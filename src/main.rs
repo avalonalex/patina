@@ -1,11 +1,4 @@
-mod env;
-mod eval;
-mod lexer;
-mod parser;
-mod repl;
-mod value;
-
-use repl::Repl;
+use patina::repl::Repl;
 
 fn main() {
     match Repl::new() {

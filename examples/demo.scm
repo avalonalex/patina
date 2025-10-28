@@ -1,5 +1,9 @@
 ; Patina REPL Demo
 ; This file demonstrates the features of the Patina Scheme interpreter
+;
+; NOTE: This file is designed for the Patina REPL (interactive mode).
+; For a version that runs as a complete R7RS script with chibi-scheme,
+; see demo_r7rs.scm
 
 ; Basic arithmetic
 (+ 1 2 3)                    ; => 6

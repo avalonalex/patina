@@ -17,6 +17,14 @@ rustyline = { version = "14.0", features = ["derive"] }
 nu-ansi-term = "0.50"  # For syntax highlighting
 dirs = "5.0"  # For finding home directory to save history
 
+[lib]
+name = "patina"
+path = "src/lib.rs"
+
+[[bin]]
+name = "patina"
+path = "src/main.rs"
+
 [dev-dependencies]
 # For testing R7RS compliance
 assert_matches = "1.5"
