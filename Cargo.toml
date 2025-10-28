@@ -1,0 +1,22 @@
+[package]
+name = "patina"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Numeric tower support for R7RS compliance
+num-bigint = "0.4"
+num-rational = "0.4"
+num-traits = "0.2"
+
+# Error handling
+thiserror = "2.0"
+
+# Rich REPL experience
+rustyline = { version = "14.0", features = ["derive"] }
+nu-ansi-term = "0.50"  # For syntax highlighting
+dirs = "5.0"  # For finding home directory to save history
+
+[dev-dependencies]
+# For testing R7RS compliance
+assert_matches = "1.5"
