@@ -142,7 +142,41 @@ See [docs/REPL_FEATURES.md](docs/REPL_FEATURES.md) for detailed documentation.
 
 ### Future: Notebook Mode
 
-We're designing a terminal-based notebook interface (like Jupyter for Scheme). See [docs/NOTEBOOK_DESIGN.md](docs/NOTEBOOK_DESIGN.md) for the vision.
+We're designing a **terminal-based notebook interface** with S-expression format:
+
+**Key Features:**
+- S-expression notebook format (`.scm.nb`) - notebooks are valid Scheme programs!
+- Cell-based editing with `tui-textarea` (Vim keybindings!)
+- **Three-tier system integration** - elegant command design:
+  - **Tier 1: Native** - `(ls)` returns structured data, not strings
+  - **Tier 2: Tables** - `(ps)` returns filterable/sortable tables
+  - **Tier 3: Shell** - `(shell "cmd")` for everything else
+- Dependency tracking and reactive evaluation
+- Export to HTML/Markdown
+
+**Why S-expressions?**
+- Homoiconic - notebooks ARE Scheme code
+- Version control friendly (beautiful diffs!)
+- Composable with macros
+- No JSON bloat
+
+**Why three-tier commands?**
+- Type-safe: `(file-info-size f)` not `(parse-string ...)`
+- Cross-platform: Native ops work everywhere
+- Composable: `(filter pred (ls))` just works
+- Better than Jupyter's `!` and `%` magic
+
+See documentation:
+- [**THREE_TIER_SUMMARY.md**](docs/THREE_TIER_SUMMARY.md) - 🌟 Visual guide to system integration
+- [NATIVE_COMMANDS.md](docs/NATIVE_COMMANDS.md) - Native Scheme commands
+- [NOTEBOOK_FORMAT.md](docs/NOTEBOOK_FORMAT.md) - Complete S-expr format spec
+- [SYSTEM_INTEGRATION.md](docs/SYSTEM_INTEGRATION.md) - Detailed command integration
+- [TUI_IMPLEMENTATION.md](docs/TUI_IMPLEMENTATION.md) - Implementation guide
+- [NOTEBOOK_DESIGN.md](docs/NOTEBOOK_DESIGN.md) - Original vision
+
+Examples:
+- [sample-notebook.scm.nb](examples/sample-notebook.scm.nb) - Tutorial
+- [system-integration-demo.scm.nb](examples/system-integration-demo.scm.nb) - Three tiers in action
 
 ## Example Usage
 

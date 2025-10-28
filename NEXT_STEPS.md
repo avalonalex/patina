@@ -161,6 +161,35 @@ cp chibi-scheme/tests/r7rs-tests.scm tests/
 - [ ] Garbage collection improvements
 - [ ] Native FFI
 
+## Notebook Mode Implementation
+
+### Phase 1: TUI Infrastructure (v0.2.0)
+- [ ] Add `ratatui` and `tui-textarea` dependencies
+- [ ] Basic TUI with cell navigation
+- [ ] Cell editing with syntax highlighting
+- [ ] Execute cells in order
+
+### Phase 2: S-expression Notebook Format (v0.3.0)
+- [ ] Parser for `.scm.nb` format
+- [ ] Save/load notebooks
+- [ ] Cell execution tracking
+- [ ] Output capture and display
+
+### Phase 3: System Integration (v0.4.0)
+- [ ] `(patina system)` library
+- [ ] Shell command execution
+- [ ] File system operations
+- [ ] Git integration
+- [ ] Process management
+
+### Phase 4: Advanced Features (v0.5.0)
+- [ ] Cell dependency tracking
+- [ ] Reactive re-evaluation
+- [ ] Export to HTML/Markdown
+- [ ] Rich output types (plots, tables)
+
+See [docs/NOTEBOOK_FORMAT.md](docs/NOTEBOOK_FORMAT.md) for complete specification.
+
 ## Future Phases
 
 ### Gradual Typing (Phase 2)

@@ -1,0 +1,128 @@
+;;; data-analysis.scm.nb
+;;; A more realistic data analysis notebook
+
+(notebook
+  (metadata
+    (title "Sales Data Analysis")
+    (author "Data Analyst")
+    (created "2025-10-27T14:00:00Z")
+    (tags analysis sales visualization))
+
+  (cell markdown
+    "# Q4 2024 Sales Analysis
+
+     Analyzing quarterly sales performance across regions.")
+
+  ;; Import libraries (future)
+  (cell code
+    #:id imports
+    ;; (import (patina system))
+    ;; (import (patina plot))
+    ;; (import (patina data))
+    'imports-placeholder)
+
+  ;; Load data (future - system integration)
+  (cell code
+    #:id load-data
+    #:depends-on (imports)
+    "Load sales data from CSV"
+    ;; Future syntax:
+    ;; (define sales-data
+    ;;   (csv->alist "sales-q4.csv"))
+
+    ;; For now, mock data
+    (define sales-data
+      '((region . "North") (revenue . 45000) (units . 150))
+      '((region . "South") (revenue . 38000) (units . 120))
+      '((region . "East")  (revenue . 52000) (units . 175))
+      '((region . "West")  (revenue . 41000) (units . 135))))
+
+  ;; Basic statistics
+  (cell code
+    #:id total-revenue
+    #:depends-on (load-data)
+    "Calculate total revenue"
+    (define total-revenue
+      (apply + (map (lambda (r) (cdr (assoc 'revenue r))) sales-data)))
+    total-revenue)
+
+  (cell code
+    #:id total-units
+    #:depends-on (load-data)
+    "Calculate total units sold"
+    (define total-units
+      (apply + (map (lambda (r) (cdr (assoc 'units r))) sales-data)))
+    total-units)
+
+  (cell code
+    #:id average-price
+    #:depends-on (total-revenue total-units)
+    "Calculate average price per unit"
+    (define avg-price (/ total-revenue total-units))
+    avg-price)
+
+  ;; Results summary
+  (cell markdown
+    #:id summary
+    "## Summary Statistics
+
+     - **Total Revenue**: $176,000
+     - **Total Units**: 580
+     - **Average Price**: $303.45/unit
+
+     This represents a 12% increase over Q3.")
+
+  ;; Regional analysis
+  (cell code
+    #:id top-region
+    #:depends-on (load-data)
+    "Find top performing region"
+    (define top-region
+      (car
+        (sort sales-data
+              (lambda (a b)
+                (> (cdr (assoc 'revenue a))
+                   (cdr (assoc 'revenue b)))))))
+    top-region)
+
+  ;; Visualization (future)
+  (cell code
+    #:id plot-revenue
+    #:depends-on (load-data)
+    "Visualize revenue by region"
+    ;; Future syntax:
+    ;; (plot:bar
+    ;;   (map (lambda (r) (cons (cdr (assoc 'region r))
+    ;;                         (cdr (assoc 'revenue r))))
+    ;;        sales-data)
+    ;;   #:title "Revenue by Region"
+    ;;   #:x-label "Region"
+    ;;   #:y-label "Revenue ($)")
+
+    'visualization-placeholder)
+
+  ;; Export results (future - system integration)
+  (cell code
+    #:id export
+    #:depends-on (total-revenue total-units avg-price)
+    "Export summary for stakeholders"
+    ;; Future syntax:
+    ;; (define report
+    ;;   (format-csv
+    ;;     `((metric value)
+    ;;       (total-revenue ,total-revenue)
+    ;;       (total-units ,total-units)
+    ;;       (avg-price ,avg-price))))
+    ;; (file-write "q4-summary.csv" report)
+    ;; (git 'add "q4-summary.csv")
+    ;; (git-commit "Update Q4 sales summary")
+
+    'export-placeholder)
+
+  (cell markdown
+    "## Next Steps
+
+     1. Deep dive into regional trends
+     2. Compare with previous quarters
+     3. Forecast Q1 2025
+     4. Present findings to management"))

@@ -1,0 +1,138 @@
+;;; sample-notebook.scm.nb
+;;; A sample Patina S-expression notebook
+;;; This is a valid Scheme file that defines a notebook structure
+
+(notebook
+  (metadata
+    (title "Introduction to Patina Notebooks")
+    (author "Patina Team")
+    (created "2025-10-27T12:00:00Z")
+    (version "0.1.0")
+    (keywords "tutorial" "demo" "scheme")
+    (tags scheme lisp notebook)
+    (dependencies (scheme base) (scheme write)))
+
+  ;; Cell 1: Markdown introduction
+  (cell markdown
+    #:id intro
+    "# Welcome to Patina Notebooks!
+
+     This is a **Scheme-native** notebook format. The entire notebook is a
+     valid S-expression, which means:
+
+     - It's homoiconic (code is data, data is code)
+     - You can load it as a Scheme library
+     - Version control is natural
+     - No JSON bloat!
+
+     Let's explore some features.")
+
+  ;; Cell 2: Basic arithmetic
+  (cell code
+    #:id basic-math
+    "Simple arithmetic operations"
+    (+ 1 2 3))
+
+  ;; Cell 3: Define a variable
+  (cell code
+    #:id define-data
+    "Create some sample data"
+    (define data '(1 4 2 8 5 7 3 9 6)))
+
+  ;; Cell 4: Process the data
+  (cell code
+    #:id compute-sum
+    #:depends-on (define-data)
+    "Calculate the sum"
+    (apply + data))
+
+  ;; Cell 5: More analysis
+  (cell code
+    #:id compute-average
+    #:depends-on (define-data compute-sum)
+    "Compute the average"
+    (define (average lst)
+      (/ (apply + lst) (length lst)))
+    (average data))
+
+  ;; Cell 6: Explanation
+  (cell markdown
+    #:id explanation
+    "## Results
+
+     The sum of our data is **45** and the average is **5.0**.
+
+     Notice how cells can depend on each other. When we change `data`,
+     the dependent cells will be marked as *stale*.")
+
+  ;; Cell 7: Define a function
+  (cell code
+    #:id define-function
+    "Define a reusable function"
+    (define (square x)
+      (* x x)))
+
+  ;; Cell 8: Use the function
+  (cell code
+    #:id use-function
+    #:depends-on (define-data define-function)
+    "Apply square to our data"
+    (map square data))
+
+  ;; Cell 9: System integration
+  (cell code
+    #:id system-demo
+    "Demonstrate system integration (when implemented)"
+    ;; This will work once we implement (patina system)
+    ;; (import (patina system))
+    ;; (shell "ls *.scm")
+    ;; (git 'status)
+
+    ;; For now, just show the concept
+    (define (demo-system-integration)
+      "System commands will be first-class functions!"))
+
+  ;; Cell 10: Final thoughts
+  (cell markdown
+    #:id conclusion
+    "## Conclusion
+
+     S-expression notebooks provide:
+
+     1. **Simplicity** - Just Scheme!
+     2. **Power** - Full language features
+     3. **Composability** - Everything is a function
+     4. **Extensibility** - Define your own cell types
+
+     ### Next Steps
+
+     - Implement `lambda` in the interpreter
+     - Build the TUI with `ratatui`
+     - Add system integration library
+     - Create visualization tools
+
+     Happy hacking! 🦀✨"))
+
+;; Note: Outputs can be stored here or in a separate .outputs file
+;; For this example, we'll show embedded outputs:
+
+(outputs
+  (basic-math
+    (timestamp "2025-10-27T12:05:00Z")
+    (execution-time 2)
+    (value 6))
+
+  (compute-sum
+    (timestamp "2025-10-27T12:05:10Z")
+    (execution-time 5)
+    (value 45))
+
+  (compute-average
+    (timestamp "2025-10-27T12:05:15Z")
+    (execution-time 8)
+    (value 5.0))
+
+  (use-function
+    (timestamp "2025-10-27T12:05:20Z")
+    (execution-time 10)
+    (value (1 16 4 64 25 49 9 81 36))))

@@ -1,0 +1,230 @@
+;;; system-integration-demo.scm.nb
+;;; Demonstrating the three-tier system integration approach
+
+(notebook
+  (metadata
+    (title "System Integration in Patina")
+    (author "Patina Team")
+    (tags system-integration native-commands tables))
+
+  (cell markdown
+    "# Three-Tier System Integration
+
+     Patina provides three ways to interact with the system:
+
+     1. **Tier 1: Native Scheme** - Structured data (preferred)
+     2. **Tier 2: Tabular API** - Table-like output
+     3. **Tier 3: Shell** - Catch-all for everything else")
+
+  ;; Import the system libraries (future)
+  (cell code
+    #:id imports
+    ;; (import (patina fs)
+    ;;         (patina table)
+    ;;         (patina shell))
+    'import-placeholder)
+
+  (cell markdown
+    "## Tier 1: Native Commands
+
+     These return **structured Scheme data** - records, lists, etc.")
+
+  (cell code
+    #:id native-ls
+    #:depends-on (imports)
+    "List files - returns file-info records"
+    ;; Future syntax:
+    ;; (define files (ls #:pattern "*.scm"))
+    ;; (map file-info-name files)
+
+    ;; Mock for now
+    (define files
+      '((name "lexer.scm" size 5234 type file)
+        (name "parser.scm" size 4123 type file)
+        (name "eval.scm" size 8932 type file)))
+    files)
+
+  (cell code
+    #:id filter-files
+    #:depends-on (native-ls)
+    "Filter large files using Scheme"
+    ;; Future:
+    ;; (filter (lambda (f) (> (file-info-size f) 5000))
+    ;;         files)
+
+    ;; Mock
+    (filter (lambda (f) (> (cadr (assoc 'size f)) 5000))
+            files))
+
+  (cell code
+    #:id total-size
+    #:depends-on (native-ls)
+    "Calculate total size - pure Scheme composition"
+    ;; Future:
+    ;; (apply + (map file-info-size files))
+
+    ;; Mock
+    (apply + (map (lambda (f) (cadr (assoc 'size f))) files)))
+
+  (cell markdown
+    "**Benefits of Tier 1:**
+     - Type safe (records, not strings)
+     - Composable with Scheme functions
+     - Cross-platform
+     - Fast (no process spawning)")
+
+  (cell markdown
+    "## Tier 2: Tabular API
+
+     For commands that naturally produce tables.")
+
+  (cell code
+    #:id process-table
+    #:depends-on (imports)
+    "Process listing as a table"
+    ;; Future:
+    ;; (define processes (ps #:all #t))
+    ;; (table-headers processes)  ; => (pid user cpu mem command)
+    ;; (table-rows processes)      ; => list of lists
+
+    ;; Mock table
+    (define processes
+      (make-table
+        '(pid user cpu mem command)
+        '((1234 "user" 45.2 128 "scheme")
+          (5678 "user" 12.1 64 "rust")
+          (9012 "root" 5.0 32 "system")))))
+
+  (cell code
+    #:id filter-high-cpu
+    #:depends-on (process-table)
+    "Filter high CPU processes"
+    ;; Future:
+    ;; (table-filter processes
+    ;;   (lambda (row)
+    ;;     (> (list-ref row 2) 40)))  ; CPU > 40%
+
+    'filter-result)
+
+  (cell code
+    #:id sort-by-memory
+    #:depends-on (process-table)
+    "Sort by memory usage"
+    ;; Future:
+    ;; (table-sort processes 'mem #:reverse #t)
+
+    'sorted-table)
+
+  (cell code
+    #:id display-processes
+    #:depends-on (process-table)
+    "Pretty print table"
+    ;; Future:
+    ;; (display-table processes #:max-rows 10)
+
+    '(displaying-table))
+
+  (cell markdown
+    "**Benefits of Tier 2:**
+     - Consistent interface for tabular data
+     - Built-in filtering, sorting, joining
+     - Easy to export (CSV, Markdown, HTML)
+     - Works with: ps, df, git-log, netstat, etc.")
+
+  (cell markdown
+    "## Tier 3: Shell Catch-all
+
+     For commands without native implementation.")
+
+  (cell code
+    #:id shell-examples
+    #:depends-on (imports)
+    "Use shell for specialized commands"
+    ;; Future:
+    ;; (shell \"ffmpeg -i input.mp4 output.avi\")
+    ;; (shell \"docker ps\")
+    ;; (shell \"kubectl get pods\")
+
+    ;; But prefer native/tabular when available!
+    ;; (ls) instead of (shell \"ls\")
+    ;; (ps) instead of (shell \"ps\")
+
+    'shell-commands)
+
+  (cell code
+    #:id pipe-example
+    #:depends-on (imports)
+    "Unix-style pipes"
+    ;; Future:
+    ;; (pipe
+    ;;   \"cat /var/log/system.log\"
+    ;;   \"grep ERROR\"
+    ;;   \"wc -l\")
+
+    'pipe-result)
+
+  (cell markdown
+    "## Real-World Example: Project Analysis")
+
+  (cell code
+    #:id analyze-project
+    #:depends-on (imports)
+    "Analyze Scheme project using all three tiers"
+
+    ;; Tier 1: Native file operations
+    ;; (define scheme-files
+    ;;   (find \"src\"
+    ;;         #:pattern \"*.scm\"
+    ;;         #:type 'file))
+    ;;
+    ;; (define file-sizes
+    ;;   (map (lambda (f)
+    ;;          (cons f (file-size f)))
+    ;;        scheme-files))
+    ;;
+    ;; ;; Tier 2: Create summary table
+    ;; (define summary
+    ;;   (make-table
+    ;;     '(file size lines)
+    ;;     (map (lambda (f)
+    ;;            (list (car f)
+    ;;                  (cdr f)
+    ;;                  (length (read-lines (car f)))))
+    ;;          file-sizes)))
+    ;;
+    ;; ;; Display sorted by size
+    ;; (display-table
+    ;;   (table-sort summary 'size #:reverse #t))
+    ;;
+    ;; ;; Tier 3: Git statistics (when no native impl)
+    ;; (define commits (shell-lines \"git log --oneline | wc -l\"))
+
+    'analysis-complete)
+
+  (cell markdown
+    "## Comparison with Jupyter
+
+     | Operation | Jupyter | Patina |
+     |-----------|---------|--------|
+     | List files | `!ls` (string) | `(ls)` (records) |
+     | Process list | `!ps aux` (string) | `(ps)` (table) |
+     | Filter | Parse manually | `(filter pred list)` |
+     | Sort | External tool | `(table-sort tbl col)` |
+     | Compose | ❌ Difficult | ✅ Natural |")
+
+  (cell markdown
+    "## Summary
+
+     **Three-tier design advantages:**
+
+     1. **Native** - Fast, type-safe, composable
+        - Use for: `ls`, `find`, `tree`, file I/O
+
+     2. **Tabular** - Structured, filterable, sortable
+        - Use for: `ps`, `df`, `git-log`, `netstat`
+
+     3. **Shell** - Fallback for everything else
+        - Use for: `ffmpeg`, `docker`, domain tools
+
+     **Result:** Better composability than Unix pipes,
+     more elegant than Jupyter's magic commands!"))
