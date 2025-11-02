@@ -29,6 +29,11 @@ Use chibi-scheme to:
 2. Test Patina's output against chibi's output for compatibility
 3. Reference the comprehensive test suite for validation
 
+**R7RS Specification**: The official R7RS-small specification LaTeX source is available at:
+`spec/r7rs-small-spec/`
+
+This includes the complete specification source code, useful for understanding precise language semantics and requirements.
+
 ## Development Commands
 
 ### Building and Running
