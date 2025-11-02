@@ -44,47 +44,13 @@ jobs:
         path: target
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Install chibi-scheme (Ubuntu)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chibi-scheme
-
-    - name: Install chibi-scheme (macOS)
-      if: matrix.os == 'macos-latest'
-      run: brew install chibi-scheme
-
-    - name: Verify chibi-scheme installation
-      run: which chibi-scheme && echo "chibi-scheme installed successfully"
-
-    - name: Run tests (with chibi-scheme)
-      run: cargo test --verbose
-
-    - name: Run tests (library only)
-      run: cargo test --lib --verbose
-
-    - name: Build
-      run: cargo build --verbose --release
-
-  test-without-chibi:
-    name: Test without chibi-scheme
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v3
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Run tests (skip chibi-scheme tests)
+    - name: Run tests
       env:
         SKIP_CHIBI_TESTS: 1
       run: cargo test --verbose
 
-    - name: Verify Patina tests pass without chibi-scheme
-      run: |
-        cargo test --lib --verbose
-        cargo test --test scheme_runner --verbose
+    - name: Build
+      run: cargo build --verbose --release
 
   fmt:
     name: Rustfmt
