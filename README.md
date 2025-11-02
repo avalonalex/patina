@@ -28,34 +28,45 @@ An educational Scheme R7RS-small interpreter written in Rust, designed for learn
    - Constraint solving
    - Integration with the main Scheme interpreter
 
-## Current Status
+## Current Status (2025-11-02)
+
+**Phase 1: R7RS Compliance** - 47% complete
+
+### Recently Implemented (NEW!)
+- ✅ **Lambda with full closures!**
+  - Fixed arity: `(lambda (x y) body)`
+  - Variadic: `(lambda args body)`
+  - Mixed: `(lambda (x . rest) body)`
+  - Proper environment capture
+  - Higher-order functions working!
 
 ### Implemented
 - ✅ Lexer with full R7RS token support
 - ✅ Parser for S-expressions, vectors, bytevectors
-- ✅ Basic evaluator with environment model
-- ✅ Core special forms: `quote`, `if`, `define`, `set!`, `begin`
-- ✅ Basic primitives: arithmetic, list operations, predicates
+- ✅ Tree-walking evaluator with environment model
+- ✅ Special forms: `quote`, `if`, `define`, `set!`, `lambda`, `begin`, `cond`
+- ✅ Arithmetic: `+`, `-`, `*`, `/`, `=`, `<`, `>`, `<=`, `>=`
+- ✅ Lists: `cons`, `car`, `cdr`, `list`, `null?`, `pair?`
+- ✅ Predicates: `eq?`, `eqv?`, `equal?`, `boolean?`, `number?`, `integer?`, etc.
 - ✅ **Rich REPL** with:
-  - Syntax highlighting (keywords, builtins, strings, numbers)
+  - Syntax highlighting
   - Multi-line editing with parenthesis balancing
-  - Persistent history across sessions
-  - History-based hints
-  - Emacs-style keybindings
+  - Persistent history (`~/.patina_history`)
+  - Emacs keybindings
 
-### TODO for R7RS-small Compliance
-- [ ] Complete special forms: `lambda`, `let`, `let*`, `letrec`, `cond`, `case`, `and`, `or`
-- [ ] Proper closures with lexical scoping
-- [ ] Tail call optimization
-- [ ] Full numeric tower (currently only integers and floats)
-- [ ] Hygenic macros (syntax-rules, let-syntax, letrec-syntax)
-- [ ] Complete standard library procedures
-- [ ] String and character operations with full Unicode support
-- [ ] Port and I/O operations
-- [ ] Exception handling (guard, raise)
-- [ ] Continuations (call/cc, dynamic-wind)
-- [ ] Record types (define-record-type)
-- [ ] Libraries and modules (define-library, import, export)
+### Next Priorities
+- 🚧 `let`, `let*`, `letrec` - Local bindings (blocks 23% of tests!)
+- 🚧 `and`, `or` - Boolean operators
+- 🚧 `apply`, `map`, `for-each` - Higher-order functions
+- 🚧 More list operations: `length`, `append`, `reverse`
+- 🚧 Numeric operations: `abs`, `quotient`, `remainder`, predicates
+- ❌ String operations
+- ❌ Vector operations
+- ❌ I/O operations
+- ❌ Tail call optimization
+- ❌ Macros (syntax-rules)
+
+**See [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md) for complete feature matrix.**
 
 ## R7RS-small Compliance Testing
 
@@ -80,83 +91,107 @@ The Chibi test suite covers:
 ### Running Tests
 
 ```bash
-# TODO: Add test runner once implemented
-# Will support running Chibi test suite
+# All tests
 cargo test
+
+# Compliance tests (R7RS spec-organized)
+cargo test --test compliance
+
+# Integration tests
+cargo test --test integration
+
+# Generate progress report
+./scripts/test_report.sh
 ```
+
+**See [docs/TESTING.md](docs/TESTING.md) for complete testing guide.**
+
+## Quick Start
+
+```bash
+# Build and run
+cargo build --release
+cargo run --release
+
+# Try it out
+patina> (define factorial
+...       (lambda (n)
+...         (if (<= n 1)
+...             1
+...             (* n (factorial (- n 1))))))
+patina> (factorial 5)
+120
+```
+
+**See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for complete guide.**
+
+## Documentation
+
+- **[Getting Started](docs/GETTING_STARTED.md)** - Installation and first steps
+- **[Feature Status](docs/FEATURE_STATUS.md)** - What's implemented (47% complete)
+- **[Testing Guide](docs/TESTING.md)** - Running and writing tests
+- **[Development Guide](docs/DEVELOPMENT.md)** - Architecture and contributing
+- **[API Reference](docs/API.md)** - Using Patina as a library
+
+**For future plans:**
+- **[PRD/ROADMAP.md](PRD/ROADMAP.md)** - Development roadmap
+- **[PRD/phase4/](PRD/phase4/)** - Notebook system design (Phase 4)
 
 ## Project Structure
 
 ```
 src/
-├── main.rs          # Entry point
-├── repl/            # Rich REPL implementation
-│   ├── mod.rs           # Main REPL loop
-│   ├── highlighter.rs   # Syntax highlighting
-│   ├── validator.rs     # Multi-line validation
-│   └── completer.rs     # Auto-completion (TODO)
 ├── lexer/           # Tokenization
-│   └── mod.rs
-├── parser/          # Parse tokens into AST
-│   └── mod.rs
-├── value/           # Scheme value representation
-│   └── mod.rs
-├── env/             # Environment and bindings
-│   └── mod.rs
-└── eval/            # Evaluator and primitives
-    └── mod.rs
+├── parser/          # AST construction
+├── eval/            # Evaluation engine
+├── value/           # Scheme values
+├── env/             # Environments/scoping
+├── repl/            # REPL interface
+├── lib.rs           # Public API
+└── main.rs          # CLI entry
 
-docs/
-├── REPL_FEATURES.md     # REPL documentation
-└── NOTEBOOK_DESIGN.md   # Notebook mode design
+docs/                # Current documentation
+├── GETTING_STARTED.md
+├── FEATURE_STATUS.md
+├── TESTING.md
+├── DEVELOPMENT.md
+└── API.md
+
+PRD/                 # Future plans & designs
+├── ROADMAP.md
+├── phase1/          # R7RS (current)
+├── phase2/          # Gradual typing
+├── phase3/          # Reactive
+└── phase4/          # Notebook system
 
 tests/
-└── basic_tests.scm      # Example test cases
-```
-
-## Building and Running
-
-```bash
-# Build the project
-cargo build --release
-
-# Run the REPL
-cargo run --release
-
-# Run tests
-cargo test
+├── compliance/      # R7RS spec tests
+├── integration/     # End-to-end tests
+└── fixtures/        # Test data
 ```
 
 ## REPL Features
 
-Patina includes a rich, modern REPL inspired by Chez Scheme's Expeditor:
+Patina includes a rich, modern REPL:
 
 - **Syntax Highlighting** - Color-coded as you type
 - **Multi-line Editing** - Intelligent parenthesis balancing
 - **Persistent History** - Saved to `~/.patina_history`
 - **History Search** - Ctrl+R for reverse search
-- **Smart Hints** - Suggestions from history
 - **Emacs Keybindings** - Ctrl+A, Ctrl+E, Ctrl+K, etc.
 
-See [docs/REPL_FEATURES.md](docs/REPL_FEATURES.md) for detailed documentation.
+## Future: Notebook System (Phase 4)
 
-### Future: Notebook Mode
+Designed but not yet implemented - a terminal-based computational notebook with S-expression format.
 
-We're designing a **terminal-based notebook interface** with S-expression format:
-
-**Key Features:**
-- S-expression notebook format (`.scm.nb`) - notebooks are valid Scheme programs!
-- Cell-based editing with `tui-textarea` (Vim keybindings!)
-- **Three-tier system integration** - elegant command design:
-  - **Tier 1: Native** - `(ls)` returns structured data, not strings
-  - **Tier 2: Tables** - `(ps)` returns filterable/sortable tables
-  - **Tier 3: Shell** - `(shell "cmd")` for everything else
-- Dependency tracking and reactive evaluation
+**Key features (planned):**
+- Notebooks as valid Scheme programs (`.scm.nb`)
+- Cell-based editing in terminal
+- Three-tier command system (Scheme/Tables/Shell)
+- Dependency tracking
 - Export to HTML/Markdown
 
-**Why S-expressions?**
-- Homoiconic - notebooks ARE Scheme code
-- Version control friendly (beautiful diffs!)
+**See [PRD/phase4/NOTEBOOK_OVERVIEW.md](PRD/phase4/NOTEBOOK_OVERVIEW.md) for complete design.**
 - Composable with macros
 - No JSON bloat
 

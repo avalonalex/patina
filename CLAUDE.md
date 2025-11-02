@@ -10,8 +10,10 @@ Patina is a Scheme R7RS-small interpreter written in Rust. This is an educationa
 
 **Important**: Use the following directories for different types of documentation:
 
-- **`PRD/`** - Product Requirements Documents, project proposals, and high-level design documents
+- **IMPORTANT** - Do not create markdown files unless the user explicitly states to do so. You may offer to create markdown files, but only do so with explicit user approval. Integrate any necessary notes as comments within the relevant code files, and keep comments succinct and on point.
+- **`PRD/`** - Product Requirements Documents, project proposals, and high-level design documents. We should be aggressive in terms of purge outdated PRDs as they have high cognative overhead.
 - **`internal/`** - Internal documentation, implementation notes, test results, and milestone records
+- **`docs/`** - Oriented towards external documentations, how to use high level features and repl and tui tools.
 
 ## Reference Implementation
 
@@ -19,13 +21,15 @@ Patina is a Scheme R7RS-small interpreter written in Rust. This is an educationa
 `~/Project/reference/chibi-scheme`
 
 Key files to reference:
+
 - `tests/r7rs-tests.scm` - Comprehensive R7RS test suite (2516 lines covering entire spec)
 - `lib/init-7.scm` - Core R7RS procedures implemented in Scheme on top of primitives
 - `eval.c` - Core evaluator implementation in C
 - `lib/scheme/base.sld` - R7RS base library definition
 
 Use chibi-scheme to:
-1. Understand how features should work
+
+1. Understand how features should work, borrow interpreter implemention when needed.
 2. Test Patina's output against chibi's output for compatibility
 3. Reference the comprehensive test suite for validation
 
