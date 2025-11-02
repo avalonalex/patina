@@ -171,7 +171,7 @@ cargo test --test compliance numbers
 
 ### Test Status Tracking
 
-See `tests/FEATURE_MATRIX.md` for detailed feature-by-feature status tracking.
+See `docs/FEATURE_STATUS.md` for detailed feature-by-feature status tracking (canonical source).
 
 Current status: **44/93 tests passing (47%)**
 - Primitives: 18/20 (90%) ✅
@@ -238,7 +238,7 @@ Current status: **44/93 tests passing (47%)**
 13. **Hygienic macros** - syntax-rules, define-syntax
 14. **Continuations** - call/cc (complex, lower priority)
 
-See `tests/FEATURE_MATRIX.md` for complete feature-by-feature tracking.
+See `docs/FEATURE_STATUS.md` for complete feature-by-feature tracking.
 
 ## Code Organization Principles
 
@@ -265,7 +265,7 @@ Phase 2 will add gradual typing (Typed Racket-style). Phase 3 adds reactive stre
 
 ## Notebook Mode (Future Feature)
 
-The project has extensive design docs for a terminal-based notebook interface with S-expression format (see `docs/`). This is not yet implemented but is a key future direction. The design emphasizes:
+The project has extensive design docs for a terminal-based notebook interface with S-expression format (see `PRD/future/phase4/`). This is not yet implemented but is a key future direction. The design emphasizes:
 - S-expression notebook format (`.scm.nb`) - notebooks as valid Scheme programs
 - Three-tier system integration: native Scheme commands, table-based commands, shell fallback
 - Cell-based editing with dependency tracking
