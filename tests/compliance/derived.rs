@@ -5,8 +5,7 @@
 //!
 //! Most of these are marked #[ignore] as they need to be implemented
 
-mod common;
-use common::*;
+use super::common::*;
 
 // 4.2.1 Conditionals - Cond
 #[test]

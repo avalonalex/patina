@@ -3,8 +3,7 @@
 //! Tests based on chibi-scheme's r7rs-tests.scm
 //! Reference: ~/Project/reference/chibi-scheme/tests/r7rs-tests.scm
 
-mod common;
-use common::*;
+use super::common::*;
 
 // 4.1.1 Variable references
 #[test]
@@ -47,13 +46,11 @@ fn test_quote_literals() {
 
 // 4.1.4 Procedures - Lambda
 #[test]
-#[ignore] // TODO: Implement lambda
 fn test_simple_lambda() {
     assert_eval_to("((lambda (x) (+ x x)) 4)", "8");
 }
 
 #[test]
-#[ignore] // TODO: Implement lambda
 fn test_lambda_multiple_args() {
     assert_program_eval_to(
         r#"
@@ -66,7 +63,7 @@ fn test_lambda_multiple_args() {
 }
 
 #[test]
-#[ignore] // TODO: Requires closures
+#[ignore] // TODO: Requires let binding form
 fn test_lambda_closure() {
     assert_program_eval_to(
         r#"
@@ -80,13 +77,11 @@ fn test_lambda_closure() {
 }
 
 #[test]
-#[ignore] // TODO: Requires variadic lambda
 fn test_lambda_variadic() {
     assert_eval_to("((lambda x x) 3 4 5 6)", "(3 4 5 6)");
 }
 
 #[test]
-#[ignore] // TODO: Requires variadic lambda with fixed args
 fn test_lambda_variadic_with_fixed() {
     assert_eval_to("((lambda (x y . z) z) 3 4 5 6)", "(5 6)");
 }

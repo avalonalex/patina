@@ -3,8 +3,7 @@
 //! Tests based on chibi-scheme's r7rs-tests.scm
 //! Reference: ~/Project/reference/chibi-scheme/tests/r7rs-tests.scm
 
-mod common;
-use common::*;
+use super::common::*;
 
 // 6.4 Pairs and lists - Constructors
 #[test]

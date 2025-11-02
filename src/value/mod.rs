@@ -58,7 +58,7 @@ pub enum Procedure {
         params: Vec<String>,
         variadic: Option<String>, // For rest parameters
         body: Vec<Value>,
-        // Environment will be added when we implement closures
+        env: Rc<crate::env::Environment>, // Captured environment for closures
     },
 
     /// Continuation (for call/cc)

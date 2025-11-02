@@ -3,8 +3,7 @@
 //! Tests based on chibi-scheme's r7rs-tests.scm
 //! Reference: ~/Project/reference/chibi-scheme/tests/r7rs-tests.scm
 
-mod common;
-use common::*;
+use super::common::*;
 
 // 6.2.6 Numerical operations - Arithmetic
 #[test]

@@ -119,38 +119,121 @@ The `Interpreter` struct provides the main programmatic interface:
 
 ## Testing Strategy
 
-### Test Organization
-- `tests/comparison_test.rs`: Side-by-side comparison with chibi-scheme (R7RS reference)
-- `tests/scheme_runner.rs`: Infrastructure for running .scm test files
-- `tests/file_runner.rs`: Test file discovery and execution
-- `tests/schemes/`: Directory containing Scheme test files organized by feature
+### Test Organization (Reorganized 2025-11-02)
+
+Tests are now organized to mirror the R7RS specification structure:
+
+**Compliance Tests** (`tests/compliance.rs` + `tests/compliance/`):
+- `primitives.rs` - Section 4.1: Primitive expressions (quote, lambda, if, define, set!)
+- `derived.rs` - Section 4.2: Derived expressions (cond, case, let, and, or, etc.)
+- `numbers.rs` - Section 6.2: Numeric operations and predicates
+- `lists.rs` - Section 6.4: Pairs and lists
+- `predicates.rs` - Type predicates and equality
+
+**Integration Tests** (`tests/integration.rs` + `tests/integration/`):
+- `comparison_test.rs` - Side-by-side comparison with chibi-scheme
+- `scheme_runner.rs` - Infrastructure for running .scm test files
+- `file_runner.rs` - Test file discovery and execution
+
+**Test Fixtures** (`tests/fixtures/`):
+- `r7rs/` - R7RS compliance test cases
+- `examples/` - Example Scheme programs organized by feature
+
+**Common Helpers** (`tests/common/mod.rs`):
+- `assert_eval_to(expr, expected)` - Test expression evaluation
+- `assert_program_eval_to(code, expected)` - Test multi-expression programs
+- `assert_eval_error(expr)` - Test error cases
+
+### Running Tests
+
+```bash
+# All tests
+cargo test
+
+# Compliance tests only (R7RS spec coverage)
+cargo test --test compliance
+
+# Integration tests only
+cargo test --test integration
+
+# Specific category
+cargo test --test compliance primitives
+cargo test --test compliance numbers
+
+# Generate progress report
+./scripts/test_report.sh
+```
+
+### Test Status Tracking
+
+See `tests/FEATURE_MATRIX.md` for detailed feature-by-feature status tracking.
+
+Current status: **44/93 tests passing (47%)**
+- Primitives: 18/20 (90%) ✅
+- Numbers: 11/23 (47%) ⚠️
+- Lists: 6/19 (31%) ⚠️
+- Predicates: 7/12 (58%) ✅
+- Derived: 2/19 (10%) ❌
 
 ### Test Infrastructure Notes
 - Tests can optionally compare output with chibi-scheme if installed
 - Use `SKIP_CHIBI_TESTS=1` environment variable to skip chibi comparisons
 - The interpreter maintains state between `eval_str` calls in the same `Interpreter` instance
 - `Value::Unspecified` is returned by definitions and should not be displayed
+- Run `./scripts/test_report.sh` for a visual progress report
 
 ## Implementation Status
 
-### Currently Working
-- Self-evaluating literals (numbers, strings, booleans, characters)
-- Quote, if, define, set!, lambda, begin special forms
-- Arithmetic primitives: +, -, *, /
-- Comparison operators: =, <, >, <=, >=
-- List operations: cons, car, cdr, null?, pair?
-- Basic predicates: eq?, boolean?, number?, integer?, string?, symbol?
+### Currently Working (Updated 2025-11-02)
+
+**Special Forms:**
+- quote - Full support including shorthand `'expr`
+- if - With and without else clause
+- define - Variable definitions (function shorthand not yet implemented)
+- set! - Mutation of existing bindings
+- lambda - **Full support with closures!** (Fixed/variadic/mixed arity)
+- begin - Sequential evaluation
+- cond - Multi-branch conditionals with else
+
+**Arithmetic:**
+- +, -, *, / - Full support (integers only currently)
+- =, <, >, <=, >= - Comparison operators (integers only)
+
+**List Operations:**
+- cons, car, cdr - Pair operations
+- null?, pair? - Type predicates
+- list - List constructor
+
+**Type Predicates:**
+- eq?, eqv?, equal? - Equality predicates
+- boolean?, number?, integer?, string?, symbol? - Type checks
+
+**Value Types:**
+- All R7RS value types parsed: booleans, numbers (full tower), characters, strings, symbols, pairs, vectors, bytevectors
 
 ### High-Priority TODOs for R7RS Compliance
-1. **Closures**: Lambda currently doesn't capture environment properly
-2. **Tail call optimization**: Required for R7RS, critical for recursive algorithms
-3. **More special forms**: let, let*, letrec, cond, case, and, or
-4. **Complete numeric tower**: Currently missing proper rational and complex arithmetic
-5. **Hygienic macros**: syntax-rules, let-syntax, letrec-syntax
-6. **String/character operations**: Full Unicode support per R7RS
-7. **I/O and ports**: File operations, read, write, display
-8. **Exception handling**: guard, raise, with-exception-handler
-9. **Continuations**: call-with-current-continuation (call/cc)
+
+**Phase 1 (Next 2-3 weeks):**
+1. **let, let*, letrec** - Binding constructs (blocks 23% of tests)
+2. **and, or** - Short-circuit boolean operators
+3. **apply** - Critical for higher-order functions
+4. **map, for-each** - Common list operations
+5. **Tail call optimization** - Required by R7RS
+
+**Phase 2 (Weeks 4-5):**
+6. **Numeric operations** - abs, quotient, remainder, modulo, predicates
+7. **List operations** - length, append, reverse, list-ref
+8. **case** - Pattern matching conditional
+
+**Phase 3 (Weeks 6+):**
+9. **String operations** - Full string manipulation suite
+10. **Vector operations** - Vector manipulation suite
+11. **I/O and ports** - display, write, file operations
+12. **Exception handling** - guard, raise, with-exception-handler
+13. **Hygienic macros** - syntax-rules, define-syntax
+14. **Continuations** - call/cc (complex, lower priority)
+
+See `tests/FEATURE_MATRIX.md` for complete feature-by-feature tracking.
 
 ## Code Organization Principles
 

@@ -189,11 +189,99 @@ impl Evaluator {
         }
     }
 
-    fn eval_lambda(&self, _args: &Value, _env: &Rc<Environment>) -> Result<Value, EvalError> {
-        // TODO: Implement lambda
-        Err(EvalError::InvalidSyntax(
-            "lambda not yet implemented".to_string(),
-        ))
+    fn eval_lambda(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (lambda params body...)
+        // params can be:
+        // - (x y z) - fixed arity
+        // - args - variadic (all args go to single parameter)
+        // - (x y . rest) - mixed (first n are fixed, rest go to rest parameter)
+
+        let (params_expr, rest) = self.extract_pair(args)?;
+
+        // Parse parameters
+        let (params, variadic) = self.parse_lambda_params(&params_expr)?;
+
+        // Collect body expressions
+        let body = self.collect_list_items(&rest)?;
+
+        if body.is_empty() {
+            return Err(EvalError::InvalidSyntax(
+                "lambda requires at least one body expression".to_string(),
+            ));
+        }
+
+        Ok(Value::Procedure(Procedure::Lambda {
+            params,
+            variadic,
+            body,
+            env: env.clone(),
+        }))
+    }
+
+    fn parse_lambda_params(
+        &self,
+        params_expr: &Value,
+    ) -> Result<(Vec<String>, Option<String>), EvalError> {
+        match params_expr {
+            // (lambda args body...) - single symbol, all args go to it
+            Value::Symbol(s) => Ok((vec![], Some(s.to_string()))),
+
+            // (lambda () body...) - no parameters
+            Value::Null => Ok((vec![], None)),
+
+            // (lambda (x y z) body...) or (lambda (x y . rest) body...)
+            Value::Pair(_) => {
+                let mut params = Vec::new();
+                let mut current = params_expr.clone();
+
+                loop {
+                    match &current {
+                        Value::Null => return Ok((params, None)),
+                        Value::Symbol(s) => {
+                            // Rest parameter: (x y . rest)
+                            return Ok((params, Some(s.to_string())));
+                        }
+                        Value::Pair(pair) => {
+                            if let Value::Symbol(param) = &pair.0 {
+                                params.push(param.to_string());
+                                current = pair.1.clone();
+                            } else {
+                                return Err(EvalError::InvalidSyntax(
+                                    "lambda parameters must be symbols".to_string(),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(EvalError::InvalidSyntax(
+                                "invalid lambda parameter list".to_string(),
+                            ))
+                        }
+                    }
+                }
+            }
+
+            _ => Err(EvalError::InvalidSyntax(
+                "lambda parameters must be a list or symbol".to_string(),
+            )),
+        }
+    }
+
+    fn collect_list_items(&self, list: &Value) -> Result<Vec<Value>, EvalError> {
+        let mut items = Vec::new();
+        let mut current = list.clone();
+
+        while let Value::Pair(pair) = current {
+            items.push(pair.0.clone());
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "improper list in lambda body".to_string(),
+            ));
+        }
+
+        Ok(items)
     }
 
     fn eval_cond(&self, clauses: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
@@ -265,6 +353,55 @@ impl Evaluator {
             Value::Procedure(Procedure::Primitive { name, arity }) => {
                 self.check_arity(&arity, args.len())?;
                 self.apply_primitive(name, args)
+            }
+            Value::Procedure(Procedure::Lambda {
+                params,
+                variadic,
+                body,
+                env,
+            }) => {
+                // Check arity
+                if variadic.is_some() {
+                    // Variadic: need at least as many args as fixed params
+                    if args.len() < params.len() {
+                        return Err(EvalError::WrongArity {
+                            expected: format!("at least {}", params.len()),
+                            actual: args.len(),
+                        });
+                    }
+                } else {
+                    // Fixed arity: need exact number of args
+                    if args.len() != params.len() {
+                        return Err(EvalError::WrongArity {
+                            expected: params.len().to_string(),
+                            actual: args.len(),
+                        });
+                    }
+                }
+
+                // Create new environment with lambda's captured environment as parent
+                let new_env = Rc::new(Environment::with_parent(env));
+
+                // Bind fixed parameters
+                for (param, arg) in params.iter().zip(args.iter()) {
+                    new_env.define(param.clone(), arg.clone());
+                }
+
+                // Bind rest parameter if variadic
+                if let Some(rest_param) = variadic {
+                    // Collect remaining args into a list
+                    let rest_args: Vec<Value> = args.into_iter().skip(params.len()).collect();
+                    let rest_list = self.list_from_vec(rest_args);
+                    new_env.define(rest_param, rest_list);
+                }
+
+                // Evaluate body expressions in sequence
+                let mut result = Value::Unspecified;
+                for expr in body {
+                    result = self.eval_in_env(&expr, &new_env)?;
+                }
+
+                Ok(result)
             }
             _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
         }

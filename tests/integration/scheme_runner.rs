@@ -128,7 +128,7 @@ fn test_begin() {
 // Test running actual .scm files
 #[test]
 fn test_basic_tests_file() {
-    let test_file = Path::new("tests/basic_tests.scm");
+    let test_file = Path::new("tests/fixtures/r7rs/basic_tests.scm");
     if !test_file.exists() {
         println!("Skipping: test file not found");
         return;
