@@ -61,7 +61,7 @@ impl Environment {
     #[allow(dead_code)]
     pub fn has(&self, name: &str) -> bool {
         self.bindings.borrow().contains_key(name)
-            || self.parent.as_ref().map_or(false, |p| p.has(name))
+            || self.parent.as_ref().is_some_and(|p| p.has(name))
     }
 }
 

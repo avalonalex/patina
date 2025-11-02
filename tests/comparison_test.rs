@@ -53,19 +53,19 @@ fn compare(expr: &str) {
     println!("Chibi:  {:?}", chibi);
 
     match (patina, chibi) {
-        (Ok(p), Ok(c)) => {
+        (Ok(_p), Ok(_c)) => {
             // TODO: Normalize output format (e.g., #t vs true)
             println!("Both succeeded!");
             // For now, just verify both worked
         }
-        (Err(p), Err(c)) => {
+        (Err(_p), Err(_c)) => {
             println!("Both failed (expected for unimplemented features)");
         }
-        (Ok(p), Err(c)) => {
+        (Ok(_p), Err(_c)) => {
             println!("WARNING: Patina succeeded but chibi failed");
             println!("This might indicate a test setup issue");
         }
-        (Err(p), Ok(c)) => {
+        (Err(_p), Ok(_c)) => {
             println!("Patina failed but chibi succeeded");
             println!("This means Patina needs to implement this feature");
             // Don't panic - just document the gap

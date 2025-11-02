@@ -179,7 +179,7 @@ impl Evaluator {
         if let Value::Symbol(name) = var {
             let value = self.eval_in_env(&value_expr, env)?;
             env.set(&name, value)
-                .map_err(|e| EvalError::UndefinedVariable(e))?;
+                .map_err(EvalError::UndefinedVariable)?;
             Ok(Value::Unspecified)
         } else {
             Err(EvalError::InvalidSyntax(
@@ -257,12 +257,20 @@ impl Evaluator {
             "/" => self.primitive_divide(args),
             "=" => self.primitive_numeric_equal(args),
             "<" => self.primitive_less_than(args),
+            ">" => self.primitive_greater_than(args),
+            "<=" => self.primitive_less_equal(args),
+            ">=" => self.primitive_greater_equal(args),
             "cons" => self.primitive_cons(args),
             "car" => self.primitive_car(args),
             "cdr" => self.primitive_cdr(args),
             "null?" => self.primitive_null_p(args),
             "pair?" => self.primitive_pair_p(args),
             "list" => Ok(self.list_from_vec(args)),
+            "number?" => self.primitive_number_p(args),
+            "integer?" => self.primitive_integer_p(args),
+            "boolean?" => self.primitive_boolean_p(args),
+            "string?" => self.primitive_string_p(args),
+            "symbol?" => self.primitive_symbol_p(args),
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name
@@ -357,13 +365,14 @@ impl Evaluator {
                 return Ok(Value::Real(1.0 / first as f64));
             }
 
-            let mut result = first;
+            // When dividing multiple numbers, use floating point
+            let mut result = first as f64;
             for arg in &args[1..] {
                 if let Value::Integer(n) = arg {
                     if *n == 0 {
                         return Err(EvalError::DivisionByZero);
                     }
-                    result /= n;
+                    result /= *n as f64;
                 } else {
                     return Err(EvalError::TypeError(format!(
                         "/ expects numbers, got {}",
@@ -371,7 +380,7 @@ impl Evaluator {
                     )));
                 }
             }
-            Ok(Value::Integer(result))
+            Ok(Value::Real(result))
         } else {
             Err(EvalError::TypeError(format!(
                 "/ expects numbers, got {}",
@@ -395,12 +404,12 @@ impl Evaluator {
                         return Ok(Value::Boolean(false));
                     }
                 } else {
-                    return Err(EvalError::TypeError(format!("= expects numbers")));
+                    return Err(EvalError::TypeError("= expects numbers".to_string()));
                 }
             }
             Ok(Value::Boolean(true))
         } else {
-            Err(EvalError::TypeError(format!("= expects numbers")))
+            Err(EvalError::TypeError("= expects numbers".to_string()))
         }
     }
 
@@ -418,7 +427,67 @@ impl Evaluator {
                     return Ok(Value::Boolean(false));
                 }
             } else {
-                return Err(EvalError::TypeError(format!("< expects numbers")));
+                return Err(EvalError::TypeError("< expects numbers".to_string()));
+            }
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    fn primitive_greater_than(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() < 2 {
+            return Err(EvalError::WrongArity {
+                expected: "at least 2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        for i in 0..args.len() - 1 {
+            if let (Value::Integer(a), Value::Integer(b)) = (&args[i], &args[i + 1]) {
+                if a <= b {
+                    return Ok(Value::Boolean(false));
+                }
+            } else {
+                return Err(EvalError::TypeError("> expects numbers".to_string()));
+            }
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    fn primitive_less_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() < 2 {
+            return Err(EvalError::WrongArity {
+                expected: "at least 2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        for i in 0..args.len() - 1 {
+            if let (Value::Integer(a), Value::Integer(b)) = (&args[i], &args[i + 1]) {
+                if a > b {
+                    return Ok(Value::Boolean(false));
+                }
+            } else {
+                return Err(EvalError::TypeError("<= expects numbers".to_string()));
+            }
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    fn primitive_greater_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() < 2 {
+            return Err(EvalError::WrongArity {
+                expected: "at least 2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        for i in 0..args.len() - 1 {
+            if let (Value::Integer(a), Value::Integer(b)) = (&args[i], &args[i + 1]) {
+                if a < b {
+                    return Ok(Value::Boolean(false));
+                }
+            } else {
+                return Err(EvalError::TypeError(">= expects numbers".to_string()));
             }
         }
         Ok(Value::Boolean(true))
@@ -480,6 +549,66 @@ impl Evaluator {
         Ok(Value::Boolean(matches!(args[0], Value::Pair(_))))
     }
 
+    fn primitive_number_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(
+            args[0],
+            Value::Integer(_)
+                | Value::BigInteger(_)
+                | Value::Rational(_)
+                | Value::Real(_)
+                | Value::Complex(_, _)
+        )))
+    }
+
+    fn primitive_integer_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(
+            args[0],
+            Value::Integer(_) | Value::BigInteger(_)
+        )))
+    }
+
+    fn primitive_boolean_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Boolean(_))))
+    }
+
+    fn primitive_string_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::String(_))))
+    }
+
+    fn primitive_symbol_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
+    }
+
     fn install_primitives(env: &Rc<Environment>) {
         let primitives = [
             ("+", Arity::Min(0)),
@@ -488,12 +617,20 @@ impl Evaluator {
             ("/", Arity::Min(1)),
             ("=", Arity::Min(2)),
             ("<", Arity::Min(2)),
+            (">", Arity::Min(2)),
+            ("<=", Arity::Min(2)),
+            (">=", Arity::Min(2)),
             ("cons", Arity::Exact(2)),
             ("car", Arity::Exact(1)),
             ("cdr", Arity::Exact(1)),
             ("null?", Arity::Exact(1)),
             ("pair?", Arity::Exact(1)),
             ("list", Arity::Min(0)),
+            ("number?", Arity::Exact(1)),
+            ("integer?", Arity::Exact(1)),
+            ("boolean?", Arity::Exact(1)),
+            ("string?", Arity::Exact(1)),
+            ("symbol?", Arity::Exact(1)),
         ];
 
         for (name, arity) in primitives {

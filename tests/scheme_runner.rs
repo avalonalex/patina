@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// Helper to run a Scheme file through chibi-scheme
+#[allow(dead_code)]
 fn run_chibi_scheme(file_path: &Path) -> Result<String, String> {
     let output = Command::new("chibi-scheme")
         .arg(file_path)

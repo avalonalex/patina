@@ -192,10 +192,10 @@ impl SchemeHighlighter {
             result.push_str(&self.keyword_style.paint(token).to_string());
         } else if Self::is_builtin(token) {
             result.push_str(&self.builtin_style.paint(token).to_string());
-        } else if token.chars().next().map_or(false, |c| c.is_numeric())
+        } else if token.chars().next().is_some_and(|c| c.is_numeric())
             || (token.starts_with('-') || token.starts_with('+'))
                 && token.len() > 1
-                && token.chars().nth(1).map_or(false, |c| c.is_numeric())
+                && token.chars().nth(1).is_some_and(|c| c.is_numeric())
         {
             result.push_str(&self.number_style.paint(token).to_string());
         } else {
