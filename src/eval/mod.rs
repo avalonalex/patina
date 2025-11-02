@@ -312,6 +312,9 @@ impl Evaluator {
             "boolean?" => self.primitive_boolean_p(args),
             "string?" => self.primitive_string_p(args),
             "symbol?" => self.primitive_symbol_p(args),
+            "eq?" => self.primitive_eq(args),
+            "eqv?" => self.primitive_eqv(args),
+            "equal?" => self.primitive_equal(args),
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name
@@ -650,6 +653,99 @@ impl Evaluator {
         Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
     }
 
+    fn primitive_eq(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        // eq? checks identity/pointer equality
+        // For symbols, booleans, null - compare identity
+        // For numbers, strings, pairs - only same if same object
+        let result = match (&args[0], &args[1]) {
+            // Booleans
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            // Null
+            (Value::Null, Value::Null) => true,
+            // Symbols - compare by content (since we don't intern symbols yet)
+            (Value::Symbol(a), Value::Symbol(b)) => a.as_ref() == b.as_ref(),
+            // For other types, eq? is stricter - only same object
+            _ => false,
+        };
+        Ok(Value::Boolean(result))
+    }
+
+    fn primitive_eqv(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        // eqv? is like eq? but compares numbers and characters by value
+        let result = match (&args[0], &args[1]) {
+            // Same as eq? for booleans, null, symbols
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            (Value::Null, Value::Null) => true,
+            (Value::Symbol(a), Value::Symbol(b)) => a.as_ref() == b.as_ref(),
+            // Numbers - compare by value
+            (Value::Integer(a), Value::Integer(b)) => a == b,
+            (Value::Real(a), Value::Real(b)) => a == b,
+            // Characters - compare by value
+            (Value::Character(a), Value::Character(b)) => a == b,
+            // Different types or other types
+            _ => false,
+        };
+        Ok(Value::Boolean(result))
+    }
+
+    fn primitive_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        Ok(Value::Boolean(Self::values_equal(&args[0], &args[1])))
+    }
+
+    fn values_equal(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            // Primitives
+            (Value::Boolean(x), Value::Boolean(y)) => x == y,
+            (Value::Integer(x), Value::Integer(y)) => x == y,
+            (Value::Real(x), Value::Real(y)) => x == y,
+            (Value::Character(x), Value::Character(y)) => x == y,
+            (Value::Null, Value::Null) => true,
+
+            // Strings - compare content
+            (Value::String(x), Value::String(y)) => x.as_ref() == y.as_ref(),
+
+            // Symbols - compare by content
+            (Value::Symbol(x), Value::Symbol(y)) => x.as_ref() == y.as_ref(),
+
+            // Pairs - recursively compare car and cdr
+            (Value::Pair(x), Value::Pair(y)) => {
+                Self::values_equal(&x.0, &y.0) && Self::values_equal(&x.1, &y.1)
+            }
+
+            // Vectors - compare length and elements
+            (Value::Vector(x), Value::Vector(y)) => {
+                x.len() == y.len()
+                    && x.iter()
+                        .zip(y.iter())
+                        .all(|(a, b)| Self::values_equal(a, b))
+            }
+
+            // Different types
+            _ => false,
+        }
+    }
+
     fn install_primitives(env: &Rc<Environment>) {
         let primitives = [
             ("+", Arity::Min(0)),
@@ -672,6 +768,9 @@ impl Evaluator {
             ("boolean?", Arity::Exact(1)),
             ("string?", Arity::Exact(1)),
             ("symbol?", Arity::Exact(1)),
+            ("eq?", Arity::Exact(2)),
+            ("eqv?", Arity::Exact(2)),
+            ("equal?", Arity::Exact(2)),
         ];
 
         for (name, arity) in primitives {

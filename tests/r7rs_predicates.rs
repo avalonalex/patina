@@ -40,7 +40,6 @@ fn test_boolean_equal() {
 
 // Equivalence predicates
 #[test]
-#[ignore] // TODO: Implement eq?
 fn test_eq() {
     assert_eval_to("(eq? 'a 'a)", "#t");
     assert_eval_to("(eq? 'a 'b)", "#f");
@@ -49,7 +48,6 @@ fn test_eq() {
 }
 
 #[test]
-#[ignore] // TODO: Implement eqv?
 fn test_eqv() {
     assert_eval_to("(eqv? 'a 'a)", "#t");
     assert_eval_to("(eqv? 2 2)", "#t");
@@ -58,7 +56,6 @@ fn test_eqv() {
 }
 
 #[test]
-#[ignore] // TODO: Implement equal?
 fn test_equal() {
     assert_eval_to("(equal? 'a 'a)", "#t");
     assert_eval_to("(equal? '(a b) '(a b))", "#t");

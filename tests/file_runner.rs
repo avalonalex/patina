@@ -39,6 +39,7 @@ fn run_chibi_scheme(file_path: &Path) -> Result<String, String> {
 }
 
 /// Skip test if chibi-scheme is not available and SKIP_CHIBI_TESTS is set
+#[allow(dead_code)]
 fn skip_if_chibi_unavailable() {
     if !is_chibi_scheme_available() {
         if std::env::var("SKIP_CHIBI_TESTS").is_ok() {
