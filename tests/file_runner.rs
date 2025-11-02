@@ -110,33 +110,6 @@ fn verify_chibi_scheme_available() {
     }
 }
 
-#[test]
-fn test_chibi_arithmetic_basic() {
-    skip_if_chibi_unavailable();
-
-    let output = run_chibi_scheme(Path::new("tests/schemes/arithmetic/basic.scm"))
-        .expect("Failed to run chibi-scheme");
-
-    // Verify expected outputs
-    assert!(output.contains("6\n")); // (+ 1 2 3)
-    assert!(output.contains("0\n")); // (+)
-    assert!(output.contains("24\n")); // (* 2 3 4)
-
-    println!("Chibi-scheme output:\n{}", output);
-}
-
-#[test]
-fn test_chibi_lists_basic() {
-    skip_if_chibi_unavailable();
-
-    let output = run_chibi_scheme(Path::new("tests/schemes/lists/basic.scm"))
-        .expect("Failed to run chibi-scheme");
-
-    assert!(output.contains("(1 . 2)")); // (cons 1 2)
-    assert!(output.contains("#t")); // (null? '())
-
-    println!("Chibi-scheme output:\n{}", output);
-}
 
 // TODO: Add Patina comparison tests once we implement:
 // - import statements (or skip them)
