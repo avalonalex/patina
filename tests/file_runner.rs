@@ -110,7 +110,6 @@ fn verify_chibi_scheme_available() {
     }
 }
 
-
 // TODO: Add Patina comparison tests once we implement:
 // - import statements (or skip them)
 // - write procedure
