@@ -14,6 +14,7 @@ Patina is a Scheme R7RS-small interpreter written in Rust. This is an educationa
 - **`PRD/`** - Product Requirements Documents, project proposals, and high-level design documents. We should be aggressive in terms of purge outdated PRDs as they have high cognative overhead.
 - **`internal/`** - Internal documentation, implementation notes, test results, and milestone records
 - **`docs/`** - Oriented towards external documentations, how to use high level features and repl and tui tools.
+- **`spec/`** - Official R7RS spec, we should NOT put any additional documentation in this directory.
 
 ## Reference Implementation
 
