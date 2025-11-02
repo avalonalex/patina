@@ -80,6 +80,7 @@ impl Evaluator {
                 "set!" => return self.eval_set(&cdr, env),
                 "lambda" => return self.eval_lambda(&cdr, env),
                 "begin" => return self.eval_begin(&cdr, env),
+                "cond" => return self.eval_cond(&cdr, env),
                 _ => {}
             }
         }
@@ -193,6 +194,46 @@ impl Evaluator {
         Err(EvalError::InvalidSyntax(
             "lambda not yet implemented".to_string(),
         ))
+    }
+
+    fn eval_cond(&self, clauses: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (cond (test1 expr1 ...) (test2 expr2 ...) ... [(else exprN ...)])
+        let mut current = clauses.clone();
+
+        while let Value::Pair(clause_pair) = current {
+            let clause = &clause_pair.0;
+
+            // Extract test and expressions from clause
+            if let Value::Pair(clause_contents) = clause {
+                let test = &clause_contents.0;
+                let exprs = &clause_contents.1;
+
+                // Check for 'else' clause
+                if let Value::Symbol(sym) = test {
+                    if sym.as_ref() == "else" {
+                        // else clause - evaluate all expressions
+                        return self.eval_begin(exprs, env);
+                    }
+                }
+
+                // Evaluate the test
+                let test_result = self.eval_in_env(test, env)?;
+
+                if test_result.is_truthy() {
+                    // Test succeeded - evaluate expressions in this clause
+                    return self.eval_begin(exprs, env);
+                }
+            } else {
+                return Err(EvalError::InvalidSyntax(
+                    "cond clause must be a list".to_string(),
+                ));
+            }
+
+            current = clause_pair.1.clone();
+        }
+
+        // No clause matched and no else - return unspecified
+        Ok(Value::Unspecified)
     }
 
     fn eval_begin(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {

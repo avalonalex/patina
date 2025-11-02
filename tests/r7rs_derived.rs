@@ -10,13 +10,11 @@ use common::*;
 
 // 4.2.1 Conditionals - Cond
 #[test]
-#[ignore] // TODO: Implement cond
 fn test_cond_simple() {
     assert_eval_to("(cond ((> 3 2) 'greater) ((< 3 2) 'less))", "greater");
 }
 
 #[test]
-#[ignore] // TODO: Implement cond
 fn test_cond_with_else() {
     assert_eval_to(
         "(cond ((> 3 3) 'greater) ((< 3 3) 'less) (else 'equal))",
