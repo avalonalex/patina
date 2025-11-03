@@ -27,3 +27,7 @@ mod lists;
 // Section 6.x: Predicates
 #[path = "compliance/predicates.rs"]
 mod predicates;
+
+// Section 6.10: Control features
+#[path = "compliance/control.rs"]
+mod control;

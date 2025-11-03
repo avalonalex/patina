@@ -87,6 +87,7 @@ impl Evaluator {
                 "letrec*" => return self.eval_letrec_star(&cdr, env),
                 "and" => return self.eval_and(&cdr, env),
                 "or" => return self.eval_or(&cdr, env),
+                "apply" => return self.eval_apply(&cdr, env),
                 _ => {}
             }
         }
@@ -691,6 +692,63 @@ impl Evaluator {
                 }
             }
         }
+    }
+
+    fn eval_apply(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (apply proc arg1 ... args)
+        // where args is a list, and all arg1... are prepended to that list
+        // Minimum 2 arguments: proc and final list
+
+        // Collect all arguments
+        let mut arg_exprs = Vec::new();
+        let mut current = args.clone();
+
+        while let Value::Pair(pair) = current {
+            arg_exprs.push(pair.0.clone());
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "apply expects a proper list of arguments".to_string(),
+            ));
+        }
+
+        if arg_exprs.len() < 2 {
+            return Err(EvalError::WrongArity {
+                expected: "at least 2".to_string(),
+                actual: arg_exprs.len(),
+            });
+        }
+
+        // First argument is the procedure
+        let proc = self.eval_in_env(&arg_exprs[0], env)?;
+
+        // Middle arguments (if any) are regular arguments
+        let mut final_args = Vec::new();
+        for arg in arg_exprs.iter().take(arg_exprs.len() - 1).skip(1) {
+            final_args.push(self.eval_in_env(arg, env)?);
+        }
+
+        // Last argument must be a list
+        let last_arg = self.eval_in_env(&arg_exprs[arg_exprs.len() - 1], env)?;
+
+        // Convert the last argument (list) to a vector and append to final_args
+        let mut current = last_arg.clone();
+        while let Value::Pair(pair) = current {
+            final_args.push(pair.0.clone());
+            current = pair.1.clone();
+        }
+
+        // Check that the last argument was a proper list
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::TypeError(
+                "apply: last argument must be a proper list".to_string(),
+            ));
+        }
+
+        // Now apply the procedure to the combined arguments
+        self.apply(proc, final_args)
     }
 
     fn eval_arguments(&self, args: &Value, env: &Rc<Environment>) -> Result<Vec<Value>, EvalError> {
