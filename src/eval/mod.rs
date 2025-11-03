@@ -32,7 +32,36 @@ impl Evaluator {
     pub fn new() -> Self {
         let global_env = Rc::new(Environment::new());
         Self::install_primitives(&global_env);
-        Evaluator { global_env }
+        let evaluator = Evaluator { global_env };
+
+        // Load bootstrap library
+        evaluator.load_bootstrap();
+
+        evaluator
+    }
+
+    fn load_bootstrap(&self) {
+        // Embed bootstrap.scm at compile time
+        const BOOTSTRAP: &str = include_str!("../../lib/bootstrap.scm");
+
+        // Parse and evaluate all expressions in bootstrap
+        // Silently ignore any errors (shouldn't happen in bootstrap)
+        let mut parser = match crate::parser::Parser::new(BOOTSTRAP) {
+            Ok(p) => p,
+            Err(_) => return, // Bootstrap failed to parse
+        };
+
+        // Parse and eval all expressions
+        loop {
+            match parser.parse() {
+                Ok(expr) => {
+                    // Evaluate, ignore result and errors
+                    let _ = self.eval(&expr);
+                }
+                Err(crate::parser::ParseError::UnexpectedEof) => break,
+                Err(_) => break, // Stop on other errors
+            }
+        }
     }
 
     pub fn eval(&self, expr: &Value) -> Result<Value, EvalError> {
@@ -164,9 +193,47 @@ impl Evaluator {
             Value::Pair(_) => {
                 // (define (name params...) body...)
                 // Shorthand for (define name (lambda (params...) body...))
-                Err(EvalError::InvalidSyntax(
-                    "Function define shorthand not yet implemented".to_string(),
-                ))
+
+                // Extract name from (name params...)
+                let (name_val, params_rest) = self.extract_pair(&first)?;
+                let name = match name_val {
+                    Value::Symbol(s) => s,
+                    _ => {
+                        return Err(EvalError::InvalidSyntax(
+                            "define: function name must be a symbol".to_string(),
+                        ))
+                    }
+                };
+
+                // params_rest is either:
+                // - () for no params
+                // - (param1 param2 ...) for fixed params
+                // - (param1 . rest) for variadic
+                // - rest for fully variadic
+
+                // Parse the parameters
+                let (params, variadic) = self.parse_lambda_params(&params_rest)?;
+
+                // rest contains the body expressions
+                let body = self.collect_list_items(&rest)?;
+
+                if body.is_empty() {
+                    return Err(EvalError::InvalidSyntax(
+                        "define: function body cannot be empty".to_string(),
+                    ));
+                }
+
+                // Create the lambda
+                let lambda = Value::Procedure(crate::value::Procedure::Lambda {
+                    params,
+                    variadic,
+                    body,
+                    env: env.clone(),
+                });
+
+                // Define it
+                env.define(name.to_string(), lambda);
+                Ok(Value::Unspecified)
             }
             _ => Err(EvalError::InvalidSyntax(
                 "define expects a symbol or list".to_string(),
@@ -859,6 +926,12 @@ impl Evaluator {
             "null?" => self.primitive_null_p(args),
             "pair?" => self.primitive_pair_p(args),
             "list" => Ok(self.list_from_vec(args)),
+            "list?" => self.primitive_list_p(args),
+            "length" => self.primitive_length(args),
+            "append" => self.primitive_append(args),
+            "reverse" => self.primitive_reverse(args),
+            "list-ref" => self.primitive_list_ref(args),
+            "list-tail" => self.primitive_list_tail(args),
             "map" => self.primitive_map(args),
             "for-each" => self.primitive_for_each(args),
             "number?" => self.primitive_number_p(args),
@@ -1421,6 +1494,227 @@ impl Evaluator {
         Ok(Value::Unspecified)
     }
 
+    fn primitive_list_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (list? obj) - Check if obj is a proper list
+        // Must detect circular lists and return #f for them
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        // Use Floyd's cycle detection (tortoise and hare)
+        let mut slow = args[0].clone();
+        let mut fast = args[0].clone();
+
+        loop {
+            match &fast {
+                Value::Null => return Ok(Value::Boolean(true)),
+                Value::Pair(pair1) => {
+                    fast = pair1.1.clone();
+                    match &fast {
+                        Value::Null => return Ok(Value::Boolean(true)),
+                        Value::Pair(pair2) => {
+                            fast = pair2.1.clone();
+                            // Move slow pointer one step
+                            if let Value::Pair(slow_pair) = &slow {
+                                slow = slow_pair.1.clone();
+                            }
+                            // Check for cycle
+                            if Self::values_equal(&slow, &fast) {
+                                return Ok(Value::Boolean(false));
+                            }
+                        }
+                        _ => return Ok(Value::Boolean(false)),
+                    }
+                }
+                _ => return Ok(Value::Boolean(false)),
+            }
+        }
+    }
+
+    fn primitive_length(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (length list) - Return the length of a proper list
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let mut count = 0;
+        let mut current = args[0].clone();
+
+        while let Value::Pair(pair) = current {
+            count += 1;
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::TypeError(
+                "length: argument must be a proper list".to_string(),
+            ));
+        }
+
+        Ok(Value::Integer(count))
+    }
+
+    fn primitive_append(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (append list1 list2 ...) - Concatenate lists
+        // The last argument need not be a list
+        if args.is_empty() {
+            return Ok(Value::Null);
+        }
+
+        // Special case: single argument
+        if args.len() == 1 {
+            return Ok(args[0].clone());
+        }
+
+        // Convert all lists (except last) to vectors
+        let mut result_items = Vec::new();
+        for (i, list) in args.iter().enumerate() {
+            if i == args.len() - 1 {
+                // Last argument can be anything - it becomes the final cdr
+                if result_items.is_empty() {
+                    return Ok(list.clone());
+                }
+                // Build list with last argument as final cdr
+                let mut result = list.clone();
+                for item in result_items.into_iter().rev() {
+                    result = Value::Pair(Rc::new((item, result)));
+                }
+                return Ok(result);
+            }
+
+            // For non-last arguments, must be proper lists
+            let mut current = list.clone();
+            while let Value::Pair(pair) = current {
+                result_items.push(pair.0.clone());
+                current = pair.1.clone();
+            }
+
+            if !matches!(current, Value::Null) {
+                return Err(EvalError::TypeError(format!(
+                    "append: argument {} must be a proper list",
+                    i + 1
+                )));
+            }
+        }
+
+        Ok(self.list_from_vec(result_items))
+    }
+
+    fn primitive_reverse(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (reverse list) - Reverse a list
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let mut items = Vec::new();
+        let mut current = args[0].clone();
+
+        while let Value::Pair(pair) = current {
+            items.push(pair.0.clone());
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::TypeError(
+                "reverse: argument must be a proper list".to_string(),
+            ));
+        }
+
+        items.reverse();
+        Ok(self.list_from_vec(items))
+    }
+
+    fn primitive_list_ref(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (list-ref list k) - Return the k-th element (0-indexed)
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let k = match &args[1] {
+            Value::Integer(n) if *n >= 0 => *n as usize,
+            Value::Integer(_) => {
+                return Err(EvalError::TypeError(
+                    "list-ref: index must be non-negative".to_string(),
+                ))
+            }
+            _ => {
+                return Err(EvalError::TypeError(
+                    "list-ref: index must be an integer".to_string(),
+                ))
+            }
+        };
+
+        let mut current = args[0].clone();
+        let mut index = 0;
+
+        while let Value::Pair(pair) = current {
+            if index == k {
+                return Ok(pair.0.clone());
+            }
+            index += 1;
+            current = pair.1.clone();
+        }
+
+        Err(EvalError::TypeError(
+            "list-ref: index out of bounds".to_string(),
+        ))
+    }
+
+    fn primitive_list_tail(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (list-tail list k) - Return the tail starting at position k
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let k = match &args[1] {
+            Value::Integer(n) if *n >= 0 => *n as usize,
+            Value::Integer(_) => {
+                return Err(EvalError::TypeError(
+                    "list-tail: index must be non-negative".to_string(),
+                ))
+            }
+            _ => {
+                return Err(EvalError::TypeError(
+                    "list-tail: index must be an integer".to_string(),
+                ))
+            }
+        };
+
+        let mut current = args[0].clone();
+        let mut index = 0;
+
+        while index < k {
+            match current {
+                Value::Pair(pair) => {
+                    current = pair.1.clone();
+                    index += 1;
+                }
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "list-tail: index out of bounds".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(current)
+    }
+
     fn install_primitives(env: &Rc<Environment>) {
         let primitives = [
             ("+", Arity::Min(0)),
@@ -1438,6 +1732,12 @@ impl Evaluator {
             ("null?", Arity::Exact(1)),
             ("pair?", Arity::Exact(1)),
             ("list", Arity::Min(0)),
+            ("list?", Arity::Exact(1)),
+            ("length", Arity::Exact(1)),
+            ("append", Arity::Min(0)),
+            ("reverse", Arity::Exact(1)),
+            ("list-ref", Arity::Exact(2)),
+            ("list-tail", Arity::Exact(2)),
             ("map", Arity::Min(2)),
             ("for-each", Arity::Min(2)),
             ("number?", Arity::Exact(1)),

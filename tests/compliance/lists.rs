@@ -49,7 +49,6 @@ fn test_pair_predicate() {
 
 // 6.4 Pairs and lists - List operations
 #[test]
-#[ignore] // TODO: Implement list
 fn test_list() {
     assert_eval_to("(list)", "()");
     assert_eval_to("(list 1)", "(1)");
@@ -57,15 +56,14 @@ fn test_list() {
 }
 
 #[test]
-#[ignore] // TODO: Implement list?
 fn test_list_predicate() {
     assert_eval_to("(list? '())", "#t");
     assert_eval_to("(list? '(1 2 3))", "#t");
     assert_eval_to("(list? '(1 . 2))", "#f");
+    assert_eval_to("(list? 42)", "#f");
 }
 
 #[test]
-#[ignore] // TODO: Implement length
 fn test_length() {
     assert_eval_to("(length '())", "0");
     assert_eval_to("(length '(a))", "1");
@@ -73,15 +71,14 @@ fn test_length() {
 }
 
 #[test]
-#[ignore] // TODO: Implement append
 fn test_append() {
     assert_eval_to("(append '(a) '(b c))", "(a b c)");
     assert_eval_to("(append '() '(a b))", "(a b)");
     assert_eval_to("(append '(a b) '())", "(a b)");
+    assert_eval_to("(append '(a b) '(c d) '(e f))", "(a b c d e f)");
 }
 
 #[test]
-#[ignore] // TODO: Implement reverse
 fn test_reverse() {
     assert_eval_to("(reverse '())", "()");
     assert_eval_to("(reverse '(a))", "(a)");
@@ -89,14 +86,12 @@ fn test_reverse() {
 }
 
 #[test]
-#[ignore] // TODO: Implement list-ref
 fn test_list_ref() {
     assert_eval_to("(list-ref '(a b c d) 0)", "a");
     assert_eval_to("(list-ref '(a b c d) 2)", "c");
 }
 
 #[test]
-#[ignore] // TODO: Implement list-tail
 fn test_list_tail() {
     assert_eval_to("(list-tail '(a b c d) 0)", "(a b c d)");
     assert_eval_to("(list-tail '(a b c d) 2)", "(c d)");
@@ -104,25 +99,21 @@ fn test_list_tail() {
 
 // 6.4 Pairs and lists - cXr combinations
 #[test]
-#[ignore] // TODO: Implement caar, cadr, etc.
 fn test_caar() {
     assert_eval_to("(caar '((a b) c d))", "a");
 }
 
 #[test]
-#[ignore] // TODO: Implement caar, cadr, etc.
 fn test_cadr() {
     assert_eval_to("(cadr '(a b c d))", "b");
 }
 
 #[test]
-#[ignore] // TODO: Implement caar, cadr, etc.
 fn test_cdar() {
     assert_eval_to("(cdar '((a b) c d))", "(b)");
 }
 
 #[test]
-#[ignore] // TODO: Implement caar, cadr, etc.
 fn test_cddr() {
     assert_eval_to("(cddr '(a b c d))", "(c d)");
 }
