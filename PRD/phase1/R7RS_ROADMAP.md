@@ -96,12 +96,15 @@ From r7rs-tests.scm lines 94-300+:
 **Already Implemented:**
 - [x] `list` ✅
 
+**Already Implemented:**
+- [x] `list?`, `length`, `append`, `reverse` ✅ (2025-11-02)
+- [x] `list-ref`, `list-tail` ✅ (2025-11-02)
+- [x] `memq`, `memv`, `member` ✅ (2025-11-02)
+- [x] `assq`, `assv`, `assoc` ✅ (2025-11-02)
+- [x] `caar`, `cadr`, `cdar`, `cddr`, ... (c[ad]{2,4}r) ✅ (2025-11-02)
+
 **TODO:**
-- [ ] `list?`, `length`, `append`, `reverse`
-- [ ] `list-ref`, `list-tail`, `list-set!`
-- [ ] `memq`, `memv`, `member`
-- [ ] `assq`, `assv`, `assoc`
-- [ ] `caar`, `cadr`, `cdar`, `cddr`, ... (c[ad]{2,4}r)
+- [ ] `list-set!` (mutation)
 
 ### Boolean Operations (6.3)
 **Already Implemented:**
@@ -297,26 +300,26 @@ For a "bare minimum R7RS interpreter", we need:
 - Full numeric tower (complex, exact rationals)
 - call-with-values, dynamic-wind
 
-## Current Status Summary (Updated 2025-11-02 Evening)
+## Current Status Summary (Updated 2025-11-02 Evening - 80% Milestone! 🎉)
 
-**Working:** ~76% of core R7RS features
+**Working:** ~80% of core R7RS features
 - ✅ All core special forms (quote, if, define with function shorthand!, set!, begin, lambda with closures)
 - ✅ All binding constructs (let, let*, letrec, letrec*)
 - ✅ Boolean operators (and, or) with short-circuit
-- ✅ Conditionals (if, cond, case with => syntax)
+- ✅ Conditionals (if, cond with =>, case with => syntax)
 - ✅ Basic arithmetic and comparisons
 - ✅ Essential predicates (eq?, eqv?, equal?)
 - ✅ List operations: cons, car, cdr, list, list?, length, append, reverse, list-ref, list-tail, caar-cddddr
+- ✅ List searching: memq, memv, member, assq, assv, assoc
 - ✅ Higher-order: apply, map, for-each
 - ✅ Bootstrap library system (auto-loaded at startup)
 
-**Test Coverage:** 83/109 compliance tests passing (76%)
+**Test Coverage:** 92/115 compliance tests passing (80%)
 
 **Next Priority:**
 1. Numeric operations (abs, quotient, remainder, modulo, floor, ceiling)
-2. More list operations (memq, assq, etc.)
-3. Basic I/O (display, write, newline)
-4. String operations
+2. Basic I/O (display, write, newline)
+3. String operations (string-append, string-length, etc.)
 
 **Estimated effort to bare minimum:**
 - ✅ Closures: DONE

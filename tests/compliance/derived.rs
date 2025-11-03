@@ -22,9 +22,26 @@ fn test_cond_with_else() {
 }
 
 #[test]
-#[ignore] // TODO: Implement cond with =>
 fn test_cond_with_arrow() {
     assert_eval_to("(cond ((assv 'b '((a 1) (b 2))) => cadr) (else #f))", "2");
+}
+
+#[test]
+fn test_cond_with_arrow_false() {
+    // When test is #f, should try next clause
+    assert_eval_to(
+        "(cond ((assv 'z '((a 1) (b 2))) => cadr) (else 'not-found))",
+        "not-found",
+    );
+}
+
+#[test]
+fn test_cond_arrow_with_lambda() {
+    // Can use lambda with =>
+    assert_eval_to(
+        "(cond ((memq 'b '(a b c)) => (lambda (x) (list 'found x))) (else #f))",
+        "(found (b c))",
+    );
 }
 
 // 4.2.1 Conditionals - Case

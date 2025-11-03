@@ -118,19 +118,46 @@ fn test_cddr() {
     assert_eval_to("(cddr '(a b c d))", "(c d)");
 }
 
+// 6.4 Pairs and lists - Membership
+#[test]
+fn test_memq() {
+    assert_eval_to("(memq 'b '(a b c))", "(b c)");
+    assert_eval_to("(memq 'd '(a b c))", "#f");
+    assert_eval_to("(memq 'a '(a b c))", "(a b c)");
+}
+
+#[test]
+fn test_memv() {
+    assert_eval_to("(memv 101 '(100 101 102))", "(101 102)");
+    assert_eval_to("(memv 99 '(100 101 102))", "#f");
+}
+
+#[test]
+fn test_member() {
+    // member uses equal? so it can find lists
+    assert_eval_to("(member (list 'a) '(b (a) c))", "((a) c)");
+    assert_eval_to("(member 'a '(b c d))", "#f");
+}
+
 // 6.4 Pairs and lists - Association lists
 #[test]
-#[ignore] // TODO: Implement assq
 fn test_assq() {
     assert_eval_to("(assq 'b '((a 1) (b 2) (c 3)))", "(b 2)");
     assert_eval_to("(assq 'd '((a 1) (b 2) (c 3)))", "#f");
 }
 
 #[test]
-#[ignore] // TODO: Implement memq
-fn test_memq() {
-    assert_eval_to("(memq 'b '(a b c))", "(b c)");
-    assert_eval_to("(memq 'd '(a b c))", "#f");
+fn test_assv() {
+    assert_eval_to("(assv 5 '((2 3) (5 7) (11 13)))", "(5 7)");
+    assert_eval_to("(assv 6 '((2 3) (5 7) (11 13)))", "#f");
+}
+
+#[test]
+fn test_assoc() {
+    // assoc uses equal? so it can find lists as keys
+    assert_eval_to("(assoc (list 'a) '(((a)) ((b)) ((c))))", "((a))");
+    assert_eval_to("(assoc 'b '((a) (b) (c)))", "(b)");
+    assert_eval_to("(assoc 'd '((a) (b) (c)))", "#f");
 }
 
 // 6.4 Higher-order list operations

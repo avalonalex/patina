@@ -361,6 +361,7 @@ impl Evaluator {
 
     fn eval_cond(&self, clauses: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
         // (cond (test1 expr1 ...) (test2 expr2 ...) ... [(else exprN ...)])
+        // Also supports: (cond (test => proc) ...)
         let mut current = clauses.clone();
 
         while let Value::Pair(clause_pair) = current {
@@ -374,7 +375,17 @@ impl Evaluator {
                 // Check for 'else' clause
                 if let Value::Symbol(sym) = test {
                     if sym.as_ref() == "else" {
-                        // else clause - evaluate all expressions
+                        // else clause - check for => syntax
+                        if let Value::Pair(exprs_pair) = exprs {
+                            if let Value::Symbol(arrow) = &exprs_pair.0 {
+                                if arrow.as_ref() == "=>" {
+                                    return Err(EvalError::InvalidSyntax(
+                                        "cond: else clause cannot use =>".to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                        // Regular else clause - evaluate all expressions
                         return self.eval_begin(exprs, env);
                     }
                 }
@@ -383,7 +394,25 @@ impl Evaluator {
                 let test_result = self.eval_in_env(test, env)?;
 
                 if test_result.is_truthy() {
-                    // Test succeeded - evaluate expressions in this clause
+                    // Test succeeded - check for => syntax
+                    if let Value::Pair(exprs_pair) = exprs {
+                        if let Value::Symbol(arrow) = &exprs_pair.0 {
+                            if arrow.as_ref() == "=>" {
+                                // (test => proc) - apply proc to test result
+                                if let Value::Pair(proc_pair) = &exprs_pair.1 {
+                                    if !matches!(proc_pair.1, Value::Null) {
+                                        return Err(EvalError::InvalidSyntax(
+                                            "cond: => requires exactly one expression".to_string(),
+                                        ));
+                                    }
+                                    let proc = self.eval_in_env(&proc_pair.0, env)?;
+                                    return self.apply(proc, vec![test_result]);
+                                }
+                            }
+                        }
+                    }
+
+                    // Regular clause - evaluate expressions
                     return self.eval_begin(exprs, env);
                 }
             } else {
@@ -1029,6 +1058,12 @@ impl Evaluator {
             "reverse" => self.primitive_reverse(args),
             "list-ref" => self.primitive_list_ref(args),
             "list-tail" => self.primitive_list_tail(args),
+            "memq" => self.primitive_memq(args),
+            "memv" => self.primitive_memv(args),
+            "member" => self.primitive_member(args),
+            "assq" => self.primitive_assq(args),
+            "assv" => self.primitive_assv(args),
+            "assoc" => self.primitive_assoc(args),
             "map" => self.primitive_map(args),
             "for-each" => self.primitive_for_each(args),
             "number?" => self.primitive_number_p(args),
@@ -1377,18 +1412,11 @@ impl Evaluator {
         Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
     }
 
-    fn primitive_eq(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
+    fn values_eq(&self, a: &Value, b: &Value) -> bool {
         // eq? checks identity/pointer equality
         // For symbols, booleans, null - compare identity
         // For numbers, strings, pairs - only same if same object
-        let result = match (&args[0], &args[1]) {
+        match (a, b) {
             // Booleans
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             // Null
@@ -1397,8 +1425,18 @@ impl Evaluator {
             (Value::Symbol(a), Value::Symbol(b)) => a.as_ref() == b.as_ref(),
             // For other types, eq? is stricter - only same object
             _ => false,
-        };
-        Ok(Value::Boolean(result))
+        }
+    }
+
+    fn primitive_eq(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        Ok(Value::Boolean(self.values_eq(&args[0], &args[1])))
     }
 
     fn values_eqv(&self, a: &Value, b: &Value) -> bool {
@@ -1437,11 +1475,11 @@ impl Evaluator {
             });
         }
 
-        Ok(Value::Boolean(Self::values_equal(&args[0], &args[1])))
+        Ok(Value::Boolean(Self::values_equal(&args[0], &args[1])?))
     }
 
-    fn values_equal(a: &Value, b: &Value) -> bool {
-        match (a, b) {
+    fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalError> {
+        Ok(match (a, b) {
             // Primitives
             (Value::Boolean(x), Value::Boolean(y)) => x == y,
             (Value::Integer(x), Value::Integer(y)) => x == y,
@@ -1457,20 +1495,28 @@ impl Evaluator {
 
             // Pairs - recursively compare car and cdr
             (Value::Pair(x), Value::Pair(y)) => {
-                Self::values_equal(&x.0, &y.0) && Self::values_equal(&x.1, &y.1)
+                Self::values_equal(&x.0, &y.0)? && Self::values_equal(&x.1, &y.1)?
             }
 
             // Vectors - compare length and elements
             (Value::Vector(x), Value::Vector(y)) => {
-                x.len() == y.len()
-                    && x.iter()
-                        .zip(y.iter())
-                        .all(|(a, b)| Self::values_equal(a, b))
+                if x.len() != y.len() {
+                    false
+                } else {
+                    let mut equal = true;
+                    for (a, b) in x.iter().zip(y.iter()) {
+                        if !Self::values_equal(a, b)? {
+                            equal = false;
+                            break;
+                        }
+                    }
+                    equal
+                }
             }
 
             // Different types
             _ => false,
-        }
+        })
     }
 
     fn primitive_map(&self, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -1622,7 +1668,7 @@ impl Evaluator {
                                 slow = slow_pair.1.clone();
                             }
                             // Check for cycle
-                            if Self::values_equal(&slow, &fast) {
+                            if Self::values_equal(&slow, &fast)? {
                                 return Ok(Value::Boolean(false));
                             }
                         }
@@ -1815,6 +1861,171 @@ impl Evaluator {
         Ok(current)
     }
 
+    fn primitive_memq(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (memq obj list) - Search using eq?
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let obj = &args[0];
+        let mut current = args[1].clone();
+
+        while let Value::Pair(pair) = current {
+            // Use eq? semantics (pointer equality for symbols, structural for others)
+            if self.values_eq(obj, &pair.0) {
+                return Ok(Value::Pair(pair));
+            }
+            current = pair.1.clone();
+        }
+
+        Ok(Value::Boolean(false))
+    }
+
+    fn primitive_memv(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (memv obj list) - Search using eqv?
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let obj = &args[0];
+        let mut current = args[1].clone();
+
+        while let Value::Pair(pair) = current {
+            // Use eqv? semantics
+            if self.values_eqv(obj, &pair.0) {
+                return Ok(Value::Pair(pair));
+            }
+            current = pair.1.clone();
+        }
+
+        Ok(Value::Boolean(false))
+    }
+
+    fn primitive_member(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (member obj list [compare]) - Search using equal? or custom comparison
+        if args.len() < 2 || args.len() > 3 {
+            return Err(EvalError::WrongArity {
+                expected: "2 or 3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let obj = &args[0];
+        let mut current = args[1].clone();
+        let compare_proc = args.get(2);
+
+        while let Value::Pair(pair) = current.clone() {
+            let matches = if let Some(proc) = compare_proc {
+                // Use custom comparison function
+                let result = self.apply(proc.clone(), vec![obj.clone(), pair.0.clone()])?;
+                result.is_truthy()
+            } else {
+                // Use equal? semantics
+                Self::values_equal(obj, &pair.0)?
+            };
+
+            if matches {
+                return Ok(Value::Pair(pair));
+            }
+            current = pair.1.clone();
+        }
+
+        Ok(Value::Boolean(false))
+    }
+
+    fn primitive_assq(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (assq obj alist) - Search using eq? on car of each pair
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let obj = &args[0];
+        let mut current = args[1].clone();
+
+        while let Value::Pair(pair) = current {
+            // Each element should be a pair
+            if let Value::Pair(entry) = &pair.0 {
+                // Compare obj with car of entry using eq?
+                if self.values_eq(obj, &entry.0) {
+                    return Ok(pair.0.clone());
+                }
+            }
+            current = pair.1.clone();
+        }
+
+        Ok(Value::Boolean(false))
+    }
+
+    fn primitive_assv(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (assv obj alist) - Search using eqv? on car of each pair
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let obj = &args[0];
+        let mut current = args[1].clone();
+
+        while let Value::Pair(pair) = current {
+            // Each element should be a pair
+            if let Value::Pair(entry) = &pair.0 {
+                // Compare obj with car of entry using eqv?
+                if self.values_eqv(obj, &entry.0) {
+                    return Ok(pair.0.clone());
+                }
+            }
+            current = pair.1.clone();
+        }
+
+        Ok(Value::Boolean(false))
+    }
+
+    fn primitive_assoc(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (assoc obj alist [compare]) - Search using equal? or custom comparison
+        if args.len() < 2 || args.len() > 3 {
+            return Err(EvalError::WrongArity {
+                expected: "2 or 3".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let obj = &args[0];
+        let mut current = args[1].clone();
+        let compare_proc = args.get(2);
+
+        while let Value::Pair(pair) = current.clone() {
+            // Each element should be a pair
+            if let Value::Pair(entry) = &pair.0 {
+                let matches = if let Some(proc) = compare_proc {
+                    // Use custom comparison function
+                    let result = self.apply(proc.clone(), vec![obj.clone(), entry.0.clone()])?;
+                    result.is_truthy()
+                } else {
+                    // Use equal? semantics on car of entry
+                    Self::values_equal(obj, &entry.0)?
+                };
+
+                if matches {
+                    return Ok(pair.0.clone());
+                }
+            }
+            current = pair.1.clone();
+        }
+
+        Ok(Value::Boolean(false))
+    }
+
     fn install_primitives(env: &Rc<Environment>) {
         let primitives = [
             ("+", Arity::Min(0)),
@@ -1838,6 +2049,12 @@ impl Evaluator {
             ("reverse", Arity::Exact(1)),
             ("list-ref", Arity::Exact(2)),
             ("list-tail", Arity::Exact(2)),
+            ("memq", Arity::Exact(2)),
+            ("memv", Arity::Exact(2)),
+            ("member", Arity::Range(2, 3)),
+            ("assq", Arity::Exact(2)),
+            ("assv", Arity::Exact(2)),
+            ("assoc", Arity::Range(2, 3)),
             ("map", Arity::Min(2)),
             ("for-each", Arity::Min(2)),
             ("number?", Arity::Exact(1)),
