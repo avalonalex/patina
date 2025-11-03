@@ -116,6 +116,7 @@ impl Evaluator {
                 "letrec*" => return self.eval_letrec_star(&cdr, env),
                 "and" => return self.eval_and(&cdr, env),
                 "or" => return self.eval_or(&cdr, env),
+                "case" => return self.eval_case(&cdr, env),
                 "apply" => return self.eval_apply(&cdr, env),
                 _ => {}
             }
@@ -388,6 +389,102 @@ impl Evaluator {
             } else {
                 return Err(EvalError::InvalidSyntax(
                     "cond clause must be a list".to_string(),
+                ));
+            }
+
+            current = clause_pair.1.clone();
+        }
+
+        // No clause matched and no else - return unspecified
+        Ok(Value::Unspecified)
+    }
+
+    fn eval_case(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (case <key> ((<datum> ...) <expr> ...) ... [(else <expr> ...)])
+        // Extract key expression
+        let (key_expr, clauses) = self.extract_pair(args)?;
+
+        // Evaluate the key
+        let key = self.eval_in_env(&key_expr, env)?;
+
+        // Iterate through clauses
+        let mut current = clauses;
+
+        while let Value::Pair(clause_pair) = current {
+            let clause = &clause_pair.0;
+
+            // Each clause should be ((<datum> ...) <expr> ...)
+            if let Value::Pair(clause_contents) = clause {
+                let datums = &clause_contents.0;
+                let exprs = &clause_contents.1;
+
+                // Check for 'else' clause
+                if let Value::Symbol(sym) = datums {
+                    if sym.as_ref() == "else" {
+                        // else clause - check for => syntax
+                        if let Value::Pair(exprs_pair) = exprs {
+                            if let Value::Symbol(arrow) = &exprs_pair.0 {
+                                if arrow.as_ref() == "=>" {
+                                    // (else => proc) - apply proc to key
+                                    if let Value::Pair(proc_pair) = &exprs_pair.1 {
+                                        if !matches!(proc_pair.1, Value::Null) {
+                                            return Err(EvalError::InvalidSyntax(
+                                                "case: => requires exactly one expression"
+                                                    .to_string(),
+                                            ));
+                                        }
+                                        let proc = self.eval_in_env(&proc_pair.0, env)?;
+                                        return self.apply(proc, vec![key]);
+                                    }
+                                }
+                            }
+                        }
+                        // Regular else clause
+                        return self.eval_begin(exprs, env);
+                    }
+                }
+
+                // Check if key matches any datum in this clause
+                let mut matched = false;
+                let mut datum_list = datums.clone();
+
+                while let Value::Pair(datum_pair) = datum_list {
+                    let datum = &datum_pair.0;
+
+                    // Use eqv? semantics for comparison
+                    if self.values_eqv(&key, datum) {
+                        matched = true;
+                        break;
+                    }
+
+                    datum_list = datum_pair.1.clone();
+                }
+
+                if matched {
+                    // Check for => syntax
+                    if let Value::Pair(exprs_pair) = exprs {
+                        if let Value::Symbol(arrow) = &exprs_pair.0 {
+                            if arrow.as_ref() == "=>" {
+                                // (<datum> ... => proc) - apply proc to key
+                                if let Value::Pair(proc_pair) = &exprs_pair.1 {
+                                    if !matches!(proc_pair.1, Value::Null) {
+                                        return Err(EvalError::InvalidSyntax(
+                                            "case: => requires exactly one expression".to_string(),
+                                        ));
+                                    }
+                                    let proc = self.eval_in_env(&proc_pair.0, env)?;
+                                    return self.apply(proc, vec![key]);
+                                }
+                            }
+                        }
+                    }
+
+                    // Regular clause - evaluate expressions
+                    return self.eval_begin(exprs, env);
+                }
+            } else {
+                return Err(EvalError::InvalidSyntax(
+                    "case clause must be a list".to_string(),
                 ));
             }
 
@@ -1304,16 +1401,9 @@ impl Evaluator {
         Ok(Value::Boolean(result))
     }
 
-    fn primitive_eqv(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
+    fn values_eqv(&self, a: &Value, b: &Value) -> bool {
         // eqv? is like eq? but compares numbers and characters by value
-        let result = match (&args[0], &args[1]) {
+        match (a, b) {
             // Same as eq? for booleans, null, symbols
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Null, Value::Null) => true,
@@ -1325,8 +1415,18 @@ impl Evaluator {
             (Value::Character(a), Value::Character(b)) => a == b,
             // Different types or other types
             _ => false,
-        };
-        Ok(Value::Boolean(result))
+        }
+    }
+
+    fn primitive_eqv(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        Ok(Value::Boolean(self.values_eqv(&args[0], &args[1])))
     }
 
     fn primitive_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {

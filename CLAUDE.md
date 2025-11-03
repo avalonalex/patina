@@ -80,7 +80,7 @@ cargo test -- --nocapture
 cargo check
 
 # Run the linter
-cargo clippy
+cargo clippy --all-targets --all-features -- -D warnings
 
 # Format code
 cargo fmt

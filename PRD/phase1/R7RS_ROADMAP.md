@@ -54,8 +54,8 @@ These can be implemented as special forms or macros:
 - [x] `letrec` - Recursive local bindings ✅ (2025-11-02)
 - [x] `letrec*` - Sequential recursive bindings ✅ (2025-11-02)
 
-### High Priority - TODO
-- [ ] `case` - Pattern matching on values
+### High Priority - COMPLETED ✅
+- [x] `case` - Pattern matching on values ✅ (2025-11-02)
 
 ### Medium Priority
 - [ ] `let-values` - Multiple value binding
@@ -223,10 +223,10 @@ Status: **Not Started** (Can work in global environment first)
    - ✅ Implemented as special forms
    - ✅ All scoping rules working correctly
 
-3. ✅ **Add cond, and, or** (frequently used) - COMPLETED 2025-11-02
+3. ✅ **Add cond, case, and, or** (frequently used) - COMPLETED 2025-11-02
    - ✅ Implemented as special forms
    - ✅ Short-circuit evaluation working
-   - 🔲 case - TODO
+   - ✅ case with => syntax support
 
 4. **Complete list operations** - IN PROGRESS
    - Many can be written in Scheme (see chibi's init-7.scm)
@@ -297,37 +297,50 @@ For a "bare minimum R7RS interpreter", we need:
 - Full numeric tower (complex, exact rationals)
 - call-with-values, dynamic-wind
 
-## Current Status Summary (Updated 2025-11-02)
+## Current Status Summary (Updated 2025-11-02 Evening)
 
-**Working:** ~60% of core R7RS features
-- ✅ All core special forms (quote, if, define, set!, begin, lambda with closures)
+**Working:** ~76% of core R7RS features
+- ✅ All core special forms (quote, if, define with function shorthand!, set!, begin, lambda with closures)
 - ✅ All binding constructs (let, let*, letrec, letrec*)
 - ✅ Boolean operators (and, or) with short-circuit
-- ✅ Conditionals (if, cond)
+- ✅ Conditionals (if, cond, case with => syntax)
 - ✅ Basic arithmetic and comparisons
 - ✅ Essential predicates (eq?, eqv?, equal?)
-- ✅ Basic list operations (cons, car, cdr, list)
-- ✅ Higher-order: apply
+- ✅ List operations: cons, car, cdr, list, list?, length, append, reverse, list-ref, list-tail, caar-cddddr
+- ✅ Higher-order: apply, map, for-each
+- ✅ Bootstrap library system (auto-loaded at startup)
 
-**Test Coverage:** 59/98 compliance tests passing (60%)
+**Test Coverage:** 83/109 compliance tests passing (76%)
 
 **Next Priority:**
-1. map, for-each (critical for functional programming)
-2. More list operations (length, append, reverse)
-3. case (pattern matching)
-4. Numeric tower expansion
-5. String operations
+1. Numeric operations (abs, quotient, remainder, modulo, floor, ceiling)
+2. More list operations (memq, assq, etc.)
+3. Basic I/O (display, write, newline)
+4. String operations
 
 **Estimated effort to bare minimum:**
 - ✅ Closures: DONE
 - ✅ Let forms: DONE
 - ✅ Cond/and/or: DONE
 - ✅ apply: DONE
-- 🔲 Map/for-each: 1-2 days
-- 🔲 List ops: 2-3 days
-- 🔲 case: 1 day
+- ✅ Map/for-each: DONE (2025-11-02)
+- ✅ Core list ops: DONE (2025-11-02)
+- ✅ Function define shorthand: DONE (2025-11-02)
+- ✅ Bootstrap library: DONE (2025-11-02)
+- ✅ case: DONE (2025-11-02)
+- 🔲 Numeric ops: 1-2 days
 - 🔲 I/O basics: 2-3 days
-- **Remaining: ~1-1.5 weeks of focused work**
+- **Remaining: ~3-5 days of focused work**
+
+## Post Phase 1: Usability & Tooling
+
+After achieving bare-minimum R7RS compliance, focus shifts to usability:
+
+**High Priority:**
+- 🔲 Built-in help system - See [HELP_SYSTEM.md](./HELP_SYSTEM.md)
+- 🔲 Better error messages with stack traces
+- 🔲 Debugger/stepper support
+- 🔲 REPL enhancements (history search, multi-line editing improvements)
 
 ## References
 

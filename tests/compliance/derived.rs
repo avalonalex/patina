@@ -29,7 +29,6 @@ fn test_cond_with_arrow() {
 
 // 4.2.1 Conditionals - Case
 #[test]
-#[ignore] // TODO: Implement case
 fn test_case_simple() {
     assert_eval_to(
         "(case (* 2 3) ((2 3 5 7) 'prime) ((1 4 6 8 9) 'composite))",
@@ -38,11 +37,44 @@ fn test_case_simple() {
 }
 
 #[test]
-#[ignore] // TODO: Implement case
 fn test_case_with_else() {
     assert_eval_to(
         "(case (car '(c d)) ((a e i o u) 'vowel) ((w y) 'semivowel) (else 'consonant))",
         "consonant",
+    );
+}
+
+#[test]
+fn test_case_with_arrow() {
+    // (else => proc) - passes the key to proc
+    assert_eval_to(
+        "(case (car '(c d)) ((a e i o u) 'vowel) ((w y) 'semivowel) (else => (lambda (x) x)))",
+        "c",
+    );
+}
+
+#[test]
+fn test_case_no_match() {
+    // No clause matches and no else - returns unspecified
+    assert_program_eval_to(
+        r#"(define result (case 10 ((1 2 3) 'small) ((20 30) 'big)))
+           result"#,
+        "#<unspecified>",
+    );
+}
+
+#[test]
+fn test_case_single_datum() {
+    assert_eval_to("(case 'a ((a) 'matched))", "matched");
+}
+
+#[test]
+fn test_case_with_multiple_exprs() {
+    // Case clause can have multiple expressions
+    assert_program_eval_to(
+        r#"(define x 0)
+           (case 1 ((1) (set! x 10) (set! x (+ x 5)) x))"#,
+        "15",
     );
 }
 
