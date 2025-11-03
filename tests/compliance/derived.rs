@@ -48,43 +48,37 @@ fn test_case_with_else() {
 
 // 4.2.2 Binding constructs - And/Or
 #[test]
-#[ignore] // TODO: Implement and
 fn test_and_all_true() {
     assert_eval_to("(and (= 2 2) (> 2 1))", "#t");
 }
 
 #[test]
-#[ignore] // TODO: Implement and
 fn test_and_with_false() {
     assert_eval_to("(and (= 2 2) (< 2 1))", "#f");
 }
 
 #[test]
-#[ignore] // TODO: Implement and
 fn test_and_returns_last() {
     assert_eval_to("(and 1 2 'c '(f g))", "(f g)");
 }
 
 #[test]
-#[ignore] // TODO: Implement and
 fn test_and_empty() {
     assert_eval_to("(and)", "#t");
 }
 
 #[test]
-#[ignore] // TODO: Implement or
 fn test_or_first_true() {
     assert_eval_to("(or (= 2 2) (> 2 1))", "#t");
 }
 
 #[test]
-#[ignore] // TODO: Implement or
 fn test_or_all_false() {
     assert_eval_to("(or #f #f #f)", "#f");
 }
 
 #[test]
-#[ignore] // TODO: Implement or
+#[ignore] // TODO: Implement memq first
 fn test_or_returns_first_true() {
     assert_eval_to("(or (memq 'b '(a b c)) (/ 3 0))", "(b c)");
 }

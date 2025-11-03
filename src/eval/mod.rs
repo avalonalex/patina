@@ -85,6 +85,8 @@ impl Evaluator {
                 "let*" => return self.eval_let_star(&cdr, env),
                 "letrec" => return self.eval_letrec(&cdr, env),
                 "letrec*" => return self.eval_letrec_star(&cdr, env),
+                "and" => return self.eval_and(&cdr, env),
+                "or" => return self.eval_or(&cdr, env),
                 _ => {}
             }
         }
@@ -599,6 +601,96 @@ impl Evaluator {
 
         // Evaluate body in the new environment
         self.eval_begin(&rest, &new_env)
+    }
+
+    fn eval_and(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (and) => #t
+        // (and test) => test
+        // (and test1 test2 ...) => if test1 is false, return #f; else continue
+        // Short-circuits on first false value
+
+        let mut current = args.clone();
+
+        // Empty (and) returns #t
+        if matches!(current, Value::Null) {
+            return Ok(Value::Boolean(true));
+        }
+
+        // Evaluate tests sequentially until we find a false one or reach the end
+        loop {
+            match current {
+                Value::Pair(ref pair) => {
+                    let test_result = self.eval_in_env(&pair.0, env)?;
+
+                    // If this is the last test, return its value (not just #t/#f)
+                    if matches!(pair.1, Value::Null) {
+                        return Ok(test_result);
+                    }
+
+                    // If test is false, short-circuit and return #f
+                    if !test_result.is_truthy() {
+                        return Ok(Value::Boolean(false));
+                    }
+
+                    // Continue with rest
+                    current = pair.1.clone();
+                }
+                Value::Null => {
+                    // Should not reach here due to earlier check
+                    return Ok(Value::Boolean(true));
+                }
+                _ => {
+                    return Err(EvalError::InvalidSyntax(
+                        "and expects a list of expressions".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn eval_or(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (or) => #f
+        // (or test) => test
+        // (or test1 test2 ...) => if test1 is true, return it; else continue
+        // Short-circuits on first true value
+
+        let mut current = args.clone();
+
+        // Empty (or) returns #f
+        if matches!(current, Value::Null) {
+            return Ok(Value::Boolean(false));
+        }
+
+        // Evaluate tests sequentially until we find a true one or reach the end
+        loop {
+            match current {
+                Value::Pair(ref pair) => {
+                    let test_result = self.eval_in_env(&pair.0, env)?;
+
+                    // If this is the last test, return its value (not just #t/#f)
+                    if matches!(pair.1, Value::Null) {
+                        return Ok(test_result);
+                    }
+
+                    // If test is true, short-circuit and return its value
+                    if test_result.is_truthy() {
+                        return Ok(test_result);
+                    }
+
+                    // Continue with rest
+                    current = pair.1.clone();
+                }
+                Value::Null => {
+                    // Should not reach here due to earlier check
+                    return Ok(Value::Boolean(false));
+                }
+                _ => {
+                    return Err(EvalError::InvalidSyntax(
+                        "or expects a list of expressions".to_string(),
+                    ));
+                }
+            }
+        }
     }
 
     fn eval_arguments(&self, args: &Value, env: &Rc<Environment>) -> Result<Vec<Value>, EvalError> {
