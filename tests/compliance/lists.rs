@@ -141,3 +141,61 @@ fn test_memq() {
     assert_eval_to("(memq 'b '(a b c))", "(b c)");
     assert_eval_to("(memq 'd '(a b c))", "#f");
 }
+
+// 6.4 Higher-order list operations
+#[test]
+fn test_map_single_list() {
+    // Basic map with single list
+    assert_eval_to("(map (lambda (x) (* x 2)) '(1 2 3))", "(2 4 6)");
+}
+
+#[test]
+fn test_map_with_primitive() {
+    // map with primitive procedure (needs cadr)
+    // For now test with car
+    assert_eval_to("(map car '((1 2) (3 4) (5 6)))", "(1 3 5)");
+}
+
+#[test]
+fn test_map_multiple_lists() {
+    // map with multiple lists
+    assert_eval_to("(map + '(1 2 3) '(4 5 6))", "(5 7 9)");
+}
+
+#[test]
+fn test_map_shortest_list() {
+    // map terminates on shortest list
+    assert_eval_to("(map + '(1 2 3) '(4 5 6 7))", "(5 7 9)");
+}
+
+#[test]
+fn test_map_empty_list() {
+    // map with empty list
+    assert_eval_to("(map (lambda (x) (* x 2)) '())", "()");
+}
+
+#[test]
+fn test_for_each_side_effects() {
+    // for-each with side effects
+    assert_program_eval_to(
+        r#"
+        (define result 0)
+        (for-each (lambda (x) (set! result (+ result x))) '(1 2 3 4))
+        result
+        "#,
+        "10",
+    );
+}
+
+#[test]
+fn test_for_each_multiple_lists() {
+    // for-each with multiple lists
+    assert_program_eval_to(
+        r#"
+        (define sum 0)
+        (for-each (lambda (x y) (set! sum (+ sum x y))) '(1 2 3) '(4 5 6))
+        sum
+        "#,
+        "21",
+    );
+}

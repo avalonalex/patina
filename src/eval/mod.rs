@@ -859,6 +859,8 @@ impl Evaluator {
             "null?" => self.primitive_null_p(args),
             "pair?" => self.primitive_pair_p(args),
             "list" => Ok(self.list_from_vec(args)),
+            "map" => self.primitive_map(args),
+            "for-each" => self.primitive_for_each(args),
             "number?" => self.primitive_number_p(args),
             "integer?" => self.primitive_integer_p(args),
             "boolean?" => self.primitive_boolean_p(args),
@@ -1298,6 +1300,127 @@ impl Evaluator {
         }
     }
 
+    fn primitive_map(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (map proc list1 list2 ...)
+        // Apply proc element-wise to corresponding elements from all lists
+        if args.is_empty() {
+            return Err(EvalError::WrongArity {
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+
+        let proc = &args[0];
+        let lists = &args[1..];
+
+        if lists.is_empty() {
+            return Err(EvalError::WrongArity {
+                expected: "at least 2".to_string(),
+                actual: 1,
+            });
+        }
+
+        // Convert all lists to vectors for easier processing
+        let mut list_vecs: Vec<Vec<Value>> = Vec::new();
+        for list in lists {
+            let mut items = Vec::new();
+            let mut current = list.clone();
+
+            while let Value::Pair(pair) = current {
+                items.push(pair.0.clone());
+                current = pair.1.clone();
+            }
+
+            // Check for proper list
+            if !matches!(current, Value::Null) {
+                return Err(EvalError::TypeError(
+                    "map: argument must be a proper list".to_string(),
+                ));
+            }
+
+            list_vecs.push(items);
+        }
+
+        // Find the length of the shortest list
+        let min_len = list_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
+
+        // Apply proc to each set of corresponding elements
+        let mut results = Vec::new();
+        for i in 0..min_len {
+            // Collect the i-th element from each list
+            let mut proc_args = Vec::new();
+            for list_vec in &list_vecs {
+                proc_args.push(list_vec[i].clone());
+            }
+
+            // Apply the procedure
+            let result = self.apply(proc.clone(), proc_args)?;
+            results.push(result);
+        }
+
+        Ok(self.list_from_vec(results))
+    }
+
+    fn primitive_for_each(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (for-each proc list1 list2 ...)
+        // Like map but for side effects, returns unspecified
+        if args.is_empty() {
+            return Err(EvalError::WrongArity {
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+
+        let proc = &args[0];
+        let lists = &args[1..];
+
+        if lists.is_empty() {
+            return Err(EvalError::WrongArity {
+                expected: "at least 2".to_string(),
+                actual: 1,
+            });
+        }
+
+        // Convert all lists to vectors
+        let mut list_vecs: Vec<Vec<Value>> = Vec::new();
+        for list in lists {
+            let mut items = Vec::new();
+            let mut current = list.clone();
+
+            while let Value::Pair(pair) = current {
+                items.push(pair.0.clone());
+                current = pair.1.clone();
+            }
+
+            // Check for proper list
+            if !matches!(current, Value::Null) {
+                return Err(EvalError::TypeError(
+                    "for-each: argument must be a proper list".to_string(),
+                ));
+            }
+
+            list_vecs.push(items);
+        }
+
+        // Find the length of the shortest list
+        let min_len = list_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
+
+        // Apply proc to each set of corresponding elements (in order, for side effects)
+        for i in 0..min_len {
+            // Collect the i-th element from each list
+            let mut proc_args = Vec::new();
+            for list_vec in &list_vecs {
+                proc_args.push(list_vec[i].clone());
+            }
+
+            // Apply the procedure (we discard the result)
+            self.apply(proc.clone(), proc_args)?;
+        }
+
+        // for-each returns unspecified
+        Ok(Value::Unspecified)
+    }
+
     fn install_primitives(env: &Rc<Environment>) {
         let primitives = [
             ("+", Arity::Min(0)),
@@ -1315,6 +1438,8 @@ impl Evaluator {
             ("null?", Arity::Exact(1)),
             ("pair?", Arity::Exact(1)),
             ("list", Arity::Min(0)),
+            ("map", Arity::Min(2)),
+            ("for-each", Arity::Min(2)),
             ("number?", Arity::Exact(1)),
             ("integer?", Arity::Exact(1)),
             ("boolean?", Arity::Exact(1)),
