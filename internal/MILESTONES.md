@@ -2,7 +2,45 @@
 
 Major accomplishments and project milestones.
 
-## 2025-11-02: Lambda Implementation & Test Reorganization
+## 2025-11-02 (Evening): Binding Constructs & Control Features
+
+**Let/Let*/Letrec Family Implementation**
+- ✅ Implemented `let` - parallel binding (evaluate in outer env, bind all at once)
+- ✅ Implemented `let*` - sequential binding (each binding sees previous ones)
+- ✅ Implemented `letrec` - recursive binding (allows mutual recursion)
+- ✅ Implemented `letrec*` - sequential recursive binding
+- ✅ All 4 binding tests passing
+- ✅ Enables mutually recursive functions like `even?`/`odd?`
+
+**Boolean Operators**
+- ✅ Implemented `and` - short-circuit conjunction
+- ✅ Implemented `or` - short-circuit disjunction
+- ✅ Returns actual values (not just #t/#f)
+- ✅ Proper short-circuit evaluation confirmed
+- ✅ All 6 and/or tests passing
+
+**Apply Implementation**
+- ✅ Implemented `apply` special form
+- ✅ Handles variadic arguments: `(apply proc arg1 ... args)`
+- ✅ Unpacks final list into individual arguments
+- ✅ Works with primitives and lambdas
+- ✅ Enables higher-order programming patterns
+- ✅ Bridges gap between data (lists) and computation (function calls)
+- ✅ Essential for function composition: `(compose f g)`
+- ✅ All 5 apply tests passing
+- ✅ Created `tests/compliance/control.rs` for control features
+
+**Test Progress:**
+- From: 44/93 tests (47%)
+- To: **59/98 tests (60%)**
+- **+15 tests passing** (+13% improvement)
+
+**Impact:**
+- Unblocked binding constructs (23% of tests)
+- Enabled functional composition patterns
+- Foundation for `map`, `for-each`, and standard library
+
+## 2025-11-02 (Morning): Lambda Implementation & Test Reorganization
 
 **Lambda with Full Closures**
 - ✅ Implemented complete lambda support
@@ -62,17 +100,18 @@ Major accomplishments and project milestones.
 
 ## Future Milestones (Planned)
 
-### Milestone: let/let*/letrec Implementation
+### ✅ Milestone: let/let*/letrec Implementation (COMPLETED 2025-11-02)
 **Target:** Week 5-6
-- [ ] Implement let binding form
-- [ ] Implement let* sequential binding
-- [ ] Implement letrec recursive binding
-- [ ] Add and, or boolean operators
-- **Impact:** Will unblock 23% of failing tests
+- ✅ Implement let binding form
+- ✅ Implement let* sequential binding
+- ✅ Implement letrec recursive binding
+- ✅ Implement letrec* sequential recursive binding
+- ✅ Add and, or boolean operators
+- **Impact:** Unblocked 23% of failing tests
 
-### Milestone: Higher-Order Functions
+### Milestone: Higher-Order Functions (IN PROGRESS)
 **Target:** Week 7-8
-- [ ] Implement apply
+- ✅ Implement apply
 - [ ] Implement map
 - [ ] Implement for-each
 - [ ] Core list operations (length, append, reverse)
@@ -138,21 +177,27 @@ Major accomplishments and project milestones.
 
 | Category | Tests | Passing | % Pass |
 |----------|-------|---------|--------|
-| Compliance | 93 | 44 | 47% |
+| Compliance | 98 | 59 | 60% |
 | Integration | 14 | 13 | 93% |
-| **Total** | **107** | **57** | **53%** |
+| **Total** | **112** | **72** | **64%** |
 
 ### Feature Completion
 
 | Area | Features | Complete | % Done |
 |------|----------|----------|--------|
-| Special Forms | 15 | 7 | 47% |
+| Special Forms | 15 | 11 | 73% |
 | Primitives | 100+ | ~30 | 30% |
 | Numeric Ops | 60 | 11 | 18% |
 | List Ops | 35 | 6 | 17% |
 | String Ops | 30 | 0 | 0% |
 | Vector Ops | 20 | 0 | 0% |
 | I/O Ops | 30 | 0 | 0% |
+
+**Special Forms Progress:**
+- ✅ quote, if, define, set!, lambda, begin, cond (7 primitives)
+- ✅ let, let*, letrec, letrec* (4 binding constructs)
+- ❌ case, when, unless, do (4 remaining derived forms)
+- Note: and, or, apply are also implemented as special forms
 
 ## Archive
 
@@ -163,4 +208,4 @@ Historical snapshots and outdated docs in `internal/ARCHIVE/`:
 
 ---
 
-**Next Update:** When next major feature is complete (likely let/let*/letrec)
+**Next Update:** When map/for-each or numeric tower expansion is complete
