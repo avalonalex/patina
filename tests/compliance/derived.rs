@@ -91,13 +91,11 @@ fn test_or_returns_first_true() {
 
 // 4.2.2 Binding constructs - Let
 #[test]
-#[ignore] // TODO: Implement let
 fn test_let_simple() {
     assert_eval_to("(let ((x 2) (y 3)) (* x y))", "6");
 }
 
 #[test]
-#[ignore] // TODO: Implement let
 fn test_let_scoping() {
     // Inner x shadows outer, but z uses outer x
     assert_eval_to(
@@ -108,7 +106,6 @@ fn test_let_scoping() {
 
 // 4.2.2 Binding constructs - Let*
 #[test]
-#[ignore] // TODO: Implement let*
 fn test_let_star_sequential() {
     // z can use x because let* is sequential
     assert_eval_to(
@@ -119,7 +116,6 @@ fn test_let_star_sequential() {
 
 // 4.2.2 Binding constructs - Letrec
 #[test]
-#[ignore] // TODO: Implement letrec
 fn test_letrec_recursive() {
     assert_eval_to(
         r#"(letrec ((even?

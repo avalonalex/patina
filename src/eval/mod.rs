@@ -81,6 +81,10 @@ impl Evaluator {
                 "lambda" => return self.eval_lambda(&cdr, env),
                 "begin" => return self.eval_begin(&cdr, env),
                 "cond" => return self.eval_cond(&cdr, env),
+                "let" => return self.eval_let(&cdr, env),
+                "let*" => return self.eval_let_star(&cdr, env),
+                "letrec" => return self.eval_letrec(&cdr, env),
+                "letrec*" => return self.eval_letrec_star(&cdr, env),
                 _ => {}
             }
         }
@@ -334,6 +338,267 @@ impl Evaluator {
         }
 
         Ok(result)
+    }
+
+    fn eval_let(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (let ((var1 val1) (var2 val2) ...) body ...)
+        // Desugars to: ((lambda (var1 var2 ...) body ...) val1 val2 ...)
+
+        let (bindings, rest) = self.extract_pair(args)?;
+
+        // Parse bindings into (names, values)
+        let mut names = Vec::new();
+        let mut value_exprs = Vec::new();
+        let mut current = bindings.clone();
+
+        while let Value::Pair(binding_pair) = current {
+            // Each binding should be (name value)
+            let binding = &binding_pair.0;
+            if let Value::Pair(binding_contents) = binding {
+                if let Value::Symbol(name) = &binding_contents.0 {
+                    names.push(name.clone());
+
+                    // Extract value expression
+                    if let Value::Pair(value_pair) = &binding_contents.1 {
+                        if !matches!(value_pair.1, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(
+                                "let binding must have exactly 2 elements".to_string(),
+                            ));
+                        }
+                        value_exprs.push(value_pair.0.clone());
+                    } else {
+                        return Err(EvalError::InvalidSyntax(
+                            "let binding must have a value".to_string(),
+                        ));
+                    }
+                } else {
+                    return Err(EvalError::InvalidSyntax(
+                        "let binding name must be a symbol".to_string(),
+                    ));
+                }
+            } else {
+                return Err(EvalError::InvalidSyntax(
+                    "let binding must be a list".to_string(),
+                ));
+            }
+
+            current = binding_pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "let bindings must be a proper list".to_string(),
+            ));
+        }
+
+        // Evaluate all value expressions in the current environment
+        let mut values = Vec::new();
+        for value_expr in value_exprs {
+            values.push(self.eval_in_env(&value_expr, env)?);
+        }
+
+        // Create new environment and bind all variables
+        let new_env = Rc::new(Environment::with_parent(env.clone()));
+        for (name, value) in names.iter().zip(values.iter()) {
+            new_env.define(name.to_string(), value.clone());
+        }
+
+        // Evaluate body in the new environment
+        self.eval_begin(&rest, &new_env)
+    }
+
+    fn eval_let_star(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (let* ((var1 val1) (var2 val2) ...) body ...)
+        // Sequential binding: each binding can see previous ones
+
+        let (bindings, rest) = self.extract_pair(args)?;
+
+        // Build environment incrementally
+        let mut current_env = env.clone();
+        let mut current = bindings.clone();
+
+        while let Value::Pair(binding_pair) = current {
+            // Each binding should be (name value)
+            let binding = &binding_pair.0;
+            if let Value::Pair(binding_contents) = binding {
+                if let Value::Symbol(name) = &binding_contents.0 {
+                    // Extract value expression
+                    if let Value::Pair(value_pair) = &binding_contents.1 {
+                        if !matches!(value_pair.1, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(
+                                "let* binding must have exactly 2 elements".to_string(),
+                            ));
+                        }
+
+                        // Evaluate value in current environment
+                        let value = self.eval_in_env(&value_pair.0, &current_env)?;
+
+                        // Create new environment extending current one
+                        let new_env = Rc::new(Environment::with_parent(current_env));
+                        new_env.define(name.to_string(), value);
+                        current_env = new_env;
+                    } else {
+                        return Err(EvalError::InvalidSyntax(
+                            "let* binding must have a value".to_string(),
+                        ));
+                    }
+                } else {
+                    return Err(EvalError::InvalidSyntax(
+                        "let* binding name must be a symbol".to_string(),
+                    ));
+                }
+            } else {
+                return Err(EvalError::InvalidSyntax(
+                    "let* binding must be a list".to_string(),
+                ));
+            }
+
+            current = binding_pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "let* bindings must be a proper list".to_string(),
+            ));
+        }
+
+        // Evaluate body in the final environment
+        self.eval_begin(&rest, &current_env)
+    }
+
+    fn eval_letrec(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (letrec ((var1 val1) (var2 val2) ...) body ...)
+        // All variables are bound first (to undefined), then values are assigned
+        // This allows mutual recursion
+
+        let (bindings, rest) = self.extract_pair(args)?;
+
+        // Parse bindings into (names, value_exprs)
+        let mut names = Vec::new();
+        let mut value_exprs = Vec::new();
+        let mut current = bindings.clone();
+
+        while let Value::Pair(binding_pair) = current {
+            let binding = &binding_pair.0;
+            if let Value::Pair(binding_contents) = binding {
+                if let Value::Symbol(name) = &binding_contents.0 {
+                    names.push(name.clone());
+
+                    if let Value::Pair(value_pair) = &binding_contents.1 {
+                        if !matches!(value_pair.1, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(
+                                "letrec binding must have exactly 2 elements".to_string(),
+                            ));
+                        }
+                        value_exprs.push(value_pair.0.clone());
+                    } else {
+                        return Err(EvalError::InvalidSyntax(
+                            "letrec binding must have a value".to_string(),
+                        ));
+                    }
+                } else {
+                    return Err(EvalError::InvalidSyntax(
+                        "letrec binding name must be a symbol".to_string(),
+                    ));
+                }
+            } else {
+                return Err(EvalError::InvalidSyntax(
+                    "letrec binding must be a list".to_string(),
+                ));
+            }
+
+            current = binding_pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "letrec bindings must be a proper list".to_string(),
+            ));
+        }
+
+        // Create new environment and bind all variables to Unspecified initially
+        let new_env = Rc::new(Environment::with_parent(env.clone()));
+        for name in &names {
+            new_env.define(name.to_string(), Value::Unspecified);
+        }
+
+        // Now evaluate all value expressions in the new environment and update bindings
+        for (name, value_expr) in names.iter().zip(value_exprs.iter()) {
+            let value = self.eval_in_env(value_expr, &new_env)?;
+            new_env
+                .set(name, value)
+                .map_err(EvalError::UndefinedVariable)?;
+        }
+
+        // Evaluate body in the new environment
+        self.eval_begin(&rest, &new_env)
+    }
+
+    fn eval_letrec_star(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (letrec* ((var1 val1) (var2 val2) ...) body ...)
+        // Like letrec but values are evaluated and assigned sequentially
+
+        let (bindings, rest) = self.extract_pair(args)?;
+
+        // Parse bindings into (names, value_exprs)
+        let mut names = Vec::new();
+        let mut value_exprs = Vec::new();
+        let mut current = bindings.clone();
+
+        while let Value::Pair(binding_pair) = current {
+            let binding = &binding_pair.0;
+            if let Value::Pair(binding_contents) = binding {
+                if let Value::Symbol(name) = &binding_contents.0 {
+                    names.push(name.clone());
+
+                    if let Value::Pair(value_pair) = &binding_contents.1 {
+                        if !matches!(value_pair.1, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(
+                                "letrec* binding must have exactly 2 elements".to_string(),
+                            ));
+                        }
+                        value_exprs.push(value_pair.0.clone());
+                    } else {
+                        return Err(EvalError::InvalidSyntax(
+                            "letrec* binding must have a value".to_string(),
+                        ));
+                    }
+                } else {
+                    return Err(EvalError::InvalidSyntax(
+                        "letrec* binding name must be a symbol".to_string(),
+                    ));
+                }
+            } else {
+                return Err(EvalError::InvalidSyntax(
+                    "letrec* binding must be a list".to_string(),
+                ));
+            }
+
+            current = binding_pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "letrec* bindings must be a proper list".to_string(),
+            ));
+        }
+
+        // Create new environment and bind all variables to Unspecified initially
+        let new_env = Rc::new(Environment::with_parent(env.clone()));
+        for name in &names {
+            new_env.define(name.to_string(), Value::Unspecified);
+        }
+
+        // Evaluate and assign values sequentially (this is the difference from letrec)
+        for (name, value_expr) in names.iter().zip(value_exprs.iter()) {
+            let value = self.eval_in_env(value_expr, &new_env)?;
+            new_env
+                .set(name, value)
+                .map_err(EvalError::UndefinedVariable)?;
+        }
+
+        // Evaluate body in the new environment
+        self.eval_begin(&rest, &new_env)
     }
 
     fn eval_arguments(&self, args: &Value, env: &Rc<Environment>) -> Result<Vec<Value>, EvalError> {
