@@ -202,3 +202,45 @@ fn test_unless() {
     assert_eval_to("(unless (< 3 2) 'yes)", "yes");
     assert_eval_to("(unless (> 3 2) 'yes)", "#<unspecified>");
 }
+
+// 4.2.2 Binding Constructs - let-values and let*-values
+#[test]
+fn test_let_values_simple() {
+    assert_eval_to("(let-values (((a b) (values 1 2))) (+ a b))", "3");
+}
+
+#[test]
+fn test_let_values_multiple_bindings() {
+    assert_eval_to(
+        "(let-values (((a b) (values 1 2)) ((c d) (values 3 4))) (+ a b c d))",
+        "10",
+    );
+}
+
+#[test]
+fn test_let_star_values_sequential() {
+    // Example from chibi tests - c and d use a and b from previous binding
+    assert_program_eval_to(
+        r#"
+        (let ((x 'x) (y 'y))
+          (let*-values (((a b) (values x y))
+                        ((x y) (values a b)))
+            (list a b x y)))
+        "#,
+        "(x y x y)",
+    );
+}
+
+#[test]
+fn test_let_star_values_dependency() {
+    assert_eval_to(
+        "(let*-values (((a b) (values 1 2)) ((c d) (values a b))) (list a b c d))",
+        "(1 2 1 2)",
+    );
+}
+
+#[test]
+fn test_let_values_empty() {
+    // Empty bindings
+    assert_eval_to("(let-values () 42)", "42");
+}

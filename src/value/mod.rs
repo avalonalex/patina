@@ -42,6 +42,9 @@ pub enum Value {
     InputPort,
     OutputPort,
 
+    // Multiple values (R7RS Section 6.10)
+    Values(Vec<Value>),
+
     // Special values
     Unspecified,
     Eof,
@@ -94,6 +97,7 @@ impl Value {
             Value::Bytevector(_) => "bytevector",
             Value::Procedure(_) => "procedure",
             Value::InputPort | Value::OutputPort => "port",
+            Value::Values(_) => "values",
             Value::Unspecified => "unspecified",
             Value::Eof => "eof-object",
         }
@@ -132,6 +136,17 @@ impl std::fmt::Display for Value {
             Value::Procedure(_) => write!(f, "#<procedure>"),
             Value::InputPort => write!(f, "#<input-port>"),
             Value::OutputPort => write!(f, "#<output-port>"),
+            Value::Values(vals) => {
+                // Multiple values are usually only seen internally
+                // Display as space-separated values
+                for (i, val) in vals.iter().enumerate() {
+                    if i > 0 {
+                        writeln!(f)?;
+                    }
+                    write!(f, "{}", val)?;
+                }
+                Ok(())
+            }
             Value::Unspecified => write!(f, "#<unspecified>"),
             Value::Eof => write!(f, "#<eof>"),
         }

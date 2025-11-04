@@ -114,6 +114,8 @@ impl Evaluator {
                 "let*" => return self.eval_let_star(&cdr, env),
                 "letrec" => return self.eval_letrec(&cdr, env),
                 "letrec*" => return self.eval_letrec_star(&cdr, env),
+                "let-values" => return self.eval_let_values(&cdr, env),
+                "let*-values" => return self.eval_let_star_values(&cdr, env),
                 "and" => return self.eval_and(&cdr, env),
                 "or" => return self.eval_or(&cdr, env),
                 "case" => return self.eval_case(&cdr, env),
@@ -797,6 +799,235 @@ impl Evaluator {
         self.eval_begin(&rest, &new_env)
     }
 
+    fn eval_let_values(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // (let-values (((formals) expr) ...) body ...)
+        // Each binding binds multiple values from expr to formals
+
+        let (bindings, rest) = self.extract_pair(args)?;
+
+        // Create new environment
+        let new_env = Rc::new(Environment::with_parent(env.clone()));
+
+        // Process each binding
+        let mut current = bindings.clone();
+        while let Value::Pair(binding_pair) = current {
+            let binding = &binding_pair.0;
+
+            // Each binding should be ((formals) expr)
+            if let Value::Pair(binding_contents) = binding {
+                let formals = &binding_contents.0;
+
+                if let Value::Pair(expr_pair) = &binding_contents.1 {
+                    if !matches!(expr_pair.1, Value::Null) {
+                        return Err(EvalError::InvalidSyntax(
+                            "let-values binding must have exactly 2 elements".to_string(),
+                        ));
+                    }
+
+                    let expr = &expr_pair.0;
+
+                    // Evaluate the expression to get values
+                    let values = self.eval_in_env(expr, env)?;
+
+                    // Bind the values to the formals
+                    self.bind_values_to_formals(formals, &values, &new_env)?;
+                } else {
+                    return Err(EvalError::InvalidSyntax(
+                        "let-values binding must have an expression".to_string(),
+                    ));
+                }
+            } else {
+                return Err(EvalError::InvalidSyntax(
+                    "let-values binding must be a list".to_string(),
+                ));
+            }
+
+            current = binding_pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "let-values bindings must be a proper list".to_string(),
+            ));
+        }
+
+        // Evaluate body in new environment
+        self.eval_begin(&rest, &new_env)
+    }
+
+    fn eval_let_star_values(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        // (let*-values (((formals) expr) ...) body ...)
+        // Like let-values but bindings are sequential
+
+        let (bindings, rest) = self.extract_pair(args)?;
+
+        // Empty bindings - just evaluate body
+        if matches!(bindings, Value::Null) {
+            return self.eval_begin(&rest, env);
+        }
+
+        // Process first binding
+        if let Value::Pair(first_pair) = bindings {
+            let first_binding = &first_pair.0;
+            let remaining_bindings = &first_pair.1;
+
+            // Parse first binding: ((formals) expr)
+            if let Value::Pair(binding_contents) = first_binding {
+                let formals = &binding_contents.0;
+
+                if let Value::Pair(expr_pair) = &binding_contents.1 {
+                    if !matches!(expr_pair.1, Value::Null) {
+                        return Err(EvalError::InvalidSyntax(
+                            "let*-values binding must have exactly 2 elements".to_string(),
+                        ));
+                    }
+
+                    let expr = &expr_pair.0;
+
+                    // Evaluate the expression
+                    let values = self.eval_in_env(expr, env)?;
+
+                    // Create new environment with these bindings
+                    let new_env = Rc::new(Environment::with_parent(env.clone()));
+                    self.bind_values_to_formals(formals, &values, &new_env)?;
+
+                    // Recursively process remaining bindings in new environment
+                    if matches!(remaining_bindings, Value::Null) {
+                        // No more bindings, evaluate body
+                        self.eval_begin(&rest, &new_env)
+                    } else {
+                        // More bindings - recurse with let*-values
+                        // Build: (remaining_bindings . body)
+                        let new_args =
+                            Value::Pair(Rc::new((remaining_bindings.clone(), rest.clone())));
+                        self.eval_let_star_values(&new_args, &new_env)
+                    }
+                } else {
+                    Err(EvalError::InvalidSyntax(
+                        "let*-values binding must have an expression".to_string(),
+                    ))
+                }
+            } else {
+                Err(EvalError::InvalidSyntax(
+                    "let*-values binding must be a list".to_string(),
+                ))
+            }
+        } else {
+            Err(EvalError::InvalidSyntax(
+                "let*-values bindings must be a proper list".to_string(),
+            ))
+        }
+    }
+
+    fn bind_values_to_formals(
+        &self,
+        formals: &Value,
+        values: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<(), EvalError> {
+        // Helper to bind values (potentially multiple) to formals
+        // This handles the different formal parameter patterns
+
+        match formals {
+            // Single identifier - bind all values (or single value)
+            Value::Symbol(name) => {
+                env.define(name.to_string(), values.clone());
+                Ok(())
+            }
+
+            // List of identifiers - extract values and bind each
+            Value::Pair(_) => {
+                // Extract value list
+                let val_list = match values {
+                    Value::Values(vals) => vals.clone(),
+                    other => vec![other.clone()],
+                };
+
+                // Extract formals list
+                let mut formal_names = Vec::new();
+                let mut current = formals.clone();
+
+                while let Value::Pair(pair) = current {
+                    if let Value::Symbol(name) = &pair.0 {
+                        formal_names.push(name.clone());
+                        current = pair.1.clone();
+                    } else {
+                        return Err(EvalError::InvalidSyntax(
+                            "Formals must be symbols".to_string(),
+                        ));
+                    }
+                }
+
+                // Handle dotted list (rest parameter)
+                let has_rest = if let Value::Symbol(rest_name) = current {
+                    formal_names.push(rest_name);
+                    true
+                } else if !matches!(current, Value::Null) {
+                    return Err(EvalError::InvalidSyntax("Invalid formals list".to_string()));
+                } else {
+                    false
+                };
+
+                // Bind values to formals
+                if has_rest {
+                    // Last formal gets remaining values as a list
+                    let fixed_count = formal_names.len() - 1;
+                    if val_list.len() < fixed_count {
+                        return Err(EvalError::WrongArity {
+                            expected: format!("at least {}", fixed_count),
+                            actual: val_list.len(),
+                        });
+                    }
+
+                    for (i, name) in formal_names.iter().take(fixed_count).enumerate() {
+                        env.define(name.to_string(), val_list[i].clone());
+                    }
+
+                    let rest_values = self.list_from_vec(val_list[fixed_count..].to_vec());
+                    env.define(formal_names[fixed_count].to_string(), rest_values);
+                } else {
+                    // Exact match required
+                    if val_list.len() != formal_names.len() {
+                        return Err(EvalError::WrongArity {
+                            expected: formal_names.len().to_string(),
+                            actual: val_list.len(),
+                        });
+                    }
+
+                    for (name, value) in formal_names.iter().zip(val_list.iter()) {
+                        env.define(name.to_string(), value.clone());
+                    }
+                }
+
+                Ok(())
+            }
+
+            // Empty list
+            Value::Null => {
+                // No formals, values should be empty too
+                match values {
+                    Value::Values(vals) if vals.is_empty() => Ok(()),
+                    Value::Values(vals) => Err(EvalError::WrongArity {
+                        expected: "0".to_string(),
+                        actual: vals.len(),
+                    }),
+                    _ => Err(EvalError::WrongArity {
+                        expected: "0".to_string(),
+                        actual: 1,
+                    }),
+                }
+            }
+
+            _ => Err(EvalError::InvalidSyntax(
+                "Invalid formals in let-values".to_string(),
+            )),
+        }
+    }
+
     fn eval_and(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
         // (and) => #t
         // (and test) => test
@@ -1074,6 +1305,8 @@ impl Evaluator {
             "eq?" => self.primitive_eq(args),
             "eqv?" => self.primitive_eqv(args),
             "equal?" => self.primitive_equal(args),
+            "values" => self.primitive_values(args),
+            "call-with-values" => self.primitive_call_with_values(args),
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name
@@ -2026,6 +2259,41 @@ impl Evaluator {
         Ok(Value::Boolean(false))
     }
 
+    fn primitive_values(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (values obj ...) - Returns multiple values
+        // Special case: single value is returned unwrapped
+        match args.len() {
+            0 => Ok(Value::Unspecified), // (values) returns unspecified
+            1 => Ok(args.into_iter().next().unwrap()), // Single value unwrapped
+            _ => Ok(Value::Values(args)), // Multiple values wrapped
+        }
+    }
+
+    fn primitive_call_with_values(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // (call-with-values producer consumer)
+        // Calls producer with no args, then calls consumer with the values
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let producer = &args[0];
+        let consumer = &args[1];
+
+        // Call producer with no arguments
+        let produced = self.apply(producer.clone(), vec![])?;
+
+        // Unwrap Values if needed and call consumer
+        let consumer_args = match produced {
+            Value::Values(vals) => vals,
+            other => vec![other],
+        };
+
+        self.apply(consumer.clone(), consumer_args)
+    }
+
     fn install_primitives(env: &Rc<Environment>) {
         let primitives = [
             ("+", Arity::Min(0)),
@@ -2065,6 +2333,8 @@ impl Evaluator {
             ("eq?", Arity::Exact(2)),
             ("eqv?", Arity::Exact(2)),
             ("equal?", Arity::Exact(2)),
+            ("values", Arity::Min(0)),
+            ("call-with-values", Arity::Exact(2)),
         ];
 
         for (name, arity) in primitives {
