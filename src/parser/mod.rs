@@ -89,7 +89,7 @@ impl Parser {
                 let quoted = self.parse_expr()?;
                 Ok(self.make_list(vec![Value::Symbol(Rc::from("unquote-splicing")), quoted]))
             }
-            Token::LeftParen | Token::LeftBracket => self.parse_list(),
+            Token::LeftParen => self.parse_list(),
             Token::VectorOpen => self.parse_vector(),
             Token::BytevectorOpen => self.parse_bytevector(),
             Token::Eof => Err(ParseError::UnexpectedEof),
@@ -98,19 +98,12 @@ impl Parser {
     }
 
     fn parse_list(&mut self) -> Result<Value, ParseError> {
-        let opening = self.current_token.clone();
-        self.advance()?; // consume ( or [
-
-        let closing = match opening {
-            Token::LeftParen => Token::RightParen,
-            Token::LeftBracket => Token::RightBracket,
-            _ => unreachable!(),
-        };
+        self.advance()?; // consume (
 
         let mut elements = Vec::new();
         let mut dotted_tail = None;
 
-        while self.current_token != closing {
+        while self.current_token != Token::RightParen {
             if self.current_token == Token::Eof {
                 return Err(ParseError::UnexpectedEof);
             }
@@ -124,10 +117,10 @@ impl Parser {
             elements.push(self.parse_expr()?);
         }
 
-        if self.current_token != closing {
+        if self.current_token != Token::RightParen {
             return Err(ParseError::UnexpectedToken(self.current_token.clone()));
         }
-        self.advance()?; // consume ) or ]
+        self.advance()?; // consume )
 
         if let Some(tail) = dotted_tail {
             Ok(self.make_dotted_list(elements, tail))

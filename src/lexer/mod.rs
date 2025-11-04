@@ -5,8 +5,6 @@ pub enum Token {
     // Delimiters
     LeftParen,
     RightParen,
-    LeftBracket,
-    RightBracket,
     VectorOpen,     // #(
     BytevectorOpen, // #u8(
 
@@ -38,6 +36,9 @@ pub enum LexError {
 
     #[error("Invalid character literal")]
     InvalidCharacter,
+
+    #[error("Reserved character (R7RS): {0}. Square brackets [ ] and curly braces {{ }} are reserved for future extensions")]
+    ReservedCharacter(char),
 
     #[allow(dead_code)]
     #[error("Invalid number format: {0}")]
@@ -75,14 +76,8 @@ impl Lexer {
                 self.advance();
                 Ok(Token::RightParen)
             }
-            '[' => {
-                self.advance();
-                Ok(Token::LeftBracket)
-            }
-            ']' => {
-                self.advance();
-                Ok(Token::RightBracket)
-            }
+            // R7RS reserves [ ] { } for future extensions
+            '[' | ']' | '{' | '}' => Err(LexError::ReservedCharacter(ch)),
             '\'' => {
                 self.advance();
                 Ok(Token::Quote)
@@ -145,7 +140,7 @@ impl Lexer {
             return true;
         }
         let next = self.input[self.position + 1];
-        next.is_whitespace() || matches!(next, '(' | ')' | '[' | ']' | '"' | ';')
+        next.is_whitespace() || matches!(next, '(' | ')' | '"' | ';')
     }
 
     fn peek_is_numeric(&self) -> bool {
@@ -233,7 +228,7 @@ impl Lexer {
         let start = self.position;
         while !self.is_at_end()
             && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')' | '[' | ']')
+            && !matches!(self.current_char(), '(' | ')')
         {
             self.advance();
         }
@@ -256,7 +251,7 @@ impl Lexer {
 
         while !self.is_at_end()
             && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')' | '[' | ']')
+            && !matches!(self.current_char(), '(' | ')')
         {
             self.advance();
         }
@@ -293,7 +288,7 @@ impl Lexer {
 
         while !self.is_at_end()
             && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')' | '[' | ']' | '"' | ';')
+            && !matches!(self.current_char(), '(' | ')' | '"' | ';')
         {
             self.advance();
         }
@@ -318,5 +313,33 @@ mod tests {
         assert_eq!(lexer.next_token().unwrap(), Token::Number("1".to_string()));
         assert_eq!(lexer.next_token().unwrap(), Token::Number("2".to_string()));
         assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_reject_reserved_characters() {
+        // R7RS reserves [ ] { } for future extensions
+        let mut lexer = Lexer::new("[");
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::ReservedCharacter('['))
+        ));
+
+        let mut lexer = Lexer::new("]");
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::ReservedCharacter(']'))
+        ));
+
+        let mut lexer = Lexer::new("{");
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::ReservedCharacter('{'))
+        ));
+
+        let mut lexer = Lexer::new("}");
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::ReservedCharacter('}'))
+        ));
     }
 }
