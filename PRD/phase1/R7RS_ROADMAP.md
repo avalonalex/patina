@@ -1,6 +1,10 @@
 # R7RS Bare Minimum Roadmap
 
-This document outlines the path to bare minimum R7RS-small compliance for Patina, based on the chibi-scheme reference implementation and R7RS specification.
+This document outlines the **strategic plan** for achieving bare minimum R7RS-small compliance for Patina.
+
+**For current implementation status**, see [FEATURE_STATUS.md](../../docs/FEATURE_STATUS.md) which tracks test-by-test progress.
+
+This roadmap focuses on **implementation strategy**, **phase planning**, and **rationale**.
 
 ## Reference
 
@@ -300,40 +304,27 @@ For a "bare minimum R7RS interpreter", we need:
 - Full numeric tower (complex, exact rationals)
 - call-with-values, dynamic-wind
 
-## Current Status Summary (Updated 2025-11-02 Evening - 80% Milestone! 🎉)
+## Current Status Summary (Updated 2025-11-03)
 
-**Working:** ~80% of core R7RS features
-- ✅ All core special forms (quote, if, define with function shorthand!, set!, begin, lambda with closures)
-- ✅ All binding constructs (let, let*, letrec, letrec*)
-- ✅ Boolean operators (and, or) with short-circuit
-- ✅ Conditionals (if, cond with =>, case with => syntax)
-- ✅ Basic arithmetic and comparisons
-- ✅ Essential predicates (eq?, eqv?, equal?)
-- ✅ List operations: cons, car, cdr, list, list?, length, append, reverse, list-ref, list-tail, caar-cddddr
-- ✅ List searching: memq, memv, member, assq, assv, assoc
-- ✅ Higher-order: apply, map, for-each
-- ✅ Bootstrap library system (auto-loaded at startup)
+**Test Coverage:** 92/115 compliance tests passing (80%) - See [FEATURE_STATUS.md](../../docs/FEATURE_STATUS.md) for details
 
-**Test Coverage:** 92/115 compliance tests passing (80%)
+**Fully Complete Categories:**
+- ✅ **Lists (100%)** - All 30 list operations working
+- ✅ **Control (100%)** - apply, map, for-each complete
+- ✅ **Derived forms (83%)** - let, cond, case, and, or complete
 
-**Next Priority:**
-1. Numeric operations (abs, quotient, remainder, modulo, floor, ceiling)
-2. Basic I/O (display, write, newline)
-3. String operations (string-append, string-length, etc.)
+**Remaining Work (23 ignored tests):**
+- Simple predicates: `not`, `zero?`, `positive?`, `negative?`, `odd?`, `even?`
+- Simple numeric ops: `abs`, `quotient`, `remainder`, `modulo`, `max`, `min`
+- Edge cases: `when`, `unless`, `do`, division by zero
 
-**Estimated effort to bare minimum:**
-- ✅ Closures: DONE
-- ✅ Let forms: DONE
-- ✅ Cond/and/or: DONE
-- ✅ apply: DONE
-- ✅ Map/for-each: DONE (2025-11-02)
-- ✅ Core list ops: DONE (2025-11-02)
-- ✅ Function define shorthand: DONE (2025-11-02)
-- ✅ Bootstrap library: DONE (2025-11-02)
-- ✅ case: DONE (2025-11-02)
-- 🔲 Numeric ops: 1-2 days
-- 🔲 I/O basics: 2-3 days
-- **Remaining: ~3-5 days of focused work**
+**Quick Wins:** Implementing the 9 simple predicates/operations above would reach **88% test coverage** with ~1-2 hours of work.
+
+**Estimated effort to 95%+ compliance:**
+- 🔲 Quick wins (predicates + simple numeric): 1-2 hours
+- 🔲 Remaining numeric ops: 2-3 hours
+- 🔲 `when`, `unless`, `do`: 2-4 hours
+- **Total: ~1 day of focused work to reach 95%+ compliance**
 
 ## Post Phase 1: Usability & Tooling
 
