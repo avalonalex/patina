@@ -135,14 +135,12 @@ fn test_integer_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Implement zero?
 fn test_zero_predicate() {
     assert_eval_to("(zero? 0)", "#t");
     assert_eval_to("(zero? 1)", "#f");
 }
 
 #[test]
-#[ignore] // TODO: Implement positive?
 fn test_positive_predicate() {
     assert_eval_to("(positive? 5)", "#t");
     assert_eval_to("(positive? -5)", "#f");
@@ -150,7 +148,6 @@ fn test_positive_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Implement negative?
 fn test_negative_predicate() {
     assert_eval_to("(negative? -5)", "#t");
     assert_eval_to("(negative? 5)", "#f");

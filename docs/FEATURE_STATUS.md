@@ -1,6 +1,6 @@
 # R7RS (scheme base) Feature Matrix
 
-**Last Updated:** 2025-11-03 (major progress update!)
+**Last Updated:** 2025-11-04 (predicates update!)
 
 This document provides a **detailed test-by-test status matrix** for R7RS compliance.
 
@@ -18,20 +18,20 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 
 ## Summary Statistics
 
-**Test Results: 92 passing, 23 ignored (not implemented)**
+**Test Results: 106 passing, 22 ignored (not implemented)**
 
 | Category | Implemented | Total | Progress |
 |----------|-------------|-------|----------|
 | Primitives | 18 | 20 | 90% |
 | Derived Forms | 20 | 24 | 83% |
-| Numbers | 11 | 27 | 41% |
+| Numbers | 14 | 27 | 52% |
 | Lists | 30 | 30 | 100% ✅ |
-| Predicates | 7 | 12 | 58% |
+| Predicates | 8 | 12 | 67% |
 | Control | 5 | 5 | 100% ✅ |
 | Strings | 0 | 30 | 0% |
 | Vectors | 0 | 20 | 0% |
 | I/O | 0 | 30 | 0% |
-| **TOTAL** | **91** | **198** | **46%** |
+| **TOTAL** | **95** | **198** | **48%** |
 
 ---
 
@@ -166,11 +166,11 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 |---------|--------|-------|------|
 | number? | ✅ | test_number_predicate | numbers.rs |
 | integer? | ✅ | test_integer_predicate | numbers.rs |
-| zero? | ❌ | test_zero_predicate (ignored) | Not implemented |
-| positive? | ❌ | test_positive_predicate (ignored) | Not implemented |
-| negative? | ❌ | test_negative_predicate (ignored) | Not implemented |
-| odd? | ❌ | test_odd_predicate (ignored) | Not implemented |
-| even? | ❌ | test_even_predicate (ignored) | Not implemented |
+| zero? | ✅ | test_zero_predicate | numbers.rs / bootstrap.scm |
+| positive? | ✅ | test_positive_predicate | numbers.rs / bootstrap.scm |
+| negative? | ✅ | test_negative_predicate | numbers.rs / bootstrap.scm |
+| odd? | ❌ | test_odd_predicate (ignored) | Needs remainder |
+| even? | ❌ | test_even_predicate (ignored) | Needs remainder |
 | exact? | ❌ | - | Not implemented |
 | inexact? | ❌ | - | Not implemented |
 | exact-integer? | ❌ | - | Not implemented |
@@ -273,7 +273,7 @@ Priority items:
 | char? | ❌ | test_char_predicate (ignored) | Not implemented |
 | vector? | ❌ | test_vector_predicate (ignored) | Not implemented |
 | procedure? | ❌ | test_procedure_predicate (ignored) | Not implemented |
-| not | ❌ | test_not (ignored) | Not implemented |
+| not | ✅ | test_not | predicates.rs / bootstrap.scm |
 
 ---
 
@@ -311,39 +311,43 @@ Priority items for basic functionality:
 
 ## Next Priorities
 
-**Current Status: 92/115 tests passing (80%)**
+**Current Status: 106/128 tests passing (83%)**
 
-Based on the 23 ignored tests, here are the quickest wins to reach higher compliance:
+Based on the 22 ignored tests, here are the quickest wins to reach higher compliance:
 
-### Quick Wins (1-2 hours) - Predicates & Simple Operations
-1. **`not`** - Boolean negation (trivial)
-2. **Numeric predicates** - `zero?`, `positive?`, `negative?`, `odd?`, `even?` (5 simple predicates)
-3. **`abs`** - Absolute value (trivial)
-4. **`max`, `min`** - Find maximum/minimum (straightforward)
+### Quick Wins (1-2 hours) - Simple Operations
+1. **`abs`** - Absolute value (trivial)
+2. **`max`, `min`** - Find maximum/minimum (straightforward)
 
 ### Medium Priority (2-4 hours) - Numeric Operations
-5. **`quotient`, `remainder`, `modulo`** - Integer division operations
+3. **`quotient`, `remainder`, `modulo`** - Integer division operations
    - **Note**: Once implemented, enable `test_gcd_euclidean` and `test_extended_gcd` in numbers.rs
    - These tests demonstrate the power of multiple values for classic algorithms!
-6. **Division by zero handling** - Proper error for `(/ 1 0)`
+   - Also enable `odd?` and `even?` predicates in bootstrap.scm once remainder is available
+4. **Division by zero handling** - Proper error for `(/ 1 0)`
 
 ### Low Priority (4+ hours) - Advanced Features
-7. **`when`, `unless`** - Syntactic sugar for `if`
-8. **`or` returns value** - Edge case: `(or #f 42)` should return `42`, not `#t`
-9. **`do`** - Iteration construct (more complex)
-10. **`procedure?`, `char?`, `vector?`** - Type predicates
+5. **`when`, `unless`** - Syntactic sugar for `if`
+6. **`or` returns value** - Edge case: `(or #f 42)` should return `42`, not `#t`
+7. **`do`** - Iteration construct (more complex)
+8. **`procedure?`, `char?`, `vector?`** - Type predicates
 
 ### Future Work (Not blocking current compliance)
 - **Strings** - 30+ operations (major undertaking)
 - **Vectors** - 20+ operations
 - **I/O** - `display`, `write`, ports, etc.
-- **Multiple values** - `values`, `call-with-values`
 - **Advanced control** - `call/cc`, `dynamic-wind`
 
 ---
 
-**Recommendation:** Focus on the **Quick Wins** section first. Implementing `not` + 5 numeric predicates + `abs` + `max`/`min` would add **9 more passing tests** with minimal effort, bringing us to **101/115 tests passing (88%)**!
+**Recent Progress (2025-11-04):**
+- ✅ Implemented `not` predicate in bootstrap.scm
+- ✅ Implemented `zero?`, `positive?`, `negative?` in bootstrap.scm
+- ✅ Added 4 new passing tests (102 → 106)
+- ✅ Progress: 80% → 83%
+
+**Recommendation:** Focus on `abs`, `max`, `min` next for quick wins, then tackle quotient/remainder/modulo to unlock GCD algorithms and odd?/even? predicates!
 
 ---
 
-**Note:** This document was updated 2025-11-03 to reflect actual implementation status.
+**Note:** This document is actively maintained and reflects the actual implementation status.

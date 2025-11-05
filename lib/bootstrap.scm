@@ -16,6 +16,20 @@
   (if x #f #t))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Numeric predicates (R7RS Section 6.2.6)
+
+(define (zero? x)
+  (= x 0))
+
+(define (positive? x)
+  (> x 0))
+
+(define (negative? x)
+  (< x 0))
+
+;; odd? and even? require remainder - will be added later
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Car/Cdr compositions (R7RS Section 6.4)
 ;; These are required by R7RS and used frequently
 

@@ -21,7 +21,6 @@ fn test_boolean_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Implement not
 fn test_not() {
     assert_eval_to("(not #t)", "#f");
     assert_eval_to("(not #f)", "#t");
