@@ -160,6 +160,74 @@ fn test_even_predicate() {
     assert_eval_to("(even? 3)", "#f");
 }
 
+// Numeric tower tests - demonstrating overflow handling
+#[test]
+#[ignore] // TODO: Implement automatic BigInt promotion on overflow
+fn test_fibonacci_large() {
+    // Fibonacci numbers grow exponentially
+    // fib(100) = 354224848179261915075 (overflows i64::MAX = 9223372036854775807)
+    assert_program_eval_to(
+        r#"
+        (define (fib n)
+          (if (< n 2)
+              n
+              (+ (fib (- n 1)) (fib (- n 2)))))
+
+        (fib 100)
+        "#,
+        "354224848179261915075",
+    );
+}
+
+#[test]
+#[ignore] // TODO: Implement automatic BigInt promotion on overflow
+fn test_factorial_large() {
+    // 25! = 15511210043330985984000000 (way beyond i64)
+    assert_program_eval_to(
+        r#"
+        (define (factorial n)
+          (if (= n 0)
+              1
+              (* n (factorial (- n 1)))))
+
+        (factorial 25)
+        "#,
+        "15511210043330985984000000",
+    );
+}
+
+#[test]
+#[ignore] // TODO: Implement automatic BigInt promotion on overflow
+fn test_power_large() {
+    // 2^100 = 1267650600228229401496703205376 (very large)
+    assert_program_eval_to(
+        r#"
+        (define (power base exp)
+          (if (= exp 0)
+              1
+              (* base (power base (- exp 1)))))
+
+        (power 2 100)
+        "#,
+        "1267650600228229401496703205376",
+    );
+}
+
+#[test]
+#[ignore] // TODO: Implement transparent overflow detection in arithmetic
+fn test_arithmetic_overflow_add() {
+    // i64::MAX = 9223372036854775807
+    // Adding 1 should promote to BigInt
+    assert_eval_to("(+ 9223372036854775807 1)", "9223372036854775808");
+}
+
+#[test]
+#[ignore] // TODO: Implement transparent overflow detection in arithmetic
+fn test_arithmetic_overflow_multiply() {
+    // 1000000000 * 10000000000 = 10000000000000000000 (overflows i64)
+    assert_eval_to("(* 1000000000 10000000000)", "10000000000000000000");
+}
+
 // 6.2.6 Advanced algorithms using multiple values
 // These demonstrate the power of values/call-with-values
 

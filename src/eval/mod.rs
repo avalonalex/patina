@@ -2317,7 +2317,7 @@ impl Evaluator {
                 if *b == 0 {
                     return Err(EvalError::DivisionByZero);
                 }
-                Ok(Value::Integer(a / b))  // Rust's / truncates toward zero
+                Ok(Value::Integer(a / b)) // Rust's / truncates toward zero
             }
             (Value::BigInteger(a), Value::BigInteger(b)) => {
                 if b.is_zero() {
@@ -2361,7 +2361,7 @@ impl Evaluator {
                 if *b == 0 {
                     return Err(EvalError::DivisionByZero);
                 }
-                Ok(Value::Integer(a % b))  // Rust's % gives truncate remainder
+                Ok(Value::Integer(a % b)) // Rust's % gives truncate remainder
             }
             (Value::BigInteger(a), Value::BigInteger(b)) => {
                 if b.is_zero() {
