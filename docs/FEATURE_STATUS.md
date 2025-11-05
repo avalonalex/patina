@@ -323,6 +323,8 @@ Based on the 23 ignored tests, here are the quickest wins to reach higher compli
 
 ### Medium Priority (2-4 hours) - Numeric Operations
 5. **`quotient`, `remainder`, `modulo`** - Integer division operations
+   - **Note**: Once implemented, enable `test_gcd_euclidean` and `test_extended_gcd` in numbers.rs
+   - These tests demonstrate the power of multiple values for classic algorithms!
 6. **Division by zero handling** - Proper error for `(/ 1 0)`
 
 ### Low Priority (4+ hours) - Advanced Features
