@@ -1315,6 +1315,8 @@ impl Evaluator {
             "abs" => self.primitive_abs(args),
             "max" => self.primitive_max(args),
             "min" => self.primitive_min(args),
+            "exact?" => self.primitive_exact_p(args),
+            "inexact?" => self.primitive_inexact_p(args),
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name
@@ -1718,6 +1720,37 @@ impl Evaluator {
             });
         }
         Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
+    }
+
+    fn primitive_exact_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        // R7RS: exact? returns #t if the number is exact, #f otherwise
+        // Exact numbers: Integer, BigInteger, Rational
+        // Inexact numbers: Real, Complex
+        Ok(Value::Boolean(matches!(
+            args[0],
+            Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_)
+        )))
+    }
+
+    fn primitive_inexact_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        // R7RS: inexact? returns #t if the number is inexact, #f otherwise
+        // Inexact numbers: Real, Complex
+        Ok(Value::Boolean(matches!(
+            args[0],
+            Value::Real(_) | Value::Complex(_, _)
+        )))
     }
 
     fn values_eq(&self, a: &Value, b: &Value) -> bool {
@@ -2658,6 +2691,8 @@ impl Evaluator {
             ("abs", Arity::Exact(1)),
             ("max", Arity::Min(1)),
             ("min", Arity::Min(1)),
+            ("exact?", Arity::Exact(1)),
+            ("inexact?", Arity::Exact(1)),
         ];
 
         for (name, arity) in primitives {

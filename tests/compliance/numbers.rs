@@ -160,6 +160,126 @@ fn test_even_predicate() {
     assert_eval_to("(even? 3)", "#f");
 }
 
+#[test]
+fn test_exact_predicate() {
+    // Exact numbers: Integer, BigInteger, Rational
+    assert_eval_to("(exact? 42)", "#t");
+    assert_eval_to("(exact? -17)", "#t");
+    assert_eval_to("(exact? 0)", "#t");
+    // BigInteger should be exact
+    assert_eval_to("(exact? 9223372036854775808)", "#t");
+    assert_eval_to("(exact? (- (+ 1 10000000000000000000000000000000000) 10000000000000000000000000000000000))", "#t"); // i64::MAX + 1 // i64::MAX + 1
+    assert_eval_to("(exact? 10000000000000000000)", "#t");
+}
+
+#[test]
+fn test_inexact_predicate() {
+    // Inexact numbers: Real (floating point)
+    assert_eval_to("(inexact? 3.14)", "#t");
+    assert_eval_to("(inexact? 2.0)", "#t");
+    assert_eval_to("(inexact? 0.0)", "#t");
+    assert_eval_to("(inexact? -5.5)", "#t");
+}
+
+#[test]
+fn test_exactness_distinction() {
+    // Integer literals (no decimal point) are exact
+    assert_eval_to("(exact? 123)", "#t");
+    assert_eval_to("(inexact? 123)", "#f");
+
+    // Decimal literals (with decimal point) are inexact
+    assert_eval_to("(exact? 123.0)", "#f");
+    assert_eval_to("(inexact? 123.0)", "#t");
+
+    // This is the key R7RS behavior: syntactic exactness
+    // 123 and 123.0 are mathematically equal but have different exactness
+    // TODO: Requires mixed Integer/Real comparison in = operator
+    // assert_eval_to("(= 123 123.0)", "#t"); // mathematically equal
+    
+    assert_eval_to("(exact? 123)", "#t"); // but different exactness
+    assert_eval_to("(exact? 123.0)", "#f");
+}
+
+#[test]
+#[ignore] // TODO: Requires inexactness contagion - exact + inexact → inexact
+fn test_inexact_contagion_addition() {
+    // R7RS: Operations involving inexact numbers produce inexact results
+    // exact + exact = exact
+    assert_eval_to("(exact? (+ 1 2))", "#t");
+
+    // inexact + inexact = inexact
+    assert_eval_to("(inexact? (+ 1.0 2.0))", "#t");
+
+    // exact + inexact = inexact (contagion)
+    assert_eval_to("(inexact? (+ 1 2.0))", "#t");
+    assert_eval_to("(inexact? (+ 1.0 2))", "#t");
+}
+
+#[test]
+#[ignore] // TODO: Requires inexactness contagion
+fn test_inexact_contagion_multiplication() {
+    // exact * exact = exact
+    assert_eval_to("(exact? (* 3 4))", "#t");
+
+    // inexact * inexact = inexact
+    assert_eval_to("(inexact? (* 3.0 4.0))", "#t");
+
+    // exact * inexact = inexact (contagion)
+    assert_eval_to("(inexact? (* 3 4.0))", "#t");
+    assert_eval_to("(inexact? (* 3.0 4))", "#t");
+}
+
+#[test]
+#[ignore] // TODO: Requires inexactness contagion
+fn test_inexact_contagion_subtraction() {
+    // exact - exact = exact
+    assert_eval_to("(exact? (- 10 3))", "#t");
+
+    // inexact - inexact = inexact
+    assert_eval_to("(inexact? (- 10.0 3.0))", "#t");
+
+    // exact - inexact = inexact (contagion)
+    assert_eval_to("(inexact? (- 10 3.0))", "#t");
+    assert_eval_to("(inexact? (- 10.0 3))", "#t");
+}
+
+#[test]
+#[ignore] // TODO: Requires inexactness contagion and mixed division
+fn test_inexact_contagion_division() {
+    // Division is special: even exact / exact can be inexact in some implementations
+    // But exact / exact should produce exact rational if possible
+
+    // inexact / inexact = inexact
+    assert_eval_to("(inexact? (/ 10.0 3.0))", "#t");
+
+    // exact / inexact = inexact (contagion)
+    assert_eval_to("(inexact? (/ 10 3.0))", "#t");
+    assert_eval_to("(inexact? (/ 10.0 3))", "#t");
+}
+
+#[test]
+#[ignore] // TODO: Requires inexactness contagion in complex expressions
+fn test_inexact_contagion_complex_expression() {
+    // Once inexactness enters an expression, it propagates throughout
+
+    // All exact
+    assert_eval_to("(exact? (+ (* 2 3) (- 10 5)))", "#t");
+
+    // One inexact contaminates the whole expression
+    assert_eval_to("(inexact? (+ (* 2 3.0) (- 10 5)))", "#t");
+    assert_eval_to("(inexact? (+ (* 2 3) (- 10.0 5)))", "#t");
+}
+
+#[test]
+fn test_bigint_remains_exact() {
+    // BigInteger arithmetic should remain exact
+    assert_eval_to("(exact? (+ 10000000000000000000 10000000000000000000))", "#t");
+    assert_eval_to("(exact? (* 10000000000000000000 2))", "#t");
+
+    // Even i64 overflow promotion keeps exactness
+    assert_eval_to("(exact? (+ 9223372036854775807 1))", "#t");
+}
+
 // Numeric tower tests - demonstrating overflow handling
 #[test]
 fn test_fibonacci_large() {

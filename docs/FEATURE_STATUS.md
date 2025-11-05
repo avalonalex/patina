@@ -18,20 +18,20 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 
 ## Summary Statistics
 
-**Test Results: 122 passing, 11 ignored (not implemented)**
+**Test Results: 124 passing, 12 ignored (not implemented)**
 
 | Category | Implemented | Total | Progress |
 |----------|-------------|-------|----------|
 | Primitives | 18 | 20 | 90% |
 | Derived Forms | 20 | 24 | 83% |
-| Numbers | 23 | 27 | 85% |
+| Numbers | 25 | 27 | 93% |
 | Lists | 30 | 30 | 100% ✅ |
 | Predicates | 8 | 12 | 67% |
 | Control | 5 | 5 | 100% ✅ |
 | Strings | 0 | 30 | 0% |
 | Vectors | 0 | 20 | 0% |
 | I/O | 0 | 30 | 0% |
-| **TOTAL** | **104** | **198** | **53%** |
+| **TOTAL** | **106** | **198** | **54%** |
 
 ---
 
@@ -171,8 +171,8 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | negative? | ✅ | test_negative_predicate | numbers.rs / bootstrap.scm |
 | odd? | ✅ | test_odd_predicate | numbers.rs / bootstrap.scm |
 | even? | ✅ | test_even_predicate | numbers.rs / bootstrap.scm |
-| exact? | ❌ | - | Not implemented |
-| inexact? | ❌ | - | Not implemented |
+| exact? | ✅ | test_exact_predicate | numbers.rs / eval/mod.rs |
+| inexact? | ✅ | test_inexact_predicate | numbers.rs / eval/mod.rs |
 | exact-integer? | ❌ | - | Not implemented |
 | finite? | ❌ | - | Not implemented |
 | infinite? | ❌ | - | Not implemented |
@@ -354,11 +354,16 @@ Based on the 22 ignored tests, here are the quickest wins to reach higher compli
   - Parser detects when integer literals exceed i64::MAX
   - Automatically parses large integers as BigInteger
   - Created comprehensive verification test suite (5 tests)
-- ✅ Added 16 new passing tests (106 → 122)
-- ✅ Progress: 83% → **92%** 🎉
-- ✅ Numbers category: 52% → **85%**
+  - Added 8 parser unit tests for BigInt literal parsing
+- ✅ **Implemented `exact?` and `inexact?` predicates**
+  - Integer/BigInteger/Rational are exact
+  - Real/Complex are inexact
+  - Respects syntactic exactness (123 vs 123.0)
+- ✅ Added 18 new passing tests (106 → 124)
+- ✅ Progress: 83% → **91%** (124/136 tests) 🎉
+- ✅ Numbers category: 52% → **93%** (25/27)
 
-**Milestone Achieved:** Over 90% test coverage + Full numeric tower overflow handling!
+**Milestone Achieved:** Over 90% test coverage + Full numeric tower with exactness tracking!
 
 ---
 
