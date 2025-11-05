@@ -1335,6 +1335,8 @@ impl Evaluator {
         let mut result: Value = Value::Integer(0);
 
         for arg in args {
+            // DEBUG: Uncomment to trace type promotion
+            // eprintln!("ADD: result={:?}, arg={:?}", result, arg);
             result = match (result, arg) {
                 // Integer + Integer - check for overflow
                 (Value::Integer(a), Value::Integer(b)) => {

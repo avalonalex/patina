@@ -1,6 +1,6 @@
 # R7RS (scheme base) Feature Matrix
 
-**Last Updated:** 2025-11-04 (numeric operations complete!)
+**Last Updated:** 2025-11-04 (BigInt literal parsing complete!)
 
 This document provides a **detailed test-by-test status matrix** for R7RS compliance.
 
@@ -18,7 +18,7 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 
 ## Summary Statistics
 
-**Test Results: 117 passing, 11 ignored (not implemented)**
+**Test Results: 122 passing, 11 ignored (not implemented)**
 
 | Category | Implemented | Total | Progress |
 |----------|-------------|-------|----------|
@@ -346,11 +346,19 @@ Based on the 22 ignored tests, here are the quickest wins to reach higher compli
 - ✅ Implemented `odd?`, `even?` in bootstrap.scm
 - ✅ Implemented `abs`, `max`, `min` primitives
 - ✅ Enabled 3 GCD algorithm tests (demonstrating multiple values!)
-- ✅ Added 11 new passing tests (106 → 117)
-- ✅ Progress: 83% → **91%** 🎉
+- ✅ **Implemented transparent overflow detection and BigInt promotion**
+  - Arithmetic operations automatically promote i64 → BigInt on overflow
+  - Uses Rust's `checked_add`, `checked_mul`, `checked_sub`, `checked_neg`
+  - Seamlessly mixes i64 and BigInt operands
+- ✅ **Implemented BigInt literal parsing**
+  - Parser detects when integer literals exceed i64::MAX
+  - Automatically parses large integers as BigInteger
+  - Created comprehensive verification test suite (5 tests)
+- ✅ Added 16 new passing tests (106 → 122)
+- ✅ Progress: 83% → **92%** 🎉
 - ✅ Numbers category: 52% → **85%**
 
-**Milestone Achieved:** Over 90% test coverage!
+**Milestone Achieved:** Over 90% test coverage + Full numeric tower overflow handling!
 
 ---
 

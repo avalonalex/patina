@@ -1,6 +1,8 @@
 use crate::lexer::{LexError, Lexer, Token};
 use crate::value::Value;
+use num_bigint::BigInt;
 use std::rc::Rc;
+use std::str::FromStr;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -173,14 +175,24 @@ impl Parser {
     }
 
     fn parse_number(&self, s: &str) -> Result<Value, ParseError> {
-        // Simple number parsing - extend this for full R7RS numeric tower
+        // Parse numbers following the R7RS numeric tower
+        // Try i64 first (fast path for small integers)
         if let Ok(n) = s.parse::<i64>() {
-            Ok(Value::Integer(n))
-        } else if let Ok(f) = s.parse::<f64>() {
-            Ok(Value::Real(f))
-        } else {
-            Err(ParseError::InvalidSyntax(format!("Invalid number: {}", s)))
+            return Ok(Value::Integer(n));
         }
+
+        // If it doesn't fit in i64, try BigInt (for large integers)
+        if let Ok(n) = BigInt::from_str(s) {
+            return Ok(Value::BigInteger(n));
+        }
+
+        // If it's not an integer, try floating point
+        if let Ok(f) = s.parse::<f64>() {
+            return Ok(Value::Real(f));
+        }
+
+        // Nothing worked - invalid number
+        Err(ParseError::InvalidSyntax(format!("Invalid number: {}", s)))
     }
 
     fn make_list(&self, elements: Vec<Value>) -> Value {
@@ -215,5 +227,109 @@ mod tests {
         let result = parser.parse().unwrap();
         // Should be a list with three elements
         assert!(matches!(result, Value::Pair(_)));
+    }
+
+    #[test]
+    fn test_parse_small_integer() {
+        // Small integers should parse as Integer (i64)
+        let mut parser = Parser::new("42").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Integer(42)));
+    }
+
+    #[test]
+    fn test_parse_i64_max() {
+        // i64::MAX should still parse as Integer
+        let mut parser = Parser::new("9223372036854775807").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Integer(9223372036854775807)));
+    }
+
+    #[test]
+    fn test_parse_i64_min() {
+        // i64::MIN should parse as Integer
+        let mut parser = Parser::new("-9223372036854775808").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Integer(-9223372036854775808)));
+    }
+
+    #[test]
+    fn test_parse_beyond_i64_max() {
+        // i64::MAX + 1 should parse as BigInteger
+        let mut parser = Parser::new("9223372036854775808").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::BigInteger(n) => {
+                assert_eq!(n.to_string(), "9223372036854775808");
+            }
+            other => panic!("Expected BigInteger, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_large_bigint() {
+        // Very large number should parse as BigInteger
+        let mut parser = Parser::new("10000000000000000000").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::BigInteger(n) => {
+                assert_eq!(n.to_string(), "10000000000000000000");
+            }
+            other => panic!("Expected BigInteger, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_huge_bigint() {
+        // Astronomically large number (2^100) should parse as BigInteger
+        let mut parser = Parser::new("1267650600228229401496703205376").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::BigInteger(n) => {
+                assert_eq!(n.to_string(), "1267650600228229401496703205376");
+            }
+            other => panic!("Expected BigInteger, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_negative_beyond_i64_min() {
+        // i64::MIN - 1 should parse as BigInteger
+        let mut parser = Parser::new("-9223372036854775809").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::BigInteger(n) => {
+                assert_eq!(n.to_string(), "-9223372036854775809");
+            }
+            other => panic!("Expected BigInteger, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_bigint_in_expression() {
+        // Large integers in expressions should parse as BigInteger
+        let mut parser = Parser::new("(+ 10000000000000000000 1)").unwrap();
+        let result = parser.parse().unwrap();
+
+        // The result should be a list (pair chain)
+        if let Value::Pair(pair) = result {
+            let (car, cdr) = pair.as_ref();
+            assert!(matches!(car, Value::Symbol(_))); // The '+'
+
+            if let Value::Pair(pair2) = cdr {
+                let (car2, _) = pair2.as_ref();
+                // The first argument should be BigInteger
+                match car2 {
+                    Value::BigInteger(n) => {
+                        assert_eq!(n.to_string(), "10000000000000000000");
+                    }
+                    other => panic!("Expected BigInteger, got {:?}", other),
+                }
+            } else {
+                panic!("Expected pair for arguments");
+            }
+        } else {
+            panic!("Expected list");
+        }
     }
 }
