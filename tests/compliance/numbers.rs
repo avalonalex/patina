@@ -79,28 +79,24 @@ fn test_greater_equal() {
 
 // 6.2.6 Numerical operations - Additional functions
 #[test]
-#[ignore] // TODO: Implement quotient
 fn test_quotient() {
     assert_eval_to("(quotient 10 3)", "3");
     assert_eval_to("(quotient -10 3)", "-3");
 }
 
 #[test]
-#[ignore] // TODO: Implement remainder
 fn test_remainder() {
     assert_eval_to("(remainder 10 3)", "1");
     assert_eval_to("(remainder -10 3)", "-1");
 }
 
 #[test]
-#[ignore] // TODO: Implement modulo
 fn test_modulo() {
     assert_eval_to("(modulo 10 3)", "1");
     assert_eval_to("(modulo -10 3)", "2");
 }
 
 #[test]
-#[ignore] // TODO: Implement abs
 fn test_abs() {
     assert_eval_to("(abs 5)", "5");
     assert_eval_to("(abs -5)", "5");
@@ -108,14 +104,12 @@ fn test_abs() {
 }
 
 #[test]
-#[ignore] // TODO: Implement max
 fn test_max() {
     assert_eval_to("(max 1 2 3)", "3");
     assert_eval_to("(max 3 2 1)", "3");
 }
 
 #[test]
-#[ignore] // TODO: Implement min
 fn test_min() {
     assert_eval_to("(min 1 2 3)", "1");
     assert_eval_to("(min 3 2 1)", "1");
@@ -155,14 +149,12 @@ fn test_negative_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Implement odd?
 fn test_odd_predicate() {
     assert_eval_to("(odd? 3)", "#t");
     assert_eval_to("(odd? 4)", "#f");
 }
 
 #[test]
-#[ignore] // TODO: Implement even?
 fn test_even_predicate() {
     assert_eval_to("(even? 4)", "#t");
     assert_eval_to("(even? 3)", "#f");
@@ -172,7 +164,6 @@ fn test_even_predicate() {
 // These demonstrate the power of values/call-with-values
 
 #[test]
-#[ignore] // TODO: Implement quotient and remainder, then enable this
 fn test_gcd_euclidean() {
     // Euclidean GCD algorithm using multiple values
     assert_program_eval_to(
@@ -210,7 +201,6 @@ fn test_gcd_euclidean() {
 }
 
 #[test]
-#[ignore] // TODO: Implement quotient and remainder, then enable this
 fn test_extended_gcd() {
     // Extended Euclidean algorithm - returns (gcd x y) where ax + by = gcd
     // This is a perfect demonstration of returning 3 values!
@@ -235,7 +225,6 @@ fn test_extended_gcd() {
 }
 
 #[test]
-#[ignore] // TODO: Implement quotient and remainder, then enable this
 fn test_quotient_remainder_relationship() {
     // Verify that quotient and remainder work correctly together
     // This uses the fundamental relationship: a = b*q + r

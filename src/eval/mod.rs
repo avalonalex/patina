@@ -1,5 +1,7 @@
 use crate::env::Environment;
 use crate::value::{Arity, Procedure, Value};
+use num_bigint::BigInt;
+use num_traits::{Signed, Zero};
 use std::rc::Rc;
 use thiserror::Error;
 
@@ -1307,6 +1309,12 @@ impl Evaluator {
             "equal?" => self.primitive_equal(args),
             "values" => self.primitive_values(args),
             "call-with-values" => self.primitive_call_with_values(args),
+            "quotient" => self.primitive_quotient(args),
+            "remainder" => self.primitive_remainder(args),
+            "modulo" => self.primitive_modulo(args),
+            "abs" => self.primitive_abs(args),
+            "max" => self.primitive_max(args),
+            "min" => self.primitive_min(args),
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name
@@ -2294,6 +2302,248 @@ impl Evaluator {
         self.apply(consumer.clone(), consumer_args)
     }
 
+    fn primitive_quotient(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // Truncate division (rounds toward zero) - R7RS Section 6.2.6
+        // quotient = truncate-quotient
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match (&args[0], &args[1]) {
+            (Value::Integer(a), Value::Integer(b)) => {
+                if *b == 0 {
+                    return Err(EvalError::DivisionByZero);
+                }
+                Ok(Value::Integer(a / b))  // Rust's / truncates toward zero
+            }
+            (Value::BigInteger(a), Value::BigInteger(b)) => {
+                if b.is_zero() {
+                    return Err(EvalError::DivisionByZero);
+                }
+                Ok(Value::BigInteger(a / b))
+            }
+            (Value::Integer(a), Value::BigInteger(b)) => {
+                if b.is_zero() {
+                    return Err(EvalError::DivisionByZero);
+                }
+                Ok(Value::BigInteger(BigInt::from(*a) / b))
+            }
+            (Value::BigInteger(a), Value::Integer(b)) => {
+                if *b == 0 {
+                    return Err(EvalError::DivisionByZero);
+                }
+                Ok(Value::BigInteger(a / BigInt::from(*b)))
+            }
+            _ => Err(EvalError::TypeError(format!(
+                "quotient requires integers, got {} and {}",
+                args[0].type_name(),
+                args[1].type_name()
+            ))),
+        }
+    }
+
+    fn primitive_remainder(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // Truncate remainder - R7RS Section 6.2.6
+        // remainder = truncate-remainder
+        // Same sign as dividend
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match (&args[0], &args[1]) {
+            (Value::Integer(a), Value::Integer(b)) => {
+                if *b == 0 {
+                    return Err(EvalError::DivisionByZero);
+                }
+                Ok(Value::Integer(a % b))  // Rust's % gives truncate remainder
+            }
+            (Value::BigInteger(a), Value::BigInteger(b)) => {
+                if b.is_zero() {
+                    return Err(EvalError::DivisionByZero);
+                }
+                Ok(Value::BigInteger(a % b))
+            }
+            (Value::Integer(a), Value::BigInteger(b)) => {
+                if b.is_zero() {
+                    return Err(EvalError::DivisionByZero);
+                }
+                Ok(Value::BigInteger(BigInt::from(*a) % b))
+            }
+            (Value::BigInteger(a), Value::Integer(b)) => {
+                if *b == 0 {
+                    return Err(EvalError::DivisionByZero);
+                }
+                Ok(Value::BigInteger(a % BigInt::from(*b)))
+            }
+            _ => Err(EvalError::TypeError(format!(
+                "remainder requires integers, got {} and {}",
+                args[0].type_name(),
+                args[1].type_name()
+            ))),
+        }
+    }
+
+    fn primitive_modulo(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // Floor remainder - R7RS Section 6.2.6
+        // modulo = floor-remainder
+        // Result has same sign as divisor
+        if args.len() != 2 {
+            return Err(EvalError::WrongArity {
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match (&args[0], &args[1]) {
+            (Value::Integer(a), Value::Integer(b)) => {
+                if *b == 0 {
+                    return Err(EvalError::DivisionByZero);
+                }
+                // Rust's rem_euclid gives floor remainder (modulo)
+                Ok(Value::Integer(a.rem_euclid(*b)))
+            }
+            (Value::BigInteger(a), Value::BigInteger(b)) => {
+                if b.is_zero() {
+                    return Err(EvalError::DivisionByZero);
+                }
+                use num_traits::Euclid;
+                Ok(Value::BigInteger(a.rem_euclid(b)))
+            }
+            (Value::Integer(a), Value::BigInteger(b)) => {
+                if b.is_zero() {
+                    return Err(EvalError::DivisionByZero);
+                }
+                use num_traits::Euclid;
+                Ok(Value::BigInteger(BigInt::from(*a).rem_euclid(b)))
+            }
+            (Value::BigInteger(a), Value::Integer(b)) => {
+                if *b == 0 {
+                    return Err(EvalError::DivisionByZero);
+                }
+                use num_traits::Euclid;
+                Ok(Value::BigInteger(a.rem_euclid(&BigInt::from(*b))))
+            }
+            _ => Err(EvalError::TypeError(format!(
+                "modulo requires integers, got {} and {}",
+                args[0].type_name(),
+                args[1].type_name()
+            ))),
+        }
+    }
+
+    fn primitive_abs(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // Absolute value - R7RS Section 6.2.6
+        if args.len() != 1 {
+            return Err(EvalError::WrongArity {
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::Integer(n) => {
+                // Handle i64::MIN overflow case
+                if *n == i64::MIN {
+                    // abs(i64::MIN) doesn't fit in i64, promote to BigInt
+                    Ok(Value::BigInteger(BigInt::from(*n).abs()))
+                } else {
+                    Ok(Value::Integer(n.abs()))
+                }
+            }
+            Value::BigInteger(n) => Ok(Value::BigInteger(n.abs())),
+            Value::Rational(r) => Ok(Value::Rational(r.abs())),
+            Value::Real(r) => Ok(Value::Real(r.abs())),
+            _ => Err(EvalError::TypeError(format!(
+                "abs requires a number, got {}",
+                args[0].type_name()
+            ))),
+        }
+    }
+
+    fn primitive_max(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // Maximum value - R7RS Section 6.2.6
+        if args.is_empty() {
+            return Err(EvalError::WrongArity {
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+
+        // For now, only support integers (like other comparison operators)
+        let mut max_val = match &args[0] {
+            Value::Integer(n) => *n,
+            _ => {
+                return Err(EvalError::TypeError(format!(
+                    "max requires integers, got {}",
+                    args[0].type_name()
+                )))
+            }
+        };
+
+        for arg in &args[1..] {
+            match arg {
+                Value::Integer(n) => {
+                    if *n > max_val {
+                        max_val = *n;
+                    }
+                }
+                _ => {
+                    return Err(EvalError::TypeError(format!(
+                        "max requires integers, got {}",
+                        arg.type_name()
+                    )))
+                }
+            }
+        }
+
+        Ok(Value::Integer(max_val))
+    }
+
+    fn primitive_min(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        // Minimum value - R7RS Section 6.2.6
+        if args.is_empty() {
+            return Err(EvalError::WrongArity {
+                expected: "at least 1".to_string(),
+                actual: 0,
+            });
+        }
+
+        // For now, only support integers (like other comparison operators)
+        let mut min_val = match &args[0] {
+            Value::Integer(n) => *n,
+            _ => {
+                return Err(EvalError::TypeError(format!(
+                    "min requires integers, got {}",
+                    args[0].type_name()
+                )))
+            }
+        };
+
+        for arg in &args[1..] {
+            match arg {
+                Value::Integer(n) => {
+                    if *n < min_val {
+                        min_val = *n;
+                    }
+                }
+                _ => {
+                    return Err(EvalError::TypeError(format!(
+                        "min requires integers, got {}",
+                        arg.type_name()
+                    )))
+                }
+            }
+        }
+
+        Ok(Value::Integer(min_val))
+    }
+
     fn install_primitives(env: &Rc<Environment>) {
         let primitives = [
             ("+", Arity::Min(0)),
@@ -2335,6 +2585,12 @@ impl Evaluator {
             ("equal?", Arity::Exact(2)),
             ("values", Arity::Min(0)),
             ("call-with-values", Arity::Exact(2)),
+            ("quotient", Arity::Exact(2)),
+            ("remainder", Arity::Exact(2)),
+            ("modulo", Arity::Exact(2)),
+            ("abs", Arity::Exact(1)),
+            ("max", Arity::Min(1)),
+            ("min", Arity::Min(1)),
         ];
 
         for (name, arity) in primitives {

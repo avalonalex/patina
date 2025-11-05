@@ -27,7 +27,11 @@
 (define (negative? x)
   (< x 0))
 
-;; odd? and even? require remainder - will be added later
+(define (odd? x)
+  (= (remainder x 2) 1))
+
+(define (even? x)
+  (= (remainder x 2) 0))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Car/Cdr compositions (R7RS Section 6.4)

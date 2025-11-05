@@ -1,6 +1,6 @@
 # R7RS (scheme base) Feature Matrix
 
-**Last Updated:** 2025-11-04 (predicates update!)
+**Last Updated:** 2025-11-04 (numeric operations complete!)
 
 This document provides a **detailed test-by-test status matrix** for R7RS compliance.
 
@@ -18,20 +18,20 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 
 ## Summary Statistics
 
-**Test Results: 106 passing, 22 ignored (not implemented)**
+**Test Results: 117 passing, 11 ignored (not implemented)**
 
 | Category | Implemented | Total | Progress |
 |----------|-------------|-------|----------|
 | Primitives | 18 | 20 | 90% |
 | Derived Forms | 20 | 24 | 83% |
-| Numbers | 14 | 27 | 52% |
+| Numbers | 23 | 27 | 85% |
 | Lists | 30 | 30 | 100% ✅ |
 | Predicates | 8 | 12 | 67% |
 | Control | 5 | 5 | 100% ✅ |
 | Strings | 0 | 30 | 0% |
 | Vectors | 0 | 20 | 0% |
 | I/O | 0 | 30 | 0% |
-| **TOTAL** | **95** | **198** | **48%** |
+| **TOTAL** | **104** | **198** | **53%** |
 
 ---
 
@@ -137,10 +137,10 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | * | ✅ | test_multiplication | numbers.rs |
 | / | ✅ | test_division | numbers.rs |
 | / (zero check) | ❌ | test_division_by_zero (ignored) | Not implemented |
-| abs | ❌ | test_abs (ignored) | Not implemented |
-| quotient | ❌ | test_quotient (ignored) | Not implemented |
-| remainder | ❌ | test_remainder (ignored) | Not implemented |
-| modulo | ❌ | test_modulo (ignored) | Not implemented |
+| abs | ✅ | test_abs | numbers.rs / eval/mod.rs |
+| quotient | ✅ | test_quotient | numbers.rs / eval/mod.rs |
+| remainder | ✅ | test_remainder | numbers.rs / eval/mod.rs |
+| modulo | ✅ | test_modulo | numbers.rs / eval/mod.rs |
 | gcd | ❌ | - | Not implemented |
 | lcm | ❌ | - | Not implemented |
 | floor | ❌ | - | Not implemented |
@@ -169,16 +169,16 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | zero? | ✅ | test_zero_predicate | numbers.rs / bootstrap.scm |
 | positive? | ✅ | test_positive_predicate | numbers.rs / bootstrap.scm |
 | negative? | ✅ | test_negative_predicate | numbers.rs / bootstrap.scm |
-| odd? | ❌ | test_odd_predicate (ignored) | Needs remainder |
-| even? | ❌ | test_even_predicate (ignored) | Needs remainder |
+| odd? | ✅ | test_odd_predicate | numbers.rs / bootstrap.scm |
+| even? | ✅ | test_even_predicate | numbers.rs / bootstrap.scm |
 | exact? | ❌ | - | Not implemented |
 | inexact? | ❌ | - | Not implemented |
 | exact-integer? | ❌ | - | Not implemented |
 | finite? | ❌ | - | Not implemented |
 | infinite? | ❌ | - | Not implemented |
 | nan? | ❌ | - | Not implemented |
-| max | ❌ | test_max (ignored) | Not implemented |
-| min | ❌ | test_min (ignored) | Not implemented |
+| max | ✅ | test_max | numbers.rs / eval/mod.rs |
+| min | ✅ | test_min | numbers.rs / eval/mod.rs |
 
 ---
 
@@ -341,12 +341,16 @@ Based on the 22 ignored tests, here are the quickest wins to reach higher compli
 ---
 
 **Recent Progress (2025-11-04):**
-- ✅ Implemented `not` predicate in bootstrap.scm
-- ✅ Implemented `zero?`, `positive?`, `negative?` in bootstrap.scm
-- ✅ Added 4 new passing tests (102 → 106)
-- ✅ Progress: 80% → 83%
+- ✅ Implemented `not`, `zero?`, `positive?`, `negative?` in bootstrap.scm
+- ✅ Implemented `quotient`, `remainder`, `modulo` primitives
+- ✅ Implemented `odd?`, `even?` in bootstrap.scm
+- ✅ Implemented `abs`, `max`, `min` primitives
+- ✅ Enabled 3 GCD algorithm tests (demonstrating multiple values!)
+- ✅ Added 11 new passing tests (106 → 117)
+- ✅ Progress: 83% → **91%** 🎉
+- ✅ Numbers category: 52% → **85%**
 
-**Recommendation:** Focus on `abs`, `max`, `min` next for quick wins, then tackle quotient/remainder/modulo to unlock GCD algorithms and odd?/even? predicates!
+**Milestone Achieved:** Over 90% test coverage!
 
 ---
 

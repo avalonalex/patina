@@ -13,7 +13,9 @@ Patina is a Scheme R7RS-small interpreter written in Rust. This is an educationa
 - **IMPORTANT** - Do not create markdown files unless the user explicitly states to do so. You may offer to create markdown files, but only do so with explicit user approval. Integrate any necessary notes as comments within the relevant code files, and keep comments succinct and on point.
 - **`PRD/`** - Product Requirements Documents, project proposals, and high-level design documents. We should be aggressive in terms of purge outdated PRDs as they have high cognative overhead.
   - **`PRD/phase1/R7RS_ROADMAP.md`** - Strategic roadmap for R7RS compliance (phases, strategy, rationale)
+  - **`PRD/phase1/NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
 - **`internal/`** - Internal documentation, implementation notes, test results, and milestone records
+  - **`internal/README_NUMERIC_ANALYSIS.md`** - Index to chibi-scheme numeric analysis (supporting reference)
 - **`docs/`** - Oriented towards external documentations, how to use high level features and repl and tui tools.
   - **`docs/FEATURE_STATUS.md`** - Detailed test-by-test R7RS compliance tracking (current status matrix)
 - **`spec/`** - Official R7RS spec, we should NOT put any additional documentation in this directory.
