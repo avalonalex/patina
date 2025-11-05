@@ -195,7 +195,7 @@ fn test_exactness_distinction() {
     // 123 and 123.0 are mathematically equal but have different exactness
     // TODO: Requires mixed Integer/Real comparison in = operator
     // assert_eval_to("(= 123 123.0)", "#t"); // mathematically equal
-    
+
     assert_eval_to("(exact? 123)", "#t"); // but different exactness
     assert_eval_to("(exact? 123.0)", "#f");
 }
@@ -273,7 +273,10 @@ fn test_inexact_contagion_complex_expression() {
 #[test]
 fn test_bigint_remains_exact() {
     // BigInteger arithmetic should remain exact
-    assert_eval_to("(exact? (+ 10000000000000000000 10000000000000000000))", "#t");
+    assert_eval_to(
+        "(exact? (+ 10000000000000000000 10000000000000000000))",
+        "#t",
+    );
     assert_eval_to("(exact? (* 10000000000000000000 2))", "#t");
 
     // Even i64 overflow promotion keeps exactness
