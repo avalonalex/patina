@@ -162,16 +162,19 @@ fn test_even_predicate() {
 
 // Numeric tower tests - demonstrating overflow handling
 #[test]
-#[ignore] // TODO: Implement automatic BigInt promotion on overflow
 fn test_fibonacci_large() {
     // Fibonacci numbers grow exponentially
     // fib(100) = 354224848179261915075 (overflows i64::MAX = 9223372036854775807)
+    // Using iterative version with let-values for O(n) performance
     assert_program_eval_to(
         r#"
         (define (fib n)
-          (if (< n 2)
-              n
-              (+ (fib (- n 1)) (fib (- n 2)))))
+          (define (fib-iter a b count)
+            (if (= count 0)
+                a
+                (let-values (((next-a next-b) (values b (+ a b))))
+                  (fib-iter next-a next-b (- count 1)))))
+          (fib-iter 0 1 n))
 
         (fib 100)
         "#,
@@ -180,7 +183,6 @@ fn test_fibonacci_large() {
 }
 
 #[test]
-#[ignore] // TODO: Implement automatic BigInt promotion on overflow
 fn test_factorial_large() {
     // 25! = 15511210043330985984000000 (way beyond i64)
     assert_program_eval_to(
@@ -197,7 +199,6 @@ fn test_factorial_large() {
 }
 
 #[test]
-#[ignore] // TODO: Implement automatic BigInt promotion on overflow
 fn test_power_large() {
     // 2^100 = 1267650600228229401496703205376 (very large)
     assert_program_eval_to(
@@ -214,7 +215,6 @@ fn test_power_large() {
 }
 
 #[test]
-#[ignore] // TODO: Implement transparent overflow detection in arithmetic
 fn test_arithmetic_overflow_add() {
     // i64::MAX = 9223372036854775807
     // Adding 1 should promote to BigInt
@@ -222,7 +222,6 @@ fn test_arithmetic_overflow_add() {
 }
 
 #[test]
-#[ignore] // TODO: Implement transparent overflow detection in arithmetic
 fn test_arithmetic_overflow_multiply() {
     // 1000000000 * 10000000000 = 10000000000000000000 (overflows i64)
     assert_eval_to("(* 1000000000 10000000000)", "10000000000000000000");

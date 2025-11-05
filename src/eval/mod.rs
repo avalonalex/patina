@@ -1331,18 +1331,36 @@ impl Evaluator {
 
     // Primitive implementations
     fn primitive_add(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        let mut result = 0i64;
+        // Start with integer 0, promote to BigInt if overflow
+        let mut result: Value = Value::Integer(0);
+
         for arg in args {
-            if let Value::Integer(n) = arg {
-                result += n;
-            } else {
-                return Err(EvalError::TypeError(format!(
-                    "+ expects numbers, got {}",
-                    arg
-                )));
-            }
+            result = match (result, arg) {
+                // Integer + Integer - check for overflow
+                (Value::Integer(a), Value::Integer(b)) => {
+                    match a.checked_add(b) {
+                        Some(sum) => Value::Integer(sum),
+                        None => {
+                            // Overflow - promote to BigInt and retry
+                            Value::BigInteger(BigInt::from(a) + BigInt::from(b))
+                        }
+                    }
+                }
+                // BigInteger + Integer
+                (Value::BigInteger(a), Value::Integer(b)) => Value::BigInteger(a + BigInt::from(b)),
+                // Integer + BigInteger
+                (Value::Integer(a), Value::BigInteger(b)) => Value::BigInteger(BigInt::from(a) + b),
+                // BigInteger + BigInteger
+                (Value::BigInteger(a), Value::BigInteger(b)) => Value::BigInteger(a + b),
+                (_, other) => {
+                    return Err(EvalError::TypeError(format!(
+                        "+ expects numbers, got {}",
+                        other.type_name()
+                    )))
+                }
+            };
         }
-        Ok(Value::Integer(result))
+        Ok(result)
     }
 
     fn primitive_subtract(&self, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -1353,44 +1371,91 @@ impl Evaluator {
             });
         }
 
-        if let Value::Integer(first) = args[0] {
-            if args.len() == 1 {
-                return Ok(Value::Integer(-first));
-            }
+        // Handle unary negation: (- x) => -x
+        if args.len() == 1 {
+            return match &args[0] {
+                Value::Integer(n) => {
+                    match n.checked_neg() {
+                        Some(neg) => Ok(Value::Integer(neg)),
+                        None => {
+                            // Overflow (e.g., -i64::MIN) - promote to BigInt
+                            Ok(Value::BigInteger(-BigInt::from(*n)))
+                        }
+                    }
+                }
+                Value::BigInteger(n) => Ok(Value::BigInteger(-n)),
+                other => Err(EvalError::TypeError(format!(
+                    "- expects numbers, got {}",
+                    other.type_name()
+                ))),
+            };
+        }
 
-            let mut result = first;
-            for arg in &args[1..] {
-                if let Value::Integer(n) = arg {
-                    result -= n;
-                } else {
+        // N-ary subtraction: (- a b c ...) => a - b - c - ...
+        let mut result = args[0].clone();
+
+        for arg in &args[1..] {
+            result = match (result, arg) {
+                // Integer - Integer - check for overflow
+                (Value::Integer(a), Value::Integer(b)) => {
+                    match a.checked_sub(*b) {
+                        Some(diff) => Value::Integer(diff),
+                        None => {
+                            // Overflow - promote to BigInt and retry
+                            Value::BigInteger(BigInt::from(a) - BigInt::from(*b))
+                        }
+                    }
+                }
+                // BigInteger - Integer
+                (Value::BigInteger(a), Value::Integer(b)) => {
+                    Value::BigInteger(a - BigInt::from(*b))
+                }
+                // Integer - BigInteger
+                (Value::Integer(a), Value::BigInteger(b)) => Value::BigInteger(BigInt::from(a) - b),
+                // BigInteger - BigInteger
+                (Value::BigInteger(a), Value::BigInteger(b)) => Value::BigInteger(a - b),
+                (_, other) => {
                     return Err(EvalError::TypeError(format!(
                         "- expects numbers, got {}",
-                        arg
-                    )));
+                        other.type_name()
+                    )))
                 }
-            }
-            Ok(Value::Integer(result))
-        } else {
-            Err(EvalError::TypeError(format!(
-                "- expects numbers, got {}",
-                args[0]
-            )))
+            };
         }
+        Ok(result)
     }
 
     fn primitive_multiply(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        let mut result = 1i64;
+        // Start with integer 1, promote to BigInt if overflow
+        let mut result: Value = Value::Integer(1);
+
         for arg in args {
-            if let Value::Integer(n) = arg {
-                result *= n;
-            } else {
-                return Err(EvalError::TypeError(format!(
-                    "* expects numbers, got {}",
-                    arg
-                )));
-            }
+            result = match (result, arg) {
+                // Integer * Integer - check for overflow
+                (Value::Integer(a), Value::Integer(b)) => {
+                    match a.checked_mul(b) {
+                        Some(product) => Value::Integer(product),
+                        None => {
+                            // Overflow - promote to BigInt and retry
+                            Value::BigInteger(BigInt::from(a) * BigInt::from(b))
+                        }
+                    }
+                }
+                // BigInteger * Integer
+                (Value::BigInteger(a), Value::Integer(b)) => Value::BigInteger(a * BigInt::from(b)),
+                // Integer * BigInteger
+                (Value::Integer(a), Value::BigInteger(b)) => Value::BigInteger(BigInt::from(a) * b),
+                // BigInteger * BigInteger
+                (Value::BigInteger(a), Value::BigInteger(b)) => Value::BigInteger(a * b),
+                (_, other) => {
+                    return Err(EvalError::TypeError(format!(
+                        "* expects numbers, got {}",
+                        other.type_name()
+                    )))
+                }
+            };
         }
-        Ok(Value::Integer(result))
+        Ok(result)
     }
 
     fn primitive_divide(&self, args: Vec<Value>) -> Result<Value, EvalError> {
