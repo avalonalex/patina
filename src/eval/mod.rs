@@ -1,7 +1,7 @@
 use crate::env::Environment;
 use crate::value::{Arity, Procedure, Value};
 use num_bigint::BigInt;
-use num_traits::{Signed, Zero};
+use num_traits::{Signed, ToPrimitive, Zero};
 use std::rc::Rc;
 use thiserror::Error;
 
@@ -1333,7 +1333,7 @@ impl Evaluator {
 
     // Primitive implementations
     fn primitive_add(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        // Start with integer 0, promote to BigInt if overflow
+        // Start with integer 0, promote to BigInt if overflow, or Real if inexact
         let mut result: Value = Value::Integer(0);
 
         for arg in args {
@@ -1356,6 +1356,24 @@ impl Evaluator {
                 (Value::Integer(a), Value::BigInteger(b)) => Value::BigInteger(BigInt::from(a) + b),
                 // BigInteger + BigInteger
                 (Value::BigInteger(a), Value::BigInteger(b)) => Value::BigInteger(a + b),
+
+                // Inexact contagion: Any operation with Real produces Real
+                // Integer + Real
+                (Value::Integer(a), Value::Real(b)) => Value::Real(a as f64 + b),
+                // Real + Integer
+                (Value::Real(a), Value::Integer(b)) => Value::Real(a + b as f64),
+                // BigInteger + Real
+                (Value::BigInteger(a), Value::Real(b)) => {
+                    // Convert BigInt to f64 (may lose precision for very large numbers)
+                    Value::Real(a.to_f64().unwrap_or(f64::INFINITY) + b)
+                }
+                // Real + BigInteger
+                (Value::Real(a), Value::BigInteger(b)) => {
+                    Value::Real(a + b.to_f64().unwrap_or(f64::INFINITY))
+                }
+                // Real + Real
+                (Value::Real(a), Value::Real(b)) => Value::Real(a + b),
+
                 (_, other) => {
                     return Err(EvalError::TypeError(format!(
                         "+ expects numbers, got {}",
@@ -1388,6 +1406,7 @@ impl Evaluator {
                     }
                 }
                 Value::BigInteger(n) => Ok(Value::BigInteger(-n)),
+                Value::Real(n) => Ok(Value::Real(-n)),
                 other => Err(EvalError::TypeError(format!(
                     "- expects numbers, got {}",
                     other.type_name()
@@ -1418,6 +1437,23 @@ impl Evaluator {
                 (Value::Integer(a), Value::BigInteger(b)) => Value::BigInteger(BigInt::from(a) - b),
                 // BigInteger - BigInteger
                 (Value::BigInteger(a), Value::BigInteger(b)) => Value::BigInteger(a - b),
+
+                // Inexact contagion: Any operation with Real produces Real
+                // Integer - Real
+                (Value::Integer(a), Value::Real(b)) => Value::Real(a as f64 - *b),
+                // Real - Integer
+                (Value::Real(a), Value::Integer(b)) => Value::Real(a - *b as f64),
+                // BigInteger - Real
+                (Value::BigInteger(a), Value::Real(b)) => {
+                    Value::Real(a.to_f64().unwrap_or(f64::INFINITY) - *b)
+                }
+                // Real - BigInteger
+                (Value::Real(a), Value::BigInteger(b)) => {
+                    Value::Real(a - b.to_f64().unwrap_or(f64::INFINITY))
+                }
+                // Real - Real
+                (Value::Real(a), Value::Real(b)) => Value::Real(a - *b),
+
                 (_, other) => {
                     return Err(EvalError::TypeError(format!(
                         "- expects numbers, got {}",
@@ -1430,7 +1466,7 @@ impl Evaluator {
     }
 
     fn primitive_multiply(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        // Start with integer 1, promote to BigInt if overflow
+        // Start with integer 1, promote to BigInt if overflow, or Real if inexact
         let mut result: Value = Value::Integer(1);
 
         for arg in args {
@@ -1451,6 +1487,23 @@ impl Evaluator {
                 (Value::Integer(a), Value::BigInteger(b)) => Value::BigInteger(BigInt::from(a) * b),
                 // BigInteger * BigInteger
                 (Value::BigInteger(a), Value::BigInteger(b)) => Value::BigInteger(a * b),
+
+                // Inexact contagion: Any operation with Real produces Real
+                // Integer * Real
+                (Value::Integer(a), Value::Real(b)) => Value::Real(a as f64 * b),
+                // Real * Integer
+                (Value::Real(a), Value::Integer(b)) => Value::Real(a * b as f64),
+                // BigInteger * Real
+                (Value::BigInteger(a), Value::Real(b)) => {
+                    Value::Real(a.to_f64().unwrap_or(f64::INFINITY) * b)
+                }
+                // Real * BigInteger
+                (Value::Real(a), Value::BigInteger(b)) => {
+                    Value::Real(a * b.to_f64().unwrap_or(f64::INFINITY))
+                }
+                // Real * Real
+                (Value::Real(a), Value::Real(b)) => Value::Real(a * b),
+
                 (_, other) => {
                     return Err(EvalError::TypeError(format!(
                         "* expects numbers, got {}",
@@ -1470,35 +1523,53 @@ impl Evaluator {
             });
         }
 
-        if let Value::Integer(first) = args[0] {
-            if args.len() == 1 {
-                if first == 0 {
-                    return Err(EvalError::DivisionByZero);
-                }
-                return Ok(Value::Real(1.0 / first as f64));
+        // Helper function to convert any numeric Value to f64
+        let to_f64 = |v: &Value| -> Result<f64, EvalError> {
+            match v {
+                Value::Integer(n) => Ok(*n as f64),
+                Value::BigInteger(n) => Ok(n.to_f64().unwrap_or(f64::INFINITY)),
+                Value::Real(n) => Ok(*n),
+                other => Err(EvalError::TypeError(format!(
+                    "/ expects numbers, got {}",
+                    other.type_name()
+                ))),
             }
+        };
 
-            // When dividing multiple numbers, use floating point
-            let mut result = first as f64;
-            for arg in &args[1..] {
-                if let Value::Integer(n) = arg {
-                    if *n == 0 {
-                        return Err(EvalError::DivisionByZero);
-                    }
-                    result /= *n as f64;
-                } else {
-                    return Err(EvalError::TypeError(format!(
-                        "/ expects numbers, got {}",
-                        arg
-                    )));
-                }
+        // Handle unary division: (/ x) => 1/x
+        if args.len() == 1 {
+            let x = to_f64(&args[0])?;
+            if x == 0.0 {
+                return Err(EvalError::DivisionByZero);
             }
-            Ok(Value::Real(result))
-        } else {
-            Err(EvalError::TypeError(format!(
-                "/ expects numbers, got {}",
-                args[0]
-            )))
+            return Ok(Value::Real(1.0 / x));
+        }
+
+        // N-ary division: (/ a b c ...) => a / b / c / ...
+        // Note: For now we always return Real. Later we'll implement exact Rational division.
+        let mut result = to_f64(&args[0])?;
+
+        for arg in &args[1..] {
+            let divisor = to_f64(arg)?;
+            if divisor == 0.0 {
+                return Err(EvalError::DivisionByZero);
+            }
+            result /= divisor;
+        }
+
+        Ok(Value::Real(result))
+    }
+
+    // Helper function to convert numeric Value to f64 for comparisons
+    fn value_to_f64(&self, v: &Value) -> Result<f64, EvalError> {
+        match v {
+            Value::Integer(n) => Ok(*n as f64),
+            Value::BigInteger(n) => Ok(n.to_f64().unwrap_or(f64::INFINITY)),
+            Value::Real(n) => Ok(*n),
+            other => Err(EvalError::TypeError(format!(
+                "Expected number, got {}",
+                other.type_name()
+            ))),
         }
     }
 
@@ -1510,20 +1581,14 @@ impl Evaluator {
             });
         }
 
-        if let Value::Integer(first) = args[0] {
-            for arg in &args[1..] {
-                if let Value::Integer(n) = arg {
-                    if first != *n {
-                        return Ok(Value::Boolean(false));
-                    }
-                } else {
-                    return Err(EvalError::TypeError("= expects numbers".to_string()));
-                }
+        let first = self.value_to_f64(&args[0])?;
+        for arg in &args[1..] {
+            let n = self.value_to_f64(arg)?;
+            if (first - n).abs() > f64::EPSILON {
+                return Ok(Value::Boolean(false));
             }
-            Ok(Value::Boolean(true))
-        } else {
-            Err(EvalError::TypeError("= expects numbers".to_string()))
         }
+        Ok(Value::Boolean(true))
     }
 
     fn primitive_less_than(&self, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -1535,12 +1600,10 @@ impl Evaluator {
         }
 
         for i in 0..args.len() - 1 {
-            if let (Value::Integer(a), Value::Integer(b)) = (&args[i], &args[i + 1]) {
-                if a >= b {
-                    return Ok(Value::Boolean(false));
-                }
-            } else {
-                return Err(EvalError::TypeError("< expects numbers".to_string()));
+            let a = self.value_to_f64(&args[i])?;
+            let b = self.value_to_f64(&args[i + 1])?;
+            if a >= b {
+                return Ok(Value::Boolean(false));
             }
         }
         Ok(Value::Boolean(true))
@@ -1555,12 +1618,10 @@ impl Evaluator {
         }
 
         for i in 0..args.len() - 1 {
-            if let (Value::Integer(a), Value::Integer(b)) = (&args[i], &args[i + 1]) {
-                if a <= b {
-                    return Ok(Value::Boolean(false));
-                }
-            } else {
-                return Err(EvalError::TypeError("> expects numbers".to_string()));
+            let a = self.value_to_f64(&args[i])?;
+            let b = self.value_to_f64(&args[i + 1])?;
+            if a <= b {
+                return Ok(Value::Boolean(false));
             }
         }
         Ok(Value::Boolean(true))
@@ -1575,12 +1636,10 @@ impl Evaluator {
         }
 
         for i in 0..args.len() - 1 {
-            if let (Value::Integer(a), Value::Integer(b)) = (&args[i], &args[i + 1]) {
-                if a > b {
-                    return Ok(Value::Boolean(false));
-                }
-            } else {
-                return Err(EvalError::TypeError("<= expects numbers".to_string()));
+            let a = self.value_to_f64(&args[i])?;
+            let b = self.value_to_f64(&args[i + 1])?;
+            if a > b {
+                return Ok(Value::Boolean(false));
             }
         }
         Ok(Value::Boolean(true))
@@ -1595,12 +1654,10 @@ impl Evaluator {
         }
 
         for i in 0..args.len() - 1 {
-            if let (Value::Integer(a), Value::Integer(b)) = (&args[i], &args[i + 1]) {
-                if a < b {
-                    return Ok(Value::Boolean(false));
-                }
-            } else {
-                return Err(EvalError::TypeError(">= expects numbers".to_string()));
+            let a = self.value_to_f64(&args[i])?;
+            let b = self.value_to_f64(&args[i + 1])?;
+            if a < b {
+                return Ok(Value::Boolean(false));
             }
         }
         Ok(Value::Boolean(true))

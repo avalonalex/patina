@@ -201,7 +201,6 @@ fn test_exactness_distinction() {
 }
 
 #[test]
-#[ignore] // TODO: Requires inexactness contagion - exact + inexact → inexact
 fn test_inexact_contagion_addition() {
     // R7RS: Operations involving inexact numbers produce inexact results
     // exact + exact = exact
@@ -216,7 +215,6 @@ fn test_inexact_contagion_addition() {
 }
 
 #[test]
-#[ignore] // TODO: Requires inexactness contagion
 fn test_inexact_contagion_multiplication() {
     // exact * exact = exact
     assert_eval_to("(exact? (* 3 4))", "#t");
@@ -230,7 +228,6 @@ fn test_inexact_contagion_multiplication() {
 }
 
 #[test]
-#[ignore] // TODO: Requires inexactness contagion
 fn test_inexact_contagion_subtraction() {
     // exact - exact = exact
     assert_eval_to("(exact? (- 10 3))", "#t");
@@ -244,7 +241,6 @@ fn test_inexact_contagion_subtraction() {
 }
 
 #[test]
-#[ignore] // TODO: Requires inexactness contagion and mixed division
 fn test_inexact_contagion_division() {
     // Division is special: even exact / exact can be inexact in some implementations
     // But exact / exact should produce exact rational if possible
@@ -258,7 +254,6 @@ fn test_inexact_contagion_division() {
 }
 
 #[test]
-#[ignore] // TODO: Requires inexactness contagion in complex expressions
 fn test_inexact_contagion_complex_expression() {
     // Once inexactness enters an expression, it propagates throughout
 
