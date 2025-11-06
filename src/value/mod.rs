@@ -111,7 +111,15 @@ impl std::fmt::Display for Value {
             Value::Integer(n) => write!(f, "{}", n),
             Value::BigInteger(n) => write!(f, "{}", n),
             Value::Rational(r) => write!(f, "{}", r),
-            Value::Real(r) => write!(f, "{}", r),
+            Value::Real(r) => {
+                // Always display inexact numbers with decimal point
+                // to distinguish from exact integers
+                if r.fract() == 0.0 && r.is_finite() {
+                    write!(f, "{:.1}", r)
+                } else {
+                    write!(f, "{}", r)
+                }
+            }
             Value::Complex(r, i) => write!(f, "{}+{}i", r, i),
             Value::Character(c) => write!(f, "#\\{}", c),
             Value::String(s) => write!(f, "\"{}\"", s),

@@ -20,6 +20,10 @@ mod derived;
 #[path = "compliance/numbers.rs"]
 mod numbers;
 
+// Section 6.2.1: Rational Numbers (comprehensive tests)
+#[path = "compliance/rationals.rs"]
+mod rationals;
+
 // Section 6.4: Pairs and lists
 #[path = "compliance/lists.rs"]
 mod lists;

@@ -30,7 +30,7 @@ fn test_multiplication() {
 #[test]
 fn test_division() {
     assert_eval_to("(/ 20 4)", "5");
-    assert_eval_to("(/ 20 4 2)", "2.5");
+    assert_eval_to("(/ 20 4 2)", "5/2"); // Exact division returns rationals
 }
 
 #[test]

@@ -1,6 +1,8 @@
 use crate::lexer::{LexError, Lexer, Token};
 use crate::value::Value;
 use num_bigint::BigInt;
+use num_rational::BigRational;
+use num_traits::{ToPrimitive, Zero};
 use std::rc::Rc;
 use std::str::FromStr;
 use thiserror::Error;
@@ -176,6 +178,42 @@ impl Parser {
 
     fn parse_number(&self, s: &str) -> Result<Value, ParseError> {
         // Parse numbers following the R7RS numeric tower
+
+        // Check if it's a rational literal (contains '/')
+        if s.contains('/') {
+            // Try to parse as rational: numerator/denominator
+            let parts: Vec<&str> = s.split('/').collect();
+            if parts.len() == 2 {
+                // Parse numerator and denominator
+                let numer = BigInt::from_str(parts[0]).map_err(|_| {
+                    ParseError::InvalidSyntax(format!("Invalid rational numerator: {}", parts[0]))
+                })?;
+                let denom = BigInt::from_str(parts[1]).map_err(|_| {
+                    ParseError::InvalidSyntax(format!("Invalid rational denominator: {}", parts[1]))
+                })?;
+
+                if denom.is_zero() {
+                    return Err(ParseError::InvalidSyntax(
+                        "Rational denominator cannot be zero".to_string(),
+                    ));
+                }
+
+                let ratio = BigRational::new(numer, denom);
+
+                // Simplify to integer if denominator is 1
+                if ratio.denom() == &BigInt::from(1) {
+                    let numer = ratio.numer();
+                    if let Some(n) = numer.to_i64() {
+                        return Ok(Value::Integer(n));
+                    } else {
+                        return Ok(Value::BigInteger(numer.clone()));
+                    }
+                }
+
+                return Ok(Value::Rational(ratio));
+            }
+        }
+
         // Try i64 first (fast path for small integers)
         if let Ok(n) = s.parse::<i64>() {
             return Ok(Value::Integer(n));

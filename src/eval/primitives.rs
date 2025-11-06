@@ -37,11 +37,149 @@
 use crate::env::Environment;
 use crate::value::{Arity, Procedure, Value};
 use num_bigint::BigInt;
+use num_rational::BigRational;
 use num_traits::{Signed, ToPrimitive, Zero};
 use std::rc::Rc;
 
 use super::error::EvalError;
 use super::Evaluator;
+
+/// Internal representation for numeric operations
+/// Automatically promotes to the most general type needed
+enum NumericValue {
+    Integer(i64),
+    BigInteger(BigInt),
+    Rational(BigRational),
+    Real(f64),
+}
+
+impl NumericValue {
+    fn from_value(v: Value) -> Result<Self, EvalError> {
+        match v {
+            Value::Integer(n) => Ok(NumericValue::Integer(n)),
+            Value::BigInteger(n) => Ok(NumericValue::BigInteger(n)),
+            Value::Rational(r) => Ok(NumericValue::Rational(r)),
+            Value::Real(f) => Ok(NumericValue::Real(f)),
+            other => Err(EvalError::TypeError(format!(
+                "Expected number, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn into_value(self, evaluator: &Evaluator) -> Value {
+        match self {
+            NumericValue::Integer(n) => Value::Integer(n),
+            NumericValue::BigInteger(n) => Value::BigInteger(n),
+            NumericValue::Rational(r) => evaluator.rational_to_value(r),
+            NumericValue::Real(f) => Value::Real(f),
+        }
+    }
+
+    /// Add two numeric values, promoting types as needed
+    fn add(self, other: Self) -> Self {
+        use NumericValue::*;
+        match (self, other) {
+            // Integer + Integer (with overflow check)
+            (Integer(a), Integer(b)) => match a.checked_add(b) {
+                Some(sum) => Integer(sum),
+                None => BigInteger(BigInt::from(a) + BigInt::from(b)),
+            },
+            // Promote to BigInteger
+            (BigInteger(a), Integer(b)) | (Integer(b), BigInteger(a)) => {
+                BigInteger(a + BigInt::from(b))
+            }
+            (BigInteger(a), BigInteger(b)) => BigInteger(a + b),
+            // Promote to Rational
+            (Rational(a), Rational(b)) => Rational(a + b),
+            (Rational(a), Integer(b)) | (Integer(b), Rational(a)) => {
+                Rational(a + BigRational::from(BigInt::from(b)))
+            }
+            (Rational(a), BigInteger(b)) | (BigInteger(b), Rational(a)) => {
+                Rational(a + BigRational::from(b))
+            }
+            // Promote to Real (inexact contagion)
+            (Real(a), Real(b)) => Real(a + b),
+            (Real(a), Integer(b)) | (Integer(b), Real(a)) => Real(a + b as f64),
+            (Real(a), BigInteger(b)) | (BigInteger(b), Real(a)) => {
+                Real(a + b.to_f64().unwrap_or(f64::INFINITY))
+            }
+            (Real(a), Rational(r)) | (Rational(r), Real(a)) => {
+                Real(a + r.to_f64().unwrap_or(f64::INFINITY))
+            }
+        }
+    }
+
+    /// Subtract two numeric values
+    fn subtract(self, other: Self) -> Self {
+        use NumericValue::*;
+        match (self, other) {
+            (Integer(a), Integer(b)) => match a.checked_sub(b) {
+                Some(diff) => Integer(diff),
+                None => BigInteger(BigInt::from(a) - BigInt::from(b)),
+            },
+            (BigInteger(a), Integer(b)) => BigInteger(a - BigInt::from(b)),
+            (Integer(a), BigInteger(b)) => BigInteger(BigInt::from(a) - b),
+            (BigInteger(a), BigInteger(b)) => BigInteger(a - b),
+            (Rational(a), Rational(b)) => Rational(a - b),
+            (Rational(a), Integer(b)) => Rational(a - BigRational::from(BigInt::from(b))),
+            (Integer(a), Rational(b)) => Rational(BigRational::from(BigInt::from(a)) - b),
+            (Rational(a), BigInteger(b)) => Rational(a - BigRational::from(b)),
+            (BigInteger(a), Rational(b)) => Rational(BigRational::from(a) - b),
+            (Real(a), Real(b)) => Real(a - b),
+            (Real(a), Integer(b)) => Real(a - b as f64),
+            (Integer(a), Real(b)) => Real(a as f64 - b),
+            (Real(a), BigInteger(b)) => Real(a - b.to_f64().unwrap_or(f64::INFINITY)),
+            (BigInteger(a), Real(b)) => Real(a.to_f64().unwrap_or(f64::INFINITY) - b),
+            (Real(a), Rational(r)) => Real(a - r.to_f64().unwrap_or(f64::INFINITY)),
+            (Rational(r), Real(a)) => Real(r.to_f64().unwrap_or(f64::INFINITY) - a),
+        }
+    }
+
+    /// Multiply two numeric values
+    fn multiply(self, other: Self) -> Self {
+        use NumericValue::*;
+        match (self, other) {
+            (Integer(a), Integer(b)) => match a.checked_mul(b) {
+                Some(product) => Integer(product),
+                None => BigInteger(BigInt::from(a) * BigInt::from(b)),
+            },
+            (BigInteger(a), Integer(b)) | (Integer(b), BigInteger(a)) => {
+                BigInteger(a * BigInt::from(b))
+            }
+            (BigInteger(a), BigInteger(b)) => BigInteger(a * b),
+            (Rational(a), Rational(b)) => Rational(a * b),
+            (Rational(a), Integer(b)) | (Integer(b), Rational(a)) => {
+                Rational(a * BigRational::from(BigInt::from(b)))
+            }
+            (Rational(a), BigInteger(b)) | (BigInteger(b), Rational(a)) => {
+                Rational(a * BigRational::from(b))
+            }
+            (Real(a), Real(b)) => Real(a * b),
+            (Real(a), Integer(b)) | (Integer(b), Real(a)) => Real(a * b as f64),
+            (Real(a), BigInteger(b)) | (BigInteger(b), Real(a)) => {
+                Real(a * b.to_f64().unwrap_or(f64::INFINITY))
+            }
+            (Real(a), Rational(r)) | (Rational(r), Real(a)) => {
+                Real(a * r.to_f64().unwrap_or(f64::INFINITY))
+            }
+        }
+    }
+
+    /// Negate a numeric value
+    fn negate(self) -> Self {
+        use NumericValue::*;
+        match self {
+            Integer(n) => match n.checked_neg() {
+                Some(neg) => Integer(neg),
+                None => BigInteger(-BigInt::from(n)),
+            },
+            BigInteger(n) => BigInteger(-n),
+            Rational(r) => Rational(-r),
+            Real(f) => Real(-f),
+        }
+    }
+}
 
 impl Evaluator {
     /// Dispatcher that routes primitive calls to specific implementations
@@ -164,35 +302,15 @@ impl Evaluator {
     // ===== Arithmetic Primitives =====
 
     pub(super) fn primitive_add(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        let mut result: Value = Value::Integer(0);
+        let mut result = NumericValue::Integer(0);
 
         for arg in args {
-            result = match (result, arg) {
-                (Value::Integer(a), Value::Integer(b)) => match a.checked_add(b) {
-                    Some(sum) => Value::Integer(sum),
-                    None => Value::BigInteger(BigInt::from(a) + BigInt::from(b)),
-                },
-                (Value::BigInteger(a), Value::Integer(b)) => Value::BigInteger(a + BigInt::from(b)),
-                (Value::Integer(a), Value::BigInteger(b)) => Value::BigInteger(BigInt::from(a) + b),
-                (Value::BigInteger(a), Value::BigInteger(b)) => Value::BigInteger(a + b),
-                (Value::Integer(a), Value::Real(b)) => Value::Real(a as f64 + b),
-                (Value::Real(a), Value::Integer(b)) => Value::Real(a + b as f64),
-                (Value::BigInteger(a), Value::Real(b)) => {
-                    Value::Real(a.to_f64().unwrap_or(f64::INFINITY) + b)
-                }
-                (Value::Real(a), Value::BigInteger(b)) => {
-                    Value::Real(a + b.to_f64().unwrap_or(f64::INFINITY))
-                }
-                (Value::Real(a), Value::Real(b)) => Value::Real(a + b),
-                (_, other) => {
-                    return Err(EvalError::TypeError(format!(
-                        "+ expects numbers, got {}",
-                        other.type_name()
-                    )))
-                }
-            };
+            let num = NumericValue::from_value(arg)
+                .map_err(|_| EvalError::TypeError("+ expects numbers".to_string()))?;
+            result = result.add(num);
         }
-        Ok(result)
+
+        Ok(result.into_value(self))
     }
 
     pub(super) fn primitive_subtract(&self, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -204,83 +322,33 @@ impl Evaluator {
         }
 
         if args.len() == 1 {
-            return match &args[0] {
-                Value::Integer(n) => match n.checked_neg() {
-                    Some(neg) => Ok(Value::Integer(neg)),
-                    None => Ok(Value::BigInteger(-BigInt::from(*n))),
-                },
-                Value::BigInteger(n) => Ok(Value::BigInteger(-n)),
-                Value::Real(n) => Ok(Value::Real(-n)),
-                other => Err(EvalError::TypeError(format!(
-                    "- expects numbers, got {}",
-                    other.type_name()
-                ))),
-            };
+            let num = NumericValue::from_value(args[0].clone())
+                .map_err(|_| EvalError::TypeError("- expects numbers".to_string()))?;
+            return Ok(num.negate().into_value(self));
         }
 
-        let mut result = args[0].clone();
+        let mut result = NumericValue::from_value(args[0].clone())
+            .map_err(|_| EvalError::TypeError("- expects numbers".to_string()))?;
 
         for arg in &args[1..] {
-            result = match (result, arg) {
-                (Value::Integer(a), Value::Integer(b)) => match a.checked_sub(*b) {
-                    Some(diff) => Value::Integer(diff),
-                    None => Value::BigInteger(BigInt::from(a) - BigInt::from(*b)),
-                },
-                (Value::BigInteger(a), Value::Integer(b)) => {
-                    Value::BigInteger(a - BigInt::from(*b))
-                }
-                (Value::Integer(a), Value::BigInteger(b)) => Value::BigInteger(BigInt::from(a) - b),
-                (Value::BigInteger(a), Value::BigInteger(b)) => Value::BigInteger(a - b),
-                (Value::Integer(a), Value::Real(b)) => Value::Real(a as f64 - *b),
-                (Value::Real(a), Value::Integer(b)) => Value::Real(a - *b as f64),
-                (Value::BigInteger(a), Value::Real(b)) => {
-                    Value::Real(a.to_f64().unwrap_or(f64::INFINITY) - *b)
-                }
-                (Value::Real(a), Value::BigInteger(b)) => {
-                    Value::Real(a - b.to_f64().unwrap_or(f64::INFINITY))
-                }
-                (Value::Real(a), Value::Real(b)) => Value::Real(a - *b),
-                (_, other) => {
-                    return Err(EvalError::TypeError(format!(
-                        "- expects numbers, got {}",
-                        other.type_name()
-                    )))
-                }
-            };
+            let num = NumericValue::from_value(arg.clone())
+                .map_err(|_| EvalError::TypeError("- expects numbers".to_string()))?;
+            result = result.subtract(num);
         }
-        Ok(result)
+
+        Ok(result.into_value(self))
     }
 
     pub(super) fn primitive_multiply(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        let mut result: Value = Value::Integer(1);
+        let mut result = NumericValue::Integer(1);
 
         for arg in args {
-            result = match (result, arg) {
-                (Value::Integer(a), Value::Integer(b)) => match a.checked_mul(b) {
-                    Some(product) => Value::Integer(product),
-                    None => Value::BigInteger(BigInt::from(a) * BigInt::from(b)),
-                },
-                (Value::BigInteger(a), Value::Integer(b)) => Value::BigInteger(a * BigInt::from(b)),
-                (Value::Integer(a), Value::BigInteger(b)) => Value::BigInteger(BigInt::from(a) * b),
-                (Value::BigInteger(a), Value::BigInteger(b)) => Value::BigInteger(a * b),
-                (Value::Integer(a), Value::Real(b)) => Value::Real(a as f64 * b),
-                (Value::Real(a), Value::Integer(b)) => Value::Real(a * b as f64),
-                (Value::BigInteger(a), Value::Real(b)) => {
-                    Value::Real(a.to_f64().unwrap_or(f64::INFINITY) * b)
-                }
-                (Value::Real(a), Value::BigInteger(b)) => {
-                    Value::Real(a * b.to_f64().unwrap_or(f64::INFINITY))
-                }
-                (Value::Real(a), Value::Real(b)) => Value::Real(a * b),
-                (_, other) => {
-                    return Err(EvalError::TypeError(format!(
-                        "* expects numbers, got {}",
-                        other.type_name()
-                    )))
-                }
-            };
+            let num = NumericValue::from_value(arg)
+                .map_err(|_| EvalError::TypeError("* expects numbers".to_string()))?;
+            result = result.multiply(num);
         }
-        Ok(result)
+
+        Ok(result.into_value(self))
     }
 
     pub(super) fn primitive_divide(&self, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -291,46 +359,110 @@ impl Evaluator {
             });
         }
 
-        let to_f64 = |v: &Value| -> Result<f64, EvalError> {
-            match v {
-                Value::Integer(n) => Ok(*n as f64),
-                Value::BigInteger(n) => Ok(n.to_f64().unwrap_or(f64::INFINITY)),
-                Value::Real(n) => Ok(*n),
-                other => Err(EvalError::TypeError(format!(
-                    "/ expects numbers, got {}",
-                    other.type_name()
-                ))),
-            }
-        };
+        // Check if any argument is inexact (Real) - if so, use float arithmetic
+        let has_inexact = args.iter().any(|v| matches!(v, Value::Real(_)));
 
-        if args.len() == 1 {
-            let x = to_f64(&args[0])?;
-            if x == 0.0 {
-                return Err(EvalError::DivisionByZero);
+        if has_inexact {
+            // Inexact contagion: use float arithmetic
+            let to_f64 = |v: &Value| -> Result<f64, EvalError> {
+                match v {
+                    Value::Integer(n) => Ok(*n as f64),
+                    Value::BigInteger(n) => Ok(n.to_f64().unwrap_or(f64::INFINITY)),
+                    Value::Rational(r) => Ok(r.to_f64().unwrap_or(f64::INFINITY)),
+                    Value::Real(n) => Ok(*n),
+                    other => Err(EvalError::TypeError(format!(
+                        "/ expects numbers, got {}",
+                        other.type_name()
+                    ))),
+                }
+            };
+
+            if args.len() == 1 {
+                let x = to_f64(&args[0])?;
+                if x == 0.0 {
+                    return Err(EvalError::DivisionByZero);
+                }
+                return Ok(Value::Real(1.0 / x));
             }
-            return Ok(Value::Real(1.0 / x));
+
+            let mut result = to_f64(&args[0])?;
+            for arg in &args[1..] {
+                let divisor = to_f64(arg)?;
+                if divisor == 0.0 {
+                    return Err(EvalError::DivisionByZero);
+                }
+                result /= divisor;
+            }
+            Ok(Value::Real(result))
+        } else {
+            // All exact: use rational arithmetic
+            let to_rational = |v: &Value| -> Result<BigRational, EvalError> {
+                match v {
+                    Value::Integer(n) => Ok(BigRational::from(BigInt::from(*n))),
+                    Value::BigInteger(n) => Ok(BigRational::from(n.clone())),
+                    Value::Rational(r) => Ok(r.clone()),
+                    other => Err(EvalError::TypeError(format!(
+                        "/ expects numbers, got {}",
+                        other.type_name()
+                    ))),
+                }
+            };
+
+            if args.len() == 1 {
+                let x = to_rational(&args[0])?;
+                if x.is_zero() {
+                    return Err(EvalError::DivisionByZero);
+                }
+                let result = BigRational::from(BigInt::from(1)) / x;
+                return Ok(self.rational_to_value(result));
+            }
+
+            let mut result = to_rational(&args[0])?;
+            for arg in &args[1..] {
+                let divisor = to_rational(arg)?;
+                if divisor.is_zero() {
+                    return Err(EvalError::DivisionByZero);
+                }
+                result /= divisor;
+            }
+            Ok(self.rational_to_value(result))
         }
+    }
 
-        let mut result = to_f64(&args[0])?;
-
-        for arg in &args[1..] {
-            let divisor = to_f64(arg)?;
-            if divisor == 0.0 {
-                return Err(EvalError::DivisionByZero);
+    /// Helper to convert BigRational to the appropriate Value type
+    /// Simplifies to Integer or BigInteger if denominator is 1
+    fn rational_to_value(&self, r: BigRational) -> Value {
+        if r.denom() == &BigInt::from(1) {
+            // Denominator is 1, simplify to integer
+            let numer = r.numer();
+            if let Some(n) = numer.to_i64() {
+                Value::Integer(n)
+            } else {
+                Value::BigInteger(numer.clone())
             }
-            result /= divisor;
+        } else {
+            Value::Rational(r)
         }
-
-        Ok(Value::Real(result))
     }
 
     // ===== Comparison Primitives =====
 
-    pub(super) fn value_to_f64(&self, v: &Value) -> Result<f64, EvalError> {
+    /// Helper for exact numeric comparison
+    /// Returns (rational_value, is_exact) for proper comparison
+    fn value_to_comparable(&self, v: &Value) -> Result<(BigRational, bool), EvalError> {
         match v {
-            Value::Integer(n) => Ok(*n as f64),
-            Value::BigInteger(n) => Ok(n.to_f64().unwrap_or(f64::INFINITY)),
-            Value::Real(n) => Ok(*n),
+            Value::Integer(n) => Ok((BigRational::from(BigInt::from(*n)), true)),
+            Value::BigInteger(n) => Ok((BigRational::from(n.clone()), true)),
+            Value::Rational(r) => Ok((r.clone(), true)),
+            Value::Real(f) => {
+                // For inexact numbers, convert to rational approximation
+                // This maintains correct comparison semantics
+                use num_rational::Ratio;
+                let ratio = Ratio::from_float(*f).ok_or_else(|| {
+                    EvalError::TypeError("Cannot compare with NaN or infinity".to_string())
+                })?;
+                Ok((ratio, false))
+            }
             other => Err(EvalError::TypeError(format!(
                 "Expected number, got {}",
                 other.type_name()
@@ -346,10 +478,10 @@ impl Evaluator {
             });
         }
 
-        let first = self.value_to_f64(&args[0])?;
+        let (first, _) = self.value_to_comparable(&args[0])?;
         for arg in &args[1..] {
-            let n = self.value_to_f64(arg)?;
-            if (first - n).abs() > f64::EPSILON {
+            let (n, _) = self.value_to_comparable(arg)?;
+            if first != n {
                 return Ok(Value::Boolean(false));
             }
         }
@@ -365,8 +497,8 @@ impl Evaluator {
         }
 
         for i in 0..args.len() - 1 {
-            let a = self.value_to_f64(&args[i])?;
-            let b = self.value_to_f64(&args[i + 1])?;
+            let (a, _) = self.value_to_comparable(&args[i])?;
+            let (b, _) = self.value_to_comparable(&args[i + 1])?;
             if a >= b {
                 return Ok(Value::Boolean(false));
             }
@@ -383,8 +515,8 @@ impl Evaluator {
         }
 
         for i in 0..args.len() - 1 {
-            let a = self.value_to_f64(&args[i])?;
-            let b = self.value_to_f64(&args[i + 1])?;
+            let (a, _) = self.value_to_comparable(&args[i])?;
+            let (b, _) = self.value_to_comparable(&args[i + 1])?;
             if a <= b {
                 return Ok(Value::Boolean(false));
             }
@@ -401,8 +533,8 @@ impl Evaluator {
         }
 
         for i in 0..args.len() - 1 {
-            let a = self.value_to_f64(&args[i])?;
-            let b = self.value_to_f64(&args[i + 1])?;
+            let (a, _) = self.value_to_comparable(&args[i])?;
+            let (b, _) = self.value_to_comparable(&args[i + 1])?;
             if a > b {
                 return Ok(Value::Boolean(false));
             }
@@ -419,8 +551,8 @@ impl Evaluator {
         }
 
         for i in 0..args.len() - 1 {
-            let a = self.value_to_f64(&args[i])?;
-            let b = self.value_to_f64(&args[i + 1])?;
+            let (a, _) = self.value_to_comparable(&args[i])?;
+            let (b, _) = self.value_to_comparable(&args[i + 1])?;
             if a < b {
                 return Ok(Value::Boolean(false));
             }
