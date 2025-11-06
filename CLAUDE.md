@@ -96,7 +96,7 @@ cargo fmt
 
 1. **Lexer** (`src/lexer/mod.rs`): Tokenizes Scheme source into tokens
 2. **Parser** (`src/parser/mod.rs`): Builds AST (Value enum) from tokens
-3. **Evaluator** (`src/eval/mod.rs`): Tree-walking interpreter that evaluates AST
+3. **Evaluator** (`src/eval/`): Tree-walking interpreter that evaluates AST (modular structure - see below)
 
 ### Value Representation (`src/value/mod.rs`)
 
@@ -111,6 +111,48 @@ The core `Value` enum represents all Scheme values:
 - Lexical scoping with parent environment chains
 - Uses `Rc<RefCell<HashMap>>` for mutable bindings (required for `set!`)
 - Global environment initialized with primitive procedures
+
+### Evaluator Module Structure (`src/eval/`)
+
+The evaluator has been refactored into a modular structure (as of 2025-11-05):
+
+- **`mod.rs`** (~143 lines): Core orchestrator
+  - `Evaluator` struct with global environment
+  - `eval()` - Public API entry point
+  - `eval_in_env()` - Internal recursive evaluator
+  - `eval_list()` - Dispatches to special forms or procedure calls
+  - `load_bootstrap()` - Loads bootstrap Scheme library
+
+- **`error.rs`** (~27 lines): Error types
+  - `EvalError` enum with all evaluation error variants
+
+- **`special_forms.rs`** (~1,086 lines): Special form evaluation
+  - All special form evaluators: `eval_quote`, `eval_if`, `eval_define`, `eval_set`, `eval_lambda`, `eval_begin`, `eval_cond`, `eval_case`
+  - Binding constructs: `eval_let`, `eval_let_star`, `eval_letrec`, `eval_letrec_star`, `eval_let_values`, `eval_let_star_values`
+  - Boolean operators: `eval_and`, `eval_or`
+  - Higher-order: `eval_apply`
+  - Helper functions: `extract_pair`, `list_from_vec`, `parse_lambda_params`, `collect_list_items`, `bind_values_to_formals`
+
+- **`application.rs`** (~114 lines): Procedure application
+  - `eval_arguments()` - Evaluates argument expressions
+  - `apply()` - Applies procedures (primitive or lambda) to arguments
+  - `check_arity()` - Validates argument counts against procedure arity
+
+- **`primitives.rs`** (~1,391 lines): Primitive procedures
+  - `apply_primitive()` - Dispatcher for all primitive calls
+  - `install_primitives()` - Registers all primitives in global environment
+  - All primitive implementations organized by category:
+    - Arithmetic: `+`, `-`, `*`, `/` with overflow detection and inexact contagion
+    - Comparisons: `=`, `<`, `>`, `<=`, `>=` supporting mixed numeric types
+    - Pair/List operations: `cons`, `car`, `cdr`, `list`, `length`, `append`, `reverse`, `list-ref`, `list-tail`
+    - Search: `memq`, `memv`, `member`, `assq`, `assv`, `assoc`
+    - Type predicates: `number?`, `integer?`, `boolean?`, `string?`, `symbol?`, `exact?`, `inexact?`, `null?`, `pair?`, `list?`
+    - Equality: `eq?`, `eqv?`, `equal?` with structural comparison
+    - Higher-order: `map`, `for-each`
+    - Multiple values: `values`, `call-with-values`
+    - Numeric operations: `quotient`, `remainder`, `modulo`, `abs`, `max`, `min`
+
+This modular structure makes the codebase more maintainable and easier to navigate. Each module has a clear, single responsibility.
 
 ### REPL (`src/repl/mod.rs`)
 
@@ -247,16 +289,30 @@ See `docs/FEATURE_STATUS.md` for complete feature-by-feature tracking.
 ## Code Organization Principles
 
 ### When Adding Features
-- New primitives go in `eval/mod.rs` in the `install_primitives` function
-- New special forms: check symbol name in `eval_list`, add handler method
-- Value types: extend the `Value` enum in `value/mod.rs`
-- Display formatting: implement `std::fmt::Display` for new Value variants
+- **New primitives**: Add implementation in `eval/primitives.rs` and register in `install_primitives()` function
+- **New special forms**: Add dispatch case in `eval/mod.rs::eval_list()`, implement handler in `eval/special_forms.rs`
+- **Value types**: Extend the `Value` enum in `value/mod.rs`
+- **Display formatting**: Implement `std::fmt::Display` for new Value variants
 
 ### Error Handling
-- Use `EvalError` enum (defined in `eval/mod.rs`) for evaluation errors
+- Use `EvalError` enum (defined in `eval/error.rs`) for evaluation errors
 - Use `ParseError` enum for parsing issues
 - Use `LexError` enum for lexical issues
 - Wrap in `InterpreterError` at the public API level
+
+### Module Organization (Evaluator)
+The evaluator follows a clean separation of concerns:
+- `eval/mod.rs` - Core evaluation logic and orchestration (keep minimal)
+- `eval/error.rs` - Error type definitions
+- `eval/special_forms.rs` - All special form implementations
+- `eval/application.rs` - Procedure application logic
+- `eval/primitives.rs` - All primitive procedure implementations
+
+When modifying the evaluator:
+- Keep `mod.rs` small and focused on core eval loop
+- Group related primitives together in `primitives.rs`
+- Use `pub(super)` visibility for functions that should only be accessible within the `eval` module
+- Helper functions should live in the module where they're primarily used
 
 ### Memory Management
 - Use `Rc<T>` for immutable shared data (symbols, strings, pairs)
