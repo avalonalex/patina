@@ -102,9 +102,12 @@ cargo fmt
 
 The core `Value` enum represents all Scheme values:
 - Numeric tower: `Integer`, `BigInteger`, `Rational`, `Real`, `Complex` (using num-bigint/num-rational)
+- Strings: `String(Rc<RefCell<String>>)` - UTF-8 with O(n) character indexing (R7RS compliant)
+  - See `PRD/phase1/STRING_OPTIMIZATION.md` for future optimization plans
 - Data structures: `Pair`, `Null`, `Vector`, `Bytevector`
 - Procedures: `Primitive` (built-in) or `Lambda` (user-defined)
 - Uses `Rc<T>` for efficient sharing of immutable data (strings, symbols, pairs)
+- Uses `Rc<RefCell<T>>` for mutable data (strings, environments)
 
 ### Environment Model (`src/env/mod.rs`)
 
