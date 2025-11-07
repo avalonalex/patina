@@ -374,6 +374,88 @@ impl Evaluator {
         }
     }
 
+    // ========== Helper Functions for Primitives ==========
+
+    /// Check that exactly `expected` arguments were provided
+    fn check_arity_exact(
+        &self,
+        args: &[Value],
+        expected: usize,
+        fn_name: &str,
+    ) -> Result<(), EvalError> {
+        if args.len() != expected {
+            return Err(EvalError::WrongArity {
+                expected: format!("{} expects {} argument(s)", fn_name, expected),
+                actual: args.len(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Check that at least `min` arguments were provided
+    fn check_arity_min(&self, args: &[Value], min: usize, fn_name: &str) -> Result<(), EvalError> {
+        if args.len() < min {
+            return Err(EvalError::WrongArity {
+                expected: format!("{} expects at least {} argument(s)", fn_name, min),
+                actual: args.len(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Convert a Scheme list to a Vec, validating it's a proper list
+    fn list_to_vec(&self, list: Value, fn_name: &str) -> Result<Vec<Value>, EvalError> {
+        let mut items = Vec::new();
+        let mut current = list;
+
+        while let Value::Pair(pair) = current {
+            items.push(pair.0.clone());
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::TypeError(format!(
+                "{}: argument must be a proper list",
+                fn_name
+            )));
+        }
+
+        Ok(items)
+    }
+
+    /// Generic type predicate helper
+    fn make_type_predicate<F>(&self, args: Vec<Value>, predicate: F) -> Result<Value, EvalError>
+    where
+        F: Fn(&Value) -> bool,
+    {
+        self.check_arity_exact(&args, 1, "type predicate")?;
+        Ok(Value::Boolean(predicate(&args[0])))
+    }
+
+    /// Generic numeric comparison helper
+    fn primitive_numeric_compare<F>(
+        &self,
+        args: Vec<Value>,
+        op: F,
+        op_name: &str,
+    ) -> Result<Value, EvalError>
+    where
+        F: Fn(&BigRational, &BigRational) -> bool,
+    {
+        self.check_arity_min(&args, 2, op_name)?;
+
+        for i in 0..args.len() - 1 {
+            let (a, _) = self.value_to_comparable(&args[i])?;
+            let (b, _) = self.value_to_comparable(&args[i + 1])?;
+            if !op(&a, &b) {
+                return Ok(Value::Boolean(false));
+            }
+        }
+        Ok(Value::Boolean(true))
+    }
+
+    // ========== End Helper Functions ==========
+
     /// Install all primitives into the global environment
     pub(super) fn install_primitives(env: &Rc<Environment>) {
         let primitives = [
@@ -606,114 +688,34 @@ impl Evaluator {
     }
 
     pub(super) fn primitive_numeric_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() < 2 {
-            return Err(EvalError::WrongArity {
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let (first, _) = self.value_to_comparable(&args[0])?;
-        for arg in &args[1..] {
-            let (n, _) = self.value_to_comparable(arg)?;
-            if first != n {
-                return Ok(Value::Boolean(false));
-            }
-        }
-        Ok(Value::Boolean(true))
+        self.primitive_numeric_compare(args, |a, b| a == b, "=")
     }
 
     pub(super) fn primitive_less_than(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() < 2 {
-            return Err(EvalError::WrongArity {
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        for i in 0..args.len() - 1 {
-            let (a, _) = self.value_to_comparable(&args[i])?;
-            let (b, _) = self.value_to_comparable(&args[i + 1])?;
-            if a >= b {
-                return Ok(Value::Boolean(false));
-            }
-        }
-        Ok(Value::Boolean(true))
+        self.primitive_numeric_compare(args, |a, b| a < b, "<")
     }
 
     pub(super) fn primitive_greater_than(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() < 2 {
-            return Err(EvalError::WrongArity {
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        for i in 0..args.len() - 1 {
-            let (a, _) = self.value_to_comparable(&args[i])?;
-            let (b, _) = self.value_to_comparable(&args[i + 1])?;
-            if a <= b {
-                return Ok(Value::Boolean(false));
-            }
-        }
-        Ok(Value::Boolean(true))
+        self.primitive_numeric_compare(args, |a, b| a > b, ">")
     }
 
     pub(super) fn primitive_less_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() < 2 {
-            return Err(EvalError::WrongArity {
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        for i in 0..args.len() - 1 {
-            let (a, _) = self.value_to_comparable(&args[i])?;
-            let (b, _) = self.value_to_comparable(&args[i + 1])?;
-            if a > b {
-                return Ok(Value::Boolean(false));
-            }
-        }
-        Ok(Value::Boolean(true))
+        self.primitive_numeric_compare(args, |a, b| a <= b, "<=")
     }
 
     pub(super) fn primitive_greater_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() < 2 {
-            return Err(EvalError::WrongArity {
-                expected: "at least 2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        for i in 0..args.len() - 1 {
-            let (a, _) = self.value_to_comparable(&args[i])?;
-            let (b, _) = self.value_to_comparable(&args[i + 1])?;
-            if a < b {
-                return Ok(Value::Boolean(false));
-            }
-        }
-        Ok(Value::Boolean(true))
+        self.primitive_numeric_compare(args, |a, b| a >= b, ">=")
     }
 
     // ===== Pair/List Primitives =====
 
     pub(super) fn primitive_cons(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
+        self.check_arity_exact(&args, 2, "cons")?;
         Ok(Value::Pair(Rc::new((args[0].clone(), args[1].clone()))))
     }
 
     pub(super) fn primitive_car(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
+        self.check_arity_exact(&args, 1, "car")?;
         match &args[0] {
             Value::Pair(pair) => Ok(pair.0.clone()),
             _ => Err(EvalError::TypeError("car expects a pair".to_string())),
@@ -721,12 +723,7 @@ impl Evaluator {
     }
 
     pub(super) fn primitive_cdr(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
+        self.check_arity_exact(&args, 1, "cdr")?;
         match &args[0] {
             Value::Pair(pair) => Ok(pair.1.clone()),
             _ => Err(EvalError::TypeError("cdr expects a pair".to_string())),
@@ -769,28 +766,9 @@ impl Evaluator {
     }
 
     pub(super) fn primitive_length(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let mut count = 0;
-        let mut current = args[0].clone();
-
-        while let Value::Pair(pair) = current {
-            count += 1;
-            current = pair.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::TypeError(
-                "length: argument must be a proper list".to_string(),
-            ));
-        }
-
-        Ok(Value::Integer(count))
+        self.check_arity_exact(&args, 1, "length")?;
+        let items = self.list_to_vec(args[0].clone(), "length")?;
+        Ok(Value::Integer(items.len() as i64))
     }
 
     pub(super) fn primitive_append(&self, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -833,38 +811,14 @@ impl Evaluator {
     }
 
     pub(super) fn primitive_reverse(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let mut items = Vec::new();
-        let mut current = args[0].clone();
-
-        while let Value::Pair(pair) = current {
-            items.push(pair.0.clone());
-            current = pair.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::TypeError(
-                "reverse: argument must be a proper list".to_string(),
-            ));
-        }
-
+        self.check_arity_exact(&args, 1, "reverse")?;
+        let mut items = self.list_to_vec(args[0].clone(), "reverse")?;
         items.reverse();
         Ok(self.list_from_vec(items))
     }
 
     pub(super) fn primitive_list_ref(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
+        self.check_arity_exact(&args, 2, "list-ref")?;
 
         let k = match &args[1] {
             Value::Integer(n) if *n >= 0 => *n as usize,
@@ -880,29 +834,15 @@ impl Evaluator {
             }
         };
 
-        let mut current = args[0].clone();
-        let mut index = 0;
-
-        while let Value::Pair(pair) = current {
-            if index == k {
-                return Ok(pair.0.clone());
-            }
-            index += 1;
-            current = pair.1.clone();
-        }
-
-        Err(EvalError::TypeError(
-            "list-ref: index out of bounds".to_string(),
-        ))
+        let items = self.list_to_vec(args[0].clone(), "list-ref")?;
+        items
+            .get(k)
+            .cloned()
+            .ok_or_else(|| EvalError::TypeError("list-ref: index out of bounds".to_string()))
     }
 
     pub(super) fn primitive_list_tail(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
+        self.check_arity_exact(&args, 2, "list-tail")?;
 
         let k = match &args[1] {
             Value::Integer(n) if *n >= 0 => *n as usize,
@@ -918,24 +858,13 @@ impl Evaluator {
             }
         };
 
-        let mut current = args[0].clone();
-        let mut index = 0;
-
-        while index < k {
-            match current {
-                Value::Pair(pair) => {
-                    current = pair.1.clone();
-                    index += 1;
-                }
-                _ => {
-                    return Err(EvalError::TypeError(
-                        "list-tail: index out of bounds".to_string(),
-                    ))
-                }
-            }
+        let items = self.list_to_vec(args[0].clone(), "list-tail")?;
+        if k > items.len() {
+            return Err(EvalError::TypeError(
+                "list-tail: index out of bounds".to_string(),
+            ));
         }
-
-        Ok(current)
+        Ok(self.list_from_vec(items[k..].to_vec()))
     }
 
     // ===== List Search Primitives =====
@@ -1091,109 +1020,55 @@ impl Evaluator {
     // ===== Type Predicates =====
 
     pub(super) fn primitive_null_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Null)))
+        self.make_type_predicate(args, |v| matches!(v, Value::Null))
     }
 
     pub(super) fn primitive_pair_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Pair(_))))
+        self.make_type_predicate(args, |v| matches!(v, Value::Pair(_)))
     }
 
     pub(super) fn primitive_number_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(
-            args[0],
-            Value::Integer(_)
-                | Value::BigInteger(_)
-                | Value::Rational(_)
-                | Value::Real(_)
-                | Value::Complex(_, _)
-        )))
+        self.make_type_predicate(args, |v| {
+            matches!(
+                v,
+                Value::Integer(_)
+                    | Value::BigInteger(_)
+                    | Value::Rational(_)
+                    | Value::Real(_)
+                    | Value::Complex(_, _)
+            )
+        })
     }
 
     pub(super) fn primitive_integer_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(
-            args[0],
-            Value::Integer(_) | Value::BigInteger(_)
-        )))
+        self.make_type_predicate(args, |v| {
+            matches!(v, Value::Integer(_) | Value::BigInteger(_))
+        })
     }
 
     pub(super) fn primitive_boolean_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Boolean(_))))
+        self.make_type_predicate(args, |v| matches!(v, Value::Boolean(_)))
     }
 
     pub(super) fn primitive_string_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::String(_))))
+        self.make_type_predicate(args, |v| matches!(v, Value::String(_)))
     }
 
     pub(super) fn primitive_symbol_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
+        self.make_type_predicate(args, |v| matches!(v, Value::Symbol(_)))
     }
 
     pub(super) fn primitive_exact_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(
-            args[0],
-            Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_)
-        )))
+        self.make_type_predicate(args, |v| {
+            matches!(
+                v,
+                Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_)
+            )
+        })
     }
 
     pub(super) fn primitive_inexact_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        Ok(Value::Boolean(matches!(
-            args[0],
-            Value::Real(_) | Value::Complex(_, _)
-        )))
+        self.make_type_predicate(args, |v| matches!(v, Value::Real(_) | Value::Complex(_, _)))
     }
 
     // ===== Equality Primitives =====
@@ -1208,13 +1083,7 @@ impl Evaluator {
     }
 
     pub(super) fn primitive_eq(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
+        self.check_arity_exact(&args, 2, "eq?")?;
         Ok(Value::Boolean(self.values_eq(&args[0], &args[1])))
     }
 
@@ -1231,24 +1100,12 @@ impl Evaluator {
     }
 
     pub(super) fn primitive_eqv(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
+        self.check_arity_exact(&args, 2, "eqv?")?;
         Ok(Value::Boolean(self.values_eqv(&args[0], &args[1])))
     }
 
     pub(super) fn primitive_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
-        if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
+        self.check_arity_exact(&args, 2, "equal?")?;
         Ok(Value::Boolean(Self::values_equal(&args[0], &args[1])?))
     }
 

@@ -36,6 +36,120 @@ impl Evaluator {
             .fold(Value::Null, |acc, item| Value::Pair(Rc::new((item, acc))))
     }
 
+    /// Parse simple bindings of the form ((var val) ...)
+    /// Used by let, let*, letrec, and letrec*
+    fn parse_simple_bindings(
+        &self,
+        bindings: &Value,
+        form_name: &str,
+    ) -> Result<(Vec<Rc<str>>, Vec<Value>), EvalError> {
+        let mut names = Vec::new();
+        let mut value_exprs = Vec::new();
+        let mut current = bindings.clone();
+
+        while let Value::Pair(binding_pair) = current {
+            // Each binding should be (name value)
+            let binding = &binding_pair.0;
+            if let Value::Pair(binding_contents) = binding {
+                if let Value::Symbol(name) = &binding_contents.0 {
+                    names.push(name.clone());
+
+                    // Extract value expression
+                    if let Value::Pair(value_pair) = &binding_contents.1 {
+                        if !matches!(value_pair.1, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(format!(
+                                "{} binding must have exactly 2 elements",
+                                form_name
+                            )));
+                        }
+                        value_exprs.push(value_pair.0.clone());
+                    } else {
+                        return Err(EvalError::InvalidSyntax(format!(
+                            "{} binding must have a value",
+                            form_name
+                        )));
+                    }
+                } else {
+                    return Err(EvalError::InvalidSyntax(format!(
+                        "{} binding name must be a symbol",
+                        form_name
+                    )));
+                }
+            } else {
+                return Err(EvalError::InvalidSyntax(format!(
+                    "{} binding must be a list",
+                    form_name
+                )));
+            }
+
+            current = binding_pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(format!(
+                "{} bindings must be a proper list",
+                form_name
+            )));
+        }
+
+        Ok((names, value_exprs))
+    }
+
+    /// Check for and evaluate arrow syntax (test => proc)
+    /// Returns Some(result) if arrow syntax was found and evaluated
+    /// Returns None if no arrow syntax (caller should handle as regular body)
+    fn eval_arrow_syntax(
+        &self,
+        exprs: &Value,
+        test_value: Value,
+        env: &Rc<Environment>,
+        form_name: &str,
+    ) -> Result<Option<Value>, EvalError> {
+        if let Value::Pair(exprs_pair) = exprs {
+            if let Value::Symbol(arrow) = &exprs_pair.0 {
+                if arrow.as_ref() == "=>" {
+                    // Found arrow syntax - apply proc to test value
+                    if let Value::Pair(proc_pair) = &exprs_pair.1 {
+                        if !matches!(proc_pair.1, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(format!(
+                                "{}: => requires exactly one expression",
+                                form_name
+                            )));
+                        }
+                        let proc = self.eval_in_env(&proc_pair.0, env)?;
+                        return Ok(Some(self.apply(proc, vec![test_value])?));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Ensure a value is a proper list (terminated by Null)
+    #[allow(dead_code)]
+    fn ensure_proper_list(&self, value: &Value, context: &str) -> Result<(), EvalError> {
+        if !matches!(value, Value::Null) {
+            return Err(EvalError::InvalidSyntax(format!(
+                "{} must be a proper list",
+                context
+            )));
+        }
+        Ok(())
+    }
+
+    /// Extract a symbol from a value, with context for error messages
+    #[allow(dead_code)]
+    fn expect_symbol(&self, value: &Value, context: &str) -> Result<Rc<str>, EvalError> {
+        match value {
+            Value::Symbol(s) => Ok(s.clone()),
+            _ => Err(EvalError::InvalidSyntax(format!(
+                "{} expects a symbol, got {}",
+                context,
+                value.type_name()
+            ))),
+        }
+    }
+
     /// Evaluate quote special form: (quote expr)
     pub(super) fn eval_quote(&self, args: &Value) -> Result<Value, EvalError> {
         let (quoted, rest) = self.extract_pair(args)?;
@@ -282,7 +396,7 @@ impl Evaluator {
                 // Check for 'else' clause
                 if let Value::Symbol(sym) = test {
                     if sym.as_ref() == "else" {
-                        // else clause - check for => syntax
+                        // else clause - check for => syntax and reject it
                         if let Value::Pair(exprs_pair) = exprs {
                             if let Value::Symbol(arrow) = &exprs_pair.0 {
                                 if arrow.as_ref() == "=>" {
@@ -302,21 +416,8 @@ impl Evaluator {
 
                 if test_result.is_truthy() {
                     // Test succeeded - check for => syntax
-                    if let Value::Pair(exprs_pair) = exprs {
-                        if let Value::Symbol(arrow) = &exprs_pair.0 {
-                            if arrow.as_ref() == "=>" {
-                                // (test => proc) - apply proc to test result
-                                if let Value::Pair(proc_pair) = &exprs_pair.1 {
-                                    if !matches!(proc_pair.1, Value::Null) {
-                                        return Err(EvalError::InvalidSyntax(
-                                            "cond: => requires exactly one expression".to_string(),
-                                        ));
-                                    }
-                                    let proc = self.eval_in_env(&proc_pair.0, env)?;
-                                    return self.apply(proc, vec![test_result]);
-                                }
-                            }
-                        }
+                    if let Some(result) = self.eval_arrow_syntax(exprs, test_result, env, "cond")? {
+                        return Ok(result);
                     }
 
                     // Regular clause - evaluate expressions
@@ -362,22 +463,10 @@ impl Evaluator {
                 if let Value::Symbol(sym) = datums {
                     if sym.as_ref() == "else" {
                         // else clause - check for => syntax
-                        if let Value::Pair(exprs_pair) = exprs {
-                            if let Value::Symbol(arrow) = &exprs_pair.0 {
-                                if arrow.as_ref() == "=>" {
-                                    // (else => proc) - apply proc to key
-                                    if let Value::Pair(proc_pair) = &exprs_pair.1 {
-                                        if !matches!(proc_pair.1, Value::Null) {
-                                            return Err(EvalError::InvalidSyntax(
-                                                "case: => requires exactly one expression"
-                                                    .to_string(),
-                                            ));
-                                        }
-                                        let proc = self.eval_in_env(&proc_pair.0, env)?;
-                                        return self.apply(proc, vec![key]);
-                                    }
-                                }
-                            }
+                        if let Some(result) =
+                            self.eval_arrow_syntax(exprs, key.clone(), env, "case")?
+                        {
+                            return Ok(result);
                         }
                         // Regular else clause
                         return self.eval_begin(exprs, env);
@@ -402,21 +491,8 @@ impl Evaluator {
 
                 if matched {
                     // Check for => syntax
-                    if let Value::Pair(exprs_pair) = exprs {
-                        if let Value::Symbol(arrow) = &exprs_pair.0 {
-                            if arrow.as_ref() == "=>" {
-                                // (<datum> ... => proc) - apply proc to key
-                                if let Value::Pair(proc_pair) = &exprs_pair.1 {
-                                    if !matches!(proc_pair.1, Value::Null) {
-                                        return Err(EvalError::InvalidSyntax(
-                                            "case: => requires exactly one expression".to_string(),
-                                        ));
-                                    }
-                                    let proc = self.eval_in_env(&proc_pair.0, env)?;
-                                    return self.apply(proc, vec![key]);
-                                }
-                            }
-                        }
+                    if let Some(result) = self.eval_arrow_syntax(exprs, key.clone(), env, "case")? {
+                        return Ok(result);
                     }
 
                     // Regular clause - evaluate expressions
@@ -456,50 +532,8 @@ impl Evaluator {
     pub(super) fn eval_let(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
         let (bindings, rest) = self.extract_pair(args)?;
 
-        // Parse bindings into (names, values)
-        let mut names = Vec::new();
-        let mut value_exprs = Vec::new();
-        let mut current = bindings.clone();
-
-        while let Value::Pair(binding_pair) = current {
-            // Each binding should be (name value)
-            let binding = &binding_pair.0;
-            if let Value::Pair(binding_contents) = binding {
-                if let Value::Symbol(name) = &binding_contents.0 {
-                    names.push(name.clone());
-
-                    // Extract value expression
-                    if let Value::Pair(value_pair) = &binding_contents.1 {
-                        if !matches!(value_pair.1, Value::Null) {
-                            return Err(EvalError::InvalidSyntax(
-                                "let binding must have exactly 2 elements".to_string(),
-                            ));
-                        }
-                        value_exprs.push(value_pair.0.clone());
-                    } else {
-                        return Err(EvalError::InvalidSyntax(
-                            "let binding must have a value".to_string(),
-                        ));
-                    }
-                } else {
-                    return Err(EvalError::InvalidSyntax(
-                        "let binding name must be a symbol".to_string(),
-                    ));
-                }
-            } else {
-                return Err(EvalError::InvalidSyntax(
-                    "let binding must be a list".to_string(),
-                ));
-            }
-
-            current = binding_pair.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::InvalidSyntax(
-                "let bindings must be a proper list".to_string(),
-            ));
-        }
+        // Parse bindings using shared helper
+        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "let")?;
 
         // Evaluate all value expressions in the current environment
         let mut values = Vec::new();
@@ -525,53 +559,20 @@ impl Evaluator {
     ) -> Result<Value, EvalError> {
         let (bindings, rest) = self.extract_pair(args)?;
 
+        // Parse bindings using shared helper
+        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "let*")?;
+
         // Build environment incrementally
         let mut current_env = env.clone();
-        let mut current = bindings.clone();
 
-        while let Value::Pair(binding_pair) = current {
-            // Each binding should be (name value)
-            let binding = &binding_pair.0;
-            if let Value::Pair(binding_contents) = binding {
-                if let Value::Symbol(name) = &binding_contents.0 {
-                    // Extract value expression
-                    if let Value::Pair(value_pair) = &binding_contents.1 {
-                        if !matches!(value_pair.1, Value::Null) {
-                            return Err(EvalError::InvalidSyntax(
-                                "let* binding must have exactly 2 elements".to_string(),
-                            ));
-                        }
+        for (name, value_expr) in names.iter().zip(value_exprs.iter()) {
+            // Evaluate value in current environment
+            let value = self.eval_in_env(value_expr, &current_env)?;
 
-                        // Evaluate value in current environment
-                        let value = self.eval_in_env(&value_pair.0, &current_env)?;
-
-                        // Create new environment extending current one
-                        let new_env = Rc::new(Environment::with_parent(current_env));
-                        new_env.define(name.to_string(), value);
-                        current_env = new_env;
-                    } else {
-                        return Err(EvalError::InvalidSyntax(
-                            "let* binding must have a value".to_string(),
-                        ));
-                    }
-                } else {
-                    return Err(EvalError::InvalidSyntax(
-                        "let* binding name must be a symbol".to_string(),
-                    ));
-                }
-            } else {
-                return Err(EvalError::InvalidSyntax(
-                    "let* binding must be a list".to_string(),
-                ));
-            }
-
-            current = binding_pair.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::InvalidSyntax(
-                "let* bindings must be a proper list".to_string(),
-            ));
+            // Create new environment extending current one
+            let new_env = Rc::new(Environment::with_parent(current_env));
+            new_env.define(name.to_string(), value);
+            current_env = new_env;
         }
 
         // Evaluate body in the final environment
@@ -586,48 +587,8 @@ impl Evaluator {
     ) -> Result<Value, EvalError> {
         let (bindings, rest) = self.extract_pair(args)?;
 
-        // Parse bindings into (names, value_exprs)
-        let mut names = Vec::new();
-        let mut value_exprs = Vec::new();
-        let mut current = bindings.clone();
-
-        while let Value::Pair(binding_pair) = current {
-            let binding = &binding_pair.0;
-            if let Value::Pair(binding_contents) = binding {
-                if let Value::Symbol(name) = &binding_contents.0 {
-                    names.push(name.clone());
-
-                    if let Value::Pair(value_pair) = &binding_contents.1 {
-                        if !matches!(value_pair.1, Value::Null) {
-                            return Err(EvalError::InvalidSyntax(
-                                "letrec binding must have exactly 2 elements".to_string(),
-                            ));
-                        }
-                        value_exprs.push(value_pair.0.clone());
-                    } else {
-                        return Err(EvalError::InvalidSyntax(
-                            "letrec binding must have a value".to_string(),
-                        ));
-                    }
-                } else {
-                    return Err(EvalError::InvalidSyntax(
-                        "letrec binding name must be a symbol".to_string(),
-                    ));
-                }
-            } else {
-                return Err(EvalError::InvalidSyntax(
-                    "letrec binding must be a list".to_string(),
-                ));
-            }
-
-            current = binding_pair.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::InvalidSyntax(
-                "letrec bindings must be a proper list".to_string(),
-            ));
-        }
+        // Parse bindings using shared helper
+        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "letrec")?;
 
         // Create new environment and bind all variables to Unspecified initially
         let new_env = Rc::new(Environment::with_parent(env.clone()));
@@ -655,48 +616,8 @@ impl Evaluator {
     ) -> Result<Value, EvalError> {
         let (bindings, rest) = self.extract_pair(args)?;
 
-        // Parse bindings into (names, value_exprs)
-        let mut names = Vec::new();
-        let mut value_exprs = Vec::new();
-        let mut current = bindings.clone();
-
-        while let Value::Pair(binding_pair) = current {
-            let binding = &binding_pair.0;
-            if let Value::Pair(binding_contents) = binding {
-                if let Value::Symbol(name) = &binding_contents.0 {
-                    names.push(name.clone());
-
-                    if let Value::Pair(value_pair) = &binding_contents.1 {
-                        if !matches!(value_pair.1, Value::Null) {
-                            return Err(EvalError::InvalidSyntax(
-                                "letrec* binding must have exactly 2 elements".to_string(),
-                            ));
-                        }
-                        value_exprs.push(value_pair.0.clone());
-                    } else {
-                        return Err(EvalError::InvalidSyntax(
-                            "letrec* binding must have a value".to_string(),
-                        ));
-                    }
-                } else {
-                    return Err(EvalError::InvalidSyntax(
-                        "letrec* binding name must be a symbol".to_string(),
-                    ));
-                }
-            } else {
-                return Err(EvalError::InvalidSyntax(
-                    "letrec* binding must be a list".to_string(),
-                ));
-            }
-
-            current = binding_pair.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::InvalidSyntax(
-                "letrec* bindings must be a proper list".to_string(),
-            ));
-        }
+        // Parse bindings using shared helper
+        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "letrec*")?;
 
         // Create new environment and bind all variables to Unspecified initially
         let new_env = Rc::new(Environment::with_parent(env.clone()));
