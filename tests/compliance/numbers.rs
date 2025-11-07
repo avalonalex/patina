@@ -34,9 +34,15 @@ fn test_division() {
 }
 
 #[test]
-#[ignore] // TODO: Division by zero should error
 fn test_division_by_zero() {
+    // Exact division by zero should error
     assert_eval_error("(/ 1 0)");
+    assert_eval_error("(/ -5 0)");
+
+    // Inexact division by zero should produce infinity
+    assert_eval_to("(/ 1 0.0)", "+inf.0");
+    assert_eval_to("(/ -1 0.0)", "-inf.0");
+    assert_eval_to("(/ 1.0 0)", "+inf.0");
 }
 
 // 6.2.6 Numerical operations - Comparisons

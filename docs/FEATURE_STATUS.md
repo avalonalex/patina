@@ -18,13 +18,13 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 
 ## Summary Statistics
 
-**Test Results: 231 passing, 12 ignored (not implemented)**
+**Test Results: 232 passing, 11 ignored (not implemented)**
 
 | Category | Implemented | Total | Progress |
 |----------|-------------|-------|----------|
 | Primitives | 18 | 20 | 90% |
 | Derived Forms | 20 | 24 | 83% |
-| Numbers | 30 | 32 | 94% |
+| Numbers | 32 | 34 | 94% |
 | Complex Numbers | 25 | 25 | 100% ✅ |
 | Lists | 30 | 30 | 100% ✅ |
 | Predicates | 8 | 12 | 67% |
@@ -32,7 +32,7 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | Strings | 0 | 30 | 0% |
 | Vectors | 0 | 20 | 0% |
 | I/O | 0 | 30 | 0% |
-| **TOTAL** | **136** | **228** | **60%** |
+| **TOTAL** | **138** | **230** | **60%** |
 
 ---
 
@@ -137,7 +137,8 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | - | ✅ | test_subtraction | numbers.rs |
 | * | ✅ | test_multiplication | numbers.rs |
 | / | ✅ | test_division | numbers.rs |
-| / (zero check) | ❌ | test_division_by_zero (ignored) | Not implemented |
+| / (exact zero error) | ✅ | test_division_by_zero | numbers.rs |
+| / (inexact zero → inf) | ✅ | test_division_by_zero | numbers.rs |
 | abs | ✅ | test_abs | numbers.rs / eval/mod.rs |
 | quotient | ✅ | test_quotient | numbers.rs / eval/mod.rs |
 | remainder | ✅ | test_remainder | numbers.rs / eval/mod.rs |
@@ -388,6 +389,11 @@ Based on the 22 ignored tests, here are the quickest wins to reach higher compli
 ---
 
 **Recent Progress (2025-11-06):**
+- ✅ **Fixed division by zero handling**
+  - Exact division by zero (`(/ 1 0)`) → error
+  - Inexact division by zero (`(/ 1 0.0)`) → `+inf.0` or `-inf.0`
+  - Added proper infinity display formatting: `+inf.0`, `-inf.0`, `+nan.0`
+  - Enabled `test_division_by_zero` (was previously ignored)
 - ✅ **Implemented full complex number support** (25 new tests)
   - Rectangular notation: `3+4i`, `5-2i`, pure imaginary `+i`, `-i`
   - Polar notation: `r@θ` with automatic rectangular conversion

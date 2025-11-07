@@ -581,6 +581,7 @@ impl Evaluator {
 
         if has_inexact {
             // Inexact contagion: use float arithmetic
+            // Division by inexact zero produces +inf.0 or -inf.0 (not an error)
             let to_f64 = |v: &Value| -> Result<f64, EvalError> {
                 match v {
                     Value::Integer(n) => Ok(*n as f64),
@@ -596,18 +597,14 @@ impl Evaluator {
 
             if args.len() == 1 {
                 let x = to_f64(&args[0])?;
-                if x == 0.0 {
-                    return Err(EvalError::DivisionByZero);
-                }
+                // Inexact division by zero is allowed, produces inf
                 return Ok(Value::Real(1.0 / x));
             }
 
             let mut result = to_f64(&args[0])?;
             for arg in &args[1..] {
                 let divisor = to_f64(arg)?;
-                if divisor == 0.0 {
-                    return Err(EvalError::DivisionByZero);
-                }
+                // Inexact division by zero is allowed, produces inf
                 result /= divisor;
             }
             Ok(Value::Real(result))

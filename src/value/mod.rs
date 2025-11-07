@@ -112,9 +112,18 @@ impl std::fmt::Display for Value {
             Value::BigInteger(n) => write!(f, "{}", n),
             Value::Rational(r) => write!(f, "{}", r),
             Value::Real(r) => {
-                // Always display inexact numbers with decimal point
-                // to distinguish from exact integers
-                if r.fract() == 0.0 && r.is_finite() {
+                // Handle special floating point values
+                if r.is_infinite() {
+                    if r.is_sign_positive() {
+                        write!(f, "+inf.0")
+                    } else {
+                        write!(f, "-inf.0")
+                    }
+                } else if r.is_nan() {
+                    write!(f, "+nan.0")
+                } else if r.fract() == 0.0 {
+                    // Always display inexact numbers with decimal point
+                    // to distinguish from exact integers
                     write!(f, "{:.1}", r)
                 } else {
                     write!(f, "{}", r)
