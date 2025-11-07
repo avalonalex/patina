@@ -3,6 +3,7 @@ use crate::value::Value;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::str::FromStr;
 use thiserror::Error;
@@ -64,7 +65,7 @@ impl Parser {
                 Ok(val)
             }
             Token::String(s) => {
-                let val = Value::String(Rc::new(s.clone()));
+                let val = Value::String(Rc::new(RefCell::new(s.clone())));
                 self.advance()?;
                 Ok(val)
             }

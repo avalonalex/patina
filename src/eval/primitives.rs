@@ -39,6 +39,7 @@ use crate::value::{Arity, Procedure, Value};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{Signed, ToPrimitive, Zero};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::error::EvalError;
@@ -369,6 +370,28 @@ impl Evaluator {
             "inexact?" => self.primitive_inexact_p(args),
             "boolean=?" => self.primitive_boolean_equal(args),
             "procedure?" => self.primitive_procedure_p(args),
+            "char?" => self.primitive_char_p(args),
+            // String operations
+            "string-length" => self.primitive_string_length(args),
+            "string-ref" => self.primitive_string_ref(args),
+            "string-set!" => self.primitive_string_set(args),
+            "make-string" => self.primitive_make_string(args),
+            "string" => self.primitive_string(args),
+            "string=?" => self.primitive_string_equal(args),
+            "string<?" => self.primitive_string_less(args),
+            "string>?" => self.primitive_string_greater(args),
+            "string<=?" => self.primitive_string_less_equal(args),
+            "string>=?" => self.primitive_string_greater_equal(args),
+            "string-ci=?" => self.primitive_string_ci_equal(args),
+            "string-ci<?" => self.primitive_string_ci_less(args),
+            "string-ci>?" => self.primitive_string_ci_greater(args),
+            "string-ci<=?" => self.primitive_string_ci_less_equal(args),
+            "string-ci>=?" => self.primitive_string_ci_greater_equal(args),
+            "string-append" => self.primitive_string_append(args),
+            "substring" => self.primitive_substring(args),
+            "string->list" => self.primitive_string_to_list(args),
+            "list->string" => self.primitive_list_to_string(args),
+            "string-copy" => self.primitive_string_copy(args),
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name
@@ -510,6 +533,28 @@ impl Evaluator {
             ("inexact?", Arity::Exact(1)),
             ("boolean=?", Arity::Min(2)),
             ("procedure?", Arity::Exact(1)),
+            ("char?", Arity::Exact(1)),
+            // String operations
+            ("string-length", Arity::Exact(1)),
+            ("string-ref", Arity::Exact(2)),
+            ("string-set!", Arity::Exact(3)),
+            ("make-string", Arity::Range(1, 2)),
+            ("string", Arity::Min(0)),
+            ("string=?", Arity::Min(2)),
+            ("string<?", Arity::Min(2)),
+            ("string>?", Arity::Min(2)),
+            ("string<=?", Arity::Min(2)),
+            ("string>=?", Arity::Min(2)),
+            ("string-ci=?", Arity::Min(2)),
+            ("string-ci<?", Arity::Min(2)),
+            ("string-ci>?", Arity::Min(2)),
+            ("string-ci<=?", Arity::Min(2)),
+            ("string-ci>=?", Arity::Min(2)),
+            ("string-append", Arity::Min(0)),
+            ("substring", Arity::Exact(3)),
+            ("string->list", Arity::Range(1, 3)),
+            ("list->string", Arity::Exact(1)),
+            ("string-copy", Arity::Range(1, 3)),
         ];
 
         for (name, arity) in primitives {
@@ -1076,6 +1121,10 @@ impl Evaluator {
         self.make_type_predicate(args, |v| matches!(v, Value::Procedure(_)))
     }
 
+    pub(super) fn primitive_char_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.make_type_predicate(args, |v| matches!(v, Value::Character(_)))
+    }
+
     pub(super) fn primitive_boolean_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
         self.check_arity_min(&args, 2, "boolean=?")?;
 
@@ -1154,7 +1203,7 @@ impl Evaluator {
             (Value::Real(x), Value::Real(y)) => x == y,
             (Value::Character(x), Value::Character(y)) => x == y,
             (Value::Null, Value::Null) => true,
-            (Value::String(x), Value::String(y)) => x.as_ref() == y.as_ref(),
+            (Value::String(x), Value::String(y)) => *x.borrow() == *y.borrow(),
             (Value::Symbol(x), Value::Symbol(y)) => x.as_ref() == y.as_ref(),
             (Value::Pair(x), Value::Pair(y)) => {
                 Self::values_equal(&x.0, &y.0)? && Self::values_equal(&x.1, &y.1)?
@@ -1540,5 +1589,485 @@ impl Evaluator {
         }
 
         Ok(Value::Integer(min_val))
+    }
+
+    // ===== String Primitives =====
+
+    pub(super) fn primitive_string_length(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_exact(&args, 1, "string-length")?;
+
+        match &args[0] {
+            Value::String(s) => {
+                // Count Unicode characters, not bytes
+                let len = s.borrow().chars().count();
+                Ok(Value::Integer(len as i64))
+            }
+            _ => Err(EvalError::TypeError(format!(
+                "string-length expects a string, got {}",
+                args[0].type_name()
+            ))),
+        }
+    }
+
+    pub(super) fn primitive_string_ref(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_exact(&args, 2, "string-ref")?;
+
+        let (s, k) = match (&args[0], &args[1]) {
+            (Value::String(s), Value::Integer(k)) => (s, *k),
+            (Value::String(_), _) => {
+                return Err(EvalError::TypeError(
+                    "string-ref index must be an integer".to_string(),
+                ))
+            }
+            _ => {
+                return Err(EvalError::TypeError(format!(
+                    "string-ref expects string and integer, got {} and {}",
+                    args[0].type_name(),
+                    args[1].type_name()
+                )))
+            }
+        };
+
+        if k < 0 {
+            return Err(EvalError::IndexOutOfBounds(format!(
+                "string-ref index must be non-negative, got {}",
+                k
+            )));
+        }
+
+        // Get nth character (O(n) - R7RS compliant)
+        let ch = s.borrow().chars().nth(k as usize).ok_or_else(|| {
+            EvalError::IndexOutOfBounds(format!(
+                "string-ref index {} out of bounds for string of length {}",
+                k,
+                s.borrow().chars().count()
+            ))
+        })?;
+
+        Ok(Value::Character(ch))
+    }
+
+    pub(super) fn primitive_string_set(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_exact(&args, 3, "string-set!")?;
+
+        let (s, k, ch) = match (&args[0], &args[1], &args[2]) {
+            (Value::String(s), Value::Integer(k), Value::Character(ch)) => (s, *k, *ch),
+            (Value::String(_), Value::Integer(_), _) => {
+                return Err(EvalError::TypeError(
+                    "string-set! third argument must be a character".to_string(),
+                ))
+            }
+            (Value::String(_), _, _) => {
+                return Err(EvalError::TypeError(
+                    "string-set! index must be an integer".to_string(),
+                ))
+            }
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string-set! expects string, integer, and character".to_string(),
+                ))
+            }
+        };
+
+        if k < 0 {
+            return Err(EvalError::IndexOutOfBounds(format!(
+                "string-set! index must be non-negative, got {}",
+                k
+            )));
+        }
+
+        // Convert to Vec<char>, mutate, convert back
+        // This is O(n) but works correctly with UTF-8
+        let mut chars: Vec<char> = s.borrow().chars().collect();
+
+        if k as usize >= chars.len() {
+            return Err(EvalError::IndexOutOfBounds(format!(
+                "string-set! index {} out of bounds for string of length {}",
+                k,
+                chars.len()
+            )));
+        }
+
+        chars[k as usize] = ch;
+        *s.borrow_mut() = chars.into_iter().collect();
+
+        Ok(Value::Unspecified)
+    }
+
+    pub(super) fn primitive_make_string(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.is_empty() || args.len() > 2 {
+            return Err(EvalError::WrongArity {
+                expected: "make-string expects 1 or 2 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let k = match &args[0] {
+            Value::Integer(k) => *k,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "make-string length must be an integer".to_string(),
+                ))
+            }
+        };
+
+        if k < 0 {
+            return Err(EvalError::TypeError(format!(
+                "make-string length must be non-negative, got {}",
+                k
+            )));
+        }
+
+        let fill_char = if args.len() == 2 {
+            match &args[1] {
+                Value::Character(ch) => *ch,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "make-string fill character must be a character".to_string(),
+                    ))
+                }
+            }
+        } else {
+            ' ' // Default fill character
+        };
+
+        let s = std::iter::repeat(fill_char).take(k as usize).collect::<String>();
+        Ok(Value::String(Rc::new(RefCell::new(s))))
+    }
+
+    pub(super) fn primitive_string(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        let mut chars = Vec::new();
+
+        for arg in args {
+            match arg {
+                Value::Character(ch) => chars.push(ch),
+                _ => {
+                    return Err(EvalError::TypeError(format!(
+                        "string expects characters, got {}",
+                        arg.type_name()
+                    )))
+                }
+            }
+        }
+
+        let s = chars.into_iter().collect::<String>();
+        Ok(Value::String(Rc::new(RefCell::new(s))))
+    }
+
+    pub(super) fn primitive_string_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_min(&args, 2, "string=?")?;
+
+        // Get first string for comparison
+        let first = match &args[0] {
+            Value::String(s) => s.borrow().clone(),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string=? expects strings".to_string(),
+                ))
+            }
+        };
+
+        // Compare all remaining strings
+        for arg in &args[1..] {
+            match arg {
+                Value::String(s) => {
+                    if *s.borrow() != first {
+                        return Ok(Value::Boolean(false));
+                    }
+                }
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "string=? expects strings".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(Value::Boolean(true))
+    }
+
+    pub(super) fn primitive_string_less(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.string_compare(args, |a, b| a < b, "string<?")
+    }
+
+    pub(super) fn primitive_string_greater(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.string_compare(args, |a, b| a > b, "string>?")
+    }
+
+    pub(super) fn primitive_string_less_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.string_compare(args, |a, b| a <= b, "string<=?")
+    }
+
+    pub(super) fn primitive_string_greater_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.string_compare(args, |a, b| a >= b, "string>=?")
+    }
+
+    fn string_compare<F>(&self, args: Vec<Value>, cmp: F, fn_name: &str) -> Result<Value, EvalError>
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        self.check_arity_min(&args, 2, fn_name)?;
+
+        for i in 0..args.len() - 1 {
+            let (a, b) = match (&args[i], &args[i + 1]) {
+                (Value::String(a), Value::String(b)) => (a.borrow().clone(), b.borrow().clone()),
+                _ => {
+                    return Err(EvalError::TypeError(format!(
+                        "{} expects strings",
+                        fn_name
+                    )))
+                }
+            };
+
+            if !cmp(&a, &b) {
+                return Ok(Value::Boolean(false));
+            }
+        }
+
+        Ok(Value::Boolean(true))
+    }
+
+    // Case-insensitive string comparisons
+    pub(super) fn primitive_string_ci_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.string_ci_compare(args, |a, b| a == b, "string-ci=?")
+    }
+
+    pub(super) fn primitive_string_ci_less(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.string_ci_compare(args, |a, b| a < b, "string-ci<?")
+    }
+
+    pub(super) fn primitive_string_ci_greater(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.string_ci_compare(args, |a, b| a > b, "string-ci>?")
+    }
+
+    pub(super) fn primitive_string_ci_less_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.string_ci_compare(args, |a, b| a <= b, "string-ci<=?")
+    }
+
+    pub(super) fn primitive_string_ci_greater_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.string_ci_compare(args, |a, b| a >= b, "string-ci>=?")
+    }
+
+    fn string_ci_compare<F>(&self, args: Vec<Value>, cmp: F, fn_name: &str) -> Result<Value, EvalError>
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        self.check_arity_min(&args, 2, fn_name)?;
+
+        for i in 0..args.len() - 1 {
+            let (a, b) = match (&args[i], &args[i + 1]) {
+                (Value::String(a), Value::String(b)) => (
+                    a.borrow().to_lowercase(),
+                    b.borrow().to_lowercase(),
+                ),
+                _ => {
+                    return Err(EvalError::TypeError(format!(
+                        "{} expects strings",
+                        fn_name
+                    )))
+                }
+            };
+
+            if !cmp(&a, &b) {
+                return Ok(Value::Boolean(false));
+            }
+        }
+
+        Ok(Value::Boolean(true))
+    }
+
+    pub(super) fn primitive_string_append(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        let mut result = String::new();
+
+        for arg in args {
+            match arg {
+                Value::String(s) => result.push_str(&s.borrow()),
+                _ => {
+                    return Err(EvalError::TypeError(format!(
+                        "string-append expects strings, got {}",
+                        arg.type_name()
+                    )))
+                }
+            }
+        }
+
+        Ok(Value::String(Rc::new(RefCell::new(result))))
+    }
+
+    pub(super) fn primitive_substring(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_exact(&args, 3, "substring")?;
+
+        let (s, start, end) = match (&args[0], &args[1], &args[2]) {
+            (Value::String(s), Value::Integer(start), Value::Integer(end)) => (s, *start, *end),
+            (Value::String(_), _, _) => {
+                return Err(EvalError::TypeError(
+                    "substring indices must be integers".to_string(),
+                ))
+            }
+            _ => {
+                return Err(EvalError::TypeError(
+                    "substring expects string and two integers".to_string(),
+                ))
+            }
+        };
+
+        if start < 0 || end < 0 {
+            return Err(EvalError::IndexOutOfBounds(
+                "substring indices must be non-negative".to_string(),
+            ));
+        }
+
+        if start > end {
+            return Err(EvalError::IndexOutOfBounds(
+                "substring start index must be <= end index".to_string(),
+            ));
+        }
+
+        let chars: Vec<char> = s.borrow().chars().collect();
+
+        if end as usize > chars.len() {
+            return Err(EvalError::IndexOutOfBounds(format!(
+                "substring end index {} out of bounds for string of length {}",
+                end,
+                chars.len()
+            )));
+        }
+
+        let substr: String = chars[start as usize..end as usize].iter().collect();
+        Ok(Value::String(Rc::new(RefCell::new(substr))))
+    }
+
+    pub(super) fn primitive_string_to_list(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.is_empty() || args.len() > 3 {
+            return Err(EvalError::WrongArity {
+                expected: "string->list expects 1 to 3 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let s = match &args[0] {
+            Value::String(s) => s.borrow().clone(),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string->list expects a string".to_string(),
+                ))
+            }
+        };
+
+        let chars: Vec<char> = s.chars().collect();
+        let start = if args.len() >= 2 {
+            match &args[1] {
+                Value::Integer(n) => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "string->list start index must be an integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            0
+        };
+
+        let end = if args.len() >= 3 {
+            match &args[2] {
+                Value::Integer(n) => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "string->list end index must be an integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            chars.len()
+        };
+
+        if start > end || end > chars.len() {
+            return Err(EvalError::IndexOutOfBounds(
+                "string->list indices out of bounds".to_string(),
+            ));
+        }
+
+        let char_values: Vec<Value> = chars[start..end]
+            .iter()
+            .map(|&ch| Value::Character(ch))
+            .collect();
+
+        Ok(self.list_from_vec(char_values))
+    }
+
+    pub(super) fn primitive_list_to_string(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_exact(&args, 1, "list->string")?;
+
+        let chars = self.list_to_vec(args[0].clone(), "list->string")?;
+        let mut result = String::new();
+
+        for ch_val in chars {
+            match ch_val {
+                Value::Character(ch) => result.push(ch),
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "list->string expects a list of characters".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(Value::String(Rc::new(RefCell::new(result))))
+    }
+
+    pub(super) fn primitive_string_copy(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.is_empty() || args.len() > 3 {
+            return Err(EvalError::WrongArity {
+                expected: "string-copy expects 1 to 3 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let s = match &args[0] {
+            Value::String(s) => s.borrow().clone(),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string-copy expects a string".to_string(),
+                ))
+            }
+        };
+
+        if args.len() == 1 {
+            // Simple copy
+            return Ok(Value::String(Rc::new(RefCell::new(s))));
+        }
+
+        // Copy substring
+        let chars: Vec<char> = s.chars().collect();
+        let start = match &args[1] {
+            Value::Integer(n) => *n as usize,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string-copy start index must be an integer".to_string(),
+                ))
+            }
+        };
+
+        let end = if args.len() >= 3 {
+            match &args[2] {
+                Value::Integer(n) => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "string-copy end index must be an integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            chars.len()
+        };
+
+        if start > end || end > chars.len() {
+            return Err(EvalError::IndexOutOfBounds(
+                "string-copy indices out of bounds".to_string(),
+            ));
+        }
+
+        let substr: String = chars[start..end].iter().collect();
+        Ok(Value::String(Rc::new(RefCell::new(substr))))
     }
 }

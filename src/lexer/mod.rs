@@ -250,7 +250,26 @@ impl Lexer {
             "space" => ' ',
             "newline" => '\n',
             "tab" => '\t',
-            s if s.len() == 1 => s.chars().next().unwrap(),
+            // R7RS named characters
+            "alarm" => '\u{0007}',
+            "backspace" => '\u{0008}',
+            "delete" => '\u{007F}',
+            "escape" => '\u{001B}',
+            "null" => '\u{0000}',
+            "return" => '\r',
+            // Check for single character (use char count, not byte length!)
+            s if s.chars().count() == 1 => s.chars().next().unwrap(),
+            // Check for hex scalar value: #\x03BB (lambda)
+            s if s.starts_with('x') => {
+                let hex_str = &s[1..];
+                match u32::from_str_radix(hex_str, 16) {
+                    Ok(code) => match char::from_u32(code) {
+                        Some(ch) => ch,
+                        None => return Err(LexError::InvalidCharacter),
+                    },
+                    Err(_) => return Err(LexError::InvalidCharacter),
+                }
+            }
             _ => return Err(LexError::InvalidCharacter),
         };
 

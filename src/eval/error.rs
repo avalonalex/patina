@@ -23,4 +23,7 @@ pub enum EvalError {
 
     #[error("Division by zero")]
     DivisionByZero,
+
+    #[error("Index out of bounds: {0}")]
+    IndexOutOfBounds(String),
 }

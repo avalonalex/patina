@@ -1,5 +1,6 @@
 use num_bigint::BigInt;
 use num_rational::BigRational;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// Represents a Scheme value in the R7RS-small language
@@ -19,8 +20,10 @@ pub enum Value {
     // Characters (Unicode support)
     Character(char),
 
-    // Strings (mutable in Scheme)
-    String(Rc<String>),
+    // Strings (mutable in Scheme, UTF-8 encoded)
+    // Uses RefCell to allow mutation via string-set!
+    // Note: Character indexing is O(n) which is explicitly allowed by R7RS
+    String(Rc<RefCell<String>>),
 
     // Symbols
     Symbol(Rc<str>),
@@ -164,7 +167,7 @@ impl std::fmt::Display for Value {
                 }
             }
             Value::Character(c) => write!(f, "#\\{}", c),
-            Value::String(s) => write!(f, "\"{}\"", s),
+            Value::String(s) => write!(f, "\"{}\"", s.borrow()),
             Value::Symbol(s) => write!(f, "{}", s),
             Value::Null => write!(f, "()"),
             Value::Pair(_) => {
