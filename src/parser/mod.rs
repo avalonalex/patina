@@ -147,7 +147,7 @@ impl Parser {
         }
 
         self.advance()?; // consume )
-        Ok(Value::Vector(Rc::new(elements)))
+        Ok(Value::Vector(Rc::new(RefCell::new(elements))))
     }
 
     fn parse_bytevector(&mut self) -> Result<Value, ParseError> {

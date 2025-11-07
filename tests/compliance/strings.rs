@@ -124,14 +124,14 @@ fn test_string_set() {
         "(define s (make-string 5 #\\a))
          (string-set! s 2 #\\X)
          s",
-        "\"aaXaa\""
+        "\"aaXaa\"",
     );
 
     assert_program_eval_to(
         "(define s \"hello\")
          (string-set! s 0 #\\H)
          s",
-        "\"Hello\""
+        "\"Hello\"",
     );
 }
 
@@ -141,14 +141,14 @@ fn test_string_set_utf8() {
         "(define s \"Hello World\")
          (string-set! s 6 #\\世)
          s",
-        "\"Hello 世orld\""
+        "\"Hello 世orld\"",
     );
 
     assert_program_eval_to(
         "(define s (make-string 3 #\\a))
          (string-set! s 1 #\\你)
          s",
-        "\"a你a\""
+        "\"a你a\"",
     );
 }
 
@@ -256,7 +256,10 @@ fn test_string_ci_greater_equal() {
 fn test_string_append() {
     assert_eval_to("(string-append)", "\"\"");
     assert_eval_to("(string-append \"hello\")", "\"hello\"");
-    assert_eval_to("(string-append \"hello\" \" \" \"world\")", "\"hello world\"");
+    assert_eval_to(
+        "(string-append \"hello\" \" \" \"world\")",
+        "\"hello world\"",
+    );
     assert_eval_to("(string-append \"a\" \"b\" \"c\" \"d\")", "\"abcd\"");
 }
 
@@ -344,7 +347,7 @@ fn test_string_copy() {
          (define s2 (string-copy s1))
          (string-set! s2 0 #\\H)
          s1",
-        "\"hello\""
+        "\"hello\"",
     );
 }
 
@@ -368,7 +371,7 @@ fn test_string_operations_combined() {
     assert_program_eval_to(
         "(define greeting (string-append \"Hello\" \" \" \"World\"))
          (string-length greeting)",
-        "11"
+        "11",
     );
 
     // Extract and modify
@@ -376,7 +379,7 @@ fn test_string_operations_combined() {
         "(define s (substring \"hello world\" 0 5))
          (string-set! s 0 #\\H)
          s",
-        "\"Hello\""
+        "\"Hello\"",
     );
 }
 
@@ -389,7 +392,7 @@ fn test_string_mutation_independence() {
          (string-set! s1 0 #\\X)
          (string-set! s2 0 #\\Y)
          (string-append s1 \" \" s2)",
-        "\"Xaa Yaa\""
+        "\"Xaa Yaa\"",
     );
 }
 
@@ -424,12 +427,12 @@ fn test_utf8_mixed_content() {
     assert_program_eval_to(
         "(define s \"Café 咖啡\")
          (string-ref s 3)",
-        "#\\é"
+        "#\\é",
     );
 
     assert_program_eval_to(
         "(define s \"Café 咖啡\")
          (string-ref s 5)",
-        "#\\咖"
+        "#\\咖",
     );
 }

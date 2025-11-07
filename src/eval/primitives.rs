@@ -392,6 +392,23 @@ impl Evaluator {
             "string->list" => self.primitive_string_to_list(args),
             "list->string" => self.primitive_list_to_string(args),
             "string-copy" => self.primitive_string_copy(args),
+            // Vector operations
+            "vector?" => self.primitive_vector_p(args),
+            "make-vector" => self.primitive_make_vector(args),
+            "vector" => self.primitive_vector(args),
+            "vector-length" => self.primitive_vector_length(args),
+            "vector-ref" => self.primitive_vector_ref(args),
+            "vector-set!" => self.primitive_vector_set(args),
+            "vector->list" => self.primitive_vector_to_list(args),
+            "list->vector" => self.primitive_list_to_vector(args),
+            "vector->string" => self.primitive_vector_to_string(args),
+            "string->vector" => self.primitive_string_to_vector(args),
+            "vector-copy" => self.primitive_vector_copy(args),
+            "vector-copy!" => self.primitive_vector_copy_bang(args),
+            "vector-append" => self.primitive_vector_append(args),
+            "vector-fill!" => self.primitive_vector_fill(args),
+            "vector-map" => self.primitive_vector_map(args),
+            "vector-for-each" => self.primitive_vector_for_each(args),
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name
@@ -555,6 +572,23 @@ impl Evaluator {
             ("string->list", Arity::Range(1, 3)),
             ("list->string", Arity::Exact(1)),
             ("string-copy", Arity::Range(1, 3)),
+            // Vector operations
+            ("vector?", Arity::Exact(1)),
+            ("make-vector", Arity::Range(1, 2)),
+            ("vector", Arity::Min(0)),
+            ("vector-length", Arity::Exact(1)),
+            ("vector-ref", Arity::Exact(2)),
+            ("vector-set!", Arity::Exact(3)),
+            ("vector->list", Arity::Range(1, 3)),
+            ("list->vector", Arity::Exact(1)),
+            ("vector->string", Arity::Range(1, 3)),
+            ("string->vector", Arity::Range(1, 3)),
+            ("vector-copy", Arity::Range(1, 3)),
+            ("vector-copy!", Arity::Range(3, 5)),
+            ("vector-append", Arity::Min(0)),
+            ("vector-fill!", Arity::Range(2, 4)),
+            ("vector-map", Arity::Min(2)),
+            ("vector-for-each", Arity::Min(2)),
         ];
 
         for (name, arity) in primitives {
@@ -1209,11 +1243,13 @@ impl Evaluator {
                 Self::values_equal(&x.0, &y.0)? && Self::values_equal(&x.1, &y.1)?
             }
             (Value::Vector(x), Value::Vector(y)) => {
-                if x.len() != y.len() {
+                let x_vec = x.borrow();
+                let y_vec = y.borrow();
+                if x_vec.len() != y_vec.len() {
                     false
                 } else {
                     let mut equal = true;
-                    for (a, b) in x.iter().zip(y.iter()) {
+                    for (a, b) in x_vec.iter().zip(y_vec.iter()) {
                         if !Self::values_equal(a, b)? {
                             equal = false;
                             break;
@@ -1731,7 +1767,7 @@ impl Evaluator {
             ' ' // Default fill character
         };
 
-        let s = std::iter::repeat(fill_char).take(k as usize).collect::<String>();
+        let s = std::iter::repeat_n(fill_char, k as usize).collect::<String>();
         Ok(Value::String(Rc::new(RefCell::new(s))))
     }
 
@@ -1760,11 +1796,7 @@ impl Evaluator {
         // Get first string for comparison
         let first = match &args[0] {
             Value::String(s) => s.borrow().clone(),
-            _ => {
-                return Err(EvalError::TypeError(
-                    "string=? expects strings".to_string(),
-                ))
-            }
+            _ => return Err(EvalError::TypeError("string=? expects strings".to_string())),
         };
 
         // Compare all remaining strings
@@ -1775,11 +1807,7 @@ impl Evaluator {
                         return Ok(Value::Boolean(false));
                     }
                 }
-                _ => {
-                    return Err(EvalError::TypeError(
-                        "string=? expects strings".to_string(),
-                    ))
-                }
+                _ => return Err(EvalError::TypeError("string=? expects strings".to_string())),
             }
         }
 
@@ -1798,7 +1826,10 @@ impl Evaluator {
         self.string_compare(args, |a, b| a <= b, "string<=?")
     }
 
-    pub(super) fn primitive_string_greater_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+    pub(super) fn primitive_string_greater_equal(
+        &self,
+        args: Vec<Value>,
+    ) -> Result<Value, EvalError> {
         self.string_compare(args, |a, b| a >= b, "string>=?")
     }
 
@@ -1811,12 +1842,7 @@ impl Evaluator {
         for i in 0..args.len() - 1 {
             let (a, b) = match (&args[i], &args[i + 1]) {
                 (Value::String(a), Value::String(b)) => (a.borrow().clone(), b.borrow().clone()),
-                _ => {
-                    return Err(EvalError::TypeError(format!(
-                        "{} expects strings",
-                        fn_name
-                    )))
-                }
+                _ => return Err(EvalError::TypeError(format!("{} expects strings", fn_name))),
             };
 
             if !cmp(&a, &b) {
@@ -1840,15 +1866,26 @@ impl Evaluator {
         self.string_ci_compare(args, |a, b| a > b, "string-ci>?")
     }
 
-    pub(super) fn primitive_string_ci_less_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+    pub(super) fn primitive_string_ci_less_equal(
+        &self,
+        args: Vec<Value>,
+    ) -> Result<Value, EvalError> {
         self.string_ci_compare(args, |a, b| a <= b, "string-ci<=?")
     }
 
-    pub(super) fn primitive_string_ci_greater_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+    pub(super) fn primitive_string_ci_greater_equal(
+        &self,
+        args: Vec<Value>,
+    ) -> Result<Value, EvalError> {
         self.string_ci_compare(args, |a, b| a >= b, "string-ci>=?")
     }
 
-    fn string_ci_compare<F>(&self, args: Vec<Value>, cmp: F, fn_name: &str) -> Result<Value, EvalError>
+    fn string_ci_compare<F>(
+        &self,
+        args: Vec<Value>,
+        cmp: F,
+        fn_name: &str,
+    ) -> Result<Value, EvalError>
     where
         F: Fn(&str, &str) -> bool,
     {
@@ -1856,16 +1893,10 @@ impl Evaluator {
 
         for i in 0..args.len() - 1 {
             let (a, b) = match (&args[i], &args[i + 1]) {
-                (Value::String(a), Value::String(b)) => (
-                    a.borrow().to_lowercase(),
-                    b.borrow().to_lowercase(),
-                ),
-                _ => {
-                    return Err(EvalError::TypeError(format!(
-                        "{} expects strings",
-                        fn_name
-                    )))
+                (Value::String(a), Value::String(b)) => {
+                    (a.borrow().to_lowercase(), b.borrow().to_lowercase())
                 }
+                _ => return Err(EvalError::TypeError(format!("{} expects strings", fn_name))),
             };
 
             if !cmp(&a, &b) {
@@ -2069,5 +2100,598 @@ impl Evaluator {
 
         let substr: String = chars[start..end].iter().collect();
         Ok(Value::String(Rc::new(RefCell::new(substr))))
+    }
+
+    // ===== Vector Primitives =====
+
+    pub(super) fn primitive_vector_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.make_type_predicate(args, |v| matches!(v, Value::Vector(_)))
+    }
+
+    pub(super) fn primitive_make_vector(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.is_empty() || args.len() > 2 {
+            return Err(EvalError::WrongArity {
+                expected: "make-vector expects 1 or 2 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let k = match &args[0] {
+            Value::Integer(n) if *n >= 0 => *n as usize,
+            Value::Integer(n) => {
+                return Err(EvalError::TypeError(format!(
+                    "make-vector length must be non-negative, got {}",
+                    n
+                )))
+            }
+            _ => {
+                return Err(EvalError::TypeError(
+                    "make-vector expects integer length".to_string(),
+                ))
+            }
+        };
+
+        let fill = if args.len() == 2 {
+            args[1].clone()
+        } else {
+            Value::Unspecified
+        };
+
+        let elements = vec![fill; k];
+        Ok(Value::Vector(Rc::new(RefCell::new(elements))))
+    }
+
+    pub(super) fn primitive_vector(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        Ok(Value::Vector(Rc::new(RefCell::new(args))))
+    }
+
+    pub(super) fn primitive_vector_length(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_exact(&args, 1, "vector-length")?;
+        match &args[0] {
+            Value::Vector(v) => Ok(Value::Integer(v.borrow().len() as i64)),
+            _ => Err(EvalError::TypeError(
+                "vector-length expects a vector".to_string(),
+            )),
+        }
+    }
+
+    pub(super) fn primitive_vector_ref(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_exact(&args, 2, "vector-ref")?;
+
+        match (&args[0], &args[1]) {
+            (Value::Vector(v), Value::Integer(k)) => {
+                if *k < 0 {
+                    return Err(EvalError::IndexOutOfBounds(format!(
+                        "vector-ref index must be non-negative, got {}",
+                        k
+                    )));
+                }
+
+                let vec = v.borrow();
+                let idx = *k as usize;
+                vec.get(idx).cloned().ok_or_else(|| {
+                    EvalError::IndexOutOfBounds(format!(
+                        "vector-ref index {} out of bounds for vector of length {}",
+                        k,
+                        vec.len()
+                    ))
+                })
+            }
+            _ => Err(EvalError::TypeError(
+                "vector-ref expects vector and integer".to_string(),
+            )),
+        }
+    }
+
+    pub(super) fn primitive_vector_set(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_exact(&args, 3, "vector-set!")?;
+
+        match (&args[0], &args[1]) {
+            (Value::Vector(v), Value::Integer(k)) => {
+                if *k < 0 {
+                    return Err(EvalError::IndexOutOfBounds(format!(
+                        "vector-set! index must be non-negative, got {}",
+                        k
+                    )));
+                }
+
+                let mut vec = v.borrow_mut();
+                let idx = *k as usize;
+                if idx >= vec.len() {
+                    return Err(EvalError::IndexOutOfBounds(format!(
+                        "vector-set! index {} out of bounds for vector of length {}",
+                        k,
+                        vec.len()
+                    )));
+                }
+
+                vec[idx] = args[2].clone();
+                Ok(Value::Unspecified)
+            }
+            _ => Err(EvalError::TypeError(
+                "vector-set! expects vector, integer, and value".to_string(),
+            )),
+        }
+    }
+
+    // ===== Vector Conversion Primitives =====
+
+    pub(super) fn primitive_vector_to_list(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.is_empty() || args.len() > 3 {
+            return Err(EvalError::WrongArity {
+                expected: "vector->list expects 1 to 3 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let vec = match &args[0] {
+            Value::Vector(v) => v.borrow().clone(),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "vector->list expects a vector".to_string(),
+                ))
+            }
+        };
+
+        let start = if args.len() >= 2 {
+            match &args[1] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                Value::Integer(n) => {
+                    return Err(EvalError::IndexOutOfBounds(format!(
+                        "vector->list start index must be non-negative, got {}",
+                        n
+                    )))
+                }
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "vector->list start index must be an integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            0
+        };
+
+        let end = if args.len() >= 3 {
+            match &args[2] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                Value::Integer(n) => {
+                    return Err(EvalError::IndexOutOfBounds(format!(
+                        "vector->list end index must be non-negative, got {}",
+                        n
+                    )))
+                }
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "vector->list end index must be an integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            vec.len()
+        };
+
+        if start > end || end > vec.len() {
+            return Err(EvalError::IndexOutOfBounds(
+                "vector->list indices out of bounds".to_string(),
+            ));
+        }
+
+        Ok(self.list_from_vec(vec[start..end].to_vec()))
+    }
+
+    pub(super) fn primitive_list_to_vector(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_exact(&args, 1, "list->vector")?;
+        let items = self.list_to_vec(args[0].clone(), "list->vector")?;
+        Ok(Value::Vector(Rc::new(RefCell::new(items))))
+    }
+
+    pub(super) fn primitive_vector_to_string(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.is_empty() || args.len() > 3 {
+            return Err(EvalError::WrongArity {
+                expected: "vector->string expects 1 to 3 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let vec = match &args[0] {
+            Value::Vector(v) => v.borrow().clone(),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "vector->string expects a vector".to_string(),
+                ))
+            }
+        };
+
+        let start = if args.len() >= 2 {
+            match &args[1] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "start index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            0
+        };
+
+        let end = if args.len() >= 3 {
+            match &args[2] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "end index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            vec.len()
+        };
+
+        if start > end || end > vec.len() {
+            return Err(EvalError::IndexOutOfBounds(
+                "indices out of bounds".to_string(),
+            ));
+        }
+
+        let mut chars = Vec::new();
+        for val in &vec[start..end] {
+            match val {
+                Value::Character(c) => chars.push(*c),
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "vector->string requires vector of characters".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(Value::String(Rc::new(RefCell::new(
+            chars.into_iter().collect(),
+        ))))
+    }
+
+    pub(super) fn primitive_string_to_vector(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.is_empty() || args.len() > 3 {
+            return Err(EvalError::WrongArity {
+                expected: "string->vector expects 1 to 3 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let s = match &args[0] {
+            Value::String(s) => s.borrow().clone(),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string->vector expects a string".to_string(),
+                ))
+            }
+        };
+
+        let chars: Vec<char> = s.chars().collect();
+
+        let start = if args.len() >= 2 {
+            match &args[1] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "start index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            0
+        };
+
+        let end = if args.len() >= 3 {
+            match &args[2] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "end index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            chars.len()
+        };
+
+        if start > end || end > chars.len() {
+            return Err(EvalError::IndexOutOfBounds(
+                "indices out of bounds".to_string(),
+            ));
+        }
+
+        let elements: Vec<Value> = chars[start..end]
+            .iter()
+            .map(|c| Value::Character(*c))
+            .collect();
+        Ok(Value::Vector(Rc::new(RefCell::new(elements))))
+    }
+
+    // ===== Vector Operation Primitives =====
+
+    pub(super) fn primitive_vector_copy(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.is_empty() || args.len() > 3 {
+            return Err(EvalError::WrongArity {
+                expected: "vector-copy expects 1 to 3 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let vec = match &args[0] {
+            Value::Vector(v) => v.borrow().clone(),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "vector-copy expects a vector".to_string(),
+                ))
+            }
+        };
+
+        let start = if args.len() >= 2 {
+            match &args[1] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "start index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            0
+        };
+
+        let end = if args.len() >= 3 {
+            match &args[2] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "end index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            vec.len()
+        };
+
+        if start > end || end > vec.len() {
+            return Err(EvalError::IndexOutOfBounds(
+                "indices out of bounds".to_string(),
+            ));
+        }
+
+        Ok(Value::Vector(Rc::new(RefCell::new(
+            vec[start..end].to_vec(),
+        ))))
+    }
+
+    pub(super) fn primitive_vector_copy_bang(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() < 3 || args.len() > 5 {
+            return Err(EvalError::WrongArity {
+                expected: "vector-copy! expects 3 to 5 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let to = match &args[0] {
+            Value::Vector(v) => v,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "first argument must be a vector".to_string(),
+                ))
+            }
+        };
+
+        let at = match &args[1] {
+            Value::Integer(n) if *n >= 0 => *n as usize,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "at index must be a non-negative integer".to_string(),
+                ))
+            }
+        };
+
+        let from_vec = match &args[2] {
+            Value::Vector(v) => v.borrow().clone(),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "from argument must be a vector".to_string(),
+                ))
+            }
+        };
+
+        let start = if args.len() >= 4 {
+            match &args[3] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "start index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            0
+        };
+
+        let end = if args.len() >= 5 {
+            match &args[4] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "end index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            from_vec.len()
+        };
+
+        if start > end || end > from_vec.len() {
+            return Err(EvalError::IndexOutOfBounds(
+                "from indices out of bounds".to_string(),
+            ));
+        }
+
+        let mut to_vec = to.borrow_mut();
+        let copy_len = end - start;
+
+        if at > to_vec.len() {
+            return Err(EvalError::IndexOutOfBounds(
+                "at index out of bounds".to_string(),
+            ));
+        }
+
+        if to_vec.len() - at < copy_len {
+            return Err(EvalError::IndexOutOfBounds(
+                "not enough space in destination vector".to_string(),
+            ));
+        }
+
+        // Copy elements - handle overlapping case by cloning
+        let slice_to_copy: Vec<Value> = from_vec[start..end].to_vec();
+        for (i, val) in slice_to_copy.into_iter().enumerate() {
+            to_vec[at + i] = val;
+        }
+
+        Ok(Value::Unspecified)
+    }
+
+    pub(super) fn primitive_vector_append(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        let mut result = Vec::new();
+
+        for arg in args {
+            match arg {
+                Value::Vector(v) => {
+                    result.extend(v.borrow().clone());
+                }
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "vector-append expects only vectors".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(Value::Vector(Rc::new(RefCell::new(result))))
+    }
+
+    pub(super) fn primitive_vector_fill(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        if args.len() < 2 || args.len() > 4 {
+            return Err(EvalError::WrongArity {
+                expected: "vector-fill! expects 2 to 4 arguments".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let vec = match &args[0] {
+            Value::Vector(v) => v,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "first argument must be a vector".to_string(),
+                ))
+            }
+        };
+
+        let fill = args[1].clone();
+
+        let start = if args.len() >= 3 {
+            match &args[2] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "start index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            0
+        };
+
+        let mut vec_mut = vec.borrow_mut();
+        let end = if args.len() >= 4 {
+            match &args[3] {
+                Value::Integer(n) if *n >= 0 => *n as usize,
+                _ => {
+                    return Err(EvalError::TypeError(
+                        "end index must be a non-negative integer".to_string(),
+                    ))
+                }
+            }
+        } else {
+            vec_mut.len()
+        };
+
+        if start > end || end > vec_mut.len() {
+            return Err(EvalError::IndexOutOfBounds(
+                "indices out of bounds".to_string(),
+            ));
+        }
+
+        for i in start..end {
+            vec_mut[i] = fill.clone();
+        }
+
+        Ok(Value::Unspecified)
+    }
+
+    // ===== Vector Higher-Order Functions =====
+
+    pub(super) fn primitive_vector_map(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_min(&args, 2, "vector-map")?;
+
+        let proc = &args[0];
+        let vectors: Vec<_> = args[1..]
+            .iter()
+            .map(|v| match v {
+                Value::Vector(vec) => Ok(vec.borrow().clone()),
+                _ => Err(EvalError::TypeError(
+                    "vector-map expects vectors".to_string(),
+                )),
+            })
+            .collect::<Result<_, _>>()?;
+
+        if vectors.is_empty() {
+            return Ok(Value::Vector(Rc::new(RefCell::new(Vec::new()))));
+        }
+
+        let min_len = vectors.iter().map(|v| v.len()).min().unwrap_or(0);
+        let mut result = Vec::new();
+
+        for i in 0..min_len {
+            let proc_args: Vec<Value> = vectors.iter().map(|v| v[i].clone()).collect();
+            let val = self.apply(proc.clone(), proc_args)?;
+            result.push(val);
+        }
+
+        Ok(Value::Vector(Rc::new(RefCell::new(result))))
+    }
+
+    pub(super) fn primitive_vector_for_each(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_min(&args, 2, "vector-for-each")?;
+
+        let proc = &args[0];
+        let vectors: Vec<_> = args[1..]
+            .iter()
+            .map(|v| match v {
+                Value::Vector(vec) => Ok(vec.borrow().clone()),
+                _ => Err(EvalError::TypeError(
+                    "vector-for-each expects vectors".to_string(),
+                )),
+            })
+            .collect::<Result<_, _>>()?;
+
+        if vectors.is_empty() {
+            return Ok(Value::Unspecified);
+        }
+
+        let min_len = vectors.iter().map(|v| v.len()).min().unwrap_or(0);
+
+        for i in 0..min_len {
+            let proc_args: Vec<Value> = vectors.iter().map(|v| v[i].clone()).collect();
+            self.apply(proc.clone(), proc_args)?;
+        }
+
+        Ok(Value::Unspecified)
     }
 }

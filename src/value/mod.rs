@@ -32,8 +32,9 @@ pub enum Value {
     Pair(Rc<(Value, Value)>),
     Null,
 
-    // Vectors (mutable)
-    Vector(Rc<Vec<Value>>),
+    // Vectors (mutable via vector-set!)
+    // Uses RefCell to allow mutation through shared references
+    Vector(Rc<RefCell<Vec<Value>>>),
 
     // Bytevectors
     Bytevector(Rc<Vec<u8>>),
@@ -177,7 +178,8 @@ impl std::fmt::Display for Value {
             }
             Value::Vector(v) => {
                 write!(f, "#(")?;
-                for (i, val) in v.iter().enumerate() {
+                let vec = v.borrow();
+                for (i, val) in vec.iter().enumerate() {
                     if i > 0 {
                         write!(f, " ")?;
                     }
