@@ -367,6 +367,8 @@ impl Evaluator {
             "min" => self.primitive_min(args),
             "exact?" => self.primitive_exact_p(args),
             "inexact?" => self.primitive_inexact_p(args),
+            "boolean=?" => self.primitive_boolean_equal(args),
+            "procedure?" => self.primitive_procedure_p(args),
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name
@@ -506,6 +508,8 @@ impl Evaluator {
             ("min", Arity::Min(1)),
             ("exact?", Arity::Exact(1)),
             ("inexact?", Arity::Exact(1)),
+            ("boolean=?", Arity::Min(2)),
+            ("procedure?", Arity::Exact(1)),
         ];
 
         for (name, arity) in primitives {
@@ -1066,6 +1070,43 @@ impl Evaluator {
 
     pub(super) fn primitive_inexact_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
         self.make_type_predicate(args, |v| matches!(v, Value::Real(_) | Value::Complex(_, _)))
+    }
+
+    pub(super) fn primitive_procedure_p(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.make_type_predicate(args, |v| matches!(v, Value::Procedure(_)))
+    }
+
+    pub(super) fn primitive_boolean_equal(&self, args: Vec<Value>) -> Result<Value, EvalError> {
+        self.check_arity_min(&args, 2, "boolean=?")?;
+
+        // First, check that all arguments are booleans
+        for arg in &args {
+            if !matches!(arg, Value::Boolean(_)) {
+                return Err(EvalError::TypeError(
+                    "boolean=? expects all arguments to be booleans".to_string(),
+                ));
+            }
+        }
+
+        // Extract first boolean value
+        let first_val = match &args[0] {
+            Value::Boolean(b) => *b,
+            _ => unreachable!(), // Already checked above
+        };
+
+        // Check that all remaining values are equal to the first
+        for arg in &args[1..] {
+            match arg {
+                Value::Boolean(b) => {
+                    if *b != first_val {
+                        return Ok(Value::Boolean(false));
+                    }
+                }
+                _ => unreachable!(), // Already checked above
+            }
+        }
+
+        Ok(Value::Boolean(true))
     }
 
     // ===== Equality Primitives =====

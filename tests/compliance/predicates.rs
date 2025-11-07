@@ -29,11 +29,14 @@ fn test_not() {
 }
 
 #[test]
-#[ignore] // TODO: Implement boolean=?
 fn test_boolean_equal() {
     assert_eval_to("(boolean=? #t #t)", "#t");
     assert_eval_to("(boolean=? #f #f)", "#t");
     assert_eval_to("(boolean=? #t #f)", "#f");
+    // Variadic tests
+    assert_eval_to("(boolean=? #t #t #t)", "#t");
+    assert_eval_to("(boolean=? #f #f #f)", "#t");
+    assert_eval_to("(boolean=? #t #t #f)", "#f");
 }
 
 // Equivalence predicates
@@ -91,9 +94,76 @@ fn test_vector_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Implement procedure?
 fn test_procedure_predicate() {
+    // Basic cases - primitives and lambdas
     assert_eval_to("(procedure? +)", "#t");
+    assert_eval_to("(procedure? cons)", "#t");
     assert_eval_to("(procedure? (lambda (x) x))", "#t");
+    assert_eval_to("(procedure? (lambda () 3))", "#t");
+
+    // Non-procedures
     assert_eval_to("(procedure? 42)", "#f");
+    assert_eval_to("(procedure? #t)", "#f");
+    assert_eval_to("(procedure? \"hello\")", "#f");
+    assert_eval_to("(procedure? 'symbol)", "#f");
+    assert_eval_to("(procedure? '())", "#f");
+    assert_eval_to("(procedure? '(1 2 3))", "#f");
+    assert_eval_to("(procedure? (cons 1 2))", "#f");
+
+    // Evaluated results
+    assert_eval_to("(procedure? ((lambda () 3)))", "#f");
+    assert_eval_to("(procedure? ((lambda () +)))", "#t");
+
+    // Self-reference
+    assert_eval_to("(procedure? procedure?)", "#t");
+
+    // Higher-order: lambda returning procedure
+    assert_eval_to("(procedure? (lambda () +))", "#t");
+
+    // Closures and named procedures
+    assert_program_eval_to(
+        "(define (make-adder n) (lambda (x) (+ x n)))
+         (procedure? make-adder)",
+        "#t",
+    );
+    assert_program_eval_to(
+        "(define (make-adder n) (lambda (x) (+ x n)))
+         (procedure? (make-adder 5))",
+        "#t",
+    );
+    assert_program_eval_to(
+        "(define (factorial n) (if (= n 0) 1 (* n (factorial (- n 1)))))
+         (procedure? factorial)",
+        "#t",
+    );
+
+    // Curried functions
+    assert_program_eval_to(
+        "(define (curry f) (lambda (x) (lambda (y) (f x y))))
+         (procedure? (curry +))",
+        "#t",
+    );
+    assert_program_eval_to(
+        "(define (curry f) (lambda (x) (lambda (y) (f x y))))
+         (procedure? ((curry +) 5))",
+        "#t",
+    );
+
+    // Results from apply
+    assert_eval_to("(procedure? (apply + '()))", "#f"); // Returns 0
+    assert_eval_to("(procedure? (apply (lambda () +) '()))", "#t"); // Returns +
+
+    // Map results
+    assert_eval_to("(procedure? (map (lambda (x) x) '(1 2)))", "#f"); // Returns list
+    assert_eval_to("(procedure? (car (map (lambda (x) +) '(1))))", "#t"); // List of procedures
+
+    // Special forms are not procedures (they error when referenced)
+    assert_eval_error("(procedure? cond)");
+    assert_eval_error("(procedure? if)");
+    assert_eval_error("(procedure? lambda)");
+    assert_eval_error("(procedure? case)");
+    assert_eval_error("(procedure? let)");
+    assert_eval_error("(procedure? letrec)");
+    assert_eval_error("(procedure? define)");
+    assert_eval_error("(procedure? quote)");
 }
