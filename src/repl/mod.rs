@@ -125,7 +125,8 @@ impl Repl {
                 Ok(line) => {
                     let line = line.trim();
 
-                    if line.is_empty() {
+                    // Skip empty lines and comment-only lines
+                    if line.is_empty() || line.starts_with(';') {
                         continue;
                     }
 

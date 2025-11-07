@@ -101,7 +101,10 @@ impl Lexer {
             }
             '"' => self.read_string(),
             '#' => self.read_hash_syntax(),
-            _ if ch.is_numeric() || (ch == '-' || ch == '+') && self.peek_is_numeric() => {
+            _ if ch.is_numeric()
+                || (ch == '-' || ch == '+')
+                    && (self.peek_is_numeric() || self.peek_is_imaginary()) =>
+            {
                 self.read_number()
             }
             _ if self.is_identifier_start(ch) => self.read_identifier(),
@@ -148,6 +151,14 @@ impl Lexer {
             return false;
         }
         self.input[self.position + 1].is_numeric()
+    }
+
+    fn peek_is_imaginary(&self) -> bool {
+        if self.position + 1 >= self.input.len() {
+            return false;
+        }
+        let next = self.input[self.position + 1];
+        next == 'i' || next == 'I'
     }
 
     fn read_string(&mut self) -> Result<Token, LexError> {

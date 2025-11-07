@@ -46,11 +46,13 @@ use super::Evaluator;
 
 /// Internal representation for numeric operations
 /// Automatically promotes to the most general type needed
+#[derive(Debug, Clone)]
 enum NumericValue {
     Integer(i64),
     BigInteger(BigInt),
     Rational(BigRational),
     Real(f64),
+    Complex(Box<(NumericValue, NumericValue)>), // (real, imaginary) - components must not be Complex
 }
 
 impl NumericValue {
@@ -60,11 +62,72 @@ impl NumericValue {
             Value::BigInteger(n) => Ok(NumericValue::BigInteger(n)),
             Value::Rational(r) => Ok(NumericValue::Rational(r)),
             Value::Real(f) => Ok(NumericValue::Real(f)),
+            Value::Complex(real, imag) => {
+                // Convert old (f64, f64) to new representation
+                Ok(NumericValue::Complex(Box::new((
+                    NumericValue::Real(real),
+                    NumericValue::Real(imag),
+                ))))
+            }
             other => Err(EvalError::TypeError(format!(
                 "Expected number, got {}",
                 other.type_name()
             ))),
         }
+    }
+
+    /// Check if a numeric value is zero
+    #[allow(dead_code)]
+    fn is_zero(&self) -> bool {
+        match self {
+            NumericValue::Integer(n) => *n == 0,
+            NumericValue::BigInteger(n) => n.is_zero(),
+            NumericValue::Rational(r) => r.is_zero(),
+            NumericValue::Real(f) => *f == 0.0,
+            NumericValue::Complex(parts) => {
+                let (r, i) = &**parts;
+                r.is_zero() && i.is_zero()
+            }
+        }
+    }
+
+    /// Check if a numeric value is exact (not Real or Complex with Real components)
+    #[allow(dead_code)]
+    fn is_exact(&self) -> bool {
+        match self {
+            NumericValue::Integer(_) | NumericValue::BigInteger(_) | NumericValue::Rational(_) => {
+                true
+            }
+            NumericValue::Real(_) => false,
+            NumericValue::Complex(parts) => {
+                let (r, i) = &**parts;
+                r.is_exact() && i.is_exact()
+            }
+        }
+    }
+
+    /// Construct a complex number from real and imaginary parts
+    /// Returns error if either component is itself complex (R7RS requires real components)
+    #[allow(dead_code)]
+    fn make_complex(real: NumericValue, imag: NumericValue) -> Result<NumericValue, EvalError> {
+        // Ban nested complex numbers (not mathematically meaningful)
+        if matches!(real, NumericValue::Complex(_)) {
+            return Err(EvalError::TypeError(
+                "make-rectangular: real part must be a real number, not complex".to_string(),
+            ));
+        }
+        if matches!(imag, NumericValue::Complex(_)) {
+            return Err(EvalError::TypeError(
+                "make-rectangular: imaginary part must be a real number, not complex".to_string(),
+            ));
+        }
+
+        // Optimization: if imaginary is zero, return just real part
+        if imag.is_zero() {
+            return Ok(real);
+        }
+
+        Ok(NumericValue::Complex(Box::new((real, imag))))
     }
 
     fn into_value(self, evaluator: &Evaluator) -> Value {
@@ -73,6 +136,30 @@ impl NumericValue {
             NumericValue::BigInteger(n) => Value::BigInteger(n),
             NumericValue::Rational(r) => evaluator.rational_to_value(r),
             NumericValue::Real(f) => Value::Real(f),
+            NumericValue::Complex(parts) => {
+                let (r, i) = *parts;
+                // For now, convert to old (f64, f64) representation
+                // TODO: Update Value::Complex to use NumericValue
+                let real_f64 = match r {
+                    NumericValue::Integer(n) => n as f64,
+                    NumericValue::BigInteger(n) => n.to_f64().unwrap_or(f64::INFINITY),
+                    NumericValue::Rational(r) => r.to_f64().unwrap_or(f64::NAN),
+                    NumericValue::Real(f) => f,
+                    NumericValue::Complex(_) => {
+                        panic!("Complex component cannot be complex")
+                    }
+                };
+                let imag_f64 = match i {
+                    NumericValue::Integer(n) => n as f64,
+                    NumericValue::BigInteger(n) => n.to_f64().unwrap_or(f64::INFINITY),
+                    NumericValue::Rational(r) => r.to_f64().unwrap_or(f64::NAN),
+                    NumericValue::Real(f) => f,
+                    NumericValue::Complex(_) => {
+                        panic!("Complex component cannot be complex")
+                    }
+                };
+                Value::Complex(real_f64, imag_f64)
+            }
         }
     }
 
@@ -107,6 +194,17 @@ impl NumericValue {
             (Real(a), Rational(r)) | (Rational(r), Real(a)) => {
                 Real(a + r.to_f64().unwrap_or(f64::INFINITY))
             }
+            // Complex number addition: (a+bi) + (c+di) = (a+c) + (b+d)i
+            (Complex(parts1), Complex(parts2)) => {
+                let (r1, i1) = *parts1;
+                let (r2, i2) = *parts2;
+                Complex(Box::new((r1.add(r2), i1.add(i2))))
+            }
+            // Promote real to complex (a + (c+di) = (a+c) + di)
+            (Complex(parts), other) | (other, Complex(parts)) => {
+                let (r, i) = *parts;
+                Complex(Box::new((r.add(other), i)))
+            }
         }
     }
 
@@ -133,6 +231,22 @@ impl NumericValue {
             (BigInteger(a), Real(b)) => Real(a.to_f64().unwrap_or(f64::INFINITY) - b),
             (Real(a), Rational(r)) => Real(a - r.to_f64().unwrap_or(f64::INFINITY)),
             (Rational(r), Real(a)) => Real(r.to_f64().unwrap_or(f64::INFINITY) - a),
+            // Complex subtraction: (a+bi) - (c+di) = (a-c) + (b-d)i
+            (Complex(parts1), Complex(parts2)) => {
+                let (r1, i1) = *parts1;
+                let (r2, i2) = *parts2;
+                Complex(Box::new((r1.subtract(r2), i1.subtract(i2))))
+            }
+            // Real - Complex
+            (other, Complex(parts)) => {
+                let (r, i) = *parts;
+                Complex(Box::new((other.subtract(r), i.negate())))
+            }
+            // Complex - Real
+            (Complex(parts), other) => {
+                let (r, i) = *parts;
+                Complex(Box::new((r.subtract(other), i)))
+            }
         }
     }
 
@@ -163,6 +277,23 @@ impl NumericValue {
             (Real(a), Rational(r)) | (Rational(r), Real(a)) => {
                 Real(a * r.to_f64().unwrap_or(f64::INFINITY))
             }
+            // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+            (Complex(parts1), Complex(parts2)) => {
+                let (r1, i1) = *parts1;
+                let (r2, i2) = *parts2;
+                // (a+bi)(c+di) = ac + adi + bci + bdi²
+                //               = ac - bd + (ad + bc)i
+                let ac = r1.clone().multiply(r2.clone());
+                let bd = i1.clone().multiply(i2.clone());
+                let ad = r1.multiply(i2.clone());
+                let bc = i1.multiply(r2);
+                Complex(Box::new((ac.subtract(bd), ad.add(bc))))
+            }
+            // Promote real to complex
+            (Complex(parts), other) | (other, Complex(parts)) => {
+                let (r, i) = *parts;
+                Complex(Box::new((r.multiply(other.clone()), i.multiply(other))))
+            }
         }
     }
 
@@ -177,6 +308,10 @@ impl NumericValue {
             BigInteger(n) => BigInteger(-n),
             Rational(r) => Rational(-r),
             Real(f) => Real(-f),
+            Complex(parts) => {
+                let (r, i) = *parts;
+                Complex(Box::new((r.negate(), i.negate())))
+            }
         }
     }
 }

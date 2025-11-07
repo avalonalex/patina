@@ -120,7 +120,40 @@ impl std::fmt::Display for Value {
                     write!(f, "{}", r)
                 }
             }
-            Value::Complex(r, i) => write!(f, "{}+{}i", r, i),
+            Value::Complex(r, i) => {
+                // Format complex numbers properly
+                if *r == 0.0 && *i == 0.0 {
+                    write!(f, "0")
+                } else if *r == 0.0 {
+                    // Pure imaginary
+                    if *i == 1.0 {
+                        write!(f, "+i")
+                    } else if *i == -1.0 {
+                        write!(f, "-i")
+                    } else if *i < 0.0 {
+                        write!(f, "{}i", i)
+                    } else {
+                        write!(f, "+{}i", i)
+                    }
+                } else if *i == 0.0 {
+                    // Pure real
+                    write!(f, "{}", r)
+                } else if *i < 0.0 {
+                    // Negative imaginary: use - instead of +-
+                    if *i == -1.0 {
+                        write!(f, "{}-i", r)
+                    } else {
+                        write!(f, "{}{}i", r, i)
+                    }
+                } else {
+                    // Positive imaginary
+                    if *i == 1.0 {
+                        write!(f, "{}+i", r)
+                    } else {
+                        write!(f, "{}+{}i", r, i)
+                    }
+                }
+            }
             Value::Character(c) => write!(f, "#\\{}", c),
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::Symbol(s) => write!(f, "{}", s),

@@ -179,6 +179,16 @@ impl Parser {
     fn parse_number(&self, s: &str) -> Result<Value, ParseError> {
         // Parse numbers following the R7RS numeric tower
 
+        // Check for polar notation: r@theta
+        if s.contains('@') {
+            return self.parse_polar(s);
+        }
+
+        // Check for rectangular notation: a+bi or a-bi (ends with 'i' or 'I')
+        if s.ends_with('i') || s.ends_with('I') {
+            return self.parse_rectangular(s);
+        }
+
         // Check if it's a rational literal (contains '/')
         if s.contains('/') {
             // Try to parse as rational: numerator/denominator
@@ -231,6 +241,106 @@ impl Parser {
 
         // Nothing worked - invalid number
         Err(ParseError::InvalidSyntax(format!("Invalid number: {}", s)))
+    }
+
+    fn parse_rectangular(&self, s: &str) -> Result<Value, ParseError> {
+        // Remove the trailing 'i' or 'I'
+        let s_no_i = &s[..s.len() - 1];
+
+        // Handle special cases: +i, -i
+        if s_no_i == "+" || s_no_i.is_empty() {
+            return Ok(Value::Complex(0.0, 1.0));
+        }
+        if s_no_i == "-" {
+            return Ok(Value::Complex(0.0, -1.0));
+        }
+
+        // Find the position of + or - that separates real and imaginary parts
+        // We need to skip the leading sign (if any)
+        let start_pos = if s_no_i.starts_with('+') || s_no_i.starts_with('-') {
+            1
+        } else {
+            0
+        };
+
+        // Find the separator (+ or -) after the start position
+        if let Some(sep_pos) = s_no_i[start_pos..].find(['+', '-']) {
+            let real_sep_pos = start_pos + sep_pos;
+            let real_part = &s_no_i[..real_sep_pos];
+            let imag_part = &s_no_i[real_sep_pos..];
+
+            // Handle empty imaginary part (like "3+i" or "3-i")
+            let imag_str = if imag_part == "+" || imag_part == "-" {
+                format!("{}1", imag_part)
+            } else {
+                imag_part.to_string()
+            };
+
+            // Parse both parts as real numbers (could be int or float)
+            let real_val = if real_part.is_empty() {
+                0.0
+            } else {
+                self.parse_real_component(real_part)?
+            };
+            let imag_val = self.parse_real_component(&imag_str)?;
+
+            Ok(Value::Complex(real_val, imag_val))
+        } else {
+            // No separator found - this is pure imaginary like "+5i" or "-3i"
+            let imag_val = self.parse_real_component(s_no_i)?;
+            Ok(Value::Complex(0.0, imag_val))
+        }
+    }
+
+    fn parse_polar(&self, s: &str) -> Result<Value, ParseError> {
+        let parts: Vec<&str> = s.split('@').collect();
+        if parts.len() != 2 {
+            return Err(ParseError::InvalidSyntax(format!(
+                "Invalid polar notation: {}",
+                s
+            )));
+        }
+
+        let magnitude = self.parse_real_component(parts[0])?;
+        let angle = self.parse_real_component(parts[1])?;
+
+        // Convert polar to rectangular: r@θ = r*cos(θ) + r*sin(θ)i
+        let real = magnitude * angle.cos();
+        let imag = magnitude * angle.sin();
+
+        Ok(Value::Complex(real, imag))
+    }
+
+    /// Parse a component that should be a real number (int, bigint, rational, or float)
+    fn parse_real_component(&self, s: &str) -> Result<f64, ParseError> {
+        // Try i64 first
+        if let Ok(n) = s.parse::<i64>() {
+            return Ok(n as f64);
+        }
+
+        // Try BigInt
+        if let Ok(n) = BigInt::from_str(s) {
+            return Ok(n.to_f64().unwrap_or(f64::INFINITY));
+        }
+
+        // Try rational
+        if s.contains('/') {
+            let parts: Vec<&str> = s.split('/').collect();
+            if parts.len() == 2 {
+                let numer = BigInt::from_str(parts[0]).map_err(|_| {
+                    ParseError::InvalidSyntax(format!("Invalid numerator: {}", parts[0]))
+                })?;
+                let denom = BigInt::from_str(parts[1]).map_err(|_| {
+                    ParseError::InvalidSyntax(format!("Invalid denominator: {}", parts[1]))
+                })?;
+                let ratio = BigRational::new(numer, denom);
+                return Ok(ratio.to_f64().unwrap_or(f64::NAN));
+            }
+        }
+
+        // Try float
+        s.parse::<f64>()
+            .map_err(|_| ParseError::InvalidSyntax(format!("Invalid real number: {}", s)))
     }
 
     fn make_list(&self, elements: Vec<Value>) -> Value {
