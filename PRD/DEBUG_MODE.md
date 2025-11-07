@@ -241,6 +241,102 @@ pub struct DebugConfig {
 - [ ] Implement `debug_compile` for bytecode generation
 - [ ] Implement `debug_vm` for VM execution
 
+## Alternative Design: S-expression Output
+
+Given Patina's design goal of making everything look like S-expressions, debug output could itself be S-expressions rather than traditional log lines.
+
+### Rationale
+
+1. **Machine-readable**: Tools can parse debug traces as Scheme data
+2. **Scheme-native**: Debug output is valid Scheme, not a separate format
+3. **Queryable**: Write Scheme programs to analyze/filter traces
+4. **Consistent**: Everything in the system speaks the same language
+5. **Notebook-friendly**: Debug traces integrate naturally with planned notebook mode
+
+### Output Format Options
+
+**Option A: Flat event stream**
+```scheme
+(debug eval (expr (+ 1 (* 2 3))))
+(debug eval (arg 1) (result 1))
+(debug eval (arg (* 2 3)))
+(debug eval (expr (* 2 3)))
+(debug eval (arg 2) (result 2))
+(debug eval (arg 3) (result 3))
+(debug apply (primitive *) (args 2 3) (result 6))
+(debug apply (primitive +) (args 1 6) (result 7))
+```
+
+**Option B: Nested trace structure**
+```scheme
+(trace
+  (eval (+ 1 (* 2 3))
+    (eval 1 => 1)
+    (eval (* 2 3)
+      (eval 2 => 2)
+      (eval 3 => 3)
+      (apply * (2 3) => 6))
+    (apply + (1 6) => 7)))
+```
+
+**Option C: Tagged events with metadata**
+```scheme
+(event eval
+  (expr (+ 1 (* 2 3)))
+  (timestamp 1234567890)
+  (depth 0))
+(event eval
+  (expr 1)
+  (result 1)
+  (depth 1))
+```
+
+### Comparison with Log-style Output
+
+| Aspect | Log-style (`[EVAL] ...`) | S-expression |
+|--------|--------------------------|--------------|
+| Human readability | High (familiar format) | Medium (more verbose) |
+| Machine parseable | Low (requires custom parser) | High (native Scheme) |
+| Queryable | No | Yes (with Scheme code) |
+| Consistency | Separate format | Unified with language |
+| Notebook integration | Needs conversion | Native |
+| Implementation complexity | Low | Medium |
+
+### Integration with REPL
+
+S-expression output could still use `,debug` commands but with output format option:
+
+```scheme
+,debug eval           ; Enable eval tracing
+,debug format sexp    ; Use S-expression format
+,debug format log     ; Use traditional log format (default)
+```
+
+Or have it always be S-expressions and provide helper procedures:
+
+```scheme
+(debug-enable 'eval)                    ; Enable tracing
+(debug-filter '(lambda (e) ...))        ; Filter events
+(debug-replay trace)                    ; Replay a trace
+```
+
+### Future: Programmable Debugging
+
+With S-expression traces, users could write Scheme code to:
+
+```scheme
+; Find all primitive applications
+(filter (lambda (e) (eq? (car e) 'apply)) debug-trace)
+
+; Count evaluation depth
+(define (max-depth trace) ...)
+
+; Extract performance data
+(define (slow-calls trace threshold) ...)
+```
+
+This aligns with the project's philosophy of "everything is an S-expression" and provides extensibility through the language itself rather than external tools.
+
 ## Open Questions
 
 1. **Output destination**: stderr vs dedicated debug log file?
@@ -248,6 +344,7 @@ pub struct DebugConfig {
 3. **Performance**: Should debug mode be a compile-time feature flag?
 4. **Color coding**: Use colors to distinguish different stages?
 5. **Depth limiting**: Limit recursion depth in output to prevent spam?
+6. **Output format**: S-expression vs traditional log format (or support both)?
 
 ## Success Criteria
 
