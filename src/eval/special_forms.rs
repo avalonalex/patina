@@ -17,6 +17,7 @@ use crate::value::{Procedure, Value};
 use std::rc::Rc;
 
 use super::error::EvalError;
+use super::primitives::equality::values_eqv;
 use super::Evaluator;
 
 impl Evaluator {
@@ -26,14 +27,6 @@ impl Evaluator {
             Value::Pair(pair) => Ok((pair.0.clone(), pair.1.clone())),
             _ => Err(EvalError::InvalidSyntax("Expected a pair".to_string())),
         }
-    }
-
-    /// Helper to convert a vector of values to a Scheme list
-    pub(super) fn list_from_vec(&self, items: Vec<Value>) -> Value {
-        items
-            .into_iter()
-            .rev()
-            .fold(Value::Null, |acc, item| Value::Pair(Rc::new((item, acc))))
     }
 
     /// Parse simple bindings of the form ((var val) ...)
@@ -481,7 +474,7 @@ impl Evaluator {
                     let datum = &datum_pair.0;
 
                     // Use eqv? semantics for comparison
-                    if self.values_eqv(&key, datum) {
+                    if values_eqv(&key, datum) {
                         matched = true;
                         break;
                     }
