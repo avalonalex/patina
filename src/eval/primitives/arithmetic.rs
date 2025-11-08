@@ -25,6 +25,36 @@ enum NumericValue {
 }
 
 impl NumericValue {
+    /// Convert an integer to BigInt (helper for type promotion)
+    #[inline]
+    fn to_bigint(n: i64) -> BigInt {
+        BigInt::from(n)
+    }
+
+    /// Convert to f64 with overflow handling (helper for inexact contagion)
+    #[inline]
+    fn to_f64(&self) -> f64 {
+        match self {
+            NumericValue::Integer(n) => *n as f64,
+            NumericValue::BigInteger(n) => n.to_f64().unwrap_or(f64::INFINITY),
+            NumericValue::Rational(r) => r.to_f64().unwrap_or(f64::INFINITY),
+            NumericValue::Real(f) => *f,
+            NumericValue::Complex(_) => panic!("Cannot convert complex to f64"),
+        }
+    }
+
+    /// Convert to BigRational (helper for exact arithmetic)
+    #[allow(dead_code)]
+    #[inline]
+    fn to_rational(&self) -> BigRational {
+        match self {
+            NumericValue::Integer(n) => BigRational::from(Self::to_bigint(*n)),
+            NumericValue::BigInteger(n) => BigRational::from(n.clone()),
+            NumericValue::Rational(r) => r.clone(),
+            _ => panic!("Cannot convert inexact number to rational"),
+        }
+    }
+
     fn from_value(v: Value) -> Result<Self, EvalError> {
         match v {
             Value::Integer(n) => Ok(NumericValue::Integer(n)),
@@ -107,26 +137,10 @@ impl NumericValue {
             NumericValue::Real(f) => Value::Real(f),
             NumericValue::Complex(parts) => {
                 let (r, i) = *parts;
-                // For now, convert to old (f64, f64) representation
+                // Convert components to f64 using helper method
                 // TODO: Update Value::Complex to use NumericValue
-                let real_f64 = match r {
-                    NumericValue::Integer(n) => n as f64,
-                    NumericValue::BigInteger(n) => n.to_f64().unwrap_or(f64::INFINITY),
-                    NumericValue::Rational(r) => r.to_f64().unwrap_or(f64::NAN),
-                    NumericValue::Real(f) => f,
-                    NumericValue::Complex(_) => {
-                        panic!("Complex component cannot be complex")
-                    }
-                };
-                let imag_f64 = match i {
-                    NumericValue::Integer(n) => n as f64,
-                    NumericValue::BigInteger(n) => n.to_f64().unwrap_or(f64::INFINITY),
-                    NumericValue::Rational(r) => r.to_f64().unwrap_or(f64::NAN),
-                    NumericValue::Real(f) => f,
-                    NumericValue::Complex(_) => {
-                        panic!("Complex component cannot be complex")
-                    }
-                };
+                let real_f64 = r.to_f64();
+                let imag_f64 = i.to_f64();
                 Value::Complex(real_f64, imag_f64)
             }
         }
@@ -138,7 +152,7 @@ impl NumericValue {
         match self {
             Integer(n) => match n.checked_neg() {
                 Some(neg) => Integer(neg),
-                None => BigInteger(-BigInt::from(n)),
+                None => BigInteger(-Self::to_bigint(n)),
             },
             BigInteger(n) => BigInteger(-n),
             Rational(r) => Rational(-r),
@@ -157,17 +171,17 @@ impl NumericValue {
             // Integer + Integer (with overflow check)
             (Integer(a), Integer(b)) => match a.checked_add(b) {
                 Some(sum) => Integer(sum),
-                None => BigInteger(BigInt::from(a) + BigInt::from(b)),
+                None => BigInteger(Self::to_bigint(a) + Self::to_bigint(b)),
             },
             // Promote to BigInteger
             (BigInteger(a), Integer(b)) | (Integer(b), BigInteger(a)) => {
-                BigInteger(a + BigInt::from(b))
+                BigInteger(a + Self::to_bigint(b))
             }
             (BigInteger(a), BigInteger(b)) => BigInteger(a + b),
             // Promote to Rational
             (Rational(a), Rational(b)) => Rational(a + b),
             (Rational(a), Integer(b)) | (Integer(b), Rational(a)) => {
-                Rational(a + BigRational::from(BigInt::from(b)))
+                Rational(a + BigRational::from(Self::to_bigint(b)))
             }
             (Rational(a), BigInteger(b)) | (BigInteger(b), Rational(a)) => {
                 Rational(a + BigRational::from(b))
@@ -201,14 +215,14 @@ impl NumericValue {
         match (self, other) {
             (Integer(a), Integer(b)) => match a.checked_sub(b) {
                 Some(diff) => Integer(diff),
-                None => BigInteger(BigInt::from(a) - BigInt::from(b)),
+                None => BigInteger(Self::to_bigint(a) - Self::to_bigint(b)),
             },
-            (BigInteger(a), Integer(b)) => BigInteger(a - BigInt::from(b)),
-            (Integer(a), BigInteger(b)) => BigInteger(BigInt::from(a) - b),
+            (BigInteger(a), Integer(b)) => BigInteger(a - Self::to_bigint(b)),
+            (Integer(a), BigInteger(b)) => BigInteger(Self::to_bigint(a) - b),
             (BigInteger(a), BigInteger(b)) => BigInteger(a - b),
             (Rational(a), Rational(b)) => Rational(a - b),
-            (Rational(a), Integer(b)) => Rational(a - BigRational::from(BigInt::from(b))),
-            (Integer(a), Rational(b)) => Rational(BigRational::from(BigInt::from(a)) - b),
+            (Rational(a), Integer(b)) => Rational(a - BigRational::from(Self::to_bigint(b))),
+            (Integer(a), Rational(b)) => Rational(BigRational::from(Self::to_bigint(a)) - b),
             (Rational(a), BigInteger(b)) => Rational(a - BigRational::from(b)),
             (BigInteger(a), Rational(b)) => Rational(BigRational::from(a) - b),
             (Real(a), Real(b)) => Real(a - b),
@@ -243,15 +257,15 @@ impl NumericValue {
         match (self, other) {
             (Integer(a), Integer(b)) => match a.checked_mul(b) {
                 Some(product) => Integer(product),
-                None => BigInteger(BigInt::from(a) * BigInt::from(b)),
+                None => BigInteger(Self::to_bigint(a) * Self::to_bigint(b)),
             },
             (BigInteger(a), Integer(b)) | (Integer(b), BigInteger(a)) => {
-                BigInteger(a * BigInt::from(b))
+                BigInteger(a * Self::to_bigint(b))
             }
             (BigInteger(a), BigInteger(b)) => BigInteger(a * b),
             (Rational(a), Rational(b)) => Rational(a * b),
             (Rational(a), Integer(b)) | (Integer(b), Rational(a)) => {
-                Rational(a * BigRational::from(BigInt::from(b)))
+                Rational(a * BigRational::from(Self::to_bigint(b)))
             }
             (Rational(a), BigInteger(b)) | (BigInteger(b), Rational(a)) => {
                 Rational(a * BigRational::from(b))
@@ -259,10 +273,10 @@ impl NumericValue {
             (Real(a), Real(b)) => Real(a * b),
             (Real(a), Integer(b)) | (Integer(b), Real(a)) => Real(a * b as f64),
             (Real(a), BigInteger(b)) | (BigInteger(b), Real(a)) => {
-                Real(a * b.to_f64().unwrap_or(f64::INFINITY))
+                Real(a * BigInteger(b).to_f64())
             }
             (Real(a), Rational(r)) | (Rational(r), Real(a)) => {
-                Real(a * r.to_f64().unwrap_or(f64::INFINITY))
+                Real(a * Rational(r).to_f64())
             }
             // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
             (Complex(parts1), Complex(parts2)) => {
@@ -495,115 +509,86 @@ pub(super) fn greater_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
     evaluator.primitive_numeric_compare(args, |a, b| a >= b, ">=")
 }
 
-pub(super) fn quotient(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 2, "quotient")?;
+// ========== Binary Integer Operation Helper ==========
 
-    match (&args[0], &args[1]) {
-        (Value::Integer(a), Value::Integer(b)) => {
-            if *b == 0 {
-                return Err(EvalError::DivisionByZero);
-            }
-            Ok(Value::Integer(a / b))
+/// Generic helper for binary integer operations with optional division-by-zero checking
+///
+/// Handles all 4 type combinations (Int×Int, Big×Big, Int×Big, Big×Int) with automatic
+/// type promotion and zero checking for division operations.
+fn binary_int_op<FInt, FBig>(
+    a: &Value,
+    b: &Value,
+    op_name: &str,
+    int_op: FInt,
+    big_op: FBig,
+    check_zero: bool,
+) -> Result<Value, EvalError>
+where
+    FInt: Fn(i64, i64) -> i64,
+    FBig: Fn(&BigInt, &BigInt) -> BigInt,
+{
+    // Division by zero check if requested
+    if check_zero {
+        match b {
+            Value::Integer(n) if *n == 0 => return Err(EvalError::DivisionByZero),
+            Value::BigInteger(n) if n.is_zero() => return Err(EvalError::DivisionByZero),
+            _ => {}
         }
-        (Value::BigInteger(a), Value::BigInteger(b)) => {
-            if b.is_zero() {
-                return Err(EvalError::DivisionByZero);
-            }
-            Ok(Value::BigInteger(a / b))
-        }
+    }
+
+    match (a, b) {
+        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(int_op(*a, *b))),
+        (Value::BigInteger(a), Value::BigInteger(b)) => Ok(Value::BigInteger(big_op(a, b))),
         (Value::Integer(a), Value::BigInteger(b)) => {
-            if b.is_zero() {
-                return Err(EvalError::DivisionByZero);
-            }
-            Ok(Value::BigInteger(BigInt::from(*a) / b))
+            Ok(Value::BigInteger(big_op(&NumericValue::to_bigint(*a), b)))
         }
         (Value::BigInteger(a), Value::Integer(b)) => {
-            if *b == 0 {
-                return Err(EvalError::DivisionByZero);
-            }
-            Ok(Value::BigInteger(a / BigInt::from(*b)))
+            Ok(Value::BigInteger(big_op(a, &NumericValue::to_bigint(*b))))
         }
         _ => Err(EvalError::TypeError(format!(
-            "quotient requires integers, got {} and {}",
-            args[0].type_name(),
-            args[1].type_name()
+            "{} requires integers, got {} and {}",
+            op_name,
+            a.type_name(),
+            b.type_name()
         ))),
     }
+}
+
+pub(super) fn quotient(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 2, "quotient")?;
+    binary_int_op(
+        &args[0],
+        &args[1],
+        "quotient",
+        |a, b| a / b,
+        |a, b| a / b,
+        true, // check for division by zero
+    )
 }
 
 pub(super) fn remainder(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 2, "remainder")?;
-
-    match (&args[0], &args[1]) {
-        (Value::Integer(a), Value::Integer(b)) => {
-            if *b == 0 {
-                return Err(EvalError::DivisionByZero);
-            }
-            Ok(Value::Integer(a % b))
-        }
-        (Value::BigInteger(a), Value::BigInteger(b)) => {
-            if b.is_zero() {
-                return Err(EvalError::DivisionByZero);
-            }
-            Ok(Value::BigInteger(a % b))
-        }
-        (Value::Integer(a), Value::BigInteger(b)) => {
-            if b.is_zero() {
-                return Err(EvalError::DivisionByZero);
-            }
-            Ok(Value::BigInteger(BigInt::from(*a) % b))
-        }
-        (Value::BigInteger(a), Value::Integer(b)) => {
-            if *b == 0 {
-                return Err(EvalError::DivisionByZero);
-            }
-            Ok(Value::BigInteger(a % BigInt::from(*b)))
-        }
-        _ => Err(EvalError::TypeError(format!(
-            "remainder requires integers, got {} and {}",
-            args[0].type_name(),
-            args[1].type_name()
-        ))),
-    }
+    binary_int_op(
+        &args[0],
+        &args[1],
+        "remainder",
+        |a, b| a % b,
+        |a, b| a % b,
+        true, // check for division by zero
+    )
 }
 
 pub(super) fn modulo(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    use num_traits::Euclid;
     evaluator.check_arity_exact(&args, 2, "modulo")?;
-
-    match (&args[0], &args[1]) {
-        (Value::Integer(a), Value::Integer(b)) => {
-            if *b == 0 {
-                return Err(EvalError::DivisionByZero);
-            }
-            Ok(Value::Integer(a.rem_euclid(*b)))
-        }
-        (Value::BigInteger(a), Value::BigInteger(b)) => {
-            if b.is_zero() {
-                return Err(EvalError::DivisionByZero);
-            }
-            use num_traits::Euclid;
-            Ok(Value::BigInteger(a.rem_euclid(b)))
-        }
-        (Value::Integer(a), Value::BigInteger(b)) => {
-            if b.is_zero() {
-                return Err(EvalError::DivisionByZero);
-            }
-            use num_traits::Euclid;
-            Ok(Value::BigInteger(BigInt::from(*a).rem_euclid(b)))
-        }
-        (Value::BigInteger(a), Value::Integer(b)) => {
-            if *b == 0 {
-                return Err(EvalError::DivisionByZero);
-            }
-            use num_traits::Euclid;
-            Ok(Value::BigInteger(a.rem_euclid(&BigInt::from(*b))))
-        }
-        _ => Err(EvalError::TypeError(format!(
-            "modulo requires integers, got {} and {}",
-            args[0].type_name(),
-            args[1].type_name()
-        ))),
-    }
+    binary_int_op(
+        &args[0],
+        &args[1],
+        "modulo",
+        |a, b| a.rem_euclid(b),
+        |a, b| a.rem_euclid(b),
+        true, // check for division by zero
+    )
 }
 
 pub(super) fn abs(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
