@@ -17,6 +17,7 @@
 mod env;
 mod eval;
 mod lexer;
+pub mod macro_system;
 mod parser;
 pub mod repl;
 mod value;
