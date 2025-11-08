@@ -42,7 +42,7 @@ impl Environment {
         } else if let Some(parent) = &self.parent {
             parent.set(name, value)
         } else {
-            Err(format!("Undefined variable: {}", name))
+            Err(name.to_string())
         }
     }
 

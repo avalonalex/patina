@@ -145,7 +145,6 @@ fn test_set_bang() {
 }
 
 #[test]
-#[ignore] // TODO: Should error on undefined variable
 fn test_set_bang_undefined() {
     assert_eval_error("(set! undefined-var 42)");
 }
