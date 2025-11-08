@@ -18,7 +18,7 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 
 ## Summary Statistics
 
-**Test Results: 241 passing, 4 ignored (not implemented)**
+**Test Results: 242 passing, 3 ignored (require macros)**
 
 | Category | Implemented | Total | Progress |
 |----------|-------------|-------|----------|
@@ -32,7 +32,7 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | Strings | 37 | 37 | 100% ✅ |
 | Vectors | 37 | 37 | 100% ✅ |
 | I/O | 0 | 30 | 0% |
-| **TOTAL** | **219** | **257** | **85%** |
+| **TOTAL** | **220** | **258** | **85%** |
 
 ---
 
@@ -440,6 +440,21 @@ Based on the 22 ignored tests, here are the quickest wins to reach higher compli
 - **Advanced control** - `call/cc`, `dynamic-wind`
 
 ---
+
+**Recent Progress (2025-11-07 - Part 4):**
+- ✅ **Fixed undefined variable error handling**
+  - Corrected double "Undefined variable:" prefix in error messages
+  - `env.set()` now returns just variable name, not full error message
+  - Error display: "Undefined variable: var-name" (was: "Undefined variable: Undefined variable: var-name")
+  - Enabled `test_set_bang_undefined` test
+- ✅ **Created comprehensive macro system research plan**
+  - 45-page detailed analysis in `PRD/MACRO_SYSTEM_RESEARCH.md`
+  - R7RS spec analysis (syntax-rules, define-syntax, hygiene)
+  - 4-phase implementation strategy
+  - Research tasks for chibi-scheme analysis
+  - Timeline: 4-6 weeks for full hygienic macro system
+- ✅ **Progress update:** 241 → 242 passing (220/258 tests, 85%)
+- ✅ **Only 3 tests remaining** - all require macro system (when, unless, do)
 
 **Recent Progress (2025-11-07 - Part 3):**
 - ✅ **Verified lambda closures are fully working** (enabled 2 ignored tests)
