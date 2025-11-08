@@ -63,7 +63,6 @@ fn test_lambda_multiple_args() {
 }
 
 #[test]
-#[ignore] // TODO: Requires let binding form
 fn test_lambda_closure() {
     assert_program_eval_to(
         r#"

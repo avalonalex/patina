@@ -127,7 +127,6 @@ fn test_or_all_false() {
 }
 
 #[test]
-#[ignore] // TODO: Implement memq first
 fn test_or_returns_first_true() {
     assert_eval_to("(or (memq 'b '(a b c)) (/ 3 0))", "(b c)");
 }

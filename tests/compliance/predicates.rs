@@ -79,15 +79,14 @@ fn test_string_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Implement char?
 fn test_char_predicate() {
     assert_eval_to("(char? #\\a)", "#t");
     assert_eval_to("(char? \"a\")", "#f");
     assert_eval_to("(char? 97)", "#f");
+    assert_eval_to("(char? #\\世)", "#t");
 }
 
 #[test]
-#[ignore] // TODO: Implement vector?
 fn test_vector_predicate() {
     assert_eval_to("(vector? #(1 2 3))", "#t");
     assert_eval_to("(vector? '(1 2 3))", "#f");

@@ -272,12 +272,8 @@ impl NumericValue {
             }
             (Real(a), Real(b)) => Real(a * b),
             (Real(a), Integer(b)) | (Integer(b), Real(a)) => Real(a * b as f64),
-            (Real(a), BigInteger(b)) | (BigInteger(b), Real(a)) => {
-                Real(a * BigInteger(b).to_f64())
-            }
-            (Real(a), Rational(r)) | (Rational(r), Real(a)) => {
-                Real(a * Rational(r).to_f64())
-            }
+            (Real(a), BigInteger(b)) | (BigInteger(b), Real(a)) => Real(a * BigInteger(b).to_f64()),
+            (Real(a), Rational(r)) | (Rational(r), Real(a)) => Real(a * Rational(r).to_f64()),
             // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
             (Complex(parts1), Complex(parts2)) => {
                 let (r1, i1) = *parts1;

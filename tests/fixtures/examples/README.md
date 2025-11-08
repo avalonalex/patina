@@ -23,6 +23,19 @@ Interesting mathematical programs including:
 
 These examples showcase non-trivial algorithms and mathematical properties.
 
+### 🔒 `closures/` ⭐
+**Comprehensive closure examples** - see [closures/README.md](closures/README.md)
+
+Complete demonstrations of lexical closures and advanced functional patterns:
+- **Basic closures** - Variable capture and lexical scoping
+- **Stateful closures** - Mutable state with set! (counters, bank accounts)
+- **Higher-order functions** - Composition, currying, partial application
+- **Multiple captures** - Objects with properties, nested scopes
+- **Practical examples** - Memoization, timers, stack implementation
+- **Nested closures** - Deep nesting, recursive closures, mutual recursion
+
+These examples demonstrate R7RS-compliant closure semantics with full environment sharing.
+
 ### 🎛️ `control/`
 Control flow constructs.
 - `if` conditionals
