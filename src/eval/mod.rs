@@ -1,5 +1,6 @@
 // Module declarations
 mod application;
+mod debug;
 mod error;
 mod primitives;
 mod special_forms;
@@ -9,17 +10,22 @@ pub use error::EvalError;
 
 use crate::env::Environment;
 use crate::value::Value;
+use debug::DebugConfig;
 use std::rc::Rc;
 
 pub struct Evaluator {
     global_env: Rc<Environment>,
+    pub(crate) debug: Rc<DebugConfig>,
 }
 
 impl Evaluator {
     pub fn new() -> Self {
         let global_env = Rc::new(Environment::new());
         Self::install_primitives(&global_env);
-        let evaluator = Evaluator { global_env };
+        let evaluator = Evaluator {
+            global_env,
+            debug: Rc::new(DebugConfig::new()),
+        };
 
         // Load bootstrap library
         evaluator.load_bootstrap();
@@ -56,7 +62,13 @@ impl Evaluator {
     }
 
     fn eval_in_env(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
-        match expr {
+        // Debug trace entry
+        if self.debug.is_enabled(debug::DebugStage::Eval) {
+            eprintln!("[EVAL]{} Evaluating: {}", self.debug.current_indent(), expr);
+            self.debug.indent();
+        }
+
+        let result = match expr {
             // Self-evaluating
             Value::Boolean(_)
             | Value::Integer(_)
@@ -70,9 +82,13 @@ impl Evaluator {
             | Value::Bytevector(_) => Ok(expr.clone()),
 
             // Variable lookup
-            Value::Symbol(name) => env
-                .get(name)
-                .ok_or_else(|| EvalError::UndefinedVariable(name.to_string())),
+            Value::Symbol(name) => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
+                }
+                env.get(name)
+                    .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
+            }
 
             // Empty list
             Value::Null => Ok(Value::Null),
@@ -81,7 +97,18 @@ impl Evaluator {
             Value::Pair(_) => self.eval_list(expr, env),
 
             _ => Ok(expr.clone()),
+        };
+
+        // Debug trace exit
+        if self.debug.is_enabled(debug::DebugStage::Eval) {
+            self.debug.dedent();
+            match &result {
+                Ok(val) => eprintln!("[EVAL]{} => {}", self.debug.current_indent(), val),
+                Err(e) => eprintln!("[EVAL]{} => ERROR: {}", self.debug.current_indent(), e),
+            }
         }
+
+        result
     }
 
     fn eval_list(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {

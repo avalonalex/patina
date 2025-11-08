@@ -13,6 +13,7 @@
 //! - `vectors` - Vector operations
 
 mod arithmetic;
+mod debug;
 pub(in crate::eval) mod equality;
 mod higher_order;
 mod lists;
@@ -134,6 +135,13 @@ impl Evaluator {
             "vector-map" => vectors::vector_map(self, args),
             "vector-for-each" => vectors::vector_for_each(self, args),
 
+            // Debug primitives
+            "debug-enable" => debug::debug_enable(self, args),
+            "debug-disable" => debug::debug_disable(self, args),
+            "debug-clear" => debug::debug_clear(self, args),
+            "debug-status" => debug::debug_status(self, args),
+            "debug-mode" => debug::debug_mode(self, args),
+
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name
@@ -238,6 +246,12 @@ impl Evaluator {
             ("vector-fill!", Arity::Range(2, 4)),
             ("vector-map", Arity::Min(2)),
             ("vector-for-each", Arity::Min(2)),
+            // Debug
+            ("debug-enable", Arity::Exact(1)),
+            ("debug-disable", Arity::Exact(1)),
+            ("debug-clear", Arity::Exact(0)),
+            ("debug-status", Arity::Exact(0)),
+            ("debug-mode", Arity::Exact(1)),
         ];
 
         for (name, arity) in primitives {

@@ -32,7 +32,23 @@ impl Evaluator {
 
     /// Apply a procedure to a vector of evaluated arguments
     pub(super) fn apply(&self, proc: Value, args: Vec<Value>) -> Result<Value, EvalError> {
-        match proc {
+        // Debug trace entry
+        if self.debug.is_enabled(super::debug::DebugStage::Apply) {
+            let args_str = args
+                .iter()
+                .map(|v| format!("{}", v))
+                .collect::<Vec<_>>()
+                .join(" ");
+            eprintln!(
+                "[APPLY]{} Applying: {} to ({})",
+                self.debug.current_indent(),
+                proc,
+                args_str
+            );
+            self.debug.indent();
+        }
+
+        let result = match proc {
             Value::Procedure(Procedure::Primitive { name, arity }) => {
                 self.check_arity(&arity, args.len())?;
                 self.apply_primitive(name, args)
@@ -87,7 +103,18 @@ impl Evaluator {
                 Ok(result)
             }
             _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
+        };
+
+        // Debug trace exit
+        if self.debug.is_enabled(super::debug::DebugStage::Apply) {
+            self.debug.dedent();
+            match &result {
+                Ok(val) => eprintln!("[APPLY]{} => {}", self.debug.current_indent(), val),
+                Err(e) => eprintln!("[APPLY]{} => ERROR: {}", self.debug.current_indent(), e),
+            }
         }
+
+        result
     }
 
     /// Check if the actual argument count matches the expected arity
