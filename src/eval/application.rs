@@ -31,6 +31,12 @@ impl Evaluator {
     }
 
     /// Apply a procedure to a vector of evaluated arguments
+    ///
+    /// TODO: Implement tail call optimization (TCO) here to enable proper tail recursion.
+    /// R7RS requires implementations to be properly tail-recursive. Currently, deeply
+    /// recursive tail calls (100+ levels) can overflow the stack in debug builds.
+    /// TCO would allow arbitrary recursion depth for tail calls.
+    /// See fibonacci tests marked with #[cfg_attr(debug_assertions, ignore)]
     pub(super) fn apply(&self, proc: Value, args: Vec<Value>) -> Result<Value, EvalError> {
         // Debug trace entry
         if self.debug.is_enabled(super::debug::DebugStage::Apply) {

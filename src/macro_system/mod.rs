@@ -21,6 +21,39 @@ pub use hygiene::apply_hygiene;
 pub use pattern::match_pattern;
 pub use template::expand_template;
 
+/// Expand a macro with the given arguments
+///
+/// Tries each rule in order until one matches, then expands using that rule's template.
+/// Returns the expanded expression or an error if no rule matches.
+pub fn expand_macro(
+    macro_def: &Macro,
+    args: &crate::Value,
+) -> Result<crate::Value, crate::EvalError> {
+    // Try each rule until we find a match
+    for rule in &macro_def.rules {
+        // Try to match the pattern against the arguments
+        if let Some(bindings) = match_pattern(&rule.pattern, args, &macro_def.literals) {
+            // Pattern matched! Expand the template with these bindings
+            let expanded = expand_template(&rule.template, &bindings)?;
+
+            // Apply hygiene: rename free identifiers
+            // Pattern variables are keys in the bindings map
+            let pattern_vars: std::collections::HashSet<std::rc::Rc<str>> =
+                bindings.keys().cloned().collect();
+
+            let hygienic = hygiene::apply_hygiene(&expanded, &pattern_vars);
+
+            return Ok(hygienic);
+        }
+    }
+
+    // No rule matched
+    Err(crate::EvalError::InvalidSyntax(format!(
+        "No matching pattern for macro {}",
+        macro_def.name
+    )))
+}
+
 /// Pattern in a syntax-rules macro
 ///
 /// Represents the structure that input must match
@@ -172,17 +205,422 @@ pub fn parse_syntax_rules(_expr: &Value, env: &Rc<Environment>) -> Result<Macro,
 }
 
 /// Parse a Value into a Pattern
-///
-/// TODO: Phase 4 - implement pattern parsing
-pub fn parse_pattern(_expr: &Value) -> Result<Pattern, crate::EvalError> {
-    // Stub - will be implemented in Phase 4
-    Ok(Pattern::Wildcard)
+pub fn parse_pattern(expr: &Value) -> Result<Pattern, crate::EvalError> {
+    match expr {
+        // Underscore wildcard
+        Value::Symbol(s) if s.as_ref() == "_" => Ok(Pattern::Wildcard),
+
+        // Symbol: pattern variable
+        Value::Symbol(s) => Ok(Pattern::Variable(s.clone())),
+
+        // List: check for ellipsis
+        Value::Pair(_) => {
+            let items = collect_list_items(expr)?;
+            parse_list_pattern(&items)
+        }
+
+        Value::Null => Ok(Pattern::List(vec![])),
+
+        // Vector
+        Value::Vector(v) => {
+            let items = v.borrow();
+            let patterns: Result<Vec<_>, _> = items.iter().map(parse_pattern).collect();
+            Ok(Pattern::Vector(patterns?))
+        }
+
+        // Literal value (boolean, number, string, character, etc.)
+        other => Ok(Pattern::Literal(other.clone())),
+    }
+}
+
+/// Parse a list pattern, detecting ellipsis
+fn parse_list_pattern(items: &[Value]) -> Result<Pattern, crate::EvalError> {
+    // Find ellipsis positions
+    let ellipsis_pos = items
+        .iter()
+        .position(|item| matches!(item, Value::Symbol(s) if s.as_ref() == "..."));
+
+    match ellipsis_pos {
+        None => {
+            // No ellipsis: regular list pattern
+            let patterns: Result<Vec<_>, _> = items.iter().map(parse_pattern).collect();
+            Ok(Pattern::List(patterns?))
+        }
+        Some(pos) => {
+            // Has ellipsis
+            if pos == 0 {
+                return Err(crate::EvalError::InvalidSyntax(
+                    "Ellipsis cannot appear at start of pattern".to_string(),
+                ));
+            }
+
+            // The pattern before ... is the repeated pattern
+            let before: Result<Vec<_>, _> = items[..pos - 1].iter().map(parse_pattern).collect();
+
+            let repeated = Box::new(parse_pattern(&items[pos - 1])?);
+
+            let after: Result<Vec<_>, _> = items[pos + 1..].iter().map(parse_pattern).collect();
+
+            Ok(Pattern::Ellipsis {
+                before: before?,
+                repeated,
+                after: after?,
+            })
+        }
+    }
 }
 
 /// Parse a Value into a Template
-///
-/// TODO: Phase 4 - implement template parsing
-pub fn parse_template(_expr: &Value) -> Result<Template, crate::EvalError> {
-    // Stub - will be implemented in Phase 4
-    Ok(Template::Literal(Value::Null))
+pub fn parse_template(expr: &Value) -> Result<Template, crate::EvalError> {
+    match expr {
+        // Symbol: template variable
+        Value::Symbol(s) => Ok(Template::Variable(s.clone())),
+
+        // List: check for ellipsis and ellipsis escape
+        Value::Pair(_) => {
+            let items = collect_list_items(expr)?;
+            parse_list_template(&items)
+        }
+
+        Value::Null => Ok(Template::List(vec![])),
+
+        // Vector
+        Value::Vector(v) => {
+            let items = v.borrow();
+            let templates: Result<Vec<_>, _> = items.iter().map(parse_template).collect();
+            Ok(Template::Vector(templates?))
+        }
+
+        // Literal value
+        other => Ok(Template::Literal(other.clone())),
+    }
+}
+
+/// Parse a list template, detecting ellipsis and ellipsis escape
+fn parse_list_template(items: &[Value]) -> Result<Template, crate::EvalError> {
+    // Check for ellipsis escape: (... template)
+    if items.len() == 2 {
+        if let Value::Symbol(s) = &items[0] {
+            if s.as_ref() == "..." {
+                let inner = Box::new(parse_template(&items[1])?);
+                return Ok(Template::EllipsisEscape(inner));
+            }
+        }
+    }
+
+    // Find ellipsis positions
+    let ellipsis_pos = items
+        .iter()
+        .position(|item| matches!(item, Value::Symbol(s) if s.as_ref() == "..."));
+
+    match ellipsis_pos {
+        None => {
+            // No ellipsis: regular list template
+            let templates: Result<Vec<_>, _> = items.iter().map(parse_template).collect();
+            Ok(Template::List(templates?))
+        }
+        Some(pos) => {
+            // Has ellipsis
+            if pos == 0 {
+                return Err(crate::EvalError::InvalidSyntax(
+                    "Ellipsis cannot appear at start of template".to_string(),
+                ));
+            }
+
+            // The template before ... is the repeated template
+            let before: Result<Vec<_>, _> = items[..pos - 1].iter().map(parse_template).collect();
+
+            let repeated = Box::new(parse_template(&items[pos - 1])?);
+
+            let after: Result<Vec<_>, _> = items[pos + 1..].iter().map(parse_template).collect();
+
+            Ok(Template::Ellipsis {
+                before: before?,
+                repeated,
+                after: after?,
+            })
+        }
+    }
+}
+
+/// Helper: Collect items from a list Value
+fn collect_list_items(expr: &Value) -> Result<Vec<Value>, crate::EvalError> {
+    let mut items = Vec::new();
+    let mut current = expr;
+
+    loop {
+        match current {
+            Value::Null => break,
+            Value::Pair(pair) => {
+                items.push(pair.0.clone());
+                current = &pair.1;
+            }
+            _ => {
+                return Err(crate::EvalError::TypeError(format!(
+                    "Improper list in macro: {}",
+                    expr
+                )));
+            }
+        }
+    }
+
+    Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    // Helper to create a list from values
+    fn make_list(items: Vec<Value>) -> Value {
+        items
+            .into_iter()
+            .rev()
+            .fold(Value::Null, |acc, val| Value::Pair(Rc::new((val, acc))))
+    }
+
+    #[test]
+    fn test_parse_pattern_wildcard() {
+        let expr = Value::Symbol("_".into());
+        let pattern = parse_pattern(&expr).unwrap();
+        assert!(matches!(pattern, Pattern::Wildcard));
+    }
+
+    #[test]
+    fn test_parse_pattern_variable() {
+        let expr = Value::Symbol("x".into());
+        let pattern = parse_pattern(&expr).unwrap();
+        assert!(matches!(pattern, Pattern::Variable(s) if s.as_ref() == "x"));
+    }
+
+    #[test]
+    fn test_parse_pattern_literal() {
+        let expr = Value::Integer(42);
+        let pattern = parse_pattern(&expr).unwrap();
+        assert!(matches!(pattern, Pattern::Literal(Value::Integer(42))));
+    }
+
+    #[test]
+    fn test_parse_pattern_simple_list() {
+        // (when test body)
+        let expr = make_list(vec![
+            Value::Symbol("when".into()),
+            Value::Symbol("test".into()),
+            Value::Symbol("body".into()),
+        ]);
+
+        let pattern = parse_pattern(&expr).unwrap();
+
+        match pattern {
+            Pattern::List(patterns) => {
+                assert_eq!(patterns.len(), 3);
+                assert!(matches!(&patterns[0], Pattern::Variable(s) if s.as_ref() == "when"));
+                assert!(matches!(&patterns[1], Pattern::Variable(s) if s.as_ref() == "test"));
+                assert!(matches!(&patterns[2], Pattern::Variable(s) if s.as_ref() == "body"));
+            }
+            _ => panic!("Expected Pattern::List"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pattern_with_ellipsis() {
+        // (when test body ...)
+        let expr = make_list(vec![
+            Value::Symbol("when".into()),
+            Value::Symbol("test".into()),
+            Value::Symbol("body".into()),
+            Value::Symbol("...".into()),
+        ]);
+
+        let pattern = parse_pattern(&expr).unwrap();
+
+        match pattern {
+            Pattern::Ellipsis {
+                before,
+                repeated,
+                after,
+            } => {
+                assert_eq!(before.len(), 2); // when, test
+                assert!(matches!(&before[0], Pattern::Variable(s) if s.as_ref() == "when"));
+                assert!(matches!(&before[1], Pattern::Variable(s) if s.as_ref() == "test"));
+                assert!(matches!(*repeated, Pattern::Variable(s) if s.as_ref() == "body"));
+                assert_eq!(after.len(), 0);
+            }
+            _ => panic!("Expected Pattern::Ellipsis"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pattern_with_ellipsis_and_after() {
+        // (let name (bindings ...) body)
+        let expr = make_list(vec![
+            Value::Symbol("let".into()),
+            Value::Symbol("name".into()),
+            Value::Symbol("bindings".into()),
+            Value::Symbol("...".into()),
+            Value::Symbol("body".into()),
+        ]);
+
+        let pattern = parse_pattern(&expr).unwrap();
+
+        match pattern {
+            Pattern::Ellipsis {
+                before,
+                repeated,
+                after,
+            } => {
+                assert_eq!(before.len(), 2); // let, name
+                assert_eq!(after.len(), 1); // body
+                assert!(matches!(*repeated, Pattern::Variable(s) if s.as_ref() == "bindings"));
+                assert!(matches!(&after[0], Pattern::Variable(s) if s.as_ref() == "body"));
+            }
+            _ => panic!("Expected Pattern::Ellipsis"),
+        }
+    }
+
+    #[test]
+    fn test_parse_template_variable() {
+        let expr = Value::Symbol("x".into());
+        let template = parse_template(&expr).unwrap();
+        assert!(matches!(template, Template::Variable(s) if s.as_ref() == "x"));
+    }
+
+    #[test]
+    fn test_parse_template_literal() {
+        let expr = Value::Integer(42);
+        let template = parse_template(&expr).unwrap();
+        assert!(matches!(template, Template::Literal(Value::Integer(42))));
+    }
+
+    #[test]
+    fn test_parse_template_simple_list() {
+        // (if test body)
+        let expr = make_list(vec![
+            Value::Symbol("if".into()),
+            Value::Symbol("test".into()),
+            Value::Symbol("body".into()),
+        ]);
+
+        let template = parse_template(&expr).unwrap();
+
+        match template {
+            Template::List(templates) => {
+                assert_eq!(templates.len(), 3);
+                assert!(matches!(&templates[0], Template::Variable(s) if s.as_ref() == "if"));
+                assert!(matches!(&templates[1], Template::Variable(s) if s.as_ref() == "test"));
+                assert!(matches!(&templates[2], Template::Variable(s) if s.as_ref() == "body"));
+            }
+            _ => panic!("Expected Template::List"),
+        }
+    }
+
+    #[test]
+    fn test_parse_template_with_ellipsis() {
+        // (begin body ...)
+        let expr = make_list(vec![
+            Value::Symbol("begin".into()),
+            Value::Symbol("body".into()),
+            Value::Symbol("...".into()),
+        ]);
+
+        let template = parse_template(&expr).unwrap();
+
+        match template {
+            Template::Ellipsis {
+                before,
+                repeated,
+                after,
+            } => {
+                assert_eq!(before.len(), 1); // begin
+                assert!(matches!(*repeated, Template::Variable(s) if s.as_ref() == "body"));
+                assert_eq!(after.len(), 0);
+            }
+            _ => panic!("Expected Template::Ellipsis"),
+        }
+    }
+
+    #[test]
+    fn test_parse_template_ellipsis_escape() {
+        // (... x)
+        let expr = make_list(vec![Value::Symbol("...".into()), Value::Symbol("x".into())]);
+
+        let template = parse_template(&expr).unwrap();
+
+        match template {
+            Template::EllipsisEscape(inner) => {
+                assert!(matches!(*inner, Template::Variable(s) if s.as_ref() == "x"));
+            }
+            _ => panic!("Expected Template::EllipsisEscape"),
+        }
+    }
+
+    #[test]
+    fn test_parse_vector_pattern() {
+        let expr = Value::Vector(Rc::new(RefCell::new(vec![
+            Value::Symbol("x".into()),
+            Value::Symbol("y".into()),
+        ])));
+
+        let pattern = parse_pattern(&expr).unwrap();
+
+        match pattern {
+            Pattern::Vector(patterns) => {
+                assert_eq!(patterns.len(), 2);
+            }
+            _ => panic!("Expected Pattern::Vector"),
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_when_macro() {
+        // Parse pattern: (when test body ...)
+        let pattern_expr = make_list(vec![
+            Value::Symbol("when".into()),
+            Value::Symbol("test".into()),
+            Value::Symbol("body".into()),
+            Value::Symbol("...".into()),
+        ]);
+
+        let pattern = parse_pattern(&pattern_expr).unwrap();
+
+        // Parse template: (if test (begin body ...))
+        let template_expr = make_list(vec![
+            Value::Symbol("if".into()),
+            Value::Symbol("test".into()),
+            make_list(vec![
+                Value::Symbol("begin".into()),
+                Value::Symbol("body".into()),
+                Value::Symbol("...".into()),
+            ]),
+        ]);
+
+        let template = parse_template(&template_expr).unwrap();
+
+        // Now test matching and expansion
+        use crate::macro_system::{expand_template, match_pattern};
+
+        let input = make_list(vec![
+            Value::Symbol("when".into()),
+            Value::Boolean(true),
+            Value::Integer(1),
+            Value::Integer(2),
+        ]);
+
+        let bindings = match_pattern(&pattern, &input, &[]).unwrap();
+        let output = expand_template(&template, &bindings).unwrap();
+
+        // Should expand to: (if #t (begin 1 2))
+        let expected = make_list(vec![
+            Value::Symbol("if".into()),
+            Value::Boolean(true),
+            make_list(vec![
+                Value::Symbol("begin".into()),
+                Value::Integer(1),
+                Value::Integer(2),
+            ]),
+        ]);
+
+        assert_eq!(format!("{}", output), format!("{}", expected));
+    }
 }

@@ -86,8 +86,25 @@ impl Evaluator {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
                     eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
                 }
-                env.get(name)
-                    .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
+
+                // First try looking up in current environment
+                if let Some(value) = env.get(name) {
+                    return Ok(value);
+                }
+
+                // If it's a gensym and not found, try looking it up in the global environment
+                // This handles hygienic macro expansion: gensyms reference bindings from
+                // where the macro was defined, not where it's used
+                if crate::macro_system::hygiene::is_gensym(name.as_ref()) {
+                    // Extract original name from gensym (format: ##name#counter)
+                    if let Some(original_name) = extract_original_from_gensym(name.as_ref()) {
+                        if let Some(value) = self.global_env.get(&Rc::from(original_name)) {
+                            return Ok(value);
+                        }
+                    }
+                }
+
+                Err(EvalError::UndefinedVariable(name.to_string()))
             }
 
             // Empty list
@@ -120,6 +137,7 @@ impl Evaluator {
                 "quote" => return self.eval_quote(&cdr),
                 "if" => return self.eval_if(&cdr, env),
                 "define" => return self.eval_define(&cdr, env),
+                "define-syntax" => return self.eval_define_syntax(&cdr, env),
                 "set!" => return self.eval_set(&cdr, env),
                 "lambda" => return self.eval_lambda(&cdr, env),
                 "begin" => return self.eval_begin(&cdr, env),
@@ -136,6 +154,37 @@ impl Evaluator {
                 "apply" => return self.eval_apply(&cdr, env),
                 _ => {}
             }
+
+            // Check if this symbol is bound to a macro
+            if let Some(Value::Macro(macro_def)) = env.get(sym) {
+                // Debug trace: macro expansion entry
+                if self.debug.is_enabled(debug::DebugStage::Expand) {
+                    eprintln!(
+                        "[MACRO]{} Expanding macro '{}': {}",
+                        self.debug.current_indent(),
+                        sym,
+                        expr
+                    );
+                    self.debug.indent();
+                }
+
+                // Expand the macro with the WHOLE form (unevaluated!)
+                // The pattern includes the keyword, so we pass the whole expr
+                let expanded = self.expand_macro(&macro_def, expr)?;
+
+                // Debug trace: show expanded form
+                if self.debug.is_enabled(debug::DebugStage::Expand) {
+                    eprintln!(
+                        "[MACRO]{} Expanded to: {}",
+                        self.debug.current_indent(),
+                        expanded
+                    );
+                    self.debug.dedent();
+                }
+
+                // Evaluate the expanded form
+                return self.eval_in_env(&expanded, env);
+            }
         }
 
         // Regular procedure call
@@ -149,4 +198,22 @@ impl Default for Evaluator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Extract the original identifier name from a gensym
+///
+/// Gensyms have format: ##name#counter
+/// This extracts "name" from that format.
+fn extract_original_from_gensym(gensym: &str) -> Option<String> {
+    if !gensym.starts_with("##") {
+        return None;
+    }
+
+    // Skip "##" prefix
+    let without_prefix = &gensym[2..];
+
+    // Find the last '#' which separates name from counter
+    without_prefix
+        .rfind('#')
+        .map(|last_hash| without_prefix[..last_hash].to_string())
 }

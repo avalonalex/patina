@@ -996,4 +996,160 @@ impl Evaluator {
         // Now apply the procedure to the combined arguments
         self.apply(proc, final_args)
     }
+
+    /// Evaluate define-syntax special form: (define-syntax name (syntax-rules (literals) rules...))
+    pub(super) fn eval_define_syntax(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        // Parse: (define-syntax name transformer)
+        let (name_expr, rest) = self.extract_pair(args)?;
+        let (transformer_expr, rest2) = self.extract_pair(&rest)?;
+
+        // Check that there are no extra arguments
+        if !matches!(rest2, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "define-syntax expects exactly 2 arguments".to_string(),
+            ));
+        }
+
+        // Name must be a symbol
+        let name = match name_expr {
+            Value::Symbol(s) => s,
+            _ => {
+                return Err(EvalError::InvalidSyntax(
+                    "define-syntax name must be a symbol".to_string(),
+                ))
+            }
+        };
+
+        // Transformer must be (syntax-rules (literals) rules...)
+        let macro_def = self.parse_syntax_rules(&transformer_expr, env)?;
+
+        // Create a Macro value with this name
+        let macro_value = Value::Macro(Rc::new(crate::macro_system::Macro {
+            name: name.clone(),
+            rules: macro_def.rules,
+            literals: macro_def.literals,
+            env: env.clone(),
+        }));
+
+        // Bind the macro in the environment
+        env.define(name.to_string(), macro_value);
+
+        Ok(Value::Unspecified)
+    }
+
+    /// Parse a syntax-rules form: (syntax-rules (literals) (pattern template)...)
+    fn parse_syntax_rules(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<crate::macro_system::Macro, EvalError> {
+        // Must be a list starting with 'syntax-rules
+        let (keyword, rest) = self.extract_pair(expr)?;
+
+        match keyword {
+            Value::Symbol(s) if s.as_ref() == "syntax-rules" => {}
+            _ => {
+                return Err(EvalError::InvalidSyntax(
+                    "Expected syntax-rules".to_string(),
+                ))
+            }
+        }
+
+        // Parse literals list
+        let (literals_expr, rules_expr) = self.extract_pair(&rest)?;
+
+        let literals = self.parse_literals_list(&literals_expr)?;
+
+        // Parse rules
+        let rules = self.parse_macro_rules(&rules_expr)?;
+
+        Ok(crate::macro_system::Macro {
+            name: Rc::from("anonymous"),
+            rules,
+            literals,
+            env: env.clone(),
+        })
+    }
+
+    /// Parse the literals list: (lit1 lit2 ...)
+    fn parse_literals_list(&self, expr: &Value) -> Result<Vec<Rc<str>>, EvalError> {
+        let mut literals = Vec::new();
+        let mut current = expr.clone();
+
+        while let Value::Pair(pair) = current {
+            match &pair.0 {
+                Value::Symbol(s) => literals.push(s.clone()),
+                _ => {
+                    return Err(EvalError::InvalidSyntax(
+                        "syntax-rules literals must be symbols".to_string(),
+                    ))
+                }
+            }
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "syntax-rules literals must be a proper list".to_string(),
+            ));
+        }
+
+        Ok(literals)
+    }
+
+    /// Parse macro rules: ((pattern template) ...)
+    fn parse_macro_rules(
+        &self,
+        expr: &Value,
+    ) -> Result<Vec<crate::macro_system::MacroRule>, EvalError> {
+        let mut rules = Vec::new();
+        let mut current = expr.clone();
+
+        while let Value::Pair(pair) = current {
+            // Each rule is (pattern template)
+            let (pattern_expr, template_rest) = self.extract_pair(&pair.0)?;
+            let (template_expr, template_end) = self.extract_pair(&template_rest)?;
+
+            if !matches!(template_end, Value::Null) {
+                return Err(EvalError::InvalidSyntax(
+                    "syntax-rules rule must have exactly 2 elements (pattern template)".to_string(),
+                ));
+            }
+
+            // Parse pattern and template using macro_system functions
+            let pattern = crate::macro_system::parse_pattern(&pattern_expr)?;
+            let template = crate::macro_system::parse_template(&template_expr)?;
+
+            rules.push(crate::macro_system::MacroRule { pattern, template });
+
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "syntax-rules rules must be a proper list".to_string(),
+            ));
+        }
+
+        if rules.is_empty() {
+            return Err(EvalError::InvalidSyntax(
+                "syntax-rules must have at least one rule".to_string(),
+            ));
+        }
+
+        Ok(rules)
+    }
+
+    /// Expand a macro call
+    pub(super) fn expand_macro(
+        &self,
+        macro_val: &crate::macro_system::Macro,
+        args: &Value,
+    ) -> Result<Value, EvalError> {
+        crate::macro_system::expand_macro(macro_val, args)
+    }
 }
