@@ -70,6 +70,11 @@ R7RS requires a module/library system with:
 **Blockers:** None
 **Next Steps:** Research chibi-scheme library implementation
 
+**After library system:** See `PRD/phase1/R7RS_TESTING_STRATEGY.md` for comprehensive testing approach using:
+- Chibi r7rs-tests.scm (2,516 lines, official test suite)
+- SRFI test suites (real-world validation)
+- Snow packages (library compatibility testing)
+
 ---
 
 ### 2. Advanced Math Functions (0%)

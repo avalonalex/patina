@@ -793,36 +793,112 @@ result <- (process-data input)
 
 ---
 
+## The Killer Application: Notebooks + Data Science
+
+**See:** `PRD/NOTEBOOK_DATA_SCIENCE_VISION.md` for complete vision
+
+**The Big Idea:**
+Combine your **existing notebook designs** with **Rust-powered data science tools** to create the **best functional data science notebook**.
+
+**Why this is a killer combination:**
+
+1. **S-expression notebooks** (already designed in PRD/future/phase4/)
+   - Notebooks are valid Scheme programs (can be loaded as libraries!)
+   - Git-friendly text format, not JSON
+   - Terminal-based with vim keybindings
+   - Dependency tracking between cells
+
+2. **Rust data tools via FFI** (Polars, ndarray)
+   - DataFrames: 5-10x faster than Pandas
+   - Numeric arrays: NumPy-like with SIMD optimization
+   - Zero-copy FFI = native speed
+   - Plotting via Rust plotters
+
+3. **No one else has this combination:**
+   - Jupyter: Python-centric, JSON format, browser-based
+   - Observable: JavaScript-centric, cloud-based
+   - Org-mode: Limited data tools
+   - **Patina: Scheme + Rust speed + Terminal UX**
+
+**Example:**
+```scheme
+;; sales-analysis.scm.nb - Valid Scheme file!
+(notebook
+  (cell code
+    (define sales (dataframe-from-csv "sales.csv")))
+
+  (cell code
+    (-> sales
+        (dataframe-group-by 'region
+          (lambda (g) (mean (get g 'revenue))))
+        (dataframe-sort-by 'total 'desc)))
+
+  (cell code
+    (plot-bar by-region #:save "revenue.png")))
+
+;; Load as library:
+(import (sales-analysis))
+(use sales)  ; Access dataframe from other notebooks!
+```
+
+**Estimated effort:** 3-4 months
+**Payoff:** Unique position in data science + Scheme communities
+
+---
+
 ## Conclusion
 
-**Top 3 Recommendations for Uniqueness:**
+**Top Recommendations for Uniqueness:**
 
-1. **Rust FFI** (MUST HAVE)
-   - Enables real-world use cases
+1. **Rust FFI** (MUST HAVE) ⭐⭐⭐⭐⭐
+   - Foundation for everything else
+   - Enables data science tools
    - Differentiates from all Schemes except Steel
-   - Synergy with Rust ecosystem
    - **Start after Phase 1 complete**
 
-2. **LSP + Time-Travel REPL** (HIGH Value)
+2. **Notebooks + Data Science** (KILLER APP) ⭐⭐⭐⭐⭐
+   - Terminal-based data science notebooks
+   - S-expression format (notebooks as programs)
+   - Polars dataframes + ndarray arrays
+   - **No one else is doing this**
+   - **Start after FFI (depends on it)**
+
+3. **LSP + Time-Travel REPL** (DEV EXPERIENCE) ⭐⭐⭐⭐⭐
    - Best-in-class developer experience
    - No Scheme has both
-   - Attracts modern developers
-   - **Start in parallel with FFI**
+   - Time-travel is unique and impressive
+   - **Can start in parallel with FFI**
 
-3. **Gradual Typing** (Already Planned)
+4. **Gradual Typing** (Already Planned) ⭐⭐⭐⭐⭐
    - Unique if done well (fast, unlike Typed Racket)
-   - Enables optimizations
+   - Enables optimizations for data pipelines
    - Synergy with LSP (type-aware autocomplete)
    - **Phase 2 after FFI+LSP**
 
-**Bonus Wild Card:**
-- **Time-Travel REPL** - Completely unique, high wow factor, relatively easy to implement
-
 This combination would make Patina:
-- **The best Scheme for embedding in Rust** (FFI)
-- **The best Scheme for daily development** (LSP + time-travel)
-- **A competitive alternative to Typed Racket** (better performance)
-- **A modern, batteries-included Scheme** (Package manager + WASM)
 
-**Estimated timeline to "feature complete":** 18-24 months
-**Estimated timeline to "uniquely compelling":** 6-9 months (FFI + LSP + Types)
+- **The best Scheme for data science** (Notebooks + Polars/ndarray) 🔬
+- **The best Scheme for embedding in Rust** (FFI) 🦀
+- **The best Scheme for daily development** (LSP + time-travel) 💻
+- **The best terminal-based notebook** (Better than Jupyter for terminal users) 📊
+- **A competitive alternative to Typed Racket** (Better performance) ⚡
+
+**Positioning:**
+> "Patina: Functional data science in your terminal, powered by Rust"
+
+**Target Markets:**
+- Data scientists tired of Jupyter/Pandas
+- Functional programming enthusiasts
+- Terminal power users
+- Researchers needing reproducibility
+- Rust developers wanting scripting
+
+**Estimated timeline:**
+- **To "uniquely compelling":** 6-9 months (FFI + LSP + Notebooks MVP)
+- **To "feature complete":** 18-24 months (+ Gradual typing + Advanced features)
+
+**Immediate next steps:**
+1. Complete Phase 1 (R7RS compliance) - Current focus
+2. Implement Rust FFI (2-3 months) - Foundation
+3. Build Notebook MVP with dataframes (3-4 months) - Killer app
+4. Launch with tutorial and example gallery
