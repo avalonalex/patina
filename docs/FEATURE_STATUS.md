@@ -1,6 +1,6 @@
 # R7RS (scheme base) Feature Matrix
 
-**Last Updated:** 2025-11-07 (Strings, Vectors, and arithmetic.rs refactoring complete!)
+**Last Updated:** 2025-11-09 (Macro system complete! `do` loop implemented!)
 
 This document provides a **detailed test-by-test status matrix** for R7RS compliance.
 
@@ -18,12 +18,13 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 
 ## Summary Statistics
 
-**Test Results: 242 passing, 3 ignored (require macros)**
+**Test Results: 395 total passing (283 compliance tests)**
 
 | Category | Implemented | Total | Progress |
 |----------|-------------|-------|----------|
 | Primitives | 18 | 20 | 90% |
-| Derived Forms | 20 | 24 | 83% |
+| Derived Forms | 30 | 31 | 97% ✅ |
+| Macros | 50 | 52 | 96% ✅ |
 | Numbers | 32 | 34 | 94% |
 | Complex Numbers | 25 | 25 | 100% ✅ |
 | Lists | 30 | 30 | 100% ✅ |
@@ -32,7 +33,7 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | Strings | 37 | 37 | 100% ✅ |
 | Vectors | 37 | 37 | 100% ✅ |
 | I/O | 0 | 30 | 0% |
-| **TOTAL** | **220** | **258** | **85%** |
+| **TOTAL** | **277** | **314** | **88%** |
 
 ---
 
@@ -101,9 +102,9 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | and (returns last) | ✅ | test_and_returns_last | derived.rs |
 | or (all false) | ✅ | test_or_all_false | derived.rs |
 | or (first true) | ✅ | test_or_first_true | derived.rs |
-| or (returns value) | 🚧 | test_or_returns_first_true (ignored) | Edge case |
-| when | ❌ | test_when (ignored) | Not implemented |
-| unless | ❌ | test_unless (ignored) | Not implemented |
+| or (returns value) | ✅ | test_or_returns_first_true | derived.rs |
+| when | ✅ | test_when | derived.rs (bootstrap.scm) |
+| unless | ✅ | test_unless | derived.rs (bootstrap.scm) |
 
 ### 4.2.2 Binding Constructs
 | Feature | Status | Tests | File |
@@ -112,8 +113,8 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | let (scoping) | ✅ | test_let_scoping | derived.rs |
 | let* | ✅ | test_let_star_sequential | derived.rs |
 | letrec | ✅ | test_letrec_recursive | derived.rs |
-| let-values | ❌ | - | Not implemented |
-| let*-values | ❌ | - | Not implemented |
+| let-values | ✅ | test_let_values_simple | derived.rs |
+| let*-values | ✅ | test_let_star_values_sequential | derived.rs |
 
 ### 4.2.3 Sequencing
 | Feature | Status | Tests | File |
@@ -124,7 +125,28 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 ### 4.2.4 Iteration
 | Feature | Status | Tests | File |
 |---------|--------|-------|------|
-| do | ❌ | test_do_simple (ignored) | Not implemented |
+| do (simple) | ✅ | test_do_simple | derived.rs |
+| do (with commands) | ✅ | test_do_with_commands | derived.rs |
+| do (no step) | ✅ | test_do_no_step | derived.rs |
+| do (no results) | ✅ | test_do_no_results | derived.rs |
+| do (multiple results) | ✅ | test_do_multiple_results | derived.rs |
+| do (vector example) | ✅ | test_do_vector_example | derived.rs |
+| do (list sum) | ✅ | test_do_list_sum | derived.rs |
+| do (factorial) | ✅ | test_do_factorial | derived.rs |
+| do (immediate exit) | ✅ | test_do_immediate_exit | derived.rs |
+| do (mixed steps) | ✅ | test_do_mixed_steps | derived.rs |
+
+### 4.3 Macros
+| Feature | Status | Tests | File |
+|---------|--------|-------|------|
+| define-syntax | ✅ | test_simple_macro | derived.rs, macros_advanced.rs |
+| syntax-rules | ✅ | test_simple_macro | derived.rs, macros_advanced.rs |
+| Hygiene (basic) | ✅ | test_macro_hygiene_prevents_capture | derived.rs |
+| Hygiene (nested macros) | ✅ | test_nested_macros | derived.rs |
+| Ellipsis (...) | ✅ | 25+ tests | macros_advanced.rs |
+| Nested ellipsis (... ...) | ❌ | - | See internal/NESTED_ELLIPSIS_LIMITATION.md |
+| Pattern matching | ✅ | 50+ tests | macros_advanced.rs |
+| Literal identifiers | ✅ | test_macro_with_literals | macros_advanced.rs |
 
 ---
 

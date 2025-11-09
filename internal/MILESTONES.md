@@ -2,6 +2,126 @@
 
 Major accomplishments and project milestones.
 
+## 2025-11-09: Do Loop Implementation
+
+**`do` Loop as Special Form**
+- ✅ Implemented full R7RS `do` loop construct
+- ✅ Variable bindings with init and optional step expressions
+- ✅ Test clause with optional result expressions
+- ✅ Command execution for side effects
+- ✅ Proper scoping with loop environment
+- ✅ Atomic variable updates (all steps evaluated before binding updates)
+- ✅ 10 comprehensive tests covering all edge cases
+- ✅ Type alias for cleaner code (DoBinding)
+
+**Test Coverage:**
+- test_do_simple - Basic iteration with sum calculation
+- test_do_with_commands - Side effects via commands
+- test_do_no_step - Variables without step expressions
+- test_do_no_results - Unspecified return value
+- test_do_multiple_results - Returns last result
+- test_do_vector_example - R7RS vector building example
+- test_do_list_sum - R7RS list sum example
+- test_do_factorial - Factorial calculation
+- test_do_immediate_exit - Test true on first iteration
+- test_do_mixed_steps - Mixed step/no-step variables
+
+**Progress:**
+- From: 385 tests passing
+- To: **395 tests passing** (+10)
+- Compliance: 283 tests passing
+- All iteration constructs now complete
+
+**Documentation:**
+- Updated `internal/DO_LOOP_IMPLEMENTATION.md` to mark as complete
+- Created `PRD/phase1/IMPLEMENTATION_STATUS.md` for overall status tracking
+- Updated `docs/FEATURE_STATUS.md` with full `do` test matrix
+
+## 2025-11-08: Macro System Complete
+
+**Hygienic Macro Expansion**
+- ✅ Implemented full `syntax-rules` pattern matching
+- ✅ Implemented hygienic macro expansion
+- ✅ Pattern variable preservation (user symbols not renamed)
+- ✅ Quoted symbol preservation (literals untouched)
+- ✅ Environment-aware hygiene (macros can call other macros)
+- ✅ Nested macro calls working correctly
+- ✅ 50+ macro tests including real-world examples
+
+**Advanced Macro Tests (25 tests)**
+- Control flow: my-when, my-unless, my-cond
+- Bindings: my-let, named-let
+- Mutations: push!, inc!, swap!
+- Logic: my-and, my-or, begin0
+- Loops: while, dotimes
+- Hygiene: triple-nested macros, multiple temps
+- Practical: assert, comment, trace
+
+**Bootstrap Library**
+- Added standard `when` and `unless` macros to bootstrap.scm
+- All bootstrap macros loaded automatically on startup
+
+**Comparison with Other Implementations**
+- ✅ Better than Steel (we handle quote forms correctly)
+- ✅ Simpler one-pass approach vs Steel's two-phase
+- ✅ Functional design (no mutation in hygiene)
+
+**Progress:**
+- From: 357 tests passing
+- To: **385 tests passing** (+28)
+- Macro system: 96% complete (only nested ellipsis missing)
+
+**Documentation:**
+- `internal/MACRO_SYSTEM_COMPLETE.md` - Comprehensive system summary
+- `internal/STEEL_HYGIENE_COMPARISON.md` - Comparison with Steel
+- `internal/NESTED_ELLIPSIS_LIMITATION.md` - Future enhancement docs
+- `internal/R7RS_HYGIENE_REQUIREMENTS.md` - Specification analysis
+
+## 2025-11-07: Strings, Vectors, and Arithmetic Refactoring
+
+**Complete String Implementation**
+- ✅ All R7RS string operations (37/37 tests)
+- ✅ Full UTF-8 support with proper character indexing
+- ✅ String mutation (string-set!, string-fill!)
+- ✅ String conversion (string->list, list->string)
+- ✅ String comparison predicates
+
+**Complete Vector Implementation**
+- ✅ All R7RS vector operations (37/37 tests)
+- ✅ Vector literals and constructors
+- ✅ Vector mutation (vector-set!, vector-fill!)
+- ✅ Vector operations (vector-map, vector-for-each)
+- ✅ Vector conversion (vector->list, list->vector)
+
+**Arithmetic Refactoring**
+- ✅ Reorganized primitives into modular structure
+- ✅ Separated arithmetic, comparisons, and type predicates
+- ✅ Better code organization for maintainability
+
+**Progress:**
+- From: ~200 tests passing
+- To: **273 tests passing**
+- Strings: 100% complete
+- Vectors: 100% complete
+
+## 2025-11-04: Numeric Tower Expansion
+
+**Complex Numbers**
+- ✅ Full complex number support (25/25 tests, 100%)
+- ✅ Complex arithmetic (+, -, *, /)
+- ✅ Complex predicates and accessors
+- ✅ Mixed real/complex operations
+
+**Advanced Arithmetic**
+- ✅ Integer overflow detection with BigInteger promotion
+- ✅ Rational number support
+- ✅ Proper inexact contagion
+- ✅ Mixed numeric type operations
+
+**Progress:**
+- Numbers: 32/34 (94%)
+- Complex: 25/25 (100%)
+
 ## 2025-11-02 (Evening): Binding Constructs & Control Features
 
 **Let/Let*/Letrec Family Implementation**

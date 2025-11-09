@@ -152,6 +152,7 @@ impl Evaluator {
                 "or" => return self.eval_or(&cdr, env),
                 "case" => return self.eval_case(&cdr, env),
                 "apply" => return self.eval_apply(&cdr, env),
+                "do" => return self.eval_do(&cdr, env),
                 _ => {}
             }
 

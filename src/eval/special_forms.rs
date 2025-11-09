@@ -20,6 +20,9 @@ use super::error::EvalError;
 use super::primitives::equality::values_eqv;
 use super::Evaluator;
 
+/// Type alias for do loop bindings: (variable_name, init_expr, optional_step_expr)
+type DoBinding = (Rc<str>, Value, Option<Value>);
+
 impl Evaluator {
     /// Helper to extract a pair, returning an error if the value is not a pair
     pub(super) fn extract_pair(&self, expr: &Value) -> Result<(Value, Value), EvalError> {
@@ -1152,5 +1155,145 @@ impl Evaluator {
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
         crate::macro_system::expand_macro(macro_val, args, env)
+    }
+
+    /// Evaluate do special form: (do ((var init step) ...) (test result ...) command ...)
+    ///
+    /// R7RS Section 4.2.4: Iteration
+    ///
+    /// Semantics:
+    /// 1. Evaluate all init expressions and bind variables
+    /// 2. Loop:
+    ///    - Evaluate test
+    ///    - If true: evaluate result expressions and return last value
+    ///    - If false: evaluate commands, then evaluate steps and update bindings
+    /// 3. If step is omitted, variable doesn't change between iterations
+    pub(super) fn eval_do(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        // Parse: (do ((var init step?) ...) (test result ...) command ...)
+        let (bindings_expr, rest) = self.extract_pair(args)?;
+        let (test_clause_expr, commands_expr) = self.extract_pair(&rest)?;
+
+        // Parse bindings: ((var init step?) ...)
+        let bindings = self.parse_do_bindings(&bindings_expr)?;
+
+        // Parse test clause: (test result ...)
+        let (test_expr, result_exprs) = self.parse_do_test_clause(&test_clause_expr)?;
+
+        // Parse commands: (command ...)
+        let commands = self.collect_list_items(&commands_expr)?;
+
+        // 1. Create loop environment and evaluate init expressions
+        let loop_env = Rc::new(Environment::with_parent(env.clone()));
+
+        for (var_name, init_expr, _step_expr) in &bindings {
+            let init_val = self.eval_in_env(init_expr, env)?;
+            loop_env.define(var_name.to_string(), init_val);
+        }
+
+        // 2. Execute loop
+        loop {
+            // Evaluate test expression
+            let test_result = self.eval_in_env(&test_expr, &loop_env)?;
+
+            // If test is true, evaluate result expressions and return
+            if test_result.is_truthy() {
+                let mut last_result = Value::Unspecified;
+                for result_expr in &result_exprs {
+                    last_result = self.eval_in_env(result_expr, &loop_env)?;
+                }
+                return Ok(last_result);
+            }
+
+            // Test is false: execute commands (for side effects)
+            for command in &commands {
+                self.eval_in_env(command, &loop_env)?;
+            }
+
+            // Evaluate step expressions and update bindings
+            // Important: evaluate all steps BEFORE updating any bindings
+            let mut new_values = Vec::new();
+            for (var_name, _init_expr, step_expr_opt) in &bindings {
+                let new_val = if let Some(step_expr) = step_expr_opt {
+                    self.eval_in_env(step_expr, &loop_env)?
+                } else {
+                    // No step: variable keeps its current value
+                    loop_env.get(var_name).ok_or_else(|| {
+                        EvalError::UndefinedVariable(var_name.to_string())
+                    })?
+                };
+                new_values.push((var_name.clone(), new_val));
+            }
+
+            // Update all bindings atomically
+            for (var_name, new_val) in new_values {
+                loop_env.set(&var_name, new_val)
+                    .map_err(EvalError::UndefinedVariable)?;
+            }
+        }
+    }
+
+    /// Parse do bindings: ((var init step?) ...)
+    /// Returns: Vec<(var_name, init_expr, step_expr_opt)>
+    fn parse_do_bindings(
+        &self,
+        bindings_expr: &Value,
+    ) -> Result<Vec<DoBinding>, EvalError> {
+        let mut bindings = Vec::new();
+        let mut current = bindings_expr.clone();
+
+        while let Value::Pair(pair) = current {
+            // Each binding is (var init) or (var init step)
+            let binding = &pair.0;
+
+            let (var_expr, rest) = self.extract_pair(binding)?;
+            let var_name = match var_expr {
+                Value::Symbol(s) => s.clone(),
+                _ => {
+                    return Err(EvalError::InvalidSyntax(
+                        "do binding variable must be a symbol".to_string(),
+                    ))
+                }
+            };
+
+            let (init_expr, rest) = self.extract_pair(&rest)?;
+
+            // Step is optional
+            let step_expr_opt = match rest {
+                Value::Null => None,
+                Value::Pair(step_pair) => {
+                    // Ensure there's nothing after step
+                    if !matches!(step_pair.1, Value::Null) {
+                        return Err(EvalError::InvalidSyntax(
+                            "do binding must be (var init) or (var init step)".to_string(),
+                        ));
+                    }
+                    Some(step_pair.0.clone())
+                }
+                _ => {
+                    return Err(EvalError::InvalidSyntax(
+                        "do binding must be a proper list".to_string(),
+                    ))
+                }
+            };
+
+            bindings.push((var_name, init_expr.clone(), step_expr_opt));
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "do bindings must be a proper list".to_string(),
+            ));
+        }
+
+        Ok(bindings)
+    }
+
+    /// Parse do test clause: (test result ...)
+    /// Returns: (test_expr, Vec<result_expr>)
+    fn parse_do_test_clause(&self, test_clause_expr: &Value) -> Result<(Value, Vec<Value>), EvalError> {
+        let (test_expr, rest) = self.extract_pair(test_clause_expr)?;
+        let result_exprs = self.collect_list_items(&rest)?;
+        Ok((test_expr.clone(), result_exprs))
     }
 }

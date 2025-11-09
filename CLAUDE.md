@@ -11,37 +11,69 @@ Patina is a Scheme R7RS-small interpreter written in Rust. This is an educationa
 **Important**: Use the following directories for different types of documentation:
 
 - **IMPORTANT** - Do not create markdown files unless the user explicitly states to do so. You may offer to create markdown files, but only do so with explicit user approval. Integrate any necessary notes as comments within the relevant code files, and keep comments succinct and on point.
-- **`PRD/`** - Product Requirements Documents, project proposals, and high-level design documents. We should be aggressive in terms of purge outdated PRDs as they have high cognative overhead.
-  - **`PRD/phase1/R7RS_ROADMAP.md`** - Strategic roadmap for R7RS compliance (phases, strategy, rationale)
-  - **`PRD/phase1/NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
-- **`internal/`** - Internal documentation, implementation notes, test results, and milestone records
-  - **`internal/README_NUMERIC_ANALYSIS.md`** - Index to chibi-scheme numeric analysis (supporting reference)
-- **`docs/`** - Oriented towards external documentations, how to use high level features and repl and tui tools.
-  - **`docs/FEATURE_STATUS.md`** - Detailed test-by-test R7RS compliance tracking (current status matrix)
-- **`spec/`** - Official R7RS spec, we should NOT put any additional documentation in this directory.
 
-## Reference Implementation
+### 📁 Active Documentation (Frequently Updated)
 
-**Chibi-scheme** (R7RS reference implementation) is available at:
-`~/Project/reference/chibi-scheme`
+- **`PRD/phase1/`** - Strategic planning and high-level design (current phase only)
+  - **`IMPLEMENTATION_STATUS.md`** - ⭐ **CANONICAL** overall roadmap, priorities, and remaining work
+  - **`R7RS_ROADMAP.md`** - Strategic roadmap for R7RS compliance (phases, strategy, rationale)
+  - **`NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
+  - `STRING_OPTIMIZATION.md` - Future optimization plans (deferred)
+  - `HELP_SYSTEM.md` - Future help system design (deferred)
 
-Key files to reference:
+- **`docs/`** - User-facing documentation and developer guides
+  - **`FEATURE_STATUS.md`** - ⭐ **CANONICAL** detailed test-by-test R7RS compliance matrix
+  - `API.md` - Public API reference
+  - `GETTING_STARTED.md` - User guide for getting started
+  - `README.md` - Project overview
+  - `TESTING.md` - Test infrastructure and usage
+  - `DEVELOPMENT.md` - Developer guide
 
+- **`internal/`** - Implementation notes and progress tracking
+  - **`MILESTONES.md`** - Historical achievements and progress milestones (keep updated)
+  - `NESTED_ELLIPSIS_LIMITATION.md` - Future enhancement documentation
+  - `reference_impls/` - Reference implementation notes (Chibi, Chez)
+
+### 🗄️ Archived Documentation (Read-Only Reference)
+
+- **`internal/ARCHIVE/`** - Completed research and historical docs (see `internal/ARCHIVE/README.md`)
+  - `macro_research/` - Macro system research (✅ COMPLETE 2025-11-08)
+  - `numeric_research/` - Numeric tower research (✅ 94% COMPLETE 2025-11-04)
+  - `completed_features/` - Implementation docs for finished features (do loop, macros)
+  - `historical/` - Resolved bugs and historical issues
+
+**Note:** Consult archive only for historical context or when implementing related future features. Always use active docs above as primary source of truth.
+
+- **`spec/`** - Official R7RS specification (DO NOT add additional documentation here)
+
+## Reference Implementations
+
+### Chibi-scheme (Primary R7RS Reference)
+
+**Location:** `~/Project/reference/chibi-scheme`
+
+**Key files to reference:**
 - `tests/r7rs-tests.scm` - Comprehensive R7RS test suite (2516 lines covering entire spec)
 - `lib/init-7.scm` - Core R7RS procedures implemented in Scheme on top of primitives
 - `eval.c` - Core evaluator implementation in C
 - `lib/scheme/base.sld` - R7RS base library definition
 
-Use chibi-scheme to:
-
-1. Understand how features should work, borrow interpreter implemention when needed.
+**Use chibi-scheme to:**
+1. Understand how features should work, borrow interpreter implementation when needed
 2. Test Patina's output against chibi's output for compatibility
 3. Reference the comprehensive test suite for validation
 
-**R7RS Specification**: The official R7RS-small specification LaTeX source is available at:
-`spec/r7rs-small-spec/`
+**Documentation:** See `internal/reference_impls/CHIBI_REFERENCE.md` for detailed notes
 
-This includes the complete specification source code, useful for understanding precise language semantics and requirements.
+### Other Reference Implementations
+
+**Chez Scheme:** See `internal/reference_impls/CHEZ_REFERENCE.md` for notes on Chez implementation patterns
+
+### R7RS Specification
+
+**Location:** `spec/r7rs-small-spec/`
+
+The official R7RS-small specification LaTeX source, useful for understanding precise language semantics and requirements.
 
 ## Development Commands
 

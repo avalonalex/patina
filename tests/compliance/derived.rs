@@ -177,7 +177,6 @@ fn test_letrec_recursive() {
 
 // 4.2.4 Iteration - Do
 #[test]
-#[ignore] // TODO: Implement do
 fn test_do_simple() {
     assert_eval_to(
         r#"(do ((i 0 (+ i 1))
@@ -187,16 +186,112 @@ fn test_do_simple() {
     );
 }
 
+#[test]
+fn test_do_with_commands() {
+    // Commands are executed for side effects
+    assert_program_eval_to(
+        r#"
+        (define result '())
+        (do ((i 0 (+ i 1)))
+            ((= i 3) result)
+          (set! result (cons i result)))
+        "#,
+        "(2 1 0)",
+    );
+}
+
+#[test]
+fn test_do_no_step() {
+    // Variable without step doesn't change
+    assert_eval_to("(do ((x 5)) ((= x 5) 'done))", "done");
+}
+
+#[test]
+fn test_do_no_results() {
+    // No result expressions returns unspecified
+    assert_eval_to("(do ((i 0 (+ i 1))) ((> i 5)))", "#<unspecified>");
+}
+
+#[test]
+fn test_do_multiple_results() {
+    // Multiple result expressions: return last one
+    assert_eval_to(
+        r#"(do ((i 0 (+ i 1)))
+             ((> i 3) 'first 'second 'last))"#,
+        "last",
+    );
+}
+
+#[test]
+fn test_do_vector_example() {
+    // R7RS example: build a vector
+    assert_eval_to(
+        r#"(do ((vec (make-vector 5))
+               (i 0 (+ i 1)))
+              ((= i 5) vec)
+            (vector-set! vec i i))"#,
+        "#(0 1 2 3 4)",
+    );
+}
+
+#[test]
+fn test_do_list_sum() {
+    // R7RS example: sum a list
+    assert_program_eval_to(
+        r#"
+        (define x '(1 3 5 7 9))
+        (do ((x x (cdr x))
+             (sum 0 (+ sum (car x))))
+            ((null? x) sum))
+        "#,
+        "25",
+    );
+}
+
+#[test]
+fn test_do_factorial() {
+    // Factorial using do
+    assert_eval_to(
+        r#"(do ((n 5 (- n 1))
+               (result 1 (* result n)))
+              ((= n 0) result))"#,
+        "120",
+    );
+}
+
+#[test]
+fn test_do_immediate_exit() {
+    // Test starts true - should exit immediately without executing commands
+    assert_program_eval_to(
+        r#"
+        (define counter 0)
+        (do ((i 10))
+            (#t counter)
+          (set! counter (+ counter 1)))
+        "#,
+        "0",
+    );
+}
+
+#[test]
+fn test_do_mixed_steps() {
+    // Mix of variables with and without steps
+    assert_eval_to(
+        r#"(do ((i 0 (+ i 1))
+               (limit 5))
+              ((= i limit) i))"#,
+        "5",
+    );
+}
+
 // 4.2.6 Dynamic bindings - When/Unless
 #[test]
-#[ignore] // TODO: Implement when
 fn test_when() {
     assert_eval_to("(when (> 3 2) 'yes)", "yes");
     assert_eval_to("(when (< 3 2) 'yes)", "#<unspecified>");
 }
 
 #[test]
-#[ignore] // TODO: Implement unless
 fn test_unless() {
     assert_eval_to("(unless (< 3 2) 'yes)", "yes");
     assert_eval_to("(unless (> 3 2) 'yes)", "#<unspecified>");
