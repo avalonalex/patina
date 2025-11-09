@@ -1149,7 +1149,8 @@ impl Evaluator {
         &self,
         macro_val: &crate::macro_system::Macro,
         args: &Value,
+        env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
-        crate::macro_system::expand_macro(macro_val, args)
+        crate::macro_system::expand_macro(macro_val, args, env)
     }
 }

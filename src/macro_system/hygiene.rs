@@ -16,11 +16,13 @@ static GENSYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// Apply hygiene to an expanded macro result
 ///
 /// Renames free identifiers (those not bound by pattern variables)
-/// to prevent variable capture.
+/// to prevent variable capture. Does NOT rename user-defined macros
+/// to allow nested macro calls.
 ///
 /// # Arguments
 /// - `expr`: The expanded expression
 /// - `pattern_vars`: Set of variables that came from the pattern (do NOT rename these)
+/// - `env`: The environment to check for macro bindings
 ///
 /// # Example
 /// ```ignore
@@ -28,12 +30,16 @@ static GENSYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// // The 'x' introduced by the macro should be renamed to prevent capture
 /// let expanded = Value::List(...);
 /// let pattern_vars = HashSet::new(); // Empty if 'x' is not from pattern
-/// let hygienic = apply_hygiene(&expanded, &pattern_vars);
+/// let hygienic = apply_hygiene(&expanded, &pattern_vars, &env);
 /// // Result: (let ((##x#0 1)) ...)
 /// ```
-pub fn apply_hygiene(expr: &Value, pattern_vars: &std::collections::HashSet<Rc<str>>) -> Value {
+pub fn apply_hygiene(
+    expr: &Value,
+    pattern_vars: &std::collections::HashSet<Rc<str>>,
+    env: &Rc<crate::env::Environment>,
+) -> Value {
     // Find all free identifiers (symbols not in pattern_vars)
-    let free_identifiers = find_free_identifiers(expr, pattern_vars);
+    let free_identifiers = find_free_identifiers(expr, pattern_vars, env);
 
     // Create renaming map: original name -> gensym
     let mut renamings = std::collections::HashMap::new();
@@ -73,32 +79,29 @@ pub fn is_gensym(name: &str) -> bool {
 
 /// Find all free identifiers in an expression
 ///
-/// Free identifiers are symbols that are NOT pattern variables.
-/// These are the identifiers introduced by the macro template.
+/// Free identifiers are symbols that are NOT pattern variables and NOT macros.
+/// These are the identifiers introduced by the macro template that should be renamed.
 ///
 /// # Arguments
 /// - `expr`: The expression to analyze
 /// - `pattern_vars`: Set of pattern variables (to exclude)
+/// - `env`: The environment to check for macro bindings
 ///
 /// # Returns
 /// Set of free identifier names
 fn find_free_identifiers(
     expr: &Value,
     pattern_vars: &std::collections::HashSet<Rc<str>>,
+    env: &Rc<crate::env::Environment>,
 ) -> std::collections::HashSet<Rc<str>> {
     let mut free_ids = std::collections::HashSet::new();
-    collect_free_identifiers(expr, pattern_vars, &mut free_ids);
+    collect_free_identifiers(expr, pattern_vars, env, &mut free_ids);
     free_ids
 }
 
 /// Check if a symbol is a special form keyword
 ///
 /// Special forms are part of the language syntax and should not be renamed.
-///
-/// TODO: Also exclude user-defined macros from renaming to fix nested macro issue.
-/// Currently, nested macro calls fail because inner macros get renamed (e.g., `unless` -> `##unless#0`).
-/// See internal/NESTED_MACRO_ISSUE.md for detailed explanation and fix.
-/// Fix requires passing Environment to hygiene functions to check if symbol is bound to a macro.
 fn is_special_form(name: &str) -> bool {
     matches!(
         name,
@@ -123,10 +126,23 @@ fn is_special_form(name: &str) -> bool {
     )
 }
 
+/// Check if a symbol is bound to a macro in the environment
+///
+/// Macros should not be renamed for hygiene, as they need to be
+/// expanded during evaluation. This allows nested macro calls to work.
+fn is_macro(name: &Rc<str>, env: &Rc<crate::env::Environment>) -> bool {
+    if let Some(value) = env.get(name) {
+        matches!(value, Value::Macro(_))
+    } else {
+        false
+    }
+}
+
 /// Recursively collect free identifiers from an expression
 fn collect_free_identifiers(
     expr: &Value,
     pattern_vars: &std::collections::HashSet<Rc<str>>,
+    env: &Rc<crate::env::Environment>,
     free_ids: &mut std::collections::HashSet<Rc<str>>,
 ) {
     match expr {
@@ -135,20 +151,30 @@ fn collect_free_identifiers(
             // 1. It's a pattern variable
             // 2. It's already a gensym
             // 3. It's a special form keyword
+            // 4. It's a macro keyword (allows nested macro calls)
             if !pattern_vars.contains(name)
                 && !is_gensym(name.as_ref())
                 && !is_special_form(name.as_ref())
+                && !is_macro(name, env)
             {
                 free_ids.insert(name.clone());
             }
         }
         Value::Pair(pair) => {
-            collect_free_identifiers(&pair.0, pattern_vars, free_ids);
-            collect_free_identifiers(&pair.1, pattern_vars, free_ids);
+            // Check if this is a quote form - if so, don't recurse into it
+            // Quote forms are literal data and should not have identifiers renamed
+            if let Value::Symbol(sym) = &pair.0 {
+                if sym.as_ref() == "quote" {
+                    return; // Don't collect identifiers inside quote
+                }
+            }
+
+            collect_free_identifiers(&pair.0, pattern_vars, env, free_ids);
+            collect_free_identifiers(&pair.1, pattern_vars, env, free_ids);
         }
         Value::Vector(vec) => {
             for item in vec.borrow().iter() {
-                collect_free_identifiers(item, pattern_vars, free_ids);
+                collect_free_identifiers(item, pattern_vars, env, free_ids);
             }
         }
         // All other values (numbers, strings, etc.) have no identifiers
@@ -178,6 +204,14 @@ fn rename_identifiers(
             }
         }
         Value::Pair(pair) => {
+            // Check if this is a quote form - if so, don't rename inside it
+            // Quote forms are literal data and should not be modified
+            if let Value::Symbol(sym) = &pair.0 {
+                if sym.as_ref() == "quote" {
+                    return expr.clone(); // Return quote form unchanged
+                }
+            }
+
             let car = rename_identifiers(&pair.0, renamings);
             let cdr = rename_identifiers(&pair.1, renamings);
             Value::Pair(Rc::new((car, cdr)))
@@ -198,6 +232,11 @@ fn rename_identifiers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Helper: create empty environment for tests
+    fn empty_env() -> Rc<crate::env::Environment> {
+        Rc::new(crate::env::Environment::new())
+    }
 
     #[test]
     fn test_gensym_uniqueness() {
@@ -223,8 +262,9 @@ mod tests {
         // Expression with no symbols
         let expr = Value::Integer(42);
         let pattern_vars = std::collections::HashSet::new();
+        let env = empty_env();
 
-        let free_ids = find_free_identifiers(&expr, &pattern_vars);
+        let free_ids = find_free_identifiers(&expr, &pattern_vars, &env);
 
         assert!(free_ids.is_empty());
     }
@@ -244,7 +284,8 @@ mod tests {
         ]);
 
         let pattern_vars = std::collections::HashSet::new();
-        let free_ids = find_free_identifiers(&expr, &pattern_vars);
+        let env = empty_env();
+        let free_ids = find_free_identifiers(&expr, &pattern_vars, &env);
 
         assert!(free_ids.contains(&Rc::from("foo")));
         assert!(free_ids.contains(&Rc::from("x")));
@@ -265,8 +306,9 @@ mod tests {
         let mut pattern_vars = std::collections::HashSet::new();
         pattern_vars.insert(Rc::from("test"));
         pattern_vars.insert(Rc::from("body"));
+        let env = empty_env();
 
-        let free_ids = find_free_identifiers(&expr, &pattern_vars);
+        let free_ids = find_free_identifiers(&expr, &pattern_vars, &env);
 
         assert!(free_ids.contains(&Rc::from("foo")));
         assert!(!free_ids.contains(&Rc::from("test")));
@@ -283,7 +325,8 @@ mod tests {
         ]);
 
         let pattern_vars = std::collections::HashSet::new();
-        let free_ids = find_free_identifiers(&expr, &pattern_vars);
+        let env = empty_env();
+        let free_ids = find_free_identifiers(&expr, &pattern_vars, &env);
 
         assert!(free_ids.contains(&Rc::from("foo")));
         assert!(!free_ids.contains(&Rc::from("##temp#0")));
@@ -329,8 +372,9 @@ mod tests {
         let mut pattern_vars = std::collections::HashSet::new();
         pattern_vars.insert(Rc::from("test"));
         pattern_vars.insert(Rc::from("body"));
+        let env = empty_env();
 
-        let hygienic = apply_hygiene(&expr, &pattern_vars);
+        let hygienic = apply_hygiene(&expr, &pattern_vars, &env);
 
         // Extract first symbol - should be gensym
         if let Value::Pair(pair) = hygienic {

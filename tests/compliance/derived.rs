@@ -243,3 +243,107 @@ fn test_let_values_empty() {
     // Empty bindings
     assert_eval_to("(let-values () 42)", "42");
 }
+
+// 4.3 Macros (define-syntax, syntax-rules)
+
+#[test]
+fn test_simple_macro() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax when
+          (syntax-rules ()
+            ((when test body ...)
+             (if test (begin body ...)))))
+        (when #t 42)
+        "#,
+        "42",
+    );
+}
+
+#[test]
+fn test_simple_macro_false() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax when
+          (syntax-rules ()
+            ((when test body ...)
+             (if test (begin body ...)))))
+        (when #f 42)
+        "#,
+        "#<unspecified>",
+    );
+}
+
+#[test]
+fn test_nested_macros() {
+    // This is the key test - verifies nested macro calls work
+    // The inner 'my-unless' macro should NOT be renamed by hygiene
+    assert_program_eval_to(
+        r#"
+        (define-syntax my-when
+          (syntax-rules ()
+            ((my-when test body ...)
+             (if test (begin body ...)))))
+
+        (define-syntax my-unless
+          (syntax-rules ()
+            ((my-unless test body ...)
+             (if (not test) (begin body ...)))))
+
+        (my-when #t
+          (my-unless #f
+            42))
+        "#,
+        "42",
+    );
+}
+
+#[test]
+fn test_nested_macros_complex() {
+    // More complex nesting with multiple macro calls
+    assert_program_eval_to(
+        r#"
+        (define-syntax my-when
+          (syntax-rules ()
+            ((my-when test body ...)
+             (if test (begin body ...)))))
+
+        (define-syntax my-unless
+          (syntax-rules ()
+            ((my-unless test body ...)
+             (if (not test) (begin body ...)))))
+
+        (define result
+          (my-when #t
+            (my-unless #f
+              (my-when #t
+                (my-unless #f
+                  123)))))
+        result
+        "#,
+        "123",
+    );
+}
+
+#[test]
+fn test_macro_hygiene_prevents_capture() {
+    // Verify that hygiene prevents variable capture
+    // The macro's 'temp' should be renamed, but user variables x, y, temp should not be
+    assert_program_eval_to(
+        r#"
+        (define-syntax swap!
+          (syntax-rules ()
+            ((swap! a b)
+             (let ((temp a))
+               (set! a b)
+               (set! b temp)))))
+
+        (define temp 999)
+        (define x 1)
+        (define y 2)
+        (swap! x y)
+        (list x y temp)
+        "#,
+        "(2 1 999)",  // temp should still be 999, not captured
+    );
+}

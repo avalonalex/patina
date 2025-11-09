@@ -1,8 +1,12 @@
 # Nested Macro Issue in Patina
 
-## The Problem
+## Status: ✅ FIXED (2025-11-08)
 
-When a macro call appears inside another macro's expansion, the inner macro gets renamed by the hygiene system and becomes uncallable.
+This issue has been resolved by passing the environment to the hygiene system so it can check if an identifier is bound to a macro.
+
+## The Problem (Historical)
+
+When a macro call appeared inside another macro's expansion, the inner macro got renamed by the hygiene system and became uncallable.
 
 ## Example
 
@@ -138,36 +142,37 @@ To fix this properly, we need to:
    }
    ```
 
-## Why We Haven't Fixed It Yet
+## The Fix (Implemented 2025-11-08)
 
-This requires:
-1. Threading the environment through the hygiene system
-2. Modifying the hygiene module API
-3. Updating all call sites
-4. More complex testing
+The fix involved:
+1. ✅ Threading the environment through the hygiene system
+2. ✅ Modifying the hygiene module API to accept `&Rc<Environment>`
+3. ✅ Adding `is_macro()` helper function to check if identifier is bound to a macro
+4. ✅ Updating `collect_free_identifiers()` to exclude macro keywords
+5. ✅ Updating all call sites to pass environment
 
-It's a moderate refactoring that we've deferred for now since:
-- Single macro calls work perfectly
-- Most real-world macro usage patterns work
-- It's a known limitation we can address later
+**Changes made:**
+- `src/macro_system/hygiene.rs`: Added environment parameter, `is_macro()` check
+- `src/macro_system/mod.rs`: Updated `expand_macro()` signature
+- `src/eval/special_forms.rs`: Pass environment through
+- `src/eval/mod.rs`: Pass environment at call site
+- `tests/compliance/derived.rs`: Added tests for nested macros
 
-## Workaround
+**Tests added:**
+- `test_nested_macros` - Basic nested macro call
+- `test_nested_macros_complex` - Multiple levels of nesting
 
-For now, avoid nesting macro calls. Instead:
+## Workaround (No Longer Needed)
+
+~~For now, avoid nesting macro calls.~~
+
+**This issue is now fixed!** Nested macro calls work correctly:
 
 ```scheme
-;; Instead of:
 (when #t
   (unless #f
-    42))
-
-;; Use:
-(when #t
-  (if (not #f)
-      42))
+    42))  ; Now works! Returns 42
 ```
-
-Or define macros to expand to code that doesn't call other macros.
 
 ## Related Files
 

@@ -43,3 +43,7 @@ mod vectors;
 // Section 6.10: Control features
 #[path = "compliance/control.rs"]
 mod control;
+
+// Section 4.3: Advanced Macros (comprehensive macro system tests)
+#[path = "compliance/macros_advanced.rs"]
+mod macros_advanced;

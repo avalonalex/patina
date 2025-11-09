@@ -170,7 +170,7 @@ impl Evaluator {
 
                 // Expand the macro with the WHOLE form (unevaluated!)
                 // The pattern includes the keyword, so we pass the whole expr
-                let expanded = self.expand_macro(&macro_def, expr)?;
+                let expanded = self.expand_macro(&macro_def, expr, env)?;
 
                 // Debug trace: show expanded form
                 if self.debug.is_enabled(debug::DebugStage::Expand) {

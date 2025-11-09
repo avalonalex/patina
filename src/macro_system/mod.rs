@@ -25,9 +25,15 @@ pub use template::expand_template;
 ///
 /// Tries each rule in order until one matches, then expands using that rule's template.
 /// Returns the expanded expression or an error if no rule matches.
+///
+/// # Arguments
+/// - `macro_def`: The macro definition to expand
+/// - `args`: The arguments to the macro (whole form including keyword)
+/// - `env`: The environment to check for macro bindings (for nested macro support)
 pub fn expand_macro(
     macro_def: &Macro,
     args: &crate::Value,
+    env: &std::rc::Rc<crate::env::Environment>,
 ) -> Result<crate::Value, crate::EvalError> {
     // Try each rule until we find a match
     for rule in &macro_def.rules {
@@ -37,11 +43,16 @@ pub fn expand_macro(
             let expanded = expand_template(&rule.template, &bindings)?;
 
             // Apply hygiene: rename free identifiers
-            // Pattern variables are keys in the bindings map
-            let pattern_vars: std::collections::HashSet<std::rc::Rc<str>> =
+            // Collect identifiers that should NOT be renamed:
+            // 1. Pattern variable names (keys)
+            // 2. All symbols from pattern variable values (to prevent renaming substituted symbols)
+            let mut pattern_vars: std::collections::HashSet<std::rc::Rc<str>> =
                 bindings.keys().cloned().collect();
 
-            let hygienic = hygiene::apply_hygiene(&expanded, &pattern_vars);
+            // Add all symbols from the matched values
+            collect_symbols_from_bindings(&bindings, &mut pattern_vars);
+
+            let hygienic = hygiene::apply_hygiene(&expanded, &pattern_vars, env);
 
             return Ok(hygienic);
         }
@@ -52,6 +63,50 @@ pub fn expand_macro(
         "No matching pattern for macro {}",
         macro_def.name
     )))
+}
+
+/// Collect all symbols from binding values
+///
+/// This extracts all symbol identifiers from the values that pattern variables matched.
+/// These symbols should not be renamed by hygiene because they came from the input form,
+/// not from the macro template.
+fn collect_symbols_from_bindings(
+    bindings: &Bindings,
+    symbols: &mut std::collections::HashSet<std::rc::Rc<str>>,
+) {
+    for value in bindings.values() {
+        match value {
+            BindingValue::Single(val) => collect_symbols_from_value(val, symbols),
+            BindingValue::Multiple(vals) => {
+                for val in vals {
+                    collect_symbols_from_value(val, symbols);
+                }
+            }
+        }
+    }
+}
+
+/// Recursively collect all symbols from a value
+fn collect_symbols_from_value(
+    value: &crate::Value,
+    symbols: &mut std::collections::HashSet<std::rc::Rc<str>>,
+) {
+    match value {
+        crate::Value::Symbol(name) => {
+            symbols.insert(name.clone());
+        }
+        crate::Value::Pair(pair) => {
+            collect_symbols_from_value(&pair.0, symbols);
+            collect_symbols_from_value(&pair.1, symbols);
+        }
+        crate::Value::Vector(vec) => {
+            for item in vec.borrow().iter() {
+                collect_symbols_from_value(item, symbols);
+            }
+        }
+        // All other values (numbers, strings, booleans, etc.) have no symbols
+        _ => {}
+    }
 }
 
 /// Pattern in a syntax-rules macro

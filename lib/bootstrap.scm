@@ -71,4 +71,17 @@
 (define (cddddr x) (cdr (cdr (cdr (cdr x)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Control flow macros (R7RS Section 4.2.1)
+
+(define-syntax when
+  (syntax-rules ()
+    ((when test body ...)
+     (if test (begin body ...)))))
+
+(define-syntax unless
+  (syntax-rules ()
+    ((unless test body ...)
+     (if (not test) (begin body ...)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; End of bootstrap library
