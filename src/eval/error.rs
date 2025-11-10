@@ -26,4 +26,7 @@ pub enum EvalError {
 
     #[error("Index out of bounds: {0}")]
     IndexOutOfBounds(String),
+
+    #[error("Internal error: {0}")]
+    InternalError(String),
 }

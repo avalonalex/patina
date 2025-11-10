@@ -240,7 +240,7 @@ fn test_begin0_macro() {
           (set! x 20)
           (set! x 30))
         "#,
-        "11",  // Returns (+ 1 10) even though x changed
+        "11", // Returns (+ 1 10) even though x changed
     );
 }
 
@@ -268,7 +268,7 @@ fn test_dotimes_macro() {
           (set! sum (+ sum i)))
         sum
         "#,
-        "10",  // 0+1+2+3+4
+        "10", // 0+1+2+3+4
     );
 }
 
@@ -363,7 +363,7 @@ fn test_nested_ellipsis() {
           ((set! x (+ x 10)) (set! x (+ x 20))))
         x
         "#,
-        "33",  // 1, 2, 12, 32, final: 33
+        "33", // 1, 2, 12, 32, final: 33
     );
 }
 
@@ -381,7 +381,7 @@ fn test_repeat_expr_macro() {
         (repeat (#f #f #f) (set! x (+ x 1)))
         x
         "#,
-        "1",  // expr evaluated once, dummy times ignored
+        "1", // expr evaluated once, dummy times ignored
     );
 }
 
@@ -439,7 +439,7 @@ fn test_hygiene_with_multiple_temps() {
         (complex-swap x y z)
         (list x y z temp1 temp2 temp3)
         "#,
-        "(3 1 2 100 200 300)",  // x,y,z rotated; temps unchanged
+        "(3 1 2 100 200 300)", // x,y,z rotated; temps unchanged
     );
 }
 

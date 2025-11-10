@@ -9,9 +9,23 @@ mod special_forms;
 pub use error::EvalError;
 
 use crate::env::Environment;
-use crate::value::Value;
+use crate::value::{Procedure, Value};
 use debug::DebugConfig;
 use std::rc::Rc;
+
+/// Result of evaluation step in the trampoline
+///
+/// The trampoline pattern enables tail call optimization by converting
+/// recursive calls into an iterative loop. Instead of making recursive
+/// calls that grow the stack, tail positions return `TailCall` which
+/// tells the trampoline to continue with the next computation.
+#[derive(Debug)]
+pub(crate) enum EvalResult {
+    /// Final value - evaluation complete
+    Value(Value),
+    /// Tail call - continue trampolining with this expression and environment
+    TailCall { expr: Value, env: Rc<Environment> },
+}
 
 pub struct Evaluator {
     global_env: Rc<Environment>,
@@ -57,10 +71,262 @@ impl Evaluator {
         }
     }
 
+    /// Main evaluation entry point with trampoline for tail call optimization
+    ///
+    /// This implements the trampoline pattern: instead of recursing directly for tail calls,
+    /// we loop and process `TailCall` results iteratively. This enables proper tail recursion
+    /// as required by R7RS - tail calls execute in constant stack space.
     pub fn eval(&self, expr: &Value) -> Result<Value, EvalError> {
-        self.eval_in_env(expr, &self.global_env)
+        let mut current_expr = expr.clone();
+        let mut current_env = self.global_env.clone();
+
+        // Trampoline loop: keep evaluating until we get a final value
+        loop {
+            match self.eval_step(&current_expr, &current_env)? {
+                EvalResult::Value(v) => return Ok(v),
+                EvalResult::TailCall { expr, env } => {
+                    // Tail call - continue loop with new expr and env
+                    // This reuses the stack frame instead of growing the stack
+                    current_expr = expr;
+                    current_env = env;
+                }
+            }
+        }
     }
 
+    /// Single evaluation step for the trampoline
+    ///
+    /// Returns EvalResult which can be either:
+    /// - Value: evaluation complete, return this value
+    /// - TailCall: tail position, bounce to expr in env
+    ///
+    /// The `in_tail_position` parameter indicates whether this expression is in tail context.
+    /// If true, the final result can be returned as a TailCall for the trampoline to process.
+    fn eval_step(&self, expr: &Value, env: &Rc<Environment>) -> Result<EvalResult, EvalError> {
+        // Top-level trampoline evaluations are in tail position!
+        // This allows the trampoline to bounce tail calls.
+        self.eval_step_impl(expr, env, true)
+    }
+
+    /// Implementation of eval_step with tail position tracking
+    fn eval_step_impl(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<EvalResult, EvalError> {
+        // Debug trace entry
+        if self.debug.is_enabled(debug::DebugStage::Eval) {
+            eprintln!(
+                "[EVAL]{} Evaluating: {} (tail={})",
+                self.debug.current_indent(),
+                expr,
+                in_tail_position
+            );
+            self.debug.indent();
+        }
+
+        let result = match expr {
+            // Self-evaluating
+            Value::Boolean(_)
+            | Value::Integer(_)
+            | Value::BigInteger(_)
+            | Value::Rational(_)
+            | Value::Real(_)
+            | Value::Complex(_, _)
+            | Value::Character(_)
+            | Value::String(_)
+            | Value::Vector(_)
+            | Value::Bytevector(_) => Ok(EvalResult::Value(expr.clone())),
+
+            // Variable lookup
+            Value::Symbol(name) => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
+                }
+
+                // First try looking up in current environment
+                if let Some(value) = env.get(name) {
+                    return Ok(EvalResult::Value(value));
+                }
+
+                // If it's a gensym and not found, try looking it up in the global environment
+                if crate::macro_system::hygiene::is_gensym(name.as_ref()) {
+                    if let Some(original_name) = extract_original_from_gensym(name.as_ref()) {
+                        if let Some(value) = self.global_env.get(&Rc::from(original_name)) {
+                            return Ok(EvalResult::Value(value));
+                        }
+                    }
+                }
+
+                Err(EvalError::UndefinedVariable(name.to_string()))
+            }
+
+            // Empty list
+            Value::Null => Ok(EvalResult::Value(Value::Null)),
+
+            // Lists (procedure calls or special forms)
+            Value::Pair(_) => self.eval_list_impl(expr, env, in_tail_position),
+
+            _ => Ok(EvalResult::Value(expr.clone())),
+        };
+
+        // Debug trace exit
+        if self.debug.is_enabled(debug::DebugStage::Eval) {
+            self.debug.dedent();
+            match &result {
+                Ok(EvalResult::Value(val)) => {
+                    eprintln!("[EVAL]{} => {}", self.debug.current_indent(), val)
+                }
+                Ok(EvalResult::TailCall { expr, .. }) => eprintln!(
+                    "[EVAL]{} => TAIL CALL: {}",
+                    self.debug.current_indent(),
+                    expr
+                ),
+                Err(e) => eprintln!("[EVAL]{} => ERROR: {}", self.debug.current_indent(), e),
+            }
+        }
+
+        result
+    }
+
+    /// Evaluate a list (procedure call or special form) with tail position tracking
+    fn eval_list_impl(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<EvalResult, EvalError> {
+        let (car, cdr) = self.extract_pair(expr)?;
+
+        // Check for special forms - these will handle tail positions internally
+        if let Value::Symbol(ref sym) = car {
+            match sym.as_ref() {
+                "quote" => return self.eval_quote(&cdr).map(EvalResult::Value),
+                "if" => return self.eval_if_impl(&cdr, env, in_tail_position),
+                "define" => return self.eval_define(&cdr, env).map(EvalResult::Value),
+                "define-syntax" => {
+                    return self.eval_define_syntax(&cdr, env).map(EvalResult::Value)
+                }
+                "set!" => return self.eval_set(&cdr, env).map(EvalResult::Value),
+                "lambda" => return self.eval_lambda(&cdr, env).map(EvalResult::Value),
+                "begin" => return self.eval_begin_impl(&cdr, env, in_tail_position),
+                "cond" => return self.eval_cond_impl(&cdr, env, in_tail_position),
+                "let" => return self.eval_let_impl(&cdr, env, in_tail_position),
+                "let*" => return self.eval_let_star_impl(&cdr, env, in_tail_position),
+                "letrec" => return self.eval_letrec_impl(&cdr, env, in_tail_position),
+                "letrec*" => return self.eval_letrec_star_impl(&cdr, env, in_tail_position),
+                "let-values" => return self.eval_let_values_impl(&cdr, env, in_tail_position),
+                "let*-values" => {
+                    return self.eval_let_star_values_impl(&cdr, env, in_tail_position)
+                }
+                "and" => return self.eval_and_impl(&cdr, env, in_tail_position),
+                "or" => return self.eval_or_impl(&cdr, env, in_tail_position),
+                "case" => return self.eval_case_impl(&cdr, env, in_tail_position),
+                "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value), // TODO: should be tail
+                "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
+                _ => {}
+            }
+
+            // Check if this symbol is bound to a macro
+            if let Some(Value::Macro(macro_def)) = env.get(sym) {
+                if self.debug.is_enabled(debug::DebugStage::Expand) {
+                    eprintln!(
+                        "[MACRO]{} Expanding macro '{}': {}",
+                        self.debug.current_indent(),
+                        sym,
+                        expr
+                    );
+                    self.debug.indent();
+                }
+
+                let expanded = self.expand_macro(&macro_def, expr, env)?;
+
+                if self.debug.is_enabled(debug::DebugStage::Expand) {
+                    eprintln!(
+                        "[MACRO]{} Expanded to: {}",
+                        self.debug.current_indent(),
+                        expanded
+                    );
+                    self.debug.dedent();
+                }
+
+                // Evaluate the expanded form, preserving tail position
+                return self.eval_step_impl(&expanded, env, in_tail_position);
+            }
+        }
+
+        // Regular procedure call - this can be a tail call if in tail position
+        let proc = self.eval_in_env(&car, env)?;
+        let args = self.eval_arguments(&cdr, env)?;
+
+        // Check if this is a lambda in tail position
+        if in_tail_position {
+            if let Value::Procedure(Procedure::Lambda {
+                params,
+                variadic,
+                body,
+                env: lambda_env,
+            }) = proc
+            {
+                // Tail call to lambda - set up environment and evaluate body
+                // This is the key to tail recursion!
+
+                // Check arity
+                if variadic.is_some() {
+                    if args.len() < params.len() {
+                        return Err(EvalError::WrongArity {
+                            expected: format!("at least {}", params.len()),
+                            actual: args.len(),
+                        });
+                    }
+                } else if args.len() != params.len() {
+                    return Err(EvalError::WrongArity {
+                        expected: params.len().to_string(),
+                        actual: args.len(),
+                    });
+                }
+
+                // Create new environment for the lambda
+                let new_env = Rc::new(Environment::with_parent(lambda_env));
+
+                // Bind parameters
+                for (param, arg) in params.iter().zip(args.iter()) {
+                    new_env.define(param.clone(), arg.clone());
+                }
+
+                // Bind rest parameter if variadic
+                if let Some(rest_param) = variadic {
+                    let rest_args: Vec<Value> = args.into_iter().skip(params.len()).collect();
+                    let rest_list = self.list_from_vec(rest_args);
+                    new_env.define(rest_param, rest_list);
+                }
+
+                // Return tail call to evaluate the body in the new environment
+                // The body expressions are evaluated sequentially, with the last in tail position
+                if body.is_empty() {
+                    return Ok(EvalResult::Value(Value::Unspecified));
+                }
+
+                // Evaluate all but the last expression
+                for expr in &body[..body.len() - 1] {
+                    self.eval_in_env(expr, &new_env)?;
+                }
+
+                // Last expression is in tail position - return it for the trampoline
+                return Ok(EvalResult::TailCall {
+                    expr: body.last().unwrap().clone(),
+                    env: new_env,
+                });
+            }
+        }
+
+        // Not in tail position, or not a lambda - just apply normally
+        self.apply(proc, args).map(EvalResult::Value)
+    }
+
+    /// Legacy eval_in_env for backward compatibility during migration
+    /// TODO: Remove once all callers are migrated to eval_step
     fn eval_in_env(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
         // Debug trace entry
         if self.debug.is_enabled(debug::DebugStage::Eval) {

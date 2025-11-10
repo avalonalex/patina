@@ -158,7 +158,13 @@ impl Evaluator {
     }
 
     /// Evaluate if special form: (if test then [else])
-    pub(super) fn eval_if(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+    /// Evaluate if special form (tail position aware version)
+    pub(super) fn eval_if_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         let (condition, rest) = self.extract_pair(args)?;
         let (then_branch, rest) = self.extract_pair(&rest)?;
 
@@ -179,13 +185,35 @@ impl Evaluator {
             }
         };
 
+        // Evaluate condition (NOT in tail position)
         let test_result = self.eval_in_env(&condition, env)?;
 
-        if test_result.is_truthy() {
-            self.eval_in_env(&then_branch, env)
+        // Both branches ARE in tail position if the if itself is
+        let branch = if test_result.is_truthy() {
+            then_branch
         } else {
-            self.eval_in_env(&else_branch, env)
+            else_branch
+        };
+
+        if in_tail_position {
+            Ok(super::EvalResult::TailCall {
+                expr: branch,
+                env: env.clone(),
+            })
+        } else {
+            self.eval_in_env(&branch, env).map(super::EvalResult::Value)
         }
+    }
+
+    /// Legacy wrapper - calls eval_if_impl with in_tail_position=false
+    pub(super) fn eval_if(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        self.eval_if_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
     }
 
     /// Evaluate define special form: (define var expr) or (define (name params...) body...)
@@ -374,11 +402,13 @@ impl Evaluator {
     }
 
     /// Evaluate cond special form: (cond (test expr...) ...)
-    pub(super) fn eval_cond(
+    /// Evaluate cond special form (tail position aware version)
+    pub(super) fn eval_cond_impl(
         &self,
         clauses: &Value,
         env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         let mut current = clauses.clone();
 
         while let Value::Pair(clause_pair) = current {
@@ -402,22 +432,23 @@ impl Evaluator {
                                 }
                             }
                         }
-                        // Regular else clause - evaluate all expressions
-                        return self.eval_begin(exprs, env);
+                        // Regular else clause - body is in tail position
+                        return self.eval_begin_impl(exprs, env, in_tail_position);
                     }
                 }
 
-                // Evaluate the test
+                // Evaluate the test (NOT in tail position)
                 let test_result = self.eval_in_env(test, env)?;
 
                 if test_result.is_truthy() {
                     // Test succeeded - check for => syntax
+                    // TODO: => application should also be in tail position per R7RS
                     if let Some(result) = self.eval_arrow_syntax(exprs, test_result, env, "cond")? {
-                        return Ok(result);
+                        return Ok(super::EvalResult::Value(result));
                     }
 
-                    // Regular clause - evaluate expressions
-                    return self.eval_begin(exprs, env);
+                    // Regular clause - body is in tail position
+                    return self.eval_begin_impl(exprs, env, in_tail_position);
                 }
             } else {
                 return Err(EvalError::InvalidSyntax(
@@ -429,15 +460,32 @@ impl Evaluator {
         }
 
         // No clause matched and no else - return unspecified
-        Ok(Value::Unspecified)
+        Ok(super::EvalResult::Value(Value::Unspecified))
+    }
+
+    /// Legacy wrapper - calls eval_cond_impl with in_tail_position=false
+    pub(super) fn eval_cond(
+        &self,
+        clauses: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        self.eval_cond_impl(clauses, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
     }
 
     /// Evaluate case special form: (case key ((datum...) expr...)...)
-    pub(super) fn eval_case(
+    /// Evaluate case special form (tail position aware version)
+    pub(super) fn eval_case_impl(
         &self,
         args: &Value,
         env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         // Extract key expression
         let (key_expr, clauses) = self.extract_pair(args)?;
 
@@ -462,10 +510,11 @@ impl Evaluator {
                         if let Some(result) =
                             self.eval_arrow_syntax(exprs, key.clone(), env, "case")?
                         {
-                            return Ok(result);
+                            // Arrow syntax is not in tail position (requires apply)
+                            return Ok(super::EvalResult::Value(result));
                         }
-                        // Regular else clause
-                        return self.eval_begin(exprs, env);
+                        // Regular else clause (in tail position)
+                        return self.eval_begin_impl(exprs, env, in_tail_position);
                     }
                 }
 
@@ -488,11 +537,12 @@ impl Evaluator {
                 if matched {
                     // Check for => syntax
                     if let Some(result) = self.eval_arrow_syntax(exprs, key.clone(), env, "case")? {
-                        return Ok(result);
+                        // Arrow syntax is not in tail position (requires apply)
+                        return Ok(super::EvalResult::Value(result));
                     }
 
-                    // Regular clause - evaluate expressions
-                    return self.eval_begin(exprs, env);
+                    // Regular clause - evaluate expressions (in tail position)
+                    return self.eval_begin_impl(exprs, env, in_tail_position);
                 }
             } else {
                 return Err(EvalError::InvalidSyntax(
@@ -504,31 +554,91 @@ impl Evaluator {
         }
 
         // No clause matched and no else - return unspecified
-        Ok(Value::Unspecified)
+        Ok(super::EvalResult::Value(Value::Unspecified))
     }
 
-    /// Evaluate begin special form: (begin expr...)
+    /// Legacy wrapper - calls eval_case_impl with in_tail_position=false
+    pub(super) fn eval_case(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        self.eval_case_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
+    }
+
+    /// Evaluate begin special form (tail position aware version)
+    pub(super) fn eval_begin_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
+        let mut current = args.clone();
+        let mut result = Value::Unspecified;
+
+        // Evaluate all expressions except the last
+        while let Value::Pair(pair) = &current {
+            if matches!(pair.1, Value::Null) {
+                // Last expression - in tail position if begin is
+                if in_tail_position {
+                    return Ok(super::EvalResult::TailCall {
+                        expr: pair.0.clone(),
+                        env: env.clone(),
+                    });
+                } else {
+                    result = self.eval_in_env(&pair.0, env)?;
+                    break;
+                }
+            } else {
+                // Not last expression - NOT in tail position
+                result = self.eval_in_env(&pair.0, env)?;
+                current = pair.1.clone();
+            }
+        }
+
+        Ok(super::EvalResult::Value(result))
+    }
+
+    /// Legacy wrapper - calls eval_begin_impl with in_tail_position=false
     pub(super) fn eval_begin(
         &self,
         args: &Value,
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
-        let mut current = args.clone();
-        let mut result = Value::Unspecified;
-
-        while let Value::Pair(pair) = current {
-            result = self.eval_in_env(&pair.0, env)?;
-            current = pair.1.clone();
-        }
-
-        Ok(result)
+        self.eval_begin_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
     }
 
-    /// Evaluate let special form: (let ((var val)...) body...)
+    /// Legacy wrapper - calls eval_let_impl with in_tail_position=false
     pub(super) fn eval_let(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
-        let (bindings, rest) = self.extract_pair(args)?;
+        self.eval_let_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
+    }
 
-        // Parse bindings using shared helper
+    /// Evaluate let special form (tail position aware version)
+    pub(super) fn eval_let_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
+        let (bindings, rest) = self.extract_pair(args)?;
         let (names, value_exprs) = self.parse_simple_bindings(&bindings, "let")?;
 
         // Evaluate all value expressions in the current environment
@@ -543,44 +653,55 @@ impl Evaluator {
             new_env.define(name.to_string(), value.clone());
         }
 
-        // Evaluate body in the new environment
-        self.eval_begin(&rest, &new_env)
+        // Evaluate body in the new environment - body is in tail position
+        self.eval_begin_impl(&rest, &new_env, in_tail_position)
     }
 
-    /// Evaluate let* special form: (let* ((var val)...) body...)
+    /// Evaluate let* special form (tail position aware version)
+    pub(super) fn eval_let_star_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
+        let (bindings, rest) = self.extract_pair(args)?;
+        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "let*")?;
+
+        // Create new environment
+        let new_env = Rc::new(Environment::with_parent(env.clone()));
+
+        // Bind variables sequentially (each can reference previous ones)
+        for (name, value_expr) in names.iter().zip(value_exprs.iter()) {
+            let value = self.eval_in_env(value_expr, &new_env)?;
+            new_env.define(name.to_string(), value);
+        }
+
+        // Evaluate body - in tail position
+        self.eval_begin_impl(&rest, &new_env, in_tail_position)
+    }
+
+    /// Legacy wrapper - calls eval_let_star_impl with in_tail_position=false
     pub(super) fn eval_let_star(
         &self,
         args: &Value,
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
-        let (bindings, rest) = self.extract_pair(args)?;
-
-        // Parse bindings using shared helper
-        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "let*")?;
-
-        // Build environment incrementally
-        let mut current_env = env.clone();
-
-        for (name, value_expr) in names.iter().zip(value_exprs.iter()) {
-            // Evaluate value in current environment
-            let value = self.eval_in_env(value_expr, &current_env)?;
-
-            // Create new environment extending current one
-            let new_env = Rc::new(Environment::with_parent(current_env));
-            new_env.define(name.to_string(), value);
-            current_env = new_env;
-        }
-
-        // Evaluate body in the final environment
-        self.eval_begin(&rest, &current_env)
+        self.eval_let_star_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
     }
 
-    /// Evaluate letrec special form: (letrec ((var val)...) body...)
-    pub(super) fn eval_letrec(
+    /// Evaluate letrec special form (tail position aware version)
+    pub(super) fn eval_letrec_impl(
         &self,
         args: &Value,
         env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         let (bindings, rest) = self.extract_pair(args)?;
 
         // Parse bindings using shared helper
@@ -600,16 +721,32 @@ impl Evaluator {
                 .map_err(EvalError::UndefinedVariable)?;
         }
 
-        // Evaluate body in the new environment
-        self.eval_begin(&rest, &new_env)
+        // Evaluate body in the new environment (body is in tail position)
+        self.eval_begin_impl(&rest, &new_env, in_tail_position)
     }
 
-    /// Evaluate letrec* special form: (letrec* ((var val)...) body...)
-    pub(super) fn eval_letrec_star(
+    /// Legacy wrapper - calls eval_letrec_impl with in_tail_position=false
+    pub(super) fn eval_letrec(
         &self,
         args: &Value,
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
+        self.eval_letrec_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
+    }
+
+    /// Evaluate letrec* special form (tail position aware version)
+    pub(super) fn eval_letrec_star_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         let (bindings, rest) = self.extract_pair(args)?;
 
         // Parse bindings using shared helper
@@ -629,16 +766,32 @@ impl Evaluator {
                 .map_err(EvalError::UndefinedVariable)?;
         }
 
-        // Evaluate body in the new environment
-        self.eval_begin(&rest, &new_env)
+        // Evaluate body in the new environment (body is in tail position)
+        self.eval_begin_impl(&rest, &new_env, in_tail_position)
     }
 
-    /// Evaluate let-values special form: (let-values (((formals) expr)...) body...)
-    pub(super) fn eval_let_values(
+    /// Legacy wrapper - calls eval_letrec_star_impl with in_tail_position=false
+    pub(super) fn eval_letrec_star(
         &self,
         args: &Value,
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
+        self.eval_letrec_star_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
+    }
+
+    /// Evaluate let-values special form (tail position aware version)
+    pub(super) fn eval_let_values_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         let (bindings, rest) = self.extract_pair(args)?;
 
         // Create new environment
@@ -687,21 +840,37 @@ impl Evaluator {
             ));
         }
 
-        // Evaluate body in new environment
-        self.eval_begin(&rest, &new_env)
+        // Evaluate body in new environment (body is in tail position)
+        self.eval_begin_impl(&rest, &new_env, in_tail_position)
     }
 
-    /// Evaluate let*-values special form: (let*-values (((formals) expr)...) body...)
-    pub(super) fn eval_let_star_values(
+    /// Legacy wrapper - calls eval_let_values_impl with in_tail_position=false
+    pub(super) fn eval_let_values(
         &self,
         args: &Value,
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
+        self.eval_let_values_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
+    }
+
+    /// Evaluate let*-values special form (tail position aware version)
+    pub(super) fn eval_let_star_values_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         let (bindings, rest) = self.extract_pair(args)?;
 
         // Empty bindings - just evaluate body
         if matches!(bindings, Value::Null) {
-            return self.eval_begin(&rest, env);
+            return self.eval_begin_impl(&rest, env, in_tail_position);
         }
 
         // Process first binding
@@ -731,14 +900,14 @@ impl Evaluator {
 
                     // Recursively process remaining bindings in new environment
                     if matches!(remaining_bindings, Value::Null) {
-                        // No more bindings, evaluate body
-                        self.eval_begin(&rest, &new_env)
+                        // No more bindings, evaluate body (in tail position)
+                        self.eval_begin_impl(&rest, &new_env, in_tail_position)
                     } else {
-                        // More bindings - recurse with let*-values
+                        // More bindings - recurse with let*-values (still in tail position)
                         // Build: (remaining_bindings . body)
                         let new_args =
                             Value::Pair(Rc::new((remaining_bindings.clone(), rest.clone())));
-                        self.eval_let_star_values(&new_args, &new_env)
+                        self.eval_let_star_values_impl(&new_args, &new_env, in_tail_position)
                     }
                 } else {
                     Err(EvalError::InvalidSyntax(
@@ -755,6 +924,21 @@ impl Evaluator {
                 "let*-values bindings must be a proper list".to_string(),
             ))
         }
+    }
+
+    /// Legacy wrapper - calls eval_let_star_values_impl with in_tail_position=false
+    pub(super) fn eval_let_star_values(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        self.eval_let_star_values_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
     }
 
     /// Helper to bind values to formals
@@ -860,86 +1044,120 @@ impl Evaluator {
         }
     }
 
-    /// Evaluate and special form: (and test...)
-    pub(super) fn eval_and(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+    /// Evaluate and special form (tail position aware version)
+    pub(super) fn eval_and_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         let mut current = args.clone();
 
         // Empty (and) returns #t
         if matches!(current, Value::Null) {
-            return Ok(Value::Boolean(true));
+            return Ok(super::EvalResult::Value(Value::Boolean(true)));
         }
 
-        // Evaluate tests sequentially until we find a false one or reach the end
+        // Evaluate tests sequentially
         loop {
             match current {
                 Value::Pair(ref pair) => {
-                    let test_result = self.eval_in_env(&pair.0, env)?;
-
-                    // If this is the last test, return its value (not just #t/#f)
+                    // If this is the last test, it's in tail position
                     if matches!(pair.1, Value::Null) {
-                        return Ok(test_result);
+                        if in_tail_position {
+                            return Ok(super::EvalResult::TailCall {
+                                expr: pair.0.clone(),
+                                env: env.clone(),
+                            });
+                        } else {
+                            return Ok(super::EvalResult::Value(self.eval_in_env(&pair.0, env)?));
+                        }
                     }
 
-                    // If test is false, short-circuit and return #f
+                    // Not last - evaluate normally
+                    let test_result = self.eval_in_env(&pair.0, env)?;
                     if !test_result.is_truthy() {
-                        return Ok(Value::Boolean(false));
+                        return Ok(super::EvalResult::Value(Value::Boolean(false)));
                     }
-
-                    // Continue with rest
                     current = pair.1.clone();
                 }
-                Value::Null => {
-                    // Should not reach here due to earlier check
-                    return Ok(Value::Boolean(true));
-                }
+                Value::Null => return Ok(super::EvalResult::Value(Value::Boolean(true))),
                 _ => {
                     return Err(EvalError::InvalidSyntax(
                         "and expects a list of expressions".to_string(),
-                    ));
+                    ))
                 }
             }
         }
     }
 
-    /// Evaluate or special form: (or test...)
-    pub(super) fn eval_or(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+    /// Legacy wrapper - calls eval_and_impl with in_tail_position=false
+    pub(super) fn eval_and(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        self.eval_and_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
+    }
+
+    /// Evaluate or special form (tail position aware version)
+    pub(super) fn eval_or_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         let mut current = args.clone();
 
         // Empty (or) returns #f
         if matches!(current, Value::Null) {
-            return Ok(Value::Boolean(false));
+            return Ok(super::EvalResult::Value(Value::Boolean(false)));
         }
 
-        // Evaluate tests sequentially until we find a true one or reach the end
+        // Evaluate tests sequentially
         loop {
             match current {
                 Value::Pair(ref pair) => {
-                    let test_result = self.eval_in_env(&pair.0, env)?;
-
-                    // If this is the last test, return its value (not just #t/#f)
+                    // If this is the last test, it's in tail position
                     if matches!(pair.1, Value::Null) {
-                        return Ok(test_result);
+                        if in_tail_position {
+                            return Ok(super::EvalResult::TailCall {
+                                expr: pair.0.clone(),
+                                env: env.clone(),
+                            });
+                        } else {
+                            return Ok(super::EvalResult::Value(self.eval_in_env(&pair.0, env)?));
+                        }
                     }
 
-                    // If test is true, short-circuit and return its value
+                    // Not last - evaluate normally
+                    let test_result = self.eval_in_env(&pair.0, env)?;
                     if test_result.is_truthy() {
-                        return Ok(test_result);
+                        return Ok(super::EvalResult::Value(test_result));
                     }
-
-                    // Continue with rest
                     current = pair.1.clone();
                 }
-                Value::Null => {
-                    // Should not reach here due to earlier check
-                    return Ok(Value::Boolean(false));
-                }
+                Value::Null => return Ok(super::EvalResult::Value(Value::Boolean(false))),
                 _ => {
                     return Err(EvalError::InvalidSyntax(
                         "or expects a list of expressions".to_string(),
-                    ));
+                    ))
                 }
             }
         }
+    }
+
+    /// Legacy wrapper - calls eval_or_impl with in_tail_position=false
+    pub(super) fn eval_or(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        self.eval_or_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
     }
 
     /// Evaluate apply special form: (apply proc arg... args)
@@ -1159,6 +1377,8 @@ impl Evaluator {
 
     /// Evaluate do special form: (do ((var init step) ...) (test result ...) command ...)
     ///
+    /// Evaluate do special form (tail position aware version)
+    ///
     /// R7RS Section 4.2.4: Iteration
     ///
     /// Semantics:
@@ -1168,7 +1388,12 @@ impl Evaluator {
     ///    - If true: evaluate result expressions and return last value
     ///    - If false: evaluate commands, then evaluate steps and update bindings
     /// 3. If step is omitted, variable doesn't change between iterations
-    pub(super) fn eval_do(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+    pub(super) fn eval_do_impl(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         // Parse: (do ((var init step?) ...) (test result ...) command ...)
         let (bindings_expr, rest) = self.extract_pair(args)?;
         let (test_clause_expr, commands_expr) = self.extract_pair(&rest)?;
@@ -1197,11 +1422,27 @@ impl Evaluator {
 
             // If test is true, evaluate result expressions and return
             if test_result.is_truthy() {
-                let mut last_result = Value::Unspecified;
-                for result_expr in &result_exprs {
-                    last_result = self.eval_in_env(result_expr, &loop_env)?;
+                // Result expressions are in tail position
+                if result_exprs.is_empty() {
+                    return Ok(super::EvalResult::Value(Value::Unspecified));
                 }
-                return Ok(last_result);
+
+                // Evaluate all but last result expression
+                for result_expr in &result_exprs[..result_exprs.len() - 1] {
+                    self.eval_in_env(result_expr, &loop_env)?;
+                }
+
+                // Last result expression is in tail position
+                let last_result_expr = &result_exprs[result_exprs.len() - 1];
+                if in_tail_position {
+                    return Ok(super::EvalResult::TailCall {
+                        expr: last_result_expr.clone(),
+                        env: loop_env,
+                    });
+                } else {
+                    let last_result = self.eval_in_env(last_result_expr, &loop_env)?;
+                    return Ok(super::EvalResult::Value(last_result));
+                }
             }
 
             // Test is false: execute commands (for side effects)
@@ -1217,27 +1458,36 @@ impl Evaluator {
                     self.eval_in_env(step_expr, &loop_env)?
                 } else {
                     // No step: variable keeps its current value
-                    loop_env.get(var_name).ok_or_else(|| {
-                        EvalError::UndefinedVariable(var_name.to_string())
-                    })?
+                    loop_env
+                        .get(var_name)
+                        .ok_or_else(|| EvalError::UndefinedVariable(var_name.to_string()))?
                 };
                 new_values.push((var_name.clone(), new_val));
             }
 
             // Update all bindings atomically
             for (var_name, new_val) in new_values {
-                loop_env.set(&var_name, new_val)
+                loop_env
+                    .set(&var_name, new_val)
                     .map_err(EvalError::UndefinedVariable)?;
             }
         }
     }
 
+    /// Legacy wrapper - calls eval_do_impl with in_tail_position=false
+    pub(super) fn eval_do(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        self.eval_do_impl(args, env, false)
+            .and_then(|result| match result {
+                super::EvalResult::Value(v) => Ok(v),
+                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                    "Unexpected tail call in non-tail context".to_string(),
+                )),
+            })
+    }
+
     /// Parse do bindings: ((var init step?) ...)
     /// Returns: Vec<(var_name, init_expr, step_expr_opt)>
-    fn parse_do_bindings(
-        &self,
-        bindings_expr: &Value,
-    ) -> Result<Vec<DoBinding>, EvalError> {
+    fn parse_do_bindings(&self, bindings_expr: &Value) -> Result<Vec<DoBinding>, EvalError> {
         let mut bindings = Vec::new();
         let mut current = bindings_expr.clone();
 
@@ -1291,7 +1541,10 @@ impl Evaluator {
 
     /// Parse do test clause: (test result ...)
     /// Returns: (test_expr, Vec<result_expr>)
-    fn parse_do_test_clause(&self, test_clause_expr: &Value) -> Result<(Value, Vec<Value>), EvalError> {
+    fn parse_do_test_clause(
+        &self,
+        test_clause_expr: &Value,
+    ) -> Result<(Value, Vec<Value>), EvalError> {
         let (test_expr, rest) = self.extract_pair(test_clause_expr)?;
         let result_exprs = self.collect_list_items(&rest)?;
         Ok((test_expr.clone(), result_exprs))

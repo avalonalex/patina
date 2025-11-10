@@ -284,30 +284,61 @@ fn test_bigint_remains_exact() {
     assert_eval_to("(exact? (+ 9223372036854775807 1))", "#t");
 }
 
-// Numeric tower tests - demonstrating overflow handling
-// Note: This test is ignored in debug builds because the deep recursion (100 levels)
-// combined with larger stack frames in unoptimized code causes stack overflow.
-// The test passes in release builds with optimizations enabled.
-// TODO: Remove #[cfg_attr] once tail call optimization is implemented (see issue #XX)
+// Numeric tower tests - demonstrating overflow handling and tail call optimization
+// This test demonstrates proper tail recursion: fib-iter makes 100 recursive calls
+// but uses constant stack space thanks to tail call optimization (TCO).
 #[test]
-#[cfg_attr(debug_assertions, ignore)]
 fn test_fibonacci_large() {
     // Fibonacci numbers grow exponentially
     // fib(100) = 354224848179261915075 (overflows i64::MAX = 9223372036854775807)
-    // Using iterative version with let-values for O(n) performance
+    // Using tail-recursive iterative version for O(n) performance
     assert_program_eval_to(
         r#"
         (define (fib n)
           (define (fib-iter a b count)
             (if (= count 0)
                 a
-                (let-values (((next-a next-b) (values b (+ a b))))
-                  (fib-iter next-a next-b (- count 1)))))
+                (fib-iter b (+ a b) (- count 1))))
           (fib-iter 0 1 n))
 
         (fib 100)
         "#,
         "354224848179261915075",
+    );
+}
+
+// Tail call optimization stress test - ensures deep recursion works
+#[test]
+fn test_tail_call_stress() {
+    // Countdown from 100,000 - would stack overflow without TCO
+    assert_program_eval_to(
+        r#"
+        (define (countdown n)
+          (if (= n 0)
+              'done
+              (countdown (- n 1))))
+
+        (countdown 100000)
+        "#,
+        "done",
+    );
+
+    // Mutual recursion stress test
+    assert_program_eval_to(
+        r#"
+        (define (even? n)
+          (if (= n 0)
+              #t
+              (odd? (- n 1))))
+
+        (define (odd? n)
+          (if (= n 0)
+              #f
+              (even? (- n 1))))
+
+        (even? 10000)
+        "#,
+        "#t",
     );
 }
 

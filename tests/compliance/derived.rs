@@ -439,6 +439,6 @@ fn test_macro_hygiene_prevents_capture() {
         (swap! x y)
         (list x y temp)
         "#,
-        "(2 1 999)",  // temp should still be 999, not captured
+        "(2 1 999)", // temp should still be 999, not captured
     );
 }
