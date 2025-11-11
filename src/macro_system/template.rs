@@ -98,8 +98,8 @@ fn expand_template_impl(
                 result.push(expand_template_impl(t, bindings, depth)?);
             }
 
-            // Find pattern variables in repeated template
-            let vars = find_pattern_vars(repeated);
+            // Find pattern variables in repeated template that are actually bound
+            let vars = find_pattern_vars_in_bindings(repeated, bindings);
 
             if vars.is_empty() {
                 return Err(EvalError::InvalidSyntax(
@@ -154,7 +154,27 @@ fn expand_template_impl(
 
             // Expand 'after' templates
             for t in after {
-                result.push(expand_template_impl(t, bindings, depth)?);
+                let expanded = expand_template_impl(t, bindings, depth)?;
+                // If the after template is itself an ellipsis that expands to a list,
+                // we need to splice its elements in, not add it as a nested list
+                if matches!(t, Template::Ellipsis { .. }) {
+                    // Flatten the expanded list into our result
+                    match expanded {
+                        Value::Null => {} // Empty list, nothing to add
+                        Value::Pair(_) => {
+                            // Convert list to vec and append all elements
+                            if let Ok(items) = list_to_vec(&expanded) {
+                                result.extend(items);
+                            } else {
+                                // Improper list, just push as-is
+                                result.push(expanded);
+                            }
+                        }
+                        other => result.push(other), // Not a list, push as-is
+                    }
+                } else {
+                    result.push(expanded);
+                }
             }
 
             Ok(list_from_vec(result))
@@ -170,7 +190,19 @@ fn expand_template_impl(
     }
 }
 
-/// Find all pattern variables in a template
+/// Find all pattern variables in a template that are actually bound
+/// This filters out literal identifiers that aren't in the bindings
+fn find_pattern_vars_in_bindings(template: &Template, bindings: &Bindings) -> Vec<Rc<str>> {
+    let mut vars = Vec::new();
+    find_pattern_vars_impl(template, &mut vars);
+    // Filter to only include variables that are actually in bindings
+    vars.into_iter()
+        .filter(|v| bindings.contains_key(v))
+        .collect()
+}
+
+/// Find all pattern variables in a template (without filtering)
+#[allow(dead_code)]
 fn find_pattern_vars(template: &Template) -> Vec<Rc<str>> {
     let mut vars = Vec::new();
     find_pattern_vars_impl(template, &mut vars);
@@ -211,6 +243,23 @@ fn list_from_vec(items: Vec<Value>) -> Value {
         .into_iter()
         .rev()
         .fold(Value::Null, |acc, val| Value::Pair(Rc::new((val, acc))))
+}
+
+/// Helper: Convert a Scheme list into a Vec of Values
+fn list_to_vec(value: &Value) -> Result<Vec<Value>, ()> {
+    let mut items = Vec::new();
+    let mut current = value;
+
+    loop {
+        match current {
+            Value::Null => return Ok(items),
+            Value::Pair(pair) => {
+                items.push(pair.0.clone());
+                current = &pair.1;
+            }
+            _ => return Err(()), // Improper list
+        }
+    }
 }
 
 #[cfg(test)]

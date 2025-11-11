@@ -314,12 +314,40 @@ fn parse_list_pattern(items: &[Value]) -> Result<Pattern, crate::EvalError> {
 
             let repeated = Box::new(parse_pattern(&items[pos - 1])?);
 
-            let after: Result<Vec<_>, _> = items[pos + 1..].iter().map(parse_pattern).collect();
+            // Handle 'after' section recursively to support multiple ellipses
+            // e.g., ((x y) ...) z ... should parse z ... as another ellipsis pattern
+            let after_items = &items[pos + 1..];
+            let after = if after_items.is_empty() {
+                vec![]
+            } else {
+                // Recursively parse the after section as a pattern list
+                // This allows patterns like: ((x y) ...) z ...
+                // to be parsed as Ellipsis with after containing another Ellipsis
+                match parse_list_pattern(after_items)? {
+                    Pattern::List(patterns) => patterns,
+                    Pattern::Ellipsis {
+                        before: b,
+                        repeated: r,
+                        after: a,
+                    } => {
+                        // The after section itself is an ellipsis pattern
+                        // Prepend the before patterns, then add the ellipsis
+                        let mut result = b;
+                        result.push(Pattern::Ellipsis {
+                            before: vec![],
+                            repeated: r,
+                            after: a,
+                        });
+                        result
+                    }
+                    other => vec![other],
+                }
+            };
 
             Ok(Pattern::Ellipsis {
                 before: before?,
                 repeated,
-                after: after?,
+                after,
             })
         }
     }
@@ -387,12 +415,38 @@ fn parse_list_template(items: &[Value]) -> Result<Template, crate::EvalError> {
 
             let repeated = Box::new(parse_template(&items[pos - 1])?);
 
-            let after: Result<Vec<_>, _> = items[pos + 1..].iter().map(parse_template).collect();
+            // Handle 'after' section recursively to support multiple ellipses
+            // e.g., (x ...) (y ...) should parse both as separate ellipsis templates
+            let after_items = &items[pos + 1..];
+            let after = if after_items.is_empty() {
+                vec![]
+            } else {
+                // Recursively parse the after section as a template list
+                // This allows templates like: (x ...) y ...
+                match parse_list_template(after_items)? {
+                    Template::List(templates) => templates,
+                    Template::Ellipsis {
+                        before: b,
+                        repeated: r,
+                        after: a,
+                    } => {
+                        // The after section itself is an ellipsis template
+                        let mut result = b;
+                        result.push(Template::Ellipsis {
+                            before: vec![],
+                            repeated: r,
+                            after: a,
+                        });
+                        result
+                    }
+                    other => vec![other],
+                }
+            };
 
             Ok(Template::Ellipsis {
                 before: before?,
                 repeated,
-                after: after?,
+                after,
             })
         }
     }
