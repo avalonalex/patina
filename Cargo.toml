@@ -1,13 +1,23 @@
-[package]
-name = "patina"
-version = "0.1.0"
-edition = "2021"
+# Workspace configuration
+[workspace]
+members = [
+    "crates/patina-runtime",
+    "crates/patina-ir",
+    "crates/patina-frontend",
+    "crates/patina-tree-walker",
+    "crates/patina-interpreter",
+    "crates/patina-repl",
+    "crates/patina-tests",
+]
+resolver = "2"
 
-[dependencies]
+# Shared dependencies across workspace
+[workspace.dependencies]
 # Numeric tower support for R7RS compliance
 num-bigint = "0.4"
 num-rational = "0.4"
 num-traits = "0.2"
+num-complex = "0.4"
 
 # Error handling
 thiserror = "2.0"
@@ -15,19 +25,4 @@ thiserror = "2.0"
 # Thread-safe lazy statics
 once_cell = "1.19"
 
-# Rich REPL experience
-rustyline = { version = "17.0.2", features = ["derive"] }
-nu-ansi-term = "0.50"  # For syntax highlighting
-dirs = "6.0.0"  # For finding home directory to save history
-
-[lib]
-name = "patina"
-path = "src/lib.rs"
-
-[[bin]]
-name = "patina"
-path = "src/main.rs"
-
-[dev-dependencies]
-# For testing R7RS compliance
-assert_matches = "1.5"
+# No main package anymore - workspace only

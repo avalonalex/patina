@@ -1,0 +1,26 @@
+[package]
+name = "patina-tree-walker"
+version = "0.1.0"
+edition = "2021"
+description = "Tree-walking interpreter backend for Patina Scheme"
+
+[dependencies]
+# Workspace crates
+patina-runtime = { path = "../patina-runtime" }
+patina-frontend = { path = "../patina-frontend" }
+
+# Numeric dependencies (needed by primitives)
+num-bigint = { workspace = true }
+num-rational = { workspace = true }
+num-traits = { workspace = true }
+num-complex = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# For gensym (thread-safe counter)
+once_cell = { workspace = true }
+
+[lib]
+name = "patina_tree_walker"
+path = "src/lib.rs"

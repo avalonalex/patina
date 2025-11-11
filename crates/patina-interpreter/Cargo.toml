@@ -1,0 +1,20 @@
+[package]
+name = "patina-interpreter"
+version = "0.1.0"
+edition = "2021"
+description = "High-level interpreter interface for Patina Scheme - supports multiple backends"
+
+[dependencies]
+# Core types
+patina-runtime = { path = "../patina-runtime" }
+patina-frontend = { path = "../patina-frontend" }
+
+# Default backend
+patina-tree-walker = { path = "../patina-tree-walker" }
+
+# Error handling
+thiserror = { workspace = true }
+
+[lib]
+name = "patina_interpreter"
+path = "src/lib.rs"

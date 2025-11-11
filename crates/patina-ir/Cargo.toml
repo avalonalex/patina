@@ -1,0 +1,16 @@
+[package]
+name = "patina-ir"
+version = "0.1.0"
+edition = "2021"
+description = "Core intermediate representation for Patina Scheme compiler"
+
+[dependencies]
+# Runtime types
+patina-runtime = { path = "../patina-runtime" }
+
+# Error handling
+thiserror = { workspace = true }
+
+[lib]
+name = "patina_ir"
+path = "src/lib.rs"

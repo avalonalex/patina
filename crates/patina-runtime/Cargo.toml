@@ -1,0 +1,19 @@
+[package]
+name = "patina-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Runtime value types and environment for Patina Scheme interpreter"
+
+[dependencies]
+# Numeric tower support
+num-bigint = { workspace = true }
+num-rational = { workspace = true }
+num-traits = { workspace = true }
+num-complex = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+[lib]
+name = "patina_runtime"
+path = "src/lib.rs"

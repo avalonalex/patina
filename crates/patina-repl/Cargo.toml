@@ -1,0 +1,24 @@
+[package]
+name = "patina-repl"
+version = "0.1.0"
+edition = "2021"
+description = "REPL and CLI for Patina Scheme"
+
+[dependencies]
+# Workspace crates
+patina-runtime = { path = "../patina-runtime" }
+patina-frontend = { path = "../patina-frontend" }
+patina-tree-walker = { path = "../patina-tree-walker" }
+patina-interpreter = { path = "../patina-interpreter" }
+
+# Rich REPL experience
+rustyline = { version = "17.0.2", features = ["derive"] }
+nu-ansi-term = "0.50"  # For syntax highlighting
+dirs = "6.0.0"  # For finding home directory to save history
+
+# Error handling
+thiserror = { workspace = true }
+
+[[bin]]
+name = "patina"
+path = "src/main.rs"
