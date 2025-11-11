@@ -52,6 +52,7 @@ impl SchemeHighlighter {
                 | "unquote-splicing"
                 | "and"
                 | "or"
+                | "call-with-values"
                 | "define-syntax"
                 | "let-syntax"
                 | "letrec-syntax"

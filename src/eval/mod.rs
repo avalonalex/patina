@@ -212,13 +212,16 @@ impl Evaluator {
                 "lambda" => return self.eval_lambda(&cdr, env).map(EvalResult::Value),
                 "begin" => return self.eval_begin_impl(&cdr, env, in_tail_position),
                 "cond" => return self.eval_cond_impl(&cdr, env, in_tail_position),
-                "let-values" => return self.eval_let_values_impl(&cdr, env, in_tail_position),
-                "let*-values" => {
-                    return self.eval_let_star_values_impl(&cdr, env, in_tail_position)
-                }
                 "case" => return self.eval_case_impl(&cdr, env, in_tail_position),
                 "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value), // TODO: should be tail
                 "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
+                "call-with-values" => {
+                    return self.eval_call_with_values_impl(&cdr, env, in_tail_position)
+                }
+                // Note: call-with-values is BOTH a special form (for tail calls) AND a primitive (for environment)
+                // This dual nature is necessary because:
+                // 1. Special form dispatch provides proper tail call optimization per R7RS Section 3.5
+                // 2. Primitive registration ensures the symbol exists in the environment for macro expansions
                 _ => {}
             }
 
@@ -402,17 +405,6 @@ impl Evaluator {
                 "lambda" => return self.eval_lambda(&cdr, env),
                 "begin" => return self.eval_begin(&cdr, env),
                 "cond" => return self.eval_cond(&cdr, env),
-                // "let" => return self.eval_let(&cdr, env),
-                // "let*" => return self.eval_let_star(&cdr, env),
-                // NOTE: let/let* are now implemented as macros in lib/bootstrap.scm
-                // "letrec" => return self.eval_letrec(&cdr, env),
-                // "letrec*" => return self.eval_letrec_star(&cdr, env),
-                // NOTE: letrec/letrec* are now implemented as macros in lib/bootstrap.scm
-                "let-values" => return self.eval_let_values(&cdr, env),
-                "let*-values" => return self.eval_let_star_values(&cdr, env),
-                // "and" => return self.eval_and(&cdr, env),
-                // "or" => return self.eval_or(&cdr, env),
-                // NOTE: and/or are now implemented as macros in lib/bootstrap.scm
                 "case" => return self.eval_case(&cdr, env),
                 "apply" => return self.eval_apply(&cdr, env),
                 "do" => return self.eval_do(&cdr, env),

@@ -197,3 +197,27 @@ mod tests {
         assert!(matches!(result, Value::Unspecified));
     }
 }
+
+#[cfg(test)]
+mod test_let_values_debug {
+    use super::*;
+    
+    #[test]
+    fn test_gcd_with_let_values() {
+        let interp = Interpreter::new();
+        let result = interp.eval_program(r#"
+            (define (quotient-and-remainder a b)
+              (values (quotient a b) (remainder a b)))
+
+            (define (gcd a b)
+              (if (= b 0)
+                  a
+                  (let-values (((q r) (quotient-and-remainder a b)))
+                    (gcd b r))))
+
+            (gcd 48 18)
+        "#).unwrap();
+        
+        assert_eq!(format!("{}", result), "6");
+    }
+}

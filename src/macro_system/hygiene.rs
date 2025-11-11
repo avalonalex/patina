@@ -118,11 +118,12 @@ fn is_special_form(name: &str) -> bool {
             | "let*"
             | "letrec"
             | "letrec*"
-            | "let-values"
-            | "let*-values"
+            // Note: let-values and let*-values are now macros (defined in bootstrap.scm)
             | "and"
             | "or"
             | "apply"
+            | "call-with-values"  // Special form for tail call optimization
+            | "do"
     )
 }
 

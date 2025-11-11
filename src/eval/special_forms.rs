@@ -573,265 +573,67 @@ impl Evaluator {
     // implementations (parse_simple_bindings, eval_letrec_impl, eval_letrec,
     // eval_letrec_star_impl, eval_letrec_star) were removed in favor of the macro
     // approach.
+    //
+    // NOTE: let-values and let*-values have been migrated to macros in lib/bootstrap.scm.
+    // The native implementations below were removed as they are no longer needed.
+    // See commit history for the original implementations if needed for reference.
 
-    /// Evaluate let-values special form (tail position aware version)
-    pub(super) fn eval_let_values_impl(
+    /// Evaluate call-with-values special form (tail position aware version)
+    /// (call-with-values producer consumer)
+    /// Per R7RS Section 3.5: "the second argument passed to call-with-values
+    /// must be called via a tail call"
+    pub(super) fn eval_call_with_values_impl(
         &self,
         args: &Value,
         env: &Rc<Environment>,
         in_tail_position: bool,
     ) -> Result<super::EvalResult, EvalError> {
-        let (bindings, rest) = self.extract_pair(args)?;
+        // Extract producer and consumer expressions
+        let (producer_expr, rest) = self.extract_pair(args)?;
+        let (consumer_expr, rest2) = self.extract_pair(&rest)?;
 
-        // Create new environment
-        let new_env = Rc::new(Environment::with_parent(env.clone()));
-
-        // Process each binding
-        let mut current = bindings.clone();
-        while let Value::Pair(binding_pair) = current {
-            let binding = &binding_pair.0;
-
-            // Each binding should be ((formals) expr)
-            if let Value::Pair(binding_contents) = binding {
-                let formals = &binding_contents.0;
-
-                if let Value::Pair(expr_pair) = &binding_contents.1 {
-                    if !matches!(expr_pair.1, Value::Null) {
-                        return Err(EvalError::InvalidSyntax(
-                            "let-values binding must have exactly 2 elements".to_string(),
-                        ));
-                    }
-
-                    let expr = &expr_pair.0;
-
-                    // Evaluate the expression to get values
-                    let values = self.eval_in_env(expr, env)?;
-
-                    // Bind the values to the formals
-                    self.bind_values_to_formals(formals, &values, &new_env)?;
-                } else {
-                    return Err(EvalError::InvalidSyntax(
-                        "let-values binding must have an expression".to_string(),
-                    ));
-                }
-            } else {
-                return Err(EvalError::InvalidSyntax(
-                    "let-values binding must be a list".to_string(),
-                ));
-            }
-
-            current = binding_pair.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
+        if !matches!(rest2, Value::Null) {
             return Err(EvalError::InvalidSyntax(
-                "let-values bindings must be a proper list".to_string(),
+                "call-with-values expects exactly 2 arguments".to_string(),
             ));
         }
 
-        // Evaluate body in new environment (body is in tail position)
-        self.eval_begin_impl(&rest, &new_env, in_tail_position)
-    }
+        // Evaluate producer and consumer to get procedures
+        let producer = self.eval_in_env(&producer_expr, env)?;
+        let consumer = self.eval_in_env(&consumer_expr, env)?;
 
-    /// Legacy wrapper - calls eval_let_values_impl with in_tail_position=false
-    pub(super) fn eval_let_values(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        self.eval_let_values_impl(args, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
+        // Call producer with no arguments to get values
+        let produced = self.apply(producer, vec![])?;
+
+        // Unpack multiple values if present
+        let consumer_args = match produced {
+            Value::Values(vals) => vals,
+            other => vec![other],
+        };
+
+        // Apply consumer to the produced values
+        // This MUST be a tail call per R7RS when in tail position
+        if in_tail_position {
+            // Construct the application as an S-expression: (consumer arg1 arg2 ...)
+            // This allows the trampoline to handle it as a proper tail call
+            let mut app_list = vec![consumer];
+            app_list.extend(consumer_args);
+            let application = self.list_from_vec(app_list);
+
+            Ok(super::EvalResult::TailCall {
+                expr: application,
+                env: env.clone(),
             })
-    }
-
-    /// Evaluate let*-values special form (tail position aware version)
-    pub(super) fn eval_let_star_values_impl(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        let (bindings, rest) = self.extract_pair(args)?;
-
-        // Empty bindings - just evaluate body
-        if matches!(bindings, Value::Null) {
-            return self.eval_begin_impl(&rest, env, in_tail_position);
-        }
-
-        // Process first binding
-        if let Value::Pair(first_pair) = bindings {
-            let first_binding = &first_pair.0;
-            let remaining_bindings = &first_pair.1;
-
-            // Parse first binding: ((formals) expr)
-            if let Value::Pair(binding_contents) = first_binding {
-                let formals = &binding_contents.0;
-
-                if let Value::Pair(expr_pair) = &binding_contents.1 {
-                    if !matches!(expr_pair.1, Value::Null) {
-                        return Err(EvalError::InvalidSyntax(
-                            "let*-values binding must have exactly 2 elements".to_string(),
-                        ));
-                    }
-
-                    let expr = &expr_pair.0;
-
-                    // Evaluate the expression
-                    let values = self.eval_in_env(expr, env)?;
-
-                    // Create new environment with these bindings
-                    let new_env = Rc::new(Environment::with_parent(env.clone()));
-                    self.bind_values_to_formals(formals, &values, &new_env)?;
-
-                    // Recursively process remaining bindings in new environment
-                    if matches!(remaining_bindings, Value::Null) {
-                        // No more bindings, evaluate body (in tail position)
-                        self.eval_begin_impl(&rest, &new_env, in_tail_position)
-                    } else {
-                        // More bindings - recurse with let*-values (still in tail position)
-                        // Build: (remaining_bindings . body)
-                        let new_args =
-                            Value::Pair(Rc::new((remaining_bindings.clone(), rest.clone())));
-                        self.eval_let_star_values_impl(&new_args, &new_env, in_tail_position)
-                    }
-                } else {
-                    Err(EvalError::InvalidSyntax(
-                        "let*-values binding must have an expression".to_string(),
-                    ))
-                }
-            } else {
-                Err(EvalError::InvalidSyntax(
-                    "let*-values binding must be a list".to_string(),
-                ))
-            }
         } else {
-            Err(EvalError::InvalidSyntax(
-                "let*-values bindings must be a proper list".to_string(),
+            Ok(super::EvalResult::Value(
+                self.apply(consumer, consumer_args)?,
             ))
         }
     }
 
-    /// Legacy wrapper - calls eval_let_star_values_impl with in_tail_position=false
-    pub(super) fn eval_let_star_values(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        self.eval_let_star_values_impl(args, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
-            })
-    }
-
-    /// Helper to bind values to formals
-    pub(super) fn bind_values_to_formals(
-        &self,
-        formals: &Value,
-        values: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<(), EvalError> {
-        match formals {
-            // Single identifier - bind all values (or single value)
-            Value::Symbol(name) => {
-                env.define(name.to_string(), values.clone());
-                Ok(())
-            }
-
-            // List of identifiers - extract values and bind each
-            Value::Pair(_) => {
-                // Extract value list
-                let val_list = match values {
-                    Value::Values(vals) => vals.clone(),
-                    other => vec![other.clone()],
-                };
-
-                // Extract formals list
-                let mut formal_names = Vec::new();
-                let mut current = formals.clone();
-
-                while let Value::Pair(pair) = current {
-                    if let Value::Symbol(name) = &pair.0 {
-                        formal_names.push(name.clone());
-                        current = pair.1.clone();
-                    } else {
-                        return Err(EvalError::InvalidSyntax(
-                            "Formals must be symbols".to_string(),
-                        ));
-                    }
-                }
-
-                // Handle dotted list (rest parameter)
-                let has_rest = if let Value::Symbol(rest_name) = current {
-                    formal_names.push(rest_name);
-                    true
-                } else if !matches!(current, Value::Null) {
-                    return Err(EvalError::InvalidSyntax("Invalid formals list".to_string()));
-                } else {
-                    false
-                };
-
-                // Bind values to formals
-                if has_rest {
-                    // Last formal gets remaining values as a list
-                    let fixed_count = formal_names.len() - 1;
-                    if val_list.len() < fixed_count {
-                        return Err(EvalError::WrongArity {
-                            expected: format!("at least {}", fixed_count),
-                            actual: val_list.len(),
-                        });
-                    }
-
-                    for (i, name) in formal_names.iter().take(fixed_count).enumerate() {
-                        env.define(name.to_string(), val_list[i].clone());
-                    }
-
-                    let rest_values = self.list_from_vec(val_list[fixed_count..].to_vec());
-                    env.define(formal_names[fixed_count].to_string(), rest_values);
-                } else {
-                    // Exact match required
-                    if val_list.len() != formal_names.len() {
-                        return Err(EvalError::WrongArity {
-                            expected: formal_names.len().to_string(),
-                            actual: val_list.len(),
-                        });
-                    }
-
-                    for (name, value) in formal_names.iter().zip(val_list.iter()) {
-                        env.define(name.to_string(), value.clone());
-                    }
-                }
-
-                Ok(())
-            }
-
-            // Empty list
-            Value::Null => {
-                // No formals, values should be empty too
-                match values {
-                    Value::Values(vals) if vals.is_empty() => Ok(()),
-                    Value::Values(vals) => Err(EvalError::WrongArity {
-                        expected: "0".to_string(),
-                        actual: vals.len(),
-                    }),
-                    _ => Err(EvalError::WrongArity {
-                        expected: "0".to_string(),
-                        actual: 1,
-                    }),
-                }
-            }
-
-            _ => Err(EvalError::InvalidSyntax(
-                "Invalid formals in let-values".to_string(),
-            )),
-        }
-    }
+    // NOTE: bind_values_to_formals was removed as it was only used by the now-deleted
+    // let-values and let*-values implementations. The macro versions in bootstrap.scm
+    // handle value binding through lambda parameters instead.
 
     /// Evaluate and special form (tail position aware version)
     // NOTE: 'and' and 'or' are now implemented as macros in lib/bootstrap.scm

@@ -135,28 +135,31 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Multiple value binding (R7RS Section 4.2.2)
+;;
+;; Now using full R7RS-compliant definitions.
+;; With call-with-values implemented as a special form (supporting proper
+;; tail calls per R7RS Section 3.5), these macro expansions are fully
+;; tail-recursive.
 
-;; let-values with support for multiple bindings
+;; let-values - bind multiple values from expressions
 (define-syntax let-values
   (syntax-rules ()
-    ;; Multiple bindings - convert to nested call-with-values
     ((let-values ((formals expression) rest ...) body ...)
      (call-with-values (lambda () expression)
                        (lambda formals
                          (let-values (rest ...) body ...))))
-    ;; Base case: no bindings
     ((let-values () body ...)
      (begin body ...))))
 
-;; Simplified let*-values for sequential bindings
+;; let*-values - sequential binding of multiple values
+;; Each binding can reference values from previous bindings
 (define-syntax let*-values
   (syntax-rules ()
-    ((let*-values () body ...)
-     (begin body ...))
-    ((let*-values ((formals expression) rest ...) body ...)
-     (call-with-values (lambda () expression)
-                       (lambda formals
-                         (let*-values (rest ...) body ...))))))
+    ((let*-values () body0 body1 ...)
+     (let () body0 body1 ...))
+    ((let*-values (binding0 binding1 ...) body0 body1 ...)
+     (let-values (binding0)
+       (let*-values (binding1 ...) body0 body1 ...)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; End of bootstrap library

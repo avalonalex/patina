@@ -96,6 +96,7 @@ impl Evaluator {
             // Multiple values
             "values" => values::values(self, args),
             "call-with-values" => values::call_with_values(self, args),
+            // Note: call-with-values is both a special form (for tail calls) and a primitive (for environment)
 
             // String operations
             "string-length" => strings::string_length(self, args),

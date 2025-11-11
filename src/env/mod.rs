@@ -63,6 +63,17 @@ impl Environment {
         self.bindings.borrow().contains_key(name)
             || self.parent.as_ref().is_some_and(|p| p.has(name))
     }
+
+    /// Get all variable names defined in this environment and parent environments
+    pub fn get_all_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.bindings.borrow().keys().cloned().collect();
+        if let Some(parent) = &self.parent {
+            names.extend(parent.get_all_names());
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
 }
 
 impl Default for Environment {
