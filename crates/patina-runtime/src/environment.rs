@@ -74,6 +74,18 @@ impl Environment {
         names.dedup();
         names
     }
+
+    /// Get all bindings in this environment only (not including parent)
+    ///
+    /// Returns a vector of (name, value) pairs for all bindings defined locally.
+    /// This is useful for library imports where we need to iterate over all exports.
+    pub fn bindings(&self) -> Vec<(String, Value)> {
+        self.bindings
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
 }
 
 impl Default for Environment {
@@ -100,5 +112,48 @@ mod tests {
 
         let child = Environment::with_parent(parent);
         assert!(matches!(child.get("x"), Some(Value::Integer(42))));
+    }
+
+    #[test]
+    fn test_bindings() {
+        let env = Environment::new();
+        env.define("x".to_string(), Value::Integer(42));
+        env.define("y".to_string(), Value::Boolean(true));
+        env.define("z".to_string(), Value::Integer(100));
+
+        let bindings = env.bindings();
+        assert_eq!(bindings.len(), 3);
+
+        // Check that all bindings are present
+        let names: Vec<String> = bindings.iter().map(|(k, _)| k.clone()).collect();
+        assert!(names.contains(&"x".to_string()));
+        assert!(names.contains(&"y".to_string()));
+        assert!(names.contains(&"z".to_string()));
+
+        // Verify values
+        for (name, value) in bindings {
+            match name.as_str() {
+                "x" => assert!(matches!(value, Value::Integer(42))),
+                "y" => assert!(matches!(value, Value::Boolean(true))),
+                "z" => assert!(matches!(value, Value::Integer(100))),
+                _ => panic!("Unexpected binding: {}", name),
+            }
+        }
+    }
+
+    #[test]
+    fn test_bindings_excludes_parent() {
+        let parent = Rc::new(Environment::new());
+        parent.define("x".to_string(), Value::Integer(42));
+        parent.define("y".to_string(), Value::Integer(100));
+
+        let child = Environment::with_parent(parent);
+        child.define("z".to_string(), Value::Boolean(true));
+
+        // bindings() should only return local bindings
+        let bindings = child.bindings();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].0, "z");
+        assert!(matches!(bindings[0].1, Value::Boolean(true)));
     }
 }

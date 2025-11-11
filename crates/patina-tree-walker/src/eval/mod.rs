@@ -397,9 +397,15 @@ impl Evaluator {
         self.apply(proc, args, in_tail_position)
     }
 
-    /// Internal eval_in_env - evaluates expression in given environment
-    /// Used by special forms and primitives for recursive evaluation.
-    fn eval_in_env(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+    /// Evaluate an expression in a specific environment
+    ///
+    /// Used by special forms, primitives, and library loading for recursive evaluation.
+    /// Public to allow library loaders to evaluate library bodies.
+    pub(crate) fn eval_in_env(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
         // Debug trace entry
         if self.debug.is_enabled(debug::DebugStage::Eval) {
             eprintln!("[EVAL]{} Evaluating: {}", self.debug.current_indent(), expr);
