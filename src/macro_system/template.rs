@@ -85,6 +85,17 @@ fn expand_template_impl(
             Ok(Value::Vector(Rc::new(std::cell::RefCell::new(expanded))))
         }
 
+        // Dotted list: expand elements with dotted tail
+        Template::DottedList { templates, tail } => {
+            let mut expanded = Vec::new();
+            for t in templates {
+                expanded.push(expand_template_impl(t, bindings, depth)?);
+            }
+            let tail_value = expand_template_impl(tail, bindings, depth)?;
+            // Build improper list: (a b . tail)
+            Ok(build_dotted_list(&expanded, tail_value))
+        }
+
         // Ellipsis: repeat expansion
         Template::Ellipsis {
             before,
@@ -233,8 +244,22 @@ fn find_pattern_vars_impl(template: &Template, vars: &mut Vec<Rc<str>>) {
         Template::EllipsisEscape(inner) => {
             find_pattern_vars_impl(inner, vars);
         }
+        Template::DottedList { templates, tail } => {
+            for t in templates {
+                find_pattern_vars_impl(t, vars);
+            }
+            find_pattern_vars_impl(tail, vars);
+        }
         Template::Literal(_) => {}
     }
+}
+
+/// Build a dotted list from values and a tail
+fn build_dotted_list(items: &[Value], tail: Value) -> Value {
+    items
+        .iter()
+        .rev()
+        .fold(tail, |acc, val| Value::Pair(Rc::new((val.clone(), acc))))
 }
 
 /// Helper: Convert a Vec of Values into a Scheme list (chain of pairs)

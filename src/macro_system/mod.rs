@@ -141,6 +141,18 @@ pub enum Pattern {
         /// Patterns after ellipsis
         after: Vec<Pattern>,
     },
+
+    /// Dotted list pattern: (p1 p2 . rest)
+    ///
+    /// Matches an improper list where the tail is bound to a variable.
+    /// Example: (a b . rest) matches (1 2 3 4 5) with:
+    ///   a=1, b=2, rest=(3 4 5)
+    DottedList {
+        /// Patterns before the dot
+        patterns: Vec<Pattern>,
+        /// Pattern for the tail (after the dot)
+        tail: Box<Pattern>,
+    },
 }
 
 /// Template in a syntax-rules macro
@@ -177,6 +189,17 @@ pub enum Template {
     /// Used to include literal `...` in output.
     /// Example: `(... ...)` produces the symbol `...`
     EllipsisEscape(Box<Template>),
+
+    /// Dotted list template: (t1 t2 . rest)
+    ///
+    /// Produces an improper list.
+    /// Example: (lambda (a . b) body) where b is a pattern variable
+    DottedList {
+        /// Templates before the dot
+        templates: Vec<Template>,
+        /// Template for the tail (after the dot)
+        tail: Box<Template>,
+    },
 }
 
 /// A single pattern-template pair (one case in syntax-rules)
@@ -268,10 +291,10 @@ pub fn parse_pattern(expr: &Value) -> Result<Pattern, crate::EvalError> {
         // Symbol: pattern variable
         Value::Symbol(s) => Ok(Pattern::Variable(s.clone())),
 
-        // List: check for ellipsis
+        // List: check for ellipsis and dotted pairs
         Value::Pair(_) => {
-            let items = collect_list_items(expr)?;
-            parse_list_pattern(&items)
+            let (items, tail) = collect_list_items(expr)?;
+            parse_list_pattern(&items, tail.as_ref())
         }
 
         Value::Null => Ok(Pattern::List(vec![])),
@@ -288,8 +311,19 @@ pub fn parse_pattern(expr: &Value) -> Result<Pattern, crate::EvalError> {
     }
 }
 
-/// Parse a list pattern, detecting ellipsis
-fn parse_list_pattern(items: &[Value]) -> Result<Pattern, crate::EvalError> {
+/// Parse a list pattern, detecting ellipsis and dotted tails
+fn parse_list_pattern(items: &[Value], tail: Option<&Value>) -> Result<Pattern, crate::EvalError> {
+    // Check if this is a dotted list pattern
+    if let Some(tail_value) = tail {
+        // Dotted list: (a b . rest)
+        let patterns: Result<Vec<_>, _> = items.iter().map(parse_pattern).collect();
+        let tail_pattern = Box::new(parse_pattern(tail_value)?);
+        return Ok(Pattern::DottedList {
+            patterns: patterns?,
+            tail: tail_pattern,
+        });
+    }
+
     // Find ellipsis positions
     let ellipsis_pos = items
         .iter()
@@ -323,7 +357,7 @@ fn parse_list_pattern(items: &[Value]) -> Result<Pattern, crate::EvalError> {
                 // Recursively parse the after section as a pattern list
                 // This allows patterns like: ((x y) ...) z ...
                 // to be parsed as Ellipsis with after containing another Ellipsis
-                match parse_list_pattern(after_items)? {
+                match parse_list_pattern(after_items, None)? {
                     Pattern::List(patterns) => patterns,
                     Pattern::Ellipsis {
                         before: b,
@@ -359,10 +393,10 @@ pub fn parse_template(expr: &Value) -> Result<Template, crate::EvalError> {
         // Symbol: template variable
         Value::Symbol(s) => Ok(Template::Variable(s.clone())),
 
-        // List: check for ellipsis and ellipsis escape
+        // List: check for ellipsis, ellipsis escape, and dotted tails
         Value::Pair(_) => {
-            let items = collect_list_items(expr)?;
-            parse_list_template(&items)
+            let (items, tail) = collect_list_items(expr)?;
+            parse_list_template(&items, tail.as_ref())
         }
 
         Value::Null => Ok(Template::List(vec![])),
@@ -379,8 +413,22 @@ pub fn parse_template(expr: &Value) -> Result<Template, crate::EvalError> {
     }
 }
 
-/// Parse a list template, detecting ellipsis and ellipsis escape
-fn parse_list_template(items: &[Value]) -> Result<Template, crate::EvalError> {
+/// Parse a list template, detecting ellipsis, ellipsis escape, and dotted tails
+fn parse_list_template(
+    items: &[Value],
+    tail: Option<&Value>,
+) -> Result<Template, crate::EvalError> {
+    // Check if this is a dotted list template
+    if let Some(tail_value) = tail {
+        // Dotted list: (a b . rest)
+        let templates: Result<Vec<_>, _> = items.iter().map(parse_template).collect();
+        let tail_template = Box::new(parse_template(tail_value)?);
+        return Ok(Template::DottedList {
+            templates: templates?,
+            tail: tail_template,
+        });
+    }
+
     // Check for ellipsis escape: (... template)
     if items.len() == 2 {
         if let Value::Symbol(s) = &items[0] {
@@ -423,7 +471,7 @@ fn parse_list_template(items: &[Value]) -> Result<Template, crate::EvalError> {
             } else {
                 // Recursively parse the after section as a template list
                 // This allows templates like: (x ...) y ...
-                match parse_list_template(after_items)? {
+                match parse_list_template(after_items, None)? {
                     Template::List(templates) => templates,
                     Template::Ellipsis {
                         before: b,
@@ -453,27 +501,24 @@ fn parse_list_template(items: &[Value]) -> Result<Template, crate::EvalError> {
 }
 
 /// Helper: Collect items from a list Value
-fn collect_list_items(expr: &Value) -> Result<Vec<Value>, crate::EvalError> {
+/// Returns (items, tail) where tail is Some(value) for improper lists
+fn collect_list_items(expr: &Value) -> Result<(Vec<Value>, Option<Value>), crate::EvalError> {
     let mut items = Vec::new();
     let mut current = expr;
 
     loop {
         match current {
-            Value::Null => break,
+            Value::Null => return Ok((items, None)),
             Value::Pair(pair) => {
                 items.push(pair.0.clone());
                 current = &pair.1;
             }
             _ => {
-                return Err(crate::EvalError::TypeError(format!(
-                    "Improper list in macro: {}",
-                    expr
-                )));
+                // Improper list: (a b . c)
+                return Ok((items, Some(current.clone())));
             }
         }
     }
-
-    Ok(items)
 }
 
 #[cfg(test)]

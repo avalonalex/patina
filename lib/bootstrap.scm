@@ -134,4 +134,29 @@
        body ...))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Multiple value binding (R7RS Section 4.2.2)
+
+;; let-values with support for multiple bindings
+(define-syntax let-values
+  (syntax-rules ()
+    ;; Multiple bindings - convert to nested call-with-values
+    ((let-values ((formals expression) rest ...) body ...)
+     (call-with-values (lambda () expression)
+                       (lambda formals
+                         (let-values (rest ...) body ...))))
+    ;; Base case: no bindings
+    ((let-values () body ...)
+     (begin body ...))))
+
+;; Simplified let*-values for sequential bindings
+(define-syntax let*-values
+  (syntax-rules ()
+    ((let*-values () body ...)
+     (begin body ...))
+    ((let*-values ((formals expression) rest ...) body ...)
+     (call-with-values (lambda () expression)
+                       (lambda formals
+                         (let*-values (rest ...) body ...))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; End of bootstrap library

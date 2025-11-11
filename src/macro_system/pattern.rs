@@ -83,6 +83,43 @@ fn match_pattern_impl(
             _ => false,
         },
 
+        // Dotted list: (a b . rest)
+        Pattern::DottedList { patterns, tail } => match expr {
+            Value::Pair(_) | Value::Null => {
+                // Collect list items (may be improper)
+                let (items, tail_value) = match collect_list_items_with_tail(expr) {
+                    Ok(result) => result,
+                    Err(_) => return false,
+                };
+
+                // Check if we have enough items for the pattern
+                if items.len() < patterns.len() {
+                    return false;
+                }
+
+                // Match the initial patterns
+                for (i, pattern) in patterns.iter().enumerate() {
+                    if !match_pattern_impl(pattern, &items[i], literals, bindings) {
+                        return false;
+                    }
+                }
+
+                // Build the rest list from remaining items + tail
+                let rest_items = &items[patterns.len()..];
+                let rest_list = if let Some(tail_val) = tail_value {
+                    // Improper list case: append tail to remaining items
+                    build_list_with_tail(rest_items, tail_val)
+                } else {
+                    // Proper list case: just the remaining items
+                    build_proper_list(rest_items)
+                };
+
+                // Match the tail pattern with the rest list
+                match_pattern_impl(tail, &rest_list, literals, bindings)
+            }
+            _ => false,
+        },
+
         // Ellipsis: complex matching
         Pattern::Ellipsis {
             before,
@@ -272,6 +309,12 @@ fn collect_pattern_variables(pattern: &Pattern, literals: &[Rc<str>], bindings: 
                 collect_pattern_variables(p, literals, bindings);
             }
         }
+        Pattern::DottedList { patterns, tail } => {
+            for p in patterns {
+                collect_pattern_variables(p, literals, bindings);
+            }
+            collect_pattern_variables(tail, literals, bindings);
+        }
     }
 }
 
@@ -343,6 +386,42 @@ fn collect_list_items(expr: &Value) -> Result<Vec<Value>, EvalError> {
     }
 
     Ok(items)
+}
+
+/// Helper: Collect items from a list, preserving tail for improper lists
+/// Returns (items, tail) where tail is Some(value) for improper lists
+fn collect_list_items_with_tail(expr: &Value) -> Result<(Vec<Value>, Option<Value>), EvalError> {
+    let mut items = Vec::new();
+    let mut current = expr;
+
+    loop {
+        match current {
+            Value::Null => return Ok((items, None)),
+            Value::Pair(pair) => {
+                items.push(pair.0.clone());
+                current = &pair.1;
+            }
+            _ => {
+                // Improper list: (a b . c)
+                return Ok((items, Some(current.clone())));
+            }
+        }
+    }
+}
+
+/// Helper: Build a proper list from items
+fn build_proper_list(items: &[Value]) -> Value {
+    items.iter().rev().fold(Value::Null, |acc, val| {
+        Value::Pair(Rc::new((val.clone(), acc)))
+    })
+}
+
+/// Helper: Build an improper list from items with a tail
+fn build_list_with_tail(items: &[Value], tail: Value) -> Value {
+    items
+        .iter()
+        .rev()
+        .fold(tail, |acc, val| Value::Pair(Rc::new((val.clone(), acc))))
 }
 
 #[cfg(test)]
