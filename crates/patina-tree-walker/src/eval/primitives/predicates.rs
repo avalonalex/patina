@@ -148,3 +148,15 @@ pub(super) fn char_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
 pub(super) fn vector_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.make_type_predicate(args, |v| matches!(v, Value::Vector(_)))
 }
+
+pub(super) fn exact_integer_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.make_type_predicate(args, |v| match v {
+        Value::Integer(_) | Value::BigInteger(_) => true,
+        Value::Rational(r) => {
+            // A rational is an exact integer if its denominator is 1
+            use num_bigint::BigInt;
+            r.denom() == &BigInt::from(1)
+        }
+        _ => false,
+    })
+}

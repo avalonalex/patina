@@ -1019,3 +1019,315 @@ pub(super) fn log(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErro
         Ok(Value::Real(x.to_f64().log(base.to_f64())))
     }
 }
+
+// ========== Number Theory Functions ==========
+
+/// Helper: compute GCD of two BigInts using Euclidean algorithm
+fn bigint_gcd(a: &BigInt, b: &BigInt) -> BigInt {
+    let mut a = a.abs();
+    let mut b = b.abs();
+
+    while !b.is_zero() {
+        let temp = b.clone();
+        b = &a % &b;
+        a = temp;
+    }
+
+    a
+}
+
+/// (gcd n1 n2 ...) - Greatest common divisor
+pub(super) fn gcd(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    // R7RS: (gcd) returns 0
+    if args.is_empty() {
+        return Ok(Value::Integer(0));
+    }
+
+    // Convert all arguments to BigInt for uniform handling
+    let mut result = BigInt::from(0);
+
+    for arg in args {
+        match arg {
+            Value::Integer(n) => {
+                result = bigint_gcd(&result, &BigInt::from(n));
+            }
+            Value::BigInteger(n) => {
+                result = bigint_gcd(&result, &n);
+            }
+            other => {
+                return Err(EvalError::TypeError(format!(
+                    "gcd expects exact integers, got {}",
+                    other.type_name()
+                )))
+            }
+        }
+    }
+
+    // Try to fit in i64
+    match result.to_i64() {
+        Some(n) => Ok(Value::Integer(n)),
+        None => Ok(Value::BigInteger(result)),
+    }
+}
+
+/// (lcm n1 n2 ...) - Least common multiple
+pub(super) fn lcm(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    // R7RS: (lcm) returns 1
+    if args.is_empty() {
+        return Ok(Value::Integer(1));
+    }
+
+    // Convert all arguments to BigInt
+    let mut result = BigInt::from(1);
+
+    for arg in args {
+        let n = match arg {
+            Value::Integer(n) => BigInt::from(n),
+            Value::BigInteger(n) => n,
+            other => {
+                return Err(EvalError::TypeError(format!(
+                    "lcm expects exact integers, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+
+        // LCM(a, b) = |a * b| / GCD(a, b)
+        // But we need to handle zero specially
+        if n.is_zero() {
+            return Ok(Value::Integer(0));
+        }
+
+        let gcd_val = bigint_gcd(&result, &n);
+        result = (result * n).abs() / gcd_val;
+    }
+
+    // Try to fit in i64
+    match result.to_i64() {
+        Some(n) => Ok(Value::Integer(n)),
+        None => Ok(Value::BigInteger(result)),
+    }
+}
+
+// ========== Rational Number Accessors ==========
+
+/// (numerator q) - Returns the numerator of rational q
+pub(super) fn numerator(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "numerator")?;
+
+    match &args[0] {
+        Value::Integer(n) => Ok(Value::Integer(*n)), // Integer's numerator is itself
+        Value::BigInteger(n) => Ok(Value::BigInteger(n.clone())),
+        Value::Rational(r) => {
+            // Return the numerator (already in lowest terms)
+            match r.numer().to_i64() {
+                Some(n) => Ok(Value::Integer(n)),
+                None => Ok(Value::BigInteger(r.numer().clone())),
+            }
+        }
+        other => Err(EvalError::TypeError(format!(
+            "numerator expects a rational number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (denominator q) - Returns the denominator of rational q
+pub(super) fn denominator(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "denominator")?;
+
+    match &args[0] {
+        Value::Integer(_) | Value::BigInteger(_) => Ok(Value::Integer(1)), // Integer's denominator is 1
+        Value::Rational(r) => {
+            // Return the denominator (already in lowest terms)
+            match r.denom().to_i64() {
+                Some(n) => Ok(Value::Integer(n)),
+                None => Ok(Value::BigInteger(r.denom().clone())),
+            }
+        }
+        other => Err(EvalError::TypeError(format!(
+            "denominator expects a rational number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+// ========== Exactness Conversion ==========
+
+/// (exact z) - Convert to exact representation (inexact->exact)
+pub(super) fn exact(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "exact")?;
+
+    match &args[0] {
+        // Already exact - return as-is
+        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => Ok(args[0].clone()),
+
+        // Convert inexact to exact
+        Value::Real(f) => {
+            // Convert float to rational
+            use num_traits::FromPrimitive;
+
+            if f.is_nan() || f.is_infinite() {
+                return Err(EvalError::TypeError(
+                    "exact: cannot convert NaN or infinity to exact".to_string(),
+                ));
+            }
+
+            // Convert to rational using BigRational::from_f64
+            match BigRational::from_f64(*f) {
+                Some(ratio) => {
+                    // Simplify to integer if possible
+                    if ratio.denom() == &BigInt::from(1) {
+                        match ratio.numer().to_i64() {
+                            Some(n) => Ok(Value::Integer(n)),
+                            None => Ok(Value::BigInteger(ratio.numer().clone())),
+                        }
+                    } else {
+                        Ok(Value::Rational(ratio))
+                    }
+                }
+                None => Err(EvalError::TypeError(
+                    "exact: cannot convert float to exact rational".to_string(),
+                )),
+            }
+        }
+
+        other => Err(EvalError::TypeError(format!(
+            "exact expects a number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (inexact z) - Convert to inexact representation (exact->inexact)
+pub(super) fn inexact(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "inexact")?;
+
+    match &args[0] {
+        // Already inexact - return as-is
+        Value::Real(f) => Ok(Value::Real(*f)),
+
+        // Convert exact to inexact
+        Value::Integer(n) => Ok(Value::Real(*n as f64)),
+        Value::BigInteger(n) => Ok(Value::Real(n.to_f64().unwrap_or(f64::INFINITY))),
+        Value::Rational(r) => Ok(Value::Real(r.to_f64().unwrap_or(f64::INFINITY))),
+
+        other => Err(EvalError::TypeError(format!(
+            "inexact expects a number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+// ========== Complex Number Operations ==========
+
+/// (real-part z) - Real part of complex number
+pub(super) fn real_part(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "real-part")?;
+
+    match &args[0] {
+        Value::Complex(r, _) => Ok(Value::Real(*r)),
+        // Real numbers have real part = themselves
+        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) | Value::Real(_) => {
+            Ok(args[0].clone())
+        }
+        other => Err(EvalError::TypeError(format!(
+            "real-part expects a number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (imag-part z) - Imaginary part of complex number
+pub(super) fn imag_part(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "imag-part")?;
+
+    match &args[0] {
+        Value::Complex(_, i) => Ok(Value::Real(*i)),
+        // Real numbers have imaginary part = 0
+        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => Ok(Value::Integer(0)),
+        Value::Real(_) => Ok(Value::Real(0.0)),
+        other => Err(EvalError::TypeError(format!(
+            "imag-part expects a number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (magnitude z) - Magnitude of complex number
+pub(super) fn magnitude(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "magnitude")?;
+
+    match &args[0] {
+        Value::Complex(r, i) => Ok(Value::Real((r * r + i * i).sqrt())),
+        Value::Integer(n) => Ok(Value::Real((*n as f64).abs())),
+        Value::BigInteger(n) => Ok(Value::Real(n.to_f64().unwrap_or(f64::INFINITY).abs())),
+        Value::Rational(r) => Ok(Value::Real(r.to_f64().unwrap_or(f64::INFINITY).abs())),
+        Value::Real(f) => Ok(Value::Real(f.abs())),
+        other => Err(EvalError::TypeError(format!(
+            "magnitude expects a number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (angle z) - Angle of complex number in radians
+pub(super) fn angle(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "angle")?;
+
+    match &args[0] {
+        Value::Complex(r, i) => Ok(Value::Real(i.atan2(*r))),
+        Value::Integer(n) if *n >= 0 => Ok(Value::Real(0.0)),
+        Value::Integer(_) => Ok(Value::Real(std::f64::consts::PI)), // Negative
+        Value::BigInteger(n) if n >= &BigInt::from(0) => Ok(Value::Real(0.0)),
+        Value::BigInteger(_) => Ok(Value::Real(std::f64::consts::PI)),
+        Value::Rational(r) if r >= &BigRational::from(BigInt::from(0)) => Ok(Value::Real(0.0)),
+        Value::Rational(_) => Ok(Value::Real(std::f64::consts::PI)),
+        Value::Real(f) if *f >= 0.0 => Ok(Value::Real(0.0)),
+        Value::Real(_) => Ok(Value::Real(std::f64::consts::PI)),
+        other => Err(EvalError::TypeError(format!(
+            "angle expects a number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (make-rectangular real imag) - Construct complex number from real and imaginary parts
+pub(super) fn make_rectangular(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 2, "make-rectangular")?;
+
+    // Convert both parts to f64
+    let real = NumericValue::from_value(args[0].clone())?.to_f64();
+    let imag = NumericValue::from_value(args[1].clone())?.to_f64();
+
+    // If imaginary part is 0, return just the real part
+    if imag == 0.0 {
+        // Try to keep exactness if input was exact
+        match &args[0] {
+            Value::Integer(n) => Ok(Value::Integer(*n)),
+            Value::BigInteger(n) => Ok(Value::BigInteger(n.clone())),
+            Value::Rational(r) => Ok(Value::Rational(r.clone())),
+            _ => Ok(Value::Real(real)),
+        }
+    } else {
+        Ok(Value::Complex(real, imag))
+    }
+}
+
+/// (make-polar magnitude angle) - Construct complex number from polar coordinates
+pub(super) fn make_polar(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 2, "make-polar")?;
+
+    let mag = NumericValue::from_value(args[0].clone())?.to_f64();
+    let ang = NumericValue::from_value(args[1].clone())?.to_f64();
+
+    let real = mag * ang.cos();
+    let imag = mag * ang.sin();
+
+    // If imaginary part is essentially 0, return just the real part
+    if imag.abs() < 1e-10 {
+        Ok(Value::Real(real))
+    } else {
+        Ok(Value::Complex(real, imag))
+    }
+}

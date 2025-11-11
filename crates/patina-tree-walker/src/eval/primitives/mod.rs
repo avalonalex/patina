@@ -83,6 +83,20 @@ impl Evaluator {
             "atan" => arithmetic::atan(self, args).map(super::EvalResult::Value),
             "exp" => arithmetic::exp(self, args).map(super::EvalResult::Value),
             "log" => arithmetic::log(self, args).map(super::EvalResult::Value),
+            "gcd" => arithmetic::gcd(self, args).map(super::EvalResult::Value),
+            "lcm" => arithmetic::lcm(self, args).map(super::EvalResult::Value),
+            "numerator" => arithmetic::numerator(self, args).map(super::EvalResult::Value),
+            "denominator" => arithmetic::denominator(self, args).map(super::EvalResult::Value),
+            "exact" => arithmetic::exact(self, args).map(super::EvalResult::Value),
+            "inexact" => arithmetic::inexact(self, args).map(super::EvalResult::Value),
+            "real-part" => arithmetic::real_part(self, args).map(super::EvalResult::Value),
+            "imag-part" => arithmetic::imag_part(self, args).map(super::EvalResult::Value),
+            "magnitude" => arithmetic::magnitude(self, args).map(super::EvalResult::Value),
+            "angle" => arithmetic::angle(self, args).map(super::EvalResult::Value),
+            "make-rectangular" => {
+                arithmetic::make_rectangular(self, args).map(super::EvalResult::Value)
+            }
+            "make-polar" => arithmetic::make_polar(self, args).map(super::EvalResult::Value),
 
             // Pair/List operations
             "cons" => lists::cons(self, args).map(super::EvalResult::Value),
@@ -120,6 +134,9 @@ impl Evaluator {
             "procedure?" => predicates::procedure_p(self, args).map(super::EvalResult::Value),
             "char?" => predicates::char_p(self, args).map(super::EvalResult::Value),
             "vector?" => predicates::vector_p(self, args).map(super::EvalResult::Value),
+            "exact-integer?" => {
+                predicates::exact_integer_p(self, args).map(super::EvalResult::Value)
+            }
 
             // Equality operations
             "eq?" => equality::eq(self, args).map(super::EvalResult::Value),
@@ -228,6 +245,18 @@ impl Evaluator {
             ("atan", Arity::Range(1, 2)),
             ("exp", Arity::Exact(1)),
             ("log", Arity::Range(1, 2)),
+            ("gcd", Arity::Min(0)),
+            ("lcm", Arity::Min(0)),
+            ("numerator", Arity::Exact(1)),
+            ("denominator", Arity::Exact(1)),
+            ("exact", Arity::Exact(1)),
+            ("inexact", Arity::Exact(1)),
+            ("real-part", Arity::Exact(1)),
+            ("imag-part", Arity::Exact(1)),
+            ("magnitude", Arity::Exact(1)),
+            ("angle", Arity::Exact(1)),
+            ("make-rectangular", Arity::Exact(2)),
+            ("make-polar", Arity::Exact(2)),
             // Lists
             ("cons", Arity::Exact(2)),
             ("car", Arity::Exact(1)),
@@ -262,6 +291,7 @@ impl Evaluator {
             ("procedure?", Arity::Exact(1)),
             ("char?", Arity::Exact(1)),
             ("vector?", Arity::Exact(1)),
+            ("exact-integer?", Arity::Exact(1)),
             // Equality
             ("eq?", Arity::Exact(2)),
             ("eqv?", Arity::Exact(2)),

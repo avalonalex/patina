@@ -62,7 +62,6 @@ fn test_round() {
 // ===== Rational Number Accessors =====
 
 #[test]
-#[ignore] // TODO: Implement numerator
 fn test_numerator() {
     assert_eval_to("(numerator 3/4)", "3");
     assert_eval_to("(numerator 6/8)", "3"); // Simplified
@@ -72,7 +71,6 @@ fn test_numerator() {
 }
 
 #[test]
-#[ignore] // TODO: Implement denominator
 fn test_denominator() {
     assert_eval_to("(denominator 3/4)", "4");
     assert_eval_to("(denominator 6/8)", "4"); // Simplified
@@ -83,7 +81,6 @@ fn test_denominator() {
 // ===== Exactness Conversion =====
 
 #[test]
-#[ignore] // TODO: Implement exact (inexact->exact)
 fn test_inexact_to_exact() {
     assert_eval_to("(exact 3.0)", "3");
     assert_eval_to("(exact 2.5)", "5/2");
@@ -93,7 +90,6 @@ fn test_inexact_to_exact() {
 }
 
 #[test]
-#[ignore] // TODO: Implement inexact (exact->inexact)
 fn test_exact_to_inexact() {
     assert_eval_to("(inexact 3)", "3.0");
     assert_eval_to("(inexact 5/2)", "2.5");
@@ -142,7 +138,6 @@ fn test_square() {
 // ===== Number Theory =====
 
 #[test]
-#[ignore] // TODO: Implement gcd
 fn test_gcd() {
     assert_eval_to("(gcd 12 8)", "4");
     assert_eval_to("(gcd 18 24)", "6");
@@ -157,7 +152,6 @@ fn test_gcd() {
 }
 
 #[test]
-#[ignore] // TODO: Implement lcm
 fn test_lcm() {
     assert_eval_to("(lcm 4 6)", "12");
     assert_eval_to("(lcm 12 18)", "36");
@@ -195,7 +189,7 @@ fn test_rationalize() {
 // ===== Float Predicates =====
 
 #[test]
-#[ignore] // TODO: Implement finite?
+#[ignore] // TODO: Parser support for +inf.0/-inf.0/+nan.0 literals needed
 fn test_finite_predicate() {
     assert_eval_to("(finite? 3)", "#t");
     assert_eval_to("(finite? 3.14)", "#t");
@@ -206,7 +200,7 @@ fn test_finite_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Implement infinite?
+#[ignore] // TODO: Parser support for +inf.0/-inf.0/+nan.0 literals needed
 fn test_infinite_predicate() {
     assert_eval_to("(infinite? 3)", "#f");
     assert_eval_to("(infinite? 3.14)", "#f");
@@ -216,7 +210,7 @@ fn test_infinite_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Implement nan?
+#[ignore] // TODO: Parser support for +inf.0/-inf.0/+nan.0 literals needed
 fn test_nan_predicate() {
     assert_eval_to("(nan? 3)", "#f");
     assert_eval_to("(nan? 3.14)", "#f");
@@ -227,7 +221,6 @@ fn test_nan_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Implement exact-integer?
 fn test_exact_integer_predicate() {
     assert_eval_to("(exact-integer? 3)", "#t");
     assert_eval_to("(exact-integer? 3.0)", "#f"); // Inexact
@@ -238,7 +231,6 @@ fn test_exact_integer_predicate() {
 // ===== Complex Number Operations =====
 
 #[test]
-#[ignore] // TODO: Implement real-part
 fn test_real_part() {
     assert_eval_to("(real-part 3+4i)", "3.0");
     assert_eval_to("(real-part 5)", "5"); // Real number
@@ -247,7 +239,6 @@ fn test_real_part() {
 }
 
 #[test]
-#[ignore] // TODO: Implement imag-part
 fn test_imag_part() {
     assert_eval_to("(imag-part 3+4i)", "4.0");
     assert_eval_to("(imag-part 5)", "0"); // Real number has imag=0
@@ -256,7 +247,6 @@ fn test_imag_part() {
 }
 
 #[test]
-#[ignore] // TODO: Implement magnitude
 fn test_magnitude() {
     assert_eval_to("(magnitude 3+4i)", "5.0"); // sqrt(3^2 + 4^2) = 5
     assert_eval_to("(magnitude 5)", "5.0");
@@ -265,7 +255,6 @@ fn test_magnitude() {
 }
 
 #[test]
-#[ignore] // TODO: Implement angle
 fn test_angle() {
     assert_eval_to("(angle 1)", "0.0"); // Positive real
     assert_eval_to("(angle -1)", "3.141592653589793"); // Pi
@@ -273,7 +262,6 @@ fn test_angle() {
 }
 
 #[test]
-#[ignore] // TODO: Implement make-rectangular
 fn test_make_rectangular() {
     assert_eval_to("(make-rectangular 3 4)", "3+4i");
     assert_eval_to("(make-rectangular 5 0)", "5");
@@ -282,12 +270,22 @@ fn test_make_rectangular() {
 }
 
 #[test]
-#[ignore] // TODO: Implement make-polar
 fn test_make_polar() {
     // make-polar takes magnitude and angle
-    assert_eval_to("(make-polar 1 0)", "1");
-    // Note: results will be approximate due to trig functions
+    // Note: results may be inexact due to trig functions
+    let result = Interpreter::new()
+        .eval_str("(make-polar 1 0)")
+        .unwrap()
+        .to_string();
+    // Should be very close to 1 (either "1" or "1.0")
+    assert!(
+        result == "1" || result == "1.0",
+        "Expected 1 or 1.0, got {}",
+        result
+    );
+
     // (make-polar 1 (/ pi 2)) should be approximately +i
+    // But we'd need pi constant to test this properly
 }
 
 // ===== Trigonometric Functions =====
