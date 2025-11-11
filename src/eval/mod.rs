@@ -249,8 +249,7 @@ impl Evaluator {
                 "set!" => return self.eval_set(&cdr, env).map(EvalResult::Value),
                 "lambda" => return self.eval_lambda(&cdr, env).map(EvalResult::Value),
                 "begin" => return self.eval_begin_impl(&cdr, env, in_tail_position),
-                "cond" => return self.eval_cond_impl(&cdr, env, in_tail_position),
-                "case" => return self.eval_case_impl(&cdr, env, in_tail_position),
+                // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
                 "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value), // TODO: should be tail
                 "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
                 // Note: call-with-values was previously a special form, but is now fully handled
@@ -437,8 +436,7 @@ impl Evaluator {
                 "set!" => return self.eval_set(&cdr, env),
                 "lambda" => return self.eval_lambda(&cdr, env),
                 "begin" => return self.eval_begin(&cdr, env),
-                "cond" => return self.eval_cond(&cdr, env),
-                "case" => return self.eval_case(&cdr, env),
+                // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
                 "apply" => return self.eval_apply(&cdr, env),
                 "do" => return self.eval_do(&cdr, env),
                 _ => {}

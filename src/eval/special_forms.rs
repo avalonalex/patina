@@ -6,18 +6,18 @@
 //! - `define` - Variable and function definition
 //! - `set!` - Assignment
 //! - `lambda` - Procedure creation
-//! - `let` variants - Binding forms (let, let*, letrec, letrec*, let-values, let*-values)
-//! - `cond` and `case` - Multi-way conditionals
-//! - `and` and `or` - Boolean operators with short-circuit evaluation
 //! - `begin` - Sequential evaluation
 //! - `apply` - Apply procedure to list of arguments
+//! - `do` - Iteration construct
+//!
+//! NOTE: Many derived expressions (cond, case, let, let*, letrec, and, or, etc.)
+//! are now implemented as macros in lib/bootstrap.scm rather than special forms.
 
 use crate::env::Environment;
 use crate::value::{Procedure, Value};
 use std::rc::Rc;
 
 use super::error::EvalError;
-use super::primitives::equality::values_eqv;
 use super::Evaluator;
 
 /// Type alias for do loop bindings: (variable_name, init_expr, optional_step_expr)
@@ -32,44 +32,7 @@ impl Evaluator {
         }
     }
 
-    /// Check for and evaluate arrow syntax (test => proc)
-    /// Returns Some(result) if arrow syntax was found and evaluated
-    /// Returns None if no arrow syntax (caller should handle as regular body)
-    fn eval_arrow_syntax(
-        &self,
-        exprs: &Value,
-        test_value: Value,
-        env: &Rc<Environment>,
-        form_name: &str,
-    ) -> Result<Option<Value>, EvalError> {
-        if let Value::Pair(exprs_pair) = exprs {
-            if let Value::Symbol(arrow) = &exprs_pair.0 {
-                if arrow.as_ref() == "=>" {
-                    // Found arrow syntax - apply proc to test value
-                    if let Value::Pair(proc_pair) = &exprs_pair.1 {
-                        if !matches!(proc_pair.1, Value::Null) {
-                            return Err(EvalError::InvalidSyntax(format!(
-                                "{}: => requires exactly one expression",
-                                form_name
-                            )));
-                        }
-                        let proc = self.eval_in_env(&proc_pair.0, env)?;
-                        // Arrow syntax application is not in tail position (requires intermediate apply)
-                        let result = self.apply(proc, vec![test_value], false)?;
-                        return Ok(Some(match result {
-                            super::EvalResult::Value(v) => v,
-                            _ => {
-                                return Err(EvalError::InternalError(
-                                    "Unexpected tail call in arrow syntax".to_string(),
-                                ))
-                            }
-                        }));
-                    }
-                }
-            }
-        }
-        Ok(None)
-    }
+    // NOTE: eval_arrow_syntax was removed as it's now handled by cond/case macros
 
     /// Ensure a value is a proper list (terminated by Null)
     #[allow(dead_code)]
@@ -352,178 +315,10 @@ impl Evaluator {
         Ok(items)
     }
 
-    /// Evaluate cond special form: (cond (test expr...) ...)
-    /// Evaluate cond special form (tail position aware version)
-    pub(super) fn eval_cond_impl(
-        &self,
-        clauses: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        let mut current = clauses.clone();
-
-        while let Value::Pair(clause_pair) = current {
-            let clause = &clause_pair.0;
-
-            // Extract test and expressions from clause
-            if let Value::Pair(clause_contents) = clause {
-                let test = &clause_contents.0;
-                let exprs = &clause_contents.1;
-
-                // Check for 'else' clause
-                if let Value::Symbol(sym) = test {
-                    if sym.as_ref() == "else" {
-                        // else clause - check for => syntax and reject it
-                        if let Value::Pair(exprs_pair) = exprs {
-                            if let Value::Symbol(arrow) = &exprs_pair.0 {
-                                if arrow.as_ref() == "=>" {
-                                    return Err(EvalError::InvalidSyntax(
-                                        "cond: else clause cannot use =>".to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                        // Regular else clause - body is in tail position
-                        return self.eval_begin_impl(exprs, env, in_tail_position);
-                    }
-                }
-
-                // Evaluate the test (NOT in tail position)
-                let test_result = self.eval_in_env(test, env)?;
-
-                if test_result.is_truthy() {
-                    // Test succeeded - check for => syntax
-                    // TODO: => application should also be in tail position per R7RS
-                    if let Some(result) = self.eval_arrow_syntax(exprs, test_result, env, "cond")? {
-                        return Ok(super::EvalResult::Value(result));
-                    }
-
-                    // Regular clause - body is in tail position
-                    return self.eval_begin_impl(exprs, env, in_tail_position);
-                }
-            } else {
-                return Err(EvalError::InvalidSyntax(
-                    "cond clause must be a list".to_string(),
-                ));
-            }
-
-            current = clause_pair.1.clone();
-        }
-
-        // No clause matched and no else - return unspecified
-        Ok(super::EvalResult::Value(Value::Unspecified))
-    }
-
-    /// Legacy wrapper - calls eval_cond_impl with in_tail_position=false
-    pub(super) fn eval_cond(
-        &self,
-        clauses: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        self.eval_cond_impl(clauses, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. }
-                | super::EvalResult::TailCallPrimitive { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
-            })
-    }
-
-    /// Evaluate case special form: (case key ((datum...) expr...)...)
-    /// Evaluate case special form (tail position aware version)
-    pub(super) fn eval_case_impl(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        // Extract key expression
-        let (key_expr, clauses) = self.extract_pair(args)?;
-
-        // Evaluate the key
-        let key = self.eval_in_env(&key_expr, env)?;
-
-        // Iterate through clauses
-        let mut current = clauses;
-
-        while let Value::Pair(clause_pair) = current {
-            let clause = &clause_pair.0;
-
-            // Each clause should be ((<datum> ...) <expr> ...)
-            if let Value::Pair(clause_contents) = clause {
-                let datums = &clause_contents.0;
-                let exprs = &clause_contents.1;
-
-                // Check for 'else' clause
-                if let Value::Symbol(sym) = datums {
-                    if sym.as_ref() == "else" {
-                        // else clause - check for => syntax
-                        if let Some(result) =
-                            self.eval_arrow_syntax(exprs, key.clone(), env, "case")?
-                        {
-                            // Arrow syntax is not in tail position (requires apply)
-                            return Ok(super::EvalResult::Value(result));
-                        }
-                        // Regular else clause (in tail position)
-                        return self.eval_begin_impl(exprs, env, in_tail_position);
-                    }
-                }
-
-                // Check if key matches any datum in this clause
-                let mut matched = false;
-                let mut datum_list = datums.clone();
-
-                while let Value::Pair(datum_pair) = datum_list {
-                    let datum = &datum_pair.0;
-
-                    // Use eqv? semantics for comparison
-                    if values_eqv(&key, datum) {
-                        matched = true;
-                        break;
-                    }
-
-                    datum_list = datum_pair.1.clone();
-                }
-
-                if matched {
-                    // Check for => syntax
-                    if let Some(result) = self.eval_arrow_syntax(exprs, key.clone(), env, "case")? {
-                        // Arrow syntax is not in tail position (requires apply)
-                        return Ok(super::EvalResult::Value(result));
-                    }
-
-                    // Regular clause - evaluate expressions (in tail position)
-                    return self.eval_begin_impl(exprs, env, in_tail_position);
-                }
-            } else {
-                return Err(EvalError::InvalidSyntax(
-                    "case clause must be a list".to_string(),
-                ));
-            }
-
-            current = clause_pair.1.clone();
-        }
-
-        // No clause matched and no else - return unspecified
-        Ok(super::EvalResult::Value(Value::Unspecified))
-    }
-
-    /// Legacy wrapper - calls eval_case_impl with in_tail_position=false
-    pub(super) fn eval_case(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        self.eval_case_impl(args, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. }
-                | super::EvalResult::TailCallPrimitive { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
-            })
-    }
+    // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
+    // This reduces code duplication and aligns with R7RS reference implementations.
+    // Previous Rust implementations (eval_cond_impl, eval_cond, eval_case_impl,
+    // eval_case, and eval_arrow_syntax helper) were removed in favor of the macro approach.
 
     /// Evaluate begin special form (tail position aware version)
     pub(super) fn eval_begin_impl(

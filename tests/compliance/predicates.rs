@@ -161,8 +161,6 @@ fn test_procedure_predicate() {
     assert_eval_error("(procedure? lambda)");
     assert_eval_error("(procedure? define)");
     assert_eval_error("(procedure? quote)");
-    assert_eval_error("(procedure? cond)");
-    assert_eval_error("(procedure? case)");
 
     // Macros are not procedures
     // Note: let, let*, letrec, letrec*, and, or are now macros in bootstrap.scm
@@ -173,4 +171,6 @@ fn test_procedure_predicate() {
     assert_eval_to("(procedure? letrec*)", "#f");
     assert_eval_to("(procedure? and)", "#f");
     assert_eval_to("(procedure? or)", "#f");
+    assert_eval_to("(procedure? cond)", "#f");
+    assert_eval_to("(procedure? case)", "#f");
 }
