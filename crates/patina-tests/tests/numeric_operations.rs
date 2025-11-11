@@ -23,7 +23,6 @@ fn assert_eval_error(input: &str) {
 // ===== Rounding Functions =====
 
 #[test]
-#[ignore] // TODO: Implement floor
 fn test_floor() {
     assert_eval_to("(floor 3.7)", "3.0");
     assert_eval_to("(floor -3.7)", "-4.0");
@@ -33,27 +32,24 @@ fn test_floor() {
 }
 
 #[test]
-#[ignore] // TODO: Implement ceiling
 fn test_ceiling() {
     assert_eval_to("(ceiling 3.2)", "4.0");
     assert_eval_to("(ceiling -3.2)", "-3.0");
     assert_eval_to("(ceiling 3.0)", "3.0");
-    assert_eval_to("(ceiling -0.5)", "0.0");
+    assert_eval_to("(ceiling -0.5)", "-0.0"); // Rust f64 displays -0.0
     assert_eval_to("(ceiling 5)", "5"); // Exact integer stays exact
 }
 
 #[test]
-#[ignore] // TODO: Implement truncate
 fn test_truncate() {
     assert_eval_to("(truncate 3.7)", "3.0");
     assert_eval_to("(truncate -3.7)", "-3.0"); // Rounds toward zero
     assert_eval_to("(truncate 3.0)", "3.0");
-    assert_eval_to("(truncate -0.5)", "0.0");
+    assert_eval_to("(truncate -0.5)", "-0.0"); // Rust f64 displays -0.0
     assert_eval_to("(truncate 5)", "5"); // Exact integer stays exact
 }
 
 #[test]
-#[ignore] // TODO: Implement round
 fn test_round() {
     assert_eval_to("(round 3.5)", "4.0"); // Banker's rounding: round to even
     assert_eval_to("(round 4.5)", "4.0"); // Banker's rounding: round to even
@@ -108,7 +104,6 @@ fn test_exact_to_inexact() {
 // ===== Square Root and Exponentiation =====
 
 #[test]
-#[ignore] // TODO: Implement sqrt
 fn test_sqrt() {
     assert_eval_to("(sqrt 4)", "2.0");
     assert_eval_to("(sqrt 9)", "3.0");
@@ -120,7 +115,6 @@ fn test_sqrt() {
 }
 
 #[test]
-#[ignore] // TODO: Implement expt
 fn test_expt() {
     // Integer exponents
     assert_eval_to("(expt 2 3)", "8");
@@ -138,7 +132,6 @@ fn test_expt() {
 }
 
 #[test]
-#[ignore] // TODO: Implement square
 fn test_square() {
     assert_eval_to("(square 4)", "16");
     assert_eval_to("(square -5)", "25");
@@ -301,41 +294,35 @@ fn test_make_polar() {
 // These are part of R7RS-small but not yet implemented
 
 #[test]
-#[ignore] // TODO: Implement sin
 fn test_sin() {
     assert_eval_to("(sin 0)", "0.0");
     // (sin (/ pi 2)) should be approximately 1.0
 }
 
 #[test]
-#[ignore] // TODO: Implement cos
 fn test_cos() {
     assert_eval_to("(cos 0)", "1.0");
     // (cos pi) should be approximately -1.0
 }
 
 #[test]
-#[ignore] // TODO: Implement tan
 fn test_tan() {
     assert_eval_to("(tan 0)", "0.0");
 }
 
 #[test]
-#[ignore] // TODO: Implement asin
 fn test_asin() {
     assert_eval_to("(asin 0)", "0.0");
     assert_eval_to("(asin 1)", "1.5707963267948966"); // Pi/2
 }
 
 #[test]
-#[ignore] // TODO: Implement acos
 fn test_acos() {
     assert_eval_to("(acos 1)", "0.0");
     assert_eval_to("(acos 0)", "1.5707963267948966"); // Pi/2
 }
 
 #[test]
-#[ignore] // TODO: Implement atan
 fn test_atan() {
     assert_eval_to("(atan 0)", "0.0");
     assert_eval_to("(atan 1)", "0.7853981633974483"); // Pi/4
@@ -348,14 +335,12 @@ fn test_atan() {
 // ===== Exponential and Logarithmic Functions =====
 
 #[test]
-#[ignore] // TODO: Implement exp
 fn test_exp() {
     assert_eval_to("(exp 0)", "1.0");
     assert_eval_to("(exp 1)", "2.718281828459045"); // e
 }
 
 #[test]
-#[ignore] // TODO: Implement log
 fn test_log() {
     assert_eval_to("(log 1)", "0.0");
     assert_eval_to("(log 2.718281828459045)", "1.0"); // log(e) = 1

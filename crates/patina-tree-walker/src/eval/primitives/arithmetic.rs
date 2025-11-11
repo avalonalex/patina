@@ -671,3 +671,351 @@ pub(super) fn min(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
 
     Ok(Value::Integer(min_val))
 }
+
+// ========== Rounding Functions ==========
+
+/// (floor x) - Rounds x toward negative infinity
+pub(super) fn floor(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "floor")?;
+
+    match &args[0] {
+        Value::Integer(n) => Ok(Value::Integer(*n)), // Already exact
+        Value::BigInteger(n) => Ok(Value::BigInteger(n.clone())), // Already exact
+        Value::Rational(r) => {
+            // Floor of rational: largest integer <= r
+            let floored = r.floor();
+            Ok(Value::BigInteger(floored.numer().clone()))
+        }
+        Value::Real(f) => Ok(Value::Real(f.floor())),
+        other => Err(EvalError::TypeError(format!(
+            "floor expects a real number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (ceiling x) - Rounds x toward positive infinity
+pub(super) fn ceiling(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "ceiling")?;
+
+    match &args[0] {
+        Value::Integer(n) => Ok(Value::Integer(*n)), // Already exact
+        Value::BigInteger(n) => Ok(Value::BigInteger(n.clone())), // Already exact
+        Value::Rational(r) => {
+            // Ceiling of rational: smallest integer >= r
+            let ceiled = r.ceil();
+            Ok(Value::BigInteger(ceiled.numer().clone()))
+        }
+        Value::Real(f) => Ok(Value::Real(f.ceil())),
+        other => Err(EvalError::TypeError(format!(
+            "ceiling expects a real number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (truncate x) - Rounds x toward zero
+pub(super) fn truncate(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "truncate")?;
+
+    match &args[0] {
+        Value::Integer(n) => Ok(Value::Integer(*n)), // Already exact
+        Value::BigInteger(n) => Ok(Value::BigInteger(n.clone())), // Already exact
+        Value::Rational(r) => {
+            // Truncate: round toward zero
+            let truncated = r.trunc();
+            Ok(Value::BigInteger(truncated.numer().clone()))
+        }
+        Value::Real(f) => Ok(Value::Real(f.trunc())),
+        other => Err(EvalError::TypeError(format!(
+            "truncate expects a real number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (round x) - Rounds x to nearest integer (banker's rounding: ties round to even)
+pub(super) fn round(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "round")?;
+
+    match &args[0] {
+        Value::Integer(n) => Ok(Value::Integer(*n)), // Already exact
+        Value::BigInteger(n) => Ok(Value::BigInteger(n.clone())), // Already exact
+        Value::Rational(r) => {
+            // R7RS requires banker's rounding (round to even on .5)
+            let r_f64 = r.to_f64().unwrap_or(0.0);
+            let rounded = if r_f64.fract().abs() == 0.5 {
+                // Tie case: round to even
+                let floor_val = r_f64.floor();
+                if floor_val as i64 % 2 == 0 {
+                    floor_val
+                } else {
+                    r_f64.ceil()
+                }
+            } else {
+                r_f64.round()
+            };
+            Ok(Value::BigInteger(BigInt::from(rounded as i64)))
+        }
+        Value::Real(f) => {
+            // Banker's rounding for floats too
+            let rounded = if f.fract().abs() == 0.5 {
+                let floor_val = f.floor();
+                if floor_val as i64 % 2 == 0 {
+                    floor_val
+                } else {
+                    f.ceil()
+                }
+            } else {
+                f.round()
+            };
+            Ok(Value::Real(rounded))
+        }
+        other => Err(EvalError::TypeError(format!(
+            "round expects a real number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+// ========== Square Root and Exponentiation ==========
+
+/// (sqrt x) - Square root
+pub(super) fn sqrt(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "sqrt")?;
+
+    let num = NumericValue::from_value(args[0].clone())?;
+    let f = num.to_f64();
+
+    if f < 0.0 {
+        // TODO: Return complex number for negative sqrt
+        return Err(EvalError::InternalError(
+            "sqrt of negative number not yet supported (requires complex numbers)".to_string(),
+        ));
+    }
+
+    Ok(Value::Real(f.sqrt()))
+}
+
+/// (square x) - Square of x
+pub(super) fn square(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "square")?;
+
+    match &args[0] {
+        Value::Integer(n) => {
+            // Check for overflow
+            match n.checked_mul(*n) {
+                Some(result) => Ok(Value::Integer(result)),
+                None => {
+                    let big_n = BigInt::from(*n);
+                    Ok(Value::BigInteger(&big_n * &big_n))
+                }
+            }
+        }
+        Value::Real(f) => Ok(Value::Real(f * f)),
+        other => Err(EvalError::TypeError(format!(
+            "square expects a number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// (expt base power) - Exponentiation
+pub(super) fn expt(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 2, "expt")?;
+
+    let base_num = NumericValue::from_value(args[0].clone())?;
+    let power_num = NumericValue::from_value(args[1].clone())?;
+
+    // Handle special case: 0^0 = 1 by convention
+    if base_num.is_zero() && power_num.is_zero() {
+        return Ok(Value::Integer(1));
+    }
+
+    // Simple case: base^inexact or inexact^power -> always inexact
+    if !base_num.is_exact() || !power_num.is_exact() {
+        let base_f = base_num.to_f64();
+        let power_f = power_num.to_f64();
+        return Ok(Value::Real(base_f.powf(power_f)));
+    }
+
+    // Exact case: try to keep exactness
+    match (&base_num, &power_num) {
+        (NumericValue::Integer(b), NumericValue::Integer(p)) if *p >= 0 => {
+            // Positive integer power - keep exact
+            let mut result = BigInt::from(1);
+            let base_big = BigInt::from(*b);
+            for _ in 0..*p {
+                result *= &base_big;
+            }
+
+            // Try to fit in i64
+            match result.to_i64() {
+                Some(n) => Ok(Value::Integer(n)),
+                None => Ok(Value::BigInteger(result)),
+            }
+        }
+        (NumericValue::Integer(b), NumericValue::Integer(p)) if *p < 0 => {
+            // Negative integer power: base^(-p) = 1/(base^p)
+            // Result is rational
+            let power_abs = (-*p) as u32;
+            let base_big = BigInt::from(*b);
+            let numerator = BigInt::from(1);
+            let denominator = base_big.pow(power_abs);
+            let ratio = BigRational::new(numerator, denominator);
+
+            // Simplify if denominator is 1
+            if ratio.denom() == &BigInt::from(1) {
+                match ratio.numer().to_i64() {
+                    Some(n) => Ok(Value::Integer(n)),
+                    None => Ok(Value::BigInteger(ratio.numer().clone())),
+                }
+            } else {
+                Ok(Value::Rational(ratio))
+            }
+        }
+        _ => {
+            // Fall back to inexact
+            let base_f = base_num.to_f64();
+            let power_f = power_num.to_f64();
+            Ok(Value::Real(base_f.powf(power_f)))
+        }
+    }
+}
+
+// ========== Float Predicates ==========
+
+/// (finite? x) - Returns #t if x is finite
+pub(super) fn finite_p(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "finite?")?;
+
+    let result = match &args[0] {
+        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => true,
+        Value::Real(f) => f.is_finite(),
+        Value::Complex(r, i) => r.is_finite() && i.is_finite(),
+        other => {
+            return Err(EvalError::TypeError(format!(
+                "finite? expects a number, got {}",
+                other.type_name()
+            )))
+        }
+    };
+
+    Ok(Value::Boolean(result))
+}
+
+/// (infinite? x) - Returns #t if x is infinite
+pub(super) fn infinite_p(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "infinite?")?;
+
+    let result = match &args[0] {
+        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => false,
+        Value::Real(f) => f.is_infinite(),
+        Value::Complex(r, i) => r.is_infinite() || i.is_infinite(),
+        other => {
+            return Err(EvalError::TypeError(format!(
+                "infinite? expects a number, got {}",
+                other.type_name()
+            )))
+        }
+    };
+
+    Ok(Value::Boolean(result))
+}
+
+/// (nan? x) - Returns #t if x is NaN
+pub(super) fn nan_p(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "nan?")?;
+
+    let result = match &args[0] {
+        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => false,
+        Value::Real(f) => f.is_nan(),
+        Value::Complex(r, i) => r.is_nan() || i.is_nan(),
+        other => {
+            return Err(EvalError::TypeError(format!(
+                "nan? expects a number, got {}",
+                other.type_name()
+            )))
+        }
+    };
+
+    Ok(Value::Boolean(result))
+}
+
+// ========== Trigonometric Functions ==========
+
+/// (sin x) - Sine
+pub(super) fn sin(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "sin")?;
+    let num = NumericValue::from_value(args[0].clone())?;
+    Ok(Value::Real(num.to_f64().sin()))
+}
+
+/// (cos x) - Cosine
+pub(super) fn cos(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "cos")?;
+    let num = NumericValue::from_value(args[0].clone())?;
+    Ok(Value::Real(num.to_f64().cos()))
+}
+
+/// (tan x) - Tangent
+pub(super) fn tan(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "tan")?;
+    let num = NumericValue::from_value(args[0].clone())?;
+    Ok(Value::Real(num.to_f64().tan()))
+}
+
+/// (asin x) - Arc sine
+pub(super) fn asin(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "asin")?;
+    let num = NumericValue::from_value(args[0].clone())?;
+    Ok(Value::Real(num.to_f64().asin()))
+}
+
+/// (acos x) - Arc cosine
+pub(super) fn acos(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "acos")?;
+    let num = NumericValue::from_value(args[0].clone())?;
+    Ok(Value::Real(num.to_f64().acos()))
+}
+
+/// (atan x [y]) - Arc tangent (one or two arguments)
+pub(super) fn atan(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_range(&args, 1, 2, "atan")?;
+
+    if args.len() == 1 {
+        // One-argument form: atan(x)
+        let num = NumericValue::from_value(args[0].clone())?;
+        Ok(Value::Real(num.to_f64().atan()))
+    } else {
+        // Two-argument form: atan2(y, x)
+        let y = NumericValue::from_value(args[0].clone())?;
+        let x = NumericValue::from_value(args[1].clone())?;
+        Ok(Value::Real(y.to_f64().atan2(x.to_f64())))
+    }
+}
+
+// ========== Exponential and Logarithmic Functions ==========
+
+/// (exp x) - e^x
+pub(super) fn exp(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "exp")?;
+    let num = NumericValue::from_value(args[0].clone())?;
+    Ok(Value::Real(num.to_f64().exp()))
+}
+
+/// (log x [base]) - Natural log or log with base
+pub(super) fn log(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_range(&args, 1, 2, "log")?;
+
+    if args.len() == 1 {
+        // One-argument form: natural log
+        let num = NumericValue::from_value(args[0].clone())?;
+        Ok(Value::Real(num.to_f64().ln()))
+    } else {
+        // Two-argument form: log with base
+        let x = NumericValue::from_value(args[0].clone())?;
+        let base = NumericValue::from_value(args[1].clone())?;
+        Ok(Value::Real(x.to_f64().log(base.to_f64())))
+    }
+}
