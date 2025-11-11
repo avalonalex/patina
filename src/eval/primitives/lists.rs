@@ -193,7 +193,16 @@ pub(super) fn member(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
 
     while let Value::Pair(pair) = current.clone() {
         let matches = if let Some(proc) = compare_proc {
-            let result = evaluator.apply(proc.clone(), vec![obj.clone(), pair.0.clone()])?;
+            // Custom comparison not in tail position
+            let result =
+                match evaluator.apply(proc.clone(), vec![obj.clone(), pair.0.clone()], false)? {
+                    super::super::EvalResult::Value(v) => v,
+                    _ => {
+                        return Err(EvalError::InternalError(
+                            "Unexpected tail call in member comparison".to_string(),
+                        ))
+                    }
+                };
             result.is_truthy()
         } else {
             values_equal(obj, &pair.0)?
@@ -259,7 +268,19 @@ pub(super) fn assoc(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
     while let Value::Pair(pair) = current.clone() {
         if let Value::Pair(entry) = &pair.0 {
             let matches = if let Some(proc) = compare_proc {
-                let result = evaluator.apply(proc.clone(), vec![obj.clone(), entry.0.clone()])?;
+                // Custom comparison not in tail position
+                let result = match evaluator.apply(
+                    proc.clone(),
+                    vec![obj.clone(), entry.0.clone()],
+                    false,
+                )? {
+                    super::super::EvalResult::Value(v) => v,
+                    _ => {
+                        return Err(EvalError::InternalError(
+                            "Unexpected tail call in assoc comparison".to_string(),
+                        ))
+                    }
+                };
                 result.is_truthy()
             } else {
                 values_equal(obj, &entry.0)?

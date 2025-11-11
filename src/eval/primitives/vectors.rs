@@ -545,7 +545,15 @@ pub(super) fn vector_map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
 
     for i in 0..min_len {
         let proc_args: Vec<Value> = vectors.iter().map(|v| v[i].clone()).collect();
-        let val = evaluator.apply(proc.clone(), proc_args)?;
+        // Procedure calls within vector-map are not in tail position
+        let val = match evaluator.apply(proc.clone(), proc_args, false)? {
+            super::super::EvalResult::Value(v) => v,
+            _ => {
+                return Err(EvalError::InternalError(
+                    "Unexpected tail call in vector-map".to_string(),
+                ))
+            }
+        };
         result.push(val);
     }
 
@@ -574,7 +582,15 @@ pub(super) fn vector_for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result
 
     for i in 0..min_len {
         let proc_args: Vec<Value> = vectors.iter().map(|v| v[i].clone()).collect();
-        evaluator.apply(proc.clone(), proc_args)?;
+        // Procedure calls within vector-for-each are not in tail position
+        match evaluator.apply(proc.clone(), proc_args, false)? {
+            super::super::EvalResult::Value(_) => {}
+            _ => {
+                return Err(EvalError::InternalError(
+                    "Unexpected tail call in vector-for-each".to_string(),
+                ))
+            }
+        }
     }
 
     Ok(Value::Unspecified)

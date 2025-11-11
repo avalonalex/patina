@@ -32,12 +32,15 @@ impl Evaluator {
 
     /// Apply a procedure to a vector of evaluated arguments
     ///
-    /// TODO: Implement tail call optimization (TCO) here to enable proper tail recursion.
-    /// R7RS requires implementations to be properly tail-recursive. Currently, deeply
-    /// recursive tail calls (100+ levels) can overflow the stack in debug builds.
-    /// TCO would allow arbitrary recursion depth for tail calls.
-    /// See fibonacci tests marked with #[cfg_attr(debug_assertions, ignore)]
-    pub(super) fn apply(&self, proc: Value, args: Vec<Value>) -> Result<Value, EvalError> {
+    /// The `in_tail_position` parameter enables tail call optimization for primitives.
+    /// When true, primitives like call-with-values can return TailCallPrimitive to
+    /// participate in the trampoline loop.
+    pub(super) fn apply(
+        &self,
+        proc: Value,
+        args: Vec<Value>,
+        in_tail_position: bool,
+    ) -> Result<super::EvalResult, EvalError> {
         // Debug trace entry
         if self.debug.is_enabled(super::debug::DebugStage::Apply) {
             let args_str = args
@@ -57,7 +60,7 @@ impl Evaluator {
         let result = match proc {
             Value::Procedure(Procedure::Primitive { name, arity }) => {
                 self.check_arity(&arity, args.len())?;
-                self.apply_primitive(name, args)
+                self.apply_primitive(name, args, in_tail_position)
             }
             Value::Procedure(Procedure::Lambda {
                 params,
@@ -101,12 +104,26 @@ impl Evaluator {
                 }
 
                 // Evaluate body expressions in sequence
-                let mut result = Value::Unspecified;
-                for expr in body {
-                    result = self.eval_in_env(&expr, &new_env)?;
+                // If we're in tail position, the last expression of the lambda body
+                // should be returned as a TailCall
+                if in_tail_position && !body.is_empty() {
+                    // Evaluate all but the last expression
+                    for expr in &body[..body.len() - 1] {
+                        self.eval_in_env(expr, &new_env)?;
+                    }
+                    // Last expression is in tail position
+                    Ok(super::EvalResult::TailCall {
+                        expr: body.last().unwrap().clone(),
+                        env: new_env,
+                    })
+                } else {
+                    // Not in tail position or empty body
+                    let mut result = Value::Unspecified;
+                    for expr in body {
+                        result = self.eval_in_env(&expr, &new_env)?;
+                    }
+                    Ok(super::EvalResult::Value(result))
                 }
-
-                Ok(result)
             }
             _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
         };
@@ -115,7 +132,29 @@ impl Evaluator {
         if self.debug.is_enabled(super::debug::DebugStage::Apply) {
             self.debug.dedent();
             match &result {
-                Ok(val) => eprintln!("[APPLY]{} => {}", self.debug.current_indent(), val),
+                Ok(super::EvalResult::Value(val)) => {
+                    eprintln!("[APPLY]{} => {}", self.debug.current_indent(), val)
+                }
+                Ok(super::EvalResult::TailCall { expr, .. }) => {
+                    eprintln!(
+                        "[APPLY]{} => TAIL CALL: {}",
+                        self.debug.current_indent(),
+                        expr
+                    )
+                }
+                Ok(super::EvalResult::TailCallPrimitive { proc, args }) => {
+                    let args_str = args
+                        .iter()
+                        .map(|v| format!("{}", v))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    eprintln!(
+                        "[APPLY]{} => TAIL CALL PRIMITIVE: {} ({})",
+                        self.debug.current_indent(),
+                        proc,
+                        args_str
+                    )
+                }
                 Err(e) => eprintln!("[APPLY]{} => ERROR: {}", self.debug.current_indent(), e),
             }
         }

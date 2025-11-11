@@ -54,7 +54,16 @@ impl Evaluator {
                             )));
                         }
                         let proc = self.eval_in_env(&proc_pair.0, env)?;
-                        return Ok(Some(self.apply(proc, vec![test_value])?));
+                        // Arrow syntax application is not in tail position (requires intermediate apply)
+                        let result = self.apply(proc, vec![test_value], false)?;
+                        return Ok(Some(match result {
+                            super::EvalResult::Value(v) => v,
+                            _ => {
+                                return Err(EvalError::InternalError(
+                                    "Unexpected tail call in arrow syntax".to_string(),
+                                ))
+                            }
+                        }));
                     }
                 }
             }
@@ -151,7 +160,8 @@ impl Evaluator {
         self.eval_if_impl(args, env, false)
             .and_then(|result| match result {
                 super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                super::EvalResult::TailCall { .. }
+                | super::EvalResult::TailCallPrimitive { .. } => Err(EvalError::InternalError(
                     "Unexpected tail call in non-tail context".to_string(),
                 )),
             })
@@ -413,7 +423,8 @@ impl Evaluator {
         self.eval_cond_impl(clauses, env, false)
             .and_then(|result| match result {
                 super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                super::EvalResult::TailCall { .. }
+                | super::EvalResult::TailCallPrimitive { .. } => Err(EvalError::InternalError(
                     "Unexpected tail call in non-tail context".to_string(),
                 )),
             })
@@ -507,7 +518,8 @@ impl Evaluator {
         self.eval_case_impl(args, env, false)
             .and_then(|result| match result {
                 super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                super::EvalResult::TailCall { .. }
+                | super::EvalResult::TailCallPrimitive { .. } => Err(EvalError::InternalError(
                     "Unexpected tail call in non-tail context".to_string(),
                 )),
             })
@@ -555,7 +567,8 @@ impl Evaluator {
         self.eval_begin_impl(args, env, false)
             .and_then(|result| match result {
                 super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                super::EvalResult::TailCall { .. }
+                | super::EvalResult::TailCallPrimitive { .. } => Err(EvalError::InternalError(
                     "Unexpected tail call in non-tail context".to_string(),
                 )),
             })
@@ -578,62 +591,9 @@ impl Evaluator {
     // The native implementations below were removed as they are no longer needed.
     // See commit history for the original implementations if needed for reference.
 
-    /// Evaluate call-with-values special form (tail position aware version)
-    /// (call-with-values producer consumer)
-    /// Per R7RS Section 3.5: "the second argument passed to call-with-values
-    /// must be called via a tail call"
-    pub(super) fn eval_call_with_values_impl(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        // Extract producer and consumer expressions
-        let (producer_expr, rest) = self.extract_pair(args)?;
-        let (consumer_expr, rest2) = self.extract_pair(&rest)?;
-
-        if !matches!(rest2, Value::Null) {
-            return Err(EvalError::InvalidSyntax(
-                "call-with-values expects exactly 2 arguments".to_string(),
-            ));
-        }
-
-        // Evaluate producer and consumer to get procedures
-        let producer = self.eval_in_env(&producer_expr, env)?;
-        let consumer = self.eval_in_env(&consumer_expr, env)?;
-
-        // Call producer with no arguments to get values
-        let produced = self.apply(producer, vec![])?;
-
-        // Unpack multiple values if present
-        let consumer_args = match produced {
-            Value::Values(vals) => vals,
-            other => vec![other],
-        };
-
-        // Apply consumer to the produced values
-        // This MUST be a tail call per R7RS when in tail position
-        if in_tail_position {
-            // Construct the application as an S-expression: (consumer arg1 arg2 ...)
-            // This allows the trampoline to handle it as a proper tail call
-            let mut app_list = vec![consumer];
-            app_list.extend(consumer_args);
-            let application = self.list_from_vec(app_list);
-
-            Ok(super::EvalResult::TailCall {
-                expr: application,
-                env: env.clone(),
-            })
-        } else {
-            Ok(super::EvalResult::Value(
-                self.apply(consumer, consumer_args)?,
-            ))
-        }
-    }
-
-    // NOTE: bind_values_to_formals was removed as it was only used by the now-deleted
-    // let-values and let*-values implementations. The macro versions in bootstrap.scm
-    // handle value binding through lambda parameters instead.
+    // NOTE: call-with-values was previously a special form for tail call optimization,
+    // but has been migrated to a pure primitive that participates in TCO via TailCallPrimitive.
+    // See src/eval/primitives/values.rs for the implementation.
 
     /// Evaluate and special form (tail position aware version)
     // NOTE: 'and' and 'or' are now implemented as macros in lib/bootstrap.scm
@@ -696,7 +656,13 @@ impl Evaluator {
         }
 
         // Now apply the procedure to the combined arguments
-        self.apply(proc, final_args)
+        // Note: apply special form is never in tail position (legacy eval_list)
+        match self.apply(proc, final_args, false)? {
+            super::EvalResult::Value(v) => Ok(v),
+            _ => Err(EvalError::InternalError(
+                "Unexpected tail call in apply special form".to_string(),
+            )),
+        }
     }
 
     /// Evaluate define-syntax special form: (define-syntax name (syntax-rules (literals) rules...))
@@ -960,7 +926,8 @@ impl Evaluator {
         self.eval_do_impl(args, env, false)
             .and_then(|result| match result {
                 super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
+                super::EvalResult::TailCall { .. }
+                | super::EvalResult::TailCallPrimitive { .. } => Err(EvalError::InternalError(
                     "Unexpected tail call in non-tail context".to_string(),
                 )),
             })

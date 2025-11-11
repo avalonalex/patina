@@ -58,7 +58,15 @@ pub(super) fn map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
             proc_args.push(list_vec[i].clone());
         }
 
-        let result = evaluator.apply(proc.clone(), proc_args)?;
+        // Procedure calls within map are not in tail position
+        let result = match evaluator.apply(proc.clone(), proc_args, false)? {
+            super::super::EvalResult::Value(v) => v,
+            _ => {
+                return Err(EvalError::InternalError(
+                    "Unexpected tail call in map".to_string(),
+                ))
+            }
+        };
         results.push(result);
     }
 
@@ -110,7 +118,15 @@ pub(super) fn for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value,
             proc_args.push(list_vec[i].clone());
         }
 
-        evaluator.apply(proc.clone(), proc_args)?;
+        // Procedure calls within for-each are not in tail position
+        match evaluator.apply(proc.clone(), proc_args, false)? {
+            super::super::EvalResult::Value(_) => {}
+            _ => {
+                return Err(EvalError::InternalError(
+                    "Unexpected tail call in for-each".to_string(),
+                ))
+            }
+        }
     }
 
     Ok(Value::Unspecified)

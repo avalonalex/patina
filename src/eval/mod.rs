@@ -25,10 +25,14 @@ pub(crate) enum EvalResult {
     Value(Value),
     /// Tail call - continue trampolining with this expression and environment
     TailCall { expr: Value, env: Rc<Environment> },
+    /// Tail call to a primitive procedure with already-evaluated arguments
+    /// This enables primitives like call-with-values to participate in tail call optimization
+    /// The procedure and arguments are already evaluated, so we just need to apply them
+    TailCallPrimitive { proc: Value, args: Vec<Value> },
 }
 
 pub struct Evaluator {
-    global_env: Rc<Environment>,
+    pub(in crate::eval) global_env: Rc<Environment>,
     pub(crate) debug: Rc<DebugConfig>,
 }
 
@@ -89,6 +93,27 @@ impl Evaluator {
                     // This reuses the stack frame instead of growing the stack
                     current_expr = expr;
                     current_env = env;
+                }
+                EvalResult::TailCallPrimitive { proc, args } => {
+                    // Primitive tail call - re-apply directly in the trampoline
+                    // This allows primitives like call-with-values to participate in TCO
+                    // Note: We pass in_tail_position=true since we're continuing the trampoline
+                    match self.apply(proc, args, true)? {
+                        EvalResult::Value(v) => return Ok(v),
+                        EvalResult::TailCall { expr, env } => {
+                            current_expr = expr;
+                            current_env = env;
+                        }
+                        EvalResult::TailCallPrimitive { proc, args } => {
+                            // Another primitive tail call - continue loop
+                            // We'll handle this in the next iteration by reconstructing
+                            // the application expression
+                            let mut app_list = vec![proc];
+                            app_list.extend(args);
+                            current_expr = self.list_from_vec(app_list);
+                            // Keep current_env unchanged
+                        }
+                    }
                 }
             }
         }
@@ -183,6 +208,19 @@ impl Evaluator {
                     self.debug.current_indent(),
                     expr
                 ),
+                Ok(EvalResult::TailCallPrimitive { proc, args }) => {
+                    let args_str = args
+                        .iter()
+                        .map(|v| format!("{}", v))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    eprintln!(
+                        "[EVAL]{} => TAIL CALL PRIMITIVE: {} ({})",
+                        self.debug.current_indent(),
+                        proc,
+                        args_str
+                    )
+                }
                 Err(e) => eprintln!("[EVAL]{} => ERROR: {}", self.debug.current_indent(), e),
             }
         }
@@ -215,13 +253,8 @@ impl Evaluator {
                 "case" => return self.eval_case_impl(&cdr, env, in_tail_position),
                 "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value), // TODO: should be tail
                 "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
-                "call-with-values" => {
-                    return self.eval_call_with_values_impl(&cdr, env, in_tail_position)
-                }
-                // Note: call-with-values is BOTH a special form (for tail calls) AND a primitive (for environment)
-                // This dual nature is necessary because:
-                // 1. Special form dispatch provides proper tail call optimization per R7RS Section 3.5
-                // 2. Primitive registration ensures the symbol exists in the environment for macro expansions
+                // Note: call-with-values was previously a special form, but is now fully handled
+                // as a primitive that participates in tail call optimization via TailCallPrimitive
                 _ => {}
             }
 
@@ -319,7 +352,7 @@ impl Evaluator {
         }
 
         // Not in tail position, or not a lambda - just apply normally
-        self.apply(proc, args).map(EvalResult::Value)
+        self.apply(proc, args, in_tail_position)
     }
 
     /// Legacy eval_in_env for backward compatibility during migration
@@ -446,7 +479,13 @@ impl Evaluator {
         // Regular procedure call
         let proc = self.eval_in_env(&car, env)?;
         let args = self.eval_arguments(&cdr, env)?;
-        self.apply(proc, args)
+        // Legacy eval_list is not tail-aware, so always pass false
+        match self.apply(proc, args, false)? {
+            EvalResult::Value(v) => Ok(v),
+            EvalResult::TailCall { .. } | EvalResult::TailCallPrimitive { .. } => Err(
+                EvalError::InternalError("Unexpected tail call in non-tail context".to_string()),
+            ),
+        }
     }
 }
 

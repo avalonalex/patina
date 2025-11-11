@@ -24,12 +24,13 @@ pub(super) fn values(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, 
 /// with those values as arguments. If producer returns a single value, consumer is
 /// called with that value as its sole argument."
 ///
-/// NOTE: This primitive implementation exists primarily to ensure call-with-values
-/// is defined in the environment (so macros can reference it). In practice, the special
-/// form handler in eval/mod.rs intercepts most call-with-values expressions to provide
-/// proper tail call optimization per R7RS Section 3.5. This primitive is only called
-/// in rare edge cases where call-with-values is used as a first-class value.
-pub(super) fn call_with_values(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+/// This primitive can now participate in tail call optimization when `in_tail_position` is true.
+/// Per R7RS Section 3.5: "the second argument passed to call-with-values must be called via a tail call"
+pub(super) fn call_with_values(
+    evaluator: &Evaluator,
+    args: Vec<Value>,
+    in_tail_position: bool,
+) -> Result<super::super::EvalResult, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -41,7 +42,15 @@ pub(super) fn call_with_values(evaluator: &Evaluator, args: Vec<Value>) -> Resul
     let consumer = &args[1];
 
     // Call producer with no arguments to get values
-    let produced = evaluator.apply(producer.clone(), vec![])?;
+    // Producer is NOT in tail position
+    let produced = match evaluator.apply(producer.clone(), vec![], false)? {
+        super::super::EvalResult::Value(v) => v,
+        _ => {
+            return Err(EvalError::InternalError(
+                "Unexpected tail call from producer in call-with-values".to_string(),
+            ))
+        }
+    };
 
     // Unpack multiple values if present, otherwise use single value
     let consumer_args = match produced {
@@ -50,6 +59,16 @@ pub(super) fn call_with_values(evaluator: &Evaluator, args: Vec<Value>) -> Resul
     };
 
     // Call consumer with the produced values
-    // Note: This is a direct apply() call, not a tail call
-    evaluator.apply(consumer.clone(), consumer_args)
+    // Consumer IS in tail position when call-with-values is
+    if in_tail_position {
+        // Return TailCallPrimitive to trampoline
+        // The trampoline will re-apply this, maintaining the current environment
+        Ok(super::super::EvalResult::TailCallPrimitive {
+            proc: consumer.clone(),
+            args: consumer_args,
+        })
+    } else {
+        // Not in tail position - apply directly
+        evaluator.apply(consumer.clone(), consumer_args, false)
+    }
 }
