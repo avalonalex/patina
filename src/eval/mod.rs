@@ -212,16 +212,10 @@ impl Evaluator {
                 "lambda" => return self.eval_lambda(&cdr, env).map(EvalResult::Value),
                 "begin" => return self.eval_begin_impl(&cdr, env, in_tail_position),
                 "cond" => return self.eval_cond_impl(&cdr, env, in_tail_position),
-                "let" => return self.eval_let_impl(&cdr, env, in_tail_position),
-                "let*" => return self.eval_let_star_impl(&cdr, env, in_tail_position),
-                "letrec" => return self.eval_letrec_impl(&cdr, env, in_tail_position),
-                "letrec*" => return self.eval_letrec_star_impl(&cdr, env, in_tail_position),
                 "let-values" => return self.eval_let_values_impl(&cdr, env, in_tail_position),
                 "let*-values" => {
                     return self.eval_let_star_values_impl(&cdr, env, in_tail_position)
                 }
-                "and" => return self.eval_and_impl(&cdr, env, in_tail_position),
-                "or" => return self.eval_or_impl(&cdr, env, in_tail_position),
                 "case" => return self.eval_case_impl(&cdr, env, in_tail_position),
                 "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value), // TODO: should be tail
                 "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
@@ -408,14 +402,17 @@ impl Evaluator {
                 "lambda" => return self.eval_lambda(&cdr, env),
                 "begin" => return self.eval_begin(&cdr, env),
                 "cond" => return self.eval_cond(&cdr, env),
-                "let" => return self.eval_let(&cdr, env),
-                "let*" => return self.eval_let_star(&cdr, env),
-                "letrec" => return self.eval_letrec(&cdr, env),
-                "letrec*" => return self.eval_letrec_star(&cdr, env),
+                // "let" => return self.eval_let(&cdr, env),
+                // "let*" => return self.eval_let_star(&cdr, env),
+                // NOTE: let/let* are now implemented as macros in lib/bootstrap.scm
+                // "letrec" => return self.eval_letrec(&cdr, env),
+                // "letrec*" => return self.eval_letrec_star(&cdr, env),
+                // NOTE: letrec/letrec* are now implemented as macros in lib/bootstrap.scm
                 "let-values" => return self.eval_let_values(&cdr, env),
                 "let*-values" => return self.eval_let_star_values(&cdr, env),
-                "and" => return self.eval_and(&cdr, env),
-                "or" => return self.eval_or(&cdr, env),
+                // "and" => return self.eval_and(&cdr, env),
+                // "or" => return self.eval_or(&cdr, env),
+                // NOTE: and/or are now implemented as macros in lib/bootstrap.scm
                 "case" => return self.eval_case(&cdr, env),
                 "apply" => return self.eval_apply(&cdr, env),
                 "do" => return self.eval_do(&cdr, env),

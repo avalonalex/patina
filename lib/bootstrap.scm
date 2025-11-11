@@ -84,4 +84,54 @@
      (if (not test) (begin body ...)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Boolean logic macros (R7RS Section 4.2.1)
+;; Short-circuiting and/or operators
+
+(define-syntax and
+  (syntax-rules ()
+    ((and) #t)
+    ((and test) test)
+    ((and test1 test2 ...)
+     (if test1 (and test2 ...) #f))))
+
+(define-syntax or
+  (syntax-rules ()
+    ((or) #f)
+    ((or test) test)
+    ((or test1 test2 ...)
+     (let ((x test1))
+       (if x x (or test2 ...))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Binding constructs (R7RS Section 4.2.2)
+
+(define-syntax let
+  (syntax-rules ()
+    ((let ((name val) ...) body ...)
+     ((lambda (name ...) body ...) val ...))))
+
+(define-syntax let*
+  (syntax-rules ()
+    ((let* () body ...)
+     ((lambda () body ...)))
+    ((let* ((name1 val1) (name2 val2) ...) body ...)
+     ((lambda (name1)
+        (let* ((name2 val2) ...) body ...))
+      val1))))
+
+(define-syntax letrec
+  (syntax-rules ()
+    ((letrec ((var init) ...) body ...)
+     (let ((var #f) ...)
+       (set! var init) ...
+       body ...))))
+
+(define-syntax letrec*
+  (syntax-rules ()
+    ((letrec* ((var init) ...) body ...)
+     (let ((var #f) ...)
+       (set! var init) ...
+       body ...))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; End of bootstrap library

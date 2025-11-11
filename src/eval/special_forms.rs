@@ -32,65 +32,6 @@ impl Evaluator {
         }
     }
 
-    /// Parse simple bindings of the form ((var val) ...)
-    /// Used by let, let*, letrec, and letrec*
-    fn parse_simple_bindings(
-        &self,
-        bindings: &Value,
-        form_name: &str,
-    ) -> Result<(Vec<Rc<str>>, Vec<Value>), EvalError> {
-        let mut names = Vec::new();
-        let mut value_exprs = Vec::new();
-        let mut current = bindings.clone();
-
-        while let Value::Pair(binding_pair) = current {
-            // Each binding should be (name value)
-            let binding = &binding_pair.0;
-            if let Value::Pair(binding_contents) = binding {
-                if let Value::Symbol(name) = &binding_contents.0 {
-                    names.push(name.clone());
-
-                    // Extract value expression
-                    if let Value::Pair(value_pair) = &binding_contents.1 {
-                        if !matches!(value_pair.1, Value::Null) {
-                            return Err(EvalError::InvalidSyntax(format!(
-                                "{} binding must have exactly 2 elements",
-                                form_name
-                            )));
-                        }
-                        value_exprs.push(value_pair.0.clone());
-                    } else {
-                        return Err(EvalError::InvalidSyntax(format!(
-                            "{} binding must have a value",
-                            form_name
-                        )));
-                    }
-                } else {
-                    return Err(EvalError::InvalidSyntax(format!(
-                        "{} binding name must be a symbol",
-                        form_name
-                    )));
-                }
-            } else {
-                return Err(EvalError::InvalidSyntax(format!(
-                    "{} binding must be a list",
-                    form_name
-                )));
-            }
-
-            current = binding_pair.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::InvalidSyntax(format!(
-                "{} bindings must be a proper list",
-                form_name
-            )));
-        }
-
-        Ok((names, value_exprs))
-    }
-
     /// Check for and evaluate arrow syntax (test => proc)
     /// Returns Some(result) if arrow syntax was found and evaluated
     /// Returns None if no arrow syntax (caller should handle as regular body)
@@ -620,170 +561,18 @@ impl Evaluator {
             })
     }
 
-    /// Legacy wrapper - calls eval_let_impl with in_tail_position=false
-    pub(super) fn eval_let(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
-        self.eval_let_impl(args, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
-            })
-    }
+    // NOTE: 'let' and 'let*' are now implemented as macros in lib/bootstrap.scm
+    // This reduces code duplication and aligns with R7RS reference implementations.
+    // Previous Rust implementations (eval_let_impl, eval_let, eval_let_star_impl,
+    // eval_let_star) were removed in favor of the macro approach.
 
-    /// Evaluate let special form (tail position aware version)
-    pub(super) fn eval_let_impl(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        let (bindings, rest) = self.extract_pair(args)?;
-        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "let")?;
-
-        // Evaluate all value expressions in the current environment
-        let mut values = Vec::new();
-        for value_expr in value_exprs {
-            values.push(self.eval_in_env(&value_expr, env)?);
-        }
-
-        // Create new environment and bind all variables
-        let new_env = Rc::new(Environment::with_parent(env.clone()));
-        for (name, value) in names.iter().zip(values.iter()) {
-            new_env.define(name.to_string(), value.clone());
-        }
-
-        // Evaluate body in the new environment - body is in tail position
-        self.eval_begin_impl(&rest, &new_env, in_tail_position)
-    }
-
-    /// Evaluate let* special form (tail position aware version)
-    pub(super) fn eval_let_star_impl(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        let (bindings, rest) = self.extract_pair(args)?;
-        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "let*")?;
-
-        // Create new environment
-        let new_env = Rc::new(Environment::with_parent(env.clone()));
-
-        // Bind variables sequentially (each can reference previous ones)
-        for (name, value_expr) in names.iter().zip(value_exprs.iter()) {
-            let value = self.eval_in_env(value_expr, &new_env)?;
-            new_env.define(name.to_string(), value);
-        }
-
-        // Evaluate body - in tail position
-        self.eval_begin_impl(&rest, &new_env, in_tail_position)
-    }
-
-    /// Legacy wrapper - calls eval_let_star_impl with in_tail_position=false
-    pub(super) fn eval_let_star(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        self.eval_let_star_impl(args, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
-            })
-    }
-
-    /// Evaluate letrec special form (tail position aware version)
-    pub(super) fn eval_letrec_impl(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        let (bindings, rest) = self.extract_pair(args)?;
-
-        // Parse bindings using shared helper
-        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "letrec")?;
-
-        // Create new environment and bind all variables to Unspecified initially
-        let new_env = Rc::new(Environment::with_parent(env.clone()));
-        for name in &names {
-            new_env.define(name.to_string(), Value::Unspecified);
-        }
-
-        // Now evaluate all value expressions in the new environment and update bindings
-        for (name, value_expr) in names.iter().zip(value_exprs.iter()) {
-            let value = self.eval_in_env(value_expr, &new_env)?;
-            new_env
-                .set(name, value)
-                .map_err(EvalError::UndefinedVariable)?;
-        }
-
-        // Evaluate body in the new environment (body is in tail position)
-        self.eval_begin_impl(&rest, &new_env, in_tail_position)
-    }
-
-    /// Legacy wrapper - calls eval_letrec_impl with in_tail_position=false
-    pub(super) fn eval_letrec(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        self.eval_letrec_impl(args, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
-            })
-    }
-
-    /// Evaluate letrec* special form (tail position aware version)
-    pub(super) fn eval_letrec_star_impl(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        let (bindings, rest) = self.extract_pair(args)?;
-
-        // Parse bindings using shared helper
-        let (names, value_exprs) = self.parse_simple_bindings(&bindings, "letrec*")?;
-
-        // Create new environment and bind all variables to Unspecified initially
-        let new_env = Rc::new(Environment::with_parent(env.clone()));
-        for name in &names {
-            new_env.define(name.to_string(), Value::Unspecified);
-        }
-
-        // Evaluate and assign values sequentially (this is the difference from letrec)
-        for (name, value_expr) in names.iter().zip(value_exprs.iter()) {
-            let value = self.eval_in_env(value_expr, &new_env)?;
-            new_env
-                .set(name, value)
-                .map_err(EvalError::UndefinedVariable)?;
-        }
-
-        // Evaluate body in the new environment (body is in tail position)
-        self.eval_begin_impl(&rest, &new_env, in_tail_position)
-    }
-
-    /// Legacy wrapper - calls eval_letrec_star_impl with in_tail_position=false
-    pub(super) fn eval_letrec_star(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        self.eval_letrec_star_impl(args, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
-            })
-    }
+    // NOTE: 'letrec' and 'letrec*' are now implemented as macros in lib/bootstrap.scm
+    // This reduces code duplication and aligns with R7RS reference implementations.
+    // The macro implementations correctly handle recursive bindings by initializing
+    // variables to #f first, then assigning values sequentially. Previous Rust
+    // implementations (parse_simple_bindings, eval_letrec_impl, eval_letrec,
+    // eval_letrec_star_impl, eval_letrec_star) were removed in favor of the macro
+    // approach.
 
     /// Evaluate let-values special form (tail position aware version)
     pub(super) fn eval_let_values_impl(
@@ -1045,120 +834,11 @@ impl Evaluator {
     }
 
     /// Evaluate and special form (tail position aware version)
-    pub(super) fn eval_and_impl(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        let mut current = args.clone();
-
-        // Empty (and) returns #t
-        if matches!(current, Value::Null) {
-            return Ok(super::EvalResult::Value(Value::Boolean(true)));
-        }
-
-        // Evaluate tests sequentially
-        loop {
-            match current {
-                Value::Pair(ref pair) => {
-                    // If this is the last test, it's in tail position
-                    if matches!(pair.1, Value::Null) {
-                        if in_tail_position {
-                            return Ok(super::EvalResult::TailCall {
-                                expr: pair.0.clone(),
-                                env: env.clone(),
-                            });
-                        } else {
-                            return Ok(super::EvalResult::Value(self.eval_in_env(&pair.0, env)?));
-                        }
-                    }
-
-                    // Not last - evaluate normally
-                    let test_result = self.eval_in_env(&pair.0, env)?;
-                    if !test_result.is_truthy() {
-                        return Ok(super::EvalResult::Value(Value::Boolean(false)));
-                    }
-                    current = pair.1.clone();
-                }
-                Value::Null => return Ok(super::EvalResult::Value(Value::Boolean(true))),
-                _ => {
-                    return Err(EvalError::InvalidSyntax(
-                        "and expects a list of expressions".to_string(),
-                    ))
-                }
-            }
-        }
-    }
-
-    /// Legacy wrapper - calls eval_and_impl with in_tail_position=false
-    pub(super) fn eval_and(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
-        self.eval_and_impl(args, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
-            })
-    }
-
-    /// Evaluate or special form (tail position aware version)
-    pub(super) fn eval_or_impl(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<super::EvalResult, EvalError> {
-        let mut current = args.clone();
-
-        // Empty (or) returns #f
-        if matches!(current, Value::Null) {
-            return Ok(super::EvalResult::Value(Value::Boolean(false)));
-        }
-
-        // Evaluate tests sequentially
-        loop {
-            match current {
-                Value::Pair(ref pair) => {
-                    // If this is the last test, it's in tail position
-                    if matches!(pair.1, Value::Null) {
-                        if in_tail_position {
-                            return Ok(super::EvalResult::TailCall {
-                                expr: pair.0.clone(),
-                                env: env.clone(),
-                            });
-                        } else {
-                            return Ok(super::EvalResult::Value(self.eval_in_env(&pair.0, env)?));
-                        }
-                    }
-
-                    // Not last - evaluate normally
-                    let test_result = self.eval_in_env(&pair.0, env)?;
-                    if test_result.is_truthy() {
-                        return Ok(super::EvalResult::Value(test_result));
-                    }
-                    current = pair.1.clone();
-                }
-                Value::Null => return Ok(super::EvalResult::Value(Value::Boolean(false))),
-                _ => {
-                    return Err(EvalError::InvalidSyntax(
-                        "or expects a list of expressions".to_string(),
-                    ))
-                }
-            }
-        }
-    }
-
-    /// Legacy wrapper - calls eval_or_impl with in_tail_position=false
-    pub(super) fn eval_or(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
-        self.eval_or_impl(args, env, false)
-            .and_then(|result| match result {
-                super::EvalResult::Value(v) => Ok(v),
-                super::EvalResult::TailCall { .. } => Err(EvalError::InternalError(
-                    "Unexpected tail call in non-tail context".to_string(),
-                )),
-            })
-    }
+    // NOTE: 'and' and 'or' are now implemented as macros in lib/bootstrap.scm
+    // This reduces code duplication and aligns with R7RS reference implementations.
+    // The macro implementations provide the same semantics including short-circuit
+    // evaluation. Previous Rust implementations (eval_and_impl, eval_and,
+    // eval_or_impl, eval_or) were removed in favor of the macro approach.
 
     /// Evaluate apply special form: (apply proc arg... args)
     pub(super) fn eval_apply(

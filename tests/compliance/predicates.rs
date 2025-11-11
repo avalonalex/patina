@@ -156,13 +156,21 @@ fn test_procedure_predicate() {
     assert_eval_to("(procedure? (map (lambda (x) x) '(1 2)))", "#f"); // Returns list
     assert_eval_to("(procedure? (car (map (lambda (x) +) '(1))))", "#t"); // List of procedures
 
-    // Special forms are not procedures (they error when referenced)
-    assert_eval_error("(procedure? cond)");
+    // Core special forms error when referenced (not first-class values)
     assert_eval_error("(procedure? if)");
     assert_eval_error("(procedure? lambda)");
-    assert_eval_error("(procedure? case)");
-    assert_eval_error("(procedure? let)");
-    assert_eval_error("(procedure? letrec)");
     assert_eval_error("(procedure? define)");
     assert_eval_error("(procedure? quote)");
+    assert_eval_error("(procedure? cond)");
+    assert_eval_error("(procedure? case)");
+
+    // Macros are not procedures
+    // Note: let, let*, letrec, letrec*, and, or are now macros in bootstrap.scm
+    // They can be referenced (unlike special forms), but are not procedures
+    assert_eval_to("(procedure? let)", "#f");
+    assert_eval_to("(procedure? let*)", "#f");
+    assert_eval_to("(procedure? letrec)", "#f");
+    assert_eval_to("(procedure? letrec*)", "#f");
+    assert_eval_to("(procedure? and)", "#f");
+    assert_eval_to("(procedure? or)", "#f");
 }
