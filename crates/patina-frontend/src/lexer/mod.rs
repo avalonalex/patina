@@ -103,7 +103,9 @@ impl Lexer {
             '#' => self.read_hash_syntax(),
             _ if ch.is_numeric()
                 || (ch == '-' || ch == '+')
-                    && (self.peek_is_numeric() || self.peek_is_imaginary()) =>
+                    && (self.peek_is_numeric()
+                        || self.peek_is_imaginary()
+                        || self.is_special_float_literal()) =>
             {
                 self.read_number()
             }
@@ -159,6 +161,14 @@ impl Lexer {
         }
         let next = self.input[self.position + 1];
         next == 'i' || next == 'I'
+    }
+
+    fn is_special_float_literal(&self) -> bool {
+        // Check if we're at the start of +inf.0, -inf.0, or +nan.0
+        let remaining: String = self.input[self.position..].iter().collect();
+        remaining.starts_with("+inf.0")
+            || remaining.starts_with("-inf.0")
+            || remaining.starts_with("+nan.0")
     }
 
     fn read_string(&mut self) -> Result<Token, LexError> {

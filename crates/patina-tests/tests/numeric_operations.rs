@@ -189,7 +189,6 @@ fn test_rationalize() {
 // ===== Float Predicates =====
 
 #[test]
-#[ignore] // TODO: Parser support for +inf.0/-inf.0/+nan.0 literals needed
 fn test_finite_predicate() {
     assert_eval_to("(finite? 3)", "#t");
     assert_eval_to("(finite? 3.14)", "#t");
@@ -200,7 +199,6 @@ fn test_finite_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Parser support for +inf.0/-inf.0/+nan.0 literals needed
 fn test_infinite_predicate() {
     assert_eval_to("(infinite? 3)", "#f");
     assert_eval_to("(infinite? 3.14)", "#f");
@@ -210,7 +208,6 @@ fn test_infinite_predicate() {
 }
 
 #[test]
-#[ignore] // TODO: Parser support for +inf.0/-inf.0/+nan.0 literals needed
 fn test_nan_predicate() {
     assert_eval_to("(nan? 3)", "#f");
     assert_eval_to("(nan? 3.14)", "#f");

@@ -180,6 +180,14 @@ impl Parser {
     fn parse_number(&self, s: &str) -> Result<Value, ParseError> {
         // Parse numbers following the R7RS numeric tower
 
+        // Check for special R7RS floating-point literals
+        match s {
+            "+inf.0" => return Ok(Value::Real(f64::INFINITY)),
+            "-inf.0" => return Ok(Value::Real(f64::NEG_INFINITY)),
+            "+nan.0" => return Ok(Value::Real(f64::NAN)),
+            _ => {}
+        }
+
         // Check for polar notation: r@theta
         if s.contains('@') {
             return self.parse_polar(s);
@@ -473,6 +481,67 @@ mod tests {
                         assert_eq!(n.to_string(), "10000000000000000000");
                     }
                     other => panic!("Expected BigInteger, got {:?}", other),
+                }
+            } else {
+                panic!("Expected pair for arguments");
+            }
+        } else {
+            panic!("Expected list");
+        }
+    }
+
+    #[test]
+    fn test_parse_positive_infinity() {
+        let mut parser = Parser::new("+inf.0").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Real(f) => {
+                assert!(f.is_infinite() && f.is_sign_positive());
+            }
+            other => panic!("Expected positive infinity, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_negative_infinity() {
+        let mut parser = Parser::new("-inf.0").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Real(f) => {
+                assert!(f.is_infinite() && f.is_sign_negative());
+            }
+            other => panic!("Expected negative infinity, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_nan() {
+        let mut parser = Parser::new("+nan.0").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Real(f) => {
+                assert!(f.is_nan());
+            }
+            other => panic!("Expected NaN, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_infinity_in_expression() {
+        let mut parser = Parser::new("(+ +inf.0 1)").unwrap();
+        let result = parser.parse().unwrap();
+
+        if let Value::Pair(pair) = result {
+            let (car, cdr) = pair.as_ref();
+            assert!(matches!(car, Value::Symbol(_))); // The '+'
+
+            if let Value::Pair(pair2) = cdr {
+                let (car2, _) = pair2.as_ref();
+                match car2 {
+                    Value::Real(f) => {
+                        assert!(f.is_infinite() && f.is_sign_positive());
+                    }
+                    other => panic!("Expected positive infinity, got {:?}", other),
                 }
             } else {
                 panic!("Expected pair for arguments");
