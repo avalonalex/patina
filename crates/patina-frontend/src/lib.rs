@@ -12,11 +12,13 @@
 
 pub mod error;
 pub mod lexer;
+pub mod library_parser;
 pub mod macro_expander;
 pub mod parser;
 
 // Re-export main types
 pub use error::FrontendError;
 pub use lexer::{LexError, Lexer, Token};
+pub use library_parser::{ExportSpec, ImportSet, LibraryDefinition};
 pub use macro_expander::Macro;
 pub use parser::{ParseError, Parser};
