@@ -102,5 +102,5 @@ From R7RS Section 4.3:
 ## Related Documentation
 
 - **Spec analysis:** `~/Project/patina/internal/MACRO_R7RS_ANALYSIS.md`
-- **Implementation plan:** `~/Project/patina/PRD/MACRO_SYSTEM_RESEARCH.md`
+- **Implementation plan:** `~/Project/patina/PRD/ARCHIVE/phase1_completed/MACRO_SYSTEM_RESEARCH.md`
 - **R7RS spec:** `~/Project/patina/spec/r7rs-small-spec/expr.tex` (lines 1443-1850)

@@ -3,7 +3,7 @@
 **Date:** 2025-11-10
 **Status:** Future Enhancement (Not Required for R7RS)
 **Prerequisites:** Current implementation complete
-**Related:** `MACRO_ARCHITECTURE_DECISIONS.md`, `NESTED_ELLIPSIS_LIMITATION.md`
+**Related:** `ARCHIVE/macro_research/MACRO_ARCHITECTURE_DECISIONS.md`, `NESTED_ELLIPSIS_LIMITATION.md`
 
 ## Executive Summary
 
@@ -1541,5 +1541,5 @@ The current implementation is **sufficient for R7RS** and handles all practical 
 - `src/macro_system/mod.rs` - Pattern/Template definitions
 - `src/macro_system/pattern.rs` - Pattern matching logic
 - `src/macro_system/template.rs` - Template expansion logic
-- `internal/MACRO_ARCHITECTURE_DECISIONS.md` - Design rationale
-- `internal/TEMPLATE_ELLIPSIS_FIX.md` - Implementation history
+- `internal/ARCHIVE/macro_research/MACRO_ARCHITECTURE_DECISIONS.md` - Design rationale
+- `internal/ARCHIVE/macro_research/TEMPLATE_ELLIPSIS_FIX.md` - Implementation history

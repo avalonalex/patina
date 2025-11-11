@@ -250,7 +250,11 @@ impl Evaluator {
                 "lambda" => return self.eval_lambda(&cdr, env).map(EvalResult::Value),
                 "begin" => return self.eval_begin_impl(&cdr, env, in_tail_position),
                 // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
-                "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value), // TODO: should be tail
+                // NOTE: 'do' has a macro implementation in bootstrap.scm, but we use the special
+                // form for proper tail call optimization. The macro version uses 'apply' which
+                // doesn't yet support TCO, causing stack overflows in tail-recursive exit clauses.
+                // TODO(TCO): 'apply' needs tail call support - see PRD/future/GENERAL_TAIL_CALL_OPTIMIZATION.md
+                "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value),
                 "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
                 // Note: call-with-values was previously a special form, but is now fully handled
                 // as a primitive that participates in tail call optimization via TailCallPrimitive
@@ -354,8 +358,8 @@ impl Evaluator {
         self.apply(proc, args, in_tail_position)
     }
 
-    /// Legacy eval_in_env for backward compatibility during migration
-    /// TODO: Remove once all callers are migrated to eval_step
+    /// Internal eval_in_env - evaluates expression in given environment
+    /// Used by special forms and primitives for recursive evaluation.
     fn eval_in_env(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
         // Debug trace entry
         if self.debug.is_enabled(debug::DebugStage::Eval) {
@@ -437,6 +441,7 @@ impl Evaluator {
                 "lambda" => return self.eval_lambda(&cdr, env),
                 "begin" => return self.eval_begin(&cdr, env),
                 // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
+                // NOTE: 'do' macro is defined in bootstrap.scm but special form is used for TCO
                 "apply" => return self.eval_apply(&cdr, env),
                 "do" => return self.eval_do(&cdr, env),
                 _ => {}

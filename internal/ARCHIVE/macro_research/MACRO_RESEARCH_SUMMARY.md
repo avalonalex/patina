@@ -428,7 +428,7 @@ enum Value {
 - `internal/CHIBI_MACRO_ANALYSIS.md` - Chibi meta-circular implementation (42KB)
 - `internal/VONUVOLI_ANALYSIS.md` - Vonuvoli built-in approach (no macros)
 - `internal/STEEL_MACRO_ANALYSIS.md` - ⭐ Steel native Rust implementation (RECOMMENDED)
-- `PRD/MACRO_SYSTEM_RESEARCH.md` - Original research plan
+- `PRD/ARCHIVE/phase1_completed/MACRO_SYSTEM_RESEARCH.md` - Original research plan
 
 **Test suites:**
 - `tests/fixtures/examples/macros/01_basic_when_unless.scm`

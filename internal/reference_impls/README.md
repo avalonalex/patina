@@ -131,8 +131,8 @@ Implementing a feature?
 
 ### Macro System
 - `../NESTED_ELLIPSIS_ROADMAP.md` - Migration to Gauche's approach
-- `../MACRO_ARCHITECTURE_DECISIONS.md` - Comparison of approaches
-- `../MACRO_MIGRATION_STATUS.md` - Current migration status
+- `../ARCHIVE/macro_research/MACRO_ARCHITECTURE_DECISIONS.md` - Comparison of approaches
+- `../ARCHIVE/macro_research/MACRO_MIGRATION_STATUS.md` - Migration history
 
 ### Testing Strategy
 - `../../PRD/phase1/R7RS_TESTING_STRATEGY.md` - Overall testing approach

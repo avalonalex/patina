@@ -1603,7 +1603,7 @@ These are not part of the initial implementation but could be added later:
 
 **Patina docs:**
 - `internal/NESTED_ELLIPSIS_LIMITATION.md` - Current limitations (this file)
-- `PRD/MACRO_IMPLEMENTATION_DESIGN.md` - Macro system design
+- `PRD/ARCHIVE/phase1_completed/MACRO_IMPLEMENTATION_DESIGN.md` - Macro system design
 - `docs/FEATURE_STATUS.md` - Feature tracking
 - `internal/ARCHIVE/macro_research/` - Research notes
 

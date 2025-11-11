@@ -294,7 +294,7 @@ Consider adding:
 ## Documentation
 
 ### Internal Documentation (this directory)
-- `MACRO_IMPLEMENTATION_DESIGN.md` - Original design (in PRD/)
+- `MACRO_IMPLEMENTATION_DESIGN.md` - Original design (in PRD/ARCHIVE/phase1_completed/)
 - `NESTED_MACRO_ISSUE.md` - ✅ FIXED (nested macro calls)
 - `HYGIENE_BINDING_FORMS.md` - ✅ FIXED (pattern variable values)
 - `R7RS_HYGIENE_REQUIREMENTS.md` - R7RS compliance analysis

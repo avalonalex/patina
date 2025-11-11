@@ -32,32 +32,8 @@ impl Evaluator {
         }
     }
 
-    // NOTE: eval_arrow_syntax was removed as it's now handled by cond/case macros
-
-    /// Ensure a value is a proper list (terminated by Null)
-    #[allow(dead_code)]
-    fn ensure_proper_list(&self, value: &Value, context: &str) -> Result<(), EvalError> {
-        if !matches!(value, Value::Null) {
-            return Err(EvalError::InvalidSyntax(format!(
-                "{} must be a proper list",
-                context
-            )));
-        }
-        Ok(())
-    }
-
-    /// Extract a symbol from a value, with context for error messages
-    #[allow(dead_code)]
-    fn expect_symbol(&self, value: &Value, context: &str) -> Result<Rc<str>, EvalError> {
-        match value {
-            Value::Symbol(s) => Ok(s.clone()),
-            _ => Err(EvalError::InvalidSyntax(format!(
-                "{} expects a symbol, got {}",
-                context,
-                value.type_name()
-            ))),
-        }
-    }
+    // NOTE: eval_arrow_syntax, ensure_proper_list, and expect_symbol were removed
+    // as they're now handled by cond/case macros or no longer needed after macro migrations.
 
     /// Evaluate quote special form: (quote expr)
     pub(super) fn eval_quote(&self, args: &Value) -> Result<Value, EvalError> {

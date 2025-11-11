@@ -2,7 +2,7 @@
 
 This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2025-11-09
+**Last Updated:** 2025-11-11
 
 ---
 
@@ -22,10 +22,18 @@ Research and analysis that led to the complete hygienic macro system implementat
 - `R7RS_HYGIENE_REQUIREMENTS.md` - R7RS hygiene specification
 - `HYGIENE_BINDING_FORMS.md` - Hygiene in binding constructs
 
+**Additional Implementation Docs (2025-11-10/11):**
+- `MACRO_ARCHITECTURE_DECISIONS.md` - Design decisions and trade-offs
+- `MACRO_MIGRATION_STATUS.md` - Special form → macro migration tracking
+- `MACRO_MIGRATION_SUMMARY.md` - and/or migration details
+- `TEMPLATE_ELLIPSIS_FIX.md` - Multiple ellipsis implementation fix
+- `CHIBI_VM_ANALYSIS.md` - Analysis of chibi-scheme's VM approach
+
 **Outcome:**
 - 96% complete macro system (50+ tests passing)
 - Full hygiene with pattern variable preservation
 - Better than Steel (correct quote handling)
+- Successfully migrated 6+ special forms to macros
 - Only nested ellipsis remaining (documented in `internal/NESTED_ELLIPSIS_LIMITATION.md`)
 
 ---
@@ -70,6 +78,24 @@ Implementation documentation for completed features:
 - Test coverage: 50+ tests
 - Comparison with other implementations
 - Production readiness checklist
+
+#### `DO_MACRO_INVESTIGATION.md` (2025-11-11)
+- Investigation of `do` as macro vs special form
+- Found working macro solution using `apply`
+- Documented TCO limitations requiring special form
+- Educational value for nested ellipsis workarounds
+
+#### `CODE_QUALITY_REVIEW_2025-11-11.md` (2025-11-11)
+- Comprehensive code quality review
+- Analysis of recent macro system changes
+- Identified improvement opportunities
+- Metrics and recommendations
+
+#### `CODE_IMPROVEMENTS_2025-11-11.md` (2025-11-11)
+- Implemented code quality improvements
+- Removed 25 lines of dead code
+- Updated TODO comments with PRD references
+- Added table of contents to bootstrap.scm
 
 ---
 

@@ -339,7 +339,7 @@ Chibi-scheme can compute `(power 2 10000)` with the non-tail-recursive implement
 Patina overflows the stack with `exp=10000` but works fine with `exp=1000` in release mode.
 
 **Root Cause Analysis**: After examining chibi-scheme's source code, the difference is architectural:
-- **Chibi uses a bytecode VM** with heap-allocated stack (see `internal/CHIBI_VM_ANALYSIS.md`)
+- **Chibi uses a bytecode VM** with heap-allocated stack (see `internal/ARCHIVE/macro_research/CHIBI_VM_ANALYSIS.md`)
 - **Patina is a tree-walking interpreter** using the Rust call stack
 - Chibi's heap-allocated stack can grow dynamically without overflow
 - This is an architectural difference, not a tail call optimization issue

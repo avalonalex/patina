@@ -470,7 +470,7 @@ Based on the 22 ignored tests, here are the quickest wins to reach higher compli
   - Error display: "Undefined variable: var-name" (was: "Undefined variable: Undefined variable: var-name")
   - Enabled `test_set_bang_undefined` test
 - ✅ **Created comprehensive macro system research plan**
-  - 45-page detailed analysis in `PRD/MACRO_SYSTEM_RESEARCH.md`
+  - 45-page detailed analysis in `PRD/ARCHIVE/phase1_completed/MACRO_SYSTEM_RESEARCH.md`
   - R7RS spec analysis (syntax-rules, define-syntax, hygiene)
   - 4-phase implementation strategy
   - Research tasks for chibi-scheme analysis

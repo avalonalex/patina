@@ -52,7 +52,7 @@ lib/gauche/macro.scm - Macro utilities
 
 **Referenced in:**
 - `internal/NESTED_ELLIPSIS_ROADMAP.md` - Migration plan based on Gauche's approach
-- `internal/MACRO_ARCHITECTURE_DECISIONS.md` - Comparison with Gauche's strategy
+- `internal/ARCHIVE/macro_research/MACRO_ARCHITECTURE_DECISIONS.md` - Comparison with Gauche's strategy
 
 #### 2. **Complex Standard Library Implementations**
 
@@ -256,7 +256,7 @@ lib/gauche/lazy.scm     - Lazy evaluation
 
 ## Gauche's Macro Pattern Matching Algorithm
 
-Based on research documented in `internal/MACRO_ARCHITECTURE_DECISIONS.md`:
+Based on research documented in `internal/ARCHIVE/macro_research/MACRO_ARCHITECTURE_DECISIONS.md`:
 
 **Gauche's approach (simplified):**
 

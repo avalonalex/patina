@@ -396,7 +396,7 @@ Reasons to implement:
 - `src/macro_system/pattern.rs` - Pattern matching implementation
 - `src/macro_system/template.rs` - Template expansion implementation
 - `tests/compliance/macros_advanced.rs:348` - Test marked `#[ignore]`
-- `PRD/MACRO_IMPLEMENTATION_DESIGN.md` - Original macro system design
+- `PRD/ARCHIVE/phase1_completed/MACRO_IMPLEMENTATION_DESIGN.md` - Original macro system design
 
 ## Decision
 

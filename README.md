@@ -39,27 +39,40 @@
 
 ---
 
-## Current Status (2025-11-09)
+## Current Status (2025-11-11)
 
-**Phase 1: R7RS Compliance** - 88% complete ✅
+**Phase 1: R7RS Compliance** - 90% complete ✅
 
 ### Recent Achievements (November 2025)
+
+- ✅ **Tail Call Optimization Complete!** (Nov 11)
+  - Full TCO implementation for tree-walking interpreter
+  - Stack-safe recursion (tested with 10,000+ iterations)
+  - Proper tail position detection in all contexts
+  - 36 comprehensive TCO tests passing
+
+- ✅ **Major Macro Migrations!** (Nov 10)
+  - Migrated 6+ special forms to macros (`let`, `let*`, `letrec`, `and`, `or`, `cond`, `case`, etc.)
+  - Demonstrated macro system power
+  - Reduced evaluator complexity
+  - All 50+ macro tests passing
 
 - ✅ **Macro System Complete!** (Nov 8)
   - Full `syntax-rules` with pattern matching
   - Hygienic macro expansion
-  - 50+ tests, better than Steel implementation
-  - Only nested ellipsis `(... ...)` missing
+  - Better than Steel implementation
+  - Only nested ellipsis `(... ...)` missing (future enhancement)
 
 - ✅ **Do Loop Implemented!** (Nov 9)
   - Full R7RS `do` iteration construct
   - 10 comprehensive tests
   - All iteration forms now complete
 
-- ✅ **Documentation Consolidated** (Nov 9)
-  - Clean structure: 13 active docs, 20 archived
-  - Single sources of truth
-  - Clear roadmap and priorities
+- ✅ **Code Quality & Documentation** (Nov 11)
+  - Comprehensive code quality review
+  - Removed dead code, improved clarity
+  - Reorganized documentation (35 files archived)
+  - Clean structure: 3 active internal docs, 9 active PRDs
 
 ### What's Implemented ✅
 
@@ -99,25 +112,21 @@
 
 ### What's Next 🚧
 
-**High Priority (Next 3-4 weeks)**
+**High Priority (Next 2-3 weeks)**
 
-1. **Tail Call Optimization** (1-2 weeks) - R7RS requirement
-   - Stack-safe recursion
-   - Critical for compliance
-
-2. **Advanced Math Functions** (3-5 days) - Quick win
+1. **Advanced Math Functions** (3-5 days) - Quick win
    - Transcendental: sin, cos, tan, exp, log, sqrt
    - Completes numeric tower to 100%
 
-3. **Basic I/O** (2-3 days) - Very useful
+2. **Basic I/O** (2-3 days) - Very useful
    - display, write, read, newline
    - String ports (no filesystem yet)
 
-4. **Exception Handling** (2-3 days) - Needed for errors
+3. **Exception Handling** (2-3 days) - Needed for errors
    - error, raise, guard
    - Catchable exceptions in Scheme
 
-5. **File I/O** (2-3 days) - Complete I/O
+4. **File I/O** (2-3 days) - Complete I/O
    - open-input-file, open-output-file
    - file-error? predicate
 
@@ -283,9 +292,11 @@ tests/
 └── integration/     # End-to-end tests
 
 docs/                # User documentation
-PRD/phase1/          # Strategic planning
+PRD/                 # Strategic planning
+  ├── phase1/          # Active Phase 1 PRDs
+  └── ARCHIVE/         # Completed PRDs (5 docs)
 internal/            # Implementation notes
-  └── ARCHIVE/       # Completed research (20 docs)
+  └── ARCHIVE/       # Completed research (35 docs)
 ```
 
 ### Key Design Decisions
@@ -400,11 +411,11 @@ We study and reference these implementations:
 | **Numbers** | ✅ 94% | Missing transcendental fns |
 | **I/O** | ❌ 0% | Not started |
 | **Exceptions** | ❌ 0% | Not started |
-| **TCO** | ❌ 0% | Not started (HIGH priority) |
+| **TCO** | ✅ 100% | 36 tests passing |
 | **Libraries** | ❌ 0% | Not started |
-| **Overall** | **88%** | **395 tests passing** |
+| **Overall** | **90%** | **395 tests passing** |
 
-**Estimated time to Phase 1 complete:** 6-8 weeks
+**Estimated time to Phase 1 complete:** 4-6 weeks
 
 ---
 
@@ -423,4 +434,4 @@ MIT License - See LICENSE file for details
 
 ---
 
-**Status:** Active development | **Latest:** Do loop complete, 395 tests passing | **Next:** Tail call optimization
+**Status:** Active development | **Latest:** Tail call optimization complete, 395 tests passing | **Next:** Advanced math functions
