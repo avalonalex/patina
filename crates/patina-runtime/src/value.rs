@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::environment::Environment;
+use crate::library::Library;
 
 /// Represents a Scheme value in the R7RS-small language
 #[derive(Debug, Clone)]
@@ -55,6 +56,10 @@ pub enum Value {
         // Opaque macro data - frontend will cast this appropriately
         data: Rc<dyn std::any::Any>,
     },
+
+    // Libraries (R7RS Section 5.6)
+    // Represents a loaded library with its exports and environment
+    Library(Rc<Library>),
 
     // Multiple values (R7RS Section 6.10)
     Values(Vec<Value>),
@@ -112,6 +117,7 @@ impl Value {
             Value::Procedure(_) => "procedure",
             Value::InputPort | Value::OutputPort => "port",
             Value::Macro { .. } => "macro",
+            Value::Library(_) => "library",
             Value::Values(_) => "values",
             Value::Unspecified => "unspecified",
             Value::Eof => "eof-object",
@@ -203,6 +209,7 @@ impl std::fmt::Display for Value {
             Value::InputPort => write!(f, "#<input-port>"),
             Value::OutputPort => write!(f, "#<output-port>"),
             Value::Macro { name, .. } => write!(f, "#<macro:{}>", name),
+            Value::Library(lib) => write!(f, "{}", lib),
             Value::Values(vals) => {
                 // Multiple values are usually only seen internally
                 // Display as space-separated values

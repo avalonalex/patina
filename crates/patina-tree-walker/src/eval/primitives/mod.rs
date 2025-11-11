@@ -141,6 +141,7 @@ impl Evaluator {
             "exact-integer?" => {
                 predicates::exact_integer_p(self, args).map(super::EvalResult::Value)
             }
+            "library?" => predicates::library_p(self, args).map(super::EvalResult::Value),
 
             // Equality operations
             "eq?" => equality::eq(self, args).map(super::EvalResult::Value),
@@ -298,6 +299,7 @@ impl Evaluator {
             ("char?", Arity::Exact(1)),
             ("vector?", Arity::Exact(1)),
             ("exact-integer?", Arity::Exact(1)),
+            ("library?", Arity::Exact(1)),
             // Equality
             ("eq?", Arity::Exact(2)),
             ("eqv?", Arity::Exact(2)),

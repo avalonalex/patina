@@ -160,3 +160,7 @@ pub(super) fn exact_integer_p(evaluator: &Evaluator, args: Vec<Value>) -> Result
         _ => false,
     })
 }
+
+pub(super) fn library_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.make_type_predicate(args, |v| matches!(v, Value::Library(_)))
+}
