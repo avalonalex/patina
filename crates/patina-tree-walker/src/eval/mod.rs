@@ -14,6 +14,7 @@ use patina_runtime::library_loader::LibraryLoaderRegistry;
 use patina_runtime::library_registry::LibraryRegistry;
 use patina_runtime::value::{Procedure, Value};
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 /// Result of evaluation step in the trampoline
@@ -611,6 +612,21 @@ impl Evaluator {
             .borrow()
             .get(name)
             .map(|lib| Rc::new(lib.clone()))
+    }
+
+    /// Get the library search paths
+    pub fn library_search_paths(&self) -> Vec<PathBuf> {
+        self.library_registry.borrow().search_paths().to_vec()
+    }
+
+    /// Find a library file in the search paths
+    pub fn find_library_file(&self, name: &[String]) -> Option<PathBuf> {
+        self.library_registry.borrow().find_library_file(name)
+    }
+
+    /// Add a library search path (for testing)
+    pub fn add_library_search_path(&self, path: PathBuf) {
+        self.library_registry.borrow_mut().add_search_path(path);
     }
 }
 
