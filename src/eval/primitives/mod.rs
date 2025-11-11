@@ -16,6 +16,7 @@ mod arithmetic;
 mod debug;
 pub(in crate::eval) mod equality;
 mod higher_order;
+mod io;
 mod lists;
 mod predicates;
 mod strings;
@@ -135,6 +136,11 @@ impl Evaluator {
             "vector-map" => vectors::vector_map(self, args),
             "vector-for-each" => vectors::vector_for_each(self, args),
 
+            // I/O operations
+            "display" => io::display(self, args),
+            "write" => io::write(self, args),
+            "newline" => io::newline(self, args),
+
             // Debug primitives
             "debug-enable" => debug::debug_enable(self, args),
             "debug-disable" => debug::debug_disable(self, args),
@@ -246,6 +252,10 @@ impl Evaluator {
             ("vector-fill!", Arity::Range(2, 4)),
             ("vector-map", Arity::Min(2)),
             ("vector-for-each", Arity::Min(2)),
+            // I/O
+            ("display", Arity::Exact(1)),
+            ("write", Arity::Exact(1)),
+            ("newline", Arity::Exact(0)),
             // Debug
             ("debug-enable", Arity::Exact(1)),
             ("debug-disable", Arity::Exact(1)),

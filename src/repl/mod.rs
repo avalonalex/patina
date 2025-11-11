@@ -16,6 +16,7 @@ pub struct Repl {
 }
 
 use rustyline::completion::{Completer, Pair};
+use rustyline::highlight::CmdKind;
 use rustyline::hint::{Hinter, HistoryHinter};
 use rustyline::Context;
 
@@ -55,8 +56,8 @@ impl rustyline::highlight::Highlighter for SchemeHelper {
         self.highlighter.highlight(line, pos)
     }
 
-    fn highlight_char(&self, line: &str, pos: usize, forced: bool) -> bool {
-        self.highlighter.highlight_char(line, pos, forced)
+    fn highlight_char(&self, line: &str, pos: usize, kind: CmdKind) -> bool {
+        self.highlighter.highlight_char(line, pos, kind)
     }
 }
 
@@ -119,6 +120,10 @@ impl Repl {
         println!();
 
         loop {
+            // Flush stdout before readline to ensure display output is visible
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+
             let readline = self.editor.readline("patina> ");
 
             match readline {
@@ -142,7 +147,16 @@ impl Repl {
                     match Parser::new(line) {
                         Ok(mut parser) => match parser.parse() {
                             Ok(expr) => match self.evaluator.eval(&expr) {
-                                Ok(result) => println!("{}", result),
+                                Ok(result) => {
+                                    // Don't print #<unspecified> values (from define, set!, etc.)
+                                    if !matches!(result, crate::value::Value::Unspecified) {
+                                        println!("{}", result);
+                                    } else {
+                                        // Force a flush by writing empty string to stderr
+                                        // This works around rustyline stdout buffering issue
+                                        eprint!("");
+                                    }
+                                }
                                 Err(e) => eprintln!("Error: {}", e),
                             },
                             Err(e) => eprintln!("Parse error: {}", e),

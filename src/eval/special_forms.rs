@@ -839,7 +839,6 @@ impl Evaluator {
     // The macro implementations provide the same semantics including short-circuit
     // evaluation. Previous Rust implementations (eval_and_impl, eval_and,
     // eval_or_impl, eval_or) were removed in favor of the macro approach.
-
     /// Evaluate apply special form: (apply proc arg... args)
     pub(super) fn eval_apply(
         &self,
