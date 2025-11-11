@@ -10,7 +10,10 @@ pub use error::EvalError;
 
 use debug::DebugConfig;
 use patina_runtime::environment::Environment;
+use patina_runtime::library_loader::LibraryLoaderRegistry;
+use patina_runtime::library_registry::LibraryRegistry;
 use patina_runtime::value::{Procedure, Value};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// Result of evaluation step in the trampoline
@@ -34,21 +37,53 @@ pub(crate) enum EvalResult {
 pub struct Evaluator {
     pub(in crate::eval) global_env: Rc<Environment>,
     pub(crate) debug: Rc<DebugConfig>,
+    /// Registry of loaded libraries
+    pub(crate) library_registry: RefCell<LibraryRegistry>,
+    /// Registry of library loaders (Rust, Scheme, etc.)
+    pub(crate) loader_registry: RefCell<LibraryLoaderRegistry>,
 }
 
 impl Evaluator {
     pub fn new() -> Self {
         let global_env = Rc::new(Environment::new());
         Self::install_primitives(&global_env);
+
+        // Create library registries
+        let library_registry = RefCell::new(LibraryRegistry::with_default_paths());
+        let loader_registry = RefCell::new(LibraryLoaderRegistry::new());
+
         let evaluator = Evaluator {
             global_env,
             debug: Rc::new(DebugConfig::new()),
+            library_registry,
+            loader_registry,
         };
+
+        // Initialize library loaders
+        evaluator.init_loaders();
 
         // Load bootstrap library
         evaluator.load_bootstrap();
 
         evaluator
+    }
+
+    /// Initialize library loaders
+    ///
+    /// Sets up the loader registry with:
+    /// 1. RustLibraryLoader for built-in libraries (scheme base, etc.)
+    /// 2. SchemeLibraryLoader for .sld files
+    fn init_loaders(&self) {
+        use crate::library_support::SchemeLibraryLoader;
+        use patina_runtime::RustLibraryLoader;
+
+        let mut loaders = self.loader_registry.borrow_mut();
+
+        // Add Rust loader first (highest priority)
+        loaders.add_loader(Box::new(RustLibraryLoader::with_standard_libraries()));
+
+        // Add Scheme loader second (for .sld files)
+        loaders.add_loader(Box::new(SchemeLibraryLoader::new(self)));
     }
 
     fn load_bootstrap(&self) {
@@ -503,6 +538,73 @@ impl Evaluator {
 impl Default for Evaluator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// Library loading methods
+impl Evaluator {
+    /// Load a library by name
+    ///
+    /// This method:
+    /// 1. Checks if the library is already loaded
+    /// 2. If not, uses the loader registry to load it
+    /// 3. Registers it in the library registry
+    ///
+    /// Returns the loaded library or an error.
+    pub fn load_library(
+        &self,
+        name: &[String],
+    ) -> Result<Rc<patina_runtime::Library>, patina_runtime::LibraryError> {
+        // Check if already loaded
+        {
+            let registry = self.library_registry.borrow();
+            if let Some(lib) = registry.get(name) {
+                return Ok(Rc::new(lib.clone()));
+            }
+        }
+
+        // Check for circular dependencies
+        {
+            let mut registry = self.library_registry.borrow_mut();
+            registry.begin_loading(name)?;
+        }
+
+        // Load the library
+        let result = {
+            let loaders = self.loader_registry.borrow();
+            let registry = self.library_registry.borrow();
+            loaders.load(name, registry.search_paths())
+        };
+
+        // End loading tracking
+        {
+            let mut registry = self.library_registry.borrow_mut();
+            registry.end_loading(name);
+        }
+
+        // Register the loaded library
+        match result {
+            Ok(lib) => {
+                let lib_rc = Rc::new(lib.clone());
+                let mut registry = self.library_registry.borrow_mut();
+                registry.register(lib)?;
+                Ok(lib_rc)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Check if a library is loaded
+    pub fn is_library_loaded(&self, name: &[String]) -> bool {
+        self.library_registry.borrow().is_loaded(name)
+    }
+
+    /// Get a loaded library
+    pub fn get_library(&self, name: &[String]) -> Option<Rc<patina_runtime::Library>> {
+        self.library_registry
+            .borrow()
+            .get(name)
+            .map(|lib| Rc::new(lib.clone()))
     }
 }
 

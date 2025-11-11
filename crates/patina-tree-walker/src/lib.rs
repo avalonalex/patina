@@ -14,6 +14,8 @@
 //! It uses lexical scoping with environment chains and supports full R7RS semantics.
 
 pub mod eval;
+pub mod library_support;
 
 // Re-export main types
 pub use eval::{EvalError, Evaluator};
+pub use library_support::SchemeLibraryLoader;
