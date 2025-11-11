@@ -97,6 +97,10 @@ impl Evaluator {
                 arithmetic::make_rectangular(self, args).map(super::EvalResult::Value)
             }
             "make-polar" => arithmetic::make_polar(self, args).map(super::EvalResult::Value),
+            "exact-integer-sqrt" => {
+                arithmetic::exact_integer_sqrt(self, args).map(super::EvalResult::Value)
+            }
+            "rationalize" => arithmetic::rationalize(self, args).map(super::EvalResult::Value),
 
             // Pair/List operations
             "cons" => lists::cons(self, args).map(super::EvalResult::Value),
@@ -257,6 +261,8 @@ impl Evaluator {
             ("angle", Arity::Exact(1)),
             ("make-rectangular", Arity::Exact(2)),
             ("make-polar", Arity::Exact(2)),
+            ("exact-integer-sqrt", Arity::Exact(1)),
+            ("rationalize", Arity::Exact(2)),
             // Lists
             ("cons", Arity::Exact(2)),
             ("car", Arity::Exact(1)),

@@ -165,7 +165,6 @@ fn test_lcm() {
 }
 
 #[test]
-#[ignore] // TODO: Implement exact-integer-sqrt
 fn test_exact_integer_sqrt() {
     // Returns two values: sqrt and remainder
     // (exact-integer-sqrt k) = (values s r) where k = s^2 + r
@@ -178,7 +177,6 @@ fn test_exact_integer_sqrt() {
 }
 
 #[test]
-#[ignore] // TODO: Implement rationalize
 fn test_rationalize() {
     // Find simplest rational within tolerance
     assert_eval_to("(rationalize 3.14159 0.01)", "22/7"); // Pi approximation

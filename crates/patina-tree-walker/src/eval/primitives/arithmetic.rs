@@ -1331,3 +1331,129 @@ pub(super) fn make_polar(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, E
         Ok(Value::Complex(real, imag))
     }
 }
+
+// ========== Additional Number Theory Functions ==========
+
+/// (exact-integer-sqrt k) - Returns two values s and r where k = s^2 + r, and k < (s+1)^2
+/// This is the integer square root with remainder
+pub(super) fn exact_integer_sqrt(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 1, "exact-integer-sqrt")?;
+
+    // Convert to BigInt for uniform handling
+    let k = match &args[0] {
+        Value::Integer(n) if *n < 0 => {
+            return Err(EvalError::TypeError(
+                "exact-integer-sqrt expects a non-negative integer".to_string(),
+            ))
+        }
+        Value::Integer(n) => BigInt::from(*n),
+        Value::BigInteger(n) if n < &BigInt::from(0) => {
+            return Err(EvalError::TypeError(
+                "exact-integer-sqrt expects a non-negative integer".to_string(),
+            ))
+        }
+        Value::BigInteger(n) => n.clone(),
+        other => {
+            return Err(EvalError::TypeError(format!(
+                "exact-integer-sqrt expects an exact integer, got {}",
+                other.type_name()
+            )))
+        }
+    };
+
+    // Compute integer square root using Newton's method
+    let (s, r) = if k.is_zero() {
+        (BigInt::from(0), BigInt::from(0))
+    } else {
+        let mut s = k.clone();
+        let mut s_next = (&s + &k / &s) / BigInt::from(2);
+
+        while s_next < s {
+            s = s_next.clone();
+            s_next = (&s + &k / &s) / BigInt::from(2);
+        }
+
+        // s is the integer square root
+        // r = k - s^2 is the remainder
+        let r = &k - &s * &s;
+        (s, r)
+    };
+
+    // Convert s and r to appropriate Value types
+    let s_val = match s.to_i64() {
+        Some(n) => Value::Integer(n),
+        None => Value::BigInteger(s),
+    };
+
+    let r_val = match r.to_i64() {
+        Some(n) => Value::Integer(n),
+        None => Value::BigInteger(r),
+    };
+
+    // Return as multiple values using Value::Values
+    Ok(Value::Values(vec![s_val, r_val]))
+}
+
+/// (rationalize x tolerance) - Find simplest rational within tolerance of x
+/// Returns the rational with smallest denominator within x±tolerance
+pub(super) fn rationalize(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    _eval.check_arity_exact(&args, 2, "rationalize")?;
+
+    let x = NumericValue::from_value(args[0].clone())?;
+    let tolerance = NumericValue::from_value(args[1].clone())?;
+
+    let x_f64 = x.to_f64();
+    let tol_f64 = tolerance.to_f64().abs();
+
+    // Range: [x - tolerance, x + tolerance]
+    let lower = x_f64 - tol_f64;
+    let upper = x_f64 + tol_f64;
+
+    // Use continued fractions to find simplest rational in range
+    // This is a simplified implementation
+    fn simplest_rational_in_range(lower: f64, upper: f64) -> BigRational {
+        use num_traits::FromPrimitive;
+
+        // Handle edge cases
+        if lower.is_nan() || upper.is_nan() || lower.is_infinite() || upper.is_infinite() {
+            return BigRational::from_f64(lower)
+                .unwrap_or_else(|| BigRational::from(BigInt::from(0)));
+        }
+
+        // If range contains 0, return 0
+        if lower <= 0.0 && upper >= 0.0 {
+            return BigRational::from(BigInt::from(0));
+        }
+
+        // If range contains an integer, return the closest one
+        let lower_ceil = lower.ceil();
+        if lower_ceil <= upper {
+            return BigRational::from(BigInt::from(lower_ceil as i64));
+        }
+
+        // Use continued fraction algorithm
+        // For simplicity, we'll use a basic approximation
+        // Convert bounds to rationals and find the mediant
+        let lower_rat = BigRational::from_f64(lower).unwrap();
+        let _upper_rat = BigRational::from_f64(upper).unwrap();
+
+        // Try simple fractions first
+        for denom in 1..=100 {
+            let d = BigInt::from(denom);
+            let lower_num = (lower * denom as f64).ceil() as i64;
+            let upper_num = (upper * denom as f64).floor() as i64;
+
+            if lower_num <= upper_num {
+                return BigRational::new(BigInt::from(lower_num), d);
+            }
+        }
+
+        // Fall back to one of the bounds
+        lower_rat
+    }
+
+    let result = simplest_rational_in_range(lower, upper);
+
+    // Convert to appropriate Value
+    Ok(_eval.rational_to_value(result))
+}
