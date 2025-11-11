@@ -8,9 +8,9 @@ mod special_forms;
 // Re-export error type for public API
 pub use error::EvalError;
 
+use debug::DebugConfig;
 use patina_runtime::environment::Environment;
 use patina_runtime::value::{Procedure, Value};
-use debug::DebugConfig;
 use std::rc::Rc;
 
 /// Result of evaluation step in the trampoline
@@ -263,7 +263,8 @@ impl Evaluator {
 
             // Check if this symbol is bound to a macro
             if let Some(Value::Macro { data, .. }) = env.get(sym) {
-                let macro_def = data.downcast_ref::<patina_frontend::macro_expander::Macro>()
+                let macro_def = data
+                    .downcast_ref::<patina_frontend::macro_expander::Macro>()
                     .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
 
                 if self.debug.is_enabled(debug::DebugStage::Expand) {
@@ -452,7 +453,8 @@ impl Evaluator {
 
             // Check if this symbol is bound to a macro
             if let Some(Value::Macro { data, .. }) = env.get(sym) {
-                let macro_def = data.downcast_ref::<patina_frontend::macro_expander::Macro>()
+                let macro_def = data
+                    .downcast_ref::<patina_frontend::macro_expander::Macro>()
                     .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
 
                 // Debug trace: macro expansion entry

@@ -1,8 +1,8 @@
 use crate::lexer::{LexError, Lexer, Token};
-use patina_runtime::Value;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
+use patina_runtime::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::str::FromStr;

@@ -594,8 +594,7 @@ impl Evaluator {
         args: &Value,
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
-        patina_frontend::macro_expander::expand_macro(macro_val, args, env)
-            .map_err(|e| e.into())
+        patina_frontend::macro_expander::expand_macro(macro_val, args, env).map_err(|e| e.into())
     }
 
     /// Evaluate do special form: (do ((var init step) ...) (test result ...) command ...)

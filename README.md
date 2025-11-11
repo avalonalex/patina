@@ -16,7 +16,7 @@
    - Implement complete R7RS-small specification
    - Pass comprehensive test suites (Chibi Scheme r7rs-tests.scm)
    - 100% standards-compliant interpreter
-   - **Current Progress: 88% complete (395 tests passing)**
+   - **Current Progress: 88% complete (435 tests passing)**
 
 2. **Understandable Implementation** 📚
    - Clean, well-documented Rust code
@@ -182,7 +182,7 @@ patina> (do ((i 0 (+ i 1))
 
 ### Test Coverage
 
-**Total: 395 tests passing, 0 failing**
+**Total: 435 tests passing, 0 failing**
 
 | Category | Tests | Status |
 |----------|-------|--------|
@@ -263,33 +263,31 @@ Lexer → Parser → Evaluator
 Tokens   AST     Result
 ```
 
-### Project Structure
+### Project Structure (Workspace)
+
+Patina uses a Rust workspace with 7 modular crates:
 
 ```
-src/
-├── lexer/           # Tokenization (R7RS literals)
-├── parser/          # AST construction
-├── eval/            # Evaluation engine
-│   ├── mod.rs          # Core eval loop
-│   ├── special_forms.rs # All special forms
-│   ├── primitives.rs   # Primitive procedures
-│   └── application.rs  # Procedure application
-├── macro_system/    # Hygienic macro expansion
-├── value/           # Scheme value types
-├── env/             # Lexical environments
-├── repl/            # Rich REPL interface
-└── lib.rs           # Public API
+crates/
+├── patina-runtime/       # Core types (Value, Environment)
+├── patina-frontend/      # Lexer, Parser, Macro Expander
+├── patina-tree-walker/   # Tree-walking interpreter backend
+│   └── eval/
+│       ├── mod.rs             # Core eval loop with TCO
+│       ├── special_forms.rs   # All special forms
+│       ├── application.rs     # Procedure application
+│       └── primitives/        # Organized by category
+├── patina-interpreter/   # High-level Interpreter API
+├── patina-ir/            # Core IR (future nanopass)
+├── patina-repl/          # REPL with executable
+└── patina-tests/         # All integration tests
+    └── tests/
+        ├── compliance/        # R7RS spec tests (~285 tests)
+        ├── integration/       # Chibi comparison (~13 tests)
+        └── interpreter_api.rs # API tests (6 tests)
 
-tests/
-├── compliance/      # R7RS spec tests (283 tests)
-│   ├── primitives.rs
-│   ├── derived.rs
-│   ├── macros_advanced.rs (25 tests)
-│   ├── numbers.rs
-│   ├── lists.rs
-│   ├── strings.rs
-│   └── vectors.rs
-└── integration/     # End-to-end tests
+lib/                 # Scheme standard library
+  └── bootstrap.scm    # Core macros (let, cond, case, etc.)
 
 docs/                # User documentation
 PRD/                 # Strategic planning
@@ -413,7 +411,7 @@ We study and reference these implementations:
 | **Exceptions** | ❌ 0% | Not started |
 | **TCO** | ✅ 100% | 36 tests passing |
 | **Libraries** | ❌ 0% | Not started |
-| **Overall** | **90%** | **395 tests passing** |
+| **Overall** | **90%** | **435 tests passing** |
 
 **Estimated time to Phase 1 complete:** 4-6 weeks
 
@@ -434,4 +432,4 @@ MIT License - See LICENSE file for details
 
 ---
 
-**Status:** Active development | **Latest:** Tail call optimization complete, 395 tests passing | **Next:** Advanced math functions
+**Status:** Active development | **Latest:** Tail call optimization complete, 435 tests passing | **Next:** Advanced math functions

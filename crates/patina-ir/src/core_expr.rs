@@ -14,10 +14,7 @@ pub enum Formals {
     Variadic(Symbol),
 
     /// Mixed: (lambda (x y . rest) ...)
-    Mixed {
-        fixed: Vec<Symbol>,
-        rest: Symbol
-    },
+    Mixed { fixed: Vec<Symbol>, rest: Symbol },
 }
 
 /// Core Scheme expressions after macro expansion and desugaring
@@ -55,10 +52,7 @@ pub enum CoreExpr {
 
     /// Assignment
     /// Example: (set! x 42)
-    Set {
-        var: Symbol,
-        value: Box<CoreExpr>,
-    },
+    Set { var: Symbol, value: Box<CoreExpr> },
 
     /// Sequencing
     /// Example: (begin expr1 expr2 expr3)
@@ -66,10 +60,7 @@ pub enum CoreExpr {
 
     /// Top-level definition
     /// Example: (define x 42), (define (f x) x)
-    Define {
-        name: Symbol,
-        value: Box<CoreExpr>,
-    },
+    Define { name: Symbol, value: Box<CoreExpr> },
 
     /// Function application
     /// Example: (f x y), (+ 1 2)
@@ -79,7 +70,6 @@ pub enum CoreExpr {
     },
 
     // Optional optimized forms (added by passes)
-
     /// Primitive call (after optimization pass recognizes primitives)
     /// Example: (+ 1 2) where + is known to be the primitive
     PrimCall {
@@ -124,7 +114,6 @@ pub enum Primitive {
     IsBoolean,
     IsString,
     IsSymbol,
-
     // More primitives will be added as needed
 }
 
@@ -167,7 +156,9 @@ impl std::fmt::Display for CoreExpr {
                     Formals::Fixed(ps) => {
                         write!(f, "(")?;
                         for (i, p) in ps.iter().enumerate() {
-                            if i > 0 { write!(f, " ")?; }
+                            if i > 0 {
+                                write!(f, " ")?;
+                            }
                             write!(f, "{}", p)?;
                         }
                         write!(f, ")")?;
@@ -176,7 +167,9 @@ impl std::fmt::Display for CoreExpr {
                     Formals::Mixed { fixed, rest } => {
                         write!(f, "(")?;
                         for (i, p) in fixed.iter().enumerate() {
-                            if i > 0 { write!(f, " ")?; }
+                            if i > 0 {
+                                write!(f, " ")?;
+                            }
                             write!(f, "{}", p)?;
                         }
                         write!(f, " . {})", rest)?;
@@ -217,7 +210,9 @@ impl std::fmt::Display for CoreExpr {
             CoreExpr::Let { bindings, body } => {
                 write!(f, "(let (")?;
                 for (i, (var, val)) in bindings.iter().enumerate() {
-                    if i > 0 { write!(f, " ")?; }
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
                     write!(f, "({} {})", var, val)?;
                 }
                 write!(f, ") {})", body)

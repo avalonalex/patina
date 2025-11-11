@@ -16,4 +16,4 @@
 pub mod eval;
 
 // Re-export main types
-pub use eval::{Evaluator, EvalError};
+pub use eval::{EvalError, Evaluator};

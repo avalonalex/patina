@@ -7,8 +7,8 @@
 //! - Literal identifier matching
 
 use super::{Bindings, Pattern};
-use patina_runtime::Value;
 use crate::error::FrontendError;
+use patina_runtime::Value;
 use std::rc::Rc;
 
 /// Match a pattern against an expression
@@ -390,7 +390,9 @@ fn collect_list_items(expr: &Value) -> Result<Vec<Value>, crate::error::Frontend
 
 /// Helper: Collect items from a list, preserving tail for improper lists
 /// Returns (items, tail) where tail is Some(value) for improper lists
-fn collect_list_items_with_tail(expr: &Value) -> Result<(Vec<Value>, Option<Value>), crate::error::FrontendError> {
+fn collect_list_items_with_tail(
+    expr: &Value,
+) -> Result<(Vec<Value>, Option<Value>), crate::error::FrontendError> {
     let mut items = Vec::new();
     let mut current = expr;
 

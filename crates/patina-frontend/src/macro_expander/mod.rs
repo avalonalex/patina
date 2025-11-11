@@ -272,7 +272,10 @@ impl MacroRule {
 /// Parse a syntax-rules form into a Macro
 ///
 /// TODO: Phase 4 - implement parsing
-pub fn parse_syntax_rules(_expr: &Value, env: &Rc<Environment>) -> Result<Macro, crate::error::FrontendError> {
+pub fn parse_syntax_rules(
+    _expr: &Value,
+    env: &Rc<Environment>,
+) -> Result<Macro, crate::error::FrontendError> {
     // Stub - will be implemented in Phase 4
     Ok(Macro {
         name: "stub".into(),
@@ -312,7 +315,10 @@ pub fn parse_pattern(expr: &Value) -> Result<Pattern, crate::error::FrontendErro
 }
 
 /// Parse a list pattern, detecting ellipsis and dotted tails
-fn parse_list_pattern(items: &[Value], tail: Option<&Value>) -> Result<Pattern, crate::error::FrontendError> {
+fn parse_list_pattern(
+    items: &[Value],
+    tail: Option<&Value>,
+) -> Result<Pattern, crate::error::FrontendError> {
     // Check if this is a dotted list pattern
     if let Some(tail_value) = tail {
         // Dotted list: (a b . rest)
@@ -502,7 +508,9 @@ fn parse_list_template(
 
 /// Helper: Collect items from a list Value
 /// Returns (items, tail) where tail is Some(value) for improper lists
-fn collect_list_items(expr: &Value) -> Result<(Vec<Value>, Option<Value>), crate::error::FrontendError> {
+fn collect_list_items(
+    expr: &Value,
+) -> Result<(Vec<Value>, Option<Value>), crate::error::FrontendError> {
     let mut items = Vec::new();
     let mut current = expr;
 

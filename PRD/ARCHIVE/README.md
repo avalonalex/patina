@@ -29,6 +29,17 @@ But preserved for:
 
 ## Archived Documents
 
+### 📁 `phase1_planning/` (NEW - 2025-11-11)
+
+**Completed high-level planning and strategy documents**
+
+After workspace refactoring, these planning docs served their purpose:
+- `R7RS_ROADMAP.md` - Strategic roadmap (now in code structure)
+- `R7RS_TESTING_STRATEGY.md` - Test organization (now in `docs/TEST_ORGANIZATION.md`)
+- `CHIBI_TEST_SUITE_ANALYSIS.md` - Test suite analysis (tests now implemented)
+
+These guided initial development but details are now captured in working code and active tests.
+
 ### 📁 `phase1_completed/`
 
 #### Macro System (2025-11-07/08)
@@ -101,6 +112,24 @@ src/eval/
 
 ---
 
+#### Future Enhancements (2025-11-10/11)
+
+**NESTED_ELLIPSIS_IMPLEMENTATION.md**
+- Detailed design for nested ellipsis support
+- Pattern matching for multi-dimensional bindings
+- Template expansion with nested iteration
+- **Status:** Design complete, not yet implemented (low priority)
+- **Note:** See `internal/NESTED_ELLIPSIS_LIMITATION.md` for current limitations
+
+**DEBUGGER_HOOK_SYSTEM.md**
+- Comprehensive hook system design for debugging/profiling
+- Interactive debugger with breakpoints and stepping
+- Call stack tracking and backtraces
+- **Status:** Research complete, not yet implemented
+- **Note:** Deferred until after TCO implementation
+
+---
+
 ## Active PRD Documents
 
 ### Still in PRD/ (Not Archived)
@@ -122,8 +151,8 @@ src/eval/
 
 **Living Documents (Continuously Updated):**
 - ⭐ `IMPLEMENTATION_STATUS.md` - Current progress, roadmap, priorities
-- ⭐ `R7RS_ROADMAP.md` - R7RS compliance strategy
 - ⭐ `NUMERIC_SUMMARY.md` - Canonical numeric tower guide
+- ⭐ `TAIL_CALL_OPTIMIZATION.md` - ✅ Complete technical summary (keep for reference!)
 
 **Implementation Plans (Not Yet Complete):**
 - `EXCEPTION_HANDLING.md` - Guard, raise (not implemented)
@@ -131,8 +160,6 @@ src/eval/
 - `IO_IMPLEMENTATION.md` - Full I/O system (partial)
 - `MODULE_SYSTEM_DESIGN.md` - Module system (not implemented)
 - `STRING_OPTIMIZATION.md` - String optimizations (deferred)
-- `TAIL_CALL_OPTIMIZATION.md` - TCO implementation (done!)
-- Other phase 1 specs
 
 ### In PRD/future/ (Future Phases)
 

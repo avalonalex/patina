@@ -14,9 +14,9 @@
 //! ```
 
 // Re-export types from workspace crates for convenience
-pub use patina_frontend::{Lexer, LexError, Parser, ParseError};
-pub use patina_runtime::{Value, Procedure, Arity, Environment};
-pub use patina_tree_walker::{Evaluator, EvalError};
+pub use patina_frontend::{LexError, Lexer, ParseError, Parser};
+pub use patina_runtime::{Arity, Environment, Procedure, Value};
+pub use patina_tree_walker::{EvalError, Evaluator};
 
 /// High-level interpreter interface that combines parsing and evaluation
 pub struct Interpreter {

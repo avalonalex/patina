@@ -4,8 +4,8 @@ mod validator;
 
 use self::highlighter::SchemeHighlighter;
 use self::validator::SchemeValidator;
-use patina_tree_walker::eval::Evaluator;
 use patina_frontend::parser::Parser;
+use patina_tree_walker::eval::Evaluator;
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::{CompletionType, Config, EditMode, Editor};

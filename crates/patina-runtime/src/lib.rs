@@ -7,11 +7,11 @@
 //!
 //! This crate is intentionally minimal and stable - it should rarely change.
 
-pub mod value;
 pub mod environment;
 pub mod error;
+pub mod value;
 
 // Re-export main types for convenience
-pub use value::{Value, Procedure, Arity};
 pub use environment::Environment;
 pub use error::RuntimeError;
+pub use value::{Arity, Procedure, Value};

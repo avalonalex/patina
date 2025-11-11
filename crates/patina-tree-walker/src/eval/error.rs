@@ -2,8 +2,8 @@
 //!
 //! This module defines all error types that can occur during evaluation of Scheme expressions.
 
-use thiserror::Error;
 use patina_frontend::FrontendError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum EvalError {

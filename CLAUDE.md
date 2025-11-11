@@ -6,6 +6,77 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Patina is a Scheme R7RS-small interpreter written in Rust. This is an educational project with ambitious goals: implementing a full R7RS-compliant Scheme interpreter, then extending it with gradual typing, reactive concurrency, and logic programming. Currently in Phase 1 (basic R7RS compliance).
 
+**Architecture:** Modular workspace with 7 crates supporting multiple backends (tree-walker implemented, VM and JIT planned).
+
+## Workspace Structure
+
+Patina uses a Rust workspace with separate crates for different concerns:
+
+```
+patina/ (workspace root)
+├── Cargo.toml              # Workspace configuration
+├── lib/                    # Scheme standard library
+│   └── bootstrap.scm       # Core macros (let, cond, case, etc.)
+│
+└── crates/
+    ├── patina-runtime/     # Core types (Value, Environment)
+    ├── patina-frontend/    # Lexer, Parser, Macro Expander
+    ├── patina-tree-walker/ # Tree-walking interpreter backend
+    ├── patina-interpreter/ # High-level Interpreter API
+    ├── patina-ir/          # Core IR for nanopass (future)
+    ├── patina-repl/        # REPL with executable binary
+    └── patina-tests/       # All integration & compliance tests
+```
+
+### Crate Responsibilities
+
+**patina-runtime** (`crates/patina-runtime/src/`)
+- Core `Value` enum: all Scheme data types
+- `Environment`: lexical scoping with parent chains
+- Shared types used by all other crates
+
+**patina-frontend** (`crates/patina-frontend/src/`)
+- `lexer/`: Tokenizes Scheme source
+- `parser/`: Builds AST (as Value) from tokens
+- `macro_expander/`: Hygienic macro expansion (syntax-rules)
+- Unit tests: 61 tests for lexer/parser/macros
+
+**patina-tree-walker** (`crates/patina-tree-walker/src/eval/`)
+- `mod.rs`: Core evaluator with TCO support
+- `special_forms.rs`: Special form handlers
+- `application.rs`: Procedure application
+- `primitives/`: All built-in procedures
+- Implements the tree-walking interpreter backend
+
+**patina-interpreter** (`crates/patina-interpreter/src/`)
+- High-level `Interpreter` API
+- Combines frontend (parsing) + backend (evaluation)
+- Simple interface: `eval_str()`, `eval_program()`
+- Backend abstraction (currently uses tree-walker)
+
+**patina-repl** (`crates/patina-repl/src/`)
+- Rich terminal REPL with rustyline
+- Syntax highlighting, history, multi-line input
+- Binary executable: `target/release/patina`
+
+**patina-tests** (`crates/patina-tests/tests/`)
+- R7RS compliance tests (~285 tests)
+- Integration tests (chibi comparison)
+- Interpreter API tests
+- All tests use `patina-interpreter` API
+
+**patina-ir** (`crates/patina-ir/src/`)
+- Core IR definition for future nanopass architecture
+- Not yet integrated into main pipeline
+
+### Dependency Flow
+
+```
+patina-repl → patina-interpreter → patina-tree-walker → patina-runtime
+                                 ↗  patina-frontend    ↗
+patina-tests → patina-interpreter
+```
+
 ## Documentation Organization
 
 **Important**: Use the following directories for different types of documentation:
@@ -23,6 +94,7 @@ Patina is a Scheme R7RS-small interpreter written in Rust. This is an educationa
 
 - **`docs/`** - User-facing documentation and developer guides
   - **`FEATURE_STATUS.md`** - ⭐ **CANONICAL** detailed test-by-test R7RS compliance matrix
+  - **`TEST_ORGANIZATION.md`** - ⭐ Test structure and running tests
   - `API.md` - Public API reference
   - `GETTING_STARTED.md` - User guide for getting started
   - `README.md` - Project overview
@@ -80,11 +152,15 @@ The official R7RS-small specification LaTeX source, useful for understanding pre
 ### Building and Running
 
 ```bash
-# Build the project
+# Build the workspace
 cargo build --release
 
 # Run the REPL
 cargo run --release
+# Binary location: ./target/release/patina
+
+# Build specific crate
+cargo build --package patina-frontend
 
 # Run in debug mode (faster compile, slower execution)
 cargo run
@@ -93,27 +169,39 @@ cargo run
 ### Testing
 
 ```bash
-# Run all tests
+# Run ALL tests (435 tests across workspace)
 cargo test
 
-# Run a specific test
-cargo test test_compare_arithmetic
-
-# Run tests without chibi-scheme comparison (if chibi not installed)
-SKIP_CHIBI_TESTS=1 cargo test
-
 # Run only integration tests
-cargo test --test comparison_test
-cargo test --test scheme_runner
+cargo test --package patina-tests
 
-# Run tests verbosely to see print statements
+# Run specific test suite
+cargo test --package patina-tests --test compliance
+cargo test --package patina-tests --test integration
+
+# Run specific crate's unit tests
+cargo test --package patina-frontend
+cargo test --package patina-runtime
+
+# Run specific category
+cargo test --package patina-tests primitives::
+cargo test --package patina-tests numbers::
+
+# Run tests verbosely
 cargo test -- --nocapture
+
+# Skip chibi comparison tests (if chibi not installed)
+SKIP_CHIBI_TESTS=1 cargo test
 ```
 
 ### Code Quality
+
 ```bash
 # Check for errors without building
 cargo check
+
+# Check specific crate
+cargo check --package patina-tree-walker
 
 # Run the linter
 cargo clippy --all-targets --all-features -- -D warnings
@@ -122,241 +210,217 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt
 ```
 
-## Architecture Overview
+## Architecture Deep Dive
 
-### Core Pipeline: Lexer � Parser � Evaluator
+### Core Value Representation
 
-1. **Lexer** (`src/lexer/mod.rs`): Tokenizes Scheme source into tokens
-2. **Parser** (`src/parser/mod.rs`): Builds AST (Value enum) from tokens
-3. **Evaluator** (`src/eval/`): Tree-walking interpreter that evaluates AST (modular structure - see below)
+**Location:** `crates/patina-runtime/src/value/mod.rs`
 
-### Value Representation (`src/value/mod.rs`)
-
-The core `Value` enum represents all Scheme values:
-- Numeric tower: `Integer`, `BigInteger`, `Rational`, `Real`, `Complex` (using num-bigint/num-rational)
-- Strings: `String(Rc<RefCell<String>>)` - UTF-8 with O(n) character indexing (R7RS compliant)
+The `Value` enum represents all Scheme values:
+- **Numeric tower**: `Integer`, `BigInteger`, `Rational`, `Real`, `Complex`
+  - Uses `num-bigint`, `num-rational` crates
+  - Automatic promotion on overflow
+  - See `PRD/phase1/NUMERIC_SUMMARY.md` for details
+- **Strings**: `String(Rc<RefCell<String>>)` - UTF-8 with O(n) character indexing (R7RS compliant)
   - See `PRD/phase1/STRING_OPTIMIZATION.md` for future optimization plans
-- Data structures: `Pair`, `Null`, `Vector`, `Bytevector`
-- Procedures: `Primitive` (built-in) or `Lambda` (user-defined)
-- Uses `Rc<T>` for efficient sharing of immutable data (strings, symbols, pairs)
-- Uses `Rc<RefCell<T>>` for mutable data (strings, environments)
+- **Data structures**: `Pair`, `Null`, `Vector`, `Bytevector`
+- **Procedures**: `Primitive` (built-in) or `Lambda` (user-defined)
+- **Macros**: `Macro { name, data }` - Hygienic macro transformers
+- Uses `Rc<T>` for efficient sharing of immutable data
+- Uses `Rc<RefCell<T>>` for mutable data (environments)
 
-### Environment Model (`src/env/mod.rs`)
+### Environment Model
+
+**Location:** `crates/patina-runtime/src/environment.rs`
 
 - Lexical scoping with parent environment chains
 - Uses `Rc<RefCell<HashMap>>` for mutable bindings (required for `set!`)
 - Global environment initialized with primitive procedures
 
-### Evaluator Module Structure (`src/eval/`)
+### Frontend Pipeline
 
-The evaluator has been refactored into a modular structure (as of 2025-11-05):
+**Location:** `crates/patina-frontend/src/`
 
-- **`mod.rs`** (~143 lines): Core orchestrator
-  - `Evaluator` struct with global environment
-  - `eval()` - Public API entry point
-  - `eval_in_env()` - Internal recursive evaluator
-  - `eval_list()` - Dispatches to special forms or procedure calls
-  - `load_bootstrap()` - Loads bootstrap Scheme library
+1. **Lexer** (`lexer/mod.rs`):
+   - Tokenizes Scheme source into tokens
+   - Handles R7RS token types including vectors, bytevectors, characters
+   - Rejects reserved characters `[`, `]`, `{`, `}`
 
-- **`error.rs`** (~27 lines): Error types
-  - `EvalError` enum with all evaluation error variants
+2. **Parser** (`parser/mod.rs`):
+   - Builds AST (as `Value` enum) from tokens
+   - Handles quote shorthands (`'`, `` ` ``, `,`, `,@`)
+   - Parses numeric literals with full numeric tower support
 
-- **`special_forms.rs`** (~1,086 lines): Special form evaluation
-  - All special form evaluators: `eval_quote`, `eval_if`, `eval_define`, `eval_set`, `eval_lambda`, `eval_begin`, `eval_cond`, `eval_case`
-  - Binding constructs: `eval_let`, `eval_let_star`, `eval_letrec`, `eval_letrec_star`, `eval_let_values`, `eval_let_star_values`
-  - Boolean operators: `eval_and`, `eval_or`
-  - Higher-order: `eval_apply`
-  - Helper functions: `extract_pair`, `list_from_vec`, `parse_lambda_params`, `collect_list_items`, `bind_values_to_formals`
+3. **Macro Expander** (`macro_expander/`):
+   - Implements R7RS `syntax-rules` hygienic macros
+   - Pattern matching and template expansion
+   - Gensym-based hygiene (format: `##name#counter`)
+   - Core macros defined in `lib/bootstrap.scm`
 
-- **`application.rs`** (~114 lines): Procedure application
-  - `eval_arguments()` - Evaluates argument expressions
-  - `apply()` - Applies procedures (primitive or lambda) to arguments
-  - `check_arity()` - Validates argument counts against procedure arity
+### Tree-Walking Interpreter
 
-- **`primitives.rs`** (~1,391 lines): Primitive procedures
-  - `apply_primitive()` - Dispatcher for all primitive calls
-  - `install_primitives()` - Registers all primitives in global environment
-  - All primitive implementations organized by category:
-    - Arithmetic: `+`, `-`, `*`, `/` with overflow detection and inexact contagion
-    - Comparisons: `=`, `<`, `>`, `<=`, `>=` supporting mixed numeric types
-    - Pair/List operations: `cons`, `car`, `cdr`, `list`, `length`, `append`, `reverse`, `list-ref`, `list-tail`
-    - Search: `memq`, `memv`, `member`, `assq`, `assv`, `assoc`
-    - Type predicates: `number?`, `integer?`, `boolean?`, `string?`, `symbol?`, `exact?`, `inexact?`, `null?`, `pair?`, `list?`
-    - Equality: `eq?`, `eqv?`, `equal?` with structural comparison
-    - Higher-order: `map`, `for-each`
-    - Multiple values: `values`, `call-with-values`
-    - Numeric operations: `quotient`, `remainder`, `modulo`, `abs`, `max`, `min`
+**Location:** `crates/patina-tree-walker/src/eval/`
 
-This modular structure makes the codebase more maintainable and easier to navigate. Each module has a clear, single responsibility.
+**Core Evaluator** (`mod.rs`):
+- Trampoline pattern for tail call optimization (TCO)
+- `eval_step_impl()` - Main evaluation loop
+- Handles special forms, macros, and procedure calls
+- Loads `lib/bootstrap.scm` on initialization
 
-### REPL (`src/repl/mod.rs`)
+**Special Forms** (`special_forms.rs`):
+- `quote`, `if`, `define`, `set!`, `lambda`, `begin`
+- `cond`, `case`, `do` (with TCO)
+- Binding forms: `let`, `let*`, `letrec`, `letrec*`
+- Multiple values: `let-values`, `let*-values`
+- Boolean: `and`, `or` (short-circuit)
+- Higher-order: `apply`
+- Macros: `define-syntax`, `syntax-rules`
 
-Rich terminal interface built with rustyline:
-- `highlighter.rs`: Real-time syntax highlighting with nu-ansi-term
-- `validator.rs`: Multi-line input validation (checks parenthesis balancing)
-- `completer.rs`: Tab completion (TODO)
-- History saved to `~/.patina_history`
+**Primitives** (`primitives/mod.rs` and subdirectories):
+- Organized by category (arithmetic, lists, strings, vectors, etc.)
+- ~100+ R7RS procedures implemented
+- See `primitives/` subdirectories for organization
+- TCO support for `call-with-values` via special primitive type
 
-### Public API (`src/lib.rs`)
+**Error Handling** (`error.rs`):
+- `EvalError` enum for all evaluation errors
+- Converts `FrontendError` from macro expansion
+
+### High-Level API
+
+**Location:** `crates/patina-interpreter/src/lib.rs`
 
 The `Interpreter` struct provides the main programmatic interface:
-- `eval_str(input: &str)`: Parse and evaluate a single expression
-- `eval_program(input: &str)`: Evaluate multiple expressions, return last result
+
+```rust
+use patina_interpreter::Interpreter;
+
+let interp = Interpreter::new();
+let result = interp.eval_str("(+ 1 2 3)").unwrap();  // Single expression
+let result = interp.eval_program("(define x 10) x").unwrap();  // Multiple expressions
+```
+
+Methods:
+- `new()` - Create interpreter with fresh environment
+- `eval_str(input: &str)` - Parse and evaluate a single expression
+- `eval_program(input: &str)` - Evaluate multiple expressions, return last result
+- `evaluator()` - Access underlying evaluator (for advanced use)
 
 ## Testing Strategy
 
-### Test Organization (Reorganized 2025-11-02)
+**See `docs/TEST_ORGANIZATION.md` for comprehensive testing documentation.**
 
-Tests are now organized to mirror the R7RS specification structure:
+### Test Organization
 
-**Compliance Tests** (`tests/compliance.rs` + `tests/compliance/`):
-- `primitives.rs` - Section 4.1: Primitive expressions (quote, lambda, if, define, set!)
-- `derived.rs` - Section 4.2: Derived expressions (cond, case, let, and, or, etc.)
-- `numbers.rs` - Section 6.2: Numeric operations and predicates
-- `lists.rs` - Section 6.4: Pairs and lists
-- `predicates.rs` - Type predicates and equality
+**Unit Tests** - In component crates with `#[cfg(test)]`:
+- `patina-frontend`: 61 tests (lexer, parser, macro patterns)
+- `patina-runtime`: 2 tests (environment operations)
 
-**Integration Tests** (`tests/integration.rs` + `tests/integration/`):
-- `comparison_test.rs` - Side-by-side comparison with chibi-scheme
-- `scheme_runner.rs` - Infrastructure for running .scm test files
-- `file_runner.rs` - Test file discovery and execution
+**Integration Tests** - In `crates/patina-tests/tests/`:
+- `compliance/` - R7RS spec tests (~285 tests)
+- `integration/` - Chibi comparison (~13 tests)
+- `interpreter_api.rs` - API tests (6 tests)
+- `tail_recursion.rs` - TCO tests (36 tests)
+- `numeric_operations.rs` - Numeric tower (25 tests)
 
-**Test Fixtures** (`tests/fixtures/`):
-- `r7rs/` - R7RS compliance test cases
-- `examples/` - Example Scheme programs organized by feature
-
-**Common Helpers** (`tests/common/mod.rs`):
-- `assert_eval_to(expr, expected)` - Test expression evaluation
-- `assert_program_eval_to(code, expected)` - Test multi-expression programs
-- `assert_eval_error(expr)` - Test error cases
+**Test Utilities** (`crates/patina-tests/tests/common/mod.rs`):
+```rust
+assert_eval_to(expr, expected)           // Test expression evaluation
+assert_program_eval_to(code, expected)   // Test multi-expression programs
+assert_eval_error(expr)                  // Test error cases
+```
 
 ### Running Tests
 
-```bash
-# All tests
-cargo test
+See Development Commands section above for test commands.
 
-# Compliance tests only (R7RS spec coverage)
-cargo test --test compliance
-
-# Integration tests only
-cargo test --test integration
-
-# Specific category
-cargo test --test compliance primitives
-cargo test --test compliance numbers
-
-# Generate progress report
-./scripts/test_report.sh
-```
-
-### Test Status Tracking
-
-See `docs/FEATURE_STATUS.md` for detailed feature-by-feature status tracking (canonical source).
-
-Current status: **44/93 tests passing (47%)**
-- Primitives: 18/20 (90%) ✅
-- Numbers: 11/23 (47%) ⚠️
-- Lists: 6/19 (31%) ⚠️
-- Predicates: 7/12 (58%) ✅
-- Derived: 2/19 (10%) ❌
-
-### Test Infrastructure Notes
-- Tests can optionally compare output with chibi-scheme if installed
-- Use `SKIP_CHIBI_TESTS=1` environment variable to skip chibi comparisons
-- The interpreter maintains state between `eval_str` calls in the same `Interpreter` instance
-- `Value::Unspecified` is returned by definitions and should not be displayed
-- Run `./scripts/test_report.sh` for a visual progress report
-
-## Implementation Status
-
-### Currently Working (Updated 2025-11-02)
-
-**Special Forms:**
-- quote - Full support including shorthand `'expr`
-- if - With and without else clause
-- define - Variable definitions (function shorthand not yet implemented)
-- set! - Mutation of existing bindings
-- lambda - **Full support with closures!** (Fixed/variadic/mixed arity)
-- begin - Sequential evaluation
-- cond - Multi-branch conditionals with else
-
-**Arithmetic:**
-- +, -, *, / - Full support (integers only currently)
-- =, <, >, <=, >= - Comparison operators (integers only)
-
-**List Operations:**
-- cons, car, cdr - Pair operations
-- null?, pair? - Type predicates
-- list - List constructor
-
-**Type Predicates:**
-- eq?, eqv?, equal? - Equality predicates
-- boolean?, number?, integer?, string?, symbol? - Type checks
-
-**Value Types:**
-- All R7RS value types parsed: booleans, numbers (full tower), characters, strings, symbols, pairs, vectors, bytevectors
-
-### High-Priority TODOs for R7RS Compliance
-
-**Phase 1 (Next 2-3 weeks):**
-1. **let, let*, letrec** - Binding constructs (blocks 23% of tests)
-2. **and, or** - Short-circuit boolean operators
-3. **apply** - Critical for higher-order functions
-4. **map, for-each** - Common list operations
-5. **Tail call optimization** - Required by R7RS
-
-**Phase 2 (Weeks 4-5):**
-6. **Numeric operations** - abs, quotient, remainder, modulo, predicates
-7. **List operations** - length, append, reverse, list-ref
-8. **case** - Pattern matching conditional
-
-**Phase 3 (Weeks 6+):**
-9. **String operations** - Full string manipulation suite
-10. **Vector operations** - Vector manipulation suite
-11. **I/O and ports** - display, write, file operations
-12. **Exception handling** - guard, raise, with-exception-handler
-13. **Hygienic macros** - syntax-rules, define-syntax
-14. **Continuations** - call/cc (complex, lower priority)
-
-See `docs/FEATURE_STATUS.md` for complete feature-by-feature tracking.
+**Total: 435 tests (392 passing, 43 ignored)**
 
 ## Code Organization Principles
 
 ### When Adding Features
-- **New primitives**: Add implementation in `eval/primitives.rs` and register in `install_primitives()` function
-- **New special forms**: Add dispatch case in `eval/mod.rs::eval_list()`, implement handler in `eval/special_forms.rs`
-- **Value types**: Extend the `Value` enum in `value/mod.rs`
-- **Display formatting**: Implement `std::fmt::Display` for new Value variants
+
+**New primitives**:
+- Add implementation in `crates/patina-tree-walker/src/eval/primitives/<category>.rs`
+- Register in `primitives/mod.rs::install_primitives()`
+
+**New special forms**:
+- Add dispatch case in `crates/patina-tree-walker/src/eval/mod.rs::eval_step_impl()`
+- Implement handler in `crates/patina-tree-walker/src/eval/special_forms.rs`
+
+**Value types**:
+- Extend `Value` enum in `crates/patina-runtime/src/value/mod.rs`
+- Implement `std::fmt::Display` for new variants
+
+**Parser features**:
+- Extend lexer in `crates/patina-frontend/src/lexer/mod.rs`
+- Extend parser in `crates/patina-frontend/src/parser/mod.rs`
 
 ### Error Handling
-- Use `EvalError` enum (defined in `eval/error.rs`) for evaluation errors
-- Use `ParseError` enum for parsing issues
-- Use `LexError` enum for lexical issues
-- Wrap in `InterpreterError` at the public API level
 
-### Module Organization (Evaluator)
-The evaluator follows a clean separation of concerns:
-- `eval/mod.rs` - Core evaluation logic and orchestration (keep minimal)
-- `eval/error.rs` - Error type definitions
-- `eval/special_forms.rs` - All special form implementations
-- `eval/application.rs` - Procedure application logic
-- `eval/primitives.rs` - All primitive procedure implementations
+- Use `EvalError` (in `patina-tree-walker/src/eval/error.rs`) for evaluation errors
+- Use `ParseError` (in `patina-frontend`) for parsing issues
+- Use `LexError` (in `patina-frontend`) for lexical issues
+- Use `FrontendError` (in `patina-frontend`) for general frontend errors
+- Wrap in `InterpreterError` at the public API level (`patina-interpreter`)
 
-When modifying the evaluator:
-- Keep `mod.rs` small and focused on core eval loop
-- Group related primitives together in `primitives.rs`
-- Use `pub(super)` visibility for functions that should only be accessible within the `eval` module
-- Helper functions should live in the module where they're primarily used
+### Module Organization
+
+**Evaluator** (in `patina-tree-walker/src/eval/`):
+- `mod.rs` - Core evaluation logic (keep minimal)
+- `error.rs` - Error type definitions
+- `special_forms.rs` - All special form implementations
+- `application.rs` - Procedure application logic
+- `primitives/` - All primitive implementations organized by category
+- `debug.rs` - Debug tracing support
+
+**Keep module boundaries clean:**
+- Use `pub(crate)` for internal APIs within a crate
+- Use `pub(super)` for module-private functions
+- Only expose what's needed at crate boundaries
 
 ### Memory Management
+
 - Use `Rc<T>` for immutable shared data (symbols, strings, pairs)
 - Use `Rc<RefCell<T>>` when interior mutability is needed (environments)
-- Avoid `clone()` when possible; prefer sharing via `Rc`
+- Avoid unnecessary `clone()`; prefer sharing via `Rc`
+- All `Value` operations work with `Rc` to minimize copying
+
+## Implementation Status
+
+See `docs/FEATURE_STATUS.md` for detailed test-by-test compliance matrix (canonical source).
+
+**Currently Implemented:**
+- Core special forms (quote, if, define, set!, lambda, begin, cond, case, do)
+- Binding forms (let, let*, letrec, letrec*, let-values, let*-values)
+- Boolean operators (and, or)
+- Full numeric tower (integers, bignums, rationals, reals, complex)
+- List operations (cons, car, cdr, list, append, map, for-each, etc.)
+- String operations (basic)
+- Vector operations (basic)
+- Type predicates and equality
+- Tail call optimization
+- Hygienic macros (syntax-rules)
+- Multiple values (values, call-with-values)
+
+**High-Priority TODOs:**
+- I/O and ports (display, write, file operations)
+- Exception handling (guard, raise)
+- Module system
+- Full string/vector suites
+- Continuations (call/cc)
 
 ## Future Phases
 
-Phase 2 will add gradual typing (Typed Racket-style). Phase 3 adds reactive streams (Project Reactor-style). Phase 4 adds miniKanren logic programming. Keep the core interpreter clean and modular to support these extensions.
+**Phase 2**: Gradual typing (Typed Racket-style)
+**Phase 3**: Reactive streams (Project Reactor-style)
+**Phase 4**: miniKanren logic programming
+
+The workspace structure supports this evolution:
+- Multiple backends: Add `patina-vm/`, `patina-jit/` alongside `patina-tree-walker/`
+- All backends implement same interface for `patina-interpreter`
+- Tests automatically run against all backends
+- See `PRD/MULTI_BACKEND_STRATEGY.md` for details
 
 ## Notebook Mode (Future Feature)
 

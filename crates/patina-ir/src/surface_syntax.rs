@@ -8,7 +8,6 @@ use patina_runtime::Value;
 pub enum SurfaceSyntax {
     /// Direct Value (from parser)
     Value(Value),
-
     // Note: For Phase 1, we'll just use Value directly from the parser.
     // This enum can be expanded later when we implement the frontend.
 }

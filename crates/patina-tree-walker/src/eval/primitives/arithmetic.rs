@@ -8,10 +8,10 @@
 
 use super::super::error::EvalError;
 use super::super::Evaluator;
-use patina_runtime::value::Value;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{Signed, ToPrimitive, Zero};
+use patina_runtime::value::Value;
 
 /// Internal representation for numeric operations
 /// Automatically promotes to the most general type needed

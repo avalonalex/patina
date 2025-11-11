@@ -7,8 +7,8 @@
 //! - Ellipsis escaping (for literal `...`)
 
 use super::{Bindings, Template};
-use patina_runtime::Value;
 use crate::error::FrontendError;
+use patina_runtime::Value;
 use std::rc::Rc;
 
 /// Expand a template using pattern variable bindings
@@ -33,7 +33,10 @@ use std::rc::Rc;
 /// bindings.insert("test".into(), BindingValue::Single(Value::Boolean(true)));
 /// let result = expand_template(&template, &bindings).unwrap();
 /// ```
-pub fn expand_template(template: &Template, bindings: &Bindings) -> Result<Value, crate::error::FrontendError> {
+pub fn expand_template(
+    template: &Template,
+    bindings: &Bindings,
+) -> Result<Value, crate::error::FrontendError> {
     expand_template_impl(template, bindings, 0)
 }
 

@@ -37,12 +37,7 @@ pub trait ExprVisitor {
     }
 
     /// Visit an if expression
-    fn visit_if(
-        &mut self,
-        test: &CoreExpr,
-        then: &CoreExpr,
-        else_: &CoreExpr,
-    ) -> Self::Output {
+    fn visit_if(&mut self, test: &CoreExpr, then: &CoreExpr, else_: &CoreExpr) -> Self::Output {
         let _ = (test, then, else_);
         unimplemented!("Subclasses should override visit_if if needed")
     }
