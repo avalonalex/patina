@@ -231,27 +231,27 @@ Use `Rc<Evaluator>` or restructure to avoid circular references. This requires r
 - `crates/patina-tests/tests/sld_file_loading.rs`
   - Added #[cfg_attr] to ignore flaky tests in release mode
 
+## Running the Chibi Test Suite
+
+The project includes the comprehensive r7rs-tests.scm from chibi-scheme for compatibility testing.
+
+**Location:** `scheme_tests/chibi/r7rs-tests.scm`
+
+**Run the test suite:**
+```bash
+./scripts/run_chibi_tests.sh
+```
+
+This will:
+1. Run the r7rs test suite with Patina interpreter
+2. Generate compatibility report in `scheme_tests/reports/compatibility.md`
+3. Show summary of passed/failed/error counts
+
+**Note:** The test suite requires all R7RS standard libraries to be implemented. Currently, many features are missing (see Future Improvements below), so expect many test failures initially.
+
+**Attribution:** The test file is from the chibi-scheme project (BSD 3-Clause license). See `scheme_tests/README.md` for full attribution.
+
 ## Next Steps
-
-### For Running Chibi Test Suite
-
-1. **Create test directory structure:**
-   ```
-   scheme_tests/
-   ├── chibi/
-   │   └── r7rs-tests.scm
-   └── reports/
-       └── compatibility.md
-   ```
-
-2. **Create test runner script** (not unit tests):
-   ```bash
-   #!/bin/bash
-   # scripts/run_chibi_tests.sh
-   ./target/release/patina scheme_tests/chibi/r7rs-tests.scm
-   ```
-
-3. **Generate compatibility report** - Track progress against chibi-scheme
 
 ### Future Improvements
 
@@ -273,5 +273,5 @@ Use `Rc<Evaluator>` or restructure to avoid circular references. This requires r
 
 - **R7RS Specification:** Section 5.6 (Libraries), Section 5.2 (Import declarations)
 - **Implementation:** `PRD/phase1/LIBRARY_SYSTEM_DESIGN.md`
-- **Status:** `docs/LIBRARY_SYSTEM_STATUS.md`
-- **Chibi Roadmap:** `docs/CHIBI_TEST_SUITE_ROADMAP.md`
+- **Test Suite Status:** `docs/CHIBI_TEST_SUITE_STATUS.md`
+- **Feature Status:** `docs/FEATURE_STATUS.md`

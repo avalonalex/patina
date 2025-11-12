@@ -19,7 +19,9 @@ mod scheme_complex;
 mod scheme_inexact;
 mod scheme_stubs;
 
-pub use chibi_test::{build_chibi_test, test_begin, test_end};
+pub use chibi_test::{
+    build_chibi_test, test_begin, test_end, test_increment_failed, test_increment_passed,
+};
 pub use scheme_base::build_scheme_base;
 pub use scheme_char::build_scheme_char;
 pub use scheme_complex::build_scheme_complex;

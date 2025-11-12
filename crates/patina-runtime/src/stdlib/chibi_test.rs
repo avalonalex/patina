@@ -46,10 +46,33 @@ pub fn build_chibi_test(_name: Vec<String>, env: Rc<Environment>) -> Vec<String>
         }),
     );
 
+    // test-increment-passed: Increment passed count (internal)
+    env.define(
+        "test-increment-passed".to_string(),
+        Value::Procedure(Procedure::Primitive {
+            name: "test-increment-passed",
+            arity: Arity::Exact(0),
+        }),
+    );
+
+    // test-increment-failed: Increment failed count (internal)
+    env.define(
+        "test-increment-failed".to_string(),
+        Value::Procedure(Procedure::Primitive {
+            name: "test-increment-failed",
+            arity: Arity::Exact(0),
+        }),
+    );
+
     // Note: 'test' is defined as a macro in bootstrap.scm and is globally available
     // We don't need to export it from this library since it's already available
 
-    vec!["test-begin".to_string(), "test-end".to_string()]
+    vec![
+        "test-begin".to_string(),
+        "test-end".to_string(),
+        "test-increment-passed".to_string(),
+        "test-increment-failed".to_string(),
+    ]
 }
 
 /// Implementation for test-begin primitive
@@ -74,6 +97,24 @@ pub fn test_end() {
             state.tests_run, state.tests_passed, state.tests_failed
         );
         println!();
+    });
+}
+
+/// Increment passed test count
+pub fn test_increment_passed() {
+    TEST_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.tests_run += 1;
+        state.tests_passed += 1;
+    });
+}
+
+/// Increment failed test count
+pub fn test_increment_failed() {
+    TEST_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.tests_run += 1;
+        state.tests_failed += 1;
     });
 }
 

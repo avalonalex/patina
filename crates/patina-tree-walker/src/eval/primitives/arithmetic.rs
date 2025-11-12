@@ -801,23 +801,9 @@ pub(super) fn sqrt(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErr
 pub(super) fn square(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "square")?;
 
-    match &args[0] {
-        Value::Integer(n) => {
-            // Check for overflow
-            match n.checked_mul(*n) {
-                Some(result) => Ok(Value::Integer(result)),
-                None => {
-                    let big_n = BigInt::from(*n);
-                    Ok(Value::BigInteger(&big_n * &big_n))
-                }
-            }
-        }
-        Value::Real(f) => Ok(Value::Real(f * f)),
-        other => Err(EvalError::TypeError(format!(
-            "square expects a number, got {}",
-            other.type_name()
-        ))),
-    }
+    let num = NumericValue::from_value(args[0].clone())?;
+    let result = num.clone().multiply(num);
+    Ok(result.into_value(_eval))
 }
 
 /// (expt base power) - Exponentiation

@@ -225,6 +225,14 @@ impl Evaluator {
                 patina_runtime::stdlib::test_end();
                 Ok(super::EvalResult::Value(Value::Unspecified))
             }
+            "test-increment-passed" => {
+                patina_runtime::stdlib::test_increment_passed();
+                Ok(super::EvalResult::Value(Value::Unspecified))
+            }
+            "test-increment-failed" => {
+                patina_runtime::stdlib::test_increment_failed();
+                Ok(super::EvalResult::Value(Value::Unspecified))
+            }
 
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
