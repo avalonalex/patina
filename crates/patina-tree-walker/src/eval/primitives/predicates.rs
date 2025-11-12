@@ -18,8 +18,8 @@
 //! - primitive_char_p()
 //! - primitive_vector_p()
 
-use super::super::error::EvalError;
 use super::super::Evaluator;
+use super::super::error::EvalError;
 use patina_runtime::value::Value;
 
 pub(super) fn number_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {

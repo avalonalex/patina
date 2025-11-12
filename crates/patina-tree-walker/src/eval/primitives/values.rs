@@ -4,8 +4,8 @@
 //! - `values` - Return multiple values
 //! - `call-with-values` - Call producer and consumer (also a special form for tail calls)
 
-use super::super::error::EvalError;
 use super::super::Evaluator;
+use super::super::error::EvalError;
 use patina_runtime::value::Value;
 
 pub(super) fn values(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -48,7 +48,7 @@ pub(super) fn call_with_values(
         _ => {
             return Err(EvalError::InternalError(
                 "Unexpected tail call from producer in call-with-values".to_string(),
-            ))
+            ));
         }
     };
 

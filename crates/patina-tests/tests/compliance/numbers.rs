@@ -174,7 +174,10 @@ fn test_exact_predicate() {
     assert_eval_to("(exact? 0)", "#t");
     // BigInteger should be exact
     assert_eval_to("(exact? 9223372036854775808)", "#t");
-    assert_eval_to("(exact? (- (+ 1 10000000000000000000000000000000000) 10000000000000000000000000000000000))", "#t"); // i64::MAX + 1 // i64::MAX + 1
+    assert_eval_to(
+        "(exact? (- (+ 1 10000000000000000000000000000000000) 10000000000000000000000000000000000))",
+        "#t",
+    ); // i64::MAX + 1 // i64::MAX + 1
     assert_eval_to("(exact? 10000000000000000000)", "#t");
 }
 

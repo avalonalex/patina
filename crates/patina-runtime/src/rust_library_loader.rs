@@ -3,10 +3,10 @@
 //! Loads libraries implemented in Rust code.
 //! This is used for performance-critical standard libraries like (scheme base).
 
+use crate::Environment;
 use crate::library::Library;
 use crate::library_loader::{LibraryLoader, RustLibraryBuilder};
 use crate::library_registry::LibraryError;
-use crate::Environment;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;

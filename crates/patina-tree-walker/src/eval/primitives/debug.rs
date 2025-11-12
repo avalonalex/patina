@@ -1,6 +1,6 @@
+use super::super::Evaluator;
 use super::super::debug::DebugStage;
 use super::super::error::EvalError;
-use super::super::Evaluator;
 use patina_runtime::value::Value;
 
 pub(super) fn debug_enable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -19,7 +19,7 @@ pub(super) fn debug_enable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Va
                     return Err(EvalError::TypeError(format!(
                         "Unknown debug stage: {}. Valid: lex, parse, eval, apply, env, expand",
                         stage_name
-                    )))
+                    )));
                 }
             };
 
@@ -48,7 +48,7 @@ pub(super) fn debug_disable(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
                     return Err(EvalError::TypeError(format!(
                         "Unknown debug stage: {}",
                         stage_name
-                    )))
+                    )));
                 }
             };
 

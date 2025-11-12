@@ -164,10 +164,10 @@ fn collect_free_identifiers(
         Value::Pair(pair) => {
             // Check if this is a quote form - if so, don't recurse into it
             // Quote forms are literal data and should not have identifiers renamed
-            if let Value::Symbol(sym) = &pair.0 {
-                if sym.as_ref() == "quote" {
-                    return; // Don't collect identifiers inside quote
-                }
+            if let Value::Symbol(sym) = &pair.0
+                && sym.as_ref() == "quote"
+            {
+                return; // Don't collect identifiers inside quote
             }
 
             collect_free_identifiers(&pair.0, pattern_vars, env, free_ids);
@@ -207,10 +207,10 @@ fn rename_identifiers(
         Value::Pair(pair) => {
             // Check if this is a quote form - if so, don't rename inside it
             // Quote forms are literal data and should not be modified
-            if let Value::Symbol(sym) = &pair.0 {
-                if sym.as_ref() == "quote" {
-                    return expr.clone(); // Return quote form unchanged
-                }
+            if let Value::Symbol(sym) = &pair.0
+                && sym.as_ref() == "quote"
+            {
+                return expr.clone(); // Return quote form unchanged
             }
 
             let car = rename_identifiers(&pair.0, renamings);

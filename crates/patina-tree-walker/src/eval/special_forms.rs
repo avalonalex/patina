@@ -18,8 +18,8 @@ use patina_runtime::value::{Procedure, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::error::EvalError;
 use super::Evaluator;
+use super::error::EvalError;
 
 /// Type alias for do loop bindings: (variable_name, init_expr, optional_step_expr)
 type DoBinding = (Rc<str>, Value, Option<Value>);
@@ -214,65 +214,59 @@ impl Evaluator {
 
                     // Check if CDR is an unquote form (for improper lists like (a . ,x))
                     // We need to check this BEFORE processing CAR
-                    if depth == 0 {
-                        if let Value::Pair(cdr_pair) = cdr {
-                            if let Value::Symbol(sym) = &cdr_pair.0 {
-                                if sym.as_ref() == "unquote" {
-                                    // This is an improper list: (... car . ,expr)
-                                    // Process car normally, then evaluate the unquote as tail
-                                    let processed_car =
-                                        self.eval_quasiquote_impl(car, env, depth)?;
-                                    elements.push(processed_car);
+                    if depth == 0
+                        && let Value::Pair(cdr_pair) = cdr
+                        && let Value::Symbol(sym) = &cdr_pair.0
+                        && sym.as_ref() == "unquote"
+                    {
+                        // This is an improper list: (... car . ,expr)
+                        // Process car normally, then evaluate the unquote as tail
+                        let processed_car = self.eval_quasiquote_impl(car, env, depth)?;
+                        elements.push(processed_car);
 
-                                    // Evaluate the unquote expression
-                                    let (unquote_expr, rest) = self.extract_pair(&cdr_pair.1)?;
-                                    if !matches!(rest, Value::Null) {
-                                        return Err(EvalError::InvalidSyntax(
-                                            "unquote expects exactly one argument".to_string(),
-                                        ));
-                                    }
-                                    tail = self.eval_in_env(&unquote_expr, env)?;
-                                    break;
-                                }
-                            }
+                        // Evaluate the unquote expression
+                        let (unquote_expr, rest) = self.extract_pair(&cdr_pair.1)?;
+                        if !matches!(rest, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(
+                                "unquote expects exactly one argument".to_string(),
+                            ));
                         }
+                        tail = self.eval_in_env(&unquote_expr, env)?;
+                        break;
                     }
 
                     // Check if this element is (unquote-splicing ...)
-                    if depth == 0 {
-                        if let Value::Pair(inner_pair) = car {
-                            if let Value::Symbol(sym) = &inner_pair.0 {
-                                if sym.as_ref() == "unquote-splicing" {
-                                    // Evaluate the splicing expression
-                                    let (splice_expr, rest) = self.extract_pair(&inner_pair.1)?;
-                                    if !matches!(rest, Value::Null) {
-                                        return Err(EvalError::InvalidSyntax(
-                                            "unquote-splicing expects exactly one argument"
-                                                .to_string(),
-                                        ));
-                                    }
-
-                                    let splice_result = self.eval_in_env(&splice_expr, env)?;
-
-                                    // Must be a list
-                                    if !self.is_list(&splice_result) {
-                                        return Err(EvalError::InvalidSyntax(
-                                            "unquote-splicing result must be a list".to_string(),
-                                        ));
-                                    }
-
-                                    // Append all elements from the spliced list
-                                    let mut splice_current = splice_result;
-                                    while let Value::Pair(splice_pair) = splice_current {
-                                        elements.push(splice_pair.0.clone());
-                                        splice_current = splice_pair.1.clone();
-                                    }
-
-                                    current = cdr.clone();
-                                    continue;
-                                }
-                            }
+                    if depth == 0
+                        && let Value::Pair(inner_pair) = car
+                        && let Value::Symbol(sym) = &inner_pair.0
+                        && sym.as_ref() == "unquote-splicing"
+                    {
+                        // Evaluate the splicing expression
+                        let (splice_expr, rest) = self.extract_pair(&inner_pair.1)?;
+                        if !matches!(rest, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(
+                                "unquote-splicing expects exactly one argument".to_string(),
+                            ));
                         }
+
+                        let splice_result = self.eval_in_env(&splice_expr, env)?;
+
+                        // Must be a list
+                        if !self.is_list(&splice_result) {
+                            return Err(EvalError::InvalidSyntax(
+                                "unquote-splicing result must be a list".to_string(),
+                            ));
+                        }
+
+                        // Append all elements from the spliced list
+                        let mut splice_current = splice_result;
+                        while let Value::Pair(splice_pair) = splice_current {
+                            elements.push(splice_pair.0.clone());
+                            splice_current = splice_pair.1.clone();
+                        }
+
+                        current = cdr.clone();
+                        continue;
                     }
 
                     // Regular element: process recursively
@@ -333,7 +327,7 @@ impl Evaluator {
                 _ => {
                     return Err(EvalError::InvalidSyntax(
                         "Cannot convert improper list to vector".to_string(),
-                    ))
+                    ));
                 }
             }
         }
@@ -365,7 +359,7 @@ impl Evaluator {
             _ => {
                 return Err(EvalError::InvalidSyntax(
                     "Malformed if expression".to_string(),
-                ))
+                ));
             }
         };
 
@@ -433,7 +427,7 @@ impl Evaluator {
                     _ => {
                         return Err(EvalError::InvalidSyntax(
                             "define: function name must be a symbol".to_string(),
-                        ))
+                        ));
                     }
                 };
 
@@ -555,7 +549,7 @@ impl Evaluator {
                         _ => {
                             return Err(EvalError::InvalidSyntax(
                                 "invalid lambda parameter list".to_string(),
-                            ))
+                            ));
                         }
                     }
                 }
@@ -754,7 +748,7 @@ impl Evaluator {
             _ => {
                 return Err(EvalError::InvalidSyntax(
                     "define-syntax name must be a symbol".to_string(),
-                ))
+                ));
             }
         };
 
@@ -793,7 +787,7 @@ impl Evaluator {
             _ => {
                 return Err(EvalError::InvalidSyntax(
                     "Expected syntax-rules".to_string(),
-                ))
+                ));
             }
         }
 
@@ -824,7 +818,7 @@ impl Evaluator {
                 _ => {
                     return Err(EvalError::InvalidSyntax(
                         "syntax-rules literals must be symbols".to_string(),
-                    ))
+                    ));
                 }
             }
             current = pair.1.clone();
@@ -1019,7 +1013,7 @@ impl Evaluator {
                 _ => {
                     return Err(EvalError::InvalidSyntax(
                         "do binding variable must be a symbol".to_string(),
-                    ))
+                    ));
                 }
             };
 
@@ -1040,7 +1034,7 @@ impl Evaluator {
                 _ => {
                     return Err(EvalError::InvalidSyntax(
                         "do binding must be a proper list".to_string(),
-                    ))
+                    ));
                 }
             };
 

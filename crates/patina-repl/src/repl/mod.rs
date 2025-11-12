@@ -15,10 +15,10 @@ pub struct Repl {
     evaluator: Evaluator,
 }
 
+use rustyline::Context;
 use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::CmdKind;
 use rustyline::hint::{Hinter, HistoryHinter};
-use rustyline::Context;
 
 /// Helper that combines all REPL features
 struct SchemeHelper {

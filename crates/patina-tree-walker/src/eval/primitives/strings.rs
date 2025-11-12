@@ -7,8 +7,8 @@
 //!
 //! Total: 20 string primitives + 2 helper functions
 
-use super::super::error::EvalError;
 use super::super::Evaluator;
+use super::super::error::EvalError;
 use patina_runtime::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -37,14 +37,14 @@ pub(super) fn string_ref(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
         (Value::String(_), _) => {
             return Err(EvalError::TypeError(
                 "string-ref index must be an integer".to_string(),
-            ))
+            ));
         }
         _ => {
             return Err(EvalError::TypeError(format!(
                 "string-ref expects string and integer, got {} and {}",
                 args[0].type_name(),
                 args[1].type_name()
-            )))
+            )));
         }
     };
 
@@ -75,17 +75,17 @@ pub(super) fn string_set(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
         (Value::String(_), Value::Integer(_), _) => {
             return Err(EvalError::TypeError(
                 "string-set! third argument must be a character".to_string(),
-            ))
+            ));
         }
         (Value::String(_), _, _) => {
             return Err(EvalError::TypeError(
                 "string-set! index must be an integer".to_string(),
-            ))
+            ));
         }
         _ => {
             return Err(EvalError::TypeError(
                 "string-set! expects string, integer, and character".to_string(),
-            ))
+            ));
         }
     };
 
@@ -122,7 +122,7 @@ pub(super) fn make_string(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
         _ => {
             return Err(EvalError::TypeError(
                 "make-string length must be an integer".to_string(),
-            ))
+            ));
         }
     };
 
@@ -139,7 +139,7 @@ pub(super) fn make_string(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
             _ => {
                 return Err(EvalError::TypeError(
                     "make-string fill character must be a character".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -160,7 +160,7 @@ pub(super) fn string(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, 
                 return Err(EvalError::TypeError(format!(
                     "string expects characters, got {}",
                     arg.type_name()
-                )))
+                )));
             }
         }
     }
@@ -306,7 +306,7 @@ pub(super) fn string_append(_evaluator: &Evaluator, args: Vec<Value>) -> Result<
                 return Err(EvalError::TypeError(format!(
                     "string-append expects strings, got {}",
                     arg.type_name()
-                )))
+                )));
             }
         }
     }
@@ -322,12 +322,12 @@ pub(super) fn substring(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
         (Value::String(_), _, _) => {
             return Err(EvalError::TypeError(
                 "substring indices must be integers".to_string(),
-            ))
+            ));
         }
         _ => {
             return Err(EvalError::TypeError(
                 "substring expects string and two integers".to_string(),
-            ))
+            ));
         }
     };
 
@@ -370,7 +370,7 @@ pub(super) fn string_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<
         _ => {
             return Err(EvalError::TypeError(
                 "string->list expects a string".to_string(),
-            ))
+            ));
         }
     };
 
@@ -381,7 +381,7 @@ pub(super) fn string_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<
             _ => {
                 return Err(EvalError::TypeError(
                     "string->list start index must be an integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -394,7 +394,7 @@ pub(super) fn string_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<
             _ => {
                 return Err(EvalError::TypeError(
                     "string->list end index must be an integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -427,7 +427,7 @@ pub(super) fn list_to_string(evaluator: &Evaluator, args: Vec<Value>) -> Result<
             _ => {
                 return Err(EvalError::TypeError(
                     "list->string expects a list of characters".to_string(),
-                ))
+                ));
             }
         }
     }
@@ -443,7 +443,7 @@ pub(super) fn string_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
         _ => {
             return Err(EvalError::TypeError(
                 "string-copy expects a string".to_string(),
-            ))
+            ));
         }
     };
 
@@ -459,7 +459,7 @@ pub(super) fn string_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
         _ => {
             return Err(EvalError::TypeError(
                 "string-copy start index must be an integer".to_string(),
-            ))
+            ));
         }
     };
 
@@ -469,7 +469,7 @@ pub(super) fn string_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
             _ => {
                 return Err(EvalError::TypeError(
                     "string-copy end index must be an integer".to_string(),
-                ))
+                ));
             }
         }
     } else {

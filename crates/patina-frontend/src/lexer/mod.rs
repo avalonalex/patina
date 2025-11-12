@@ -37,7 +37,9 @@ pub enum LexError {
     #[error("Invalid character literal")]
     InvalidCharacter,
 
-    #[error("Reserved character (R7RS): {0}. Square brackets [ ] and curly braces {{ }} are reserved for future extensions")]
+    #[error(
+        "Reserved character (R7RS): {0}. Square brackets [ ] and curly braces {{ }} are reserved for future extensions"
+    )]
     ReservedCharacter(char),
 
     #[allow(dead_code)]

@@ -9,8 +9,8 @@ use patina_runtime::environment::Environment;
 use patina_runtime::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
-use super::error::EvalError;
 use super::Evaluator;
+use super::error::EvalError;
 
 impl Evaluator {
     /// Evaluate a list of argument expressions

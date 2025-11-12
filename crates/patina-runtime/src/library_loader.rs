@@ -10,9 +10,9 @@
 //! - Use Scheme for derived functions and syntactic sugar
 //! - Support both for maximum flexibility
 
+use crate::Environment;
 use crate::library::Library;
 use crate::library_registry::LibraryError;
-use crate::Environment;
 use std::path::PathBuf;
 use std::rc::Rc;
 

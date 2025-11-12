@@ -6,8 +6,8 @@
 //! - Integer division (quotient, remainder, modulo)
 //! - Numeric utilities (abs, max, min)
 
-use super::super::error::EvalError;
 use super::super::Evaluator;
+use super::super::error::EvalError;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{Signed, ToPrimitive, Zero};
@@ -617,7 +617,7 @@ pub(super) fn max(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
             return Err(EvalError::TypeError(format!(
                 "max requires integers, got {}",
                 args[0].type_name()
-            )))
+            )));
         }
     };
 
@@ -632,7 +632,7 @@ pub(super) fn max(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
                 return Err(EvalError::TypeError(format!(
                     "max requires integers, got {}",
                     arg.type_name()
-                )))
+                )));
             }
         }
     }
@@ -649,7 +649,7 @@ pub(super) fn min(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
             return Err(EvalError::TypeError(format!(
                 "min requires integers, got {}",
                 args[0].type_name()
-            )))
+            )));
         }
     };
 
@@ -664,7 +664,7 @@ pub(super) fn min(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
                 return Err(EvalError::TypeError(format!(
                     "min requires integers, got {}",
                     arg.type_name()
-                )))
+                )));
             }
         }
     }
@@ -883,7 +883,7 @@ pub(super) fn finite_p(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, Eva
             return Err(EvalError::TypeError(format!(
                 "finite? expects a number, got {}",
                 other.type_name()
-            )))
+            )));
         }
     };
 
@@ -902,7 +902,7 @@ pub(super) fn infinite_p(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, E
             return Err(EvalError::TypeError(format!(
                 "infinite? expects a number, got {}",
                 other.type_name()
-            )))
+            )));
         }
     };
 
@@ -921,7 +921,7 @@ pub(super) fn nan_p(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalEr
             return Err(EvalError::TypeError(format!(
                 "nan? expects a number, got {}",
                 other.type_name()
-            )))
+            )));
         }
     };
 
@@ -1044,7 +1044,7 @@ pub(super) fn gcd(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErro
                 return Err(EvalError::TypeError(format!(
                     "gcd expects exact integers, got {}",
                     other.type_name()
-                )))
+                )));
             }
         }
     }
@@ -1074,7 +1074,7 @@ pub(super) fn lcm(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErro
                 return Err(EvalError::TypeError(format!(
                     "lcm expects exact integers, got {}",
                     other.type_name()
-                )))
+                )));
             }
         };
 
@@ -1330,20 +1330,20 @@ pub(super) fn exact_integer_sqrt(_eval: &Evaluator, args: Vec<Value>) -> Result<
         Value::Integer(n) if *n < 0 => {
             return Err(EvalError::TypeError(
                 "exact-integer-sqrt expects a non-negative integer".to_string(),
-            ))
+            ));
         }
         Value::Integer(n) => BigInt::from(*n),
         Value::BigInteger(n) if n < &BigInt::from(0) => {
             return Err(EvalError::TypeError(
                 "exact-integer-sqrt expects a non-negative integer".to_string(),
-            ))
+            ));
         }
         Value::BigInteger(n) => n.clone(),
         other => {
             return Err(EvalError::TypeError(format!(
                 "exact-integer-sqrt expects an exact integer, got {}",
                 other.type_name()
-            )))
+            )));
         }
     };
 

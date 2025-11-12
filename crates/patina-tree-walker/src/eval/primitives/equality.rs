@@ -13,8 +13,8 @@
 //! - values_eqv() helper
 //! - values_equal() helper
 
-use super::super::error::EvalError;
 use super::super::Evaluator;
+use super::super::error::EvalError;
 use patina_runtime::value::Value;
 
 pub(super) fn eq(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {

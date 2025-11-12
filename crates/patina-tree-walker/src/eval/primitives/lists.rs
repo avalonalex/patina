@@ -18,8 +18,8 @@
 //! - primitive_assv()
 //! - primitive_assoc()
 
-use super::super::error::EvalError;
 use super::super::Evaluator;
+use super::super::error::EvalError;
 use super::equality::{values_eq, values_equal, values_eqv};
 use patina_runtime::value::Value;
 use std::rc::Rc;
@@ -105,12 +105,12 @@ pub(super) fn list_ref(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value,
         Value::Integer(_) => {
             return Err(EvalError::TypeError(
                 "list-ref: index must be non-negative".to_string(),
-            ))
+            ));
         }
         _ => {
             return Err(EvalError::TypeError(
                 "list-ref: index must be an integer".to_string(),
-            ))
+            ));
         }
     };
 
@@ -129,12 +129,12 @@ pub(super) fn list_tail(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
         Value::Integer(_) => {
             return Err(EvalError::TypeError(
                 "list-tail: index must be non-negative".to_string(),
-            ))
+            ));
         }
         _ => {
             return Err(EvalError::TypeError(
                 "list-tail: index must be an integer".to_string(),
-            ))
+            ));
         }
     };
 
@@ -200,7 +200,7 @@ pub(super) fn member(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
                     _ => {
                         return Err(EvalError::InternalError(
                             "Unexpected tail call in member comparison".to_string(),
-                        ))
+                        ));
                     }
                 };
             result.is_truthy()
@@ -224,10 +224,10 @@ pub(super) fn assq(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eva
     let mut current = args[1].clone();
 
     while let Value::Pair(pair) = current {
-        if let Value::Pair(entry) = &pair.0 {
-            if values_eq(obj, &entry.0) {
-                return Ok(pair.0.clone());
-            }
+        if let Value::Pair(entry) = &pair.0
+            && values_eq(obj, &entry.0)
+        {
+            return Ok(pair.0.clone());
         }
         current = pair.1.clone();
     }
@@ -241,12 +241,13 @@ pub(super) fn assv(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eva
     let obj = &args[0];
     let mut current = args[1].clone();
 
-    while let Value::Pair(pair) = current {
-        if let Value::Pair(entry) = &pair.0 {
-            if values_eqv(obj, &entry.0) {
-                return Ok(pair.0.clone());
-            }
+    while let Value::Pair(pair) = current
+        && let Value::Pair(entry) = &pair.0
+    {
+        if values_eqv(obj, &entry.0) {
+            return Ok(pair.0.clone());
         }
+
         current = pair.1.clone();
     }
 
@@ -278,7 +279,7 @@ pub(super) fn assoc(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
                     _ => {
                         return Err(EvalError::InternalError(
                             "Unexpected tail call in assoc comparison".to_string(),
-                        ))
+                        ));
                     }
                 };
                 result.is_truthy()

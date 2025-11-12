@@ -8,8 +8,8 @@
 //! - primitive_map()
 //! - primitive_for_each()
 
-use super::super::error::EvalError;
 use super::super::Evaluator;
+use super::super::error::EvalError;
 use patina_runtime::value::Value;
 
 pub(super) fn map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -64,7 +64,7 @@ pub(super) fn map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
             _ => {
                 return Err(EvalError::InternalError(
                     "Unexpected tail call in map".to_string(),
-                ))
+                ));
             }
         };
         results.push(result);
@@ -124,7 +124,7 @@ pub(super) fn for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value,
             _ => {
                 return Err(EvalError::InternalError(
                     "Unexpected tail call in for-each".to_string(),
-                ))
+                ));
             }
         }
     }

@@ -27,8 +27,8 @@ use patina_runtime::environment::Environment;
 use patina_runtime::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
-use super::error::EvalError;
 use super::Evaluator;
+use super::error::EvalError;
 
 impl Evaluator {
     /// Main dispatcher for primitive procedure calls
@@ -215,7 +215,7 @@ impl Evaluator {
                     _ => {
                         return Err(EvalError::TypeError(
                             "test-begin expects string or symbol".to_string(),
-                        ))
+                        ));
                     }
                 };
                 patina_runtime::stdlib::test_begin(&name);

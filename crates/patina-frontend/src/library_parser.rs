@@ -405,7 +405,7 @@ impl LibraryDefinition {
                     return Err(ParseError::InvalidSyntax(format!(
                         "Expected proper list, got improper list ending with: {}",
                         current
-                    )))
+                    )));
                 }
             }
         }

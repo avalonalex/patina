@@ -120,12 +120,12 @@ impl LibraryRegistry {
         }
 
         // 3. Executable directory/../lib/
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let mut lib_path = exe_dir.to_path_buf();
-                lib_path.push("../lib");
-                registry.add_search_path(lib_path);
-            }
+        if let Ok(exe_path) = std::env::current_exe()
+            && let Some(exe_dir) = exe_path.parent()
+        {
+            let mut lib_path = exe_dir.to_path_buf();
+            lib_path.push("../lib");
+            registry.add_search_path(lib_path);
         }
 
         registry

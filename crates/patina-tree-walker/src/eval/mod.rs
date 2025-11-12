@@ -76,7 +76,7 @@ impl Evaluator {
     /// 2. SchemeLibraryLoader for .sld files
     fn init_loaders(&self) {
         use crate::library_support::SchemeLibraryLoader;
-        use patina_runtime::{stdlib, RustLibraryLoader};
+        use patina_runtime::{RustLibraryLoader, stdlib};
 
         let mut loaders = self.loader_registry.borrow_mut();
 
@@ -275,12 +275,11 @@ impl Evaluator {
                 }
 
                 // If it's a gensym and not found, try looking it up in the global environment
-                if patina_frontend::macro_expander::hygiene::is_gensym(name.as_ref()) {
-                    if let Some(original_name) = extract_original_from_gensym(name.as_ref()) {
-                        if let Some(value) = self.global_env.get(&Rc::from(original_name)) {
-                            return Ok(EvalResult::Value(value));
-                        }
-                    }
+                if patina_frontend::macro_expander::hygiene::is_gensym(name.as_ref())
+                    && let Some(original_name) = extract_original_from_gensym(name.as_ref())
+                    && let Some(value) = self.global_env.get(&Rc::from(original_name))
+                {
+                    return Ok(EvalResult::Value(value));
                 }
 
                 Err(EvalError::UndefinedVariable(name.to_string()))
@@ -344,7 +343,7 @@ impl Evaluator {
                 "if" => return self.eval_if_impl(&cdr, env, in_tail_position),
                 "define" => return self.eval_define(&cdr, env).map(EvalResult::Value),
                 "define-syntax" => {
-                    return self.eval_define_syntax(&cdr, env).map(EvalResult::Value)
+                    return self.eval_define_syntax(&cdr, env).map(EvalResult::Value);
                 }
                 "set!" => return self.eval_set(&cdr, env).map(EvalResult::Value),
                 "lambda" => return self.eval_lambda(&cdr, env).map(EvalResult::Value),
@@ -399,64 +398,63 @@ impl Evaluator {
         let args = self.eval_arguments(&cdr, env)?;
 
         // Check if this is a lambda in tail position
-        if in_tail_position {
-            if let Value::Procedure(Procedure::Lambda {
+        if in_tail_position
+            && let Value::Procedure(Procedure::Lambda {
                 params,
                 variadic,
                 body,
                 env: lambda_env,
             }) = proc
-            {
-                // Tail call to lambda - set up environment and evaluate body
-                // This is the key to tail recursion!
+        {
+            // Tail call to lambda - set up environment and evaluate body
+            // This is the key to tail recursion!
 
-                // Check arity
-                if variadic.is_some() {
-                    if args.len() < params.len() {
-                        return Err(EvalError::WrongArity {
-                            expected: format!("at least {}", params.len()),
-                            actual: args.len(),
-                        });
-                    }
-                } else if args.len() != params.len() {
+            // Check arity
+            if variadic.is_some() {
+                if args.len() < params.len() {
                     return Err(EvalError::WrongArity {
-                        expected: params.len().to_string(),
+                        expected: format!("at least {}", params.len()),
                         actual: args.len(),
                     });
                 }
-
-                // Create new environment for the lambda
-                let new_env = Rc::new(Environment::with_parent(lambda_env));
-
-                // Bind parameters
-                for (param, arg) in params.iter().zip(args.iter()) {
-                    new_env.define(param.clone(), arg.clone());
-                }
-
-                // Bind rest parameter if variadic
-                if let Some(rest_param) = variadic {
-                    let rest_args: Vec<Value> = args.into_iter().skip(params.len()).collect();
-                    let rest_list = self.list_from_vec(rest_args);
-                    new_env.define(rest_param, rest_list);
-                }
-
-                // Return tail call to evaluate the body in the new environment
-                // The body expressions are evaluated sequentially, with the last in tail position
-                if body.is_empty() {
-                    return Ok(EvalResult::Value(Value::Unspecified));
-                }
-
-                // Evaluate all but the last expression
-                for expr in &body[..body.len() - 1] {
-                    self.eval_in_env(expr, &new_env)?;
-                }
-
-                // Last expression is in tail position - return it for the trampoline
-                return Ok(EvalResult::TailCall {
-                    expr: body.last().unwrap().clone(),
-                    env: new_env,
+            } else if args.len() != params.len() {
+                return Err(EvalError::WrongArity {
+                    expected: params.len().to_string(),
+                    actual: args.len(),
                 });
             }
+
+            // Create new environment for the lambda
+            let new_env = Rc::new(Environment::with_parent(lambda_env));
+
+            // Bind parameters
+            for (param, arg) in params.iter().zip(args.iter()) {
+                new_env.define(param.clone(), arg.clone());
+            }
+
+            // Bind rest parameter if variadic
+            if let Some(rest_param) = variadic {
+                let rest_args: Vec<Value> = args.into_iter().skip(params.len()).collect();
+                let rest_list = self.list_from_vec(rest_args);
+                new_env.define(rest_param, rest_list);
+            }
+
+            // Return tail call to evaluate the body in the new environment
+            // The body expressions are evaluated sequentially, with the last in tail position
+            if body.is_empty() {
+                return Ok(EvalResult::Value(Value::Unspecified));
+            }
+
+            // Evaluate all but the last expression
+            for expr in &body[..body.len() - 1] {
+                self.eval_in_env(expr, &new_env)?;
+            }
+
+            // Last expression is in tail position - return it for the trampoline
+            return Ok(EvalResult::TailCall {
+                expr: body.last().unwrap().clone(),
+                env: new_env,
+            });
         }
 
         // Not in tail position, or not a lambda - just apply normally
@@ -507,10 +505,10 @@ impl Evaluator {
                 // where the macro was defined, not where it's used
                 if patina_frontend::macro_expander::hygiene::is_gensym(name.as_ref()) {
                     // Extract original name from gensym (format: ##name#counter)
-                    if let Some(original_name) = extract_original_from_gensym(name.as_ref()) {
-                        if let Some(value) = self.global_env.get(&Rc::from(original_name)) {
-                            return Ok(value);
-                        }
+                    if let Some(original_name) = extract_original_from_gensym(name.as_ref())
+                        && let Some(value) = self.global_env.get(&Rc::from(original_name))
+                    {
+                        return Ok(value);
                     }
                 }
 

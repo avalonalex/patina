@@ -255,11 +255,11 @@ impl Value {
                 };
 
                 // Check if cdr is a proper 1-element list: (keyword expr)
-                if let Value::Pair(cdr_pair) = &pair.1 {
-                    if matches!(cdr_pair.1, Value::Null) {
-                        // It's (keyword expr), format as prefix + expr
-                        return Some(format!("{}{}", prefix, cdr_pair.0));
-                    }
+                if let Value::Pair(cdr_pair) = &pair.1
+                    && matches!(cdr_pair.1, Value::Null)
+                {
+                    // It's (keyword expr), format as prefix + expr
+                    return Some(format!("{}{}", prefix, cdr_pair.0));
                 }
 
                 // If we get here, it's malformed (e.g., (quote a b) or (quote . a))

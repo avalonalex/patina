@@ -436,13 +436,12 @@ fn parse_list_template(
     }
 
     // Check for ellipsis escape: (... template)
-    if items.len() == 2 {
-        if let Value::Symbol(s) = &items[0] {
-            if s.as_ref() == "..." {
-                let inner = Box::new(parse_template(&items[1])?);
-                return Ok(Template::EllipsisEscape(inner));
-            }
-        }
+    if items.len() == 2
+        && let Value::Symbol(s) = &items[0]
+        && s.as_ref() == "..."
+    {
+        let inner = Box::new(parse_template(&items[1])?);
+        return Ok(Template::EllipsisEscape(inner));
     }
 
     // Find ellipsis positions

@@ -7,8 +7,8 @@
 //!
 //! All functions extracted from primitives.rs
 
-use super::super::error::EvalError;
 use super::super::Evaluator;
+use super::super::error::EvalError;
 use patina_runtime::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -22,12 +22,12 @@ pub(super) fn make_vector(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
             return Err(EvalError::TypeError(format!(
                 "make-vector length must be non-negative, got {}",
                 n
-            )))
+            )));
         }
         _ => {
             return Err(EvalError::TypeError(
                 "make-vector expects integer length".to_string(),
-            ))
+            ));
         }
     };
 
@@ -128,7 +128,7 @@ pub(super) fn vector_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<
         _ => {
             return Err(EvalError::TypeError(
                 "vector->list expects a vector".to_string(),
-            ))
+            ));
         }
     };
 
@@ -139,12 +139,12 @@ pub(super) fn vector_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<
                 return Err(EvalError::IndexOutOfBounds(format!(
                     "vector->list start index must be non-negative, got {}",
                     n
-                )))
+                )));
             }
             _ => {
                 return Err(EvalError::TypeError(
                     "vector->list start index must be an integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -158,12 +158,12 @@ pub(super) fn vector_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<
                 return Err(EvalError::IndexOutOfBounds(format!(
                     "vector->list end index must be non-negative, got {}",
                     n
-                )))
+                )));
             }
             _ => {
                 return Err(EvalError::TypeError(
                     "vector->list end index must be an integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -201,7 +201,7 @@ pub(super) fn vector_to_string(
         _ => {
             return Err(EvalError::TypeError(
                 "vector->string expects a vector".to_string(),
-            ))
+            ));
         }
     };
 
@@ -211,7 +211,7 @@ pub(super) fn vector_to_string(
             _ => {
                 return Err(EvalError::TypeError(
                     "start index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -224,7 +224,7 @@ pub(super) fn vector_to_string(
             _ => {
                 return Err(EvalError::TypeError(
                     "end index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -244,7 +244,7 @@ pub(super) fn vector_to_string(
             _ => {
                 return Err(EvalError::TypeError(
                     "vector->string requires vector of characters".to_string(),
-                ))
+                ));
             }
         }
     }
@@ -265,7 +265,7 @@ pub(super) fn string_to_vector(
         _ => {
             return Err(EvalError::TypeError(
                 "string->vector expects a string".to_string(),
-            ))
+            ));
         }
     };
 
@@ -277,7 +277,7 @@ pub(super) fn string_to_vector(
             _ => {
                 return Err(EvalError::TypeError(
                     "start index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -290,7 +290,7 @@ pub(super) fn string_to_vector(
             _ => {
                 return Err(EvalError::TypeError(
                     "end index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -318,7 +318,7 @@ pub(super) fn vector_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
         _ => {
             return Err(EvalError::TypeError(
                 "vector-copy expects a vector".to_string(),
-            ))
+            ));
         }
     };
 
@@ -328,7 +328,7 @@ pub(super) fn vector_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
             _ => {
                 return Err(EvalError::TypeError(
                     "start index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -341,7 +341,7 @@ pub(super) fn vector_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
             _ => {
                 return Err(EvalError::TypeError(
                     "end index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -370,7 +370,7 @@ pub(super) fn vector_copy_bang(
         _ => {
             return Err(EvalError::TypeError(
                 "first argument must be a vector".to_string(),
-            ))
+            ));
         }
     };
 
@@ -379,7 +379,7 @@ pub(super) fn vector_copy_bang(
         _ => {
             return Err(EvalError::TypeError(
                 "at index must be a non-negative integer".to_string(),
-            ))
+            ));
         }
     };
 
@@ -388,7 +388,7 @@ pub(super) fn vector_copy_bang(
         _ => {
             return Err(EvalError::TypeError(
                 "from argument must be a vector".to_string(),
-            ))
+            ));
         }
     };
 
@@ -398,7 +398,7 @@ pub(super) fn vector_copy_bang(
             _ => {
                 return Err(EvalError::TypeError(
                     "start index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -411,7 +411,7 @@ pub(super) fn vector_copy_bang(
             _ => {
                 return Err(EvalError::TypeError(
                     "end index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -460,7 +460,7 @@ pub(super) fn vector_append(_evaluator: &Evaluator, args: Vec<Value>) -> Result<
             _ => {
                 return Err(EvalError::TypeError(
                     "vector-append expects only vectors".to_string(),
-                ))
+                ));
             }
         }
     }
@@ -476,7 +476,7 @@ pub(super) fn vector_fill(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
         _ => {
             return Err(EvalError::TypeError(
                 "first argument must be a vector".to_string(),
-            ))
+            ));
         }
     };
 
@@ -488,7 +488,7 @@ pub(super) fn vector_fill(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
             _ => {
                 return Err(EvalError::TypeError(
                     "start index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -502,7 +502,7 @@ pub(super) fn vector_fill(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
             _ => {
                 return Err(EvalError::TypeError(
                     "end index must be a non-negative integer".to_string(),
-                ))
+                ));
             }
         }
     } else {
@@ -551,7 +551,7 @@ pub(super) fn vector_map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
             _ => {
                 return Err(EvalError::InternalError(
                     "Unexpected tail call in vector-map".to_string(),
-                ))
+                ));
             }
         };
         result.push(val);
@@ -588,7 +588,7 @@ pub(super) fn vector_for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result
             _ => {
                 return Err(EvalError::InternalError(
                     "Unexpected tail call in vector-for-each".to_string(),
-                ))
+                ));
             }
         }
     }
