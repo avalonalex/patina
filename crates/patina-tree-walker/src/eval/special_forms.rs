@@ -772,4 +772,137 @@ impl Evaluator {
         let result_exprs = self.collect_list_items(&rest)?;
         Ok((test_expr.clone(), result_exprs))
     }
+
+    /// Evaluate import special form: (import import-set ...)
+    ///
+    /// R7RS Section 5.2: Import declarations
+    ///
+    /// Import sets can be:
+    /// - (library name) - direct library import
+    /// - (only import-set identifier ...) - import only specified identifiers
+    /// - (except import-set identifier ...) - import all except specified
+    /// - (prefix import-set prefix) - import with prefix
+    /// - (rename import-set (old new) ...) - import with renaming
+    ///
+    /// This implementation loads the libraries and imports their exports
+    /// into the current environment.
+    pub(super) fn eval_import(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        use patina_frontend::LibraryDefinition;
+
+        // Parse all import sets
+        let import_sets = self.collect_list_items(args)?;
+
+        for import_set_expr in import_sets {
+            // Parse the import set
+            let import_set = LibraryDefinition::parse_import_set(&import_set_expr)
+                .map_err(|e| EvalError::InvalidSyntax(format!("Invalid import set: {}", e)))?;
+
+            // Process the import set: this will import the identifiers into env
+            self.process_import_for_eval(&import_set, env)?;
+        }
+
+        Ok(Value::Unspecified)
+    }
+
+    /// Process an import set for eval context
+    ///
+    /// This is similar to process_import_set in library_support.rs but works
+    /// in the eval context (importing into a regular environment, not building a library)
+    fn process_import_for_eval(
+        &self,
+        import_set: &patina_frontend::ImportSet,
+        env: &Rc<Environment>,
+    ) -> Result<(), EvalError> {
+        use patina_frontend::ImportSet;
+        use std::collections::HashSet;
+
+        match import_set {
+            ImportSet::Library(lib_name) => {
+                // Load the library
+                let lib = self.load_library(lib_name).map_err(|e| {
+                    EvalError::InvalidSyntax(format!("Failed to load library: {}", e))
+                })?;
+
+                // Import all exports into the current environment
+                for export_name in lib.export_names() {
+                    if let Some(value) = lib.get_export(export_name) {
+                        env.define(export_name.to_string(), value.clone());
+                    }
+                }
+                Ok(())
+            }
+
+            ImportSet::Only {
+                import_set,
+                identifiers,
+            } => {
+                // First process the nested import set into a temporary environment
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_for_eval(import_set, &temp_env)?;
+
+                // Then import only the specified identifiers
+                let allowed: HashSet<_> = identifiers.iter().collect();
+                for (name, value) in temp_env.bindings() {
+                    if allowed.contains(&name) {
+                        env.define(name, value);
+                    }
+                }
+                Ok(())
+            }
+
+            ImportSet::Except {
+                import_set,
+                identifiers,
+            } => {
+                // Process nested import set into temp environment
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_for_eval(import_set, &temp_env)?;
+
+                // Import all except specified identifiers
+                let excluded: HashSet<_> = identifiers.iter().collect();
+                for (name, value) in temp_env.bindings() {
+                    if !excluded.contains(&name) {
+                        env.define(name, value);
+                    }
+                }
+                Ok(())
+            }
+
+            ImportSet::Prefix { import_set, prefix } => {
+                // Process nested import set into temp environment
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_for_eval(import_set, &temp_env)?;
+
+                // Import all with prefix
+                for (name, value) in temp_env.bindings() {
+                    let prefixed_name = format!("{}{}", prefix, name);
+                    env.define(prefixed_name, value);
+                }
+                Ok(())
+            }
+
+            ImportSet::Rename {
+                import_set,
+                renames,
+            } => {
+                // Process nested import set into temp environment
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_for_eval(import_set, &temp_env)?;
+
+                // Build rename map
+                let rename_map: std::collections::HashMap<_, _> = renames.iter().cloned().collect();
+
+                // Import with renaming
+                for (name, value) in temp_env.bindings() {
+                    let final_name = rename_map.get(&name).unwrap_or(&name);
+                    env.define(final_name.clone(), value);
+                }
+                Ok(())
+            }
+        }
+    }
 }

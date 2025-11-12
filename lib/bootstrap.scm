@@ -327,4 +327,26 @@
 ;;      (do-normalize () ((var init . rest) ...) test-clause body ...))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Testing framework support
+
+;; test macro for (chibi test)
+;; Usage: (test expected-value actual-expression)
+(define-syntax test
+  (syntax-rules ()
+    ((test expected expr)
+     (let ((expected-val expected)
+           (actual-val expr))
+       (if (equal? expected-val actual-val)
+           #t  ; Test passed (silently)
+           (begin
+             (display "FAIL: ")
+             (write 'expr)
+             (display " expected ")
+             (write expected-val)
+             (display " but got ")
+             (write actual-val)
+             (newline)
+             #f))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; End of bootstrap library

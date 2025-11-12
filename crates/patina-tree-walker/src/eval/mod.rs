@@ -76,12 +76,75 @@ impl Evaluator {
     /// 2. SchemeLibraryLoader for .sld files
     fn init_loaders(&self) {
         use crate::library_support::SchemeLibraryLoader;
-        use patina_runtime::RustLibraryLoader;
+        use patina_runtime::{stdlib, RustLibraryLoader};
 
         let mut loaders = self.loader_registry.borrow_mut();
 
+        // Create Rust loader and register standard libraries
+        let mut rust_loader = RustLibraryLoader::with_standard_libraries();
+
+        // Register all R7RS standard libraries
+        rust_loader.register(
+            vec!["scheme".to_string(), "base".to_string()],
+            stdlib::build_scheme_base,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "char".to_string()],
+            stdlib::build_scheme_char,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "complex".to_string()],
+            stdlib::build_scheme_complex,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "inexact".to_string()],
+            stdlib::build_scheme_inexact,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "lazy".to_string()],
+            stdlib::build_scheme_lazy,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "time".to_string()],
+            stdlib::build_scheme_time,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "file".to_string()],
+            stdlib::build_scheme_file,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "read".to_string()],
+            stdlib::build_scheme_read,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "write".to_string()],
+            stdlib::build_scheme_write,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "eval".to_string()],
+            stdlib::build_scheme_eval,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "process-context".to_string()],
+            stdlib::build_scheme_process_context,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "case-lambda".to_string()],
+            stdlib::build_scheme_case_lambda,
+        );
+        rust_loader.register(
+            vec!["scheme".to_string(), "r5rs".to_string()],
+            stdlib::build_scheme_r5rs,
+        );
+
+        // Register test frameworks
+        rust_loader.register(
+            vec!["chibi".to_string(), "test".to_string()],
+            stdlib::build_chibi_test,
+        );
+
         // Add Rust loader first (highest priority)
-        loaders.add_loader(Box::new(RustLibraryLoader::with_standard_libraries()));
+        loaders.add_loader(Box::new(rust_loader));
 
         // Add Scheme loader second (for .sld files)
         loaders.add_loader(Box::new(SchemeLibraryLoader::new(self)));
@@ -292,6 +355,7 @@ impl Evaluator {
                 // TODO(TCO): 'apply' needs tail call support - see PRD/future/GENERAL_TAIL_CALL_OPTIMIZATION.md
                 "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value),
                 "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
+                "import" => return self.eval_import(&cdr, env).map(EvalResult::Value),
                 // Note: call-with-values was previously a special form, but is now fully handled
                 // as a primitive that participates in tail call optimization via TailCallPrimitive
                 _ => {}
@@ -577,10 +641,17 @@ impl Evaluator {
         }
 
         // Load the library
+        // Note: We need to copy search_paths before calling load() because
+        // load() may call back into the evaluator (for .sld files), which
+        // could try to borrow library_registry again, causing a panic.
+        let search_paths = {
+            let registry = self.library_registry.borrow();
+            registry.search_paths().to_vec()
+        };
+
         let result = {
             let loaders = self.loader_registry.borrow();
-            let registry = self.library_registry.borrow();
-            loaders.load(name, registry.search_paths())
+            loaders.load(name, &search_paths)
         };
 
         // End loading tracking

@@ -237,7 +237,7 @@ impl LibraryDefinition {
     }
 
     /// Parse an import set
-    fn parse_import_set(value: &Value) -> Result<ImportSet, ParseError> {
+    pub fn parse_import_set(value: &Value) -> Result<ImportSet, ParseError> {
         match value {
             Value::Pair(_) => {
                 let list = Self::expect_list(value)?;

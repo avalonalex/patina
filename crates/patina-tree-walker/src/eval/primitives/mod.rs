@@ -206,6 +206,26 @@ impl Evaluator {
             "debug-status" => debug::debug_status(self, args).map(super::EvalResult::Value),
             "debug-mode" => debug::debug_mode(self, args).map(super::EvalResult::Value),
 
+            // Testing framework (chibi test)
+            "test-begin" => {
+                self.check_arity_exact(&args, 1, "test-begin")?;
+                let name = match &args[0] {
+                    Value::String(s) => s.borrow().clone(),
+                    Value::Symbol(s) => s.to_string(),
+                    _ => {
+                        return Err(EvalError::TypeError(
+                            "test-begin expects string or symbol".to_string(),
+                        ))
+                    }
+                };
+                patina_runtime::stdlib::test_begin(&name);
+                Ok(super::EvalResult::Value(Value::Unspecified))
+            }
+            "test-end" => {
+                patina_runtime::stdlib::test_end();
+                Ok(super::EvalResult::Value(Value::Unspecified))
+            }
+
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
                 name

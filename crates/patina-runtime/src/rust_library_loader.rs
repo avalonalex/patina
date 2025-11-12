@@ -44,9 +44,9 @@ impl RustLibraryLoader {
     /// - (scheme base) - Core R7RS library
     /// - Additional standard libraries as they are implemented
     pub fn with_standard_libraries() -> Self {
-        // Register (scheme base)
-        // For now, this is a placeholder - we'll implement the actual builder next
-        // loader.register(vec!["scheme".to_string(), "base".to_string()], build_scheme_base);
+        // Note: Standard libraries are registered by the backend (tree-walker, VM, etc.)
+        // when initializing the evaluator. This keeps the runtime crate backend-agnostic.
+
         Self::new()
     }
 }

@@ -13,6 +13,7 @@ pub mod library;
 pub mod library_loader;
 pub mod library_registry;
 pub mod rust_library_loader;
+pub mod stdlib;
 pub mod value;
 
 // Re-export main types for convenience

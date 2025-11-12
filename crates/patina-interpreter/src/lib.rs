@@ -31,6 +31,14 @@ impl Interpreter {
         }
     }
 
+    /// Create an interpreter from an existing evaluator
+    ///
+    /// This is useful for tests that need to configure the evaluator
+    /// before creating the interpreter (e.g., adding search paths).
+    pub fn from_evaluator(evaluator: Evaluator) -> Self {
+        Interpreter { evaluator }
+    }
+
     /// Evaluate a string containing Scheme code
     ///
     /// # Example
