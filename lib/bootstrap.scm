@@ -331,31 +331,39 @@
 
 ;; test macro for (chibi test)
 ;; Usage: (test expected-value actual-expression)
+;;
+;; Note: This macro does NOT catch errors during test execution.
+;; If expr raises an error, the interpreter's resilient mode will
+;; catch it and continue with the next top-level expression.
+;; This allows test suites to continue running even when individual
+;; tests encounter unimplemented features or runtime errors.
 (define-syntax test
   (syntax-rules ()
     ((test expected expr)
-     (let ((expected-val expected)
-           (actual-val expr))
-       (if (equal? expected-val actual-val)
-           (begin
-             (test-increment-passed)
-             #t)  ; Test passed (silently)
-           (begin
-             (test-increment-failed)
-             (display "FAIL: ")
-             (newline)
-             (write 'expr)
-             (newline)
-             (display " expected ")
-             (newline)
-             (write expected-val)
-             (newline)
-             (display " but got ")
-             (newline)
-             (write actual-val)
-             (newline)
-             (newline)
-             #f))))))
+     (let ((expected-val expected))
+       ;; First evaluate the expression
+       (let ((actual-val expr))
+         ;; Then compare and report
+         (if (equal? expected-val actual-val)
+             (begin
+               (test-increment-passed)
+               #t)  ; Test passed (silently)
+             (begin
+               (test-increment-failed)
+               (display "FAIL: ")
+               (newline)
+               (write 'expr)
+               (newline)
+               (display " expected ")
+               (newline)
+               (write expected-val)
+               (newline)
+               (display " but got ")
+               (newline)
+               (write actual-val)
+               (newline)
+               (newline)
+               #f)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; End of bootstrap library

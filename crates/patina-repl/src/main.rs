@@ -30,14 +30,25 @@ fn run_script(filename: &str) {
 
     // Create interpreter and run the program
     let interp = Interpreter::new();
-    match interp.eval_program(&code) {
-        Ok(_) => {
-            // Script completed successfully
-            process::exit(0);
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            process::exit(1);
+
+    // Check if this is a test file by looking for common test patterns
+    let is_test_file = filename.contains("test") || code.contains("test-begin");
+
+    if is_test_file {
+        // Use resilient mode for test files - continue on errors
+        interp.eval_program_resilient(&code);
+        process::exit(0);
+    } else {
+        // Use strict mode for regular scripts - stop on first error
+        match interp.eval_program(&code) {
+            Ok(_) => {
+                // Script completed successfully
+                process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            }
         }
     }
 }

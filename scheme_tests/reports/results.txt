@@ -55,4 +55,84 @@ FAIL:
 1393796574908163946345982392040522594123776
 
 
-Error: Evaluation error: Invalid syntax: No matching pattern for macro let
+Error: Invalid syntax: No matching pattern for macro let
+Error: Undefined variable: force
+Error: Undefined variable: delay
+Error: Undefined variable: delay
+Error: Undefined variable: integers
+Error: Undefined variable: integers
+Error: Undefined variable: delay
+Error: Undefined variable: promise?
+Error: Undefined variable: promise?
+Error: Undefined variable: delay
+Error: Undefined variable: make-promise
+Error: Undefined variable: force
+Error: Undefined variable: force
+Error: Undefined variable: make-parameter
+Error: Undefined variable: number->string
+Error: Undefined variable: parameterize
+Error: Undefined variable: number->string
+Error: Undefined variable: quasiquote
+Error: Undefined variable: quasiquote
+Error: Undefined variable: quasiquote
+Error: Undefined variable: quasiquote
+Error: Undefined variable: quasiquote
+Error: Undefined variable: quasiquote
+Error: Undefined variable: quasiquote
+Error: Undefined variable: quasiquote
+Error: Undefined variable: case-lambda
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: case-lambda
+Error: Undefined variable: rest-arity
+Error: Undefined variable: rest-arity
+Error: Undefined variable: rest-arity
+Error: Undefined variable: rest-arity
+Error: Undefined variable: case-lambda
+Error: Undefined variable: dead-clause
+Error: Undefined variable: dead-clause
+Error: Undefined variable: dead-clause
+Error: Undefined variable: dead-clause
+Tests run: 37, Passed: 33, Failed: 4
+
+Running test suite: 4.3 Macros
+Error: Undefined variable: let-syntax
+Error: Undefined variable: let-syntax
+Error: Undefined variable: letrec-syntax
+Error: Invalid syntax: Expected syntax-rules
+Error: Undefined variable: sequence1
+Error: Invalid syntax: Ellipsis template contains no pattern variables
+Error: Undefined variable: sequence2
+Error: Invalid syntax: Expected syntax-rules
+Error: Undefined variable: sequence3
+Error: Invalid syntax: Ellipsis cannot appear at start of template
+Error: Undefined variable: elli-esc-1
+Error: Undefined variable: elli-esc-1
+Error: Undefined variable: elli-esc-1
+Error: Invalid syntax: Pattern variable m used with ellipsis but not bound with ellipsis
+Error: Invalid syntax: Pattern variable m used with ellipsis but not bound with ellipsis
+FAIL: 
+
+(list (count-to-2_ _ _) (count-to-2_) (count-to-2_ a b) (count-to-2_ a b c d))
+
+ expected 
+
+(2 0 fail fail)
+
+ but got 
+
+(2 0 2 fail)
+
+
+Error: Invalid syntax: Expected syntax-rules
+Error: Undefined variable: mad-hatter
+Error: Not a procedure: ok
+Error: Undefined variable: let-syntax
+Error: Invalid syntax: Expected syntax-rules
+Error: Undefined variable: let-syntax
+Error: Undefined variable: ##bar399#1000
+Error: Undefined variable: let-syntax
+Error: Lexer error: Unexpected character: |

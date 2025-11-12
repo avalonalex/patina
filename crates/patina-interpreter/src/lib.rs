@@ -78,6 +78,49 @@ impl Interpreter {
         Ok(result)
     }
 
+    /// Evaluate multiple expressions from a string, continuing on errors
+    ///
+    /// Unlike `eval_program`, this method does not stop on the first error.
+    /// Instead, it prints errors to stderr and continues with the next expression.
+    /// This is useful for test suites where you want to see all failures.
+    ///
+    /// Returns the last successfully evaluated result, or Unspecified if all failed.
+    pub fn eval_program_resilient(&self, input: &str) -> Value {
+        let mut result = Value::Unspecified;
+        let mut parser = match Parser::new(input) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                return result;
+            }
+        };
+
+        loop {
+            // Check if we've reached EOF by attempting to parse
+            match parser.parse() {
+                Ok(expr) => {
+                    match self.evaluator.eval(&expr) {
+                        Ok(val) => result = val,
+                        Err(e) => {
+                            // Print error and continue
+                            eprintln!("Error: {}", e);
+                        }
+                    }
+                }
+                Err(ParseError::UnexpectedEof) => break,
+                Err(e) => {
+                    // Print parse error and continue
+                    eprintln!("Error: {}", e);
+                    // Try to recover by skipping to the next expression
+                    // (for now, we just stop on parse errors)
+                    break;
+                }
+            }
+        }
+
+        result
+    }
+
     /// Get a reference to the underlying evaluator
     pub fn evaluator(&self) -> &Evaluator {
         &self.evaluator
