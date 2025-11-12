@@ -72,14 +72,6 @@ Error: Undefined variable: make-parameter
 Error: Undefined variable: number->string
 Error: Undefined variable: parameterize
 Error: Undefined variable: number->string
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
 Error: Undefined variable: case-lambda
 Error: Undefined variable: any-arity
 Error: Undefined variable: any-arity
@@ -96,7 +88,7 @@ Error: Undefined variable: dead-clause
 Error: Undefined variable: dead-clause
 Error: Undefined variable: dead-clause
 Error: Undefined variable: dead-clause
-Tests run: 37, Passed: 33, Failed: 4
+Tests run: 45, Passed: 41, Failed: 4
 
 Running test suite: 4.3 Macros
 Error: Undefined variable: let-syntax

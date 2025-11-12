@@ -15,6 +15,7 @@
 
 use patina_runtime::environment::Environment;
 use patina_runtime::value::{Procedure, Value};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::error::EvalError;
@@ -44,6 +45,300 @@ impl Evaluator {
             ));
         }
         Ok(quoted)
+    }
+
+    /// Evaluate quasiquote special form: (quasiquote template)
+    ///
+    /// Quasiquote is like quote, but allows selective evaluation via unquote (,) and
+    /// unquote-splicing (,@). It tracks nesting depth to handle nested quasiquotes.
+    ///
+    /// Examples:
+    /// - `(a b c) => (a b c)  (like quote)
+    /// - `(a ,(+ 1 2) c) => (a 3 c)  (unquote evaluates)
+    /// - `(a ,@(list 1 2) b) => (a 1 2 b)  (splicing)
+    /// - ``(a ,,x) => `(a ,value-of-x)  (nested)
+    pub(super) fn eval_quasiquote(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        let (template, rest) = self.extract_pair(args)?;
+        if !matches!(rest, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "quasiquote expects exactly one argument".to_string(),
+            ));
+        }
+        self.eval_quasiquote_impl(&template, env, 0)
+    }
+
+    /// Implementation of quasiquote with depth tracking
+    ///
+    /// The depth parameter tracks nesting level:
+    /// - depth 0: at current quasiquote level (unquotes are active)
+    /// - depth > 0: inside nested quasiquote (unquotes become quoted)
+    fn eval_quasiquote_impl(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+        depth: i32,
+    ) -> Result<Value, EvalError> {
+        match expr {
+            // Self-evaluating values: return as-is
+            Value::Boolean(_)
+            | Value::Integer(_)
+            | Value::BigInteger(_)
+            | Value::Rational(_)
+            | Value::Real(_)
+            | Value::Complex(_, _)
+            | Value::Character(_)
+            | Value::String(_)
+            | Value::Bytevector(_)
+            | Value::Unspecified => Ok(expr.clone()),
+
+            // Symbols and null: quote them (return as-is)
+            Value::Symbol(_) | Value::Null => Ok(expr.clone()),
+
+            // Vectors: convert to list, process, convert back
+            Value::Vector(vec) => {
+                let list = self.vector_to_list(&vec.borrow());
+                let processed = self.eval_quasiquote_impl(&list, env, depth)?;
+                self.list_to_vector(&processed)
+            }
+
+            // Pairs: the interesting case
+            Value::Pair(pair) => {
+                let car = &pair.0;
+                let cdr = &pair.1;
+
+                // Check if car is a symbol that requires special handling
+                if let Value::Symbol(sym) = car {
+                    match sym.as_ref() {
+                        // Nested quasiquote: increment depth
+                        "quasiquote" => {
+                            let (inner, rest) = self.extract_pair(cdr)?;
+                            if !matches!(rest, Value::Null) {
+                                return Err(EvalError::InvalidSyntax(
+                                    "quasiquote expects exactly one argument".to_string(),
+                                ));
+                            }
+                            let processed = self.eval_quasiquote_impl(&inner, env, depth + 1)?;
+                            Ok(self.list_from_vec(vec![
+                                Value::Symbol(Rc::from("quasiquote")),
+                                processed,
+                            ]))
+                        }
+
+                        // Unquote: evaluate if at depth 0, otherwise decrement depth
+                        "unquote" => {
+                            let (inner, rest) = self.extract_pair(cdr)?;
+                            if !matches!(rest, Value::Null) {
+                                return Err(EvalError::InvalidSyntax(
+                                    "unquote expects exactly one argument".to_string(),
+                                ));
+                            }
+
+                            if depth == 0 {
+                                // At quasiquote level: evaluate the unquoted expression
+                                self.eval_in_env(&inner, env)
+                            } else {
+                                // Inside nested quasiquote: preserve unquote, decrement depth
+                                let processed =
+                                    self.eval_quasiquote_impl(&inner, env, depth - 1)?;
+                                Ok(self.list_from_vec(vec![
+                                    Value::Symbol(Rc::from("unquote")),
+                                    processed,
+                                ]))
+                            }
+                        }
+
+                        // Unquote-splicing: can't appear at top level of quasiquote
+                        "unquote-splicing" => {
+                            if depth == 0 {
+                                Err(EvalError::InvalidSyntax(
+                                    "unquote-splicing not in list context".to_string(),
+                                ))
+                            } else {
+                                // Inside nested quasiquote: preserve, decrement depth
+                                let (inner, rest) = self.extract_pair(cdr)?;
+                                if !matches!(rest, Value::Null) {
+                                    return Err(EvalError::InvalidSyntax(
+                                        "unquote-splicing expects exactly one argument".to_string(),
+                                    ));
+                                }
+                                let processed =
+                                    self.eval_quasiquote_impl(&inner, env, depth - 1)?;
+                                Ok(self.list_from_vec(vec![
+                                    Value::Symbol(Rc::from("unquote-splicing")),
+                                    processed,
+                                ]))
+                            }
+                        }
+
+                        _ => {
+                            // Regular symbol: process as normal pair
+                            self.process_quasiquote_pair(expr, env, depth)
+                        }
+                    }
+                } else {
+                    // Non-symbol car: process as normal pair
+                    self.process_quasiquote_pair(expr, env, depth)
+                }
+            }
+
+            // Other types: return as-is
+            _ => Ok(expr.clone()),
+        }
+    }
+
+    /// Process a regular pair in quasiquote context
+    ///
+    /// This handles the case where we have a list that might contain unquote-splicing
+    fn process_quasiquote_pair(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+        depth: i32,
+    ) -> Result<Value, EvalError> {
+        // Convert to vector for easier manipulation
+        let mut elements = Vec::new();
+        let mut current = expr.clone();
+        let mut tail = Value::Null; // For improper lists
+
+        // Walk the list
+        loop {
+            match &current {
+                Value::Null => break,
+                Value::Pair(pair) => {
+                    let car = &pair.0;
+                    let cdr = &pair.1;
+
+                    // Check if CDR is an unquote form (for improper lists like (a . ,x))
+                    // We need to check this BEFORE processing CAR
+                    if depth == 0 {
+                        if let Value::Pair(cdr_pair) = cdr {
+                            if let Value::Symbol(sym) = &cdr_pair.0 {
+                                if sym.as_ref() == "unquote" {
+                                    // This is an improper list: (... car . ,expr)
+                                    // Process car normally, then evaluate the unquote as tail
+                                    let processed_car =
+                                        self.eval_quasiquote_impl(car, env, depth)?;
+                                    elements.push(processed_car);
+
+                                    // Evaluate the unquote expression
+                                    let (unquote_expr, rest) = self.extract_pair(&cdr_pair.1)?;
+                                    if !matches!(rest, Value::Null) {
+                                        return Err(EvalError::InvalidSyntax(
+                                            "unquote expects exactly one argument".to_string(),
+                                        ));
+                                    }
+                                    tail = self.eval_in_env(&unquote_expr, env)?;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Check if this element is (unquote-splicing ...)
+                    if depth == 0 {
+                        if let Value::Pair(inner_pair) = car {
+                            if let Value::Symbol(sym) = &inner_pair.0 {
+                                if sym.as_ref() == "unquote-splicing" {
+                                    // Evaluate the splicing expression
+                                    let (splice_expr, rest) = self.extract_pair(&inner_pair.1)?;
+                                    if !matches!(rest, Value::Null) {
+                                        return Err(EvalError::InvalidSyntax(
+                                            "unquote-splicing expects exactly one argument"
+                                                .to_string(),
+                                        ));
+                                    }
+
+                                    let splice_result = self.eval_in_env(&splice_expr, env)?;
+
+                                    // Must be a list
+                                    if !self.is_list(&splice_result) {
+                                        return Err(EvalError::InvalidSyntax(
+                                            "unquote-splicing result must be a list".to_string(),
+                                        ));
+                                    }
+
+                                    // Append all elements from the spliced list
+                                    let mut splice_current = splice_result;
+                                    while let Value::Pair(splice_pair) = splice_current {
+                                        elements.push(splice_pair.0.clone());
+                                        splice_current = splice_pair.1.clone();
+                                    }
+
+                                    current = cdr.clone();
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    // Regular element: process recursively
+                    let processed = self.eval_quasiquote_impl(car, env, depth)?;
+                    elements.push(processed);
+                    current = cdr.clone();
+                }
+                _ => {
+                    // Improper list (dotted pair with non-list tail)
+                    tail = self.eval_quasiquote_impl(&current, env, depth)?;
+                    break;
+                }
+            }
+        }
+
+        // Reconstruct the list
+        if matches!(tail, Value::Null) {
+            Ok(self.list_from_vec(elements))
+        } else {
+            // Improper list
+            let mut result = tail;
+            for elem in elements.iter().rev() {
+                result = Value::Pair(Rc::new((elem.clone(), result)));
+            }
+            Ok(result)
+        }
+    }
+
+    /// Helper: check if a value is a proper list
+    fn is_list(&self, val: &Value) -> bool {
+        let mut current = val;
+        loop {
+            match current {
+                Value::Null => return true,
+                Value::Pair(pair) => current = &pair.1,
+                _ => return false,
+            }
+        }
+    }
+
+    /// Helper: convert vector to list
+    fn vector_to_list(&self, vec: &[Value]) -> Value {
+        self.list_from_vec(vec.to_vec())
+    }
+
+    /// Helper: convert list to vector
+    fn list_to_vector(&self, list: &Value) -> Result<Value, EvalError> {
+        let mut vec = Vec::new();
+        let mut current = list;
+
+        loop {
+            match current {
+                Value::Null => break,
+                Value::Pair(pair) => {
+                    vec.push(pair.0.clone());
+                    current = &pair.1;
+                }
+                _ => {
+                    return Err(EvalError::InvalidSyntax(
+                        "Cannot convert improper list to vector".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(Value::Vector(Rc::new(RefCell::new(vec))))
     }
 
     /// Evaluate if special form: (if test then [else])

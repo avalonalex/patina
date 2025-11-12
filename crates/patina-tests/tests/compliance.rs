@@ -44,6 +44,10 @@ mod vectors;
 #[path = "compliance/control.rs"]
 mod control;
 
+// Section 4.2.8: Quasiquotation
+#[path = "compliance/quasiquote.rs"]
+mod quasiquote;
+
 // Section 4.3: Advanced Macros (comprehensive macro system tests)
 #[path = "compliance/macros_advanced.rs"]
 mod macros_advanced;

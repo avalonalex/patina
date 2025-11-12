@@ -194,6 +194,31 @@ cargo test -- --nocapture
 SKIP_CHIBI_TESTS=1 cargo test
 ```
 
+### R7RS Compliance Testing
+
+Run the comprehensive chibi-scheme r7rs test suite to check compliance:
+
+```bash
+# Run chibi-scheme's r7rs-tests.scm and generate compatibility report
+./scripts/run_chibi_tests.sh
+
+# View the report
+cat scheme_tests/reports/compatibility.md
+
+# View detailed results
+cat scheme_tests/reports/results.txt
+```
+
+This runs the complete chibi-scheme R7RS test suite (~2500 lines) and generates:
+- **Compatibility report** with pass/fail statistics
+- **Detailed test output** showing what works and what doesn't
+
+**Current status (as of quasiquote implementation):**
+- ✅ 68/129 tests passing (52.7%)
+- ❌ 4 tests failing (3.1%)
+- ⚠️ 57 tests crashing (44.2%) - missing features
+- Tests cover: primitives, macros, quasiquote, numeric tower, lists, strings, vectors, control flow
+
 ### Code Quality
 
 ```bash

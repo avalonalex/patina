@@ -340,6 +340,7 @@ impl Evaluator {
         if let Value::Symbol(ref sym) = car {
             match sym.as_ref() {
                 "quote" => return self.eval_quote(&cdr).map(EvalResult::Value),
+                "quasiquote" => return self.eval_quasiquote(&cdr, env).map(EvalResult::Value),
                 "if" => return self.eval_if_impl(&cdr, env, in_tail_position),
                 "define" => return self.eval_define(&cdr, env).map(EvalResult::Value),
                 "define-syntax" => {
@@ -544,6 +545,7 @@ impl Evaluator {
         if let Value::Symbol(ref sym) = car {
             match sym.as_ref() {
                 "quote" => return self.eval_quote(&cdr),
+                "quasiquote" => return self.eval_quasiquote(&cdr, env),
                 "if" => return self.eval_if(&cdr, env),
                 "define" => return self.eval_define(&cdr, env),
                 "define-syntax" => return self.eval_define_syntax(&cdr, env),

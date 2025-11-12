@@ -1,16 +1,18 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-11 16:57:53
+**Generated:** 2025-11-11 18:11:18
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 60 | 93.8% |
-| ❌ Failed | 4 | 6.2% |
-| ⚠️ Error | 65 | 101.6% |
-| **Total** | **64** | **100%** |
+| ✅ Passed | 68 | 52.7% |
+| ❌ Failed | 4 | 3.1% |
+| ⚠️ Error (crashed) | 57 | 44.2% |
+| **Total** | **129** | **100%** |
+
+**Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
 ## Failed Tests
 
@@ -44,14 +46,6 @@ Error: Undefined variable: make-parameter
 Error: Undefined variable: number->string
 Error: Undefined variable: parameterize
 Error: Undefined variable: number->string
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
-Error: Undefined variable: quasiquote
 Error: Undefined variable: case-lambda
 Error: Undefined variable: any-arity
 Error: Undefined variable: any-arity

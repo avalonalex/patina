@@ -189,9 +189,14 @@ impl std::fmt::Display for Value {
             Value::Symbol(s) => write!(f, "{}", s),
             Value::Null => write!(f, "()"),
             Value::Pair(_) => {
-                write!(f, "(")?;
-                self.fmt_list_contents(f)?;
-                write!(f, ")")
+                // Check for special shorthand forms: quote, quasiquote, unquote, unquote-splicing
+                if let Some(shorthand) = self.check_quote_shorthand() {
+                    write!(f, "{}", shorthand)
+                } else {
+                    write!(f, "(")?;
+                    self.fmt_list_contents(f)?;
+                    write!(f, ")")
+                }
             }
             Value::Vector(v) => {
                 write!(f, "#(")?;
@@ -228,6 +233,42 @@ impl std::fmt::Display for Value {
 }
 
 impl Value {
+    /// Check if this value is a special quote form that can be displayed with shorthand syntax
+    ///
+    /// Returns Some(formatted_string) if this is a quote-like form, None otherwise.
+    ///
+    /// Handles:
+    /// - (quote expr) -> 'expr
+    /// - (quasiquote expr) -> `expr
+    /// - (unquote expr) -> ,expr
+    /// - (unquote-splicing expr) -> ,@expr
+    fn check_quote_shorthand(&self) -> Option<String> {
+        if let Value::Pair(pair) = self {
+            // Check if car is one of the special symbols
+            if let Value::Symbol(sym) = &pair.0 {
+                let prefix = match sym.as_ref() {
+                    "quote" => "'",
+                    "quasiquote" => "`",
+                    "unquote" => ",",
+                    "unquote-splicing" => ",@",
+                    _ => return None,
+                };
+
+                // Check if cdr is a proper 1-element list: (keyword expr)
+                if let Value::Pair(cdr_pair) = &pair.1 {
+                    if matches!(cdr_pair.1, Value::Null) {
+                        // It's (keyword expr), format as prefix + expr
+                        return Some(format!("{}{}", prefix, cdr_pair.0));
+                    }
+                }
+
+                // If we get here, it's malformed (e.g., (quote a b) or (quote . a))
+                // Fall through to regular list formatting
+            }
+        }
+        None
+    }
+
     fn fmt_list_contents(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Pair(p) => {

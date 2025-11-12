@@ -32,8 +32,9 @@ fn test_quote_list() {
 
 #[test]
 fn test_quote_nested() {
-    assert_eval_to("'(quote a)", "(quote a)");
-    assert_eval_to("''a", "(quote a)");
+    // Note: We display (quote a) as 'a which is equivalent and more readable
+    assert_eval_to("'(quote a)", "'a");
+    assert_eval_to("''a", "'a");
 }
 
 #[test]

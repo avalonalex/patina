@@ -58,8 +58,11 @@ TOTAL_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Tests run: ' '{sum += $
 # Count lines that start with "FAIL:" for additional failures
 ADDITIONAL_FAILS=$(grep -c "^FAIL:" "$RESULTS_FILE" || echo "0")
 
-# Count errors from error messages
+# Count errors from error messages (these are tests that crashed)
 ERROR_COUNT=$(grep -c "^Error:" "$RESULTS_FILE" || echo "0")
+
+# Calculate true total: tests that ran + tests that crashed
+TRUE_TOTAL=$((TOTAL_COUNT + ERROR_COUNT))
 
 # Generate markdown report
 cat > "$COMPAT_REPORT" << EOF
@@ -72,10 +75,12 @@ cat > "$COMPAT_REPORT" << EOF
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | $PASS_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($PASS_COUNT/$TOTAL_COUNT)*100}") |
-| ❌ Failed | $FAIL_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($FAIL_COUNT/$TOTAL_COUNT)*100}") |
-| ⚠️ Error | $ERROR_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($ERROR_COUNT/$TOTAL_COUNT)*100}") |
-| **Total** | **$TOTAL_COUNT** | **100%** |
+| ✅ Passed | $PASS_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($PASS_COUNT/$TRUE_TOTAL)*100}") |
+| ❌ Failed | $FAIL_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($FAIL_COUNT/$TRUE_TOTAL)*100}") |
+| ⚠️ Error (crashed) | $ERROR_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($ERROR_COUNT/$TRUE_TOTAL)*100}") |
+| **Total** | **$TRUE_TOTAL** | **100%** |
+
+**Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
 ## Failed Tests
 
