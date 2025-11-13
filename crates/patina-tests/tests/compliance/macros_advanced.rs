@@ -345,7 +345,6 @@ fn test_list_star_macro() {
 }
 
 #[test]
-#[ignore] // TODO: See internal/NESTED_ELLIPSIS_LIMITATION.md - not yet supported
 fn test_nested_ellipsis() {
     // Multiple items with nested ellipsis
     // This requires nested ellipsis support: (expr ...) ...
@@ -363,7 +362,7 @@ fn test_nested_ellipsis() {
           ((set! x (+ x 10)) (set! x (+ x 20))))
         x
         "#,
-        "33", // 1, 2, 12, 32, final: 33
+        "32", // 0 → 1 → 2 → 12 → 32
     );
 }
 

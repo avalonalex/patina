@@ -367,11 +367,12 @@ impl Expander {
             });
         }
 
-        // Get iteration count at outer level (level - 1)
+        // Get iteration count at outer level
+        // For double ellipsis, we iterate first at the ellipsis level (which is the variable's parent level)
         let outer_count = if let Some(&first_var) = vars.first() {
             // The variable should be at level >= 2 for double ellipsis
-            // We want to iterate at its parent level
-            self.get_iteration_count_at_level(env, first_var, indices, (level - 1) as usize)?
+            // We want to iterate at the ellipsis level (the variable's parent level)
+            self.get_iteration_count_at_level(env, first_var, indices, level as usize)?
         } else {
             0
         };
@@ -382,10 +383,14 @@ impl Expander {
         for outer_idx in 0..outer_count {
             // Build indices for this outer iteration
             let mut outer_indices = indices.to_vec();
-            while outer_indices.len() <= (level - 1) as usize {
+            // Ensure outer_indices is long enough for the variable's level
+            // For a level-2 variable, we need indices[0] and indices[1]
+            let max_var_level = vars.iter().map(|v| v.level()).max().unwrap_or(0);
+            while outer_indices.len() <= max_var_level {
                 outer_indices.push(0);
             }
-            outer_indices[(level - 1) as usize] = outer_idx;
+            // Set the index at the ellipsis level (outer iteration)
+            outer_indices[level as usize] = outer_idx;
 
             // Get inner iteration count at this outer index
             let inner_count = if let Some(&first_var) = vars.first() {
@@ -397,10 +402,21 @@ impl Expander {
             // Expand inner ellipsis
             for inner_idx in 0..inner_count {
                 let mut inner_indices = outer_indices.clone();
-                while inner_indices.len() <= level as usize {
+                // For double ellipsis with level-2 variables, we need indices[2]
+                // So ensure indices has at least (level + 1) elements
+                // Actually, we need enough space for the VARIABLE's level, not just ellipsis level
+                // For step ... ... where step is level 2, we need indices[0], [1], [2]
+                let max_var_level = vars.iter().map(|v| v.level()).max().unwrap_or(0);
+                while inner_indices.len() <= max_var_level {
                     inner_indices.push(0);
                 }
-                inner_indices[level as usize] = inner_idx;
+                // Set the index at the variable's level (inner iteration)
+                // For double ellipsis with level=1 and var level=2, we set indices[2]
+                let var_level = vars
+                    .first()
+                    .map(|v| v.level())
+                    .unwrap_or((level + 1) as usize);
+                inner_indices[var_level] = inner_idx;
 
                 let value = self.expand_impl(subtemplate, env, &inner_indices)?;
                 all_results.push(value);
@@ -478,8 +494,16 @@ impl Expander {
             })?;
 
         // Navigate to the appropriate level using indices
+        // For a level-N variable, we need to navigate N-1 times using indices[1] through indices[N-1]
+        // Example: level-2 variable with indices=[_, 0] navigates once using indices[1]=0
         let mut current = match_value;
-        for &idx in indices.iter().skip(1).take(pvref.level() - 1) {
+        for level_idx in 1..pvref.level() {
+            if level_idx >= indices.len() {
+                return Err(ExpandError::UndefinedVariable {
+                    pvref: format!("{:?}", pvref),
+                });
+            }
+            let idx = indices[level_idx];
             match current {
                 MatchValue::Branch(items) => {
                     current = items
@@ -775,11 +799,11 @@ mod tests {
 
     #[test]
     fn test_expand_double_ellipsis() {
-        // This tests the do macro use case:
+        // This tests the do macro use case with BOTH bindings having steps:
         // Pattern: ((var init step ...) ...)
         // Template: (loop step ... ...)
-        // Input: ((i 0 (+ i 1)) (j 10))
-        // Expected: (loop (+ i 1) j)
+        // Input: ((i 0 (+ i 1)) (j 10 (- j 1)))
+        // Expected: (loop (+ i 1) (- j 1))
 
         let expander = Expander::new();
         let step = PVRef::new(2, 0); // level 2 because it's in nested ellipsis
@@ -789,7 +813,7 @@ mod tests {
             Template2::Symbol(Identifier::new("loop")),
             Template2::Ellipsis {
                 subtemplate: Box::new(Template2::Var(step)),
-                level: 2,
+                level: 1, // ellipsis level is 1 for double ellipsis with level-2 variables
                 nesting: 2,
                 vars: vec![step],
             },
@@ -799,38 +823,33 @@ mod tests {
 
         // step is a doubly-nested structure:
         // Branch([
-        //   Branch([Leaf((+ i 1))]),  // First binding has 1 step
-        //   Branch([])                 // Second binding has 0 steps (will use var as step)
+        //   Branch([Leaf((+ i 1))]),    // First binding has 1 step
+        //   Branch([Leaf((- j 1))])     // Second binding has 1 step
         // ])
-        let plus_symbol = Value::Symbol(Rc::from("+"));
-        let i_symbol = Value::Symbol(Rc::from("i"));
-        let one = Value::Integer(1);
-        let step_expr = make_list(vec![plus_symbol, i_symbol, one]);
-
-        let j_symbol = Value::Symbol(Rc::from("j"));
+        let step_i = make_list(vec![
+            Value::Symbol(Rc::from("+")),
+            Value::Symbol(Rc::from("i")),
+            Value::Integer(1),
+        ]);
+        let step_j = make_list(vec![
+            Value::Symbol(Rc::from("-")),
+            Value::Symbol(Rc::from("j")),
+            Value::Integer(1),
+        ]);
 
         env.insert_branch(
             step,
             vec![
-                MatchValue::Branch(vec![MatchValue::Leaf(step_expr)]), // i binding: 1 step
-                MatchValue::Branch(vec![MatchValue::Leaf(j_symbol)]), // j binding: 1 step (the var itself)
+                MatchValue::Branch(vec![MatchValue::Leaf(step_i.clone())]), // i binding: 1 step
+                MatchValue::Branch(vec![MatchValue::Leaf(step_j.clone())]), // j binding: 1 step
             ],
         );
 
         let result = expander.expand(&template, &env);
         assert!(result.is_ok());
 
-        // Should produce (loop (+ i 1) j)
-        let expected_step = make_list(vec![
-            Value::Symbol(Rc::from("+")),
-            Value::Symbol(Rc::from("i")),
-            Value::Integer(1),
-        ]);
-        let expected = make_list(vec![
-            Value::Symbol(Rc::from("loop")),
-            expected_step,
-            Value::Symbol(Rc::from("j")),
-        ]);
+        // Should produce (loop (+ i 1) (- j 1))
+        let expected = make_list(vec![Value::Symbol(Rc::from("loop")), step_i, step_j]);
 
         assert_eq!(format!("{:?}", result.unwrap()), format!("{:?}", expected));
     }
@@ -841,7 +860,7 @@ mod tests {
         // Pattern: ((a b ...) ...)
         // Template: (result b ... ...)
         // Input: ((x 1 2) (y))
-        // Expected: (result 1 2)
+        // Expected: (result 1 2) - empty inner branch contributes nothing
 
         let expander = Expander::new();
         let b = PVRef::new(2, 0);
@@ -850,7 +869,7 @@ mod tests {
             Template2::Symbol(Identifier::new("result")),
             Template2::Ellipsis {
                 subtemplate: Box::new(Template2::Var(b)),
-                level: 2,
+                level: 1, // ellipsis level is 1 for double ellipsis with level-2 variables
                 nesting: 2,
                 vars: vec![b],
             },
@@ -871,7 +890,7 @@ mod tests {
         let result = expander.expand(&template, &env);
         assert!(result.is_ok());
 
-        // Should produce (result 1 2)
+        // Should produce (result 1 2) - second group contributes nothing
         let expected = make_list(vec![
             Value::Symbol(Rc::from("result")),
             Value::Integer(1),

@@ -284,39 +284,55 @@
 ;; ellipsis. This approach has zero runtime overhead compared to the
 ;; standard definition.
 
-;; TEMPORARILY DISABLED: do macro with nested ellipsis
-;; The do macro requires nested ellipsis (step ... ...) which is not yet
-;; fully working in the V2 macro system. Temporarily disabled to avoid
-;; test failures. The 'do' special form in the evaluator is still active.
-;;
-;; TODO: Re-enable once nested ellipsis is fully implemented
-;;
-;; ;; Helper to normalize bindings with optional steps
-;; (define-syntax do-normalize
-;;   (syntax-rules ()
-;;     ;; Done normalizing - call main do
-;;     ((do-normalize ((var init step) ...) () test-clause body ...)
-;;      (do ((var init step) ...) test-clause body ...))
-;;     ;; Has explicit step - keep it
-;;     ((do-normalize (done ...) ((var init step) rest ...) test body ...)
-;;      (do-normalize (done ... (var init step)) (rest ...) test body ...))
-;;     ;; No step - use var as step (variable doesn't change)
-;;     ((do-normalize (done ...) ((var init) rest ...) test body ...)
-;;      (do-normalize (done ... (var init var)) (rest ...) test body ...))))
-;;
-;; ;; R7RS-Compliant do macro with double ellipsis
-;; (define-syntax do
-;;   (syntax-rules ()
-;;     ((do ((var init step ...) ...)
-;;          (test result ...)
-;;        command ...)
-;;      (letrec ((loop (lambda (var ...)
-;;                       (if test
-;;                           (begin result ...)
-;;                           (begin
-;;                             command ...
-;;                             (loop step ... ...))))))
-;;        (loop init ...)))))
+;; R7RS-Compliant do macro with auxiliary helper
+;; Handles optional step expressions: (var init) or (var init step)
+;; When step is omitted, the variable doesn't change (uses itself as step)
+(define-syntax do
+  (syntax-rules ()
+    ((do (binding ...)
+         (test result ...)
+       command ...)
+     (do-helper (binding ...)
+                (test result ...)
+                (command ...)
+                ()))))  ; empty accumulator for normalized bindings
+
+;; Helper macro to normalize bindings
+;; Transforms (var init) -> (var init var) and (var init step) -> (var init step)
+(define-syntax do-helper
+  (syntax-rules ()
+    ;; Base case: all bindings processed, generate letrec
+    ((do-helper ()
+                (test result ...)
+                (command ...)
+                ((var init step) ...))
+     (letrec ((loop (lambda (var ...)
+                      (if test
+                          (begin result ...)
+                          (begin
+                            command ...
+                            (loop step ...))))))
+       (loop init ...)))
+
+    ;; Recursive case: binding with explicit step
+    ((do-helper ((var init step) rest ...)
+                test-clause
+                commands
+                (acc ...))
+     (do-helper (rest ...)
+                test-clause
+                commands
+                (acc ... (var init step))))
+
+    ;; Recursive case: binding without step - use var as step
+    ((do-helper ((var init) rest ...)
+                test-clause
+                commands
+                (acc ...))
+     (do-helper (rest ...)
+                test-clause
+                commands
+                (acc ... (var init var))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Testing framework support

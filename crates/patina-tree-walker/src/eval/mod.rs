@@ -339,6 +339,7 @@ impl Evaluator {
         if let Value::Symbol(ref sym) = car {
             match sym.as_ref() {
                 "quote" => return self.eval_quote(&cdr).map(EvalResult::Value),
+                "expand" => return self.eval_expand(&cdr, env).map(EvalResult::Value),
                 "quasiquote" => return self.eval_quasiquote(&cdr, env).map(EvalResult::Value),
                 "if" => return self.eval_if_impl(&cdr, env, in_tail_position),
                 "define" => return self.eval_define(&cdr, env).map(EvalResult::Value),
@@ -349,13 +350,13 @@ impl Evaluator {
                 "lambda" => return self.eval_lambda(&cdr, env).map(EvalResult::Value),
                 "begin" => return self.eval_begin_impl(&cdr, env, in_tail_position),
                 // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
-                // NOTE: 'do' has a macro implementation in bootstrap.scm, but we use the special
-                // form for proper tail call optimization. The macro version uses 'apply' which
-                // doesn't yet support TCO, causing stack overflows in tail-recursive exit clauses.
-                // TODO(TCO): 'apply' needs tail call support - see PRD/future/GENERAL_TAIL_CALL_OPTIMIZATION.md
+                // NOTE: 'do' is now implemented as a macro in lib/bootstrap.scm using the V2 macro system
+                // with full double ellipsis support. The previous Rust special form implementation has
+                // been disabled as the macro version is now feature-complete and handles nested ellipsis
+                // correctly for optional step expressions.
                 "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value),
-                // "do" special form is active (macro version temporarily disabled due to nested ellipsis)
-                "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
+                // "do" special form is now disabled in favor of the macro implementation
+                // "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
                 "import" => return self.eval_import(&cdr, env).map(EvalResult::Value),
                 // Note: call-with-values was previously a special form, but is now fully handled
                 // as a primitive that participates in tail call optimization via TailCallPrimitive
@@ -552,10 +553,10 @@ impl Evaluator {
                 "lambda" => return self.eval_lambda(&cdr, env),
                 "begin" => return self.eval_begin(&cdr, env),
                 // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
-                // NOTE: 'do' macro is defined in bootstrap.scm but special form is used for TCO
+                // NOTE: 'do' is now implemented as a macro (see lib/bootstrap.scm) with nested ellipsis
                 "apply" => return self.eval_apply(&cdr, env),
-                // "do" special form is active (macro version temporarily disabled)
-                "do" => return self.eval_do(&cdr, env),
+                // "do" special form disabled - now using macro implementation from bootstrap.scm
+                // "do" => return self.eval_do(&cdr, env),
                 _ => {}
             }
 

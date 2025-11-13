@@ -243,7 +243,6 @@ impl Matcher {
                 if let Pattern2::Ellipsis {
                     subpattern,
                     num_following,
-                    vars,
                     ..
                 } = pattern
                 {
@@ -252,9 +251,13 @@ impl Matcher {
                     let remaining_input = input_list.len() - input_idx;
                     let to_consume = remaining_input.saturating_sub(*num_following);
 
-                    // Collect all matches into branches
+                    // Collect ALL variables from subpattern (recursively)
+                    // This is critical for nested ellipsis support
+                    let all_vars = self.collect_all_pvars(subpattern);
+
+                    // Initialize branches for ALL variables
                     let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue>> =
-                        vars.iter().map(|pvref| (*pvref, Vec::new())).collect();
+                        all_vars.iter().map(|pvref| (*pvref, Vec::new())).collect();
 
                     // Match subpattern against each consumed element
                     for i in 0..to_consume {
@@ -264,8 +267,9 @@ impl Matcher {
                         let mut temp_env = MatchEnv::new(self.num_pvars);
                         self.match_impl(subpattern, elem, &mut temp_env, level + 1)?;
 
-                        // Extract matched values and add to branches
-                        for pvref in vars {
+                        // Extract matched values for ALL variables (not just direct ones)
+                        // This is the key fix for nested ellipsis
+                        for pvref in &all_vars {
                             if let Some(match_value) = temp_env.get_raw(*pvref) {
                                 branches.get_mut(pvref).unwrap().push(match_value.clone());
                             }
@@ -304,6 +308,61 @@ impl Matcher {
         }
 
         Ok(())
+    }
+
+    /// Recursively collect all pattern variables from a pattern
+    ///
+    /// This is essential for nested ellipsis support. We need to extract
+    /// bindings for ALL variables in the subpattern tree, not just the
+    /// direct children of the ellipsis.
+    ///
+    /// Inspired by Gauche's enter_subpattern (macro.c:766+)
+    fn collect_all_pvars(&self, pattern: &Pattern2) -> Vec<PVRef> {
+        let mut result = Vec::new();
+        Self::collect_pvars_impl(pattern, &mut result);
+        result
+    }
+
+    /// Internal implementation of collect_all_pvars
+    fn collect_pvars_impl(pattern: &Pattern2, result: &mut Vec<PVRef>) {
+        match pattern {
+            Pattern2::Var(pvref) => {
+                if !result.contains(pvref) {
+                    result.push(*pvref);
+                }
+            }
+            Pattern2::List(patterns) => {
+                for p in patterns {
+                    Self::collect_pvars_impl(p, result);
+                }
+            }
+            Pattern2::Vector(patterns) => {
+                for p in patterns {
+                    Self::collect_pvars_impl(p, result);
+                }
+            }
+            Pattern2::DottedList { patterns, tail } => {
+                for p in patterns {
+                    Self::collect_pvars_impl(p, result);
+                }
+                Self::collect_pvars_impl(tail, result);
+            }
+            Pattern2::Ellipsis {
+                subpattern, vars, ..
+            } => {
+                // Include the direct vars from this ellipsis
+                for pvref in vars {
+                    if !result.contains(pvref) {
+                        result.push(*pvref);
+                    }
+                }
+                // Recursively collect from subpattern
+                Self::collect_pvars_impl(subpattern, result);
+            }
+            Pattern2::Wildcard | Pattern2::Literal(_) => {
+                // No variables
+            }
+        }
     }
 
     /// Match a vector pattern against a vector value

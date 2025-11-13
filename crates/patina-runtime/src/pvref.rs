@@ -265,13 +265,14 @@ impl MatchEnv {
         let mut val = &self.vars[pvref.index()];
 
         // Navigate tree using indices
-        for i in 1..=pvref.level() {
+        // The indices array is 1-indexed: indices[0] is unused, indices[level] is for level
+        for level in 1..=pvref.level() {
             match val {
                 MatchValue::Branch(items) => {
-                    if i >= indices.len() || indices[i] >= items.len() {
-                        return None; // Exhausted
+                    if level >= indices.len() || indices[level] >= items.len() {
+                        return None; // Index out of bounds
                     }
-                    val = &items[indices[i]];
+                    val = &items[indices[level]];
                 }
                 MatchValue::Leaf(_) => return None, // Type mismatch - shouldn't happen
             }
