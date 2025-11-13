@@ -184,11 +184,7 @@ fn test_quasiquote_improper_list() {
     assert_eval_to("`(a b . c)", "(a b . c)");
 }
 
-// TODO: Fix improper list with unquote-splicing followed by dotted tail
-// Currently fails with "unquote-splicing not in list context"
-// Issue: Complex interaction between splicing and improper tail detection
 #[test]
-#[ignore]
 fn test_quasiquote_improper_list_with_unquote() {
     // R7RS example: `((foo ,(- 10 3)) ,@(cdr '(c)) . ,(car '(cons)))
     //            => ((foo 7) . cons)
@@ -213,28 +209,19 @@ fn test_unquote_returns_list() {
 // Error Cases
 // ============================================================================
 
-// TODO: Add error handling for unquote/unquote-splicing outside quasiquote
-// Currently these evaluate instead of erroring as they should
-// Need to define unquote/unquote-splicing as auxiliary syntax that errors when used outside quasiquote
 #[test]
-#[ignore]
-#[should_panic]
 fn test_unquote_outside_quasiquote() {
     // Using unquote outside quasiquote should be an error
     assert_eval_error("(unquote x)");
 }
 
 #[test]
-#[ignore]
-#[should_panic]
 fn test_unquote_splicing_outside_quasiquote() {
     // Using unquote-splicing outside quasiquote should be an error
     assert_eval_error("(unquote-splicing x)");
 }
 
 #[test]
-#[ignore]
-#[should_panic]
 fn test_unquote_splicing_non_list() {
     // Splicing a non-list should be an error
     assert_eval_error("`(a ,@42 b)");
@@ -312,9 +299,7 @@ fn test_r7rs_example_3() {
     assert_eval_to("`(a ,(+ 1 2) ,@(map abs '(4 -5 6)) b)", "(a 3 4 5 6 b)");
 }
 
-// TODO: Same issue as test_quasiquote_improper_list_with_unquote
 #[test]
-#[ignore]
 fn test_r7rs_example_4() {
     // Section 4.2.8 example (adapted without sqrt)
     assert_eval_to(

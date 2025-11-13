@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-11 18:11:18
+**Generated:** 2025-11-13 10:27:32
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 68 | 52.7% |
-| ❌ Failed | 4 | 3.1% |
-| ⚠️ Error (crashed) | 57 | 44.2% |
-| **Total** | **129** | **100%** |
+| ✅ Passed | 68 | 54.0% |
+| ❌ Failed | 4 | 3.2% |
+| ⚠️ Error (crashed) | 54 | 42.9% |
+| **Total** | **126** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -67,23 +67,20 @@ Error: Undefined variable: let-syntax
 Error: Undefined variable: letrec-syntax
 Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: sequence1
-Error: Invalid syntax: Ellipsis template contains no pattern variables
+Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: sequence2
 Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: sequence3
-Error: Invalid syntax: Ellipsis cannot appear at start of template
-Error: Undefined variable: elli-esc-1
-Error: Undefined variable: elli-esc-1
-Error: Undefined variable: elli-esc-1
-Error: Invalid syntax: Pattern variable m used with ellipsis but not bound with ellipsis
-Error: Invalid syntax: Pattern variable m used with ellipsis but not bound with ellipsis
+Error: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
+Error: Undefined variable: part-2x
+Error: Undefined variable: part-2x
 Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: mad-hatter
 Error: Not a procedure: ok
 Error: Undefined variable: let-syntax
 Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: let-syntax
-Error: Undefined variable: ##bar399#1000
+Error: Undefined variable: ##bar399#1005
 Error: Undefined variable: let-syntax
 Error: Lexer error: Unexpected character: |
 ```

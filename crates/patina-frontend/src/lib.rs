@@ -20,5 +20,5 @@ pub mod parser;
 pub use error::FrontendError;
 pub use lexer::{LexError, Lexer, Token};
 pub use library_parser::{ExportSpec, ImportSet, LibraryDefinition};
-pub use patina_runtime::Value::Macro;
 pub use parser::{ParseError, Parser};
+pub use patina_runtime::Value::Macro;

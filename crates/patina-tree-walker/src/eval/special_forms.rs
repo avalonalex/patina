@@ -256,30 +256,9 @@ impl Evaluator {
                     let car = &pair.0;
                     let cdr = &pair.1;
 
-                    // Check if CDR is an unquote form (for improper lists like (a . ,x))
-                    // We need to check this BEFORE processing CAR
-                    if depth == 0
-                        && let Value::Pair(cdr_pair) = cdr
-                        && let Value::Symbol(sym) = &cdr_pair.0
-                        && sym.as_ref() == "unquote"
-                    {
-                        // This is an improper list: (... car . ,expr)
-                        // Process car normally, then evaluate the unquote as tail
-                        let processed_car = self.eval_quasiquote_impl(car, env, depth)?;
-                        elements.push(processed_car);
-
-                        // Evaluate the unquote expression
-                        let (unquote_expr, rest) = self.extract_pair(&cdr_pair.1)?;
-                        if !matches!(rest, Value::Null) {
-                            return Err(EvalError::InvalidSyntax(
-                                "unquote expects exactly one argument".to_string(),
-                            ));
-                        }
-                        tail = self.eval_in_env(&unquote_expr, env)?;
-                        break;
-                    }
-
                     // Check if this element is (unquote-splicing ...)
+                    // IMPORTANT: Check this BEFORE checking if CDR is unquote, because we might have
+                    // (,@list . ,tail) which needs special handling
                     if depth == 0
                         && let Value::Pair(inner_pair) = car
                         && let Value::Symbol(sym) = &inner_pair.0
@@ -309,8 +288,47 @@ impl Evaluator {
                             splice_current = splice_pair.1.clone();
                         }
 
+                        // After splicing, check if CDR is an unquote form for improper list tail
+                        // e.g., (...  ,@list . ,tail)
+                        if let Value::Pair(cdr_pair) = cdr
+                            && let Value::Symbol(sym) = &cdr_pair.0
+                            && sym.as_ref() == "unquote"
+                        {
+                            // Evaluate the unquote expression as the tail
+                            let (unquote_expr, rest) = self.extract_pair(&cdr_pair.1)?;
+                            if !matches!(rest, Value::Null) {
+                                return Err(EvalError::InvalidSyntax(
+                                    "unquote expects exactly one argument".to_string(),
+                                ));
+                            }
+                            tail = self.eval_in_env(&unquote_expr, env)?;
+                            break;
+                        }
+
                         current = cdr.clone();
                         continue;
+                    }
+
+                    // Check if CDR is an unquote form (for improper lists like (a . ,x))
+                    if depth == 0
+                        && let Value::Pair(cdr_pair) = cdr
+                        && let Value::Symbol(sym) = &cdr_pair.0
+                        && sym.as_ref() == "unquote"
+                    {
+                        // This is an improper list: (... car . ,expr)
+                        // Process car normally, then evaluate the unquote as tail
+                        let processed_car = self.eval_quasiquote_impl(car, env, depth)?;
+                        elements.push(processed_car);
+
+                        // Evaluate the unquote expression
+                        let (unquote_expr, rest) = self.extract_pair(&cdr_pair.1)?;
+                        if !matches!(rest, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(
+                                "unquote expects exactly one argument".to_string(),
+                            ));
+                        }
+                        tail = self.eval_in_env(&unquote_expr, env)?;
+                        break;
                     }
 
                     // Regular element: process recursively
@@ -937,7 +955,7 @@ impl Evaluator {
     ///
     /// This implementation loads the libraries and imports their exports
     /// into the current environment.
-    #[allow(dead_code)]    
+    #[allow(dead_code)]
     pub(super) fn eval_import(
         &self,
         args: &Value,
