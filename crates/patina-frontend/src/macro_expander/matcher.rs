@@ -13,7 +13,7 @@
 //! Inspired by Gauche's pattern matching (macro.c:600+)
 //! Reference: https://github.com/shirok/Gauche/blob/master/src/macro.c
 
-use crate::macro_expander::pattern_v2::Pattern2;
+use crate::macro_expander::pattern::Pattern;
 use patina_runtime::{MatchEnv, MatchValue, PVRef, Value};
 
 /// Error type for pattern matching failures
@@ -126,7 +126,7 @@ impl Matcher {
     /// Returns a MatchEnv with all pattern variables bound on success.
     ///
     /// Inspired by Gauche's match_pattern (macro.c:600+)
-    pub fn match_pattern(&self, pattern: &Pattern2, input: &Value) -> Result<MatchEnv, MatchError> {
+    pub fn match_pattern(&self, pattern: &Pattern, input: &Value) -> Result<MatchEnv, MatchError> {
         let mut env = MatchEnv::new(self.num_pvars);
         self.match_impl(pattern, input, &mut env, 0)?;
         Ok(env)
@@ -143,18 +143,18 @@ impl Matcher {
     /// Based on Gauche's match_rec (macro.c:620+)
     fn match_impl(
         &self,
-        pattern: &Pattern2,
+        pattern: &Pattern,
         input: &Value,
         env: &mut MatchEnv,
         level: usize,
     ) -> Result<(), MatchError> {
         match pattern {
-            Pattern2::Wildcard => {
+            Pattern::Wildcard => {
                 // Wildcard matches anything, binds nothing
                 Ok(())
             }
 
-            Pattern2::Literal(lit) => {
+            Pattern::Literal(lit) => {
                 // Literal must match exactly
                 if format!("{:?}", lit) == format!("{:?}", input) {
                     Ok(())
@@ -166,29 +166,29 @@ impl Matcher {
                 }
             }
 
-            Pattern2::Var(pvref) => {
+            Pattern::Var(pvref) => {
                 // Bind pattern variable
                 // At level 0, this is a simple leaf binding
                 env.insert(*pvref, input.clone());
                 Ok(())
             }
 
-            Pattern2::List(patterns) => {
+            Pattern::List(patterns) => {
                 // Match list pattern
                 self.match_list(patterns, input, env, level)
             }
 
-            Pattern2::Vector(patterns) => {
+            Pattern::Vector(patterns) => {
                 // Match vector pattern
                 self.match_vector(patterns, input, env, level)
             }
 
-            Pattern2::DottedList { patterns, tail } => {
+            Pattern::DottedList { patterns, tail } => {
                 // Match dotted list: (p1 p2 . rest)
                 self.match_dotted_list(patterns, tail, input, env, level)
             }
 
-            Pattern2::Ellipsis {
+            Pattern::Ellipsis {
                 subpattern,
                 level: _pattern_level,
                 num_following,
@@ -206,7 +206,7 @@ impl Matcher {
     /// Handles both proper lists and lists with ellipsis patterns.
     fn match_list(
         &self,
-        patterns: &[Pattern2],
+        patterns: &[Pattern],
         input: &Value,
         env: &mut MatchEnv,
         level: usize,
@@ -240,7 +240,7 @@ impl Matcher {
             if pattern.is_ellipsis() {
                 has_ellipsis = true;
                 // Handle ellipsis pattern
-                if let Pattern2::Ellipsis {
+                if let Pattern::Ellipsis {
                     subpattern,
                     num_following,
                     ..
@@ -317,37 +317,37 @@ impl Matcher {
     /// direct children of the ellipsis.
     ///
     /// Inspired by Gauche's enter_subpattern (macro.c:766+)
-    fn collect_all_pvars(&self, pattern: &Pattern2) -> Vec<PVRef> {
+    fn collect_all_pvars(&self, pattern: &Pattern) -> Vec<PVRef> {
         let mut result = Vec::new();
         Self::collect_pvars_impl(pattern, &mut result);
         result
     }
 
     /// Internal implementation of collect_all_pvars
-    fn collect_pvars_impl(pattern: &Pattern2, result: &mut Vec<PVRef>) {
+    fn collect_pvars_impl(pattern: &Pattern, result: &mut Vec<PVRef>) {
         match pattern {
-            Pattern2::Var(pvref) => {
+            Pattern::Var(pvref) => {
                 if !result.contains(pvref) {
                     result.push(*pvref);
                 }
             }
-            Pattern2::List(patterns) => {
+            Pattern::List(patterns) => {
                 for p in patterns {
                     Self::collect_pvars_impl(p, result);
                 }
             }
-            Pattern2::Vector(patterns) => {
+            Pattern::Vector(patterns) => {
                 for p in patterns {
                     Self::collect_pvars_impl(p, result);
                 }
             }
-            Pattern2::DottedList { patterns, tail } => {
+            Pattern::DottedList { patterns, tail } => {
                 for p in patterns {
                     Self::collect_pvars_impl(p, result);
                 }
                 Self::collect_pvars_impl(tail, result);
             }
-            Pattern2::Ellipsis {
+            Pattern::Ellipsis {
                 subpattern, vars, ..
             } => {
                 // Include the direct vars from this ellipsis
@@ -359,7 +359,7 @@ impl Matcher {
                 // Recursively collect from subpattern
                 Self::collect_pvars_impl(subpattern, result);
             }
-            Pattern2::Wildcard | Pattern2::Literal(_) => {
+            Pattern::Wildcard | Pattern::Literal(_) => {
                 // No variables
             }
         }
@@ -368,7 +368,7 @@ impl Matcher {
     /// Match a vector pattern against a vector value
     fn match_vector(
         &self,
-        patterns: &[Pattern2],
+        patterns: &[Pattern],
         input: &Value,
         env: &mut MatchEnv,
         level: usize,
@@ -403,8 +403,8 @@ impl Matcher {
     /// Match a dotted list pattern: (p1 p2 . rest)
     fn match_dotted_list(
         &self,
-        patterns: &[Pattern2],
-        tail: &Pattern2,
+        patterns: &[Pattern],
+        tail: &Pattern,
         input: &Value,
         env: &mut MatchEnv,
         level: usize,
@@ -444,7 +444,7 @@ impl Matcher {
     /// to avoid backtracking.
     fn match_ellipsis(
         &self,
-        _subpattern: &Pattern2,
+        _subpattern: &Pattern,
         _num_following: usize,
         _vars: &[PVRef],
         input: &Value,
@@ -488,12 +488,12 @@ impl Matcher {
     /// Count minimum required elements in a pattern list
     ///
     /// This accounts for ellipsis patterns which can match zero elements.
-    fn count_min_required(&self, patterns: &[Pattern2]) -> usize {
+    fn count_min_required(&self, patterns: &[Pattern]) -> usize {
         let mut count = 0;
         for pattern in patterns {
             if pattern.is_ellipsis() {
                 // Ellipsis can match zero, but need to account for num_following
-                if let Pattern2::Ellipsis { num_following, .. } = pattern {
+                if let Pattern::Ellipsis { num_following, .. } = pattern {
                     // The items after this ellipsis are required
                     count += num_following;
                     break; // No more patterns after this (they're accounted for in num_following)
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn test_match_wildcard() {
         let matcher = Matcher::new(0);
-        let pattern = Pattern2::Wildcard;
+        let pattern = Pattern::Wildcard;
         let input = Value::Integer(42);
 
         let result = matcher.match_pattern(&pattern, &input);
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn test_match_literal_success() {
         let matcher = Matcher::new(0);
-        let pattern = Pattern2::Literal(Value::Integer(42));
+        let pattern = Pattern::Literal(Value::Integer(42));
         let input = Value::Integer(42);
 
         let result = matcher.match_pattern(&pattern, &input);
@@ -543,7 +543,7 @@ mod tests {
     #[test]
     fn test_match_literal_failure() {
         let matcher = Matcher::new(0);
-        let pattern = Pattern2::Literal(Value::Integer(42));
+        let pattern = Pattern::Literal(Value::Integer(42));
         let input = Value::Integer(43);
 
         let result = matcher.match_pattern(&pattern, &input);
@@ -558,7 +558,7 @@ mod tests {
     fn test_match_var() {
         let matcher = Matcher::new(1);
         let pvref = PVRef::new(0, 0);
-        let pattern = Pattern2::Var(pvref);
+        let pattern = Pattern::Var(pvref);
         let input = Value::Integer(42);
 
         let result = matcher.match_pattern(&pattern, &input);
@@ -578,7 +578,7 @@ mod tests {
         let matcher = Matcher::new(2);
         let x = PVRef::new(0, 0);
         let y = PVRef::new(0, 1);
-        let pattern = Pattern2::List(vec![Pattern2::Var(x), Pattern2::Var(y)]);
+        let pattern = Pattern::List(vec![Pattern::Var(x), Pattern::Var(y)]);
 
         let input = make_list(vec![Value::Integer(1), Value::Integer(2)]);
 
@@ -594,10 +594,10 @@ mod tests {
     fn test_match_list_too_few_elements() {
         // Pattern: (x y z)
         let matcher = Matcher::new(3);
-        let pattern = Pattern2::List(vec![
-            Pattern2::Var(PVRef::new(0, 0)),
-            Pattern2::Var(PVRef::new(0, 1)),
-            Pattern2::Var(PVRef::new(0, 2)),
+        let pattern = Pattern::List(vec![
+            Pattern::Var(PVRef::new(0, 0)),
+            Pattern::Var(PVRef::new(0, 1)),
+            Pattern::Var(PVRef::new(0, 2)),
         ]);
 
         let input = make_list(vec![Value::Integer(1), Value::Integer(2)]);
@@ -615,8 +615,8 @@ mod tests {
         // Pattern: (x ...)
         let matcher = Matcher::new(1);
         let x = PVRef::new(1, 0);
-        let pattern = Pattern2::List(vec![Pattern2::Ellipsis {
-            subpattern: Box::new(Pattern2::Var(x)),
+        let pattern = Pattern::List(vec![Pattern::Ellipsis {
+            subpattern: Box::new(Pattern::Var(x)),
             level: 1,
             num_following: 0,
             vars: vec![x],
@@ -648,14 +648,14 @@ mod tests {
         let matcher = Matcher::new(2);
         let x = PVRef::new(1, 0);
         let y = PVRef::new(0, 1);
-        let pattern = Pattern2::List(vec![
-            Pattern2::Ellipsis {
-                subpattern: Box::new(Pattern2::Var(x)),
+        let pattern = Pattern::List(vec![
+            Pattern::Ellipsis {
+                subpattern: Box::new(Pattern::Var(x)),
                 level: 1,
                 num_following: 1,
                 vars: vec![x],
             },
-            Pattern2::Var(y),
+            Pattern::Var(y),
         ]);
 
         let input = make_list(vec![

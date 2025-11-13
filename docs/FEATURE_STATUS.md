@@ -165,16 +165,16 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | quotient | ✅ | test_quotient | numbers.rs / eval/mod.rs |
 | remainder | ✅ | test_remainder | numbers.rs / eval/mod.rs |
 | modulo | ✅ | test_modulo | numbers.rs / eval/mod.rs |
-| gcd | ❌ | - | Not implemented |
-| lcm | ❌ | - | Not implemented |
-| floor | ❌ | - | Not implemented |
-| ceiling | ❌ | - | Not implemented |
-| truncate | ❌ | - | Not implemented |
-| round | ❌ | - | Not implemented |
+| gcd | ✅ | test_gcd, test_gcd_euclidean, test_extended_gcd | numbers.rs / arithmetic.rs |
+| lcm | ✅ | test_lcm | numbers.rs / arithmetic.rs |
+| floor | ✅ | - | arithmetic.rs |
+| ceiling | ✅ | - | arithmetic.rs |
+| truncate | ✅ | - | arithmetic.rs |
+| round | ✅ | - | arithmetic.rs |
 | rationalize | ❌ | - | Not implemented |
-| square | ❌ | - | Not implemented |
+| square | ✅ | test_square | numbers.rs / arithmetic.rs |
 | exact-integer-sqrt | ❌ | - | Not implemented |
-| expt | ❌ | - | Not implemented |
+| expt | ✅ | - | arithmetic.rs |
 
 ### Comparison Operations
 | Feature | Status | Tests | File |
@@ -444,7 +444,6 @@ Based on the 22 ignored tests, here are the quickest wins to reach higher compli
 
 ### Medium Priority (2-4 hours) - Numeric Operations
 3. **`quotient`, `remainder`, `modulo`** - Integer division operations
-   - **Note**: Once implemented, enable `test_gcd_euclidean` and `test_extended_gcd` in numbers.rs
    - These tests demonstrate the power of multiple values for classic algorithms!
    - Also enable `odd?` and `even?` predicates in bootstrap.scm once remainder is available
 4. **Division by zero handling** - Proper error for `(/ 1 0)`

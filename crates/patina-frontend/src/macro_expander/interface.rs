@@ -54,30 +54,6 @@ impl MacroExpander for CompiledMacroExpander {
     }
 }
 
-/// A macro expander created from legacy macro definition (V1 system)
-#[allow(dead_code)]
-pub struct LegacyMacroExpander {
-    macro_def: super::Macro,
-}
-
-#[allow(dead_code)]
-impl LegacyMacroExpander {
-    /// Create a new expander from legacy macro definition
-    pub fn new(macro_def: super::Macro) -> Self {
-        Self { macro_def }
-    }
-}
-
-impl MacroExpander for LegacyMacroExpander {
-    fn expand(&self, macro_form: &Value, env: &Rc<Environment>) -> ExpansionResult {
-        super::expand_macro(&self.macro_def, macro_form, env)
-    }
-
-    fn name(&self) -> &str {
-        &self.macro_def.name
-    }
-}
-
 /// Test helper for creating macro expanders and testing expansions
 ///
 /// This is available in all builds to support testing in downstream crates.

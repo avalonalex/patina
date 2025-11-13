@@ -13,8 +13,8 @@
 //!
 //! Reference: https://github.com/shirok/Gauche/blob/master/src/macro.c
 
-use super::pattern_v2::Pattern2;
-use super::template_v2::{Identifier, Template2};
+use super::pattern::Pattern;
+use super::template::{Identifier, Template};
 use crate::error::FrontendError;
 use patina_runtime::{PVRef, Value};
 use std::collections::HashMap;
@@ -27,10 +27,10 @@ use std::rc::Rc;
 #[derive(Clone, Debug)]
 pub struct CompiledRule {
     /// Compiled pattern
-    pub pattern: Pattern2,
+    pub pattern: Pattern,
 
     /// Compiled template
-    pub template: Template2,
+    pub template: Template,
 
     /// Number of pattern variables in this rule
     pub num_pvars: usize,
@@ -151,20 +151,20 @@ impl Compiler {
         &mut self,
         form: &Value,
         level: usize,
-    ) -> Result<Pattern2, FrontendError> {
+    ) -> Result<Pattern, FrontendError> {
         match form {
             // Underscore wildcard
-            Value::Symbol(s) if s.as_ref() == "_" => Ok(Pattern2::Wildcard),
+            Value::Symbol(s) if s.as_ref() == "_" => Ok(Pattern::Wildcard),
 
             // Symbol - could be literal or pattern variable
             Value::Symbol(s) => {
                 if self.is_literal(s) {
                     // Literal identifier
-                    Ok(Pattern2::Literal(form.clone()))
+                    Ok(Pattern::Literal(form.clone()))
                 } else {
                     // Pattern variable - assign PVREF
                     let pvref = self.add_pvar(s.clone(), level)?;
-                    Ok(Pattern2::Var(pvref))
+                    Ok(Pattern::Var(pvref))
                 }
             }
 
@@ -180,7 +180,7 @@ impl Compiler {
                 }
             }
 
-            Value::Null => Ok(Pattern2::List(vec![])),
+            Value::Null => Ok(Pattern::List(vec![])),
 
             // Vector
             Value::Vector(v) => {
@@ -189,11 +189,11 @@ impl Compiler {
                 for item in items.iter() {
                     patterns.push(self.compile_pattern(item, level)?);
                 }
-                Ok(Pattern2::Vector(patterns))
+                Ok(Pattern::Vector(patterns))
             }
 
             // Literal value (boolean, number, string, character, etc.)
-            other => Ok(Pattern2::Literal(other.clone())),
+            other => Ok(Pattern::Literal(other.clone())),
         }
     }
 
@@ -205,7 +205,7 @@ impl Compiler {
         &mut self,
         items: &[Value],
         level: usize,
-    ) -> Result<Pattern2, FrontendError> {
+    ) -> Result<Pattern, FrontendError> {
         let mut patterns = Vec::new();
         let mut i = 0;
 
@@ -235,7 +235,7 @@ impl Compiler {
                 // Update max level
                 self.max_level = self.max_level.max(level + 1);
 
-                patterns.push(Pattern2::Ellipsis {
+                patterns.push(Pattern::Ellipsis {
                     subpattern: Box::new(subpattern),
                     level: (level + 1) as u8,
                     num_following,
@@ -249,7 +249,7 @@ impl Compiler {
             }
         }
 
-        Ok(Pattern2::List(patterns))
+        Ok(Pattern::List(patterns))
     }
 
     /// Compile a dotted list pattern: (a b . rest)
@@ -258,7 +258,7 @@ impl Compiler {
         items: &[Value],
         tail: &Value,
         level: usize,
-    ) -> Result<Pattern2, FrontendError> {
+    ) -> Result<Pattern, FrontendError> {
         let mut patterns = Vec::new();
         for item in items {
             patterns.push(self.compile_pattern(item, level)?);
@@ -266,7 +266,7 @@ impl Compiler {
 
         let tail_pattern = Box::new(self.compile_pattern(tail, level)?);
 
-        Ok(Pattern2::DottedList {
+        Ok(Pattern::DottedList {
             patterns,
             tail: tail_pattern,
         })
@@ -279,7 +279,7 @@ impl Compiler {
         &mut self,
         form: &Value,
         level: usize,
-    ) -> Result<Template2, FrontendError> {
+    ) -> Result<Template, FrontendError> {
         match form {
             Value::Symbol(s) => {
                 // Check if it's a pattern variable
@@ -293,10 +293,10 @@ impl Compiler {
                             level
                         )));
                     }
-                    Ok(Template2::Var(*pvref))
+                    Ok(Template::Var(*pvref))
                 } else {
                     // Introduced symbol (will be renamed for hygiene)
-                    Ok(Template2::Symbol(Identifier::new(s.clone())))
+                    Ok(Template::Symbol(Identifier::new(s.clone())))
                 }
             }
 
@@ -322,7 +322,7 @@ impl Compiler {
                 }
             }
 
-            Value::Null => Ok(Template2::List(vec![])),
+            Value::Null => Ok(Template::List(vec![])),
 
             // Vector
             Value::Vector(v) => {
@@ -331,11 +331,11 @@ impl Compiler {
                 for item in items.iter() {
                     templates.push(self.compile_template(item, level)?);
                 }
-                Ok(Template2::Vector(templates))
+                Ok(Template::Vector(templates))
             }
 
             // Literal value
-            other => Ok(Template2::Literal(other.clone())),
+            other => Ok(Template::Literal(other.clone())),
         }
     }
 
@@ -344,7 +344,7 @@ impl Compiler {
         &mut self,
         items: &[Value],
         level: usize,
-    ) -> Result<Template2, FrontendError> {
+    ) -> Result<Template, FrontendError> {
         let mut templates = Vec::new();
         let mut i = 0;
 
@@ -376,7 +376,7 @@ impl Compiler {
                 // Verify variables are at appropriate levels for nesting
                 self.verify_ellipsis_nesting(&vars, level, nesting as usize)?;
 
-                templates.push(Template2::Ellipsis {
+                templates.push(Template::Ellipsis {
                     subtemplate: Box::new(subtemplate),
                     level: (level + 1) as u8,
                     nesting,
@@ -390,7 +390,7 @@ impl Compiler {
             }
         }
 
-        Ok(Template2::List(templates))
+        Ok(Template::List(templates))
     }
 
     /// Compile a dotted list template: (a b . rest)
@@ -399,7 +399,7 @@ impl Compiler {
         items: &[Value],
         tail: &Value,
         level: usize,
-    ) -> Result<Template2, FrontendError> {
+    ) -> Result<Template, FrontendError> {
         let mut templates = Vec::new();
         for item in items {
             templates.push(self.compile_template(item, level)?);
@@ -407,7 +407,7 @@ impl Compiler {
 
         let tail_template = Box::new(self.compile_template(tail, level)?);
 
-        Ok(Template2::DottedList {
+        Ok(Template::DottedList {
             templates,
             tail: tail_template,
         })
@@ -420,7 +420,7 @@ impl Compiler {
         &mut self,
         form: &Value,
         level: usize,
-    ) -> Result<Template2, FrontendError> {
+    ) -> Result<Template, FrontendError> {
         // Save current ellipsis setting
         let saved_ellipsis = self.ellipsis.take();
 
@@ -510,7 +510,7 @@ impl Compiler {
     /// Collect all pattern variables from a template
     ///
     /// Used to determine which variables need to be iterated during ellipsis expansion.
-    fn collect_template_vars(&self, tmpl: &Template2, min_level: usize) -> Vec<PVRef> {
+    fn collect_template_vars(&self, tmpl: &Template, min_level: usize) -> Vec<PVRef> {
         let mut vars = Vec::new();
         Self::collect_vars_rec(tmpl, min_level, &mut vars);
         vars.sort_by_key(|pv| (pv.level(), pv.index()));
@@ -519,20 +519,20 @@ impl Compiler {
     }
 
     /// Recursively collect variables from template
-    fn collect_vars_rec(tmpl: &Template2, min_level: usize, acc: &mut Vec<PVRef>) {
+    fn collect_vars_rec(tmpl: &Template, min_level: usize, acc: &mut Vec<PVRef>) {
         match tmpl {
-            Template2::Var(pvref) if pvref.level() >= min_level => {
+            Template::Var(pvref) if pvref.level() >= min_level => {
                 acc.push(*pvref);
             }
-            Template2::List(items) | Template2::Vector(items) => {
+            Template::List(items) | Template::Vector(items) => {
                 for item in items {
                     Self::collect_vars_rec(item, min_level, acc);
                 }
             }
-            Template2::Ellipsis { subtemplate, .. } => {
+            Template::Ellipsis { subtemplate, .. } => {
                 Self::collect_vars_rec(subtemplate, min_level, acc);
             }
-            Template2::DottedList { templates, tail } => {
+            Template::DottedList { templates, tail } => {
                 for t in templates {
                     Self::collect_vars_rec(t, min_level, acc);
                 }
@@ -595,11 +595,11 @@ mod tests {
         let pattern = compiler.compile_pattern(&pattern_form, 0).unwrap();
 
         match pattern {
-            Pattern2::List(patterns) => {
+            Pattern::List(patterns) => {
                 assert_eq!(patterns.len(), 3);
-                assert!(matches!(&patterns[0], Pattern2::Var(_)));
-                assert!(matches!(&patterns[1], Pattern2::Var(_)));
-                assert!(matches!(&patterns[2], Pattern2::Var(_)));
+                assert!(matches!(&patterns[0], Pattern::Var(_)));
+                assert!(matches!(&patterns[1], Pattern::Var(_)));
+                assert!(matches!(&patterns[2], Pattern::Var(_)));
             }
             _ => panic!("Expected Pattern2::List"),
         }
@@ -617,14 +617,14 @@ mod tests {
         let pattern = compiler.compile_pattern(&pattern_form, 0).unwrap();
 
         match pattern {
-            Pattern2::List(patterns) => {
+            Pattern::List(patterns) => {
                 assert_eq!(patterns.len(), 3);
                 // First two are normal vars
-                assert!(matches!(&patterns[0], Pattern2::Var(_)));
-                assert!(matches!(&patterns[1], Pattern2::Var(_)));
+                assert!(matches!(&patterns[0], Pattern::Var(_)));
+                assert!(matches!(&patterns[1], Pattern::Var(_)));
                 // Third is ellipsis
                 match &patterns[2] {
-                    Pattern2::Ellipsis {
+                    Pattern::Ellipsis {
                         subpattern,
                         level,
                         num_following,
@@ -633,7 +633,7 @@ mod tests {
                         assert_eq!(*level, 1);
                         assert_eq!(*num_following, 0); // No items after ellipsis
                         assert_eq!(vars.len(), 1);
-                        assert!(matches!(**subpattern, Pattern2::Var(_)));
+                        assert!(matches!(**subpattern, Pattern::Var(_)));
                     }
                     _ => panic!("Expected Pattern2::Ellipsis"),
                 }
@@ -657,10 +657,10 @@ mod tests {
         let pattern = compiler.compile_pattern(&pattern_form, 0).unwrap();
 
         match pattern {
-            Pattern2::List(patterns) => {
+            Pattern::List(patterns) => {
                 assert_eq!(patterns.len(), 3); // do, bindings..., (test result)
                 match &patterns[1] {
-                    Pattern2::Ellipsis { num_following, .. } => {
+                    Pattern::Ellipsis { num_following, .. } => {
                         assert_eq!(*num_following, 1); // One item follows
                     }
                     _ => panic!("Expected ellipsis"),
@@ -683,13 +683,13 @@ mod tests {
         let template = compiler.compile_template(&template_form, 0).unwrap();
 
         match template {
-            Template2::List(templates) => {
+            Template::List(templates) => {
                 assert_eq!(templates.len(), 3);
                 // "if" is introduced symbol
-                assert!(matches!(&templates[0], Template2::Symbol(_)));
+                assert!(matches!(&templates[0], Template::Symbol(_)));
                 // "test" and "body" are pattern variables
-                assert!(matches!(&templates[1], Template2::Var(_)));
-                assert!(matches!(&templates[2], Template2::Var(_)));
+                assert!(matches!(&templates[1], Template::Var(_)));
+                assert!(matches!(&templates[2], Template::Var(_)));
             }
             _ => panic!("Expected Template2::List"),
         }
@@ -708,10 +708,10 @@ mod tests {
         let template = compiler.compile_template(&template_form, 0).unwrap();
 
         match template {
-            Template2::List(templates) => {
+            Template::List(templates) => {
                 assert_eq!(templates.len(), 3); // lambda, (), (body ...)
                 match &templates[2] {
-                    Template2::Ellipsis {
+                    Template::Ellipsis {
                         subtemplate,
                         level,
                         nesting,
@@ -720,7 +720,7 @@ mod tests {
                         assert_eq!(*level, 1);
                         assert_eq!(*nesting, 1);
                         assert_eq!(vars.len(), 1);
-                        assert!(matches!(**subtemplate, Template2::Var(_)));
+                        assert!(matches!(**subtemplate, Template::Var(_)));
                     }
                     _ => panic!("Expected ellipsis"),
                 }
@@ -738,14 +738,14 @@ mod tests {
         let pattern = compiler.compile_pattern(&pattern_form, 0).unwrap();
 
         match pattern {
-            Pattern2::List(patterns) => {
+            Pattern::List(patterns) => {
                 assert_eq!(patterns.len(), 3);
                 // "cond" is a variable
-                assert!(matches!(&patterns[0], Pattern2::Var(_)));
+                assert!(matches!(&patterns[0], Pattern::Var(_)));
                 // "else" is a literal
-                assert!(matches!(&patterns[1], Pattern2::Literal(_)));
+                assert!(matches!(&patterns[1], Pattern::Literal(_)));
                 // "body" is a variable
-                assert!(matches!(&patterns[2], Pattern2::Var(_)));
+                assert!(matches!(&patterns[2], Pattern::Var(_)));
             }
             _ => panic!("Expected list"),
         }

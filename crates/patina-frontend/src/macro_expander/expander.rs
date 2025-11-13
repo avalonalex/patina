@@ -13,7 +13,7 @@
 //! Inspired by Gauche's template expansion (macro.c:800+)
 //! Reference: https://github.com/shirok/Gauche/blob/master/src/macro.c
 
-use crate::macro_expander::template_v2::{Identifier, Template2};
+use crate::macro_expander::template::{Identifier, Template};
 use patina_runtime::{MatchEnv, MatchValue, PVRef, Value};
 use std::rc::Rc;
 
@@ -96,7 +96,7 @@ impl Expander {
     /// This is the main entry point for template expansion.
     ///
     /// Inspired by Gauche's expand_template (macro.c:800+)
-    pub fn expand(&self, template: &Template2, env: &MatchEnv) -> Result<Value, ExpandError> {
+    pub fn expand(&self, template: &Template, env: &MatchEnv) -> Result<Value, ExpandError> {
         self.expand_impl(template, env, &[])
     }
 
@@ -110,22 +110,22 @@ impl Expander {
     /// Based on Gauche's expand_rec (macro.c:820+)
     fn expand_impl(
         &self,
-        template: &Template2,
+        template: &Template,
         env: &MatchEnv,
         indices: &[usize],
     ) -> Result<Value, ExpandError> {
         match template {
-            Template2::Literal(value) => {
+            Template::Literal(value) => {
                 // Literal values are inserted as-is
                 Ok(value.clone())
             }
 
-            Template2::Symbol(id) => {
+            Template::Symbol(id) => {
                 // Symbols are renamed for hygiene
                 Ok(self.rename_identifier(id))
             }
 
-            Template2::Var(pvref) => {
+            Template::Var(pvref) => {
                 // Look up pattern variable in match environment
                 // Use indices to navigate the tree
                 match env.get(*pvref, indices) {
@@ -136,22 +136,22 @@ impl Expander {
                 }
             }
 
-            Template2::List(templates) => {
+            Template::List(templates) => {
                 // Expand list template: (t1 t2 t3)
                 self.expand_list(templates, env, indices)
             }
 
-            Template2::Vector(templates) => {
+            Template::Vector(templates) => {
                 // Expand vector template: #(t1 t2 t3)
                 self.expand_vector(templates, env, indices)
             }
 
-            Template2::DottedList { templates, tail } => {
+            Template::DottedList { templates, tail } => {
                 // Expand dotted list template: (t1 t2 . rest)
                 self.expand_dotted_list(templates, tail, env, indices)
             }
 
-            Template2::Ellipsis {
+            Template::Ellipsis {
                 subtemplate,
                 level,
                 nesting,
@@ -166,7 +166,7 @@ impl Expander {
     /// Expand a list template
     fn expand_list(
         &self,
-        templates: &[Template2],
+        templates: &[Template],
         env: &MatchEnv,
         indices: &[usize],
     ) -> Result<Value, ExpandError> {
@@ -175,7 +175,7 @@ impl Expander {
         for template in templates {
             if template.is_ellipsis() {
                 // Handle ellipsis specially - it expands to multiple elements
-                if let Template2::Ellipsis {
+                if let Template::Ellipsis {
                     subtemplate,
                     level,
                     nesting,
@@ -214,7 +214,7 @@ impl Expander {
     /// Expand a vector template
     fn expand_vector(
         &self,
-        templates: &[Template2],
+        templates: &[Template],
         env: &MatchEnv,
         indices: &[usize],
     ) -> Result<Value, ExpandError> {
@@ -231,8 +231,8 @@ impl Expander {
     /// Expand a dotted list template: (t1 t2 . rest)
     fn expand_dotted_list(
         &self,
-        templates: &[Template2],
-        tail: &Template2,
+        templates: &[Template],
+        tail: &Template,
         env: &MatchEnv,
         indices: &[usize],
     ) -> Result<Value, ExpandError> {
@@ -262,7 +262,7 @@ impl Expander {
     /// Based on Gauche's ellipsis expansion (macro.c:850+)
     fn expand_ellipsis(
         &self,
-        subtemplate: &Template2,
+        subtemplate: &Template,
         level: u8,
         nesting: u8,
         vars: &[PVRef],
@@ -288,7 +288,7 @@ impl Expander {
     /// Expand a single ellipsis template (nesting = 1)
     fn expand_single_ellipsis(
         &self,
-        subtemplate: &Template2,
+        subtemplate: &Template,
         level: u8,
         vars: &[PVRef],
         env: &MatchEnv,
@@ -352,7 +352,7 @@ impl Expander {
     /// Output: (loop (+ i 1) j)
     fn expand_double_ellipsis(
         &self,
-        subtemplate: &Template2,
+        subtemplate: &Template,
         level: u8,
         vars: &[PVRef],
         env: &MatchEnv,
@@ -372,7 +372,7 @@ impl Expander {
         let outer_count = if let Some(&first_var) = vars.first() {
             // The variable should be at level >= 2 for double ellipsis
             // We want to iterate at the ellipsis level (the variable's parent level)
-            self.get_iteration_count_at_level(env, first_var, indices, level as usize)?
+            self.get_iteration_count_at_level(env, first_var, indices, (level - 1) as usize)?
         } else {
             0
         };
@@ -587,7 +587,7 @@ impl Default for Expander {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::macro_expander::template_v2::Identifier;
+    use crate::macro_expander::template::Identifier;
 
     // Helper to create a list from values
     fn make_list(values: Vec<Value>) -> Value {
@@ -601,7 +601,7 @@ mod tests {
     #[test]
     fn test_expand_literal() {
         let expander = Expander::new();
-        let template = Template2::Literal(Value::Integer(42));
+        let template = Template::Literal(Value::Integer(42));
         let env = MatchEnv::new(0);
 
         let result = expander.expand(&template, &env);
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn test_expand_symbol() {
         let expander = Expander::new();
-        let template = Template2::Symbol(Identifier::new("if"));
+        let template = Template::Symbol(Identifier::new("if"));
         let env = MatchEnv::new(0);
 
         let result = expander.expand(&template, &env);
@@ -631,7 +631,7 @@ mod tests {
     fn test_expand_var() {
         let expander = Expander::new();
         let pvref = PVRef::new(0, 0);
-        let template = Template2::Var(pvref);
+        let template = Template::Var(pvref);
 
         let mut env = MatchEnv::new(1);
         env.insert(pvref, Value::Integer(42));
@@ -651,10 +651,10 @@ mod tests {
         let y = PVRef::new(0, 1);
 
         // Template: (if x y)
-        let template = Template2::List(vec![
-            Template2::Symbol(Identifier::new("if")),
-            Template2::Var(x),
-            Template2::Var(y),
+        let template = Template::List(vec![
+            Template::Symbol(Identifier::new("if")),
+            Template::Var(x),
+            Template::Var(y),
         ]);
 
         let mut env = MatchEnv::new(2);
@@ -679,8 +679,8 @@ mod tests {
         let x = PVRef::new(1, 0);
 
         // Template: (x ...)
-        let template = Template2::List(vec![Template2::Ellipsis {
-            subtemplate: Box::new(Template2::Var(x)),
+        let template = Template::List(vec![Template::Ellipsis {
+            subtemplate: Box::new(Template::Var(x)),
             level: 1,
             nesting: 1,
             vars: vec![x],
@@ -715,11 +715,11 @@ mod tests {
         let x = PVRef::new(1, 0);
 
         // Template: ((+ x 1) ...)
-        let template = Template2::List(vec![Template2::Ellipsis {
-            subtemplate: Box::new(Template2::List(vec![
-                Template2::Symbol(Identifier::new("+")),
-                Template2::Var(x),
-                Template2::Literal(Value::Integer(1)),
+        let template = Template::List(vec![Template::Ellipsis {
+            subtemplate: Box::new(Template::List(vec![
+                Template::Symbol(Identifier::new("+")),
+                Template::Var(x),
+                Template::Literal(Value::Integer(1)),
             ])),
             level: 1,
             nesting: 1,
@@ -761,15 +761,15 @@ mod tests {
         let y = PVRef::new(0, 1);
 
         // Template: (begin x ... y)
-        let template = Template2::List(vec![
-            Template2::Symbol(Identifier::new("begin")),
-            Template2::Ellipsis {
-                subtemplate: Box::new(Template2::Var(x)),
+        let template = Template::List(vec![
+            Template::Symbol(Identifier::new("begin")),
+            Template::Ellipsis {
+                subtemplate: Box::new(Template::Var(x)),
                 level: 1,
                 nesting: 1,
                 vars: vec![x],
             },
-            Template2::Var(y),
+            Template::Var(y),
         ]);
 
         let mut env = MatchEnv::new(2);
@@ -809,10 +809,10 @@ mod tests {
         let step = PVRef::new(2, 0); // level 2 because it's in nested ellipsis
 
         // Template: (loop step ... ...)
-        let template = Template2::List(vec![
-            Template2::Symbol(Identifier::new("loop")),
-            Template2::Ellipsis {
-                subtemplate: Box::new(Template2::Var(step)),
+        let template = Template::List(vec![
+            Template::Symbol(Identifier::new("loop")),
+            Template::Ellipsis {
+                subtemplate: Box::new(Template::Var(step)),
                 level: 1, // ellipsis level is 1 for double ellipsis with level-2 variables
                 nesting: 2,
                 vars: vec![step],
@@ -865,10 +865,10 @@ mod tests {
         let expander = Expander::new();
         let b = PVRef::new(2, 0);
 
-        let template = Template2::List(vec![
-            Template2::Symbol(Identifier::new("result")),
-            Template2::Ellipsis {
-                subtemplate: Box::new(Template2::Var(b)),
+        let template = Template::List(vec![
+            Template::Symbol(Identifier::new("result")),
+            Template::Ellipsis {
+                subtemplate: Box::new(Template::Var(b)),
                 level: 1, // ellipsis level is 1 for double ellipsis with level-2 variables
                 nesting: 2,
                 vars: vec![b],

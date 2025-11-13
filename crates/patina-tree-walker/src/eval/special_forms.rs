@@ -883,43 +883,6 @@ impl Evaluator {
         Ok(rules)
     }
 
-    /// Parse a syntax-rules form: (syntax-rules (literals) (pattern template)...)
-    ///
-    /// Note: This is the V1 macro parser, kept for reference. V2 uses the compiler in patina-frontend.
-    #[allow(dead_code)]
-    fn parse_syntax_rules(
-        &self,
-        expr: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<patina_frontend::macro_expander::Macro, EvalError> {
-        // Must be a list starting with 'syntax-rules
-        let (keyword, rest) = self.extract_pair(expr)?;
-
-        match keyword {
-            Value::Symbol(s) if s.as_ref() == "syntax-rules" => {}
-            _ => {
-                return Err(EvalError::InvalidSyntax(
-                    "Expected syntax-rules".to_string(),
-                ));
-            }
-        }
-
-        // Parse literals list
-        let (literals_expr, rules_expr) = self.extract_pair(&rest)?;
-
-        let literals = self.parse_literals_list(&literals_expr)?;
-
-        // Parse rules
-        let rules = self.parse_macro_rules(&rules_expr)?;
-
-        Ok(patina_frontend::macro_expander::Macro {
-            name: Rc::from("anonymous"),
-            rules,
-            literals,
-            env: env.clone(),
-        })
-    }
-
     /// Parse the literals list: (lit1 lit2 ...)
     fn parse_literals_list(&self, expr: &Value) -> Result<Vec<Rc<str>>, EvalError> {
         let mut literals = Vec::new();
@@ -946,52 +909,6 @@ impl Evaluator {
         Ok(literals)
     }
 
-    /// Parse macro rules: ((pattern template) ...)
-    ///
-    /// Note: This is the V1 macro parser, kept for reference. V2 uses the compiler in patina-frontend.
-    #[allow(dead_code)]
-    fn parse_macro_rules(
-        &self,
-        expr: &Value,
-    ) -> Result<Vec<patina_frontend::macro_expander::MacroRule>, EvalError> {
-        let mut rules = Vec::new();
-        let mut current = expr.clone();
-
-        while let Value::Pair(pair) = current {
-            // Each rule is (pattern template)
-            let (pattern_expr, template_rest) = self.extract_pair(&pair.0)?;
-            let (template_expr, template_end) = self.extract_pair(&template_rest)?;
-
-            if !matches!(template_end, Value::Null) {
-                return Err(EvalError::InvalidSyntax(
-                    "syntax-rules rule must have exactly 2 elements (pattern template)".to_string(),
-                ));
-            }
-
-            // Parse pattern and template using macro_system functions
-            let pattern = patina_frontend::macro_expander::parse_pattern(&pattern_expr)?;
-            let template = patina_frontend::macro_expander::parse_template(&template_expr)?;
-
-            rules.push(patina_frontend::macro_expander::MacroRule { pattern, template });
-
-            current = pair.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::InvalidSyntax(
-                "syntax-rules rules must be a proper list".to_string(),
-            ));
-        }
-
-        if rules.is_empty() {
-            return Err(EvalError::InvalidSyntax(
-                "syntax-rules must have at least one rule".to_string(),
-            ));
-        }
-
-        Ok(rules)
-    }
-
     /// Expand a macro call using V2 PVREF-based system via the MacroExpander trait
     pub(super) fn expand_macro_v2(
         &self,
@@ -1006,16 +923,7 @@ impl Evaluator {
     }
 
     /// Expand a macro call (old system - deprecated)
-    #[allow(dead_code)]
-    pub(super) fn expand_macro(
-        &self,
-        macro_val: &patina_frontend::macro_expander::Macro,
-        args: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        patina_frontend::macro_expander::expand_macro(macro_val, args, env).map_err(|e| e.into())
-    }
-
+    /// Old expand_macro removed - use expand_macro_v2 instead
     /// Evaluate import special form: (import import-set ...)
     ///
     /// R7RS Section 5.2: Import declarations
@@ -1029,6 +937,7 @@ impl Evaluator {
     ///
     /// This implementation loads the libraries and imports their exports
     /// into the current environment.
+    #[allow(dead_code)]    
     pub(super) fn eval_import(
         &self,
         args: &Value,
