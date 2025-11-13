@@ -41,6 +41,37 @@ pub(super) fn integer_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
     })
 }
 
+pub(super) fn rational_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.make_type_predicate(args, |v| {
+        matches!(
+            v,
+            Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_)
+        )
+    })
+}
+
+pub(super) fn real_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.make_type_predicate(args, |v| {
+        matches!(
+            v,
+            Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) | Value::Real(_)
+        )
+    })
+}
+
+pub(super) fn complex_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.make_type_predicate(args, |v| {
+        matches!(
+            v,
+            Value::Integer(_)
+                | Value::BigInteger(_)
+                | Value::Rational(_)
+                | Value::Real(_)
+                | Value::Complex(_, _)
+        )
+    })
+}
+
 pub(super) fn boolean_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.make_type_predicate(args, |v| matches!(v, Value::Boolean(_)))
 }

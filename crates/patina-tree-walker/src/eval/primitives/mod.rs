@@ -125,6 +125,9 @@ impl Evaluator {
 
             // Type predicates
             "number?" => predicates::number_p(self, args).map(super::EvalResult::Value),
+            "complex?" => predicates::complex_p(self, args).map(super::EvalResult::Value),
+            "real?" => predicates::real_p(self, args).map(super::EvalResult::Value),
+            "rational?" => predicates::rational_p(self, args).map(super::EvalResult::Value),
             "integer?" => predicates::integer_p(self, args).map(super::EvalResult::Value),
             "boolean?" => predicates::boolean_p(self, args).map(super::EvalResult::Value),
             "string?" => predicates::string_p(self, args).map(super::EvalResult::Value),
@@ -313,6 +316,9 @@ impl Evaluator {
             ("for-each", Arity::Min(2)),
             // Predicates
             ("number?", Arity::Exact(1)),
+            ("complex?", Arity::Exact(1)),
+            ("real?", Arity::Exact(1)),
+            ("rational?", Arity::Exact(1)),
             ("integer?", Arity::Exact(1)),
             ("boolean?", Arity::Exact(1)),
             ("string?", Arity::Exact(1)),

@@ -1,8 +1,11 @@
 Running test suite: R7RS
 Running test suite: 4.1 Primitive expression types
-Tests run: 27, Passed: 27, Failed: 0
+Error: Invalid syntax: No matching pattern for macro let
+Error: Invalid syntax: No matching pattern for macro let
+Tests run: 25, Passed: 25, Failed: 0
 
 Running test suite: 4.2 Derived expression types
+Error: Invalid syntax: No matching pattern for macro let
 Error: Invalid syntax: No matching pattern for macro let
 Error: Undefined variable: force
 Error: Undefined variable: delay
@@ -20,6 +23,7 @@ Error: Undefined variable: make-parameter
 Error: Undefined variable: number->string
 Error: Undefined variable: parameterize
 Error: Undefined variable: number->string
+Error: Invalid syntax: No matching pattern for macro let
 Error: Undefined variable: case-lambda
 Error: Undefined variable: any-arity
 Error: Undefined variable: any-arity
@@ -36,7 +40,7 @@ Error: Undefined variable: dead-clause
 Error: Undefined variable: dead-clause
 Error: Undefined variable: dead-clause
 Error: Undefined variable: dead-clause
-Tests run: 45, Passed: 45, Failed: 0
+Tests run: 43, Passed: 43, Failed: 0
 
 Running test suite: 4.3 Macros
 Error: Undefined variable: let-syntax
@@ -48,6 +52,7 @@ Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: sequence2
 Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: sequence3
+Error: Invalid syntax: No matching pattern for macro let
 Error: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
 Error: Undefined variable: part-2x
 Error: Undefined variable: part-2x

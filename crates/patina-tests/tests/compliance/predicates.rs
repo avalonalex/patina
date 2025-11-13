@@ -174,3 +174,92 @@ fn test_procedure_predicate() {
     assert_eval_to("(procedure? cond)", "#f");
     assert_eval_to("(procedure? case)", "#f");
 }
+
+// Numeric type predicates (R7RS Section 6.2)
+#[test]
+fn test_complex_predicate() {
+    // Complex numbers
+    assert_eval_to("(complex? 3+4i)", "#t");
+    assert_eval_to("(complex? 0+1i)", "#t");
+
+    // Real numbers are also complex
+    assert_eval_to("(complex? 3.14)", "#t");
+    assert_eval_to("(complex? 22/7)", "#t");
+    assert_eval_to("(complex? 42)", "#t");
+
+    // Non-numbers
+    assert_eval_to("(complex? \"42\")", "#f");
+    assert_eval_to("(complex? #t)", "#f");
+}
+
+#[test]
+fn test_real_predicate() {
+    // Real numbers
+    assert_eval_to("(real? 3.14)", "#t");
+    assert_eval_to("(real? 22/7)", "#t");
+    assert_eval_to("(real? 42)", "#t");
+    assert_eval_to("(real? -5)", "#t");
+
+    // Complex numbers with non-zero imaginary part
+    assert_eval_to("(real? 3+4i)", "#f");
+
+    // Non-numbers
+    assert_eval_to("(real? \"3.14\")", "#f");
+    assert_eval_to("(real? #f)", "#f");
+}
+
+#[test]
+fn test_rational_predicate() {
+    // Rationals
+    assert_eval_to("(rational? 22/7)", "#t");
+    assert_eval_to("(rational? 3/4)", "#t");
+
+    // Integers are also rational
+    assert_eval_to("(rational? 42)", "#t");
+    assert_eval_to("(rational? -5)", "#t");
+
+    // Inexact numbers (floats) are not rational
+    assert_eval_to("(rational? 3.14)", "#f");
+
+    // Complex numbers
+    assert_eval_to("(rational? 3+4i)", "#f");
+
+    // Non-numbers
+    assert_eval_to("(rational? \"22/7\")", "#f");
+}
+
+#[test]
+fn test_integer_predicate() {
+    // Integers
+    assert_eval_to("(integer? 42)", "#t");
+    assert_eval_to("(integer? -5)", "#t");
+    assert_eval_to("(integer? 0)", "#t");
+
+    // Rationals that are not integers
+    assert_eval_to("(integer? 22/7)", "#f");
+    assert_eval_to("(integer? 3/4)", "#f");
+
+    // Reals
+    assert_eval_to("(integer? 3.14)", "#f");
+    assert_eval_to("(integer? 3.0)", "#f");
+
+    // Complex
+    assert_eval_to("(integer? 3+4i)", "#f");
+
+    // Non-numbers
+    assert_eval_to("(integer? \"42\")", "#f");
+}
+
+#[test]
+fn test_number_predicate() {
+    // All numeric types
+    assert_eval_to("(number? 42)", "#t");
+    assert_eval_to("(number? 22/7)", "#t");
+    assert_eval_to("(number? 3.14)", "#t");
+    assert_eval_to("(number? 3+4i)", "#t");
+
+    // Non-numbers
+    assert_eval_to("(number? \"42\")", "#f");
+    assert_eval_to("(number? #t)", "#f");
+    assert_eval_to("(number? 'symbol)", "#f");
+}

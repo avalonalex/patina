@@ -353,7 +353,7 @@
 
   (define (approx-equal? x y)
     (cond
-      ;; For real numbers, use epsilon-based comparison
+      ;; For real numbers (but not exact rationals), use epsilon-based comparison
       ((and (real? x) (real? y) (not (rational? x)) (not (rational? y)))
        (< (abs (- x y)) epsilon))
       ;; For complex numbers, compare both parts with epsilon
