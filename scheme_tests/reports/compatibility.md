@@ -1,14 +1,14 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-13 10:27:32
+**Generated:** 2025-11-13 10:36:36
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 68 | 54.0% |
-| ❌ Failed | 4 | 3.2% |
+| ✅ Passed | 72 | 57.1% |
+| ❌ Failed | 0 | 0.0% |
 | ⚠️ Error (crashed) | 54 | 42.9% |
 | **Total** | **126** | **100%** |
 
@@ -19,10 +19,6 @@
 ### Test Failures
 
 ```
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
 FAIL: 
 ```
 

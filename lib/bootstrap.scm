@@ -345,14 +345,44 @@
 ;; catch it and continue with the next top-level expression.
 ;; This allows test suites to continue running even when individual
 ;; tests encounter unimplemented features or runtime errors.
+
+;; Helper for approximate equality (used by test framework)
+;; Matches chibi-scheme's behavior: uses epsilon-based comparison for floats
+(define (test-equal? expected actual)
+  (define epsilon 1e-6)
+
+  (define (approx-equal? x y)
+    (cond
+      ;; For real numbers, use epsilon-based comparison
+      ((and (real? x) (real? y) (not (rational? x)) (not (rational? y)))
+       (< (abs (- x y)) epsilon))
+      ;; For complex numbers, compare both parts with epsilon
+      ((and (complex? x) (complex? y))
+       (and (< (abs (- (real-part x) (real-part y))) epsilon)
+            (< (abs (- (imag-part x) (imag-part y))) epsilon)))
+      ;; For pairs, recurse on both parts
+      ((and (pair? x) (pair? y))
+       (and (approx-equal? (car x) (car y))
+            (approx-equal? (cdr x) (cdr y))))
+      ;; For vectors, recurse on all elements
+      ((and (vector? x) (vector? y) (= (vector-length x) (vector-length y)))
+       (let loop ((i 0))
+         (or (>= i (vector-length x))
+             (and (approx-equal? (vector-ref x i) (vector-ref y i))
+                  (loop (+ i 1))))))
+      ;; For everything else, use equal?
+      (else (equal? x y))))
+
+  (approx-equal? expected actual))
+
 (define-syntax test
   (syntax-rules ()
     ((test expected expr)
      (let ((expected-val expected))
        ;; First evaluate the expression
        (let ((actual-val expr))
-         ;; Then compare and report
-         (if (equal? expected-val actual-val)
+         ;; Then compare and report using approximate equality
+         (if (test-equal? expected-val actual-val)
              (begin
                (test-increment-passed)
                #t)  ; Test passed (silently)

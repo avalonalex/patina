@@ -3,58 +3,6 @@ Running test suite: 4.1 Primitive expression types
 Tests run: 27, Passed: 27, Failed: 0
 
 Running test suite: 4.2 Derived expression types
-FAIL: 
-
-b
-
- expected 
-
-9.728
-
- but got 
-
-9.728000255822641
-
-
-FAIL: 
-
-c
-
- expected 
-
-1800/497
-
- but got 
-
-1800/497
-
-
-FAIL: 
-
-(let*-values (((root rem) (exact-integer-sqrt (expt 10 39)))) (list root rem))
-
- expected 
-
-(31622776601683793319 62545769258890964239)
-
- but got 
-
-(31622776601683793319 62545769258890964239)
-
-
-FAIL: 
-
-(square root)
-
- expected 
-
-1393796574908163946345982392040522594123776
-
- but got 
-
-1393796574908163946345982392040522594123776
-
-
 Error: Invalid syntax: No matching pattern for macro let
 Error: Undefined variable: force
 Error: Undefined variable: delay
@@ -88,7 +36,7 @@ Error: Undefined variable: dead-clause
 Error: Undefined variable: dead-clause
 Error: Undefined variable: dead-clause
 Error: Undefined variable: dead-clause
-Tests run: 45, Passed: 41, Failed: 4
+Tests run: 45, Passed: 45, Failed: 0
 
 Running test suite: 4.3 Macros
 Error: Undefined variable: let-syntax

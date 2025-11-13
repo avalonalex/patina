@@ -59,7 +59,10 @@ pub(in crate::eval) fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalEr
     Ok(match (a, b) {
         (Value::Boolean(x), Value::Boolean(y)) => x == y,
         (Value::Integer(x), Value::Integer(y)) => x == y,
-        (Value::Real(x), Value::Real(y)) => x == y,
+        (Value::BigInteger(x), Value::BigInteger(y)) => x == y,
+        (Value::Rational(x), Value::Rational(y)) => x == y,
+        (Value::Real(x), Value::Real(y)) => x == y, // IEEE 754 exact equality
+        (Value::Complex(r1, i1), Value::Complex(r2, i2)) => r1 == r2 && i1 == i2, // IEEE 754 exact equality
         (Value::Character(x), Value::Character(y)) => x == y,
         (Value::Null, Value::Null) => true,
         (Value::String(x), Value::String(y)) => *x.borrow() == *y.borrow(),
@@ -81,6 +84,7 @@ pub(in crate::eval) fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalEr
                 equal
             }
         }
+        (Value::Bytevector(x), Value::Bytevector(y)) => x == y,
         _ => false,
     })
 }
