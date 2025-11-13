@@ -112,8 +112,8 @@
     ((or) #f)
     ((or test) test)
     ((or test1 test2 ...)
-     (let ((x test1))
-       (if x x (or test2 ...))))))
+     (let ((or-tmp test1))
+       (if or-tmp or-tmp (or test2 ...))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Binding constructs (R7RS Section 4.2.2)
