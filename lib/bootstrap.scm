@@ -120,8 +120,18 @@
 
 (define-syntax let
   (syntax-rules ()
-    ((let ((name val) ...) body ...)
-     ((lambda (name ...) body ...) val ...))))
+    ;; Named let (recursive binding) - must come first!
+    ;; (let name ((var val) ...) body ...)
+    ;; Expands to: ((letrec ((name (lambda (var ...) body ...))) name) val ...)
+    ((let proc-name ((var val) ...) body ...)
+     ((letrec ((proc-name (lambda (var ...) body ...)))
+        proc-name)
+      val ...))
+    ;; Regular let (parallel bindings)
+    ;; (let ((var val) ...) body ...)
+    ;; Expands to: ((lambda (var ...) body ...) val ...)
+    ((let ((var val) ...) body ...)
+     ((lambda (var ...) body ...) val ...))))
 
 (define-syntax let*
   (syntax-rules ()

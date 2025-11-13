@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-13 10:43:11
+**Generated:** 2025-11-13 10:58:53
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 68 | 53.5% |
+| ✅ Passed | 69 | 54.3% |
 | ❌ Failed | 0 | 0.0% |
-| ⚠️ Error (crashed) | 59 | 46.5% |
+| ⚠️ Error (crashed) | 58 | 45.7% |
 | **Total** | **127** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
@@ -25,10 +25,9 @@ FAIL:
 ### Errors
 
 ```
-Error: Invalid syntax: No matching pattern for macro let
-Error: Invalid syntax: No matching pattern for macro let
-Error: Invalid syntax: No matching pattern for macro let
-Error: Invalid syntax: No matching pattern for macro let
+Error: Type error: vector-ref expects vector and integer
+Error: Type error: vector-ref expects vector and integer
+Error: Type error: vector-ref expects vector and integer
 Error: Undefined variable: force
 Error: Undefined variable: delay
 Error: Undefined variable: delay
@@ -45,7 +44,7 @@ Error: Undefined variable: make-parameter
 Error: Undefined variable: number->string
 Error: Undefined variable: parameterize
 Error: Undefined variable: number->string
-Error: Invalid syntax: No matching pattern for macro let
+Error: Type error: vector-ref expects vector and integer
 Error: Undefined variable: case-lambda
 Error: Undefined variable: any-arity
 Error: Undefined variable: any-arity
@@ -71,7 +70,7 @@ Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: sequence2
 Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: sequence3
-Error: Invalid syntax: No matching pattern for macro let
+Error: Type error: vector-ref expects vector and integer
 Error: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
 Error: Undefined variable: part-2x
 Error: Undefined variable: part-2x
