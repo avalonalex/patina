@@ -12,14 +12,26 @@ use patina_runtime::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+pub mod compiler;
+pub mod expander_v2;
 pub mod hygiene;
+pub mod matcher_v2;
 pub mod pattern;
+pub mod pattern_v2;
 pub mod template;
+pub mod template_v2;
 
 // Re-export main functions
 pub use hygiene::apply_hygiene;
 pub use pattern::match_pattern;
 pub use template::expand_template;
+
+// Re-export V2 types
+pub use compiler::{CompiledMacro, CompiledRule, Compiler};
+pub use expander_v2::{ExpandError, Expander};
+pub use matcher_v2::{MatchError, Matcher};
+pub use pattern_v2::Pattern2;
+pub use template_v2::{Identifier, Template2};
 
 /// Expand a macro with the given arguments
 ///
