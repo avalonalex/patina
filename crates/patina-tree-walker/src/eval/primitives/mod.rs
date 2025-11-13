@@ -388,6 +388,11 @@ impl Evaluator {
             ("debug-clear", Arity::Exact(0)),
             ("debug-status", Arity::Exact(0)),
             ("debug-mode", Arity::Exact(1)),
+            // Test framework
+            ("test-begin", Arity::Exact(1)),
+            ("test-end", Arity::Exact(0)),
+            ("test-increment-passed", Arity::Exact(0)),
+            ("test-increment-failed", Arity::Exact(0)),
         ];
 
         for (name, arity) in primitives {

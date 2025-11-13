@@ -59,60 +59,162 @@ pub(super) fn vector_length(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
 pub(super) fn vector_ref(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 2, "vector-ref")?;
 
-    match (&args[0], &args[1]) {
-        (Value::Vector(v), Value::Integer(k)) => {
+    let vec = match &args[0] {
+        Value::Vector(v) => v,
+        _ => {
+            return Err(EvalError::TypeError(
+                "vector-ref expects vector and integer".to_string(),
+            ));
+        }
+    };
+
+    // Extract index, supporting Integer, BigInteger, and Rational (if it's an exact integer)
+    let idx = match &args[1] {
+        Value::Integer(k) => {
             if *k < 0 {
                 return Err(EvalError::IndexOutOfBounds(format!(
                     "vector-ref index must be non-negative, got {}",
                     k
                 )));
             }
-
-            let vec = v.borrow();
-            let idx = *k as usize;
-            vec.get(idx).cloned().ok_or_else(|| {
-                EvalError::IndexOutOfBounds(format!(
-                    "vector-ref index {} out of bounds for vector of length {}",
-                    k,
-                    vec.len()
-                ))
-            })
+            *k as usize
         }
-        _ => Err(EvalError::TypeError(
-            "vector-ref expects vector and integer".to_string(),
-        )),
-    }
+        Value::BigInteger(k) => {
+            use num_traits::ToPrimitive;
+            if k.sign() == num_bigint::Sign::Minus {
+                return Err(EvalError::IndexOutOfBounds(
+                    "vector-ref index must be non-negative".to_string(),
+                ));
+            }
+            match k.to_usize() {
+                Some(idx) => idx,
+                None => {
+                    return Err(EvalError::IndexOutOfBounds(
+                        "vector-ref index too large".to_string(),
+                    ));
+                }
+            }
+        }
+        Value::Rational(r) => {
+            use num_bigint::BigInt;
+            use num_traits::ToPrimitive;
+            // Check if it's an exact integer (denominator == 1)
+            if r.denom() != &BigInt::from(1) {
+                return Err(EvalError::TypeError(
+                    "vector-ref index must be an integer".to_string(),
+                ));
+            }
+            if r.numer().sign() == num_bigint::Sign::Minus {
+                return Err(EvalError::IndexOutOfBounds(
+                    "vector-ref index must be non-negative".to_string(),
+                ));
+            }
+            match r.numer().to_usize() {
+                Some(idx) => idx,
+                None => {
+                    return Err(EvalError::IndexOutOfBounds(
+                        "vector-ref index too large".to_string(),
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(EvalError::TypeError(
+                "vector-ref expects vector and integer".to_string(),
+            ));
+        }
+    };
+
+    let borrowed_vec = vec.borrow();
+    borrowed_vec.get(idx).cloned().ok_or_else(|| {
+        EvalError::IndexOutOfBounds(format!(
+            "vector-ref index {} out of bounds for vector of length {}",
+            idx,
+            borrowed_vec.len()
+        ))
+    })
 }
 
 pub(super) fn vector_set(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 3, "vector-set!")?;
 
-    match (&args[0], &args[1]) {
-        (Value::Vector(v), Value::Integer(k)) => {
+    let vec = match &args[0] {
+        Value::Vector(v) => v,
+        _ => {
+            return Err(EvalError::TypeError(
+                "vector-set! expects vector, integer, and value".to_string(),
+            ));
+        }
+    };
+
+    // Extract index, supporting Integer, BigInteger, and Rational (if it's an exact integer)
+    let idx = match &args[1] {
+        Value::Integer(k) => {
             if *k < 0 {
                 return Err(EvalError::IndexOutOfBounds(format!(
                     "vector-set! index must be non-negative, got {}",
                     k
                 )));
             }
-
-            let mut vec = v.borrow_mut();
-            let idx = *k as usize;
-            if idx >= vec.len() {
-                return Err(EvalError::IndexOutOfBounds(format!(
-                    "vector-set! index {} out of bounds for vector of length {}",
-                    k,
-                    vec.len()
-                )));
-            }
-
-            vec[idx] = args[2].clone();
-            Ok(Value::Unspecified)
+            *k as usize
         }
-        _ => Err(EvalError::TypeError(
-            "vector-set! expects vector, integer, and value".to_string(),
-        )),
+        Value::BigInteger(k) => {
+            use num_traits::ToPrimitive;
+            if k.sign() == num_bigint::Sign::Minus {
+                return Err(EvalError::IndexOutOfBounds(
+                    "vector-set! index must be non-negative".to_string(),
+                ));
+            }
+            match k.to_usize() {
+                Some(idx) => idx,
+                None => {
+                    return Err(EvalError::IndexOutOfBounds(
+                        "vector-set! index too large".to_string(),
+                    ));
+                }
+            }
+        }
+        Value::Rational(r) => {
+            use num_bigint::BigInt;
+            use num_traits::ToPrimitive;
+            // Check if it's an exact integer (denominator == 1)
+            if r.denom() != &BigInt::from(1) {
+                return Err(EvalError::TypeError(
+                    "vector-set! index must be an integer".to_string(),
+                ));
+            }
+            if r.numer().sign() == num_bigint::Sign::Minus {
+                return Err(EvalError::IndexOutOfBounds(
+                    "vector-set! index must be non-negative".to_string(),
+                ));
+            }
+            match r.numer().to_usize() {
+                Some(idx) => idx,
+                None => {
+                    return Err(EvalError::IndexOutOfBounds(
+                        "vector-set! index too large".to_string(),
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(EvalError::TypeError(
+                "vector-set! expects vector, integer, and value".to_string(),
+            ));
+        }
+    };
+
+    let mut borrowed_vec = vec.borrow_mut();
+    if idx >= borrowed_vec.len() {
+        return Err(EvalError::IndexOutOfBounds(format!(
+            "vector-set! index {} out of bounds for vector of length {}",
+            idx,
+            borrowed_vec.len()
+        )));
     }
+
+    borrowed_vec[idx] = args[2].clone();
+    Ok(Value::Unspecified)
 }
 
 pub(super) fn vector_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {

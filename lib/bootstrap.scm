@@ -348,7 +348,12 @@
 ;; Testing framework support
 
 ;; test macro for (chibi test)
-;; Usage: (test expected-value actual-expression)
+;; Usage:
+;;   (test expected-value actual-expression)
+;;   (test "test description" expected-value actual-expression)
+;;
+;; The macro prints what it's about to test BEFORE evaluating the expression,
+;; so if the test crashes, you can see which test was running.
 ;;
 ;; Note: This macro does NOT catch errors during test execution.
 ;; If expr raises an error, the interpreter's resilient mode will
@@ -387,31 +392,69 @@
 
 (define-syntax test
   (syntax-rules ()
+    ;; Test with explicit name/description (3 arguments)
+    ((test name expected expr)
+     (begin
+       ;; Print what we're about to test BEFORE evaluating
+       (display "Testing: ")
+       (write name)
+       (display " -> ")
+       (write 'expr)
+       (newline)
+       (let ((expected-val expected))
+         ;; Now evaluate the expression
+         (let ((actual-val expr))
+           ;; Then compare and report using approximate equality
+           (if (test-equal? expected-val actual-val)
+               (begin
+                 (test-increment-passed)
+                 #t)  ; Test passed (silently)
+               (begin
+                 (test-increment-failed)
+                 (display "FAIL: ")
+                 (write name)
+                 (newline)
+                 (display "  expr: ")
+                 (write 'expr)
+                 (newline)
+                 (display "  expected: ")
+                 (write expected-val)
+                 (newline)
+                 (display "  but got:  ")
+                 (write actual-val)
+                 (newline)
+                 (newline)
+                 #f))))))
+
+    ;; Test without name (2 arguments, backward compatible)
     ((test expected expr)
-     (let ((expected-val expected))
-       ;; First evaluate the expression
-       (let ((actual-val expr))
-         ;; Then compare and report using approximate equality
-         (if (test-equal? expected-val actual-val)
-             (begin
-               (test-increment-passed)
-               #t)  ; Test passed (silently)
-             (begin
-               (test-increment-failed)
-               (display "FAIL: ")
-               (newline)
-               (write 'expr)
-               (newline)
-               (display " expected ")
-               (newline)
-               (write expected-val)
-               (newline)
-               (display " but got ")
-               (newline)
-               (write actual-val)
-               (newline)
-               (newline)
-               #f)))))))
+     (begin
+       ;; Print what we're about to test BEFORE evaluating
+       (display "Testing: ")
+       (write 'expr)
+       (newline)
+       (let ((expected-val expected))
+         ;; Now evaluate the expression
+         (let ((actual-val expr))
+           ;; Then compare and report using approximate equality
+           (if (test-equal? expected-val actual-val)
+               (begin
+                 (test-increment-passed)
+                 #t)  ; Test passed (silently)
+               (begin
+                 (test-increment-failed)
+                 (display "FAIL: ")
+                 (write 'expr)
+                 (newline)
+                 (display "  expected: ")
+                 (write expected-val)
+                 (newline)
+                 (display "  but got:  ")
+                 (write actual-val)
+                 (newline)
+                 (newline)
+                 #f)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; End of bootstrap library
+)
