@@ -21,3 +21,16 @@ pub enum FrontendError {
     #[error("Frontend error: {0}")]
     General(String),
 }
+
+// Conversions from specific error types
+impl From<crate::lexer::LexError> for FrontendError {
+    fn from(e: crate::lexer::LexError) -> Self {
+        FrontendError::LexError(e.to_string())
+    }
+}
+
+impl From<crate::parser::ParseError> for FrontendError {
+    fn from(e: crate::parser::ParseError) -> Self {
+        FrontendError::ParseError(e.to_string())
+    }
+}

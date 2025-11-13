@@ -15,6 +15,7 @@ use std::rc::Rc;
 pub mod compiler;
 pub mod expander_v2;
 pub mod hygiene;
+pub mod interface;
 pub mod matcher_v2;
 pub mod pattern;
 pub mod pattern_v2;
@@ -29,9 +30,13 @@ pub use template::expand_template;
 // Re-export V2 types
 pub use compiler::{CompiledMacro, CompiledRule, Compiler};
 pub use expander_v2::{ExpandError, Expander};
+pub use interface::{CompiledMacroExpander, ExpansionResult, MacroExpander};
 pub use matcher_v2::{MatchError, Matcher};
 pub use pattern_v2::Pattern2;
 pub use template_v2::{Identifier, Template2};
+
+// Re-export test helpers
+pub use interface::TestExpander;
 
 /// Expand a macro using the V2 PVREF-based system
 ///
