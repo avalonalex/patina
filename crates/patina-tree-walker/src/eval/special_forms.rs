@@ -78,8 +78,10 @@ impl Evaluator {
                             EvalError::InternalError("Invalid macro data".to_string())
                         })?;
 
-                    // Expand the macro and return the expanded form
-                    let expanded = self.expand_macro_v2(compiled_macro, &expr, env)?;
+                    // Expand the macro using the MacroExpander trait interface
+                    use patina_frontend::macro_expander::{CompiledMacroExpander, MacroExpander};
+                    let expander = CompiledMacroExpander::new(compiled_macro.clone());
+                    let expanded = expander.expand(&expr, env).map_err(EvalError::from)?;
                     return Ok(expanded);
                 }
             }
@@ -990,15 +992,17 @@ impl Evaluator {
         Ok(rules)
     }
 
-    /// Expand a macro call using V2 PVREF-based system
+    /// Expand a macro call using V2 PVREF-based system via the MacroExpander trait
     pub(super) fn expand_macro_v2(
         &self,
         compiled_macro: &patina_frontend::macro_expander::CompiledMacro,
         args: &Value,
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
-        patina_frontend::macro_expander::expand_macro_v2(compiled_macro, args, env)
-            .map_err(|e| e.into())
+        use patina_frontend::macro_expander::{CompiledMacroExpander, MacroExpander};
+
+        let expander = CompiledMacroExpander::new(compiled_macro.clone());
+        expander.expand(args, env).map_err(EvalError::from)
     }
 
     /// Expand a macro call (old system - deprecated)
