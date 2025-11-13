@@ -41,10 +41,21 @@ pub fn apply_hygiene(
     // Find all free identifiers (symbols not in pattern_vars)
     let free_identifiers = find_free_identifiers(expr, pattern_vars, env);
 
+    if patina_runtime::macro_debug::is_enabled() && !free_identifiers.is_empty() {
+        println!("[MACRO]   Free identifiers to rename:");
+        for id in &free_identifiers {
+            println!("[MACRO]     {}", id);
+        }
+    }
+
     // Create renaming map: original name -> gensym
     let mut renamings = std::collections::HashMap::new();
     for name in free_identifiers {
-        renamings.insert(name.clone(), gensym(&name));
+        let new_name = gensym(&name);
+        if patina_runtime::macro_debug::is_enabled() {
+            println!("[MACRO]     Renaming: {} -> {}", name, new_name);
+        }
+        renamings.insert(name.clone(), new_name);
     }
 
     // Apply renamings to the expression

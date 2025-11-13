@@ -127,8 +127,28 @@ impl Matcher {
     ///
     /// Inspired by Gauche's match_pattern (macro.c:600+)
     pub fn match_pattern(&self, pattern: &Pattern, input: &Value) -> Result<MatchEnv, MatchError> {
+        if patina_runtime::macro_debug::is_enabled() {
+            println!("[MACRO]     Pattern: {}", Self::pattern_to_string(pattern));
+            println!("[MACRO]     Input: {}", input);
+        }
+
         let mut env = MatchEnv::new(self.num_pvars);
-        self.match_impl(pattern, input, &mut env, 0)?;
+        let result = self.match_impl(pattern, input, &mut env, 0);
+
+        if patina_runtime::macro_debug::is_enabled() {
+            match &result {
+                Ok(_) => {
+                    println!("[MACRO]     Match: SUCCESS");
+                    println!("[MACRO]     Bindings:");
+                    Self::print_bindings(&env);
+                }
+                Err(e) => {
+                    println!("[MACRO]     Match: FAILED ({})", e);
+                }
+            }
+        }
+
+        result?;
         Ok(env)
     }
 
@@ -503,6 +523,66 @@ impl Matcher {
             }
         }
         count
+    }
+
+    /// Convert a pattern to a readable string for debugging
+    fn pattern_to_string(pattern: &Pattern) -> String {
+        match pattern {
+            Pattern::Wildcard => "_".to_string(),
+            Pattern::Literal(v) => format!("{}", v),
+            Pattern::Var(_pv) => "var".to_string(), // Don't access internal structure
+            Pattern::List(patterns) => {
+                let inner = patterns
+                    .iter()
+                    .map(Self::pattern_to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("({})", inner)
+            }
+            Pattern::DottedList { patterns, tail } => {
+                let mut parts: Vec<String> = patterns.iter().map(Self::pattern_to_string).collect();
+                parts.push(".".to_string());
+                parts.push(Self::pattern_to_string(tail));
+                format!("({})", parts.join(" "))
+            }
+            Pattern::Vector(patterns) => {
+                let inner = patterns
+                    .iter()
+                    .map(Self::pattern_to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("#({})", inner)
+            }
+            Pattern::Ellipsis { subpattern, .. } => {
+                format!("({} ...)", Self::pattern_to_string(subpattern))
+            }
+        }
+    }
+
+    /// Print bindings from match environment
+    fn print_bindings(env: &MatchEnv) {
+        // MatchEnv doesn't expose num_pvars, so we'll just try to get some common indices
+        for i in 0..10 {
+            let pv = PVRef::new(0, i);
+            if let Some(value) = env.get_raw(pv) {
+                println!(
+                    "[MACRO]       var#{}: {}",
+                    i,
+                    Self::match_value_to_string(value)
+                );
+            }
+        }
+    }
+
+    /// Convert a match value to a readable string
+    fn match_value_to_string(mv: &MatchValue) -> String {
+        match mv {
+            MatchValue::Leaf(v) => format!("{}", v),
+            MatchValue::Branch(values) => {
+                let items: Vec<String> = values.iter().map(Self::match_value_to_string).collect();
+                format!("[{}]", items.join(", "))
+            }
+        }
     }
 }
 

@@ -12,6 +12,7 @@ pub mod error;
 pub mod library;
 pub mod library_loader;
 pub mod library_registry;
+pub mod macro_debug;
 pub mod pvref;
 pub mod rust_library_loader;
 pub mod stdlib;

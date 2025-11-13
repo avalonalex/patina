@@ -236,6 +236,34 @@ impl Evaluator {
                 patina_runtime::stdlib::test_increment_failed();
                 Ok(super::EvalResult::Value(Value::Unspecified))
             }
+            "macro-debug-mode" => {
+                self.check_arity_exact(&args, 1, "macro-debug-mode")?;
+                match &args[0] {
+                    Value::Symbol(s) if s.as_ref() == "on" => {
+                        patina_runtime::macro_debug::enable();
+                        Ok(super::EvalResult::Value(Value::Symbol(
+                            "macro-debug-enabled".into(),
+                        )))
+                    }
+                    Value::Symbol(s) if s.as_ref() == "off" => {
+                        patina_runtime::macro_debug::disable();
+                        Ok(super::EvalResult::Value(Value::Symbol(
+                            "macro-debug-disabled".into(),
+                        )))
+                    }
+                    Value::Symbol(s) if s.as_ref() == "status" => {
+                        let status = if patina_runtime::macro_debug::is_enabled() {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        };
+                        Ok(super::EvalResult::Value(Value::Symbol(status.into())))
+                    }
+                    _ => Err(EvalError::InvalidSyntax(
+                        "macro-debug-mode expects 'on, 'off, or 'status".to_string(),
+                    )),
+                }
+            }
 
             _ => Err(EvalError::InvalidSyntax(format!(
                 "Unknown primitive: {}",
@@ -388,6 +416,7 @@ impl Evaluator {
             ("debug-clear", Arity::Exact(0)),
             ("debug-status", Arity::Exact(0)),
             ("debug-mode", Arity::Exact(1)),
+            ("macro-debug-mode", Arity::Exact(1)),
             // Test framework
             ("test-begin", Arity::Exact(1)),
             ("test-end", Arity::Exact(0)),
