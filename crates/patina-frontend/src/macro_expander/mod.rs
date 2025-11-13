@@ -33,6 +33,58 @@ pub use matcher_v2::{MatchError, Matcher};
 pub use pattern_v2::Pattern2;
 pub use template_v2::{Identifier, Template2};
 
+/// Expand a macro using the V2 PVREF-based system
+///
+/// This is the new macro expansion pipeline:
+/// 1. Try each compiled rule in order
+/// 2. Use Matcher to match pattern against input
+/// 3. Use Expander to expand template with match environment
+/// 4. Apply hygiene to result
+///
+/// Based on Gauche's macro expansion pipeline.
+pub fn expand_macro_v2(
+    compiled_macro: &CompiledMacro,
+    args: &patina_runtime::Value,
+    env: &std::rc::Rc<patina_runtime::Environment>,
+) -> Result<patina_runtime::Value, crate::error::FrontendError> {
+    let expander = Expander::new();
+
+    // Try each rule until we find a match
+    for rule in &compiled_macro.rules {
+        // Create matcher for this rule
+        let matcher = Matcher::new(rule.num_pvars);
+
+        // Try to match the pattern against the arguments
+        match matcher.match_pattern(&rule.pattern, args) {
+            Ok(match_env) => {
+                // Pattern matched! Expand the template
+                let expanded = expander
+                    .expand(&rule.template, &match_env)
+                    .map_err(|e| crate::error::FrontendError::InvalidSyntax(e.to_string()))?;
+
+                // Apply hygiene: rename free identifiers
+                // For now, we collect all symbols from the input to prevent renaming them
+                let mut pattern_vars = std::collections::HashSet::new();
+                collect_symbols_from_value(args, &mut pattern_vars);
+
+                let hygienic = hygiene::apply_hygiene(&expanded, &pattern_vars, env);
+
+                return Ok(hygienic);
+            }
+            Err(_) => {
+                // This rule didn't match, try next one
+                continue;
+            }
+        }
+    }
+
+    // No rule matched
+    Err(crate::error::FrontendError::InvalidSyntax(format!(
+        "No matching pattern for macro {}",
+        compiled_macro.name
+    )))
+}
+
 /// Expand a macro with the given arguments
 ///
 /// Tries each rule in order until one matches, then expands using that rule's template.

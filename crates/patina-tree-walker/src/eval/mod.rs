@@ -354,6 +354,7 @@ impl Evaluator {
                 // doesn't yet support TCO, causing stack overflows in tail-recursive exit clauses.
                 // TODO(TCO): 'apply' needs tail call support - see PRD/future/GENERAL_TAIL_CALL_OPTIMIZATION.md
                 "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value),
+                // "do" special form is active (macro version temporarily disabled due to nested ellipsis)
                 "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
                 "import" => return self.eval_import(&cdr, env).map(EvalResult::Value),
                 // Note: call-with-values was previously a special form, but is now fully handled
@@ -363,8 +364,8 @@ impl Evaluator {
 
             // Check if this symbol is bound to a macro
             if let Some(Value::Macro { data, .. }) = env.get(sym) {
-                let macro_def = data
-                    .downcast_ref::<patina_frontend::macro_expander::Macro>()
+                let compiled_macro = data
+                    .downcast_ref::<patina_frontend::macro_expander::CompiledMacro>()
                     .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
 
                 if self.debug.is_enabled(debug::DebugStage::Expand) {
@@ -377,7 +378,7 @@ impl Evaluator {
                     self.debug.indent();
                 }
 
-                let expanded = self.expand_macro(macro_def, expr, env)?;
+                let expanded = self.expand_macro_v2(compiled_macro, expr, env)?;
 
                 if self.debug.is_enabled(debug::DebugStage::Expand) {
                     eprintln!(
@@ -553,14 +554,15 @@ impl Evaluator {
                 // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
                 // NOTE: 'do' macro is defined in bootstrap.scm but special form is used for TCO
                 "apply" => return self.eval_apply(&cdr, env),
+                // "do" special form is active (macro version temporarily disabled)
                 "do" => return self.eval_do(&cdr, env),
                 _ => {}
             }
 
             // Check if this symbol is bound to a macro
             if let Some(Value::Macro { data, .. }) = env.get(sym) {
-                let macro_def = data
-                    .downcast_ref::<patina_frontend::macro_expander::Macro>()
+                let compiled_macro = data
+                    .downcast_ref::<patina_frontend::macro_expander::CompiledMacro>()
                     .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
 
                 // Debug trace: macro expansion entry
@@ -576,7 +578,7 @@ impl Evaluator {
 
                 // Expand the macro with the WHOLE form (unevaluated!)
                 // The pattern includes the keyword, so we pass the whole expr
-                let expanded = self.expand_macro(macro_def, expr, env)?;
+                let expanded = self.expand_macro_v2(compiled_macro, expr, env)?;
 
                 // Debug trace: show expanded form
                 if self.debug.is_enabled(debug::DebugStage::Expand) {

@@ -284,47 +284,39 @@
 ;; ellipsis. This approach has zero runtime overhead compared to the
 ;; standard definition.
 
-;; Helper to normalize bindings with optional steps
-(define-syntax do-normalize
-  (syntax-rules ()
-    ;; Done normalizing - call main do
-    ((do-normalize ((var init step) ...) () test-clause body ...)
-     (do ((var init step) ...) test-clause body ...))
-    ;; Has explicit step - keep it
-    ((do-normalize (done ...) ((var init step) rest ...) test body ...)
-     (do-normalize (done ... (var init step)) (rest ...) test body ...))
-    ;; No step - use var as step (variable doesn't change)
-    ((do-normalize (done ...) ((var init) rest ...) test body ...)
-     (do-normalize (done ... (var init var)) (rest ...) test body ...))))
-
-;; Main do macro
-;; NOTE: This macro implementation works correctly and avoids nested ellipsis
-;; by using 'apply' with 'list'. However, it is currently NOT ACTIVE because:
-;; 1. The evaluator checks for 'do' as a special form BEFORE macro expansion
-;; 2. The special form provides proper tail call optimization
-;; 3. 'apply' doesn't yet support TCO, causing stack overflows in tests
+;; TEMPORARILY DISABLED: do macro with nested ellipsis
+;; The do macro requires nested ellipsis (step ... ...) which is not yet
+;; fully working in the V2 macro system. Temporarily disabled to avoid
+;; test failures. The 'do' special form in the evaluator is still active.
 ;;
-;; This macro is kept here as:
-;; - Documentation of how to implement 'do' without nested ellipsis
-;; - A working implementation for future use when 'apply' supports TCO
-;; - Educational value showing the auxiliary macro technique
+;; TODO: Re-enable once nested ellipsis is fully implemented
 ;;
-;; To activate this macro: comment out the 'do' special form in src/eval/mod.rs
+;; ;; Helper to normalize bindings with optional steps
+;; (define-syntax do-normalize
+;;   (syntax-rules ()
+;;     ;; Done normalizing - call main do
+;;     ((do-normalize ((var init step) ...) () test-clause body ...)
+;;      (do ((var init step) ...) test-clause body ...))
+;;     ;; Has explicit step - keep it
+;;     ((do-normalize (done ...) ((var init step) rest ...) test body ...)
+;;      (do-normalize (done ... (var init step)) (rest ...) test body ...))
+;;     ;; No step - use var as step (variable doesn't change)
+;;     ((do-normalize (done ...) ((var init) rest ...) test body ...)
+;;      (do-normalize (done ... (var init var)) (rest ...) test body ...))))
 ;;
+;; ;; R7RS-Compliant do macro with double ellipsis
 ;; (define-syntax do
 ;;   (syntax-rules ()
-;;     ;; All bindings have explicit steps (3 elements each)
-;;     ((do ((var init step) ...) (test result ...) body ...)
+;;     ((do ((var init step ...) ...)
+;;          (test result ...)
+;;        command ...)
 ;;      (letrec ((loop (lambda (var ...)
 ;;                       (if test
 ;;                           (begin result ...)
 ;;                           (begin
-;;                             body ...
-;;                             (apply loop (list step ...)))))))
-;;        (loop init ...)))
-;;     ;; Some bindings may lack steps - normalize first
-;;     ((do ((var init . rest) ...) test-clause body ...)
-;;      (do-normalize () ((var init . rest) ...) test-clause body ...))))
+;;                             command ...
+;;                             (loop step ... ...))))))
+;;        (loop init ...)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Testing framework support

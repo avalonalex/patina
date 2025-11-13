@@ -753,18 +753,13 @@ impl Evaluator {
         };
 
         // Transformer must be (syntax-rules (literals) rules...)
-        let macro_def = self.parse_syntax_rules(&transformer_expr, env)?;
+        // Use V2 compiler to compile the macro
+        let compiled_macro = self.compile_syntax_rules_v2(&transformer_expr, name.clone())?;
 
-        // Create a Macro value with this name
-        let macro_data = patina_frontend::macro_expander::Macro {
-            name: name.clone(),
-            rules: macro_def.rules,
-            literals: macro_def.literals,
-            env: env.clone(),
-        };
+        // Store the compiled macro
         let macro_value = Value::Macro {
             name: name.clone(),
-            data: Rc::new(macro_data),
+            data: Rc::new(compiled_macro),
         };
 
         // Bind the macro in the environment
@@ -773,7 +768,81 @@ impl Evaluator {
         Ok(Value::Unspecified)
     }
 
+    /// Compile a syntax-rules form using the V2 PVREF-based compiler
+    fn compile_syntax_rules_v2(
+        &self,
+        expr: &Value,
+        name: Rc<str>,
+    ) -> Result<patina_frontend::macro_expander::CompiledMacro, EvalError> {
+        use patina_frontend::macro_expander::Compiler;
+
+        // Must be a list starting with 'syntax-rules
+        let (keyword, rest) = self.extract_pair(expr)?;
+
+        match keyword {
+            Value::Symbol(s) if s.as_ref() == "syntax-rules" => {}
+            _ => {
+                return Err(EvalError::InvalidSyntax(
+                    "Expected syntax-rules".to_string(),
+                ));
+            }
+        }
+
+        // Parse literals list
+        let (literals_expr, rules_expr) = self.extract_pair(&rest)?;
+        let literals = self.parse_literals_list(&literals_expr)?;
+
+        // Parse rules as (pattern, template) pairs
+        let rules = self.parse_macro_rules_v2(&rules_expr)?;
+
+        // Compile using V2 compiler
+        let mut compiler = Compiler::new(literals, None); // Use default ellipsis (...)
+        compiler
+            .compile_macro(name, rules)
+            .map_err(|e| EvalError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
+    }
+
+    /// Parse macro rules as (pattern, template) pairs for V2 compiler
+    fn parse_macro_rules_v2(&self, expr: &Value) -> Result<Vec<(Value, Value)>, EvalError> {
+        let mut rules = Vec::new();
+        let mut current = expr.clone();
+
+        while let Value::Pair(rule_pair) = current {
+            // Each rule is (pattern template)
+            let (pattern, template_list) = self.extract_pair(&rule_pair.0)?;
+            let (template, rest_of_rule) = self.extract_pair(&template_list)?;
+
+            // Verify no extra elements in the rule
+            if !matches!(rest_of_rule, Value::Null) {
+                return Err(EvalError::InvalidSyntax(
+                    "Each syntax-rules rule must have exactly 2 elements (pattern template)"
+                        .to_string(),
+                ));
+            }
+
+            rules.push((pattern, template));
+            current = rule_pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "syntax-rules rules must be a proper list".to_string(),
+            ));
+        }
+
+        if rules.is_empty() {
+            return Err(EvalError::InvalidSyntax(
+                "syntax-rules must have at least one rule".to_string(),
+            ));
+        }
+
+        Ok(rules)
+    }
+
     /// Parse a syntax-rules form: (syntax-rules (literals) (pattern template)...)
+    ///
+    /// Note: This is the V1 macro parser, kept for reference. V2 uses the compiler in patina-frontend.
+    #[allow(dead_code)]
     fn parse_syntax_rules(
         &self,
         expr: &Value,
@@ -834,6 +903,9 @@ impl Evaluator {
     }
 
     /// Parse macro rules: ((pattern template) ...)
+    ///
+    /// Note: This is the V1 macro parser, kept for reference. V2 uses the compiler in patina-frontend.
+    #[allow(dead_code)]
     fn parse_macro_rules(
         &self,
         expr: &Value,
@@ -876,7 +948,19 @@ impl Evaluator {
         Ok(rules)
     }
 
-    /// Expand a macro call
+    /// Expand a macro call using V2 PVREF-based system
+    pub(super) fn expand_macro_v2(
+        &self,
+        compiled_macro: &patina_frontend::macro_expander::CompiledMacro,
+        args: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        patina_frontend::macro_expander::expand_macro_v2(compiled_macro, args, env)
+            .map_err(|e| e.into())
+    }
+
+    /// Expand a macro call (old system - deprecated)
+    #[allow(dead_code)]
     pub(super) fn expand_macro(
         &self,
         macro_val: &patina_frontend::macro_expander::Macro,

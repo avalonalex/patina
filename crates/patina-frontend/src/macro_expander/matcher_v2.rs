@@ -26,6 +26,9 @@ pub enum MatchError {
         actual: usize,
     },
 
+    /// Input has more elements than pattern can match (no ellipsis to consume them)
+    TooManyElements { expected: usize, actual: usize },
+
     /// Literal value doesn't match
     LiteralMismatch { expected: String, actual: String },
 
@@ -56,6 +59,13 @@ impl std::fmt::Display for MatchError {
                     f,
                     "Pattern {} requires at least {} elements, got {}",
                     pattern, expected, actual
+                )
+            }
+            MatchError::TooManyElements { expected, actual } => {
+                write!(
+                    f,
+                    "Pattern expects {} elements, got {} (no ellipsis to consume extra elements)",
+                    expected, actual
                 )
             }
             MatchError::LiteralMismatch { expected, actual } => {
@@ -224,8 +234,11 @@ impl Matcher {
 
         // Match patterns against input
         let mut input_idx = 0;
+        let mut has_ellipsis = false;
+
         for pattern in patterns {
             if pattern.is_ellipsis() {
+                has_ellipsis = true;
                 // Handle ellipsis pattern
                 if let Pattern2::Ellipsis {
                     subpattern,
@@ -278,6 +291,16 @@ impl Matcher {
                 self.match_impl(pattern, &input_list[input_idx], env, level)?;
                 input_idx += 1;
             }
+        }
+
+        // Check for unconsumed input elements
+        // If the pattern has no ellipsis, all input elements must be consumed.
+        // This matches Gauche's behavior (macro.c:901): return SCM_NULLP(form);
+        if !has_ellipsis && input_idx < input_list.len() {
+            return Err(MatchError::TooManyElements {
+                expected: input_idx,
+                actual: input_list.len(),
+            });
         }
 
         Ok(())
