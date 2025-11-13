@@ -109,6 +109,9 @@ impl std::error::Error for MatchError {}
 pub struct Matcher {
     /// Number of pattern variables (determines MatchEnv size)
     num_pvars: usize,
+
+    /// Optional mapping from PVREF to variable names (for debug output)
+    pvar_names: Option<std::collections::HashMap<PVRef, std::rc::Rc<str>>>,
 }
 
 impl Matcher {
@@ -117,7 +120,25 @@ impl Matcher {
     /// # Arguments
     /// * `num_pvars` - Total number of pattern variables in the pattern
     pub fn new(num_pvars: usize) -> Self {
-        Self { num_pvars }
+        Self {
+            num_pvars,
+            pvar_names: None,
+        }
+    }
+
+    /// Create a new matcher with pattern variable names for debug output
+    ///
+    /// # Arguments
+    /// * `num_pvars` - Total number of pattern variables in the pattern
+    /// * `pvar_names` - Mapping from PVREF to variable names
+    pub fn new_with_names(
+        num_pvars: usize,
+        pvar_names: std::collections::HashMap<PVRef, std::rc::Rc<str>>,
+    ) -> Self {
+        Self {
+            num_pvars,
+            pvar_names: Some(pvar_names),
+        }
     }
 
     /// Match a pattern against an input expression
@@ -128,7 +149,13 @@ impl Matcher {
     /// Inspired by Gauche's match_pattern (macro.c:600+)
     pub fn match_pattern(&self, pattern: &Pattern, input: &Value) -> Result<MatchEnv, MatchError> {
         if patina_runtime::macro_debug::is_enabled() {
-            println!("[MACRO]     Pattern: {}", Self::pattern_to_string(pattern));
+            // Use names if available, otherwise fall back to generic representation
+            let pattern_str = if let Some(ref names) = self.pvar_names {
+                Self::pattern_to_string_with_names(pattern, names)
+            } else {
+                Self::pattern_to_string(pattern)
+            };
+            println!("[MACRO]     Pattern: {}", pattern_str);
             println!("[MACRO]     Input: {}", input);
         }
 
@@ -140,7 +167,7 @@ impl Matcher {
                 Ok(_) => {
                     println!("[MACRO]     Match: SUCCESS");
                     println!("[MACRO]     Bindings:");
-                    Self::print_bindings(&env);
+                    self.print_bindings(&env);
                 }
                 Err(e) => {
                     println!("[MACRO]     Match: FAILED ({})", e);
@@ -526,6 +553,54 @@ impl Matcher {
     }
 
     /// Convert a pattern to a readable string for debugging
+    fn pattern_to_string_with_names(
+        pattern: &Pattern,
+        names: &std::collections::HashMap<PVRef, std::rc::Rc<str>>,
+    ) -> String {
+        match pattern {
+            Pattern::Wildcard => "_".to_string(),
+            Pattern::Literal(v) => format!("{}", v),
+            Pattern::Var(pv) => {
+                // Look up the actual variable name
+                names
+                    .get(pv)
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "var".to_string())
+            }
+            Pattern::List(patterns) => {
+                let inner = patterns
+                    .iter()
+                    .map(|p| Self::pattern_to_string_with_names(p, names))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("({})", inner)
+            }
+            Pattern::DottedList { patterns, tail } => {
+                let mut parts: Vec<String> = patterns
+                    .iter()
+                    .map(|p| Self::pattern_to_string_with_names(p, names))
+                    .collect();
+                parts.push(".".to_string());
+                parts.push(Self::pattern_to_string_with_names(tail, names));
+                format!("({})", parts.join(" "))
+            }
+            Pattern::Vector(patterns) => {
+                let inner = patterns
+                    .iter()
+                    .map(|p| Self::pattern_to_string_with_names(p, names))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("#({})", inner)
+            }
+            Pattern::Ellipsis { subpattern, .. } => {
+                format!(
+                    "({} ...)",
+                    Self::pattern_to_string_with_names(subpattern, names)
+                )
+            }
+        }
+    }
+
     fn pattern_to_string(pattern: &Pattern) -> String {
         match pattern {
             Pattern::Wildcard => "_".to_string(),
@@ -560,16 +635,38 @@ impl Matcher {
     }
 
     /// Print bindings from match environment
-    fn print_bindings(env: &MatchEnv) {
-        // MatchEnv doesn't expose num_pvars, so we'll just try to get some common indices
-        for i in 0..10 {
-            let pv = PVRef::new(0, i);
-            if let Some(value) = env.get_raw(pv) {
-                println!(
-                    "[MACRO]       var#{}: {}",
-                    i,
-                    Self::match_value_to_string(value)
-                );
+    fn print_bindings(&self, env: &MatchEnv) {
+        // If we have pvar_names, iterate through them and print in order
+        // Otherwise, fall back to printing all bindings at levels 0 and 1
+        if let Some(ref names) = self.pvar_names {
+            // Collect and sort PVREFs by (level, index) for consistent ordering
+            let mut sorted_pvrefs: Vec<_> = names.keys().collect();
+            sorted_pvrefs.sort_by_key(|pv| (pv.level(), pv.index()));
+
+            for pv in sorted_pvrefs {
+                if let Some(value) = env.get_raw(*pv) {
+                    let name = &names[pv];
+                    println!(
+                        "[MACRO]       {} = {}",
+                        name,
+                        Self::match_value_to_string(value)
+                    );
+                }
+            }
+        } else {
+            // Fallback: print all bindings at levels 0 and 1
+            for level in 0..=1 {
+                for i in 0..self.num_pvars {
+                    let pv = PVRef::new(level, i as u8);
+                    if let Some(value) = env.get_raw(pv) {
+                        println!(
+                            "[MACRO]       var#{}@L{} = {}",
+                            i,
+                            level,
+                            Self::match_value_to_string(value)
+                        );
+                    }
+                }
             }
         }
     }

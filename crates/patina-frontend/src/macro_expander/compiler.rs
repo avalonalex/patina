@@ -37,6 +37,9 @@ pub struct CompiledRule {
 
     /// Maximum ellipsis nesting level in this rule
     pub max_level: usize,
+
+    /// Mapping from pattern variable names to their PVREFs (for debug output)
+    pub pvar_names: HashMap<PVRef, Rc<str>>,
 }
 
 /// Compiled macro definition
@@ -122,11 +125,19 @@ impl Compiler {
             let pattern = self.compile_pattern(&pat_form, 0)?;
             let template = self.compile_template(&tmpl_form, 0)?;
 
+            // Build reverse mapping: PVREF -> name (for debug output)
+            let pvar_names: HashMap<PVRef, Rc<str>> = self
+                .pvars
+                .iter()
+                .map(|(name, pvref)| (*pvref, name.clone()))
+                .collect();
+
             compiled_rules.push(CompiledRule {
                 pattern,
                 template,
                 num_pvars: self.pvar_count,
                 max_level: self.max_level,
+                pvar_names,
             });
 
             max_pvars = max_pvars.max(self.pvar_count);

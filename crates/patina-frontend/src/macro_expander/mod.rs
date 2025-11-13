@@ -45,6 +45,23 @@ pub fn expand_macro_v2(
 ) -> Result<patina_runtime::Value, crate::error::FrontendError> {
     if patina_runtime::macro_debug::is_enabled() {
         println!("[MACRO] Expanding macro: {}", compiled_macro.name);
+
+        // Print macro definition (pattern -> template for each rule)
+        if !compiled_macro.rules.is_empty() {
+            println!(
+                "[MACRO]   Definition ({} rule(s)):",
+                compiled_macro.rules.len()
+            );
+            for (idx, rule) in compiled_macro.rules.iter().enumerate() {
+                println!(
+                    "[MACRO]     Rule {}: {} -> <template>",
+                    idx + 1,
+                    pattern_to_string_with_names(&rule.pattern, &rule.pvar_names)
+                );
+            }
+            println!("[MACRO]   ");
+        }
+
         println!("[MACRO]   Input: {}", args);
         println!("[MACRO]   Trying {} rule(s):", compiled_macro.rules.len());
     }
@@ -59,7 +76,8 @@ pub fn expand_macro_v2(
         }
 
         // Create matcher for this rule
-        let matcher = Matcher::new(rule.num_pvars);
+        // Pass pvar_names for better debug output
+        let matcher = Matcher::new_with_names(rule.num_pvars, rule.pvar_names.clone());
 
         // Try to match the pattern against the arguments
         match matcher.match_pattern(&rule.pattern, args) {
@@ -139,5 +157,51 @@ fn collect_symbols_from_value(
         }
         // All other values (numbers, strings, booleans, etc.) have no symbols
         _ => {}
+    }
+}
+
+/// Convert a pattern to a readable string with variable names for debug output
+fn pattern_to_string_with_names(
+    pattern: &Pattern,
+    names: &std::collections::HashMap<patina_runtime::PVRef, std::rc::Rc<str>>,
+) -> String {
+    match pattern {
+        Pattern::Wildcard => "_".to_string(),
+        Pattern::Literal(v) => format!("{}", v),
+        Pattern::Var(pv) => {
+            // Look up the actual variable name
+            names
+                .get(pv)
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "var".to_string())
+        }
+        Pattern::List(patterns) => {
+            let inner = patterns
+                .iter()
+                .map(|p| pattern_to_string_with_names(p, names))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("({})", inner)
+        }
+        Pattern::DottedList { patterns, tail } => {
+            let mut parts: Vec<String> = patterns
+                .iter()
+                .map(|p| pattern_to_string_with_names(p, names))
+                .collect();
+            parts.push(".".to_string());
+            parts.push(pattern_to_string_with_names(tail, names));
+            format!("({})", parts.join(" "))
+        }
+        Pattern::Vector(patterns) => {
+            let inner = patterns
+                .iter()
+                .map(|p| pattern_to_string_with_names(p, names))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("#({})", inner)
+        }
+        Pattern::Ellipsis { subpattern, .. } => {
+            format!("({} ...)", pattern_to_string_with_names(subpattern, names))
+        }
     }
 }
