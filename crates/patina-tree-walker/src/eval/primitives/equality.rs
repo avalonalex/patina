@@ -88,3 +88,35 @@ pub(in crate::eval) fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalEr
         _ => false,
     })
 }
+pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
+    use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    // eq? - pointer/symbol equality
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "eq?",
+        Arity::Exact(2),
+        "Returns #t if obj1 and obj2 are the same object (pointer equality).",
+        |eval, args, _tail| eq(eval, args).map(EvalResult::Value),
+    ));
+
+    // eqv? - value equality for numbers, pointer equality otherwise
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "eqv?",
+        Arity::Exact(2),
+        "Returns #t if obj1 and obj2 are equivalent (value equality for numbers and characters).",
+        |eval, args, _tail| eqv(eval, args).map(EvalResult::Value),
+    ));
+
+    // equal? - deep structural equality
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "equal?",
+        Arity::Exact(2),
+        "Returns #t if obj1 and obj2 are structurally equal (deep comparison).",
+        |eval, args, _tail| equal(eval, args).map(EvalResult::Value),
+    ));
+}

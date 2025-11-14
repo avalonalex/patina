@@ -697,3 +697,144 @@ pub(super) fn vector_for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result
 
     Ok(Value::Unspecified)
 }
+
+pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
+    use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    // Make-vector
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "make-vector",
+        Arity::Range(1, 2),
+        "Returns a newly allocated vector of k elements.",
+        |eval, args, _tail| make_vector(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector constructor
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector",
+        Arity::Min(0),
+        "Returns a newly allocated vector whose elements contain the given arguments.",
+        |eval, args, _tail| vector(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector-length
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector-length",
+        Arity::Exact(1),
+        "Returns the number of elements in vector.",
+        |eval, args, _tail| vector_length(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector-ref
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector-ref",
+        Arity::Exact(2),
+        "Returns the contents of element k of vector.",
+        |eval, args, _tail| vector_ref(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector-set!
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector-set!",
+        Arity::Exact(3),
+        "Stores obj in element k of vector.",
+        |eval, args, _tail| vector_set(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector->list
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector->list",
+        Arity::Range(1, 3),
+        "Returns a newly allocated list of the objects contained in the elements of vector.",
+        |eval, args, _tail| vector_to_list(eval, args).map(EvalResult::Value),
+    ));
+
+    // List->vector
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "list->vector",
+        Arity::Exact(1),
+        "Returns a newly allocated vector of the objects contained in the list.",
+        |eval, args, _tail| list_to_vector(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector->string
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector->string",
+        Arity::Range(1, 3),
+        "Returns a newly allocated string of the characters contained in the elements of vector.",
+        |eval, args, _tail| vector_to_string(eval, args).map(EvalResult::Value),
+    ));
+
+    // String->vector
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string->vector",
+        Arity::Range(1, 3),
+        "Returns a newly allocated vector of the characters contained in the string.",
+        |eval, args, _tail| string_to_vector(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector-copy
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector-copy",
+        Arity::Range(1, 3),
+        "Returns a newly allocated copy of the elements of the given vector.",
+        |eval, args, _tail| vector_copy(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector-copy!
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector-copy!",
+        Arity::Range(3, 5),
+        "Copies the elements of vector from at to into vector to, starting at at.",
+        |eval, args, _tail| vector_copy_bang(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector-append
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector-append",
+        Arity::Min(0),
+        "Returns a newly allocated vector whose elements are the concatenation of the elements of the given vectors.",
+        |eval, args, _tail| vector_append(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector-fill!
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector-fill!",
+        Arity::Range(2, 4),
+        "Stores fill in the elements of vector.",
+        |eval, args, _tail| vector_fill(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector-map
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector-map",
+        Arity::Min(2),
+        "Returns a newly allocated vector of the results of applying proc element-wise to the elements of the vectors.",
+        |eval, args, _tail| vector_map(eval, args).map(EvalResult::Value),
+    ));
+
+    // Vector-for-each
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector-for-each",
+        Arity::Min(2),
+        "Applies proc element-wise to the elements of the vectors for side effects.",
+        |eval, args, _tail| vector_for_each(eval, args).map(EvalResult::Value),
+    ));
+}

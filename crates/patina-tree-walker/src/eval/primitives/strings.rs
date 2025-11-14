@@ -485,3 +485,189 @@ pub(super) fn string_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
     let substr: String = chars[start..end].iter().collect();
     Ok(Value::String(Rc::new(RefCell::new(substr))))
 }
+
+pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
+    use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    // String length
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-length",
+        Arity::Exact(1),
+        "Returns the number of characters in string.",
+        |eval, args, _tail| string_length(eval, args).map(EvalResult::Value),
+    ));
+
+    // String ref
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-ref",
+        Arity::Exact(2),
+        "Returns character k of string.",
+        |eval, args, _tail| string_ref(eval, args).map(EvalResult::Value),
+    ));
+
+    // String set!
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-set!",
+        Arity::Exact(3),
+        "Stores char in element k of string.",
+        |eval, args, _tail| string_set(eval, args).map(EvalResult::Value),
+    ));
+
+    // Make-string
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "make-string",
+        Arity::Range(1, 2),
+        "Returns a newly allocated string of length k.",
+        |eval, args, _tail| make_string(eval, args).map(EvalResult::Value),
+    ));
+
+    // String constructor
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string",
+        Arity::Min(0),
+        "Returns a newly allocated string composed of the arguments.",
+        |eval, args, _tail| string(eval, args).map(EvalResult::Value),
+    ));
+
+    // String equality
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string=?",
+        Arity::Min(2),
+        "Returns #t if all strings are equal.",
+        |eval, args, _tail| string_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // String less than
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string<?",
+        Arity::Min(2),
+        "Returns #t if strings are monotonically increasing.",
+        |eval, args, _tail| string_less(eval, args).map(EvalResult::Value),
+    ));
+
+    // String greater than
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string>?",
+        Arity::Min(2),
+        "Returns #t if strings are monotonically decreasing.",
+        |eval, args, _tail| string_greater(eval, args).map(EvalResult::Value),
+    ));
+
+    // String less than or equal
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string<=?",
+        Arity::Min(2),
+        "Returns #t if strings are monotonically non-decreasing.",
+        |eval, args, _tail| string_less_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // String greater than or equal
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string>=?",
+        Arity::Min(2),
+        "Returns #t if strings are monotonically non-increasing.",
+        |eval, args, _tail| string_greater_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // String case-insensitive equality
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-ci=?",
+        Arity::Min(2),
+        "Returns #t if all strings are equal (case-insensitive).",
+        |eval, args, _tail| string_ci_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // String case-insensitive less than
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-ci<?",
+        Arity::Min(2),
+        "Returns #t if strings are monotonically increasing (case-insensitive).",
+        |eval, args, _tail| string_ci_less(eval, args).map(EvalResult::Value),
+    ));
+
+    // String case-insensitive greater than
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-ci>?",
+        Arity::Min(2),
+        "Returns #t if strings are monotonically decreasing (case-insensitive).",
+        |eval, args, _tail| string_ci_greater(eval, args).map(EvalResult::Value),
+    ));
+
+    // String case-insensitive less than or equal
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-ci<=?",
+        Arity::Min(2),
+        "Returns #t if strings are monotonically non-decreasing (case-insensitive).",
+        |eval, args, _tail| string_ci_less_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // String case-insensitive greater than or equal
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-ci>=?",
+        Arity::Min(2),
+        "Returns #t if strings are monotonically non-increasing (case-insensitive).",
+        |eval, args, _tail| string_ci_greater_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // String append
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-append",
+        Arity::Min(0),
+        "Returns a newly allocated string whose characters are the concatenation of the given strings.",
+        |eval, args, _tail| string_append(eval, args).map(EvalResult::Value),
+    ));
+
+    // Substring
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "substring",
+        Arity::Exact(3),
+        "Returns a newly allocated string formed from the characters of string beginning with index start and ending with index end.",
+        |eval, args, _tail| substring(eval, args).map(EvalResult::Value),
+    ));
+
+    // String->list
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string->list",
+        Arity::Range(1, 3),
+        "Returns a newly allocated list of the characters of string.",
+        |eval, args, _tail| string_to_list(eval, args).map(EvalResult::Value),
+    ));
+
+    // List->string
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "list->string",
+        Arity::Exact(1),
+        "Returns a newly allocated string formed from the characters in the list.",
+        |eval, args, _tail| list_to_string(eval, args).map(EvalResult::Value),
+    ));
+
+    // String-copy
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-copy",
+        Arity::Range(1, 3),
+        "Returns a newly allocated copy of the part of the given string.",
+        |eval, args, _tail| string_copy(eval, args).map(EvalResult::Value),
+    ));
+}

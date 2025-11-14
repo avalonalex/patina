@@ -195,3 +195,165 @@ pub(super) fn exact_integer_p(evaluator: &Evaluator, args: Vec<Value>) -> Result
 pub(super) fn library_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.make_type_predicate(args, |v| matches!(v, Value::Library(_)))
 }
+pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
+    use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    // Numeric type predicates
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "number?",
+        Arity::Exact(1),
+        "Returns #t if obj is a number.",
+        |eval, args, _tail| number_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "complex?",
+        Arity::Exact(1),
+        "Returns #t if obj is a complex number.",
+        |eval, args, _tail| complex_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "real?",
+        Arity::Exact(1),
+        "Returns #t if obj is a real number.",
+        |eval, args, _tail| real_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "rational?",
+        Arity::Exact(1),
+        "Returns #t if obj is a rational number.",
+        |eval, args, _tail| rational_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "integer?",
+        Arity::Exact(1),
+        "Returns #t if obj is an integer.",
+        |eval, args, _tail| integer_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "exact-integer?",
+        Arity::Exact(1),
+        "Returns #t if obj is an exact integer.",
+        |eval, args, _tail| exact_integer_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "exact?",
+        Arity::Exact(1),
+        "Returns #t if obj is an exact number.",
+        |eval, args, _tail| exact_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "inexact?",
+        Arity::Exact(1),
+        "Returns #t if obj is an inexact number.",
+        |eval, args, _tail| inexact_p(eval, args).map(EvalResult::Value),
+    ));
+
+    // Data type predicates
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "boolean?",
+        Arity::Exact(1),
+        "Returns #t if obj is a boolean.",
+        |eval, args, _tail| boolean_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string?",
+        Arity::Exact(1),
+        "Returns #t if obj is a string.",
+        |eval, args, _tail| string_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "symbol?",
+        Arity::Exact(1),
+        "Returns #t if obj is a symbol.",
+        |eval, args, _tail| symbol_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "char?",
+        Arity::Exact(1),
+        "Returns #t if obj is a character.",
+        |eval, args, _tail| char_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "vector?",
+        Arity::Exact(1),
+        "Returns #t if obj is a vector.",
+        |eval, args, _tail| vector_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "procedure?",
+        Arity::Exact(1),
+        "Returns #t if obj is a procedure.",
+        |eval, args, _tail| procedure_p(eval, args).map(EvalResult::Value),
+    ));
+
+    // List predicates
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "null?",
+        Arity::Exact(1),
+        "Returns #t if obj is the empty list.",
+        |eval, args, _tail| null_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "pair?",
+        Arity::Exact(1),
+        "Returns #t if obj is a pair.",
+        |eval, args, _tail| pair_p(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "list?",
+        Arity::Exact(1),
+        "Returns #t if obj is a list.",
+        |eval, args, _tail| list_p(eval, args).map(EvalResult::Value),
+    ));
+
+    // Boolean equality
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "boolean=?",
+        Arity::Min(2),
+        "Returns #t if all arguments are booleans and are all equal.",
+        |eval, args, _tail| boolean_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // Library predicate (Patina extension)
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "library?",
+        Arity::Exact(1),
+        "Returns #t if obj is a library.",
+        |eval, args, _tail| library_p(eval, args).map(EvalResult::Value),
+    ));
+}

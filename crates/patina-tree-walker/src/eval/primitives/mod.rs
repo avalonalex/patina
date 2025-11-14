@@ -74,80 +74,13 @@ impl Evaluator {
             // NOTE: All arithmetic operations are now in the registry (scheme.base/+, -, *, /, etc.)
             // NOTE: All list operations are now in the registry (scheme.base/cons, car, cdr, list, etc.)
             // NOTE: All higher-order functions are now in the registry (scheme.base/map, for-each)
-
-            // Type predicates
-            "number?" => predicates::number_p(self, args).map(super::EvalResult::Value),
-            "complex?" => predicates::complex_p(self, args).map(super::EvalResult::Value),
-            "real?" => predicates::real_p(self, args).map(super::EvalResult::Value),
-            "rational?" => predicates::rational_p(self, args).map(super::EvalResult::Value),
-            "integer?" => predicates::integer_p(self, args).map(super::EvalResult::Value),
-            "boolean?" => predicates::boolean_p(self, args).map(super::EvalResult::Value),
-            "string?" => predicates::string_p(self, args).map(super::EvalResult::Value),
-            "symbol?" => predicates::symbol_p(self, args).map(super::EvalResult::Value),
-            "null?" => predicates::null_p(self, args).map(super::EvalResult::Value),
-            "pair?" => predicates::pair_p(self, args).map(super::EvalResult::Value),
-            "list?" => predicates::list_p(self, args).map(super::EvalResult::Value),
-            "exact?" => predicates::exact_p(self, args).map(super::EvalResult::Value),
-            "inexact?" => predicates::inexact_p(self, args).map(super::EvalResult::Value),
-            "boolean=?" => predicates::boolean_equal(self, args).map(super::EvalResult::Value),
-            "procedure?" => predicates::procedure_p(self, args).map(super::EvalResult::Value),
-            "char?" => predicates::char_p(self, args).map(super::EvalResult::Value),
-            "vector?" => predicates::vector_p(self, args).map(super::EvalResult::Value),
-            "exact-integer?" => {
-                predicates::exact_integer_p(self, args).map(super::EvalResult::Value)
-            }
-            "library?" => predicates::library_p(self, args).map(super::EvalResult::Value),
-
-            // Equality operations
-            "eq?" => equality::eq(self, args).map(super::EvalResult::Value),
-            "eqv?" => equality::eqv(self, args).map(super::EvalResult::Value),
-            "equal?" => equality::equal(self, args).map(super::EvalResult::Value),
+            // NOTE: All type predicates are now in the registry (scheme.base/number?, boolean?, etc.)
+            // NOTE: All equality operations are now in the registry (scheme.base/eq?, eqv?, equal?)
+            // NOTE: All string operations are now in the registry (scheme.base/string-length, string-ref, etc.)
+            // NOTE: All vector operations are now in the registry (scheme.base/make-vector, vector-ref, etc.)
 
             // Multiple values
             "values" => values::values(self, args).map(super::EvalResult::Value),
-
-            // String operations
-            "string-length" => strings::string_length(self, args).map(super::EvalResult::Value),
-            "string-ref" => strings::string_ref(self, args).map(super::EvalResult::Value),
-            "string-set!" => strings::string_set(self, args).map(super::EvalResult::Value),
-            "make-string" => strings::make_string(self, args).map(super::EvalResult::Value),
-            "string" => strings::string(self, args).map(super::EvalResult::Value),
-            "string=?" => strings::string_equal(self, args).map(super::EvalResult::Value),
-            "string<?" => strings::string_less(self, args).map(super::EvalResult::Value),
-            "string>?" => strings::string_greater(self, args).map(super::EvalResult::Value),
-            "string<=?" => strings::string_less_equal(self, args).map(super::EvalResult::Value),
-            "string>=?" => strings::string_greater_equal(self, args).map(super::EvalResult::Value),
-            "string-ci=?" => strings::string_ci_equal(self, args).map(super::EvalResult::Value),
-            "string-ci<?" => strings::string_ci_less(self, args).map(super::EvalResult::Value),
-            "string-ci>?" => strings::string_ci_greater(self, args).map(super::EvalResult::Value),
-            "string-ci<=?" => {
-                strings::string_ci_less_equal(self, args).map(super::EvalResult::Value)
-            }
-            "string-ci>=?" => {
-                strings::string_ci_greater_equal(self, args).map(super::EvalResult::Value)
-            }
-            "string-append" => strings::string_append(self, args).map(super::EvalResult::Value),
-            "substring" => strings::substring(self, args).map(super::EvalResult::Value),
-            "string->list" => strings::string_to_list(self, args).map(super::EvalResult::Value),
-            "list->string" => strings::list_to_string(self, args).map(super::EvalResult::Value),
-            "string-copy" => strings::string_copy(self, args).map(super::EvalResult::Value),
-
-            // Vector operations
-            "make-vector" => vectors::make_vector(self, args).map(super::EvalResult::Value),
-            "vector" => vectors::vector(self, args).map(super::EvalResult::Value),
-            "vector-length" => vectors::vector_length(self, args).map(super::EvalResult::Value),
-            "vector-ref" => vectors::vector_ref(self, args).map(super::EvalResult::Value),
-            "vector-set!" => vectors::vector_set(self, args).map(super::EvalResult::Value),
-            "vector->list" => vectors::vector_to_list(self, args).map(super::EvalResult::Value),
-            "list->vector" => vectors::list_to_vector(self, args).map(super::EvalResult::Value),
-            "vector->string" => vectors::vector_to_string(self, args).map(super::EvalResult::Value),
-            "string->vector" => vectors::string_to_vector(self, args).map(super::EvalResult::Value),
-            "vector-copy" => vectors::vector_copy(self, args).map(super::EvalResult::Value),
-            "vector-copy!" => vectors::vector_copy_bang(self, args).map(super::EvalResult::Value),
-            "vector-append" => vectors::vector_append(self, args).map(super::EvalResult::Value),
-            "vector-fill!" => vectors::vector_fill(self, args).map(super::EvalResult::Value),
-            "vector-map" => vectors::vector_map(self, args).map(super::EvalResult::Value),
-            "vector-for-each" => vectors::vector_for_each(self, args).map(super::EvalResult::Value),
 
             // I/O operations
             "display" => io::display(self, args).map(super::EvalResult::Value),
@@ -233,12 +166,12 @@ impl Evaluator {
         arithmetic::register(registry);
         lists::register(registry);
         higher_order::register(registry);
+        predicates::register(registry);
+        equality::register(registry);
+        strings::register(registry);
+        vectors::register(registry);
 
-        // TODO: Convert and register other categories:
-        // strings::register(registry);
-        // vectors::register(registry);
-        // predicates::register(registry);
-        // etc.
+        // All core primitives are now in the registry!
     }
 
     /// Install all primitive procedures into the environment
