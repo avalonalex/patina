@@ -82,11 +82,12 @@ pub enum EvalResult {
 
 ## Critical Issues - Architectural Debt
 
-### Issue #1: Backend Coupling 🔴 CRITICAL
+### Issue #1: Backend Coupling ✅ COMPLETED
 
-**Location:** `patina-interpreter/src/lib.rs:19-24`
+**Status:** RESOLVED (implemented before review)
+**Location:** `patina-runtime/src/backend.rs`, `patina-tree-walker/src/backend.rs`
 
-**Problem:**
+**Previous Problem:**
 ```rust
 pub use patina_tree_walker::{EvalError, Evaluator};  // ❌ Direct coupling
 
@@ -150,16 +151,25 @@ pub type TreeWalkInterpreter = Interpreter<TreeWalker>;
 4. Make `Interpreter` generic (with default type parameter for compatibility)
 5. Update `patina-repl` to use `TreeWalkInterpreter`
 
-**Effort:** 1-2 days
-**Priority:** CRITICAL (blocks VM/JIT work)
+**Current Implementation:**
+- ✅ `Backend` trait defined in `patina-runtime/src/backend.rs`
+- ✅ `TreeWalker` wrapper in `patina-tree-walker/src/backend.rs`
+- ✅ Generic `Interpreter<B: Backend>` in `patina-interpreter`
+- ✅ Backend-agnostic error type: `InterpreterError<E>`
+- ✅ Type alias `TreeWalkInterpreter` for convenience
+- ✅ Full test coverage for trait implementation
+
+**Achievement:** Architecture supports pluggable backends, ready for VM/JIT
+**Next Steps:** Can now implement VM or JIT backend without modifying interpreter
 
 ---
 
-### Issue #2: Primitive Dispatch - 530-Line Match Statement 🔴 CRITICAL
+### Issue #2: Primitive Dispatch - 530-Line Match Statement ✅ COMPLETED
 
-**Location:** `patina-tree-walker/src/eval/primitives/mod.rs:39-530`
+**Status:** RESOLVED as of 2025-11-13
+**Location:** `patina-tree-walker/src/eval/primitives/mod.rs` (now using registry)
 
-**Problem:**
+**Previous Problem:**
 ```rust
 pub fn apply_primitive(&self, name: &str, args: Vec<Value>,
                        in_tail_position: bool) -> Result<EvalResult, EvalError> {
@@ -256,8 +266,18 @@ pub fn register_arithmetic(registry: &mut PrimitiveRegistry) {
 - ✅ Primitives grouped by category (still in separate modules)
 - ✅ Enables profiling (count primitive calls)
 
-**Effort:** 3-4 days
-**Priority:** HIGH (enables plugin system, improves UX)
+**Current Implementation:**
+- ✅ `PrimitiveRegistry` implemented with full metadata support
+- ✅ All 125 R7RS primitives migrated to registry
+- ✅ Organized by category with register() functions
+- ✅ Arity checking centralized in registry
+- ✅ Help text for all primitives
+- ✅ Tail call optimization support (in_tail parameter)
+- ✅ Library namespacing (scheme.base/+, etc.)
+- ✅ Match statement reduced to 9 non-R7RS utilities
+
+**Achievement:** Completed in 2 sessions (2025-11-12 to 2025-11-13)
+**Next Steps:** Add help system to utilize metadata, consider plugin API
 
 ---
 

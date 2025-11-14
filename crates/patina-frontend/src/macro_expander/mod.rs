@@ -38,7 +38,7 @@ pub use interface::TestExpander;
 /// 4. Apply hygiene to result
 ///
 /// Based on Gauche's macro expansion pipeline.
-pub fn expand_macro_v2(
+pub fn expand_macro(
     compiled_macro: &CompiledMacro,
     args: &patina_runtime::Value,
     env: &std::rc::Rc<patina_runtime::Environment>,

@@ -46,7 +46,7 @@ impl CompiledMacroExpander {
 
 impl MacroExpander for CompiledMacroExpander {
     fn expand(&self, macro_form: &Value, env: &Rc<Environment>) -> ExpansionResult {
-        super::expand_macro_v2(&self.compiled, macro_form, env)
+        super::expand_macro(&self.compiled, macro_form, env)
     }
 
     fn name(&self) -> &str {

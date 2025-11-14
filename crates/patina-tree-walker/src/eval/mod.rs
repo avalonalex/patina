@@ -3,7 +3,7 @@ mod application;
 mod debug;
 mod error;
 mod primitives;
-mod special_forms;
+pub mod special_forms; // Registry-based special forms
 
 // Re-export error type for public API
 pub use error::EvalError;
@@ -24,7 +24,7 @@ use std::rc::Rc;
 /// calls that grow the stack, tail positions return `TailCall` which
 /// tells the trampoline to continue with the next computation.
 #[derive(Debug)]
-pub(crate) enum EvalResult {
+pub enum EvalResult {
     /// Final value - evaluation complete
     Value(Value),
     /// Tail call - continue trampolining with this expression and environment
@@ -44,6 +44,8 @@ pub struct Evaluator {
     pub(crate) loader_registry: RefCell<LibraryLoaderRegistry>,
     /// Registry of primitive procedures
     pub(crate) primitive_registry: primitives::PrimitiveRegistry,
+    /// Registry of special forms
+    pub(crate) special_form_registry: special_forms::SpecialFormRegistry,
 }
 
 impl Evaluator {
@@ -57,6 +59,9 @@ impl Evaluator {
         // Install primitives into global environment (for backward compatibility)
         Self::install_primitives(&global_env);
 
+        // Create special form registry and register all special forms
+        let special_form_registry = special_forms::build_registry();
+
         // Create library registries
         let library_registry = RefCell::new(LibraryRegistry::with_default_paths());
         let loader_registry = RefCell::new(LibraryLoaderRegistry::new());
@@ -67,6 +72,7 @@ impl Evaluator {
             library_registry,
             loader_registry,
             primitive_registry,
+            special_form_registry,
         };
 
         // Initialize library loaders
@@ -344,64 +350,50 @@ impl Evaluator {
     ) -> Result<EvalResult, EvalError> {
         let (car, cdr) = self.extract_pair(expr)?;
 
-        // Check for special forms - these will handle tail positions internally
-        if let Value::Symbol(ref sym) = car {
-            match sym.as_ref() {
-                "quote" => return self.eval_quote(&cdr).map(EvalResult::Value),
-                "expand" => return self.eval_expand(&cdr, env).map(EvalResult::Value),
-                "quasiquote" => return self.eval_quasiquote(&cdr, env).map(EvalResult::Value),
-                "if" => return self.eval_if_impl(&cdr, env, in_tail_position),
-                "define" => return self.eval_define(&cdr, env).map(EvalResult::Value),
-                "define-syntax" => {
-                    return self.eval_define_syntax(&cdr, env).map(EvalResult::Value);
-                }
-                "set!" => return self.eval_set(&cdr, env).map(EvalResult::Value),
-                "lambda" => return self.eval_lambda(&cdr, env).map(EvalResult::Value),
-                "begin" => return self.eval_begin_impl(&cdr, env, in_tail_position),
-                // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
-                // NOTE: 'do' is now implemented as a macro in lib/bootstrap.scm using the V2 macro system
-                // with full double ellipsis support. The previous Rust special form implementation has
-                // been disabled as the macro version is now feature-complete and handles nested ellipsis
-                // correctly for optional step expressions.
-                "apply" => return self.eval_apply(&cdr, env).map(EvalResult::Value),
-                // "do" special form is now disabled in favor of the macro implementation
-                // "do" => return self.eval_do_impl(&cdr, env, in_tail_position),
-                "import" => return self.eval_import(&cdr, env).map(EvalResult::Value),
-                // Note: call-with-values was previously a special form, but is now fully handled
-                // as a primitive that participates in tail call optimization via TailCallPrimitive
-                _ => {}
+        // Check if it's a special form in the registry first
+        if let Value::Symbol(ref sym) = car
+            && self.special_form_registry.contains(sym.as_ref())
+        {
+            return self.special_form_registry.eval(
+                sym.as_ref(),
+                &cdr,
+                self,
+                env,
+                in_tail_position,
+            );
+        }
+
+        // Check if this symbol is bound to a macro
+        if let Value::Symbol(ref sym) = car
+            && let Some(Value::Macro { data, .. }) = env.get(sym)
+        {
+            let compiled_macro = data
+                .downcast_ref::<patina_frontend::macro_expander::CompiledMacro>()
+                .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
+
+            if self.debug.is_enabled(debug::DebugStage::Expand) {
+                eprintln!(
+                    "[MACRO]{} Expanding macro '{}': {}",
+                    self.debug.current_indent(),
+                    sym,
+                    expr
+                );
+                self.debug.indent();
             }
 
-            // Check if this symbol is bound to a macro
-            if let Some(Value::Macro { data, .. }) = env.get(sym) {
-                let compiled_macro = data
-                    .downcast_ref::<patina_frontend::macro_expander::CompiledMacro>()
-                    .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
+            let expanded = self.expand_macro(compiled_macro, expr, env)?;
 
-                if self.debug.is_enabled(debug::DebugStage::Expand) {
-                    eprintln!(
-                        "[MACRO]{} Expanding macro '{}': {}",
-                        self.debug.current_indent(),
-                        sym,
-                        expr
-                    );
-                    self.debug.indent();
-                }
-
-                let expanded = self.expand_macro_v2(compiled_macro, expr, env)?;
-
-                if self.debug.is_enabled(debug::DebugStage::Expand) {
-                    eprintln!(
-                        "[MACRO]{} Expanded to: {}",
-                        self.debug.current_indent(),
-                        expanded
-                    );
-                    self.debug.dedent();
-                }
-
-                // Evaluate the expanded form, preserving tail position
-                return self.eval_step_impl(&expanded, env, in_tail_position);
+            if self.debug.is_enabled(debug::DebugStage::Expand) {
+                eprintln!(
+                    "[MACRO]{} Expanded to: {}",
+                    self.debug.current_indent(),
+                    expanded
+                );
+                self.debug.dedent();
             }
+
+            // Evaluate the expanded form, preserving tail position
+            return self.eval_step_impl(&expanded, env, in_tail_position);
         }
 
         // Regular procedure call - this can be a tail call if in tail position
@@ -508,77 +500,6 @@ impl Evaluator {
             }
         }
     }
-
-    #[allow(dead_code)] // Legacy non-tail-aware version, replaced by eval_list_impl
-    fn eval_list(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
-        let (car, cdr) = self.extract_pair(expr)?;
-
-        // Check for special forms
-        if let Value::Symbol(ref sym) = car {
-            match sym.as_ref() {
-                "quote" => return self.eval_quote(&cdr),
-                "quasiquote" => return self.eval_quasiquote(&cdr, env),
-                "if" => return self.eval_if(&cdr, env),
-                "define" => return self.eval_define(&cdr, env),
-                "define-syntax" => return self.eval_define_syntax(&cdr, env),
-                "set!" => return self.eval_set(&cdr, env),
-                "lambda" => return self.eval_lambda(&cdr, env),
-                "begin" => return self.eval_begin(&cdr, env),
-                // NOTE: 'cond' and 'case' are now implemented as macros in lib/bootstrap.scm
-                // NOTE: 'do' is now implemented as a macro (see lib/bootstrap.scm) with nested ellipsis
-                "apply" => return self.eval_apply(&cdr, env),
-                // "do" special form disabled - now using macro implementation from bootstrap.scm
-                // "do" => return self.eval_do(&cdr, env),
-                _ => {}
-            }
-
-            // Check if this symbol is bound to a macro
-            if let Some(Value::Macro { data, .. }) = env.get(sym) {
-                let compiled_macro = data
-                    .downcast_ref::<patina_frontend::macro_expander::CompiledMacro>()
-                    .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
-
-                // Debug trace: macro expansion entry
-                if self.debug.is_enabled(debug::DebugStage::Expand) {
-                    eprintln!(
-                        "[MACRO]{} Expanding macro '{}': {}",
-                        self.debug.current_indent(),
-                        sym,
-                        expr
-                    );
-                    self.debug.indent();
-                }
-
-                // Expand the macro with the WHOLE form (unevaluated!)
-                // The pattern includes the keyword, so we pass the whole expr
-                let expanded = self.expand_macro_v2(compiled_macro, expr, env)?;
-
-                // Debug trace: show expanded form
-                if self.debug.is_enabled(debug::DebugStage::Expand) {
-                    eprintln!(
-                        "[MACRO]{} Expanded to: {}",
-                        self.debug.current_indent(),
-                        expanded
-                    );
-                    self.debug.dedent();
-                }
-
-                // Evaluate the expanded form
-                return self.eval_in_env(&expanded, env);
-            }
-        }
-
-        // Regular procedure call
-        let proc = self.eval_in_env(&car, env)?;
-        let args = self.eval_arguments(&cdr, env)?;
-        // Legacy eval_list is not tail-aware, so always pass false
-        match self.apply(proc, args, false)? {
-            EvalResult::Value(v) => Ok(v),
-            EvalResult::TailCall { .. } | EvalResult::TailCallPrimitive { .. } => Err(
-                EvalError::InternalError("Unexpected tail call in non-tail context".to_string()),
-            ),
-        }
-    }
 }
 
 impl Default for Evaluator {
@@ -673,6 +594,302 @@ impl Evaluator {
     /// Add a library search path (for testing)
     pub fn add_library_search_path(&self, path: PathBuf) {
         self.library_registry.borrow_mut().add_search_path(path);
+    }
+
+    /// Parse lambda parameter list
+    ///
+    /// Handles:
+    /// - `()` - no parameters
+    /// - `x` - single variadic parameter
+    /// - `(x y z)` - fixed parameters
+    /// - `(x y . rest)` - fixed parameters + variadic
+    ///
+    /// Returns `(fixed_params, variadic_param)`
+    pub(crate) fn parse_lambda_params(
+        &self,
+        params_expr: &Value,
+    ) -> Result<(Vec<String>, Option<String>), EvalError> {
+        match params_expr {
+            // (lambda args body...) - single symbol, all args go to it
+            Value::Symbol(s) => Ok((vec![], Some(s.to_string()))),
+
+            // (lambda () body...) - no parameters
+            Value::Null => Ok((vec![], None)),
+
+            // (lambda (x y z) body...) or (lambda (x y . rest) body...)
+            Value::Pair(_) => {
+                let mut params = Vec::new();
+                let mut current = params_expr.clone();
+
+                loop {
+                    match &current {
+                        Value::Null => return Ok((params, None)),
+                        Value::Symbol(s) => {
+                            // Rest parameter: (x y . rest)
+                            return Ok((params, Some(s.to_string())));
+                        }
+                        Value::Pair(pair) => {
+                            if let Value::Symbol(param) = &pair.0 {
+                                params.push(param.to_string());
+                                current = pair.1.clone();
+                            } else {
+                                return Err(EvalError::InvalidSyntax(
+                                    "lambda parameters must be symbols".to_string(),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(EvalError::InvalidSyntax(
+                                "invalid lambda parameter list".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            _ => Err(EvalError::InvalidSyntax(
+                "lambda parameters must be a list or symbol".to_string(),
+            )),
+        }
+    }
+
+    /// Collect list items into a vector
+    ///
+    /// Verifies the list is proper (ends with null) and returns all elements.
+    pub(crate) fn collect_list_items(&self, list: &Value) -> Result<Vec<Value>, EvalError> {
+        let mut items = Vec::new();
+        let mut current = list.clone();
+
+        while let Value::Pair(pair) = current {
+            items.push(pair.0.clone());
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax("expected proper list".to_string()));
+        }
+
+        Ok(items)
+    }
+
+    /// Process an import set for eval context
+    ///
+    /// This imports library identifiers into a regular environment (not building a library).
+    /// Used by the `import` special form.
+    pub(crate) fn process_import_for_eval(
+        &self,
+        import_set: &patina_frontend::ImportSet,
+        env: &Rc<Environment>,
+    ) -> Result<(), EvalError> {
+        use patina_frontend::ImportSet;
+        use std::collections::HashSet;
+
+        match import_set {
+            ImportSet::Library(lib_name) => {
+                // Load the library
+                let lib = self.load_library(lib_name).map_err(|e| {
+                    EvalError::InvalidSyntax(format!("Failed to load library: {}", e))
+                })?;
+
+                // Import all exports into the current environment
+                for export_name in lib.export_names() {
+                    if let Some(value) = lib.get_export(export_name) {
+                        env.define(export_name.to_string(), value.clone());
+                    }
+                }
+                Ok(())
+            }
+
+            ImportSet::Only {
+                import_set,
+                identifiers,
+            } => {
+                // First process the nested import set into a temporary environment
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_for_eval(import_set, &temp_env)?;
+
+                // Then import only the specified identifiers
+                let allowed: HashSet<_> = identifiers.iter().collect();
+                for (name, value) in temp_env.bindings() {
+                    if allowed.contains(&name) {
+                        env.define(name, value);
+                    }
+                }
+                Ok(())
+            }
+
+            ImportSet::Except {
+                import_set,
+                identifiers,
+            } => {
+                // Process nested import set into temp environment
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_for_eval(import_set, &temp_env)?;
+
+                // Import all except specified identifiers
+                let excluded: HashSet<_> = identifiers.iter().collect();
+                for (name, value) in temp_env.bindings() {
+                    if !excluded.contains(&name) {
+                        env.define(name, value);
+                    }
+                }
+                Ok(())
+            }
+
+            ImportSet::Prefix { import_set, prefix } => {
+                // Process nested import set into temp environment
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_for_eval(import_set, &temp_env)?;
+
+                // Import all with prefix
+                for (name, value) in temp_env.bindings() {
+                    let prefixed_name = format!("{}{}", prefix, name);
+                    env.define(prefixed_name, value);
+                }
+                Ok(())
+            }
+
+            ImportSet::Rename {
+                import_set,
+                renames,
+            } => {
+                // Process nested import set into temp environment
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_for_eval(import_set, &temp_env)?;
+
+                // Build rename map
+                let rename_map: std::collections::HashMap<_, _> = renames.iter().cloned().collect();
+
+                // Import with renaming
+                for (name, value) in temp_env.bindings() {
+                    let final_name = rename_map.get(&name).unwrap_or(&name);
+                    env.define(final_name.clone(), value);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Compile a syntax-rules form using the V2 PVREF-based compiler
+    pub(crate) fn compile_syntax_rules(
+        &self,
+        expr: &Value,
+        name: Rc<str>,
+    ) -> Result<patina_frontend::macro_expander::CompiledMacro, EvalError> {
+        use patina_frontend::macro_expander::Compiler;
+
+        // Must be a list starting with 'syntax-rules
+        let (keyword, rest) = self.extract_pair(expr)?;
+
+        match keyword {
+            Value::Symbol(s) if s.as_ref() == "syntax-rules" => {}
+            _ => {
+                return Err(EvalError::InvalidSyntax(
+                    "Expected syntax-rules".to_string(),
+                ));
+            }
+        }
+
+        // Parse literals list
+        let (literals_expr, rules_expr) = self.extract_pair(&rest)?;
+        let literals = self.parse_literals_list(&literals_expr)?;
+
+        // Parse rules as (pattern, template) pairs
+        let rules = self.parse_macro_rules(&rules_expr)?;
+
+        // Compile using V2 compiler
+        let mut compiler = Compiler::new(literals, None); // Use default ellipsis (...)
+        compiler
+            .compile_macro(name, rules)
+            .map_err(|e| EvalError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
+    }
+
+    /// Parse macro rules as (pattern, template) pairs for V2 compiler
+    fn parse_macro_rules(&self, expr: &Value) -> Result<Vec<(Value, Value)>, EvalError> {
+        let mut rules = Vec::new();
+        let mut current = expr.clone();
+
+        while let Value::Pair(rule_pair) = current {
+            // Each rule is (pattern template)
+            let (pattern, template_list) = self.extract_pair(&rule_pair.0)?;
+            let (template, rest_of_rule) = self.extract_pair(&template_list)?;
+
+            // Verify no extra elements in the rule
+            if !matches!(rest_of_rule, Value::Null) {
+                return Err(EvalError::InvalidSyntax(
+                    "Each syntax-rules rule must have exactly 2 elements (pattern template)"
+                        .to_string(),
+                ));
+            }
+
+            rules.push((pattern, template));
+            current = rule_pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "syntax-rules rules must be a proper list".to_string(),
+            ));
+        }
+
+        if rules.is_empty() {
+            return Err(EvalError::InvalidSyntax(
+                "syntax-rules must have at least one rule".to_string(),
+            ));
+        }
+
+        Ok(rules)
+    }
+
+    /// Parse the literals list: (lit1 lit2 ...)
+    fn parse_literals_list(&self, expr: &Value) -> Result<Vec<Rc<str>>, EvalError> {
+        let mut literals = Vec::new();
+        let mut current = expr.clone();
+
+        while let Value::Pair(pair) = current {
+            match &pair.0 {
+                Value::Symbol(s) => literals.push(s.clone()),
+                _ => {
+                    return Err(EvalError::InvalidSyntax(
+                        "syntax-rules literals must be symbols".to_string(),
+                    ));
+                }
+            }
+            current = pair.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(EvalError::InvalidSyntax(
+                "syntax-rules literals must be a proper list".to_string(),
+            ));
+        }
+
+        Ok(literals)
+    }
+
+    /// Extract a pair from a Value
+    ///
+    /// This is a common operation in special forms to parse argument lists.
+    pub(crate) fn extract_pair(&self, expr: &Value) -> Result<(Value, Value), EvalError> {
+        match expr {
+            Value::Pair(pair) => Ok((pair.0.clone(), pair.1.clone())),
+            _ => Err(EvalError::InvalidSyntax("Expected a pair".to_string())),
+        }
+    }
+
+    /// Expand a macro using the V2 PVREF-based expander
+    ///
+    /// This is used by both define-syntax and the macro expansion logic in eval_list_impl.
+    pub(crate) fn expand_macro(
+        &self,
+        compiled_macro: &patina_frontend::macro_expander::CompiledMacro,
+        args: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        use patina_frontend::macro_expander::{CompiledMacroExpander, MacroExpander};
+
+        let expander = CompiledMacroExpander::new(compiled_macro.clone());
+        expander.expand(args, env).map_err(EvalError::from)
     }
 }
 
