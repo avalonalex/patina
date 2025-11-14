@@ -162,7 +162,8 @@ impl Evaluator {
         loaders.add_loader(Box::new(rust_loader));
 
         // Add Scheme loader second (for .sld files)
-        loaders.add_loader(Box::new(SchemeLibraryLoader::new(self)));
+        // Note: SchemeLibraryLoader is now stateless and uses EvaluatingLibraryLoader trait
+        loaders.add_evaluating_loader(Box::new(SchemeLibraryLoader::new()));
     }
 
     fn load_bootstrap(&self) {
@@ -536,18 +537,36 @@ impl Evaluator {
             registry.begin_loading(name)?;
         }
 
-        // Load the library
-        // Note: We need to copy search_paths before calling load() because
-        // load() may call back into the evaluator (for .sld files), which
-        // could try to borrow library_registry again, causing a panic.
+        // Get search paths (copy to avoid borrow conflicts)
         let search_paths = {
             let registry = self.library_registry.borrow();
             registry.search_paths().to_vec()
         };
 
-        let result = {
+        // Try simple loaders first (Rust libraries)
+        let lib_result = {
             let loaders = self.loader_registry.borrow();
-            loaders.load(name, &search_paths)
+            loaders.try_simple_load(name, &search_paths)?
+        };
+
+        let lib = if let Some(lib) = lib_result {
+            // Simple loader succeeded
+            lib
+        } else {
+            // Try evaluating loaders (Scheme .sld files)
+            let parsed = {
+                let loaders = self.loader_registry.borrow();
+                loaders.try_parse(name, &search_paths)?
+            };
+
+            if let Some(parsed) = parsed {
+                // Parse succeeded, now evaluate
+                self.evaluate_parsed_library(parsed)?
+            } else {
+                // No loader can handle this library
+                self.library_registry.borrow_mut().end_loading(name);
+                return Err(patina_runtime::LibraryError::NotFound(name.to_vec()));
+            }
         };
 
         // End loading tracking
@@ -557,15 +576,10 @@ impl Evaluator {
         }
 
         // Register the loaded library
-        match result {
-            Ok(lib) => {
-                let lib_rc = Rc::new(lib.clone());
-                let mut registry = self.library_registry.borrow_mut();
-                registry.register(lib)?;
-                Ok(lib_rc)
-            }
-            Err(e) => Err(e),
-        }
+        let lib_rc = Rc::new(lib.clone());
+        let mut registry = self.library_registry.borrow_mut();
+        registry.register(lib)?;
+        Ok(lib_rc)
     }
 
     /// Check if a library is loaded
@@ -594,6 +608,185 @@ impl Evaluator {
     /// Add a library search path (for testing)
     pub fn add_library_search_path(&self, path: PathBuf) {
         self.library_registry.borrow_mut().add_search_path(path);
+    }
+
+    /// Evaluate a parsed library
+    ///
+    /// This method is called after a library is parsed from a .sld file.
+    /// It handles import resolution, body evaluation, and export collection.
+    fn evaluate_parsed_library(
+        &self,
+        parsed: patina_runtime::library_loader::ParsedLibrary,
+    ) -> Result<patina_runtime::Library, patina_runtime::LibraryError> {
+        use patina_runtime::library_loader::ExportSpec;
+
+        // Create a fresh environment for this library
+        let lib_env = Rc::new(Environment::new());
+
+        // Step 1: Resolve imports
+        for import_set in &parsed.imports {
+            self.process_import_set(import_set, &lib_env)?;
+        }
+
+        // Step 2: Evaluate library body (definitions only)
+        for expr in &parsed.body {
+            self.eval_in_env(expr, &lib_env).map_err(|e| {
+                patina_runtime::LibraryError::ParseError {
+                    file: parsed
+                        .source
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    message: format!("Error evaluating library body: {:?}", e),
+                }
+            })?;
+        }
+
+        // Step 3: Collect exports and create library
+        let mut library = patina_runtime::Library::with_env(parsed.name.clone(), lib_env.clone());
+        if let Some(source) = parsed.source {
+            library.set_source(source);
+        }
+
+        for spec in &parsed.exports {
+            match spec {
+                ExportSpec::Identifier(name) => {
+                    // Export with same name
+                    if let Some(value) = lib_env.get(name) {
+                        library.export(name.clone(), value);
+                    } else {
+                        return Err(patina_runtime::LibraryError::ParseError {
+                            file: library
+                                .source
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default(),
+                            message: format!("Exported identifier '{}' not defined", name),
+                        });
+                    }
+                }
+
+                ExportSpec::Rename { internal, external } => {
+                    // Export with different name
+                    if let Some(value) = lib_env.get(internal) {
+                        library.export(external.clone(), value);
+                    } else {
+                        return Err(patina_runtime::LibraryError::ParseError {
+                            file: library
+                                .source
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default(),
+                            message: format!("Exported identifier '{}' not defined", internal),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(library)
+    }
+
+    /// Process a single import set
+    fn process_import_set(
+        &self,
+        import_set: &patina_runtime::library_loader::ImportSet,
+        lib_env: &Rc<Environment>,
+    ) -> Result<(), patina_runtime::LibraryError> {
+        use patina_runtime::library_loader::ImportSet;
+        use std::collections::HashSet;
+
+        match import_set {
+            ImportSet::Library(lib_name) => {
+                // Direct library import: import all exports
+                let imported_lib = self.load_library(lib_name)?;
+
+                // Import all exports into this library's environment
+                for (name, value) in &imported_lib.exports {
+                    lib_env.define(name.clone(), value.clone());
+                }
+                Ok(())
+            }
+
+            ImportSet::Only {
+                import_set,
+                identifiers,
+            } => {
+                // Import only specific identifiers
+                // First process the inner import set to get the bindings
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_set(import_set, &temp_env)?;
+
+                // Then import only the specified identifiers
+                for id in identifiers {
+                    if let Some(value) = temp_env.get(id) {
+                        lib_env.define(id.clone(), value);
+                    } else {
+                        return Err(patina_runtime::LibraryError::ParseError {
+                            file: String::new(),
+                            message: format!("Identifier '{}' not found in import set", id),
+                        });
+                    }
+                }
+                Ok(())
+            }
+
+            ImportSet::Except {
+                import_set,
+                identifiers,
+            } => {
+                // Import all except specific identifiers
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_set(import_set, &temp_env)?;
+
+                let exclude: HashSet<_> = identifiers.iter().collect();
+
+                // Import all bindings except the excluded ones
+                for (name, value) in temp_env.bindings() {
+                    if !exclude.contains(&name) {
+                        lib_env.define(name, value);
+                    }
+                }
+
+                Ok(())
+            }
+
+            ImportSet::Prefix { import_set, prefix } => {
+                // Import with prefix: foo → prefix:foo
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_set(import_set, &temp_env)?;
+
+                // Import all bindings with the prefix added
+                for (name, value) in temp_env.bindings() {
+                    let prefixed_name = format!("{}{}", prefix, name);
+                    lib_env.define(prefixed_name, value);
+                }
+
+                Ok(())
+            }
+
+            ImportSet::Rename {
+                import_set,
+                renames,
+            } => {
+                // Import with renames: old-name → new-name
+                let temp_env = Rc::new(Environment::new());
+                self.process_import_set(import_set, &temp_env)?;
+
+                // Apply renames
+                for (old_name, new_name) in renames {
+                    if let Some(value) = temp_env.get(old_name) {
+                        lib_env.define(new_name.clone(), value);
+                    } else {
+                        return Err(patina_runtime::LibraryError::ParseError {
+                            file: String::new(),
+                            message: format!("Identifier '{}' not found for rename", old_name),
+                        });
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Parse lambda parameter list

@@ -11,6 +11,7 @@
 //! - Support both for maximum flexibility
 
 use crate::Environment;
+use crate::Value;
 use crate::library::Library;
 use crate::library_registry::LibraryError;
 use std::path::PathBuf;
@@ -40,38 +41,193 @@ pub trait LibraryLoader {
     fn can_load(&self, name: &[String]) -> bool;
 }
 
+/// Export specification for library declarations
+///
+/// Describes how identifiers are exported from a library.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExportSpec {
+    /// Simple export: identifier
+    Identifier(String),
+
+    /// Renamed export: (rename internal-name external-name)
+    Rename { internal: String, external: String },
+}
+
+/// Import set (R7RS 5.6.1)
+///
+/// Describes how to import identifiers from other libraries,
+/// with optional filtering and renaming.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportSet {
+    /// Direct library import: (scheme base)
+    Library(Vec<String>),
+
+    /// Only specific identifiers: (only <import-set> id1 id2 ...)
+    Only {
+        import_set: Box<ImportSet>,
+        identifiers: Vec<String>,
+    },
+
+    /// Exclude specific identifiers: (except <import-set> id1 id2 ...)
+    Except {
+        import_set: Box<ImportSet>,
+        identifiers: Vec<String>,
+    },
+
+    /// Add prefix to all imports: (prefix <import-set> prefix)
+    Prefix {
+        import_set: Box<ImportSet>,
+        prefix: String,
+    },
+
+    /// Rename imports: (rename <import-set> (old1 new1) (old2 new2) ...)
+    Rename {
+        import_set: Box<ImportSet>,
+        renames: Vec<(String, String)>,
+    },
+}
+
+/// Parsed library ready for evaluation
+///
+/// This struct holds the parsed components of a .sld library file
+/// before evaluation. It allows separating parsing from evaluation,
+/// which eliminates the need for circular references between loaders
+/// and evaluators.
+#[derive(Debug, Clone)]
+pub struct ParsedLibrary {
+    /// Library name
+    pub name: Vec<String>,
+
+    /// Import specifications (will need to be resolved)
+    pub imports: Vec<ImportSet>,
+
+    /// Library body expressions (need evaluation)
+    pub body: Vec<Value>,
+
+    /// Export specifications
+    pub exports: Vec<ExportSpec>,
+
+    /// Source file path (for error reporting)
+    pub source: Option<PathBuf>,
+}
+
+/// Trait for loaders that need evaluation support
+///
+/// Some library loaders (like SchemeLibraryLoader) parse library files
+/// but need the evaluator's help to:
+/// - Resolve imports (which may require loading other libraries)
+/// - Evaluate library body expressions
+/// - Collect exports from the evaluated environment
+///
+/// This trait separates parsing from evaluation, eliminating the need
+/// for unsafe circular references.
+pub trait EvaluatingLibraryLoader {
+    /// Parse a library definition without evaluating it
+    ///
+    /// This method:
+    /// - Finds the library source (e.g., .sld file)
+    /// - Parses it into structured form
+    /// - Returns ParsedLibrary for the evaluator to process
+    ///
+    /// The evaluator will then handle imports and evaluation.
+    fn parse(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+    ) -> Result<ParsedLibrary, LibraryError>;
+
+    /// Check if this loader can handle the given library name
+    fn can_load(&self, name: &[String]) -> bool;
+}
+
 /// Registry for library loaders
 ///
 /// Manages multiple loaders with a priority order:
 /// 1. Built-in Rust libraries (fastest, highest priority)
 /// 2. .sld files (standard R7RS libraries)
 /// 3. Custom loaders (extensions)
+///
+/// Supports two types of loaders:
+/// - Simple loaders (LibraryLoader): Can load libraries completely on their own
+/// - Evaluating loaders (EvaluatingLibraryLoader): Parse libraries but need evaluation support
 pub struct LibraryLoaderRegistry {
-    loaders: Vec<Box<dyn LibraryLoader>>,
+    /// Loaders that can load libraries completely (e.g., RustLibraryLoader)
+    simple_loaders: Vec<Box<dyn LibraryLoader>>,
+
+    /// Loaders that parse but need evaluation (e.g., SchemeLibraryLoader)
+    evaluating_loaders: Vec<Box<dyn EvaluatingLibraryLoader>>,
 }
 
 impl LibraryLoaderRegistry {
     /// Create a new loader registry
     pub fn new() -> Self {
         Self {
-            loaders: Vec::new(),
+            simple_loaders: Vec::new(),
+            evaluating_loaders: Vec::new(),
         }
     }
 
-    /// Add a loader to the registry
+    /// Add a simple loader to the registry
     ///
-    /// Loaders are tried in the order they are added.
+    /// Simple loaders can load libraries completely without external help.
     /// Add highest-priority loaders first.
     pub fn add_loader(&mut self, loader: Box<dyn LibraryLoader>) {
-        self.loaders.push(loader);
+        self.simple_loaders.push(loader);
     }
 
-    /// Load a library using the first matching loader
+    /// Add an evaluating loader to the registry
+    ///
+    /// Evaluating loaders parse libraries but need the evaluator's help.
+    /// Add highest-priority loaders first.
+    pub fn add_evaluating_loader(&mut self, loader: Box<dyn EvaluatingLibraryLoader>) {
+        self.evaluating_loaders.push(loader);
+    }
+
+    /// Try to load a library using simple loaders
+    ///
+    /// Returns Ok(Some(lib)) if a loader successfully loaded the library.
+    /// Returns Ok(None) if no loader can handle this library.
+    /// Returns Err if a loader tried but failed.
+    pub fn try_simple_load(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+    ) -> Result<Option<Library>, LibraryError> {
+        for loader in &self.simple_loaders {
+            if loader.can_load(name) {
+                return loader.load(name, search_paths).map(Some);
+            }
+        }
+        Ok(None)
+    }
+
+    /// Try to parse a library using evaluating loaders
+    ///
+    /// Returns Ok(Some(parsed)) if a loader can parse this library.
+    /// Returns Ok(None) if no loader can handle this library.
+    /// Returns Err if a loader tried but failed.
+    pub fn try_parse(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+    ) -> Result<Option<ParsedLibrary>, LibraryError> {
+        for loader in &self.evaluating_loaders {
+            if loader.can_load(name) {
+                return loader.parse(name, search_paths).map(Some);
+            }
+        }
+        Ok(None)
+    }
+
+    /// Load a library using the first matching loader (legacy method)
+    ///
+    /// This method only tries simple loaders and is kept for backward compatibility.
+    /// New code should use try_simple_load() and try_parse() separately.
     ///
     /// Tries each loader in order until one succeeds.
     /// Returns NotFound if no loader can handle the library.
     pub fn load(&self, name: &[String], search_paths: &[PathBuf]) -> Result<Library, LibraryError> {
-        for loader in &self.loaders {
+        for loader in &self.simple_loaders {
             if loader.can_load(name) {
                 match loader.load(name, search_paths) {
                     Ok(lib) => return Ok(lib),
@@ -172,12 +328,27 @@ mod tests {
         registry.add_loader(Box::new(loader2));
 
         // Should find foo with first loader
-        assert!(registry.load(&["foo".to_string()], &[]).is_ok());
+        assert!(
+            registry
+                .try_simple_load(&["foo".to_string()], &[])
+                .unwrap()
+                .is_some()
+        );
 
         // Should find bar with second loader
-        assert!(registry.load(&["bar".to_string()], &[]).is_ok());
+        assert!(
+            registry
+                .try_simple_load(&["bar".to_string()], &[])
+                .unwrap()
+                .is_some()
+        );
 
         // Should not find baz
-        assert!(registry.load(&["baz".to_string()], &[]).is_err());
+        assert!(
+            registry
+                .try_simple_load(&["baz".to_string()], &[])
+                .unwrap()
+                .is_none()
+        );
     }
 }

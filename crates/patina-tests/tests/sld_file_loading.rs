@@ -26,7 +26,6 @@ fn test_evaluator() -> Evaluator {
 }
 
 #[test]
-#[ignore = "Flaky due to unsafe pointer in SchemeLibraryLoader, causes segfault in debug mode"]
 fn test_load_simple_library() {
     let eval = test_evaluator();
 
@@ -51,7 +50,6 @@ fn test_load_simple_library() {
 }
 
 #[test]
-#[ignore = "Flaky due to unsafe pointer in SchemeLibraryLoader, causes segfault in debug mode"]
 fn test_library_with_renamed_export() {
     let eval = test_evaluator();
 
@@ -81,7 +79,6 @@ fn test_library_not_found() {
 }
 
 #[test]
-#[ignore = "Flaky due to unsafe pointer in SchemeLibraryLoader, causes segfault in debug mode"]
 fn test_library_cached_after_load() {
     let eval = test_evaluator();
 

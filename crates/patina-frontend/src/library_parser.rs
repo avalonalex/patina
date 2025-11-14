@@ -14,6 +14,9 @@
 use crate::ParseError;
 use patina_runtime::Value;
 
+// Re-export library types from runtime (they moved there to fix dependency issues)
+pub use patina_runtime::library_loader::{ExportSpec, ImportSet};
+
 /// A parsed library definition
 #[derive(Debug, Clone)]
 pub struct LibraryDefinition {
@@ -28,47 +31,6 @@ pub struct LibraryDefinition {
 
     /// Library body (code to evaluate)
     pub body: Vec<Value>,
-}
-
-/// Export specification
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExportSpec {
-    /// Simple export: identifier
-    Identifier(String),
-
-    /// Renamed export: (rename internal-name external-name)
-    Rename { internal: String, external: String },
-}
-
-/// Import set (R7RS 5.6.1)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ImportSet {
-    /// Direct library import: (scheme base)
-    Library(Vec<String>),
-
-    /// Only specific identifiers: (only <import-set> id1 id2 ...)
-    Only {
-        import_set: Box<ImportSet>,
-        identifiers: Vec<String>,
-    },
-
-    /// Exclude specific identifiers: (except <import-set> id1 id2 ...)
-    Except {
-        import_set: Box<ImportSet>,
-        identifiers: Vec<String>,
-    },
-
-    /// Add prefix to all imports: (prefix <import-set> prefix)
-    Prefix {
-        import_set: Box<ImportSet>,
-        prefix: String,
-    },
-
-    /// Rename imports: (rename <import-set> (old1 new1) (old2 new2) ...)
-    Rename {
-        import_set: Box<ImportSet>,
-        renames: Vec<(String, String)>,
-    },
 }
 
 impl LibraryDefinition {
