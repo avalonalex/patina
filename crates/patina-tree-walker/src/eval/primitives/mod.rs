@@ -71,77 +71,9 @@ impl Evaluator {
             "call-with-values" => values::call_with_values(self, args, in_tail_position),
 
             // All other primitives ignore tail position and return Value
-            // NOTE: +, -, *, floor are now in the registry above (scheme.base/...)
-            // Arithmetic operations (not yet converted to registry)
-            "/" => arithmetic::divide(self, args).map(super::EvalResult::Value),
-            "=" => arithmetic::numeric_equal(self, args).map(super::EvalResult::Value),
-            "<" => arithmetic::less_than(self, args).map(super::EvalResult::Value),
-            ">" => arithmetic::greater_than(self, args).map(super::EvalResult::Value),
-            "<=" => arithmetic::less_equal(self, args).map(super::EvalResult::Value),
-            ">=" => arithmetic::greater_equal(self, args).map(super::EvalResult::Value),
-            "quotient" => arithmetic::quotient(self, args).map(super::EvalResult::Value),
-            "remainder" => arithmetic::remainder(self, args).map(super::EvalResult::Value),
-            "modulo" => arithmetic::modulo(self, args).map(super::EvalResult::Value),
-            "abs" => arithmetic::abs(self, args).map(super::EvalResult::Value),
-            "max" => arithmetic::max(self, args).map(super::EvalResult::Value),
-            "min" => arithmetic::min(self, args).map(super::EvalResult::Value),
-            // NOTE: floor is now in the registry (scheme.base/floor)
-            "ceiling" => arithmetic::ceiling(self, args).map(super::EvalResult::Value),
-            "truncate" => arithmetic::truncate(self, args).map(super::EvalResult::Value),
-            "round" => arithmetic::round(self, args).map(super::EvalResult::Value),
-            "sqrt" => arithmetic::sqrt(self, args).map(super::EvalResult::Value),
-            "square" => arithmetic::square(self, args).map(super::EvalResult::Value),
-            "expt" => arithmetic::expt(self, args).map(super::EvalResult::Value),
-            "finite?" => arithmetic::finite_p(self, args).map(super::EvalResult::Value),
-            "infinite?" => arithmetic::infinite_p(self, args).map(super::EvalResult::Value),
-            "nan?" => arithmetic::nan_p(self, args).map(super::EvalResult::Value),
-            "sin" => arithmetic::sin(self, args).map(super::EvalResult::Value),
-            "cos" => arithmetic::cos(self, args).map(super::EvalResult::Value),
-            "tan" => arithmetic::tan(self, args).map(super::EvalResult::Value),
-            "asin" => arithmetic::asin(self, args).map(super::EvalResult::Value),
-            "acos" => arithmetic::acos(self, args).map(super::EvalResult::Value),
-            "atan" => arithmetic::atan(self, args).map(super::EvalResult::Value),
-            "exp" => arithmetic::exp(self, args).map(super::EvalResult::Value),
-            "log" => arithmetic::log(self, args).map(super::EvalResult::Value),
-            "gcd" => arithmetic::gcd(self, args).map(super::EvalResult::Value),
-            "lcm" => arithmetic::lcm(self, args).map(super::EvalResult::Value),
-            "numerator" => arithmetic::numerator(self, args).map(super::EvalResult::Value),
-            "denominator" => arithmetic::denominator(self, args).map(super::EvalResult::Value),
-            "exact" => arithmetic::exact(self, args).map(super::EvalResult::Value),
-            "inexact" => arithmetic::inexact(self, args).map(super::EvalResult::Value),
-            "real-part" => arithmetic::real_part(self, args).map(super::EvalResult::Value),
-            "imag-part" => arithmetic::imag_part(self, args).map(super::EvalResult::Value),
-            "magnitude" => arithmetic::magnitude(self, args).map(super::EvalResult::Value),
-            "angle" => arithmetic::angle(self, args).map(super::EvalResult::Value),
-            "make-rectangular" => {
-                arithmetic::make_rectangular(self, args).map(super::EvalResult::Value)
-            }
-            "make-polar" => arithmetic::make_polar(self, args).map(super::EvalResult::Value),
-            "exact-integer-sqrt" => {
-                arithmetic::exact_integer_sqrt(self, args).map(super::EvalResult::Value)
-            }
-            "rationalize" => arithmetic::rationalize(self, args).map(super::EvalResult::Value),
-
-            // Pair/List operations
-            "cons" => lists::cons(self, args).map(super::EvalResult::Value),
-            "car" => lists::car(self, args).map(super::EvalResult::Value),
-            "cdr" => lists::cdr(self, args).map(super::EvalResult::Value),
-            "list" => Ok(super::EvalResult::Value(self.list_from_vec(args))),
-            "length" => lists::length(self, args).map(super::EvalResult::Value),
-            "append" => lists::append(self, args).map(super::EvalResult::Value),
-            "reverse" => lists::reverse(self, args).map(super::EvalResult::Value),
-            "list-ref" => lists::list_ref(self, args).map(super::EvalResult::Value),
-            "list-tail" => lists::list_tail(self, args).map(super::EvalResult::Value),
-            "memq" => lists::memq(self, args).map(super::EvalResult::Value),
-            "memv" => lists::memv(self, args).map(super::EvalResult::Value),
-            "member" => lists::member(self, args).map(super::EvalResult::Value),
-            "assq" => lists::assq(self, args).map(super::EvalResult::Value),
-            "assv" => lists::assv(self, args).map(super::EvalResult::Value),
-            "assoc" => lists::assoc(self, args).map(super::EvalResult::Value),
-
-            // Higher-order functions
-            "map" => higher_order::map(self, args).map(super::EvalResult::Value),
-            "for-each" => higher_order::for_each(self, args).map(super::EvalResult::Value),
+            // NOTE: All arithmetic operations are now in the registry (scheme.base/+, -, *, /, etc.)
+            // NOTE: All list operations are now in the registry (scheme.base/cons, car, cdr, list, etc.)
+            // NOTE: All higher-order functions are now in the registry (scheme.base/map, for-each)
 
             // Type predicates
             "number?" => predicates::number_p(self, args).map(super::EvalResult::Value),
@@ -299,9 +231,10 @@ impl Evaluator {
     pub(super) fn register_all_primitives(registry: &mut PrimitiveRegistry) {
         // Register primitives by category
         arithmetic::register(registry);
+        lists::register(registry);
+        higher_order::register(registry);
 
         // TODO: Convert and register other categories:
-        // lists::register(registry);
         // strings::register(registry);
         // vectors::register(registry);
         // predicates::register(registry);

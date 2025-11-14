@@ -131,3 +131,26 @@ pub(super) fn for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value,
 
     Ok(Value::Unspecified)
 }
+pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
+    use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    // Map - apply procedure to each element
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "map",
+        Arity::Min(2),
+        "Applies proc element-wise to the elements of the lists and returns a list of the results.",
+        |eval, args, _tail| map(eval, args).map(EvalResult::Value),
+    ));
+
+    // For-each - apply procedure for side effects
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "for-each",
+        Arity::Min(2),
+        "Applies proc element-wise to the elements of the lists for side effects.",
+        |eval, args, _tail| for_each(eval, args).map(EvalResult::Value),
+    ));
+}

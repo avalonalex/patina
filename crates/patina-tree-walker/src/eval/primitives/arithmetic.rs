@@ -1487,4 +1487,391 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "Returns the largest integer not larger than x.",
         |eval, args, _tail| floor(eval, args).map(EvalResult::Value),
     ));
+
+    // Division
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "/",
+        Arity::Min(1),
+        "Divides the first argument by subsequent arguments. With one argument, returns its reciprocal.",
+        |eval, args, _tail| divide(eval, args).map(EvalResult::Value),
+    ));
+
+    // Numeric equality
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "=",
+        Arity::Min(2),
+        "Returns #t if all arguments are numerically equal.",
+        |eval, args, _tail| numeric_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // Less than
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "<",
+        Arity::Min(2),
+        "Returns #t if arguments are monotonically increasing.",
+        |eval, args, _tail| less_than(eval, args).map(EvalResult::Value),
+    ));
+
+    // Greater than
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        ">",
+        Arity::Min(2),
+        "Returns #t if arguments are monotonically decreasing.",
+        |eval, args, _tail| greater_than(eval, args).map(EvalResult::Value),
+    ));
+
+    // Less than or equal
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "<=",
+        Arity::Min(2),
+        "Returns #t if arguments are monotonically non-decreasing.",
+        |eval, args, _tail| less_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // Greater than or equal
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        ">=",
+        Arity::Min(2),
+        "Returns #t if arguments are monotonically non-increasing.",
+        |eval, args, _tail| greater_equal(eval, args).map(EvalResult::Value),
+    ));
+
+    // Quotient
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "quotient",
+        Arity::Exact(2),
+        "Returns the quotient of dividing n1 by n2.",
+        |eval, args, _tail| quotient(eval, args).map(EvalResult::Value),
+    ));
+
+    // Remainder
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "remainder",
+        Arity::Exact(2),
+        "Returns the remainder of dividing n1 by n2.",
+        |eval, args, _tail| remainder(eval, args).map(EvalResult::Value),
+    ));
+
+    // Modulo
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "modulo",
+        Arity::Exact(2),
+        "Returns n1 modulo n2.",
+        |eval, args, _tail| modulo(eval, args).map(EvalResult::Value),
+    ));
+
+    // Absolute value
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "abs",
+        Arity::Exact(1),
+        "Returns the absolute value of x.",
+        |eval, args, _tail| abs(eval, args).map(EvalResult::Value),
+    ));
+
+    // Maximum
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "max",
+        Arity::Min(1),
+        "Returns the maximum of its arguments.",
+        |eval, args, _tail| max(eval, args).map(EvalResult::Value),
+    ));
+
+    // Minimum
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "min",
+        Arity::Min(1),
+        "Returns the minimum of its arguments.",
+        |eval, args, _tail| min(eval, args).map(EvalResult::Value),
+    ));
+
+    // Ceiling
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "ceiling",
+        Arity::Exact(1),
+        "Returns the smallest integer not smaller than x.",
+        |eval, args, _tail| ceiling(eval, args).map(EvalResult::Value),
+    ));
+
+    // Truncate
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "truncate",
+        Arity::Exact(1),
+        "Returns the integer closest to x whose absolute value is not larger than the absolute value of x.",
+        |eval, args, _tail| truncate(eval, args).map(EvalResult::Value),
+    ));
+
+    // Round
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "round",
+        Arity::Exact(1),
+        "Returns the closest integer to x, rounding to even when x is halfway between two integers.",
+        |eval, args, _tail| round(eval, args).map(EvalResult::Value),
+    ));
+
+    // Square root
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "sqrt",
+        Arity::Exact(1),
+        "Returns the principal square root of x.",
+        |eval, args, _tail| sqrt(eval, args).map(EvalResult::Value),
+    ));
+
+    // Square
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "square",
+        Arity::Exact(1),
+        "Returns the square of x.",
+        |eval, args, _tail| square(eval, args).map(EvalResult::Value),
+    ));
+
+    // Exponentiation
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "expt",
+        Arity::Exact(2),
+        "Returns z1 raised to the power z2.",
+        |eval, args, _tail| expt(eval, args).map(EvalResult::Value),
+    ));
+
+    // Finite predicate
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "finite?",
+        Arity::Exact(1),
+        "Returns #t if x is finite.",
+        |eval, args, _tail| finite_p(eval, args).map(EvalResult::Value),
+    ));
+
+    // Infinite predicate
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "infinite?",
+        Arity::Exact(1),
+        "Returns #t if x is infinite.",
+        |eval, args, _tail| infinite_p(eval, args).map(EvalResult::Value),
+    ));
+
+    // NaN predicate
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "nan?",
+        Arity::Exact(1),
+        "Returns #t if x is NaN.",
+        |eval, args, _tail| nan_p(eval, args).map(EvalResult::Value),
+    ));
+
+    // Sine
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "sin",
+        Arity::Exact(1),
+        "Returns the sine of x.",
+        |eval, args, _tail| sin(eval, args).map(EvalResult::Value),
+    ));
+
+    // Cosine
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "cos",
+        Arity::Exact(1),
+        "Returns the cosine of x.",
+        |eval, args, _tail| cos(eval, args).map(EvalResult::Value),
+    ));
+
+    // Tangent
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "tan",
+        Arity::Exact(1),
+        "Returns the tangent of x.",
+        |eval, args, _tail| tan(eval, args).map(EvalResult::Value),
+    ));
+
+    // Arcsine
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "asin",
+        Arity::Exact(1),
+        "Returns the arcsine of x.",
+        |eval, args, _tail| asin(eval, args).map(EvalResult::Value),
+    ));
+
+    // Arccosine
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "acos",
+        Arity::Exact(1),
+        "Returns the arccosine of x.",
+        |eval, args, _tail| acos(eval, args).map(EvalResult::Value),
+    ));
+
+    // Arctangent
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "atan",
+        Arity::Range(1, 2),
+        "Returns the arctangent of x, or of y/x.",
+        |eval, args, _tail| atan(eval, args).map(EvalResult::Value),
+    ));
+
+    // Exponential
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "exp",
+        Arity::Exact(1),
+        "Returns e raised to the power x.",
+        |eval, args, _tail| exp(eval, args).map(EvalResult::Value),
+    ));
+
+    // Natural logarithm
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "log",
+        Arity::Range(1, 2),
+        "Returns the natural logarithm of x, or logarithm of x in base y.",
+        |eval, args, _tail| log(eval, args).map(EvalResult::Value),
+    ));
+
+    // Greatest common divisor
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "gcd",
+        Arity::Min(0),
+        "Returns the greatest common divisor of its arguments.",
+        |eval, args, _tail| gcd(eval, args).map(EvalResult::Value),
+    ));
+
+    // Least common multiple
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "lcm",
+        Arity::Min(0),
+        "Returns the least common multiple of its arguments.",
+        |eval, args, _tail| lcm(eval, args).map(EvalResult::Value),
+    ));
+
+    // Numerator
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "numerator",
+        Arity::Exact(1),
+        "Returns the numerator of x.",
+        |eval, args, _tail| numerator(eval, args).map(EvalResult::Value),
+    ));
+
+    // Denominator
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "denominator",
+        Arity::Exact(1),
+        "Returns the denominator of x.",
+        |eval, args, _tail| denominator(eval, args).map(EvalResult::Value),
+    ));
+
+    // Exact
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "exact",
+        Arity::Exact(1),
+        "Returns an exact representation of x.",
+        |eval, args, _tail| exact(eval, args).map(EvalResult::Value),
+    ));
+
+    // Inexact
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "inexact",
+        Arity::Exact(1),
+        "Returns an inexact representation of x.",
+        |eval, args, _tail| inexact(eval, args).map(EvalResult::Value),
+    ));
+
+    // Real part
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "real-part",
+        Arity::Exact(1),
+        "Returns the real part of z.",
+        |eval, args, _tail| real_part(eval, args).map(EvalResult::Value),
+    ));
+
+    // Imaginary part
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "imag-part",
+        Arity::Exact(1),
+        "Returns the imaginary part of z.",
+        |eval, args, _tail| imag_part(eval, args).map(EvalResult::Value),
+    ));
+
+    // Magnitude
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "magnitude",
+        Arity::Exact(1),
+        "Returns the magnitude of z.",
+        |eval, args, _tail| magnitude(eval, args).map(EvalResult::Value),
+    ));
+
+    // Angle
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "angle",
+        Arity::Exact(1),
+        "Returns the angle of z.",
+        |eval, args, _tail| angle(eval, args).map(EvalResult::Value),
+    ));
+
+    // Make rectangular
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "make-rectangular",
+        Arity::Exact(2),
+        "Returns a complex number with real part x1 and imaginary part x2.",
+        |eval, args, _tail| make_rectangular(eval, args).map(EvalResult::Value),
+    ));
+
+    // Make polar
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "make-polar",
+        Arity::Exact(2),
+        "Returns a complex number with magnitude x1 and angle x2.",
+        |eval, args, _tail| make_polar(eval, args).map(EvalResult::Value),
+    ));
+
+    // Exact integer square root
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "exact-integer-sqrt",
+        Arity::Exact(1),
+        "Returns two values s and r where k = s^2 + r and k < (s+1)^2.",
+        |eval, args, _tail| exact_integer_sqrt(eval, args).map(EvalResult::Value),
+    ));
+
+    // Rationalize
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "rationalize",
+        Arity::Exact(2),
+        "Returns the simplest rational number differing from x by no more than y.",
+        |eval, args, _tail| rationalize(eval, args).map(EvalResult::Value),
+    ));
 }
