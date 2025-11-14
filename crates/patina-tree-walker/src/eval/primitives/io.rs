@@ -67,3 +67,36 @@ pub(super) fn newline(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
 
     Ok(Value::Unspecified)
 }
+
+pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
+    use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    // display - Write in human-readable format
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "display",
+        Arity::Exact(1),
+        "Writes obj to the textual output port in a human-readable format.",
+        |eval, args, _tail| display(eval, args).map(EvalResult::Value),
+    ));
+
+    // write - Write in machine-readable format
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "write",
+        Arity::Exact(1),
+        "Writes obj to the textual output port in a machine-readable format.",
+        |eval, args, _tail| write(eval, args).map(EvalResult::Value),
+    ));
+
+    // newline - Write a newline
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "newline",
+        Arity::Exact(0),
+        "Writes a newline to the textual output port.",
+        |eval, args, _tail| newline(eval, args).map(EvalResult::Value),
+    ));
+}

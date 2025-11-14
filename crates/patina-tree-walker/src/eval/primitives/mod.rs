@@ -64,30 +64,24 @@ impl Evaluator {
         }
 
         // Fall back to match statement for primitives not yet converted to registry
-        // Most primitives just return their value wrapped in EvalResult::Value
-        // Only special primitives like call-with-values use in_tail_position
+        // NOTE: All arithmetic operations are now in the registry (scheme.base/+, -, *, /, etc.)
+        // NOTE: All list operations are now in the registry (scheme.base/cons, car, cdr, list, etc.)
+        // NOTE: All higher-order functions are now in the registry (scheme.base/map, for-each)
+        // NOTE: All type predicates are now in the registry (scheme.base/number?, boolean?, etc.)
+        // NOTE: All equality operations are now in the registry (scheme.base/eq?, eqv?, equal?)
+        // NOTE: All string operations are now in the registry (scheme.base/string-length, string-ref, etc.)
+        // NOTE: All vector operations are now in the registry (scheme.base/make-vector, vector-ref, etc.)
+        // NOTE: All multiple value operations are now in the registry (scheme.base/values, call-with-values)
+        // NOTE: All I/O operations are now in the registry (scheme.base/display, write, newline)
+        //
+        // TODO: Migrate remaining primitives to registry when namespace/import system is implemented:
+        // - Debug primitives should be in patina.debug namespace (debug-enable, debug-disable, etc.)
+        // - Test framework primitives should be in patina.test namespace (test-begin, test-end, etc.)
+        // - Macro debug should be in patina.debug namespace (macro-debug-mode)
+        // Currently, apply_primitive only checks scheme.base namespace, so these would need
+        // multi-namespace lookup support or proper import/namespace resolution.
         match name {
-            // Special case: call-with-values can participate in tail call optimization
-            "call-with-values" => values::call_with_values(self, args, in_tail_position),
-
-            // All other primitives ignore tail position and return Value
-            // NOTE: All arithmetic operations are now in the registry (scheme.base/+, -, *, /, etc.)
-            // NOTE: All list operations are now in the registry (scheme.base/cons, car, cdr, list, etc.)
-            // NOTE: All higher-order functions are now in the registry (scheme.base/map, for-each)
-            // NOTE: All type predicates are now in the registry (scheme.base/number?, boolean?, etc.)
-            // NOTE: All equality operations are now in the registry (scheme.base/eq?, eqv?, equal?)
-            // NOTE: All string operations are now in the registry (scheme.base/string-length, string-ref, etc.)
-            // NOTE: All vector operations are now in the registry (scheme.base/make-vector, vector-ref, etc.)
-
-            // Multiple values
-            "values" => values::values(self, args).map(super::EvalResult::Value),
-
-            // I/O operations
-            "display" => io::display(self, args).map(super::EvalResult::Value),
-            "write" => io::write(self, args).map(super::EvalResult::Value),
-            "newline" => io::newline(self, args).map(super::EvalResult::Value),
-
-            // Debug primitives
+            // Debug primitives (patina.debug namespace - not yet migrated)
             "debug-enable" => debug::debug_enable(self, args).map(super::EvalResult::Value),
             "debug-disable" => debug::debug_disable(self, args).map(super::EvalResult::Value),
             "debug-clear" => debug::debug_clear(self, args).map(super::EvalResult::Value),
@@ -170,6 +164,8 @@ impl Evaluator {
         equality::register(registry);
         strings::register(registry);
         vectors::register(registry);
+        values::register(registry);
+        io::register(registry);
 
         // All core primitives are now in the registry!
     }

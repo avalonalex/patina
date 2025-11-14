@@ -72,3 +72,27 @@ pub(super) fn call_with_values(
         evaluator.apply(consumer.clone(), consumer_args, false)
     }
 }
+
+pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
+    use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    // values - Return multiple values
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "values",
+        Arity::Min(0),
+        "Returns all of its arguments as multiple values.",
+        |eval, args, _tail| values(eval, args).map(EvalResult::Value),
+    ));
+
+    // call-with-values - Call producer and consumer (supports TCO)
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "call-with-values",
+        Arity::Exact(2),
+        "Calls producer with no arguments, then calls consumer with the values produced.",
+        call_with_values,
+    ));
+}
