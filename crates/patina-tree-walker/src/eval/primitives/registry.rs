@@ -1,0 +1,415 @@
+//! Primitive procedure registry for runtime-extensible primitives
+//!
+//! This module provides a registry-based system for primitive procedures that enables:
+//! - Runtime registration of new primitives (for plugins/extensions)
+//! - Automatic arity checking
+//! - Introspection and help system support
+//! - Centralized primitive management
+
+use super::super::{EvalError, EvalResult, Evaluator};
+use patina_runtime::{Arity, Value};
+use std::collections::HashMap;
+
+/// A primitive procedure with full metadata
+///
+/// This structure contains everything needed to call a primitive:
+/// - Library namespace (e.g., "scheme.base", "patina.debug")
+/// - Name for identification (e.g., "+", "car", "string-append")
+/// - Arity specification for automatic checking
+/// - Help text for documentation
+/// - Handler function that performs the operation
+pub struct PrimitiveFn {
+    /// The library namespace this primitive belongs to
+    /// Examples: "scheme.base", "scheme.char", "patina.debug"
+    pub library: &'static str,
+
+    /// The name of the primitive (e.g., "+", "car", "string-append")
+    pub name: &'static str,
+
+    /// The arity specification (exact count, at least N, or range)
+    pub arity: Arity,
+
+    /// Help text describing what this primitive does
+    ///
+    /// This will be used by the help system (e.g., `(help '+)`)
+    #[allow(dead_code)] // Will be used by future help system
+    pub help: &'static str,
+
+    /// The handler function that implements this primitive
+    ///
+    /// Arguments:
+    /// - `&Evaluator`: Access to the evaluator for recursive evaluation
+    /// - `Vec<Value>`: Already-evaluated arguments
+    /// - `bool`: Whether this call is in tail position (for TCO)
+    ///
+    /// Returns:
+    /// - `EvalResult` which can be a value or a tail call
+    pub handler: fn(&Evaluator, Vec<Value>, bool) -> Result<EvalResult, EvalError>,
+}
+
+impl PrimitiveFn {
+    /// Create a new primitive function
+    ///
+    /// # Arguments
+    /// * `library` - The library namespace (e.g., "scheme.base")
+    /// * `name` - The primitive name (e.g., "+")
+    /// * `arity` - Arity specification
+    /// * `help` - Help text for documentation
+    /// * `handler` - The implementation function
+    ///
+    /// # Example
+    /// ```ignore
+    /// PrimitiveFn::new(
+    ///     "scheme.base",
+    ///     "+",
+    ///     Arity::Min(0),
+    ///     "Returns the sum of its arguments.",
+    ///     |eval, args, _tail| add(eval, args).map(EvalResult::Value),
+    /// )
+    /// ```
+    pub fn new(
+        library: &'static str,
+        name: &'static str,
+        arity: Arity,
+        help: &'static str,
+        handler: fn(&Evaluator, Vec<Value>, bool) -> Result<EvalResult, EvalError>,
+    ) -> Self {
+        PrimitiveFn {
+            library,
+            name,
+            arity,
+            help,
+            handler,
+        }
+    }
+
+    /// Get the fully qualified name of this primitive
+    ///
+    /// Returns: "library/name" (e.g., "scheme.base/+")
+    pub fn qualified_name(&self) -> String {
+        format!("{}/{}", self.library, self.name)
+    }
+
+    /// Check if the given argument count matches this primitive's arity
+    pub fn check_arity(&self, arg_count: usize) -> Result<(), EvalError> {
+        match self.arity {
+            Arity::Exact(n) => {
+                if arg_count != n {
+                    return Err(EvalError::InvalidSyntax(format!(
+                        "{} expects exactly {} arguments, got {}",
+                        self.name, n, arg_count
+                    )));
+                }
+            }
+            Arity::Min(n) => {
+                if arg_count < n {
+                    return Err(EvalError::InvalidSyntax(format!(
+                        "{} expects at least {} arguments, got {}",
+                        self.name, n, arg_count
+                    )));
+                }
+            }
+            Arity::Range(min, max) => {
+                if arg_count < min || arg_count > max {
+                    return Err(EvalError::InvalidSyntax(format!(
+                        "{} expects {}-{} arguments, got {}",
+                        self.name, min, max, arg_count
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Call this primitive with the given arguments
+    pub fn call(
+        &self,
+        evaluator: &Evaluator,
+        args: Vec<Value>,
+        in_tail: bool,
+    ) -> Result<EvalResult, EvalError> {
+        // Check arity first
+        self.check_arity(args.len())?;
+
+        // Call the handler
+        (self.handler)(evaluator, args, in_tail)
+    }
+}
+
+/// Registry for primitive procedures
+///
+/// This registry manages all primitive procedures available in the interpreter.
+/// Primitives are stored with their fully qualified names (library/name) and can be
+/// looked up by either qualified or unqualified names.
+///
+/// Primitives can be registered at initialization time or dynamically at runtime.
+pub struct PrimitiveRegistry {
+    /// Map from fully qualified name (library/name) to primitive function
+    /// Example: "scheme.base/+" -> PrimitiveFn { ... }
+    primitives: HashMap<String, PrimitiveFn>,
+}
+
+impl PrimitiveRegistry {
+    /// Create a new empty primitive registry
+    pub fn new() -> Self {
+        PrimitiveRegistry {
+            primitives: HashMap::new(),
+        }
+    }
+
+    /// Register a primitive procedure
+    ///
+    /// The primitive is stored using its fully qualified name (library/name).
+    /// If a primitive with the same qualified name already exists, it will be replaced.
+    /// This enables primitive overriding for testing or customization.
+    pub fn register(&mut self, primitive: PrimitiveFn) {
+        let qualified_name = primitive.qualified_name();
+        self.primitives.insert(qualified_name, primitive);
+    }
+
+    /// Register multiple primitives at once
+    #[allow(dead_code)] // Part of public API, used during initialization
+    pub fn register_all(&mut self, primitives: Vec<PrimitiveFn>) {
+        for primitive in primitives {
+            self.register(primitive);
+        }
+    }
+
+    /// Get a primitive by qualified name (library/name)
+    ///
+    /// Example: `registry.get("scheme.base/+")`
+    pub fn get(&self, qualified_name: &str) -> Option<&PrimitiveFn> {
+        self.primitives.get(qualified_name)
+    }
+
+    /// Get a primitive by unqualified name from a specific library
+    ///
+    /// Example: `registry.get_from_library("scheme.base", "+")`
+    #[allow(dead_code)] // Part of public API for library introspection
+    pub fn get_from_library(&self, library: &str, name: &str) -> Option<&PrimitiveFn> {
+        let qualified = format!("{}/{}", library, name);
+        self.primitives.get(&qualified)
+    }
+
+    /// Get all primitives from a specific library
+    ///
+    /// Returns an iterator over all primitives whose library matches.
+    /// Example: `registry.get_library_primitives("scheme.base")`
+    #[allow(dead_code)] // Will be used for library building and introspection
+    pub fn get_library_primitives(&self, library: &str) -> impl Iterator<Item = &PrimitiveFn> {
+        let prefix = format!("{}/", library);
+        self.primitives
+            .iter()
+            .filter_map(move |(qualified_name, prim_fn)| {
+                if qualified_name.starts_with(&prefix) {
+                    Some(prim_fn)
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Check if a primitive with the given qualified name exists
+    #[allow(dead_code)] // Part of public API for introspection
+    pub fn contains(&self, qualified_name: &str) -> bool {
+        self.primitives.contains_key(qualified_name)
+    }
+
+    /// Get the number of registered primitives
+    #[allow(dead_code)] // Part of public API for introspection
+    pub fn len(&self) -> usize {
+        self.primitives.len()
+    }
+
+    /// Check if the registry is empty
+    #[allow(dead_code)] // Part of public API for introspection
+    pub fn is_empty(&self) -> bool {
+        self.primitives.is_empty()
+    }
+
+    /// List all registered primitive names (sorted)
+    ///
+    /// This is useful for auto-completion and help systems.
+    #[allow(dead_code)] // Will be used for auto-completion
+    pub fn list_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.primitives.keys().map(|s| s.as_str()).collect();
+        names.sort();
+        names
+    }
+
+    /// Get all primitives (for iteration)
+    #[allow(dead_code)] // Part of public API for introspection
+    pub fn primitives(&self) -> impl Iterator<Item = &PrimitiveFn> {
+        self.primitives.values()
+    }
+
+    /// Apply a primitive procedure
+    ///
+    /// This is the main entry point for calling primitives through the registry.
+    pub fn apply(
+        &self,
+        name: &str,
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        in_tail: bool,
+    ) -> Result<EvalResult, EvalError> {
+        // Look up the primitive
+        let primitive = self
+            .get(name)
+            .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))?;
+
+        // Call it
+        primitive.call(evaluator, args, in_tail)
+    }
+}
+
+impl Default for PrimitiveRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper primitive for testing
+    fn test_add(_eval: &Evaluator, args: Vec<Value>, _tail: bool) -> Result<EvalResult, EvalError> {
+        let sum = args
+            .into_iter()
+            .map(|v| match v {
+                Value::Integer(n) => Ok(n),
+                _ => Err(EvalError::TypeError(format!("Expected integer, got {}", v))),
+            })
+            .collect::<Result<Vec<i64>, EvalError>>()?
+            .into_iter()
+            .sum();
+
+        Ok(EvalResult::Value(Value::Integer(sum)))
+    }
+
+    #[test]
+    fn test_primitive_fn_creation() {
+        let prim = PrimitiveFn::new("scheme.base", "+", Arity::Min(0), "Add numbers", test_add);
+
+        assert_eq!(prim.library, "scheme.base");
+        assert_eq!(prim.name, "+");
+        assert_eq!(prim.help, "Add numbers");
+        assert_eq!(prim.qualified_name(), "scheme.base/+");
+    }
+
+    #[test]
+    fn test_arity_checking() {
+        let prim = PrimitiveFn::new(
+            "scheme.base",
+            "+",
+            Arity::Exact(2),
+            "Add two numbers",
+            test_add,
+        );
+
+        assert!(prim.check_arity(2).is_ok());
+        assert!(prim.check_arity(1).is_err());
+        assert!(prim.check_arity(3).is_err());
+    }
+
+    #[test]
+    fn test_registry_registration() {
+        let mut registry = PrimitiveRegistry::new();
+
+        let prim = PrimitiveFn::new("scheme.base", "+", Arity::Min(0), "Add numbers", test_add);
+        registry.register(prim);
+
+        assert_eq!(registry.len(), 1);
+        assert!(registry.contains("scheme.base/+"));
+        assert!(!registry.contains("scheme.base/-"));
+    }
+
+    #[test]
+    fn test_registry_lookup() {
+        let mut registry = PrimitiveRegistry::new();
+
+        let prim = PrimitiveFn::new("scheme.base", "+", Arity::Min(0), "Add numbers", test_add);
+        registry.register(prim);
+
+        // Test qualified lookup
+        let found = registry.get("scheme.base/+");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "+");
+
+        let not_found = registry.get("scheme.base/-");
+        assert!(not_found.is_none());
+
+        // Test library-specific lookup
+        let found_lib = registry.get_from_library("scheme.base", "+");
+        assert!(found_lib.is_some());
+        assert_eq!(found_lib.unwrap().name, "+");
+    }
+
+    #[test]
+    fn test_registry_list_names() {
+        let mut registry = PrimitiveRegistry::new();
+
+        registry.register(PrimitiveFn::new(
+            "scheme.base",
+            "+",
+            Arity::Min(0),
+            "Add",
+            test_add,
+        ));
+        registry.register(PrimitiveFn::new(
+            "scheme.base",
+            "car",
+            Arity::Exact(1),
+            "Car",
+            test_add,
+        ));
+        registry.register(PrimitiveFn::new(
+            "scheme.base",
+            "*",
+            Arity::Min(0),
+            "Multiply",
+            test_add,
+        ));
+
+        let names = registry.list_names();
+        // Sorted alphabetically by qualified name
+        assert_eq!(
+            names,
+            vec!["scheme.base/*", "scheme.base/+", "scheme.base/car"]
+        );
+    }
+
+    #[test]
+    fn test_get_library_primitives() {
+        let mut registry = PrimitiveRegistry::new();
+
+        registry.register(PrimitiveFn::new(
+            "scheme.base",
+            "+",
+            Arity::Min(0),
+            "Add",
+            test_add,
+        ));
+        registry.register(PrimitiveFn::new(
+            "scheme.base",
+            "-",
+            Arity::Min(1),
+            "Subtract",
+            test_add,
+        ));
+        registry.register(PrimitiveFn::new(
+            "scheme.char",
+            "char-upcase",
+            Arity::Exact(1),
+            "Upcase",
+            test_add,
+        ));
+
+        let base_prims: Vec<_> = registry.get_library_primitives("scheme.base").collect();
+        assert_eq!(base_prims.len(), 2);
+
+        let char_prims: Vec<_> = registry.get_library_primitives("scheme.char").collect();
+        assert_eq!(char_prims.len(), 1);
+    }
+}

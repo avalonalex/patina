@@ -4,15 +4,14 @@ mod validator;
 
 use self::highlighter::SchemeHighlighter;
 use self::validator::SchemeValidator;
-use patina_frontend::parser::Parser;
-use patina_tree_walker::eval::Evaluator;
+use patina_interpreter::TreeWalkInterpreter;
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::{CompletionType, Config, EditMode, Editor};
 
 pub struct Repl {
     editor: Editor<SchemeHelper, FileHistory>,
-    evaluator: Evaluator,
+    interpreter: TreeWalkInterpreter,
 }
 
 use rustyline::Context;
@@ -100,7 +99,7 @@ impl Repl {
 
         Ok(Repl {
             editor,
-            evaluator: Evaluator::new(),
+            interpreter: TreeWalkInterpreter::new_tree_walker(),
         })
     }
 
@@ -143,25 +142,19 @@ impl Repl {
                     // Add to history
                     let _ = self.editor.add_history_entry(line);
 
-                    // Parse and evaluate
-                    match Parser::new(line) {
-                        Ok(mut parser) => match parser.parse() {
-                            Ok(expr) => match self.evaluator.eval(&expr) {
-                                Ok(result) => {
-                                    // Don't print #<unspecified> values (from define, set!, etc.)
-                                    if !matches!(result, patina_runtime::Value::Unspecified) {
-                                        println!("{}", result);
-                                    } else {
-                                        // Force a flush by writing empty string to stderr
-                                        // This works around rustyline stdout buffering issue
-                                        eprint!("");
-                                    }
-                                }
-                                Err(e) => eprintln!("Error: {}", e),
-                            },
-                            Err(e) => eprintln!("Parse error: {}", e),
-                        },
-                        Err(e) => eprintln!("Parser initialization error: {}", e),
+                    // Evaluate using interpreter (which handles parsing internally)
+                    match self.interpreter.eval_str(line) {
+                        Ok(result) => {
+                            // Don't print #<unspecified> values (from define, set!, etc.)
+                            if !matches!(result, patina_runtime::Value::Unspecified) {
+                                println!("{}", result);
+                            } else {
+                                // Force a flush by writing empty string to stderr
+                                // This works around rustyline stdout buffering issue
+                                eprint!("");
+                            }
+                        }
+                        Err(e) => eprintln!("Error: {}", e),
                     }
                 }
                 Err(ReadlineError::Interrupted) => {

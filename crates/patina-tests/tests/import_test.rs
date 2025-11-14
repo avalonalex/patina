@@ -1,10 +1,10 @@
 //! Tests for import special form
 
-use patina_interpreter::Interpreter;
+use patina_interpreter::TreeWalkInterpreter;
 
 #[test]
 fn test_import_scheme_base() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     let result = interp.eval_program(
         r#"
@@ -19,7 +19,7 @@ fn test_import_scheme_base() {
 
 #[test]
 fn test_import_only() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     let result = interp.eval_program(
         r#"
@@ -34,7 +34,7 @@ fn test_import_only() {
 
 #[test]
 fn test_import_prefix() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     let result = interp.eval_program(
         r#"

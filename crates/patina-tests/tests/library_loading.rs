@@ -3,7 +3,7 @@
 //! These tests verify that the library loading infrastructure works correctly
 //! for Rust libraries, Scheme libraries (.sld files), and mixed libraries.
 
-use patina_interpreter::Interpreter;
+use patina_interpreter::TreeWalkInterpreter;
 use patina_runtime::{Environment, Library, LibraryError, Value};
 use std::rc::Rc;
 
@@ -119,7 +119,7 @@ fn test_circular_dependency_error() {
 // Integration test with interpreter
 #[test]
 fn test_library_value_type() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // library? predicate should work
     let result = interp.eval_str("(library? 42)").unwrap();

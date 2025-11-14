@@ -1,4 +1,4 @@
-use patina_interpreter::Interpreter;
+use patina_interpreter::TreeWalkInterpreter;
 use patina_repl::Repl;
 use std::env;
 use std::fs;
@@ -29,7 +29,7 @@ fn run_script(filename: &str) {
     };
 
     // Create interpreter and run the program
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Check if this is a test file by looking for common test patterns
     let is_test_file = filename.contains("test") || code.contains("test-begin");

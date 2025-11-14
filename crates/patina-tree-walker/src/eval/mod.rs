@@ -36,17 +36,25 @@ pub(crate) enum EvalResult {
 }
 
 pub struct Evaluator {
-    pub(in crate::eval) global_env: Rc<Environment>,
+    pub global_env: Rc<Environment>,
     pub(crate) debug: Rc<DebugConfig>,
     /// Registry of loaded libraries
     pub(crate) library_registry: RefCell<LibraryRegistry>,
     /// Registry of library loaders (Rust, Scheme, etc.)
     pub(crate) loader_registry: RefCell<LibraryLoaderRegistry>,
+    /// Registry of primitive procedures
+    pub(crate) primitive_registry: primitives::PrimitiveRegistry,
 }
 
 impl Evaluator {
     pub fn new() -> Self {
         let global_env = Rc::new(Environment::new());
+
+        // Create primitive registry and register all primitives
+        let mut primitive_registry = primitives::PrimitiveRegistry::new();
+        Self::register_all_primitives(&mut primitive_registry);
+
+        // Install primitives into global environment (for backward compatibility)
         Self::install_primitives(&global_env);
 
         // Create library registries
@@ -58,6 +66,7 @@ impl Evaluator {
             debug: Rc::new(DebugConfig::new()),
             library_registry,
             loader_registry,
+            primitive_registry,
         };
 
         // Initialize library loaders
@@ -465,79 +474,42 @@ impl Evaluator {
 
     /// Evaluate an expression in a specific environment
     ///
-    /// Used by special forms, primitives, and library loading for recursive evaluation.
-    /// Public to allow library loaders to evaluate library bodies.
-    pub(crate) fn eval_in_env(
-        &self,
-        expr: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        // Debug trace entry
-        if self.debug.is_enabled(debug::DebugStage::Eval) {
-            eprintln!("[EVAL]{} Evaluating: {}", self.debug.current_indent(), expr);
-            self.debug.indent();
-        }
+    /// Used by special forms, primitives, library loading, and backend trait implementation.
+    /// Public to allow library loaders to evaluate library bodies and backends to evaluate
+    /// in specific environments.
+    ///
+    /// Like `eval()`, this uses the trampoline pattern for tail call optimization.
+    pub fn eval_in_env(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        let mut current_expr = expr.clone();
+        let mut current_env = env.clone();
 
-        let result = match expr {
-            // Self-evaluating
-            Value::Boolean(_)
-            | Value::Integer(_)
-            | Value::BigInteger(_)
-            | Value::Rational(_)
-            | Value::Real(_)
-            | Value::Complex(_, _)
-            | Value::Character(_)
-            | Value::String(_)
-            | Value::Vector(_)
-            | Value::Bytevector(_) => Ok(expr.clone()),
-
-            // Variable lookup
-            Value::Symbol(name) => {
-                if self.debug.is_enabled(debug::DebugStage::Env) {
-                    eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
+        // Trampoline loop for TCO
+        loop {
+            match self.eval_step(&current_expr, &current_env)? {
+                EvalResult::Value(v) => return Ok(v),
+                EvalResult::TailCall { expr, env } => {
+                    current_expr = expr;
+                    current_env = env;
                 }
-
-                // First try looking up in current environment
-                if let Some(value) = env.get(name) {
-                    return Ok(value);
-                }
-
-                // If it's a gensym and not found, try looking it up in the global environment
-                // This handles hygienic macro expansion: gensyms reference bindings from
-                // where the macro was defined, not where it's used
-                if patina_frontend::macro_expander::hygiene::is_gensym(name.as_ref()) {
-                    // Extract original name from gensym (format: ##name#counter)
-                    if let Some(original_name) = extract_original_from_gensym(name.as_ref())
-                        && let Some(value) = self.global_env.get(&Rc::from(original_name))
-                    {
-                        return Ok(value);
+                EvalResult::TailCallPrimitive { proc, args } => {
+                    match self.apply(proc, args, true)? {
+                        EvalResult::Value(v) => return Ok(v),
+                        EvalResult::TailCall { expr, env } => {
+                            current_expr = expr;
+                            current_env = env;
+                        }
+                        EvalResult::TailCallPrimitive { proc, args } => {
+                            let mut app_list = vec![proc];
+                            app_list.extend(args);
+                            current_expr = self.list_from_vec(app_list);
+                        }
                     }
                 }
-
-                Err(EvalError::UndefinedVariable(name.to_string()))
-            }
-
-            // Empty list
-            Value::Null => Ok(Value::Null),
-
-            // Lists (procedure calls or special forms)
-            Value::Pair(_) => self.eval_list(expr, env),
-
-            _ => Ok(expr.clone()),
-        };
-
-        // Debug trace exit
-        if self.debug.is_enabled(debug::DebugStage::Eval) {
-            self.debug.dedent();
-            match &result {
-                Ok(val) => eprintln!("[EVAL]{} => {}", self.debug.current_indent(), val),
-                Err(e) => eprintln!("[EVAL]{} => ERROR: {}", self.debug.current_indent(), e),
             }
         }
-
-        result
     }
 
+    #[allow(dead_code)] // Legacy non-tail-aware version, replaced by eval_list_impl
     fn eval_list(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
         let (car, cdr) = self.extract_pair(expr)?;
 

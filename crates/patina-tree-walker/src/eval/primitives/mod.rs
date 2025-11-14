@@ -3,6 +3,7 @@
 //! This module coordinates all primitive operations across different categories.
 //! Each category is implemented in its own submodule:
 //!
+//! - `registry` - Primitive registry for runtime-extensible primitives
 //! - `arithmetic` - Numeric operations (+, -, *, /, comparisons, etc.)
 //! - `lists` - Pair and list operations (cons, car, cdr, append, etc.)
 //! - `higher_order` - map, for-each
@@ -11,6 +12,8 @@
 //! - `values` - Multiple values support
 //! - `strings` - String operations
 //! - `vectors` - Vector operations
+
+pub mod registry;
 
 mod arithmetic;
 mod debug;
@@ -22,6 +25,9 @@ mod predicates;
 mod strings;
 mod values;
 mod vectors;
+
+// Re-export registry types for convenience
+pub use registry::PrimitiveRegistry;
 
 use patina_runtime::environment::Environment;
 use patina_runtime::value::{Arity, Procedure, Value};
@@ -42,6 +48,22 @@ impl Evaluator {
         args: Vec<Value>,
         in_tail_position: bool,
     ) -> Result<super::EvalResult, EvalError> {
+        // Try registry first with scheme.base namespace
+        // This allows primitives registered in the registry to take precedence
+        //
+        // TODO: This hardcodes "scheme.base" which is a temporary hack!
+        // In the future, Value::Primitive should store the library namespace,
+        // so we can look up primitives from any library (scheme.char, scheme.file, etc.)
+        // For now, all primitives are from scheme.base, so this works.
+        let qualified_name = format!("scheme.base/{}", name);
+        if let Ok(result) =
+            self.primitive_registry
+                .apply(&qualified_name, args.clone(), self, in_tail_position)
+        {
+            return Ok(result);
+        }
+
+        // Fall back to match statement for primitives not yet converted to registry
         // Most primitives just return their value wrapped in EvalResult::Value
         // Only special primitives like call-with-values use in_tail_position
         match name {
@@ -49,10 +71,8 @@ impl Evaluator {
             "call-with-values" => values::call_with_values(self, args, in_tail_position),
 
             // All other primitives ignore tail position and return Value
-            // Arithmetic operations
-            "+" => arithmetic::add(self, args).map(super::EvalResult::Value),
-            "-" => arithmetic::subtract(self, args).map(super::EvalResult::Value),
-            "*" => arithmetic::multiply(self, args).map(super::EvalResult::Value),
+            // NOTE: +, -, *, floor are now in the registry above (scheme.base/...)
+            // Arithmetic operations (not yet converted to registry)
             "/" => arithmetic::divide(self, args).map(super::EvalResult::Value),
             "=" => arithmetic::numeric_equal(self, args).map(super::EvalResult::Value),
             "<" => arithmetic::less_than(self, args).map(super::EvalResult::Value),
@@ -65,7 +85,7 @@ impl Evaluator {
             "abs" => arithmetic::abs(self, args).map(super::EvalResult::Value),
             "max" => arithmetic::max(self, args).map(super::EvalResult::Value),
             "min" => arithmetic::min(self, args).map(super::EvalResult::Value),
-            "floor" => arithmetic::floor(self, args).map(super::EvalResult::Value),
+            // NOTE: floor is now in the registry (scheme.base/floor)
             "ceiling" => arithmetic::ceiling(self, args).map(super::EvalResult::Value),
             "truncate" => arithmetic::truncate(self, args).map(super::EvalResult::Value),
             "round" => arithmetic::round(self, args).map(super::EvalResult::Value),
@@ -272,7 +292,26 @@ impl Evaluator {
         }
     }
 
+    /// Register all primitive procedures in the registry
+    ///
+    /// This is the new registry-based approach for primitives.
+    /// Each category module will provide a registration function.
+    pub(super) fn register_all_primitives(registry: &mut PrimitiveRegistry) {
+        // Register primitives by category
+        arithmetic::register(registry);
+
+        // TODO: Convert and register other categories:
+        // lists::register(registry);
+        // strings::register(registry);
+        // vectors::register(registry);
+        // predicates::register(registry);
+        // etc.
+    }
+
     /// Install all primitive procedures into the environment
+    ///
+    /// This is the old environment-based approach, kept for backward compatibility
+    /// during the migration to the registry system.
     pub(super) fn install_primitives(env: &Rc<Environment>) {
         let primitives = [
             // Arithmetic

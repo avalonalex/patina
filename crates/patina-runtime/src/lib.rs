@@ -4,9 +4,11 @@
 //! - `Value`: The Scheme value representation (numbers, lists, procedures, etc.)
 //! - `Environment`: Lexical environment for variable bindings
 //! - `Procedure` and `Arity`: Procedure representation
+//! - `Backend`: Trait for pluggable interpreter implementations
 //!
 //! This crate is intentionally minimal and stable - it should rarely change.
 
+pub mod backend;
 pub mod environment;
 pub mod error;
 pub mod library;
@@ -19,6 +21,7 @@ pub mod stdlib;
 pub mod value;
 
 // Re-export main types for convenience
+pub use backend::Backend;
 pub use environment::Environment;
 pub use error::RuntimeError;
 pub use library::Library;

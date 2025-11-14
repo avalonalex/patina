@@ -1,6 +1,6 @@
 //! Tests for (scheme base) library
 
-use patina_interpreter::Interpreter;
+use patina_interpreter::TreeWalkInterpreter;
 use patina_tree_walker::Evaluator;
 
 #[test]
@@ -51,7 +51,7 @@ fn test_scheme_base_is_cached() {
 
 #[test]
 fn test_scheme_base_primitives_work() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Load (scheme base) via evaluator
     let eval = interp.evaluator();

@@ -3,7 +3,7 @@
 //! This demonstrates actual side-by-side comparison for expressions
 //! that both interpreters support.
 
-use patina_interpreter::Interpreter;
+use patina_interpreter::TreeWalkInterpreter;
 use std::process::Command;
 
 /// Run a single Scheme expression through chibi-scheme
@@ -27,7 +27,7 @@ fn eval_with_chibi(expr: &str) -> Result<String, String> {
 
 /// Run a single Scheme expression through Patina
 fn eval_with_patina(expr: &str) -> Result<String, String> {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     match interp.eval_str(expr) {
         Ok(value) => Ok(format!("{}", value)),
         Err(e) => Err(format!("{}", e)),

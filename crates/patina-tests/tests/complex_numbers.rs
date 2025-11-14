@@ -1,8 +1,8 @@
-use patina_interpreter::Interpreter;
+use patina_interpreter::TreeWalkInterpreter;
 
 #[test]
 fn test_parse_complex_rectangular() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Basic rectangular notation
     assert_eq!(interp.eval_str("3+4i").unwrap().to_string(), "3+4i");
@@ -13,7 +13,7 @@ fn test_parse_complex_rectangular() {
 
 #[test]
 fn test_parse_complex_pure_imaginary() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Pure imaginary
     assert_eq!(interp.eval_str("+i").unwrap().to_string(), "+i");
@@ -24,7 +24,7 @@ fn test_parse_complex_pure_imaginary() {
 
 #[test]
 fn test_parse_complex_shorthand() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Shorthand for imaginary part = 1
     assert_eq!(interp.eval_str("3+i").unwrap().to_string(), "3+i");
@@ -33,7 +33,7 @@ fn test_parse_complex_shorthand() {
 
 #[test]
 fn test_parse_complex_with_floats() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Inexact complex numbers
     assert_eq!(interp.eval_str("3.5+2.7i").unwrap().to_string(), "3.5+2.7i");
@@ -42,7 +42,7 @@ fn test_parse_complex_with_floats() {
 
 #[test]
 fn test_complex_addition() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // (a+bi) + (c+di) = (a+c) + (b+d)i
     assert_eq!(
@@ -61,7 +61,7 @@ fn test_complex_addition() {
 
 #[test]
 fn test_complex_addition_with_real() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Complex + Real
     assert_eq!(interp.eval_str("(+ 3+4i 5)").unwrap().to_string(), "8+4i");
@@ -70,7 +70,7 @@ fn test_complex_addition_with_real() {
 
 #[test]
 fn test_complex_subtraction() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // (a+bi) - (c+di) = (a-c) + (b-d)i
     assert_eq!(
@@ -82,7 +82,7 @@ fn test_complex_subtraction() {
 
 #[test]
 fn test_complex_multiplication() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // (a+bi)(c+di) = (ac-bd) + (ad+bc)i
     assert_eq!(interp.eval_str("(* 2+3i 1-1i)").unwrap().to_string(), "5+i");
@@ -92,7 +92,7 @@ fn test_complex_multiplication() {
 
 #[test]
 fn test_complex_multiplication_with_real() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Complex * Real
     assert_eq!(interp.eval_str("(* 2+3i 2)").unwrap().to_string(), "4+6i");
@@ -101,7 +101,7 @@ fn test_complex_multiplication_with_real() {
 
 #[test]
 fn test_complex_negation() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Unary minus
     assert_eq!(interp.eval_str("(- 3+4i)").unwrap().to_string(), "-3-4i");
@@ -111,7 +111,7 @@ fn test_complex_negation() {
 
 #[test]
 fn test_complex_zero() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Operations that result in zero
     assert_eq!(interp.eval_str("(+ 3+4i -3-4i)").unwrap().to_string(), "0");
@@ -120,7 +120,7 @@ fn test_complex_zero() {
 
 #[test]
 fn test_parse_polar() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Polar notation: r@theta
     // Note: Results are approximate due to floating point
@@ -134,7 +134,7 @@ fn test_parse_polar() {
 
 #[test]
 fn test_complex_polynomial_identity() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Verify polynomial identity: (z - w)(z + w) = z² - w²
     interp.eval_str("(define z 3+4i)").unwrap();
@@ -148,7 +148,7 @@ fn test_complex_polynomial_identity() {
 
 #[test]
 fn test_complex_conjugate_property() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Complex conjugate: (a + bi)(a - bi) = a² + b²
     // For 3+4i and 3-4i: should give 9 + 16 = 25
@@ -158,7 +158,7 @@ fn test_complex_conjugate_property() {
 
 #[test]
 fn test_i_squared() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Fundamental property: i² = -1
     assert_eq!(interp.eval_str("(* +i +i)").unwrap().to_string(), "-1");
@@ -167,7 +167,7 @@ fn test_i_squared() {
 
 #[test]
 fn test_complex_fibonacci() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Define complex Fibonacci
     interp
@@ -230,7 +230,7 @@ fn test_complex_fibonacci() {
 
 #[test]
 fn test_powers_of_i() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // i¹ = i
     assert_eq!(interp.eval_str("+i").unwrap().to_string(), "+i");
@@ -256,7 +256,7 @@ fn test_powers_of_i() {
 
 #[test]
 fn test_complex_iteration() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Julia set style iteration: z_n+1 = z_n² + c
     interp
@@ -299,7 +299,7 @@ fn test_complex_iteration() {
 
 #[test]
 fn test_cube_roots_of_unity_sum() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // The three cube roots of unity sum to 0
     // 1 + e^(2πi/3) + e^(4πi/3) = 0
@@ -315,7 +315,7 @@ fn test_cube_roots_of_unity_sum() {
 
 #[test]
 fn test_demoivre_special_cases() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // (1+i)² = 1 + 2i - 1 = 2i
     assert_eq!(interp.eval_str("(* 1+1i 1+1i)").unwrap().to_string(), "+2i");
@@ -329,7 +329,7 @@ fn test_demoivre_special_cases() {
 
 #[test]
 fn test_complex_distributive_law() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Test: a(b + c) = ab + ac with complex numbers
     interp.eval_str("(define a 2+3i)").unwrap();
@@ -344,7 +344,7 @@ fn test_complex_distributive_law() {
 
 #[test]
 fn test_complex_associative_law() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Test: (ab)c = a(bc) with complex numbers
     interp.eval_str("(define a 1+2i)").unwrap();
@@ -359,7 +359,7 @@ fn test_complex_associative_law() {
 
 #[test]
 fn test_complex_with_exact_rationals() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Complex numbers with rational components
     // Note: currently converts to float, but parsing works
@@ -370,7 +370,7 @@ fn test_complex_with_exact_rationals() {
 
 #[test]
 fn test_nested_complex_operations() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Deeply nested complex arithmetic
     let result = interp
@@ -383,7 +383,7 @@ fn test_nested_complex_operations() {
 
 #[test]
 fn test_complex_zero_handling() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // 0 + complex = complex
     assert_eq!(interp.eval_str("(+ 0 3+4i)").unwrap().to_string(), "3+4i");

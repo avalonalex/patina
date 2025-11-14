@@ -2,18 +2,18 @@
 //!
 //! These tests verify the public API provided by the main `patina` crate
 
-use patina_interpreter::{Interpreter, Value};
+use patina_interpreter::{TreeWalkInterpreter, Value};
 
 #[test]
 fn test_interpreter_basic_arithmetic() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp.eval_str("(+ 1 2 3)").unwrap();
     assert!(matches!(result, Value::Integer(6)));
 }
 
 #[test]
 fn test_interpreter_define_and_use() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     interp.eval_str("(define x 42)").unwrap();
     let result = interp.eval_str("x").unwrap();
     assert!(matches!(result, Value::Integer(42)));
@@ -21,7 +21,7 @@ fn test_interpreter_define_and_use() {
 
 #[test]
 fn test_eval_program() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp
         .eval_program(
             r#"
@@ -36,7 +36,7 @@ fn test_eval_program() {
 
 #[test]
 fn test_macro_when() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Define the when macro
     let define_result = interp.eval_str(
@@ -72,7 +72,7 @@ fn test_macro_when() {
 
 #[test]
 fn test_macro_unless() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Define the unless macro
     interp
@@ -97,7 +97,7 @@ fn test_macro_unless() {
 
 #[test]
 fn test_gcd_with_let_values() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp
         .eval_program(
             r#"

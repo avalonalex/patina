@@ -3,7 +3,7 @@
 //! These tests run Scheme code through both Patina and chibi-scheme
 //! to ensure R7RS compliance by comparing outputs.
 
-use patina_interpreter::{Interpreter, Value};
+use patina_interpreter::{TreeWalkInterpreter, Value};
 use std::path::Path;
 use std::process::Command;
 
@@ -24,7 +24,7 @@ fn run_chibi_scheme(file_path: &Path) -> Result<String, String> {
 
 /// Helper to run Scheme code through Patina
 fn run_patina(code: &str) -> Result<String, String> {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let mut results = Vec::new();
     let mut current_code = code;
 
@@ -106,7 +106,7 @@ fn test_conditionals() {
 
 #[test]
 fn test_definitions() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     interp.eval_str("(define x 42)").unwrap();
     let result = interp.eval_str("x").unwrap();
     assert!(matches!(result, Value::Integer(42)));
@@ -118,7 +118,7 @@ fn test_definitions() {
 
 #[test]
 fn test_begin() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp
         .eval_str("(begin (define a 5) (define b 10) (+ a b))")
         .unwrap();

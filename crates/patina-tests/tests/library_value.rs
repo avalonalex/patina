@@ -3,7 +3,7 @@
 //! These tests verify that the Library value type is properly integrated
 //! and that the library? predicate works correctly.
 
-use patina_interpreter::Interpreter;
+use patina_interpreter::TreeWalkInterpreter;
 use patina_runtime::{Library, Value};
 use std::rc::Rc;
 
@@ -22,7 +22,7 @@ fn test_library_value_creation() {
 
 #[test]
 fn test_library_predicate() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Test that library? is available
     // Note: We can't actually create libraries from Scheme yet,

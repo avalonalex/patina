@@ -446,6 +446,7 @@ impl Evaluator {
     }
 
     /// Legacy wrapper - calls eval_if_impl with in_tail_position=false
+    #[allow(dead_code)] // Used only by legacy eval_list
     pub(super) fn eval_if(&self, args: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
         self.eval_if_impl(args, env, false)
             .and_then(|result| match result {
@@ -681,6 +682,7 @@ impl Evaluator {
     }
 
     /// Legacy wrapper - calls eval_begin_impl with in_tail_position=false
+    #[allow(dead_code)] // Used only by legacy eval_list
     pub(super) fn eval_begin(
         &self,
         args: &Value,

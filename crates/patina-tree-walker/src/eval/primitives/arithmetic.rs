@@ -1443,3 +1443,48 @@ pub(super) fn rationalize(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, 
     // Convert to appropriate Value
     Ok(_eval.rational_to_value(result))
 }
+
+/// Register arithmetic primitives with the registry
+///
+/// Registers (scheme base) arithmetic primitives with their full namespace.
+pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
+    use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    // Addition
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "+",
+        Arity::Min(0),
+        "Returns the sum of its arguments. With no arguments, returns 0.",
+        |eval, args, _tail| add(eval, args).map(EvalResult::Value),
+    ));
+
+    // Subtraction
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "-",
+        Arity::Min(1),
+        "Subtracts subsequent arguments from the first. With one argument, returns its negation.",
+        |eval, args, _tail| subtract(eval, args).map(EvalResult::Value),
+    ));
+
+    // Multiplication
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "*",
+        Arity::Min(0),
+        "Returns the product of its arguments. With no arguments, returns 1.",
+        |eval, args, _tail| multiply(eval, args).map(EvalResult::Value),
+    ));
+
+    // Floor
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "floor",
+        Arity::Exact(1),
+        "Returns the largest integer not larger than x.",
+        |eval, args, _tail| floor(eval, args).map(EvalResult::Value),
+    ));
+}

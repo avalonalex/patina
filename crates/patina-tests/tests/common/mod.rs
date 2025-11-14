@@ -5,11 +5,11 @@
 
 #![allow(dead_code)]
 
-use patina_interpreter::{Interpreter, Value};
+use patina_interpreter::{TreeWalkInterpreter, Value};
 
 /// Assert that evaluating a Scheme expression produces the expected result
 pub fn assert_eval_to(expr: &str, expected: &str) {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp
         .eval_str(expr)
         .unwrap_or_else(|e| panic!("Failed to evaluate '{}': {}", expr, e));
@@ -25,7 +25,7 @@ pub fn assert_eval_to(expr: &str, expected: &str) {
 
 /// Assert that evaluating a Scheme expression produces an error
 pub fn assert_eval_error(expr: &str) {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp.eval_str(expr);
 
     assert!(
@@ -38,7 +38,7 @@ pub fn assert_eval_error(expr: &str) {
 
 /// Assert that evaluating a Scheme expression produces a specific value type
 pub fn assert_eval_type(expr: &str, type_check: impl Fn(&Value) -> bool, type_name: &str) {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp
         .eval_str(expr)
         .unwrap_or_else(|e| panic!("Failed to evaluate '{}': {}", expr, e));
@@ -54,7 +54,7 @@ pub fn assert_eval_type(expr: &str, type_check: impl Fn(&Value) -> bool, type_na
 
 /// Evaluate multiple expressions in sequence, return last result
 pub fn eval_program(code: &str) -> String {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp
         .eval_program(code)
         .unwrap_or_else(|e| panic!("Failed to evaluate program: {}", e));

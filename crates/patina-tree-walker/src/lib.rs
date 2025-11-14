@@ -4,6 +4,7 @@
 //!
 //! # Components
 //!
+//! - **TreeWalker** - Backend trait implementation wrapping the evaluator
 //! - **Evaluator** - Core evaluation engine (eval module)
 //! - **Special Forms** - Built-in special forms (quote, lambda, if, etc.)
 //! - **Primitives** - Built-in procedures organized by category
@@ -12,10 +13,22 @@
 //!
 //! The tree-walking interpreter directly evaluates the AST produced by the frontend.
 //! It uses lexical scoping with environment chains and supports full R7RS semantics.
+//!
+//! # Using as a Backend
+//!
+//! ```ignore
+//! use patina_tree_walker::TreeWalker;
+//! use patina_runtime::Backend;
+//!
+//! let backend = TreeWalker::new();
+//! let result = backend.eval_global(&expr)?;
+//! ```
 
+pub mod backend;
 pub mod eval;
 pub mod library_support;
 
 // Re-export main types
+pub use backend::TreeWalker;
 pub use eval::{EvalError, Evaluator};
 pub use library_support::SchemeLibraryLoader;

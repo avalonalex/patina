@@ -3,11 +3,11 @@
 //! This test demonstrates and verifies the overflow detection and
 //! automatic promotion from i64 to BigInt.
 
-use patina_interpreter::{Interpreter, Value};
+use patina_interpreter::{TreeWalkInterpreter, Value};
 
 #[test]
 fn test_overflow_promotion_step_by_step() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Step 1: Start with a small integer (stays as i64)
     let result = interp.eval_str("42").unwrap();
@@ -57,7 +57,7 @@ fn test_overflow_promotion_step_by_step() {
 
 #[test]
 fn test_promotion_in_factorial() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Define factorial function
     interp
@@ -97,7 +97,7 @@ fn test_promotion_in_factorial() {
 
 #[test]
 fn test_promotion_boundaries() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     println!("\n=== Testing i64 Boundaries ===");
     println!("i64::MAX = 9223372036854775807");
@@ -126,7 +126,7 @@ fn test_promotion_boundaries() {
 
 #[test]
 fn test_mixed_operations() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     println!("\n=== Testing Mixed i64/BigInt Operations ===");
 
@@ -177,7 +177,7 @@ fn test_mixed_operations() {
 #[test]
 #[cfg_attr(debug_assertions, ignore)]
 fn test_fibonacci_demonstrates_promotion() {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     println!("\n=== Fibonacci Demonstrates Gradual Promotion ===");
 

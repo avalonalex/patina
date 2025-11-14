@@ -1,66 +1,102 @@
 //! Patina Interpreter - High-level interface for Scheme evaluation
 //!
 //! This crate provides the `Interpreter` API that combines frontend (parsing)
-//! with backend (evaluation). It supports multiple backend implementations.
+//! with backend (evaluation). It supports multiple backend implementations
+//! through the `Backend` trait.
 //!
 //! # Example
 //!
 //! ```no_run
 //! use patina_interpreter::Interpreter;
+//! use patina_tree_walker::TreeWalker;
 //!
-//! let mut interp = Interpreter::new();
+//! let interp = Interpreter::new(TreeWalker::new());
 //! let result = interp.eval_str("(+ 1 2 3)").unwrap();
 //! println!("Result: {}", result);
+//! ```
+//!
+//! # Using the Default Backend
+//!
+//! For convenience, a type alias `TreeWalkInterpreter` is provided that uses
+//! the tree-walking backend by default:
+//!
+//! ```no_run
+//! use patina_interpreter::TreeWalkInterpreter;
+//!
+//! let interp = TreeWalkInterpreter::new_tree_walker();
+//! let result = interp.eval_str("(+ 1 2 3)").unwrap();
 //! ```
 
 // Re-export types from workspace crates for convenience
 pub use patina_frontend::{LexError, Lexer, ParseError, Parser};
-pub use patina_runtime::{Arity, Environment, Procedure, Value};
-pub use patina_tree_walker::{EvalError, Evaluator};
+pub use patina_runtime::{Arity, Backend, Environment, Procedure, Value};
+pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker};
 
 /// High-level interpreter interface that combines parsing and evaluation
-pub struct Interpreter {
-    evaluator: Evaluator,
+///
+/// The interpreter is generic over the backend implementation, allowing
+/// you to swap between different evaluation strategies (tree-walker, VM, JIT)
+/// without changing your code.
+///
+/// # Type Parameters
+///
+/// - `B`: The backend implementation (must implement `Backend` trait)
+///
+/// # Example
+///
+/// ```ignore
+/// use patina_interpreter::Interpreter;
+/// use patina_tree_walker::TreeWalker;
+///
+/// // Create interpreter with tree-walking backend
+/// let interp = Interpreter::new(TreeWalker::new());
+/// let result = interp.eval_str("(+ 1 2)").unwrap();
+/// ```
+pub struct Interpreter<B: Backend> {
+    backend: B,
 }
 
-impl Interpreter {
-    /// Create a new interpreter with a fresh environment
-    pub fn new() -> Self {
-        Interpreter {
-            evaluator: Evaluator::new(),
-        }
-    }
-
-    /// Create an interpreter from an existing evaluator
+impl<B: Backend> Interpreter<B> {
+    /// Create a new interpreter with the given backend
     ///
-    /// This is useful for tests that need to configure the evaluator
-    /// before creating the interpreter (e.g., adding search paths).
-    pub fn from_evaluator(evaluator: Evaluator) -> Self {
-        Interpreter { evaluator }
+    /// # Arguments
+    ///
+    /// - `backend`: The backend implementation to use for evaluation
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use patina_interpreter::Interpreter;
+    /// use patina_tree_walker::TreeWalker;
+    ///
+    /// let backend = TreeWalker::new();
+    /// let interp = Interpreter::new(backend);
+    /// ```
+    pub fn new(backend: B) -> Self {
+        Interpreter { backend }
     }
 
     /// Evaluate a string containing Scheme code
     ///
     /// # Example
     ///
-    /// ```no_run
-    /// use patina_interpreter::Interpreter;
-    ///
-    /// let mut interp = Interpreter::new();
+    /// ```ignore
     /// let result = interp.eval_str("(+ 1 2)").unwrap();
-    /// println!("Result: {}", result);
     /// ```
-    pub fn eval_str(&self, input: &str) -> Result<Value, InterpreterError> {
+    pub fn eval_str(&self, input: &str) -> Result<Value, InterpreterError<B::Error>> {
         let mut parser = Parser::new(input)?;
         let expr = parser.parse()?;
-        let result = self.evaluator.eval(&expr)?;
+        let result = self
+            .backend
+            .eval_global(&expr)
+            .map_err(InterpreterError::Backend)?;
         Ok(result)
     }
 
     /// Evaluate multiple expressions from a string, returning the last result
     ///
     /// This is useful for evaluating entire programs or test files.
-    pub fn eval_program(&self, input: &str) -> Result<Value, InterpreterError> {
+    pub fn eval_program(&self, input: &str) -> Result<Value, InterpreterError<B::Error>> {
         let mut result = Value::Unspecified;
         let mut parser = Parser::new(input)?;
 
@@ -68,7 +104,10 @@ impl Interpreter {
             // Check if we've reached EOF by attempting to parse
             match parser.parse() {
                 Ok(expr) => {
-                    result = self.evaluator.eval(&expr)?;
+                    result = self
+                        .backend
+                        .eval_global(&expr)
+                        .map_err(InterpreterError::Backend)?;
                 }
                 Err(ParseError::UnexpectedEof) => break,
                 Err(e) => return Err(e.into()),
@@ -98,15 +137,13 @@ impl Interpreter {
         loop {
             // Check if we've reached EOF by attempting to parse
             match parser.parse() {
-                Ok(expr) => {
-                    match self.evaluator.eval(&expr) {
-                        Ok(val) => result = val,
-                        Err(e) => {
-                            // Print error and continue
-                            eprintln!("Error: {}", e);
-                        }
+                Ok(expr) => match self.backend.eval_global(&expr) {
+                    Ok(val) => result = val,
+                    Err(e) => {
+                        // Print error and continue
+                        eprintln!("Error: {}", e);
                     }
-                }
+                },
                 Err(ParseError::UnexpectedEof) => break,
                 Err(e) => {
                     // Print parse error and continue
@@ -121,24 +158,133 @@ impl Interpreter {
         result
     }
 
-    /// Get a reference to the underlying evaluator
-    pub fn evaluator(&self) -> &Evaluator {
-        &self.evaluator
+    /// Get a reference to the underlying backend
+    ///
+    /// This allows access to backend-specific functionality that's not
+    /// part of the generic `Backend` trait.
+    pub fn backend(&self) -> &B {
+        &self.backend
     }
 }
 
-impl Default for Interpreter {
+/// Convenience type alias for interpreter with tree-walking backend
+///
+/// This is the default backend and provides the same API as the previous
+/// non-generic `Interpreter` implementation.
+///
+/// # Example
+///
+/// ```no_run
+/// use patina_interpreter::TreeWalkInterpreter;
+///
+/// let interp = TreeWalkInterpreter::new_tree_walker();
+/// let result = interp.eval_str("(+ 1 2 3)").unwrap();
+/// ```
+pub type TreeWalkInterpreter = Interpreter<TreeWalker>;
+
+// Specialized implementation for TreeWalker backend
+impl Interpreter<TreeWalker> {
+    /// Create a new interpreter with the default TreeWalker backend
+    ///
+    /// This is a convenience method that's equivalent to:
+    /// ```ignore
+    /// Interpreter::new(TreeWalker::new())
+    /// ```
+    pub fn new_tree_walker() -> Self {
+        Self::new(TreeWalker::new())
+    }
+
+    /// Create an interpreter from an existing evaluator (TreeWalker-specific)
+    ///
+    /// This is useful for tests that need to configure the evaluator
+    /// before creating the interpreter (e.g., adding search paths).
+    ///
+    /// This method is only available when using the TreeWalker backend.
+    pub fn from_evaluator(evaluator: Evaluator) -> Self {
+        Interpreter {
+            backend: TreeWalker::from_evaluator(evaluator),
+        }
+    }
+
+    /// Get a reference to the underlying evaluator (TreeWalker-specific)
+    ///
+    /// This provides access to evaluator-specific functionality.
+    /// For generic backend access, use `backend()` instead.
+    ///
+    /// This method is only available when using the TreeWalker backend.
+    pub fn evaluator(&self) -> &Evaluator {
+        self.backend.evaluator()
+    }
+}
+
+// Implement Default only for TreeWalker backend
+impl Default for Interpreter<TreeWalker> {
     fn default() -> Self {
-        Self::new()
+        Self::new_tree_walker()
     }
 }
 
 /// Combined error type for the interpreter
+///
+/// Generic over the backend error type, allowing different backends
+/// to provide their own error types while maintaining a consistent
+/// high-level error API.
 #[derive(Debug, thiserror::Error)]
-pub enum InterpreterError {
+pub enum InterpreterError<E: std::error::Error> {
     #[error("Parse error: {0}")]
-    Parse(#[from] ParseError),
+    Parse(ParseError),
 
-    #[error("Evaluation error: {0}")]
-    Eval(#[from] EvalError),
+    #[error("Lex error: {0}")]
+    Lex(LexError),
+
+    #[error("Backend error: {0}")]
+    Backend(E),
+}
+
+// From implementations for frontend errors
+impl<E: std::error::Error> From<ParseError> for InterpreterError<E> {
+    fn from(e: ParseError) -> Self {
+        InterpreterError::Parse(e)
+    }
+}
+
+impl<E: std::error::Error> From<LexError> for InterpreterError<E> {
+    fn from(e: LexError) -> Self {
+        InterpreterError::Lex(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_interpreter_with_tree_walker() {
+        let interp = Interpreter::new(TreeWalker::new());
+        let result = interp.eval_str("42").unwrap();
+        assert!(matches!(result, Value::Integer(42)));
+    }
+
+    #[test]
+    fn test_tree_walk_interpreter_alias() {
+        let interp = TreeWalkInterpreter::new_tree_walker();
+        let result = interp.eval_str("42").unwrap();
+        assert!(matches!(result, Value::Integer(42)));
+    }
+
+    #[test]
+    fn test_interpreter_default() {
+        let interp = TreeWalkInterpreter::default();
+        let result = interp.eval_str("(+ 1 2)").unwrap();
+        assert!(matches!(result, Value::Integer(3)));
+    }
+
+    #[test]
+    fn test_eval_program() {
+        let interp = TreeWalkInterpreter::new_tree_walker();
+        let result = interp
+            .eval_program("(define x 10) (define y 20) (+ x y)")
+            .unwrap();
+        assert!(matches!(result, Value::Integer(30)));
+    }
 }

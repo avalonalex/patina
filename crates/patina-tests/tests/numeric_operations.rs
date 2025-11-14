@@ -2,17 +2,17 @@
 // All tests are currently ignored and serve as a specification
 // for future implementation work.
 
-use patina_interpreter::Interpreter;
+use patina_interpreter::TreeWalkInterpreter;
 
 fn assert_eval_to(input: &str, expected: &str) {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp.eval_str(input).unwrap();
     assert_eq!(result.to_string(), expected, "Input: {}", input);
 }
 
 #[allow(dead_code)]
 fn assert_eval_error(input: &str) {
-    let interp = Interpreter::new();
+    let interp = TreeWalkInterpreter::new_tree_walker();
     assert!(
         interp.eval_str(input).is_err(),
         "Expected error for: {}",
@@ -268,7 +268,7 @@ fn test_make_rectangular() {
 fn test_make_polar() {
     // make-polar takes magnitude and angle
     // Note: results may be inexact due to trig functions
-    let result = Interpreter::new()
+    let result = TreeWalkInterpreter::new_tree_walker()
         .eval_str("(make-polar 1 0)")
         .unwrap()
         .to_string();
