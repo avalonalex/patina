@@ -1,9 +1,71 @@
 # Library System Redesign
 
-**Status:** Design Phase
-**Date:** 2025-11-13
+**Status:** Phase 1 Complete ✅
+**Date Started:** 2025-11-13
+**Phase 1 Completed:** 2025-11-15
 **Target:** Phase 1 - R7RS Library System Completion
 **Estimated Effort:** 22-32 hours over 4 phases
+**Actual Effort (Phase 1):** ~3 hours
+
+## Implementation Status
+
+### ✅ Phase 1: Decouple Bootstrap (COMPLETE)
+**Completed:** 2025-11-15
+**Effort:** ~3 hours
+
+**What was accomplished:**
+- ✅ Created `lib/scheme/base-extras.scm` (346 lines) with all R7RS-required macros and derived functions
+- ✅ Created `lib/chibi/test-extras.scm` (127 lines) with test framework macros
+- ✅ Implemented `load_scheme_base_extras()` to load extras into `(scheme base)` library environment
+- ✅ Updated evaluator initialization to load libraries before importing to global environment
+- ✅ **Deleted `bootstrap.scm` entirely** - no longer needed!
+- ✅ All 483 tests passing with library-based system
+
+**Key Files Changed:**
+- `crates/patina-tree-walker/src/eval/mod.rs:169-273` - New library loading system
+- `lib/scheme/base-extras.scm` - Created (R7RS base library extras)
+- `lib/chibi/test-extras.scm` - Created (test framework)
+- `lib/bootstrap.scm` - **DELETED**
+
+**Benefits Achieved:**
+- Clean separation: primitives (Rust) + derived functions/macros (Scheme)
+- Proper R7RS library structure
+- Foundation for mixed Rust/Scheme libraries
+- Bootstrap eliminated, reducing global namespace pollution
+
+### 🚧 Phase 2: Registry-Aware Builders (NOT STARTED)
+**Status:** Planned
+**Estimated Effort:** 6-8 hours
+
+**Objective:** Eliminate duplication between primitive registry and library builders
+
+**Current Issue:** 141 primitives listed twice:
+- Once in primitive registry (with full metadata)
+- Again in `build_scheme_base()` (duplicate arity specifications)
+
+**Planned Solution:** Update `RustLibraryBuilder` signature to accept `&PrimitiveRegistry` parameter
+
+### 🚧 Phase 3: Namespace-Aware Primitives (NOT STARTED)
+**Status:** Planned
+**Estimated Effort:** 4-6 hours
+
+**Objective:** Remove hardcoded `"scheme.base/"` namespace limitation
+
+**Current Issue:** Only primitives from `scheme.base` can be called (hardcoded in `apply_primitive`)
+
+**Planned Solution:** Add `library` field to `Procedure::Primitive` variant
+
+### 🚧 Phase 4: Special Libraries (NOT STARTED)
+**Status:** Planned
+**Estimated Effort:** 8-12 hours
+
+**Objective:** Implement special libraries with custom semantics
+- `(scheme lazy)` - delays and promises
+- `(scheme eval)` - runtime evaluation
+- `(scheme case-lambda)` - variable arity syntax
+- `(scheme process-context)` - environment variables
+
+---
 
 ## Executive Summary
 
@@ -105,8 +167,13 @@ crates/
     └── library_parser.rs            # Parse define-library forms
 
 lib/
-└── bootstrap.scm                    # Bootstrap code (to be minimized)
+├── scheme/
+│   └── base-extras.scm              # R7RS base library extras (NEW)
+└── chibi/
+    └── test-extras.scm              # Test framework (NEW)
 ```
+
+**Note:** `bootstrap.scm` has been eliminated (Phase 1 complete).
 
 ---
 
@@ -142,12 +209,16 @@ lib/
 
 ### 2.3 Success Criteria
 
-- [ ] No duplicate primitive lists
-- [ ] `bootstrap.scm` minimal or empty
-- [ ] Can implement `(scheme lazy)`, `(scheme eval)`, `(scheme case-lambda)`, `(scheme process-context)`
-- [ ] All existing tests pass
-- [ ] Example mixed library (Rust + Scheme) working
-- [ ] Can access primitives from all namespaces
+**Phase 1 (COMPLETE ✅):**
+- [ ] No duplicate primitive lists *(Deferred to Phase 2)*
+- [x] **`bootstrap.scm` minimal or empty** ✅ **DELETED ENTIRELY!**
+- [x] **All existing tests pass** ✅ **483 tests passing**
+- [x] **Mixed library foundation** ✅ **`(scheme base)` = Rust primitives + Scheme extras**
+
+**Remaining Phases:**
+- [ ] No duplicate primitive lists *(Phase 2: Registry-Aware Builders)*
+- [ ] Can implement `(scheme lazy)`, `(scheme eval)`, `(scheme case-lambda)`, `(scheme process-context)` *(Phase 4)*
+- [ ] Can access primitives from all namespaces *(Phase 3: Namespace-Aware Primitives)*
 
 ---
 

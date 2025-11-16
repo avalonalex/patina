@@ -167,25 +167,150 @@ impl Evaluator {
     }
 
     fn load_bootstrap(&self) {
-        // Embed bootstrap.scm at compile time
-        const BOOTSTRAP: &str = include_str!("../../../../lib/bootstrap.scm");
+        // Load (scheme base) library first to get core functionality
+        // This will populate primitives but not yet the derived functions
+        let _ = self.load_library(&["scheme".to_string(), "base".to_string()]);
 
-        // Parse and evaluate all expressions in bootstrap
-        // Silently ignore any errors (shouldn't happen in bootstrap)
-        let mut parser = match patina_frontend::Parser::new(BOOTSTRAP) {
-            Ok(p) => p,
-            Err(_) => return, // Bootstrap failed to parse
+        // Now load the Scheme-implemented extras into (scheme base)
+        self.load_scheme_base_extras();
+
+        // Load test framework primitives (the 'test' macro is in base-extras.scm)
+        let _ = self.load_library(&["chibi".to_string(), "test".to_string()]);
+
+        // After loading libraries, import (scheme base) into global environment
+        // This makes primitives and macros available without explicit import
+        // (R5RS-style convenience for REPL)
+        if let Some(lib) = self
+            .library_registry
+            .borrow()
+            .get(&["scheme".to_string(), "base".to_string()])
+        {
+            for (name, value) in lib.exports.iter() {
+                self.global_env.define(name.clone(), value.clone());
+            }
+        }
+    }
+
+    /// Load Scheme-implemented extras for (scheme base)
+    ///
+    /// These are R7RS-required procedures and macros that are built on top
+    /// of the primitive procedures. They are loaded directly into the (scheme base)
+    /// library environment.
+    fn load_scheme_base_extras(&self) {
+        // Embed base-extras.scm at compile time
+        const BASE_EXTRAS: &str = include_str!("../../../../lib/scheme/base-extras.scm");
+
+        // Get the (scheme base) library environment (clone the Rc to avoid borrow issues)
+        let base_env = {
+            let registry = self.library_registry.borrow();
+            match registry.get(&["scheme".to_string(), "base".to_string()]) {
+                Some(lib) => lib.env.clone(),
+                None => {
+                    eprintln!("Warning: (scheme base) library not loaded, cannot load extras");
+                    return;
+                }
+            }
         };
 
-        // Parse and eval all expressions
+        // Parse and evaluate all expressions in the library's environment
+        let mut parser = match patina_frontend::Parser::new(BASE_EXTRAS) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Warning: Failed to parse base-extras.scm: {}", e);
+                return;
+            }
+        };
+
+        // Parse and eval all expressions in the library environment
         loop {
             match parser.parse() {
                 Ok(expr) => {
-                    // Evaluate, ignore result and errors
-                    let _ = self.eval(&expr);
+                    // Evaluate in the library's environment
+                    match self.eval_in_env(&expr, &base_env) {
+                        Ok(_) => {} // Success, continue
+                        Err(e) => {
+                            eprintln!("Warning: Error loading base-extras.scm: {}", e);
+                            break;
+                        }
+                    }
                 }
                 Err(patina_frontend::ParseError::UnexpectedEof) => break,
-                Err(_) => break, // Stop on other errors
+                Err(e) => {
+                    eprintln!("Warning: Parse error in base-extras.scm: {}", e);
+                    break;
+                }
+            }
+        }
+
+        // Now update the library's exports to include the new definitions
+        // All top-level definitions in base-extras.scm should be exported as part of (scheme base)
+        let extra_exports = vec![
+            // Boolean operations
+            "not",
+            // Numeric predicates
+            "zero?",
+            "positive?",
+            "negative?",
+            "odd?",
+            "even?",
+            // Car/cdr compositions
+            "caar",
+            "cadr",
+            "cdar",
+            "cddr",
+            "caaar",
+            "caadr",
+            "cadar",
+            "caddr",
+            "cdaar",
+            "cdadr",
+            "cddar",
+            "cdddr",
+            "caaaar",
+            "caaadr",
+            "caadar",
+            "caaddr",
+            "cadaar",
+            "cadadr",
+            "caddar",
+            "cadddr",
+            "cdaaar",
+            "cdaadr",
+            "cdadar",
+            "cdaddr",
+            "cddaar",
+            "cddadr",
+            "cdddar",
+            "cddddr",
+            // Control flow macros
+            "when",
+            "unless",
+            // Boolean logic macros
+            "and",
+            "or",
+            // Binding constructs
+            "let",
+            "let*",
+            "letrec",
+            "letrec*",
+            // Multiple value binding
+            "let-values",
+            "let*-values",
+            // Conditional macros
+            "cond",
+            "case",
+            // Iteration
+            "do",
+            "do-helper",
+        ];
+
+        // Add exports to the library
+        let mut lib_registry = self.library_registry.borrow_mut();
+        if let Some(lib) = lib_registry.get_mut(&["scheme".to_string(), "base".to_string()]) {
+            for export_name in extra_exports {
+                if let Some(value) = base_env.get(export_name) {
+                    lib.export(export_name.to_string(), value);
+                }
             }
         }
     }
