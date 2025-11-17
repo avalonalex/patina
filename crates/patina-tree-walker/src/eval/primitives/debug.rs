@@ -6,8 +6,8 @@ use patina_runtime::value::Value;
 
 /// Register all debug primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
-    use super::registry::PrimitiveFn;
     use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
     use patina_runtime::value::Arity;
 
     // Evaluation debugging primitives
@@ -173,7 +173,10 @@ pub(super) fn debug_mode(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
     }
 }
 
-pub(super) fn macro_debug_mode(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+pub(super) fn macro_debug_mode(
+    evaluator: &Evaluator,
+    args: Vec<Value>,
+) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "macro-debug-mode")?;
 
     match &args[0] {

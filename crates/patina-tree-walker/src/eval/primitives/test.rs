@@ -7,8 +7,8 @@ use patina_runtime::value::Value;
 
 /// Register all test framework primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
-    use super::registry::PrimitiveFn;
     use super::super::EvalResult;
+    use super::registry::PrimitiveFn;
     use patina_runtime::value::Arity;
 
     registry.register(PrimitiveFn::new(

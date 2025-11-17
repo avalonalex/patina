@@ -280,7 +280,34 @@ impl Evaluator {
             }
         };
 
-        // Parse and evaluate all expressions in the library's environment
+        // Create an evaluation environment that has access to (scheme base) primitives
+        // The extras file needs these for macro definitions (display, write, newline, etc.)
+        let eval_env = {
+            // Start with library environment as base
+            let env = Rc::new(Environment::new());
+
+            // Import all (scheme base) exports if this isn't (scheme base) itself
+            let is_scheme_base = name == ["scheme".to_string(), "base".to_string()];
+            if !is_scheme_base {
+                let registry = self.library_registry.borrow();
+                if let Some(scheme_base) = registry.get(&["scheme".to_string(), "base".to_string()])
+                {
+                    // Add all (scheme base) exports to the evaluation environment
+                    for (export_name, value) in &scheme_base.exports {
+                        env.define(export_name.clone(), value.clone());
+                    }
+                }
+            }
+
+            // Add all library's own definitions (these can shadow scheme base)
+            for (binding_name, value) in lib_env.bindings() {
+                env.define(binding_name, value);
+            }
+
+            env
+        };
+
+        // Parse and evaluate all expressions in the evaluation environment
         let mut parser = match patina_frontend::Parser::new(&extras_content) {
             Ok(p) => p,
             Err(e) => {
@@ -296,7 +323,7 @@ impl Evaluator {
         loop {
             match parser.parse() {
                 Ok(expr) => {
-                    if let Err(e) = self.eval_in_env(&expr, &lib_env) {
+                    if let Err(e) = self.eval_in_env(&expr, &eval_env) {
                         eprintln!(
                             "Warning: Failed to evaluate expression in {}: {}",
                             extras_path.display(),
@@ -309,6 +336,24 @@ impl Evaluator {
                     eprintln!("Warning: Parse error in {}: {:?}", extras_path.display(), e);
                     break;
                 }
+            }
+        }
+
+        // Copy any new definitions from the evaluation environment back to the library environment
+        for (binding_name, value) in eval_env.bindings() {
+            // Skip (scheme base) primitives - only copy definitions created by the extras file
+            let is_from_extras = {
+                let registry = self.library_registry.borrow();
+                if let Some(scheme_base) = registry.get(&["scheme".to_string(), "base".to_string()])
+                {
+                    !scheme_base.exports.contains_key(&binding_name)
+                } else {
+                    true // If (scheme base) not loaded, copy everything
+                }
+            };
+
+            if is_from_extras {
+                lib_env.define(binding_name, value);
             }
         }
     }

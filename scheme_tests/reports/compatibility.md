@@ -1,154 +1,81 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-16 19:44:02
+**Generated:** 2025-11-16 20:30:53
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 0 | 0.0% |
+| ✅ Passed | 73 | 57.9% |
 | ❌ Failed | 0 | 0.0% |
-| ⚠️ Error (crashed) | 132 | 100.0% |
-| **Total** | **132** | **100%** |
+| ⚠️ Error (crashed) | 53 | 42.1% |
+| **Total** | **126** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
 ## Failed Tests
 
+### Test Failures
+
+```
+FAIL: 
+```
+
 ### Errors
 
 ```
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
+Error: Undefined variable: force
 Error: Undefined variable: delay
-Error: Undefined variable: test
-Error: Undefined variable: test
 Error: Undefined variable: delay
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
+Error: Undefined variable: integers
+Error: Undefined variable: integers
+Error: Undefined variable: delay
+Error: Undefined variable: promise?
+Error: Undefined variable: promise?
+Error: Undefined variable: delay
+Error: Undefined variable: make-promise
+Error: Undefined variable: force
+Error: Undefined variable: force
 Error: Undefined variable: make-parameter
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
+Error: Undefined variable: number->string
+Error: Undefined variable: parameterize
+Error: Undefined variable: number->string
 Error: Undefined variable: case-lambda
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
 Error: Undefined variable: case-lambda
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
+Error: Undefined variable: rest-arity
+Error: Undefined variable: rest-arity
+Error: Undefined variable: rest-arity
+Error: Undefined variable: rest-arity
 Error: Undefined variable: case-lambda
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
+Error: Undefined variable: dead-clause
+Error: Undefined variable: dead-clause
+Error: Undefined variable: dead-clause
+Error: Undefined variable: dead-clause
+Error: Undefined variable: let-syntax
+Error: Undefined variable: let-syntax
+Error: Undefined variable: letrec-syntax
 Error: Invalid syntax: Expected syntax-rules
-Error: Undefined variable: test
+Error: Undefined variable: sequence1
 Error: Invalid syntax: Expected syntax-rules
-Error: Undefined variable: test
+Error: Undefined variable: sequence2
 Error: Invalid syntax: Expected syntax-rules
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
+Error: Undefined variable: sequence3
 Error: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
-Error: Undefined variable: test
+Error: Undefined variable: part-2x
+Error: Undefined variable: part-2x
 Error: Invalid syntax: Expected syntax-rules
-Error: Undefined variable: test
-Error: Undefined variable: test
+Error: Undefined variable: mad-hatter
+Error: Not a procedure: ok
 Error: Undefined variable: let-syntax
 Error: Invalid syntax: Expected syntax-rules
-Error: Undefined variable: test
 Error: Undefined variable: let-syntax
-Error: Undefined variable: test
+Error: Undefined variable: ##bar399#1031
 Error: Undefined variable: let-syntax
 Error: Lexer error: Unexpected character: |
 ```

@@ -3,8 +3,8 @@
 //! Provides debugging primitives for Patina development and troubleshooting.
 //! This library is automatically loaded in REPL mode for convenience.
 
-use crate::value::{Arity, Procedure, Value};
 use crate::Environment;
+use crate::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
 /// Build the (patina debug) library
