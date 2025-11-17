@@ -433,7 +433,7 @@ Based on chibi test results, the highest-impact missing features are:
 - ✅ Library extras pattern (Rust + Scheme macros)
 - ✅ Fixed library environment inheritance issue (Nov 16)
 - ✅ Full test framework with approximate equality
-- ✅ 73/126 chibi r7rs-tests passing (57.9% compliance)
+- ✅ 85/126 chibi r7rs-tests passing (67.5% compliance)
 - ✅ 435 total internal tests passing
 
 ---
@@ -490,9 +490,9 @@ Patina has achieved **outstanding progress on Phase 1** with:
 - ✅ Tail Call Optimization (100%)
 - ✅ Library system with test framework (95%)
 - ✅ Comprehensive data structures (100%)
-- ✅ Strong test coverage (435 internal tests, 73/126 chibi tests)
+- ✅ Strong test coverage (435 internal tests, 85/126 chibi tests)
 
-**Current R7RS Compliance:** 57.9% (73/126 chibi tests passing)
+**Current R7RS Compliance:** 67.5% (85/126 chibi tests passing)
 
 **Next Major Milestones (to reach 80%+ compliance):**
 1. Lazy evaluation (delay/force) - blocks 12 tests

@@ -207,11 +207,11 @@ Cache compiled libraries to `.pbc` (Patina Bytecode) files for faster loading.
 - Full test suite coverage for library system
 
 **Chibi R7RS Tests:**
-- 73/126 tests passing (57.9% compliance)
+- 85/126 tests passing (67.5% compliance)
 - 0 test failures
-- 53 tests with errors (missing features: delay/force, parameterize, case-lambda, let-syntax, etc.)
+- 41 tests with errors (missing features: parameterize, case-lambda, let-syntax, number->string, etc.)
 
-The library system itself is not blocking any chibi tests. The 53 errors are all due to missing language features, not library system issues.
+The library system itself is not blocking any chibi tests. The 41 errors are all due to missing language features, not library system issues.
 
 ---
 
