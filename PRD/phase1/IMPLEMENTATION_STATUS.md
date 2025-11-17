@@ -1,12 +1,16 @@
 # Phase 1 Implementation Status
 
-**Last Updated:** 2025-11-11
+**Last Updated:** 2025-11-16
 
 ## Overview
 
-Patina has **88% feature implementation** but **0% standards compliance** due to missing library system.
+Patina has achieved **90% feature implementation** with working library system and test framework!
 
-**Test Results:** 402 total tests passing (285 compliance + 33 numeric + 36 tail recursion + 48 other)
+**Test Results:**
+- 435 internal tests passing (all categories)
+- 73/126 chibi r7rs-tests passing (57.9% compliance)
+- 0 test failures
+- 53 tests with errors (missing features: delay/force, parameterize, case-lambda, let-syntax, etc.)
 
 **📋 For detailed checklist, see [R7RS_COMPLIANCE_CHECKLIST.md](R7RS_COMPLIANCE_CHECKLIST.md)**
 
@@ -87,36 +91,65 @@ Patina now has proper tail recursion as required by R7RS Section 3.5. Tail calls
 
 ---
 
-## 🚧 Major Areas Remaining
+## ✅ Recently Completed (November 2025)
 
-### 1. Library System (0%)
-**Priority:** HIGH
-**Status:** Not started
-**Estimated Effort:** 1-2 weeks
+### Library System (95%) - COMPLETED Nov 14-16! 🎉
+**Status:** ✅ Production ready with working test framework
+**Completed Features:**
+- ✅ Multi-namespace library support (`scheme.base`, `chibi.test`, `patina.debug`)
+- ✅ Primitive registry with proper namespace handling
+- ✅ Library extras pattern (Rust primitives + Scheme macros in `-extras.scm` files)
+- ✅ Library environment inheritance from `(scheme base)`
+- ✅ `(import ...)` statement working in REPL
+- ✅ Test framework (`chibi test`) with approximate equality for reals and complex numbers
+- ✅ Auto-loading of common libraries in REPL (scheme base, chibi test, patina debug)
 
-R7RS requires a module/library system with:
-- `define-library` - Library definitions
-- `import` - Import declarations
-- `export` - Export specifications
-- `include` - File inclusion
-- Standard library organization
+**Test Framework Features:**
+- Approximate equality for inexact real numbers (epsilon = 1e-6)
+- Approximate equality for inexact complex numbers (compares real/imag parts)
+- Recursive comparison for pairs and vectors
+- Exact comparison for integers, rationals, strings, booleans
+- `test-begin`, `test-end`, `test` macro all working
 
-**Blockers:** None
-**Next Steps:** Research chibi-scheme library implementation
+**Known Issues:**
+- ⚠️ Parser has trouble with complex multi-rule macros (worked around in test macro)
+- 🔧 `real-part` and `imag-part` temporarily in `(scheme base)` (should move to `(scheme complex)`)
 
-**After library system:** See `PRD/phase1/R7RS_TESTING_STRATEGY.md` for comprehensive testing approach using:
-- Chibi r7rs-tests.scm (2,516 lines, official test suite)
-- SRFI test suites (real-world validation)
-- Snow packages (library compatibility testing)
+**Implementation:** See `crates/patina-tree-walker/src/eval/mod.rs:267-356` for library extras loading
 
 ---
 
-### 2. Advanced Math Functions (0%)
-**Priority:** MEDIUM
-**Status:** Not started
-**Estimated Effort:** 3-5 days
+### 🔥 Today's Achievements (Nov 16, 2025)
 
-Missing transcendental and advanced numeric functions:
+**Fixed Critical Library System Issue:**
+- ✅ Library extras files now have access to `(scheme base)` primitives
+- ✅ Created evaluation environment that merges library bindings with `(scheme base)` exports
+- ✅ Test macro now loads and works correctly
+
+**Implemented Full Test Framework:**
+- ✅ `(chibi test)` library fully functional
+- ✅ Test macro with pass/fail reporting
+- ✅ Approximate equality for complex numbers (compares real and imaginary parts)
+- ✅ Improved from 68 to 73 passing chibi tests (+5 tests)
+
+**Technical Improvements:**
+- ✅ Fixed infinite recursion in `approx-equal?` by checking `(not (real? x))`
+- ✅ Added `real-part` and `imag-part` to `(scheme base)` exports (TODO: move to `(scheme complex)`)
+- ✅ Comprehensive documentation of test framework capabilities
+
+---
+
+## 🚧 Major Areas Remaining
+
+### 1. Advanced Math Functions (30%)
+**Priority:** MEDIUM
+**Status:** Partially implemented
+**Estimated Effort:** 2-3 days remaining
+
+**Completed:**
+- ✅ `real-part`, `imag-part` - Complex number part extraction
+
+**Missing:**
 - Trigonometric: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`
 - Exponential: `exp`, `log`, `expt`
 - Rounding: `floor`, `ceiling`, `truncate`, `round`
@@ -125,31 +158,11 @@ Missing transcendental and advanced numeric functions:
 - Rational: `numerator`, `denominator`, `rationalize`
 
 **Blockers:** None (can use Rust's f64 math functions)
-**Next Steps:** Add primitives using `num` crate functions
+**Next Steps:** Add remaining primitives using `num` crate functions
 
 ---
 
-### 3. Tail Call Optimization (TCO) (0%)
-**Priority:** HIGH (R7RS requirement)
-**Status:** Not started
-**Estimated Effort:** 1-2 weeks
-
-**Current Issue:** Stack overflow on deep recursion
-**R7RS Requirement:** Proper tail calls must not grow the stack
-
-**Implementation Options:**
-1. **Trampoline Pattern** - Return thunks instead of values
-2. **Loop-Based Evaluator** - Replace recursion with iteration
-3. **Explicit Stack** - Manage call stack manually
-
-**Recommended:** Option 3 (explicit stack) for best performance and clarity
-
-**Blockers:** None
-**Next Steps:** Research Steel/Chibi implementations
-
----
-
-### 4. Nested Ellipsis Support (0%)
+### 2. Nested Ellipsis Support (0%)
 **Priority:** LOW-MEDIUM
 **Status:** Documented
 **Estimated Effort:** 2-3 days
@@ -164,7 +177,7 @@ Missing transcendental and advanced numeric functions:
 
 ---
 
-### 5. I/O and Ports (0%)
+### 3. I/O and Ports (0%)
 **Priority:** MEDIUM-HIGH
 **Status:** Not started
 **Estimated Effort:** 1-2 weeks (10 days)
@@ -200,7 +213,7 @@ Missing transcendental and advanced numeric functions:
 
 ---
 
-### 6. Exception Handling (0%)
+### 4. Exception Handling (0%)
 **Priority:** MEDIUM-HIGH (needed for I/O error handling)
 **Status:** Not started
 **Estimated Effort:** 3-5 days
@@ -236,7 +249,7 @@ Missing transcendental and advanced numeric functions:
 
 ---
 
-### 7. Continuations (0%)
+### 5. Continuations (0%)
 **Priority:** LOW (complex, rarely used)
 **Status:** Not started
 **Estimated Effort:** 2-3 weeks
@@ -252,7 +265,7 @@ Missing transcendental and advanced numeric functions:
 
 ---
 
-### 8. Debugger and Hook System (0%)
+### 6. Debugger and Hook System (0%)
 **Priority:** MEDIUM (enhances development experience)
 **Status:** Research complete
 **Estimated Effort:** 2-3 weeks (phased approach)
@@ -305,65 +318,75 @@ Missing transcendental and advanced numeric functions:
 
 ---
 
-## Implementation Priority Ranking
+## 🎯 Next Steps & Priorities
 
-### Phase 1A - Core Compliance (Next 3-4 weeks)
+### Immediate Priorities (Next 2-3 Weeks)
 
-**Recommended order based on dependencies and value:**
+Based on chibi test results, the highest-impact missing features are:
 
-1. **Tail Call Optimization** (HIGH, R7RS requirement) - 1-2 weeks
-   - Critical for R7RS compliance
-   - Enables stack-safe recursion
-   - Should be done first
+**1. Lazy Evaluation (HIGH) - 3-5 days**
+- `delay`, `force`, `promise?`, `make-promise`
+- Blocks 12 chibi tests
+- Required for R7RS compliance
+- Moderate complexity
 
-2. **Advanced Math Functions** (MEDIUM, quick win) - 3-5 days
-   - Completes numeric tower to 100%
-   - Easy - just add primitives using Rust math
-   - High value, low effort
+**2. Parameter Objects (HIGH) - 2-3 days**
+- `make-parameter`, `parameterize`
+- Blocks 2 chibi tests
+- Required for I/O port management
+- Foundation for `current-input-port`, `current-output-port`
 
-3. **I/O Phase 1: String Ports + Basic I/O** (HIGH, very useful) - 2-3 days
-   - `display`, `write`, `read`, `newline`
-   - String ports (no filesystem yet!)
-   - Immediate debugging value
-   - Enables better REPL and testing
+**3. Case-Lambda (MEDIUM) - 2-3 days**
+- `case-lambda` - procedures with multiple arities
+- Blocks 7 chibi tests
+- Useful for library implementations
+- Moderate complexity
 
-4. **Exception Handling Phases 1-2** (MEDIUM-HIGH) - 2-3 days
-   - Basic `error` procedure
-   - `with-exception-handler`, `raise`
-   - Complements I/O (needed for error reporting)
-   - Can implement simplified `guard` without call/cc
+**4. Let-Syntax & Letrec-Syntax (MEDIUM-HIGH) - 3-5 days**
+- Local syntax bindings
+- Blocks 6 chibi tests
+- Important for advanced macro patterns
+- Complex - requires environment handling for syntax
 
-5. **I/O Phase 2: File I/O** (MEDIUM) - 2-3 days
-   - `open-input-file`, `open-output-file`, `close-port`
-   - `file-error?` predicate
-   - Depends on exception handling
+**5. Advanced Math Functions (MEDIUM) - 2-3 days**
+- `number->string`, `string->number` with bases
+- Transcendental functions (sin, cos, exp, log, sqrt)
+- Blocks 2 chibi tests
+- Easy implementation using Rust math
 
-**Total Phase 1A: ~3-4 weeks**
+**6. Parser Fixes (MEDIUM) - 2-3 days**
+- Fix multi-rule macro parsing issue
+- Support for `|` identifiers (blocks 1 test)
+- Foundation for more complex macros
+
+**Total Immediate Priorities: ~2-3 weeks**
 
 ---
 
-### Phase 1B - Module System (Next 3-4 weeks)
+### Medium-Term Priorities (Next 4-6 Weeks)
 
-6. **Library System** (HIGH) - 1-2 weeks
-   - `define-library`, `import`, `export`
-   - Module organization
-   - Required for standard library structure
+**7. I/O Phase 1: String Ports + Basic I/O** (HIGH) - 2-3 days
+   - `display`, `write`, `read`, `newline`
+   - String ports (no filesystem yet!)
+   - Immediate debugging value
 
-7. **I/O Phase 3: Parameter Objects** (MEDIUM) - 1-2 days
-   - `parameterize` special form
-   - Make current-{input,output,error}-port parameter objects
-   - `with-output-to-file`, `with-input-from-file`
+**8. Exception Handling Phases 1-2** (MEDIUM-HIGH) - 2-3 days
+   - Basic `error` procedure
+   - `with-exception-handler`, `raise`
+   - Complements I/O
 
-8. **I/O Phase 4: Binary I/O** (LOW) - 3-4 days
-   - Binary ports, bytevector I/O
-   - Bulk operations
-   - Less commonly used
+**9. I/O Phase 2: File I/O** (MEDIUM) - 2-3 days
+   - `open-input-file`, `open-output-file`, `close-port`
 
-**Total Phase 1B: ~2-3 weeks**
+**Total Medium-Term: ~1-2 weeks**
 
-### Phase 1C - Advanced Features (Future)
-7. **Nested Ellipsis** (LOW-MEDIUM) - 2-3 days
-8. **Continuations** (LOW) - 2-3 weeks (optional)
+---
+
+### Long-Term Priorities
+
+**10. Nested Ellipsis** (LOW-MEDIUM) - 2-3 days
+**11. Continuations** (LOW) - 2-3 weeks (optional)
+**12. Debugger System** (MEDIUM) - 2-3 weeks
 
 ---
 
@@ -394,28 +417,45 @@ Missing transcendental and advanced numeric functions:
 - ✅ Fixed nested macro calls
 - ✅ Better implementation than Steel (quote handling)
 
-### Week of Nov 9: Iteration
-- ✅ Implemented `do` loop as special form
-- ✅ Added 10 comprehensive `do` tests
-- ✅ All R7RS iteration semantics working
-- ✅ 395 total tests passing (+10 from do loop)
+### Week of Nov 9: Tail Call Optimization
+- ✅ Implemented TCO with trampoline pattern
+- ✅ All R7RS tail contexts properly optimized
+- ✅ 36 comprehensive tail recursion tests
+- ✅ Stack-safe recursion achieved
+
+### Week of Nov 11-16: Library System & Test Framework
+- ✅ Multi-namespace library support implemented
+- ✅ Primitive registry with proper namespace handling
+- ✅ Library extras pattern (Rust + Scheme macros)
+- ✅ Fixed library environment inheritance issue (Nov 16)
+- ✅ Full test framework with approximate equality
+- ✅ 73/126 chibi r7rs-tests passing (57.9% compliance)
+- ✅ 435 total internal tests passing
 
 ---
 
 ## Technical Debt
 
-### Low Priority
+### Completed ✅
 - ✅ ~~String optimization~~ (Documented in PRD/phase1/STRING_OPTIMIZATION.md - defer)
-- ✅ ~~Do loop implementation~~ (COMPLETED)
+- ✅ ~~Do loop implementation~~ (COMPLETED Nov 9)
+- ✅ ~~Tail Call Optimization~~ (COMPLETED Nov 9)
+- ✅ ~~Library System~~ (COMPLETED Nov 14-16)
 
-### Medium Priority
+### Current Priorities
+
+**High Priority:**
+- Parser: Fix multi-rule macro parsing issue
+- Parser: Support `|identifier|` syntax (R7RS identifiers)
+
+**Medium Priority:**
 - Improve error messages (locations, stack traces)
 - Add type annotations for better errors
 - Performance profiling and optimization
+- Move `real-part`/`imag-part` from `(scheme base)` to `(scheme complex)`
 
-### High Priority (Blockers)
-- **Tail Call Optimization** - Required for R7RS compliance
-- **Library System** - Required for standard library organization
+**Low Priority:**
+- Refactor test framework to support 3-argument test form (with name)
 
 ---
 
@@ -440,17 +480,25 @@ Missing transcendental and advanced numeric functions:
 
 ## Conclusion
 
-Patina has achieved **excellent progress on Phase 1** with:
+Patina has achieved **outstanding progress on Phase 1** with:
 - ✅ Complete macro system (96%)
 - ✅ Full core language features (100%)
+- ✅ Tail Call Optimization (100%)
+- ✅ Library system with test framework (95%)
 - ✅ Comprehensive data structures (100%)
-- ✅ Strong test coverage (395 tests)
+- ✅ Strong test coverage (435 internal tests, 73/126 chibi tests)
 
-**Next Major Milestones:**
-1. Tail Call Optimization (R7RS compliance requirement)
-2. Advanced math functions (numeric tower completion)
-3. Library system (module organization)
+**Current R7RS Compliance:** 57.9% (73/126 chibi tests passing)
 
-**Estimated Time to Phase 1 Complete:** 6-8 weeks at current pace
+**Next Major Milestones (to reach 80%+ compliance):**
+1. Lazy evaluation (delay/force) - blocks 12 tests
+2. Parameter objects (make-parameter/parameterize) - blocks 2 tests
+3. Case-lambda - blocks 7 tests
+4. Let-syntax/letrec-syntax - blocks 6 tests
+5. Advanced math functions - blocks 2 tests
+6. Parser improvements - blocks 1 test
 
-The foundation is solid and production-ready for the implemented features. Focus should now shift to TCO and the library system to achieve full R7RS-small compliance.
+**Estimated Time to 80% Compliance:** 2-3 weeks at current pace
+**Estimated Time to Phase 1 Complete (95%):** 6-8 weeks
+
+The foundation is **production-ready** for all implemented features. With the library system and test framework now working, we have excellent infrastructure for rapid feature development and compliance testing.
