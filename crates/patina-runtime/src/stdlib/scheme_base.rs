@@ -59,6 +59,9 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("inexact", Arity::Exact(1)),
         ("exact-integer-sqrt", Arity::Exact(1)),
         ("rationalize", Arity::Exact(2)),
+        // TODO: Move to (scheme complex) library when implemented
+        ("real-part", Arity::Exact(1)),
+        ("imag-part", Arity::Exact(1)),
         // List operations
         ("cons", Arity::Exact(2)),
         ("car", Arity::Exact(1)),

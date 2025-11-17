@@ -7,12 +7,24 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Helper for approximate equality (used by test framework)
-;; Simplified version without complex number support
+;;
+;; Supports:
+;; - Approximate comparison for inexact real numbers (using epsilon = 1e-6)
+;; - Approximate comparison for inexact complex numbers (compares real and imaginary parts)
+;; - Recursive comparison for pairs and vectors
+;; - Exact comparison for everything else (exact integers, rationals, strings, booleans, etc.)
 (define (test-equal? expected actual)
   (define epsilon 1e-6)
 
   (define (approx-equal? x y)
     (cond
+      ;; For inexact complex numbers (non-real), compare real and imaginary parts separately
+      ;; Note: Check (not (real? x)) to avoid infinite recursion, since all numbers are complex
+      ((and (complex? x) (complex? y)
+            (not (real? x)) (not (real? y))
+            (or (inexact? x) (inexact? y)))
+       (and (approx-equal? (real-part x) (real-part y))
+            (approx-equal? (imag-part x) (imag-part y))))
       ;; For real numbers (but not exact rationals), use epsilon-based comparison
       ((and (real? x) (real? y) (inexact? x) (inexact? y))
        (< (abs (- x y)) epsilon))
@@ -26,7 +38,7 @@
          (or (>= i (vector-length x))
              (and (approx-equal? (vector-ref x i) (vector-ref y i))
                   (loop (+ i 1))))))
-      ;; For everything else, use equal?
+      ;; For everything else (exact integers, rationals, strings, etc.), use exact equal?
       (else (equal? x y))))
 
   (approx-equal? expected actual))

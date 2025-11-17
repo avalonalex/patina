@@ -1812,7 +1812,14 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         |eval, args, _tail| inexact(eval, args).map(EvalResult::Value),
     ));
 
-    // Real part
+    // Real part (also in scheme.base for convenience)
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "real-part",
+        Arity::Exact(1),
+        "Returns the real part of z.",
+        |eval, args, _tail| real_part(eval, args).map(EvalResult::Value),
+    ));
     registry.register(PrimitiveFn::new(
         "scheme.complex",
         "real-part",
@@ -1821,7 +1828,14 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         |eval, args, _tail| real_part(eval, args).map(EvalResult::Value),
     ));
 
-    // Imaginary part
+    // Imaginary part (also in scheme.base for convenience)
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "imag-part",
+        Arity::Exact(1),
+        "Returns the imaginary part of z.",
+        |eval, args, _tail| imag_part(eval, args).map(EvalResult::Value),
+    ));
     registry.register(PrimitiveFn::new(
         "scheme.complex",
         "imag-part",
