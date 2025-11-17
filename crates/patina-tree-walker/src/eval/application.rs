@@ -58,9 +58,9 @@ impl Evaluator {
         }
 
         let result = match proc {
-            Value::Procedure(Procedure::Primitive { name, arity }) => {
-                self.check_arity(&arity, args.len())?;
-                self.apply_primitive(name, args, in_tail_position)
+            Value::Procedure(ref procedure @ Procedure::Primitive { ref arity, .. }) => {
+                self.check_arity(arity, args.len())?;
+                self.apply_primitive(procedure, args, in_tail_position)
             }
             Value::Procedure(Procedure::Lambda {
                 params,

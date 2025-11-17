@@ -105,7 +105,8 @@ impl LibraryRegistry {
     /// Default search paths (in order):
     /// 1. ./lib/ (relative to current directory)
     /// 2. $PATINA_HOME/lib/ (if PATINA_HOME env var is set)
-    /// 3. Executable directory/../lib/ (relative to binary)
+    /// 3. Workspace root/lib/ (by walking up from executable to find Cargo.toml workspace)
+    /// 4. Executable directory/../lib/ (relative to binary)
     pub fn with_default_paths() -> Self {
         let mut registry = Self::new();
 
@@ -119,7 +120,16 @@ impl LibraryRegistry {
             registry.add_search_path(path);
         }
 
-        // 3. Executable directory/../lib/
+        // 3. Workspace root/lib/ - walk up from executable looking for workspace Cargo.toml
+        if let Ok(exe_path) = std::env::current_exe()
+            && let Some(workspace_root) = Self::find_workspace_root(&exe_path)
+        {
+            let mut lib_path = workspace_root;
+            lib_path.push("lib");
+            registry.add_search_path(lib_path);
+        }
+
+        // 4. Executable directory/../lib/
         if let Ok(exe_path) = std::env::current_exe()
             && let Some(exe_dir) = exe_path.parent()
         {
@@ -129,6 +139,29 @@ impl LibraryRegistry {
         }
 
         registry
+    }
+
+    /// Find workspace root by walking up from the given path looking for Cargo.toml with [workspace]
+    fn find_workspace_root(start_path: &std::path::Path) -> Option<PathBuf> {
+        let mut current = start_path.to_path_buf();
+
+        // Walk up the directory tree
+        while let Some(parent) = current.parent() {
+            let cargo_toml = parent.join("Cargo.toml");
+
+            if cargo_toml.exists() {
+                // Check if this Cargo.toml defines a workspace
+                if let Ok(content) = std::fs::read_to_string(&cargo_toml)
+                    && content.contains("[workspace]")
+                {
+                    return Some(parent.to_path_buf());
+                }
+            }
+
+            current = parent.to_path_buf();
+        }
+
+        None
     }
 
     /// Add a search path for library files

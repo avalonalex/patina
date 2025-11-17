@@ -6,6 +6,9 @@ use patina_interpreter::TreeWalkInterpreter;
 
 fn assert_eval_to(input: &str, expected: &str) {
     let interp = TreeWalkInterpreter::new_tree_walker();
+    // Import libraries needed for numeric operations
+    let _ = interp.eval_str("(import (scheme inexact))");
+    let _ = interp.eval_str("(import (scheme complex))");
     let result = interp.eval_str(input).unwrap();
     assert_eq!(result.to_string(), expected, "Input: {}", input);
 }
@@ -268,10 +271,9 @@ fn test_make_rectangular() {
 fn test_make_polar() {
     // make-polar takes magnitude and angle
     // Note: results may be inexact due to trig functions
-    let result = TreeWalkInterpreter::new_tree_walker()
-        .eval_str("(make-polar 1 0)")
-        .unwrap()
-        .to_string();
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let _ = interp.eval_str("(import (scheme complex))");
+    let result = interp.eval_str("(make-polar 1 0)").unwrap().to_string();
     // Should be very close to 1 (either "1" or "1.0")
     assert!(
         result == "1" || result == "1.0",

@@ -7,6 +7,8 @@ use crate::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
 pub fn build_scheme_complex(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+    let library_name = vec!["scheme".to_string(), "complex".to_string()];
+
     // Complex number operations
     let primitives = [
         ("make-rectangular", Arity::Exact(2)),
@@ -23,6 +25,7 @@ pub fn build_scheme_complex(_name: Vec<String>, env: Rc<Environment>) -> Vec<Str
             Value::Procedure(Procedure::Primitive {
                 name,
                 arity: arity.clone(),
+                library: library_name.clone(),
             }),
         );
     }

@@ -56,8 +56,9 @@ impl Evaluator {
         let mut primitive_registry = primitives::PrimitiveRegistry::new();
         Self::register_all_primitives(&mut primitive_registry);
 
-        // Install primitives into global environment (for backward compatibility)
-        Self::install_primitives(&global_env);
+        // Note: Primitives are now installed via library loading rather than
+        // direct installation. The load_bootstrap() call below will load (scheme base)
+        // and import it into the global environment.
 
         // Create special form registry and register all special forms
         let special_form_registry = special_forms::build_registry();
@@ -167,19 +168,16 @@ impl Evaluator {
     }
 
     fn load_bootstrap(&self) {
-        // Load (scheme base) library first to get core functionality
-        // This will populate primitives but not yet the derived functions
+        // Load (scheme base) library
+        // This will load Rust primitives and automatically load base-extras.scm
         let _ = self.load_library(&["scheme".to_string(), "base".to_string()]);
 
-        // Now load the Scheme-implemented extras into (scheme base)
-        self.load_scheme_base_extras();
-
-        // Load test framework primitives (the 'test' macro is in base-extras.scm)
+        // Load test framework (test-extras.scm contains the 'test' macro)
         let _ = self.load_library(&["chibi".to_string(), "test".to_string()]);
 
         // After loading libraries, import (scheme base) into global environment
         // This makes primitives and macros available without explicit import
-        // (R5RS-style convenience for REPL)
+        // (R7RS-style convenience for REPL)
         if let Some(lib) = self
             .library_registry
             .borrow()
@@ -191,182 +189,97 @@ impl Evaluator {
         }
     }
 
-    /// Load Scheme-implemented extras for (scheme base)
+    /// Load Scheme-implemented extras for a library
     ///
-    /// These are R7RS-required procedures and macros that are built on top
-    /// of the primitive procedures. They are loaded directly into the (scheme base)
-    /// library environment.
-    fn load_scheme_base_extras(&self) {
-        // Embed base-extras.scm at compile time
-        const BASE_EXTRAS: &str = include_str!("../../../../lib/scheme/base-extras.scm");
+    /// After loading Rust primitives, this checks for a corresponding `-extras.scm` file.
+    /// If found, it's evaluated in the library's environment.
+    ///
+    /// Convention:
+    /// - (scheme base) → lib/scheme/base-extras.scm
+    /// - (scheme lazy) → lib/scheme/lazy-extras.scm
+    /// - (chibi test) → lib/chibi/test-extras.scm
+    ///
+    /// This allows any library to have:
+    /// - Rust primitives (performance-critical operations)
+    /// - Scheme code (derived forms, macros, convenience functions)
+    fn load_library_extras(&self, name: &[String]) {
+        if name.is_empty() {
+            return;
+        }
 
-        // Get the (scheme base) library environment (clone the Rc to avoid borrow issues)
-        let base_env = {
+        // Construct relative extras file path: (scheme base) → scheme/base-extras.scm
+        let mut relative_path = std::path::PathBuf::new();
+        for part in &name[..name.len() - 1] {
+            relative_path.push(part);
+        }
+        relative_path.push(format!("{}-extras.scm", name.last().unwrap()));
+
+        // Search for the extras file in all library search paths
+        let search_paths = self.library_search_paths();
+        let extras_path = search_paths
+            .iter()
+            .map(|base| base.join(&relative_path))
+            .find(|path| path.exists());
+
+        let extras_path = match extras_path {
+            Some(path) => path,
+            None => return, // No extras file - that's fine
+        };
+
+        // Read the extras file
+        let extras_content = match std::fs::read_to_string(&extras_path) {
+            Ok(content) => content,
+            Err(_) => return, // Can't read file - silently skip
+        };
+
+        // Get the library's environment
+        let lib_env = {
             let registry = self.library_registry.borrow();
-            match registry.get(&["scheme".to_string(), "base".to_string()]) {
+            match registry.get(name) {
                 Some(lib) => lib.env.clone(),
                 None => {
-                    eprintln!("Warning: (scheme base) library not loaded, cannot load extras");
+                    eprintln!(
+                        "Warning: Library {:?} not loaded, cannot load extras from {}",
+                        name,
+                        extras_path.display()
+                    );
                     return;
                 }
             }
         };
 
         // Parse and evaluate all expressions in the library's environment
-        let mut parser = match patina_frontend::Parser::new(BASE_EXTRAS) {
+        let mut parser = match patina_frontend::Parser::new(&extras_content) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("Warning: Failed to parse base-extras.scm: {}", e);
+                eprintln!(
+                    "Warning: Failed to parse {}: {:?}",
+                    extras_path.display(),
+                    e
+                );
                 return;
             }
         };
 
-        // Parse and eval all expressions in the library environment
         loop {
             match parser.parse() {
                 Ok(expr) => {
-                    // Evaluate in the library's environment
-                    match self.eval_in_env(&expr, &base_env) {
-                        Ok(_) => {} // Success, continue
-                        Err(e) => {
-                            eprintln!("Warning: Error loading base-extras.scm: {}", e);
-                            break;
-                        }
+                    if let Err(e) = self.eval_in_env(&expr, &lib_env) {
+                        eprintln!(
+                            "Warning: Failed to evaluate expression in {}: {}",
+                            extras_path.display(),
+                            e
+                        );
                     }
                 }
                 Err(patina_frontend::ParseError::UnexpectedEof) => break,
                 Err(e) => {
-                    eprintln!("Warning: Parse error in base-extras.scm: {}", e);
+                    eprintln!("Warning: Parse error in {}: {:?}", extras_path.display(), e);
                     break;
                 }
             }
         }
-
-        // Now update the library's exports to include the new definitions
-        // All top-level definitions in base-extras.scm should be exported as part of (scheme base)
-        let extra_exports = vec![
-            // Boolean operations
-            "not",
-            // Numeric predicates
-            "zero?",
-            "positive?",
-            "negative?",
-            "odd?",
-            "even?",
-            // Car/cdr compositions
-            "caar",
-            "cadr",
-            "cdar",
-            "cddr",
-            "caaar",
-            "caadr",
-            "cadar",
-            "caddr",
-            "cdaar",
-            "cdadr",
-            "cddar",
-            "cdddr",
-            "caaaar",
-            "caaadr",
-            "caadar",
-            "caaddr",
-            "cadaar",
-            "cadadr",
-            "caddar",
-            "cadddr",
-            "cdaaar",
-            "cdaadr",
-            "cdadar",
-            "cdaddr",
-            "cddaar",
-            "cddadr",
-            "cdddar",
-            "cddddr",
-            // Control flow macros
-            "when",
-            "unless",
-            // Boolean logic macros
-            "and",
-            "or",
-            // Binding constructs
-            "let",
-            "let*",
-            "letrec",
-            "letrec*",
-            // Multiple value binding
-            "let-values",
-            "let*-values",
-            // Conditional macros
-            "cond",
-            "case",
-            // Iteration
-            "do",
-            "do-helper",
-        ];
-
-        // Add exports to the library
-        let mut lib_registry = self.library_registry.borrow_mut();
-        if let Some(lib) = lib_registry.get_mut(&["scheme".to_string(), "base".to_string()]) {
-            for export_name in extra_exports {
-                if let Some(value) = base_env.get(export_name) {
-                    lib.export(export_name.to_string(), value);
-                }
-            }
-        }
     }
-
-    /// Main evaluation entry point with trampoline for tail call optimization
-    ///
-    /// This implements the trampoline pattern: instead of recursing directly for tail calls,
-    /// we loop and process `TailCall` results iteratively. This enables proper tail recursion
-    /// as required by R7RS - tail calls execute in constant stack space.
-    pub fn eval(&self, expr: &Value) -> Result<Value, EvalError> {
-        let mut current_expr = expr.clone();
-        let mut current_env = self.global_env.clone();
-
-        // Trampoline loop: keep evaluating until we get a final value
-        loop {
-            match self.eval_step(&current_expr, &current_env)? {
-                EvalResult::Value(v) => return Ok(v),
-                EvalResult::TailCall { expr, env } => {
-                    // Tail call - continue loop with new expr and env
-                    // This reuses the stack frame instead of growing the stack
-                    current_expr = expr;
-                    current_env = env;
-                }
-                EvalResult::TailCallPrimitive { proc, args } => {
-                    // Primitive tail call - re-apply directly in the trampoline
-                    // This allows primitives like call-with-values to participate in TCO
-                    // Note: We pass in_tail_position=true since we're continuing the trampoline
-                    match self.apply(proc, args, true)? {
-                        EvalResult::Value(v) => return Ok(v),
-                        EvalResult::TailCall { expr, env } => {
-                            current_expr = expr;
-                            current_env = env;
-                        }
-                        EvalResult::TailCallPrimitive { proc, args } => {
-                            // Another primitive tail call - continue loop
-                            // We'll handle this in the next iteration by reconstructing
-                            // the application expression
-                            let mut app_list = vec![proc];
-                            app_list.extend(args);
-                            current_expr = self.list_from_vec(app_list);
-                            // Keep current_env unchanged
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Single evaluation step for the trampoline
-    ///
-    /// Returns EvalResult which can be either:
-    /// - Value: evaluation complete, return this value
-    /// - TailCall: tail position, bounce to expr in env
-    ///
-    /// The `in_tail_position` parameter indicates whether this expression is in tail context.
-    /// If true, the final result can be returned as a TailCall for the trampoline to process.
     fn eval_step(&self, expr: &Value, env: &Rc<Environment>) -> Result<EvalResult, EvalError> {
         // Top-level trampoline evaluations are in tail position!
         // This allows the trampoline to bounce tail calls.
@@ -674,9 +587,9 @@ impl Evaluator {
             loaders.try_simple_load(name, &search_paths)?
         };
 
-        let lib = if let Some(lib) = lib_result {
-            // Simple loader succeeded
-            lib
+        let (lib, loaded_via_rust) = if let Some(lib) = lib_result {
+            // Simple loader succeeded (Rust library)
+            (lib, true)
         } else {
             // Try evaluating loaders (Scheme .sld files)
             let parsed = {
@@ -686,7 +599,7 @@ impl Evaluator {
 
             if let Some(parsed) = parsed {
                 // Parse succeeded, now evaluate
-                self.evaluate_parsed_library(parsed)?
+                (self.evaluate_parsed_library(parsed)?, false)
             } else {
                 // No loader can handle this library
                 self.library_registry.borrow_mut().end_loading(name);
@@ -700,10 +613,38 @@ impl Evaluator {
             registry.end_loading(name);
         }
 
-        // Register the loaded library
-        let lib_rc = Rc::new(lib.clone());
-        let mut registry = self.library_registry.borrow_mut();
-        registry.register(lib)?;
+        // Register the library first
+        {
+            let mut registry = self.library_registry.borrow_mut();
+            registry.register(lib)?;
+        }
+
+        // If loaded via Rust, load extras and update exports in-place
+        if loaded_via_rust {
+            // Load extras file - this adds definitions to the library's environment
+            self.load_library_extras(name);
+
+            // Update the library's exports to include everything from the environment
+            {
+                let mut registry = self.library_registry.borrow_mut();
+                if let Some(library) = registry.get_mut(name) {
+                    let all_bindings = library.env.bindings();
+
+                    // Clear and re-export everything
+                    library.exports.clear();
+                    for (binding_name, value) in all_bindings {
+                        library.export(binding_name, value);
+                    }
+                }
+            }
+        }
+
+        // Return the registered library
+        let lib_rc = {
+            let registry = self.library_registry.borrow();
+            Rc::new(registry.get(name).cloned().expect("Library should exist"))
+        };
+
         Ok(lib_rc)
     }
 

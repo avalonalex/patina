@@ -1623,9 +1623,18 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         |eval, args, _tail| round(eval, args).map(EvalResult::Value),
     ));
 
-    // Square root
+    // Square root (in both scheme.base and scheme.inexact per R7RS)
     registry.register(PrimitiveFn::new(
         "scheme.base",
+        "sqrt",
+        Arity::Exact(1),
+        "Returns the principal square root of x.",
+        |eval, args, _tail| sqrt(eval, args).map(EvalResult::Value),
+    ));
+
+    // Register sqrt again under scheme.inexact
+    registry.register(PrimitiveFn::new(
+        "scheme.inexact",
         "sqrt",
         Arity::Exact(1),
         "Returns the principal square root of x.",
@@ -1652,7 +1661,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Finite predicate
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "finite?",
         Arity::Exact(1),
         "Returns #t if x is finite.",
@@ -1661,7 +1670,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Infinite predicate
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "infinite?",
         Arity::Exact(1),
         "Returns #t if x is infinite.",
@@ -1670,7 +1679,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // NaN predicate
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "nan?",
         Arity::Exact(1),
         "Returns #t if x is NaN.",
@@ -1679,7 +1688,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Sine
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "sin",
         Arity::Exact(1),
         "Returns the sine of x.",
@@ -1688,7 +1697,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Cosine
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "cos",
         Arity::Exact(1),
         "Returns the cosine of x.",
@@ -1697,7 +1706,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Tangent
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "tan",
         Arity::Exact(1),
         "Returns the tangent of x.",
@@ -1706,7 +1715,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Arcsine
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "asin",
         Arity::Exact(1),
         "Returns the arcsine of x.",
@@ -1715,7 +1724,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Arccosine
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "acos",
         Arity::Exact(1),
         "Returns the arccosine of x.",
@@ -1724,7 +1733,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Arctangent
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "atan",
         Arity::Range(1, 2),
         "Returns the arctangent of x, or of y/x.",
@@ -1733,7 +1742,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Exponential
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "exp",
         Arity::Exact(1),
         "Returns e raised to the power x.",
@@ -1742,7 +1751,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Natural logarithm
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.inexact",
         "log",
         Arity::Range(1, 2),
         "Returns the natural logarithm of x, or logarithm of x in base y.",
@@ -1805,7 +1814,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Real part
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.complex",
         "real-part",
         Arity::Exact(1),
         "Returns the real part of z.",
@@ -1814,7 +1823,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Imaginary part
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.complex",
         "imag-part",
         Arity::Exact(1),
         "Returns the imaginary part of z.",
@@ -1823,7 +1832,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Magnitude
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.complex",
         "magnitude",
         Arity::Exact(1),
         "Returns the magnitude of z.",
@@ -1832,7 +1841,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Angle
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.complex",
         "angle",
         Arity::Exact(1),
         "Returns the angle of z.",
@@ -1841,7 +1850,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Make rectangular
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.complex",
         "make-rectangular",
         Arity::Exact(2),
         "Returns a complex number with real part x1 and imaginary part x2.",
@@ -1850,7 +1859,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Make polar
     registry.register(PrimitiveFn::new(
-        "scheme.base",
+        "scheme.complex",
         "make-polar",
         Arity::Exact(2),
         "Returns a complex number with magnitude x1 and angle x2.",

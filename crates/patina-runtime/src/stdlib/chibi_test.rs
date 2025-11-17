@@ -28,12 +28,15 @@ thread_local! {
 
 /// Build the (chibi test) library
 pub fn build_chibi_test(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+    let library_name = vec!["chibi".to_string(), "test".to_string()];
+
     // test-begin: Start a test suite
     env.define(
         "test-begin".to_string(),
         Value::Procedure(Procedure::Primitive {
             name: "test-begin",
             arity: Arity::Exact(1),
+            library: library_name.clone(),
         }),
     );
 
@@ -43,6 +46,7 @@ pub fn build_chibi_test(_name: Vec<String>, env: Rc<Environment>) -> Vec<String>
         Value::Procedure(Procedure::Primitive {
             name: "test-end",
             arity: Arity::Min(0),
+            library: library_name.clone(),
         }),
     );
 
@@ -52,6 +56,7 @@ pub fn build_chibi_test(_name: Vec<String>, env: Rc<Environment>) -> Vec<String>
         Value::Procedure(Procedure::Primitive {
             name: "test-increment-passed",
             arity: Arity::Exact(0),
+            library: library_name.clone(),
         }),
     );
 
@@ -61,6 +66,7 @@ pub fn build_chibi_test(_name: Vec<String>, env: Rc<Environment>) -> Vec<String>
         Value::Procedure(Procedure::Primitive {
             name: "test-increment-failed",
             arity: Arity::Exact(0),
+            library: library_name.clone(),
         }),
     );
 

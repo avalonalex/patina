@@ -73,7 +73,11 @@ pub enum Value {
 #[allow(dead_code)]
 pub enum Procedure {
     /// Built-in primitive procedure
-    Primitive { name: &'static str, arity: Arity },
+    Primitive {
+        name: &'static str,
+        arity: Arity,
+        library: Vec<String>, // Library namespace, e.g., ["scheme", "base"]
+    },
 
     /// User-defined procedure (lambda)
     Lambda {
@@ -210,7 +214,13 @@ impl std::fmt::Display for Value {
                 write!(f, ")")
             }
             Value::Bytevector(bv) => write!(f, "#u8({:?})", bv),
-            Value::Procedure(_) => write!(f, "#<procedure>"),
+            Value::Procedure(proc) => match proc {
+                Procedure::Primitive { name, library, .. } => {
+                    write!(f, "#<procedure:{}:{}>", library.join("."), name)
+                }
+                Procedure::Lambda { .. } => write!(f, "#<procedure>"),
+                Procedure::Continuation => write!(f, "#<continuation>"),
+            },
             Value::InputPort => write!(f, "#<input-port>"),
             Value::OutputPort => write!(f, "#<output-port>"),
             Value::Macro { name, .. } => write!(f, "#<macro:{}>", name),

@@ -7,6 +7,8 @@ use crate::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
 pub fn build_scheme_inexact(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+    let library_name = vec!["scheme".to_string(), "inexact".to_string()];
+
     // Inexact/floating point operations
     let primitives = [
         ("finite?", Arity::Exact(1)),
@@ -29,6 +31,7 @@ pub fn build_scheme_inexact(_name: Vec<String>, env: Rc<Environment>) -> Vec<Str
             Value::Procedure(Procedure::Primitive {
                 name,
                 arity: arity.clone(),
+                library: library_name.clone(),
             }),
         );
     }

@@ -1,428 +1,251 @@
+DEBUG: Looking for extras file: scheme/base-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/base-extras.scm
+DEBUG: Extras file found at: ~/Projects/patina/lib/scheme/base-extras.scm
+DEBUG: Found 157 total bindings after loading extras
+DEBUG: Before export update: 109 exports
+DEBUG: After export update: 157 exports
+DEBUG: Looking for extras file: chibi/test-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/chibi/test-extras.scm
+DEBUG: Extras file found at: ~/Projects/patina/lib/chibi/test-extras.scm
+DEBUG: Found 5 total bindings after loading extras
+DEBUG: Before export update: 4 exports
+DEBUG: After export update: 5 exports
+DEBUG: Importing 157 exports from (scheme base) into global env
+DEBUG: Looking for extras file: scheme/char-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/char-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/char-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
+DEBUG: Looking for extras file: scheme/lazy-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/lazy-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/lazy-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
+DEBUG: Looking for extras file: scheme/inexact-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/inexact-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/inexact-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 12 total bindings after loading extras
+DEBUG: Before export update: 12 exports
+DEBUG: After export update: 12 exports
+DEBUG: Looking for extras file: scheme/complex-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/complex-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/complex-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 6 total bindings after loading extras
+DEBUG: Before export update: 6 exports
+DEBUG: After export update: 6 exports
+DEBUG: Looking for extras file: scheme/time-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/time-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/time-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
+DEBUG: Looking for extras file: scheme/file-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/file-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/file-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
+DEBUG: Looking for extras file: scheme/read-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/read-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/read-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
+DEBUG: Looking for extras file: scheme/write-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/write-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/write-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
+DEBUG: Looking for extras file: scheme/eval-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/eval-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/eval-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
+DEBUG: Looking for extras file: scheme/process-context-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/process-context-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/process-context-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
+DEBUG: Looking for extras file: scheme/case-lambda-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/case-lambda-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/case-lambda-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
+DEBUG: Looking for extras file: scheme/r5rs-extras.scm
+DEBUG: Search paths: ["~/Projects/patina/lib", "~/Projects/patina/target/release/../lib"]
+DEBUG: Checking: ~/Projects/patina/lib/scheme/r5rs-extras.scm
+DEBUG: Checking: ~/Projects/patina/target/release/../lib/scheme/r5rs-extras.scm
+DEBUG: Extras file not found in any search path
+DEBUG: Found 0 total bindings after loading extras
+DEBUG: Before export update: 0 exports
+DEBUG: After export update: 0 exports
 Running test suite: R7RS
 Running test suite: 4.1 Primitive expression types
-Testing: 
-x
-
-Testing: 
-'a
-
-Testing: 
-'#(a b c)
-
-Testing: 
-'(+ 1 2)
-
-Testing: 
-'a
-
-Testing: 
-'#(a b c)
-
-Testing: 
-'()
-
-Testing: 
-'(+ 1 2)
-
-Testing: 
-''a
-
-Testing: 
-''a
-
-Testing: 
-'"abc"
-
-Testing: 
-"abc"
-
-Testing: 
-'145932
-
-Testing: 
-145932
-
-Testing: 
-'#t
-
-Testing: 
-#t
-
-Testing: 
-(+ 3 4)
-
-Testing: 
-((if #f + *) 3 4)
-
-Testing: 
-((lambda (x) (+ x x)) 4)
-
-Testing: 
-(reverse-subtract 7 10)
-
-Testing: 
-(add4 6)
-
-Testing: 
-((lambda x x) 3 4 5 6)
-
-Testing: 
-((lambda (x y . z) z) 3 4 5 6)
-
-Testing: 
-(if (> 3 2) 'yes 'no)
-
-Testing: 
-(if (> 2 3) 'yes 'no)
-
-Testing: 
-(if (> 3 2) (- 3 2) (+ 3 2))
-
-Testing: 
-(+ x 1)
-
-Tests run: 27, Passed: 27, Failed: 0
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Tests run: 0, Passed: 0, Failed: 0
 
 Running test suite: 4.2 Derived expression types
-Testing: 
-(cond ((> 3 2) 'greater) ((< 3 2) 'less))
-
-Testing: 
-(cond ((> 3 3) 'greater) ((< 3 3) 'less) (else 'equal))
-
-Testing: 
-(cond ((assv 'b '((a 1) (b 2))) => cadr) (else #f))
-
-Testing: 
-(case (* 2 3) ((2 3 5 7) 'prime) ((1 4 6 8 9) 'composite))
-
-Testing: 
-(case (car '(c d)) ((a e i o u) 'vowel) ((w y) 'semivowel) (else => (lambda (x) x)))
-
-Testing: 
-(map (lambda (x) (case x ((a e i o u) => (lambda (w) (cons 'vowel w))) ((w y) (cons 'semivowel x)) (else => (lambda (w) (cons 'other w))))) '(z y x w u))
-
-Testing: 
-(and (= 2 2) (> 2 1))
-
-Testing: 
-(and (= 2 2) (< 2 1))
-
-Testing: 
-(and 1 2 'c '(f g))
-
-Testing: 
-(and)
-
-Testing: 
-(or (= 2 2) (> 2 1))
-
-Testing: 
-(or (= 2 2) (< 2 1))
-
-Testing: 
-(or #f #f #f)
-
-Testing: 
-(or (memq 'b '(a b c)) (/ 3 0))
-
-Testing: 
-(let ((x 2) (y 3)) (* x y))
-
-Testing: 
-(let ((x 2) (y 3)) (let ((x 7) (z (+ x y))) (* z x)))
-
-Testing: 
-(let ((x 2) (y 3)) (let* ((x 7) (z (+ x y))) (* z x)))
-
-Testing: 
-(letrec ((even? (lambda (n) (if (zero? n) #t (odd? (- n 1))))) (odd? (lambda (n) (if (zero? n) #f (even? (- n 1)))))) (even? 88))
-
-Testing: 
-(letrec* ((p (lambda (x) (+ 1 (q (- x 1))))) (q (lambda (y) (if (zero? y) 0 (+ 1 (p (- y 1)))))) (x (p 5)) (y x)) y)
-
-Testing: 
-a
-
-Testing: 
-b
-
-Testing: 
-c
-
-Testing: 
-(* root rem)
-
-Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 60)))) (list root rem))
-
-Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 61)))) (list root rem))
-
-Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 119)))) (list root rem))
-
-Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 120)))) (list root rem))
-
-Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 121)))) (list root rem))
-
-Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 10 39)))) (list root rem))
-
-Testing: 
-rem
-
-Testing: 
-(square root)
-
-Testing: 
-(let ((a 'a) (b 'b) (x 'x) (y 'y)) (let*-values (((a b) (values x y)) ((x y) (values a b))) (list a b x y)))
-
-Testing: 
-(let-values () 'ok)
-
-Testing: 
-(let ((x 1)) (let*-values () (define x 2) #f) x)
-
-Testing: 
-(+ x 1)
-
-Testing: 
-(do ((vec (make-vector 5)) (i 0 (+ i 1))) ((= i 5) vec) (vector-set! vec i i))
-
-Testing: 
-(let ((x '(1 3 5 7 9))) (do ((x x (cdr x)) (sum 0 (+ sum (car x)))) ((null? x) sum)))
-
-Testing: 
-(let loop ((numbers '(3 -2 1 6 -5)) (nonneg '()) (neg '())) (cond ((null? numbers) (list nonneg neg)) ((>= (car numbers) 0) (loop (cdr numbers) (cons (car numbers) nonneg) neg)) ((< (car numbers) 0) (loop (cdr numbers) nonneg (cons (car numbers) neg)))))
-
-Testing: 
-(force (delay (+ 1 2)))
-
-Error: Undefined variable: force
-Testing: 
-(let ((p (delay (+ 1 2)))) (list (force p) (force p)))
-
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Undefined variable: delay
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Undefined variable: delay
-Testing: 
-(head (tail (tail integers)))
-
-Error: Undefined variable: integers
-Testing: 
-(head (tail (tail (stream-filter odd? integers))))
-
-Error: Undefined variable: integers
-Error: Undefined variable: delay
-Testing: 
-(promise? (delay (+ 2 2)))
-
-Error: Undefined variable: promise?
-Testing: 
-(promise? (make-promise (+ 2 2)))
-
-Error: Undefined variable: promise?
-Testing: 
-(let ((x (delay (+ 2 2)))) (force x) (promise? x))
-
-Error: Undefined variable: delay
-Testing: 
-(let ((x (make-promise (+ 2 2)))) (force x) (promise? x))
-
-Error: Undefined variable: make-promise
-Testing: 
-(force (make-promise (+ 2 2)))
-
-Error: Undefined variable: force
-Testing: 
-(force (make-promise (make-promise (+ 2 2))))
-
-Error: Undefined variable: force
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Undefined variable: make-parameter
-Testing: 
-(f 12)
-
-Error: Undefined variable: number->string
-Testing: 
-(parameterize ((radix 2)) (f 12))
-
-Error: Undefined variable: parameterize
-Testing: 
-(f 12)
-
-Error: Undefined variable: number->string
-Testing: 
-`(list ,(+ 1 2) 4)
-
-Testing: 
-`(list ,name ',name)
-
-Testing: 
-`(a ,(+ 1 2) ,@(map abs '(4 -5 6)) b)
-
-Testing: 
-`#(10 5 ,(square 2) ,@(map square '(4 3)) 8)
-
-Testing: 
-`(a `(b ,(+ 1 2) ,(foo ,(+ 1 3) d) e) f)
-
-Testing: 
-`(a `(b ,,name1 ,',name2 d) e)
-
-Testing: 
-`(list ,(+ 1 2) 4)
-
-Testing: 
-`(list ,(+ 1 2) 4)
-
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Undefined variable: case-lambda
-Testing: 
-(any-arity)
-
-Error: Undefined variable: any-arity
-Testing: 
-(any-arity 1)
-
-Error: Undefined variable: any-arity
-Testing: 
-(any-arity 1 2)
-
-Error: Undefined variable: any-arity
-Testing: 
-(any-arity 1 2 3)
-
-Error: Undefined variable: any-arity
-Testing: 
-(any-arity 1 2 3 4)
-
-Error: Undefined variable: any-arity
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Undefined variable: case-lambda
-Testing: 
-(rest-arity)
-
-Error: Undefined variable: rest-arity
-Testing: 
-(rest-arity 1)
-
-Error: Undefined variable: rest-arity
-Testing: 
-(rest-arity 1 2)
-
-Error: Undefined variable: rest-arity
-Testing: 
-(rest-arity 1 2 3)
-
-Error: Undefined variable: rest-arity
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Undefined variable: case-lambda
-Testing: 
-(dead-clause)
-
-Error: Undefined variable: dead-clause
-Testing: 
-(dead-clause 1)
-
-Error: Undefined variable: dead-clause
-Testing: 
-(dead-clause 1 2)
-
-Error: Undefined variable: dead-clause
-Testing: 
-(dead-clause 1 2 3)
-
-Error: Undefined variable: dead-clause
-Tests run: 46, Passed: 46, Failed: 0
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Tests run: 0, Passed: 0, Failed: 0
 
 Running test suite: 4.3 Macros
-Testing: 
-(let-syntax ((when (syntax-rules () ((when test stmt1 stmt2 ...) (if test (begin stmt1 stmt2 ...)))))) (let ((if #t)) (when if (set! if 'now)) if))
-
-Error: Undefined variable: let-syntax
-Testing: 
-(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
-
-Error: Undefined variable: let-syntax
-Testing: 
-(letrec-syntax ((my-or (syntax-rules () ((my-or) #f) ((my-or e) e) ((my-or e1 e2 ...) (let ((temp e1)) (if temp temp (my-or e2 ...))))))) (let ((x #f) (y 7) (temp 8) (let odd?) (if even?)) (my-or x (let temp) (if y) y)))
-
-Error: Undefined variable: letrec-syntax
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Invalid syntax: Expected syntax-rules
-Testing: 
-(sequence1 0 1 2 3)
-
-Error: Undefined variable: sequence1
+Error: Undefined variable: test
 Error: Invalid syntax: Expected syntax-rules
-Testing: 
-(sequence2 1 2 3 4)
-
-Error: Undefined variable: sequence2
+Error: Undefined variable: test
 Error: Invalid syntax: Expected syntax-rules
-Testing: 
-(sequence3 2 3 4 5)
-
-Error: Undefined variable: sequence3
-Testing: 
-(elli-esc-1)
-
-Testing: 
-(elli-esc-1 100)
-
-Testing: 
-(elli-esc-1 100 200)
-
-Testing: 
-(part-2 10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77)
-
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
-Testing: 
-(part-2x (10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77))
-
-Error: Undefined variable: part-2x
-Testing: 
-(part-2x (10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77 . "tail"))
-
-Error: Undefined variable: part-2x
-Testing: 
-(underscore foo)
-
-Testing: 
-(underscore2 (1 2))
-
-Testing: 
-(list (count-to-2 a b) (count-to-2) (count-to-2 a b c d))
-
-Testing: 
-(list (count-to-2_ _ _) (count-to-2_) (count-to-2_ a b) (count-to-2_ a b c d))
-
-FAIL: 
-(list (count-to-2_ _ _) (count-to-2_) (count-to-2_ a b) (count-to-2_ a b c d))
-
-  expected: 
-(2 0 fail fail)
-
-  but got:  
-(2 0 2 fail)
-
-
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Invalid syntax: Expected syntax-rules
-Testing: 
-(mad-hatter)
-
-Error: Undefined variable: mad-hatter
-Testing: 
-(let ((=> #f)) (cond (#t => 'ok)))
-
-Error: Not a procedure: ok
+Error: Undefined variable: test
+Error: Undefined variable: test
 Error: Undefined variable: let-syntax
 Error: Invalid syntax: Expected syntax-rules
-Testing: 
-(ff 10)
-
+Error: Undefined variable: test
 Error: Undefined variable: let-syntax
-Testing: 
-(quux399)
-
-Error: Undefined variable: ##bar399#1031
+Error: Undefined variable: test
 Error: Undefined variable: let-syntax
 Error: Lexer error: Unexpected character: |

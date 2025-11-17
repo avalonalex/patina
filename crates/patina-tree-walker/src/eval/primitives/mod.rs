@@ -29,8 +29,7 @@ mod vectors;
 // Re-export registry types for convenience
 pub use registry::PrimitiveRegistry;
 
-use patina_runtime::environment::Environment;
-use patina_runtime::value::{Arity, Procedure, Value};
+use patina_runtime::value::{Procedure, Value};
 use std::rc::Rc;
 
 use super::Evaluator;
@@ -44,18 +43,22 @@ impl Evaluator {
     /// `call-with-values` can return `EvalResult::TailCallPrimitive` to participate in TCO.
     pub(super) fn apply_primitive(
         &self,
-        name: &str,
+        proc: &Procedure,
         args: Vec<Value>,
         in_tail_position: bool,
     ) -> Result<super::EvalResult, EvalError> {
-        // Try registry first with scheme.base namespace
-        // This allows primitives registered in the registry to take precedence
-        //
-        // TODO: This hardcodes "scheme.base" which is a temporary hack!
-        // In the future, Value::Primitive should store the library namespace,
-        // so we can look up primitives from any library (scheme.char, scheme.file, etc.)
-        // For now, all primitives are from scheme.base, so this works.
-        let qualified_name = format!("scheme.base/{}", name);
+        // Extract name and library from the primitive
+        let (name, library) = match proc {
+            Procedure::Primitive { name, library, .. } => (*name, library),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "apply_primitive called with non-primitive procedure".to_string(),
+                ));
+            }
+        };
+
+        // Build qualified name using the procedure's library namespace
+        let qualified_name = format!("{}/{}", library.join("."), name);
         if let Ok(result) =
             self.primitive_registry
                 .apply(&qualified_name, args.clone(), self, in_tail_position)
@@ -168,169 +171,6 @@ impl Evaluator {
         io::register(registry);
 
         // All core primitives are now in the registry!
-    }
-
-    /// Install all primitive procedures into the environment
-    ///
-    /// This is the old environment-based approach, kept for backward compatibility
-    /// during the migration to the registry system.
-    pub(super) fn install_primitives(env: &Rc<Environment>) {
-        let primitives = [
-            // Arithmetic
-            ("+", Arity::Min(0)),
-            ("-", Arity::Min(1)),
-            ("*", Arity::Min(0)),
-            ("/", Arity::Min(1)),
-            ("=", Arity::Min(2)),
-            ("<", Arity::Min(2)),
-            (">", Arity::Min(2)),
-            ("<=", Arity::Min(2)),
-            (">=", Arity::Min(2)),
-            ("quotient", Arity::Exact(2)),
-            ("remainder", Arity::Exact(2)),
-            ("modulo", Arity::Exact(2)),
-            ("abs", Arity::Exact(1)),
-            ("max", Arity::Min(1)),
-            ("min", Arity::Min(1)),
-            ("floor", Arity::Exact(1)),
-            ("ceiling", Arity::Exact(1)),
-            ("truncate", Arity::Exact(1)),
-            ("round", Arity::Exact(1)),
-            ("sqrt", Arity::Exact(1)),
-            ("square", Arity::Exact(1)),
-            ("expt", Arity::Exact(2)),
-            ("finite?", Arity::Exact(1)),
-            ("infinite?", Arity::Exact(1)),
-            ("nan?", Arity::Exact(1)),
-            ("sin", Arity::Exact(1)),
-            ("cos", Arity::Exact(1)),
-            ("tan", Arity::Exact(1)),
-            ("asin", Arity::Exact(1)),
-            ("acos", Arity::Exact(1)),
-            ("atan", Arity::Range(1, 2)),
-            ("exp", Arity::Exact(1)),
-            ("log", Arity::Range(1, 2)),
-            ("gcd", Arity::Min(0)),
-            ("lcm", Arity::Min(0)),
-            ("numerator", Arity::Exact(1)),
-            ("denominator", Arity::Exact(1)),
-            ("exact", Arity::Exact(1)),
-            ("inexact", Arity::Exact(1)),
-            ("real-part", Arity::Exact(1)),
-            ("imag-part", Arity::Exact(1)),
-            ("magnitude", Arity::Exact(1)),
-            ("angle", Arity::Exact(1)),
-            ("make-rectangular", Arity::Exact(2)),
-            ("make-polar", Arity::Exact(2)),
-            ("exact-integer-sqrt", Arity::Exact(1)),
-            ("rationalize", Arity::Exact(2)),
-            // Lists
-            ("cons", Arity::Exact(2)),
-            ("car", Arity::Exact(1)),
-            ("cdr", Arity::Exact(1)),
-            ("list", Arity::Min(0)),
-            ("length", Arity::Exact(1)),
-            ("append", Arity::Min(0)),
-            ("reverse", Arity::Exact(1)),
-            ("list-ref", Arity::Exact(2)),
-            ("list-tail", Arity::Exact(2)),
-            ("memq", Arity::Exact(2)),
-            ("memv", Arity::Exact(2)),
-            ("member", Arity::Range(2, 3)),
-            ("assq", Arity::Exact(2)),
-            ("assv", Arity::Exact(2)),
-            ("assoc", Arity::Range(2, 3)),
-            // Higher-order
-            ("map", Arity::Min(2)),
-            ("for-each", Arity::Min(2)),
-            // Predicates
-            ("number?", Arity::Exact(1)),
-            ("complex?", Arity::Exact(1)),
-            ("real?", Arity::Exact(1)),
-            ("rational?", Arity::Exact(1)),
-            ("integer?", Arity::Exact(1)),
-            ("boolean?", Arity::Exact(1)),
-            ("string?", Arity::Exact(1)),
-            ("symbol?", Arity::Exact(1)),
-            ("null?", Arity::Exact(1)),
-            ("pair?", Arity::Exact(1)),
-            ("list?", Arity::Exact(1)),
-            ("exact?", Arity::Exact(1)),
-            ("inexact?", Arity::Exact(1)),
-            ("boolean=?", Arity::Min(2)),
-            ("procedure?", Arity::Exact(1)),
-            ("char?", Arity::Exact(1)),
-            ("vector?", Arity::Exact(1)),
-            ("exact-integer?", Arity::Exact(1)),
-            ("library?", Arity::Exact(1)),
-            // Equality
-            ("eq?", Arity::Exact(2)),
-            ("eqv?", Arity::Exact(2)),
-            ("equal?", Arity::Exact(2)),
-            // Multiple values
-            ("values", Arity::Min(0)),
-            ("call-with-values", Arity::Exact(2)),
-            // Strings
-            ("string-length", Arity::Exact(1)),
-            ("string-ref", Arity::Exact(2)),
-            ("string-set!", Arity::Exact(3)),
-            ("make-string", Arity::Range(1, 2)),
-            ("string", Arity::Min(0)),
-            ("string=?", Arity::Min(2)),
-            ("string<?", Arity::Min(2)),
-            ("string>?", Arity::Min(2)),
-            ("string<=?", Arity::Min(2)),
-            ("string>=?", Arity::Min(2)),
-            ("string-ci=?", Arity::Min(2)),
-            ("string-ci<?", Arity::Min(2)),
-            ("string-ci>?", Arity::Min(2)),
-            ("string-ci<=?", Arity::Min(2)),
-            ("string-ci>=?", Arity::Min(2)),
-            ("string-append", Arity::Min(0)),
-            ("substring", Arity::Exact(3)),
-            ("string->list", Arity::Range(1, 3)),
-            ("list->string", Arity::Exact(1)),
-            ("string-copy", Arity::Range(1, 3)),
-            // Vectors
-            ("make-vector", Arity::Range(1, 2)),
-            ("vector", Arity::Min(0)),
-            ("vector-length", Arity::Exact(1)),
-            ("vector-ref", Arity::Exact(2)),
-            ("vector-set!", Arity::Exact(3)),
-            ("vector->list", Arity::Range(1, 3)),
-            ("list->vector", Arity::Exact(1)),
-            ("vector->string", Arity::Range(1, 3)),
-            ("string->vector", Arity::Range(1, 3)),
-            ("vector-copy", Arity::Range(1, 3)),
-            ("vector-copy!", Arity::Range(3, 5)),
-            ("vector-append", Arity::Min(0)),
-            ("vector-fill!", Arity::Range(2, 4)),
-            ("vector-map", Arity::Min(2)),
-            ("vector-for-each", Arity::Min(2)),
-            // I/O
-            ("display", Arity::Exact(1)),
-            ("write", Arity::Exact(1)),
-            ("newline", Arity::Exact(0)),
-            // Debug
-            ("debug-enable", Arity::Exact(1)),
-            ("debug-disable", Arity::Exact(1)),
-            ("debug-clear", Arity::Exact(0)),
-            ("debug-status", Arity::Exact(0)),
-            ("debug-mode", Arity::Exact(1)),
-            ("macro-debug-mode", Arity::Exact(1)),
-            // Test framework
-            ("test-begin", Arity::Exact(1)),
-            ("test-end", Arity::Exact(0)),
-            ("test-increment-passed", Arity::Exact(0)),
-            ("test-increment-failed", Arity::Exact(0)),
-        ];
-
-        for (name, arity) in primitives {
-            env.define(
-                name.to_string(),
-                Value::Procedure(Procedure::Primitive { name, arity }),
-            );
-        }
     }
 
     // ========== Helper Functions for Primitives ==========
