@@ -159,6 +159,12 @@ impl Evaluator {
             stdlib::build_chibi_test,
         );
 
+        // Register Patina extensions
+        rust_loader.register(
+            vec!["patina".to_string(), "debug".to_string()],
+            stdlib::build_patina_debug,
+        );
+
         // Add Rust loader first (highest priority)
         loaders.add_loader(Box::new(rust_loader));
 
@@ -175,6 +181,10 @@ impl Evaluator {
         // Load test framework (test-extras.scm contains the 'test' macro)
         let _ = self.load_library(&["chibi".to_string(), "test".to_string()]);
 
+        // Load Patina debugging utilities
+        // Auto-loaded in REPL for convenience (commonly used during development)
+        let _ = self.load_library(&["patina".to_string(), "debug".to_string()]);
+
         // After loading libraries, import (scheme base) into global environment
         // This makes primitives and macros available without explicit import
         // (R7RS-style convenience for REPL)
@@ -182,6 +192,28 @@ impl Evaluator {
             .library_registry
             .borrow()
             .get(&["scheme".to_string(), "base".to_string()])
+        {
+            for (name, value) in lib.exports.iter() {
+                self.global_env.define(name.clone(), value.clone());
+            }
+        }
+
+        // Import (patina debug) into global environment for REPL convenience
+        if let Some(lib) = self
+            .library_registry
+            .borrow()
+            .get(&["patina".to_string(), "debug".to_string()])
+        {
+            for (name, value) in lib.exports.iter() {
+                self.global_env.define(name.clone(), value.clone());
+            }
+        }
+
+        // Import (chibi test) into global environment for testing convenience
+        if let Some(lib) = self
+            .library_registry
+            .borrow()
+            .get(&["chibi".to_string(), "test".to_string()])
         {
             for (name, value) in lib.exports.iter() {
                 self.global_env.define(name.clone(), value.clone());

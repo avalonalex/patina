@@ -1,7 +1,65 @@
 use super::super::Evaluator;
 use super::super::debug::DebugStage;
 use super::super::error::EvalError;
+use super::registry::PrimitiveRegistry;
 use patina_runtime::value::Value;
+
+/// Register all debug primitives in the registry
+pub(super) fn register(registry: &mut PrimitiveRegistry) {
+    use super::registry::PrimitiveFn;
+    use super::super::EvalResult;
+    use patina_runtime::value::Arity;
+
+    // Evaluation debugging primitives
+    registry.register(PrimitiveFn::new(
+        "patina.debug",
+        "debug-enable",
+        Arity::Exact(1),
+        "Enable debugging for a specific stage (lex, parse, eval, apply, env, expand)",
+        |eval, args, _| debug_enable(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "patina.debug",
+        "debug-disable",
+        Arity::Exact(1),
+        "Disable debugging for a specific stage",
+        |eval, args, _| debug_disable(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "patina.debug",
+        "debug-clear",
+        Arity::Exact(0),
+        "Disable all debugging stages",
+        |eval, args, _| debug_clear(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "patina.debug",
+        "debug-status",
+        Arity::Exact(0),
+        "Return a list of currently enabled debug stages",
+        |eval, args, _| debug_status(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "patina.debug",
+        "debug-mode",
+        Arity::Exact(1),
+        "Enable ('on/'all) or disable ('off) all debugging stages",
+        |eval, args, _| debug_mode(eval, args).map(EvalResult::Value),
+    ));
+
+    // Macro expansion debugging
+    registry.register(PrimitiveFn::new(
+        "patina.debug",
+        "macro-debug-mode",
+        Arity::Exact(1),
+        "Control macro expansion debugging ('on, 'off, 'status)",
+        |eval, args, _| macro_debug_mode(eval, args).map(EvalResult::Value),
+    ));
+}
 
 pub(super) fn debug_enable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "debug-enable")?;
@@ -111,6 +169,32 @@ pub(super) fn debug_mode(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
         },
         _ => Err(EvalError::TypeError(
             "debug-mode expects a symbol".to_string(),
+        )),
+    }
+}
+
+pub(super) fn macro_debug_mode(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 1, "macro-debug-mode")?;
+
+    match &args[0] {
+        Value::Symbol(s) if s.as_ref() == "on" => {
+            patina_runtime::macro_debug::enable();
+            Ok(Value::Symbol("macro-debug-enabled".into()))
+        }
+        Value::Symbol(s) if s.as_ref() == "off" => {
+            patina_runtime::macro_debug::disable();
+            Ok(Value::Symbol("macro-debug-disabled".into()))
+        }
+        Value::Symbol(s) if s.as_ref() == "status" => {
+            let status = if patina_runtime::macro_debug::is_enabled() {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            Ok(Value::Symbol(status.into()))
+        }
+        _ => Err(EvalError::InvalidSyntax(
+            "macro-debug-mode expects 'on, 'off, or 'status".to_string(),
         )),
     }
 }

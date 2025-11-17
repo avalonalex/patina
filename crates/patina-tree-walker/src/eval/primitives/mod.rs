@@ -23,6 +23,7 @@ mod io;
 mod lists;
 mod predicates;
 mod strings;
+mod test;
 mod values;
 mod vectors;
 
@@ -66,92 +67,24 @@ impl Evaluator {
             return Ok(result);
         }
 
-        // Fall back to match statement for primitives not yet converted to registry
-        // NOTE: All arithmetic operations are now in the registry (scheme.base/+, -, *, /, etc.)
-        // NOTE: All list operations are now in the registry (scheme.base/cons, car, cdr, list, etc.)
-        // NOTE: All higher-order functions are now in the registry (scheme.base/map, for-each)
-        // NOTE: All type predicates are now in the registry (scheme.base/number?, boolean?, etc.)
-        // NOTE: All equality operations are now in the registry (scheme.base/eq?, eqv?, equal?)
-        // NOTE: All string operations are now in the registry (scheme.base/string-length, string-ref, etc.)
-        // NOTE: All vector operations are now in the registry (scheme.base/make-vector, vector-ref, etc.)
-        // NOTE: All multiple value operations are now in the registry (scheme.base/values, call-with-values)
-        // NOTE: All I/O operations are now in the registry (scheme.base/display, write, newline)
-        //
-        // TODO: Migrate remaining primitives to registry when namespace/import system is implemented:
-        // - Debug primitives should be in patina.debug namespace (debug-enable, debug-disable, etc.)
-        // - Test framework primitives should be in patina.test namespace (test-begin, test-end, etc.)
-        // - Macro debug should be in patina.debug namespace (macro-debug-mode)
-        // Currently, apply_primitive only checks scheme.base namespace, so these would need
-        // multi-namespace lookup support or proper import/namespace resolution.
-        match name {
-            // Debug primitives (patina.debug namespace - not yet migrated)
-            "debug-enable" => debug::debug_enable(self, args).map(super::EvalResult::Value),
-            "debug-disable" => debug::debug_disable(self, args).map(super::EvalResult::Value),
-            "debug-clear" => debug::debug_clear(self, args).map(super::EvalResult::Value),
-            "debug-status" => debug::debug_status(self, args).map(super::EvalResult::Value),
-            "debug-mode" => debug::debug_mode(self, args).map(super::EvalResult::Value),
+        // All primitives are now in the registry!
+        // NOTE: All arithmetic operations are in the registry (scheme.base/+, -, *, /, etc.)
+        // NOTE: All list operations are in the registry (scheme.base/cons, car, cdr, list, etc.)
+        // NOTE: All higher-order functions are in the registry (scheme.base/map, for-each)
+        // NOTE: All type predicates are in the registry (scheme.base/number?, boolean?, etc.)
+        // NOTE: All equality operations are in the registry (scheme.base/eq?, eqv?, equal?)
+        // NOTE: All string operations are in the registry (scheme.base/string-length, string-ref, etc.)
+        // NOTE: All vector operations are in the registry (scheme.base/make-vector, vector-ref, etc.)
+        // NOTE: All multiple value operations are in the registry (scheme.base/values, call-with-values)
+        // NOTE: All I/O operations are in the registry (scheme.base/display, write, newline)
+        // NOTE: All debug primitives are in the registry (patina.debug/debug-mode, etc.)
+        // NOTE: All test framework primitives are in the registry (chibi.test/test-begin, test-end, etc.)
 
-            // Testing framework (chibi test)
-            "test-begin" => {
-                self.check_arity_exact(&args, 1, "test-begin")?;
-                let name = match &args[0] {
-                    Value::String(s) => s.borrow().clone(),
-                    Value::Symbol(s) => s.to_string(),
-                    _ => {
-                        return Err(EvalError::TypeError(
-                            "test-begin expects string or symbol".to_string(),
-                        ));
-                    }
-                };
-                patina_runtime::stdlib::test_begin(&name);
-                Ok(super::EvalResult::Value(Value::Unspecified))
-            }
-            "test-end" => {
-                patina_runtime::stdlib::test_end();
-                Ok(super::EvalResult::Value(Value::Unspecified))
-            }
-            "test-increment-passed" => {
-                patina_runtime::stdlib::test_increment_passed();
-                Ok(super::EvalResult::Value(Value::Unspecified))
-            }
-            "test-increment-failed" => {
-                patina_runtime::stdlib::test_increment_failed();
-                Ok(super::EvalResult::Value(Value::Unspecified))
-            }
-            "macro-debug-mode" => {
-                self.check_arity_exact(&args, 1, "macro-debug-mode")?;
-                match &args[0] {
-                    Value::Symbol(s) if s.as_ref() == "on" => {
-                        patina_runtime::macro_debug::enable();
-                        Ok(super::EvalResult::Value(Value::Symbol(
-                            "macro-debug-enabled".into(),
-                        )))
-                    }
-                    Value::Symbol(s) if s.as_ref() == "off" => {
-                        patina_runtime::macro_debug::disable();
-                        Ok(super::EvalResult::Value(Value::Symbol(
-                            "macro-debug-disabled".into(),
-                        )))
-                    }
-                    Value::Symbol(s) if s.as_ref() == "status" => {
-                        let status = if patina_runtime::macro_debug::is_enabled() {
-                            "enabled"
-                        } else {
-                            "disabled"
-                        };
-                        Ok(super::EvalResult::Value(Value::Symbol(status.into())))
-                    }
-                    _ => Err(EvalError::InvalidSyntax(
-                        "macro-debug-mode expects 'on, 'off, or 'status".to_string(),
-                    )),
-                }
-            }
-
-            _ => Err(EvalError::InvalidSyntax(format!(
-                "Unknown primitive: {}",
-                name
-            ))),
-        }
+        // If we reach here, the primitive was not found in the registry
+        Err(EvalError::InvalidSyntax(format!(
+            "Unknown primitive: {}",
+            name
+        )))
     }
 
     /// Register all primitive procedures in the registry
@@ -169,6 +102,8 @@ impl Evaluator {
         vectors::register(registry);
         values::register(registry);
         io::register(registry);
+        debug::register(registry);
+        test::register(registry);
 
         // All core primitives are now in the registry!
     }
