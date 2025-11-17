@@ -64,9 +64,22 @@ pub enum Value {
     // Multiple values (R7RS Section 6.10)
     Values(Vec<Value>),
 
+    // Promises (R7RS Section 6.10 - scheme lazy)
+    // A promise is a delayed computation that can be forced to produce a value
+    Promise(Rc<RefCell<PromiseState>>),
+
     // Special values
     Unspecified,
     Eof,
+}
+
+/// State of a promise for lazy evaluation
+#[derive(Debug, Clone)]
+pub enum PromiseState {
+    /// Not yet evaluated - contains the thunk to evaluate
+    Delayed(Value),
+    /// Evaluated - contains the cached result
+    Forced(Value),
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +136,7 @@ impl Value {
             Value::Macro { .. } => "macro",
             Value::Library(_) => "library",
             Value::Values(_) => "values",
+            Value::Promise(_) => "promise",
             Value::Unspecified => "unspecified",
             Value::Eof => "eof-object",
         }
@@ -236,6 +250,7 @@ impl std::fmt::Display for Value {
                 }
                 Ok(())
             }
+            Value::Promise(_) => write!(f, "#<promise>"),
             Value::Unspecified => write!(f, "#<unspecified>"),
             Value::Eof => write!(f, "#<eof>"),
         }

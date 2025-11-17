@@ -20,6 +20,7 @@ mod debug;
 pub(in crate::eval) mod equality;
 mod higher_order;
 mod io;
+mod lazy;
 mod lists;
 mod predicates;
 mod strings;
@@ -104,6 +105,7 @@ impl Evaluator {
         io::register(registry);
         debug::register(registry);
         test::register(registry);
+        lazy::register(registry);
 
         // All core primitives are now in the registry!
     }

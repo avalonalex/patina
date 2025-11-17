@@ -201,45 +201,39 @@ Testing:
 Testing: 
 (force (delay (+ 1 2)))
 
-Error: Undefined variable: force
 Testing: 
 (let ((p (delay (+ 1 2)))) (list (force p) (force p)))
 
-Error: Undefined variable: delay
-Error: Undefined variable: delay
 Testing: 
 (head (tail (tail integers)))
 
-Error: Undefined variable: integers
 Testing: 
 (head (tail (tail (stream-filter odd? integers))))
 
-Error: Undefined variable: integers
-Error: Undefined variable: delay
+Testing: 
+(force p)
+
+Testing: 
+(begin (set! x 10) (force p))
+
 Testing: 
 (promise? (delay (+ 2 2)))
 
-Error: Undefined variable: promise?
 Testing: 
 (promise? (make-promise (+ 2 2)))
 
-Error: Undefined variable: promise?
 Testing: 
 (let ((x (delay (+ 2 2)))) (force x) (promise? x))
 
-Error: Undefined variable: delay
 Testing: 
 (let ((x (make-promise (+ 2 2)))) (force x) (promise? x))
 
-Error: Undefined variable: make-promise
 Testing: 
 (force (make-promise (+ 2 2)))
 
-Error: Undefined variable: force
 Testing: 
 (force (make-promise (make-promise (+ 2 2))))
 
-Error: Undefined variable: force
 Error: Undefined variable: make-parameter
 Testing: 
 (f 12)
@@ -332,7 +326,7 @@ Testing:
 (dead-clause 1 2 3)
 
 Error: Undefined variable: dead-clause
-Tests run: 46, Passed: 46, Failed: 0
+Tests run: 58, Passed: 58, Failed: 0
 
 Running test suite: 4.3 Macros
 Testing: 
@@ -423,6 +417,6 @@ Error: Undefined variable: let-syntax
 Testing: 
 (quux399)
 
-Error: Undefined variable: ##bar399#1031
+Error: Undefined variable: ##bar399#1069
 Error: Undefined variable: let-syntax
 Error: Lexer error: Unexpected character: |

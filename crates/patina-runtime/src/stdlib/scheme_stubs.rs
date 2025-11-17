@@ -6,12 +6,6 @@
 use crate::environment::Environment;
 use std::rc::Rc;
 
-/// (scheme lazy) - Promises and delays
-pub fn build_scheme_lazy(_name: Vec<String>, _env: Rc<Environment>) -> Vec<String> {
-    // TODO: Implement delay, force, delay-force, promise?
-    vec![]
-}
-
 /// (scheme time) - Time operations
 pub fn build_scheme_time(_name: Vec<String>, _env: Rc<Environment>) -> Vec<String> {
     // TODO: Implement current-second, current-jiffy, jiffies-per-second

@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-16 21:04:18
+**Generated:** 2025-11-16 22:33:43
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 73 | 57.9% |
+| ✅ Passed | 85 | 67.5% |
 | ❌ Failed | 0 | 0.0% |
-| ⚠️ Error (crashed) | 53 | 42.1% |
+| ⚠️ Error (crashed) | 41 | 32.5% |
 | **Total** | **126** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
@@ -25,18 +25,6 @@ FAIL:
 ### Errors
 
 ```
-Error: Undefined variable: force
-Error: Undefined variable: delay
-Error: Undefined variable: delay
-Error: Undefined variable: integers
-Error: Undefined variable: integers
-Error: Undefined variable: delay
-Error: Undefined variable: promise?
-Error: Undefined variable: promise?
-Error: Undefined variable: delay
-Error: Undefined variable: make-promise
-Error: Undefined variable: force
-Error: Undefined variable: force
 Error: Undefined variable: make-parameter
 Error: Undefined variable: number->string
 Error: Undefined variable: parameterize
@@ -75,7 +63,7 @@ Error: Not a procedure: ok
 Error: Undefined variable: let-syntax
 Error: Invalid syntax: Expected syntax-rules
 Error: Undefined variable: let-syntax
-Error: Undefined variable: ##bar399#1031
+Error: Undefined variable: ##bar399#1069
 Error: Undefined variable: let-syntax
 Error: Lexer error: Unexpected character: |
 ```
