@@ -47,12 +47,6 @@ pub fn build_scheme_process_context(_name: Vec<String>, _env: Rc<Environment>) -
     vec![]
 }
 
-/// (scheme case-lambda) - Case lambda
-pub fn build_scheme_case_lambda(_name: Vec<String>, _env: Rc<Environment>) -> Vec<String> {
-    // TODO: Implement case-lambda syntax
-    vec![]
-}
-
 /// (scheme r5rs) - R5RS compatibility
 pub fn build_scheme_r5rs(_name: Vec<String>, _env: Rc<Environment>) -> Vec<String> {
     // TODO: Re-export everything from (scheme base) plus R5RS-specific items

@@ -70,3 +70,15 @@ pub fn assert_program_eval_to(code: &str, expected: &str) {
         code, expected, result
     );
 }
+
+/// Assert that evaluating a multi-expression program produces an error
+pub fn assert_program_eval_error(code: &str) {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let result = interp.eval_program(code);
+
+    assert!(
+        result.is_err(),
+        "Expected error for program, but got: {:?}",
+        result.unwrap()
+    );
+}

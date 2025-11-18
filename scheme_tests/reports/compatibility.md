@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-16 22:57:04
+**Generated:** 2025-11-17 20:20:11
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 85 | 67.5% |
+| ✅ Passed | 98 | 79.7% |
 | ❌ Failed | 0 | 0.0% |
-| ⚠️ Error (crashed) | 41 | 32.5% |
-| **Total** | **126** | **100%** |
+| ⚠️ Error (crashed) | 25 | 20.3% |
+| **Total** | **123** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -29,22 +29,6 @@ Error: Undefined variable: make-parameter
 Error: Undefined variable: number->string
 Error: Undefined variable: parameterize
 Error: Undefined variable: number->string
-Error: Undefined variable: case-lambda
-Error: Undefined variable: any-arity
-Error: Undefined variable: any-arity
-Error: Undefined variable: any-arity
-Error: Undefined variable: any-arity
-Error: Undefined variable: any-arity
-Error: Undefined variable: case-lambda
-Error: Undefined variable: rest-arity
-Error: Undefined variable: rest-arity
-Error: Undefined variable: rest-arity
-Error: Undefined variable: rest-arity
-Error: Undefined variable: case-lambda
-Error: Undefined variable: dead-clause
-Error: Undefined variable: dead-clause
-Error: Undefined variable: dead-clause
-Error: Undefined variable: dead-clause
 Error: Undefined variable: let-syntax
 Error: Undefined variable: let-syntax
 Error: Undefined variable: letrec-syntax

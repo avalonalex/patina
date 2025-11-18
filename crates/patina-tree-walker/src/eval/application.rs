@@ -125,6 +125,65 @@ impl Evaluator {
                     Ok(super::EvalResult::Value(result))
                 }
             }
+            Value::Procedure(Procedure::CaseLambda { clauses, env }) => {
+                // Try each clause in order to find one that matches the argument count
+                for (params, variadic, body) in clauses {
+                    let matches = if variadic.is_some() {
+                        // Variadic clause: need at least as many args as fixed params
+                        args.len() >= params.len()
+                    } else {
+                        // Fixed arity clause: need exact number of args
+                        args.len() == params.len()
+                    };
+
+                    if matches {
+                        // Found a matching clause - bind arguments and evaluate body
+                        let new_env = Rc::new(Environment::with_parent(env.clone()));
+
+                        // Bind fixed parameters
+                        for (param, arg) in params.iter().zip(args.iter()) {
+                            new_env.define(param.clone(), arg.clone());
+                        }
+
+                        // Bind rest parameter if variadic
+                        if let Some(rest_param) = variadic {
+                            // Collect remaining args into a list
+                            let rest_args: Vec<Value> =
+                                args.into_iter().skip(params.len()).collect();
+                            let rest_list = self.list_from_vec(rest_args);
+                            new_env.define(rest_param.clone(), rest_list);
+                        }
+
+                        // Evaluate body expressions in sequence
+                        // If we're in tail position, the last expression of the lambda body
+                        // should be returned as a TailCall
+                        if in_tail_position && !body.is_empty() {
+                            // Evaluate all but the last expression
+                            for expr in &body[..body.len() - 1] {
+                                self.eval_in_env(expr, &new_env)?;
+                            }
+                            // Last expression is in tail position
+                            return Ok(super::EvalResult::TailCall {
+                                expr: body.last().unwrap().clone(),
+                                env: new_env,
+                            });
+                        } else {
+                            // Not in tail position or empty body
+                            let mut result = Value::Unspecified;
+                            for expr in body {
+                                result = self.eval_in_env(&expr, &new_env)?;
+                            }
+                            return Ok(super::EvalResult::Value(result));
+                        }
+                    }
+                }
+
+                // No matching clause found
+                Err(EvalError::WrongArity {
+                    expected: format!("case-lambda: no clause matches {} arguments", args.len()),
+                    actual: args.len(),
+                })
+            }
             _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
         };
 

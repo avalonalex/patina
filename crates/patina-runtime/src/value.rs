@@ -100,6 +100,13 @@ pub enum Procedure {
         env: Rc<Environment>, // Captured environment for closures
     },
 
+    /// Case-lambda procedure (dispatches on argument count)
+    /// Each clause is (params, variadic, body)
+    CaseLambda {
+        clauses: Vec<(Vec<String>, Option<String>, Vec<Value>)>,
+        env: Rc<Environment>, // Captured environment for closures
+    },
+
     /// Continuation (for call/cc)
     Continuation,
 }
@@ -233,6 +240,7 @@ impl std::fmt::Display for Value {
                     write!(f, "#<procedure:{}:{}>", library.join("."), name)
                 }
                 Procedure::Lambda { .. } => write!(f, "#<procedure>"),
+                Procedure::CaseLambda { .. } => write!(f, "#<procedure:case-lambda>"),
                 Procedure::Continuation => write!(f, "#<continuation>"),
             },
             Value::InputPort => write!(f, "#<input-port>"),

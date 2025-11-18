@@ -56,6 +56,7 @@ pub use trait_def::SpecialForm;
 // Individual special form implementations
 mod apply;
 mod begin;
+mod case_lambda;
 mod define;
 mod define_syntax;
 mod expand;
@@ -133,6 +134,9 @@ pub fn build_registry() -> SpecialFormRegistry {
     registry.register(Box::new(import::ImportForm));
     registry.register(Box::new(define_syntax::DefineSyntaxForm));
     registry.register(Box::new(quasiquote::QuasiquoteForm));
+
+    // R7RS (scheme case-lambda) special forms
+    registry.register(Box::new(case_lambda::CaseLambdaForm));
 
     // Patina debugging extensions
     // TODO: Move to (patina debug) library when we implement library-specific special forms

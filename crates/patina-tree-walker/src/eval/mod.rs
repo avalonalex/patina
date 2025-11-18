@@ -121,6 +121,10 @@ impl Evaluator {
             stdlib::build_scheme_lazy,
         );
         rust_loader.register(
+            vec!["scheme".to_string(), "case-lambda".to_string()],
+            stdlib::build_scheme_case_lambda,
+        );
+        rust_loader.register(
             vec!["scheme".to_string(), "time".to_string()],
             stdlib::build_scheme_time,
         );

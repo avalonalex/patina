@@ -271,62 +271,46 @@ Testing:
 Testing: 
 `(list ,(+ 1 2) 4)
 
-Error: Undefined variable: case-lambda
 Testing: 
 (any-arity)
 
-Error: Undefined variable: any-arity
 Testing: 
 (any-arity 1)
 
-Error: Undefined variable: any-arity
 Testing: 
 (any-arity 1 2)
 
-Error: Undefined variable: any-arity
 Testing: 
 (any-arity 1 2 3)
 
-Error: Undefined variable: any-arity
 Testing: 
 (any-arity 1 2 3 4)
 
-Error: Undefined variable: any-arity
-Error: Undefined variable: case-lambda
 Testing: 
 (rest-arity)
 
-Error: Undefined variable: rest-arity
 Testing: 
 (rest-arity 1)
 
-Error: Undefined variable: rest-arity
 Testing: 
 (rest-arity 1 2)
 
-Error: Undefined variable: rest-arity
 Testing: 
 (rest-arity 1 2 3)
 
-Error: Undefined variable: rest-arity
-Error: Undefined variable: case-lambda
 Testing: 
 (dead-clause)
 
-Error: Undefined variable: dead-clause
 Testing: 
 (dead-clause 1)
 
-Error: Undefined variable: dead-clause
 Testing: 
 (dead-clause 1 2)
 
-Error: Undefined variable: dead-clause
 Testing: 
 (dead-clause 1 2 3)
 
-Error: Undefined variable: dead-clause
-Tests run: 58, Passed: 58, Failed: 0
+Tests run: 71, Passed: 71, Failed: 0
 
 Running test suite: 4.3 Macros
 Testing: 
