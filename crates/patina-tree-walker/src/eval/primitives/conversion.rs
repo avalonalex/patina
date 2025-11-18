@@ -282,17 +282,15 @@ impl Evaluator {
             // Try parsing rational (e.g., "3/4")
             if s.contains('/') {
                 let parts: Vec<&str> = s.split('/').collect();
-                if parts.len() == 2 {
-                    if let (Ok(numer), Ok(denom)) =
+                if parts.len() == 2
+                    && let (Ok(numer), Ok(denom)) =
                         (parts[0].parse::<i64>(), parts[1].parse::<i64>())
-                    {
-                        if denom != 0 {
-                            return Some(Value::Rational(BigRational::new(
-                                BigInt::from(numer),
-                                BigInt::from(denom),
-                            )));
-                        }
-                    }
+                    && denom != 0
+                {
+                    return Some(Value::Rational(BigRational::new(
+                        BigInt::from(numer),
+                        BigInt::from(denom),
+                    )));
                 }
             }
         }
