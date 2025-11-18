@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-17 20:20:11
+**Generated:** 2025-11-17 20:40:08
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
@@ -26,9 +26,9 @@ FAIL:
 
 ```
 Error: Undefined variable: make-parameter
-Error: Undefined variable: number->string
+Error: Undefined variable: radix
 Error: Undefined variable: parameterize
-Error: Undefined variable: number->string
+Error: Undefined variable: radix
 Error: Undefined variable: let-syntax
 Error: Undefined variable: let-syntax
 Error: Undefined variable: letrec-syntax

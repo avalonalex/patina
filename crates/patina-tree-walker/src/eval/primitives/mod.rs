@@ -16,6 +16,7 @@
 pub mod registry;
 
 mod arithmetic;
+mod conversion;
 mod debug;
 pub(in crate::eval) mod equality;
 mod higher_order;
@@ -68,19 +69,6 @@ impl Evaluator {
             return Ok(result);
         }
 
-        // All primitives are now in the registry!
-        // NOTE: All arithmetic operations are in the registry (scheme.base/+, -, *, /, etc.)
-        // NOTE: All list operations are in the registry (scheme.base/cons, car, cdr, list, etc.)
-        // NOTE: All higher-order functions are in the registry (scheme.base/map, for-each)
-        // NOTE: All type predicates are in the registry (scheme.base/number?, boolean?, etc.)
-        // NOTE: All equality operations are in the registry (scheme.base/eq?, eqv?, equal?)
-        // NOTE: All string operations are in the registry (scheme.base/string-length, string-ref, etc.)
-        // NOTE: All vector operations are in the registry (scheme.base/make-vector, vector-ref, etc.)
-        // NOTE: All multiple value operations are in the registry (scheme.base/values, call-with-values)
-        // NOTE: All I/O operations are in the registry (scheme.base/display, write, newline)
-        // NOTE: All debug primitives are in the registry (patina.debug/debug-mode, etc.)
-        // NOTE: All test framework primitives are in the registry (chibi.test/test-begin, test-end, etc.)
-
         // If we reach here, the primitive was not found in the registry
         Err(EvalError::InvalidSyntax(format!(
             "Unknown primitive: {}",
@@ -95,6 +83,7 @@ impl Evaluator {
     pub(super) fn register_all_primitives(registry: &mut PrimitiveRegistry) {
         // Register primitives by category
         arithmetic::register(registry);
+        conversion::register(registry);
         lists::register(registry);
         higher_order::register(registry);
         predicates::register(registry);

@@ -238,7 +238,7 @@ Error: Undefined variable: make-parameter
 Testing: 
 (f 12)
 
-Error: Undefined variable: number->string
+Error: Undefined variable: radix
 Testing: 
 (parameterize ((radix 2)) (f 12))
 
@@ -246,7 +246,7 @@ Error: Undefined variable: parameterize
 Testing: 
 (f 12)
 
-Error: Undefined variable: number->string
+Error: Undefined variable: radix
 Testing: 
 `(list ,(+ 1 2) 4)
 
