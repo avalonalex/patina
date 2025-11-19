@@ -132,6 +132,14 @@ impl Compiler {
                 .map(|(name, pvref)| (*pvref, name.clone()))
                 .collect();
 
+            // Validate the rule before adding it
+            if let Err(e) = super::validator::validate_rule(&pattern, &template, &pvar_names) {
+                return Err(FrontendError::MacroError(format!(
+                    "Macro '{}' validation failed: {}",
+                    name, e
+                )));
+            }
+
             compiled_rules.push(CompiledRule {
                 pattern,
                 template,

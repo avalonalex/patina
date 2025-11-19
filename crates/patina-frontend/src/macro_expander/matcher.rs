@@ -57,27 +57,47 @@ impl std::fmt::Display for MatchError {
             } => {
                 write!(
                     f,
-                    "Pattern {} requires at least {} elements, got {}",
+                    "Pattern matching failed: {} requires at least {} element(s), but input has only {}\n\
+                     Hint: Check that your macro call provides enough arguments",
                     pattern, expected, actual
                 )
             }
             MatchError::TooManyElements { expected, actual } => {
                 write!(
                     f,
-                    "Pattern expects {} elements, got {} (no ellipsis to consume extra elements)",
+                    "Pattern matching failed: expected {} element(s), got {}\n\
+                     Hint: Pattern has no ellipsis (...) to consume extra elements. \
+                     Either add '...' to the pattern or remove extra arguments",
                     expected, actual
                 )
             }
             MatchError::LiteralMismatch { expected, actual } => {
-                write!(f, "Literal mismatch: expected {}, got {}", expected, actual)
+                write!(
+                    f,
+                    "Pattern matching failed: literal mismatch\n\
+                     Expected: {}\n\
+                     Got:      {}\n\
+                     Hint: Literals in patterns must match exactly",
+                    expected, actual
+                )
             }
             MatchError::TypeMismatch { expected, actual } => {
-                write!(f, "Type mismatch: expected {}, got {}", expected, actual)
+                write!(
+                    f,
+                    "Pattern matching failed: type mismatch\n\
+                     Expected: {}\n\
+                     Got:      {}\n\
+                     Hint: List patterns only match lists, vector patterns only match vectors",
+                    expected, actual
+                )
             }
             MatchError::VectorSizeMismatch { expected, actual } => {
                 write!(
                     f,
-                    "Vector size mismatch: expected {}, got {}",
+                    "Pattern matching failed: vector size mismatch\n\
+                     Expected: {} element(s)\n\
+                     Got:      {} element(s)\n\
+                     Hint: Vector patterns must match the exact number of elements (no ellipsis support yet)",
                     expected, actual
                 )
             }
@@ -89,7 +109,10 @@ impl std::fmt::Display for MatchError {
             } => {
                 write!(
                     f,
-                    "Inconsistent repetition: {} matched {} times, {} matched {} times",
+                    "Pattern matching failed: inconsistent repetition in ellipsis pattern\n\
+                     Variable '{}' matched {} time(s)\n\
+                     Variable '{}' matched {} time(s)\n\
+                     Hint: All variables in the same ellipsis pattern must match the same number of times",
                     var1, count1, var2, count2
                 )
             }
@@ -202,13 +225,13 @@ impl Matcher {
             }
 
             Pattern::Literal(lit) => {
-                // Literal must match exactly
+                // Literal must match exactly (using Debug format for precise comparison)
                 if format!("{:?}", lit) == format!("{:?}", input) {
                     Ok(())
                 } else {
                     Err(MatchError::LiteralMismatch {
-                        expected: format!("{}", lit),
-                        actual: format!("{}", input),
+                        expected: format!("{:?}", lit),
+                        actual: format!("{:?}", input),
                     })
                 }
             }
@@ -860,6 +883,142 @@ mod tests {
         assert_eq!(
             format!("{:?}", y_bound),
             format!("{:?}", Some(Value::Integer(99)))
+        );
+    }
+
+    // === Error Condition Tests ===
+
+    #[test]
+    fn test_error_too_many_elements() {
+        // Pattern: (x y) without ellipsis
+        // Input: (1 2 3) - too many elements
+        let matcher = Matcher::new(2);
+        let pattern = Pattern::List(vec![
+            Pattern::Var(PVRef::new(0, 0)),
+            Pattern::Var(PVRef::new(0, 1)),
+        ]);
+
+        let input = make_list(vec![
+            Value::Integer(1),
+            Value::Integer(2),
+            Value::Integer(3), // extra!
+        ]);
+
+        let result = matcher.match_pattern(&pattern, &input);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), MatchError::TooManyElements { .. }),
+            "Expected TooManyElements error"
+        );
+    }
+
+    #[test]
+    fn test_error_type_mismatch_list_vs_vector() {
+        // Pattern: (x y) - expects list
+        // Input: #(1 2) - vector
+        let matcher = Matcher::new(2);
+        let pattern = Pattern::List(vec![
+            Pattern::Var(PVRef::new(0, 0)),
+            Pattern::Var(PVRef::new(0, 1)),
+        ]);
+
+        let input = Value::Vector(Rc::new(std::cell::RefCell::new(vec![
+            Value::Integer(1),
+            Value::Integer(2),
+        ])));
+
+        let result = matcher.match_pattern(&pattern, &input);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), MatchError::TypeMismatch { .. }),
+            "Expected TypeMismatch error"
+        );
+    }
+
+    #[test]
+    fn test_error_type_mismatch_vector_vs_list() {
+        // Pattern: #(x y) - expects vector
+        // Input: (1 2) - list
+        let matcher = Matcher::new(2);
+        let pattern = Pattern::Vector(vec![
+            Pattern::Var(PVRef::new(0, 0)),
+            Pattern::Var(PVRef::new(0, 1)),
+        ]);
+
+        let input = make_list(vec![Value::Integer(1), Value::Integer(2)]);
+
+        let result = matcher.match_pattern(&pattern, &input);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), MatchError::TypeMismatch { .. }),
+            "Expected TypeMismatch error"
+        );
+    }
+
+    #[test]
+    fn test_error_vector_size_mismatch() {
+        // Pattern: #(x y z) - expects 3 elements
+        // Input: #(1 2) - only 2 elements
+        let matcher = Matcher::new(3);
+        let pattern = Pattern::Vector(vec![
+            Pattern::Var(PVRef::new(0, 0)),
+            Pattern::Var(PVRef::new(0, 1)),
+            Pattern::Var(PVRef::new(0, 2)),
+        ]);
+
+        let input = Value::Vector(Rc::new(std::cell::RefCell::new(vec![
+            Value::Integer(1),
+            Value::Integer(2),
+        ])));
+
+        let result = matcher.match_pattern(&pattern, &input);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), MatchError::VectorSizeMismatch { .. }),
+            "Expected VectorSizeMismatch error"
+        );
+    }
+
+    #[test]
+    fn test_error_type_mismatch_list_vs_atom() {
+        // Pattern: (x y) - expects list
+        // Input: 42 - atom
+        let matcher = Matcher::new(2);
+        let pattern = Pattern::List(vec![
+            Pattern::Var(PVRef::new(0, 0)),
+            Pattern::Var(PVRef::new(0, 1)),
+        ]);
+
+        let input = Value::Integer(42);
+
+        let result = matcher.match_pattern(&pattern, &input);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), MatchError::TypeMismatch { .. }),
+            "Expected TypeMismatch error"
+        );
+    }
+
+    #[test]
+    fn test_error_dotted_list_too_few() {
+        // Pattern: (x y . rest) - expects at least 2 elements
+        // Input: (1) - only 1 element
+        let matcher = Matcher::new(3);
+        let pattern = Pattern::DottedList {
+            patterns: vec![
+                Pattern::Var(PVRef::new(0, 0)),
+                Pattern::Var(PVRef::new(0, 1)),
+            ],
+            tail: Box::new(Pattern::Var(PVRef::new(0, 2))),
+        };
+
+        let input = make_list(vec![Value::Integer(1)]);
+
+        let result = matcher.match_pattern(&pattern, &input);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), MatchError::TooFewElements { .. }),
+            "Expected TooFewElements error"
         );
     }
 }

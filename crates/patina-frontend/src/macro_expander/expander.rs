@@ -41,7 +41,13 @@ impl std::fmt::Display for ExpandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExpandError::UndefinedVariable { pvref } => {
-                write!(f, "Undefined pattern variable: {}", pvref)
+                write!(
+                    f,
+                    "Template expansion failed: undefined pattern variable: {}\n\
+                     Hint: This variable was not bound during pattern matching. \
+                     Check that the variable appears in the macro pattern",
+                    pvref
+                )
             }
             ExpandError::LevelMismatch {
                 pvref,
@@ -50,19 +56,32 @@ impl std::fmt::Display for ExpandError {
             } => {
                 write!(
                     f,
-                    "Variable {} used at level {} but defined at level {}",
+                    "Template expansion failed: ellipsis level mismatch\n\
+                     Variable:       {}\n\
+                     Template level: {}\n\
+                     Actual level:   {}\n\
+                     Hint: Variable must be used at the same ellipsis nesting depth where it was bound",
                     pvref, template_level, actual_level
                 )
             }
             ExpandError::InconsistentRepetition { expected, actual } => {
                 write!(
                     f,
-                    "Inconsistent ellipsis repetition: expected {}, got {}",
+                    "Template expansion failed: inconsistent ellipsis repetition\n\
+                     Expected: {} iteration(s)\n\
+                     Got:      {} iteration(s)\n\
+                     Hint: All variables in the same ellipsis template must have the same repetition count",
                     expected, actual
                 )
             }
             ExpandError::InvalidTemplate { message } => {
-                write!(f, "Invalid template: {}", message)
+                write!(
+                    f,
+                    "Template expansion failed: invalid template structure\n\
+                     Error: {}\n\
+                     Hint: Check the macro template syntax",
+                    message
+                )
             }
         }
     }
@@ -898,5 +917,177 @@ mod tests {
         ]);
 
         assert_eq!(format!("{:?}", result.unwrap()), format!("{:?}", expected));
+    }
+
+    // === Error Condition Tests ===
+
+    #[test]
+    fn test_error_undefined_variable() {
+        // Template references a variable that's not in the environment
+        let expander = Expander::new();
+        let x = PVRef::new(0, 5); // Out of bounds!
+        let template = Template::Var(x);
+
+        let env = MatchEnv::new(1); // Only has space for 1 var (index 0)
+
+        let result = expander.expand(&template, &env);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), ExpandError::UndefinedVariable { .. }),
+            "Expected UndefinedVariable error"
+        );
+    }
+
+    #[test]
+    fn test_error_inconsistent_repetition() {
+        // Two variables in same ellipsis with different repetition counts
+        let expander = Expander::new();
+        let x = PVRef::new(1, 0);
+        let y = PVRef::new(1, 1);
+
+        // Template: ((x y) ...)
+        let template = Template::List(vec![Template::Ellipsis {
+            subtemplate: Box::new(Template::List(vec![Template::Var(x), Template::Var(y)])),
+            level: 1,
+            nesting: 1,
+            vars: vec![x, y],
+        }]);
+
+        let mut env = MatchEnv::new(2);
+        // x has 3 values
+        env.insert_branch(
+            x,
+            vec![
+                MatchValue::Leaf(Value::Integer(1)),
+                MatchValue::Leaf(Value::Integer(2)),
+                MatchValue::Leaf(Value::Integer(3)),
+            ],
+        );
+        // y has only 2 values - INCONSISTENT!
+        env.insert_branch(
+            y,
+            vec![
+                MatchValue::Leaf(Value::Integer(10)),
+                MatchValue::Leaf(Value::Integer(20)),
+            ],
+        );
+
+        let result = expander.expand(&template, &env);
+        assert!(result.is_err());
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                ExpandError::InconsistentRepetition { .. }
+            ),
+            "Expected InconsistentRepetition error"
+        );
+    }
+
+    #[test]
+    fn test_error_triple_ellipsis_not_supported() {
+        // Triple ellipsis (nesting = 3) should be rejected
+        let expander = Expander::new();
+        let x = PVRef::new(3, 0);
+
+        let template = Template::List(vec![Template::Ellipsis {
+            subtemplate: Box::new(Template::Var(x)),
+            level: 1,
+            nesting: 3, // Triple ellipsis!
+            vars: vec![x],
+        }]);
+
+        let env = MatchEnv::new(1);
+
+        let result = expander.expand(&template, &env);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), ExpandError::InvalidTemplate { .. }),
+            "Expected InvalidTemplate error for triple ellipsis"
+        );
+    }
+
+    #[test]
+    fn test_error_double_ellipsis_level_zero() {
+        // Double ellipsis with level 0 is invalid
+        let expander = Expander::new();
+        let x = PVRef::new(1, 0);
+
+        let template = Template::List(vec![Template::Ellipsis {
+            subtemplate: Box::new(Template::Var(x)),
+            level: 0, // Level 0 with double ellipsis is invalid!
+            nesting: 2,
+            vars: vec![x],
+        }]);
+
+        let env = MatchEnv::new(1);
+
+        let result = expander.expand(&template, &env);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), ExpandError::InvalidTemplate { .. }),
+            "Expected InvalidTemplate error for level-0 double ellipsis"
+        );
+    }
+
+    #[test]
+    fn test_error_ellipsis_expands_to_non_list() {
+        // This tests that ellipsis expansion produces a list
+        // Actually, this is hard to trigger with the current implementation
+        // because ellipsis always produces lists. Keeping this as a placeholder
+        // in case we add validation later.
+    }
+
+    #[test]
+    fn test_error_level_mismatch_leaf_instead_of_branch() {
+        // Try to expand an ellipsis when the variable is a Leaf instead of Branch
+        let expander = Expander::new();
+        let x = PVRef::new(1, 0);
+
+        // Template: (x ...)
+        let template = Template::List(vec![Template::Ellipsis {
+            subtemplate: Box::new(Template::Var(x)),
+            level: 1,
+            nesting: 1,
+            vars: vec![x],
+        }]);
+
+        let mut env = MatchEnv::new(1);
+        // Insert x as a Leaf instead of Branch - level mismatch!
+        env.insert(x, Value::Integer(42));
+
+        let result = expander.expand(&template, &env);
+        assert!(result.is_err());
+        // This will likely be UndefinedVariable or LevelMismatch
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                ExpandError::LevelMismatch { .. } | ExpandError::UndefinedVariable { .. }
+            ),
+            "Expected LevelMismatch or UndefinedVariable error"
+        );
+    }
+
+    #[test]
+    fn test_error_undefined_in_nested_context() {
+        // Variable undefined in nested ellipsis context (out of bounds)
+        let expander = Expander::new();
+        let x = PVRef::new(1, 5); // Out of bounds!
+
+        let template = Template::List(vec![Template::Ellipsis {
+            subtemplate: Box::new(Template::Var(x)),
+            level: 1,
+            nesting: 1,
+            vars: vec![x],
+        }]);
+
+        // Create env with limited space
+        let env = MatchEnv::new(1); // Only has space for index 0
+
+        let result = expander.expand(&template, &env);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), ExpandError::UndefinedVariable { .. }),
+            "Expected UndefinedVariable error"
+        );
     }
 }

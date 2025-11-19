@@ -14,6 +14,7 @@ pub mod interface;
 pub mod matcher;
 pub mod pattern;
 pub mod template;
+pub mod validator;
 
 // Re-export main functions
 pub use hygiene::apply_hygiene;
@@ -72,7 +73,11 @@ pub fn expand_macro(
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
         if patina_runtime::macro_debug::is_enabled() {
             println!("[MACRO]   ");
-            println!("[MACRO]   Trying rule {}:", rule_idx + 1);
+            println!("[MACRO]   === Trying rule {} ===", rule_idx + 1);
+            println!(
+                "[MACRO]   Pattern: {}",
+                pattern_to_string_with_names(&rule.pattern, &rule.pvar_names)
+            );
         }
 
         // Create matcher for this rule
@@ -84,8 +89,13 @@ pub fn expand_macro(
             Ok(match_env) => {
                 // Pattern matched! Expand the template
                 if patina_runtime::macro_debug::is_enabled() {
+                    println!("[MACRO]   ✓ Match successful!");
                     println!("[MACRO]   ");
-                    println!("[MACRO]   Expanding template...");
+                    println!("[MACRO]   === Expanding template ===");
+                    println!(
+                        "[MACRO]   Template: {}",
+                        template_to_string(&rule.template, &rule.pvar_names)
+                    );
                 }
 
                 let expanded = expander
@@ -93,7 +103,7 @@ pub fn expand_macro(
                     .map_err(|e| crate::error::FrontendError::InvalidSyntax(e.to_string()))?;
 
                 if patina_runtime::macro_debug::is_enabled() {
-                    println!("[MACRO]   Template result: {}", expanded);
+                    println!("[MACRO]   Expanded: {}", expanded);
                 }
 
                 // Apply hygiene: rename free identifiers
@@ -103,20 +113,27 @@ pub fn expand_macro(
 
                 if patina_runtime::macro_debug::is_enabled() {
                     println!("[MACRO]   ");
-                    println!("[MACRO]   Applying hygiene...");
+                    println!("[MACRO]   === Applying hygiene ===");
                 }
 
                 let hygienic = hygiene::apply_hygiene(&expanded, &pattern_vars, env);
 
                 if patina_runtime::macro_debug::is_enabled() {
-                    println!("[MACRO]   Final result: {}", hygienic);
+                    println!("[MACRO]   Final: {}", hygienic);
+                    println!("[MACRO] ");
+                    println!("[MACRO] ========================================");
+                    println!("[MACRO] Expansion complete!");
                     println!("[MACRO] ");
                 }
 
                 return Ok(hygienic);
             }
-            Err(_) => {
+            Err(e) => {
                 // This rule didn't match, try next one
+                if patina_runtime::macro_debug::is_enabled() {
+                    println!("[MACRO]   ✗ Match failed: {}", e);
+                    println!("[MACRO]   ");
+                }
                 continue;
             }
         }
@@ -202,6 +219,57 @@ fn pattern_to_string_with_names(
         }
         Pattern::Ellipsis { subpattern, .. } => {
             format!("({} ...)", pattern_to_string_with_names(subpattern, names))
+        }
+    }
+}
+
+/// Convert a template to a readable string with variable names for debug output
+fn template_to_string(
+    template: &Template,
+    names: &std::collections::HashMap<patina_runtime::PVRef, std::rc::Rc<str>>,
+) -> String {
+    match template {
+        Template::Literal(v) => format!("{}", v),
+        Template::Symbol(id) => id.name().to_string(),
+        Template::Var(pv) => {
+            // Look up the actual variable name
+            names
+                .get(pv)
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "var".to_string())
+        }
+        Template::List(templates) => {
+            let inner = templates
+                .iter()
+                .map(|t| template_to_string(t, names))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("({})", inner)
+        }
+        Template::DottedList { templates, tail } => {
+            let mut parts: Vec<String> = templates
+                .iter()
+                .map(|t| template_to_string(t, names))
+                .collect();
+            parts.push(".".to_string());
+            parts.push(template_to_string(tail, names));
+            format!("({})", parts.join(" "))
+        }
+        Template::Vector(templates) => {
+            let inner = templates
+                .iter()
+                .map(|t| template_to_string(t, names))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("#({})", inner)
+        }
+        Template::Ellipsis {
+            subtemplate,
+            nesting,
+            ..
+        } => {
+            let dots = (0..*nesting).map(|_| "...").collect::<Vec<_>>().join(" ");
+            format!("({} {})", template_to_string(subtemplate, names), dots)
         }
     }
 }

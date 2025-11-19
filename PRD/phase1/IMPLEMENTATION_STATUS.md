@@ -37,6 +37,11 @@ Patina has achieved **92% feature implementation** with working library system a
 
 **Test Coverage:** 50+ macro tests including real-world examples (swap!, push!, inc!, while, etc.)
 
+**🔍 Debug Mode:** Currently ENABLED globally (see `MACRO_DEBUG_ENABLED.md`)
+- Detailed trace output for all macro expansions
+- Helps debug r7rs-tests.scm issues
+- **TODO:** Disable once all macro tests in r7rs-tests.scm pass
+
 ### Data Structures (100%)
 - ✅ **Lists** - Full pair/list operations (30/30 tests)
 - ✅ **Vectors** - Complete vector support with map/for-each (37/37 tests)
