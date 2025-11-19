@@ -287,6 +287,121 @@ Evaluator → Value (strips source info during evaluation)
 
 **Breaking Changes**: Error type changes. Mostly internal.
 
+## Multi-Backend Considerations
+
+### Why Generic Syntax?
+
+Patina's architecture supports multiple evaluation backends (tree-walker, VM, JIT). Making `Syntax` generic over the data type provides several benefits:
+
+**1. Backend-Specific Representations**
+
+Different backends need different internal representations:
+
+```rust
+// Tree-walker: Uses Value enum as AST
+type TreeWalkerSyntax = Syntax<Value>;
+
+// VM backend: Uses bytecode with source mapping
+type VMSyntax = Syntax<VMInstruction>;
+
+// JIT backend: Uses IR nodes
+type JITSyntax = Syntax<IRNode>;
+```
+
+**2. Source Tracking Through Compilation Pipelines**
+
+Source info can flow through multi-stage compilation:
+
+```
+Source → Syntax<Value> → [Macro Expand] → Syntax<Value>
+       → [Compile to VM] → Syntax<VMInstruction>
+       → [Optimize] → Syntax<VMInstruction>
+       → [Emit] → Bytecode + SourceMap
+```
+
+Each transformation preserves source info for debugging.
+
+**3. Common Error Reporting Infrastructure**
+
+All backends share the same `SourceInfo` and `SourceSpan` types, enabling:
+- Consistent error messages across backends
+- Single implementation of pretty-printing
+- Unified stack trace formatting
+
+### Design Decision: Generic with Default
+
+```rust
+pub struct Syntax<T = Value> {
+    pub data: T,
+    pub source: Option<SourceInfo>,
+}
+```
+
+**The default type parameter `T = Value` means:**
+- Phase 1-5: Can write `Syntax` and it means `Syntax<Value>`
+- Future: When adding VM backend, use `Syntax<VMInstruction>` explicitly
+- Migration is gradual - existing code doesn't break
+
+**Field naming: `data` instead of `value`**
+- `value` would be misleading for `Syntax<VMInstruction>`
+- `data` is generic and works for any backend
+- For tree-walker, `syntax.data` is the `Value` enum
+
+### Backend Pipeline Example
+
+**Tree-walker (current):**
+```rust
+source → Parser → Syntax<Value> → eval() → Value
+```
+
+**Future VM backend:**
+```rust
+source → Parser → Syntax<Value>
+       → Compiler → Syntax<VMInstruction>
+       → VM::execute() → Value
+```
+
+**Future JIT backend:**
+```rust
+source → Parser → Syntax<Value>
+       → Analyzer → Syntax<TypedIR>
+       → JIT::compile() → NativeCode
+       → execute() → Value
+```
+
+Each stage maintains source info for debugging.
+
+### Alternative: Non-Generic Syntax
+
+An alternative design would be to keep `Syntax` specific to `Value`:
+
+```rust
+// Non-generic version
+pub struct Syntax {
+    pub value: Value,
+    pub source: Option<SourceInfo>,
+}
+
+// VM backend would need its own type
+pub struct VMSyntax {
+    pub instruction: VMInstruction,
+    pub source: Option<SourceInfo>,
+}
+```
+
+**Why we chose generic instead:**
+- ✅ Avoids code duplication (each backend reimplements source tracking)
+- ✅ Generic `map()` and utility methods work for all backends
+- ✅ Error types can be generic over `Syntax<T>`
+- ✅ Compiler infrastructure can be polymorphic
+- ✅ Type safety: Can't accidentally mix different representations
+
+**Trade-off:**
+- ⚠️ Slightly more complex type signatures
+- ⚠️ Field name `data` instead of `value` (less specific)
+
+The benefits outweigh the costs, especially for long-term multi-backend support.
+
 ## API Design
 
 ### Core Types
@@ -320,50 +435,68 @@ pub struct SourceSpan {
     pub end_offset: usize,
 }
 
-/// Syntax object: Value annotated with source information
+/// Syntax object: Generic data annotated with source information
+///
+/// This type is generic to support multiple backend representations:
+/// - Tree-walker: `Syntax<Value>` (current AST as Value enum)
+/// - VM backend: `Syntax<VMInstruction>` (bytecode with source mapping)
+/// - JIT backend: `Syntax<IRNode>` (intermediate representation)
+///
+/// For Phase 1 implementation, we use a type alias to `Value` for simplicity,
+/// but the generic design enables future multi-backend support.
 #[derive(Debug, Clone)]
-pub struct Syntax {
-    /// The actual Scheme value
-    pub value: Value,
+pub struct Syntax<T = Value> {
+    /// The actual data (AST node, bytecode, IR, etc.)
+    pub data: T,
     /// Optional source information (None for runtime-generated values)
     pub source: Option<SourceInfo>,
 }
 
-impl Syntax {
+impl<T> Syntax<T> {
     /// Create syntax with source info
-    pub fn new(value: Value, source: Option<SourceInfo>) -> Self {
-        Syntax { value, source }
+    pub fn new(data: T, source: Option<SourceInfo>) -> Self {
+        Syntax { data, source }
     }
 
     /// Create syntax without source info
-    pub fn without_source(value: Value) -> Self {
-        Syntax { value, source: None }
+    pub fn without_source(data: T) -> Self {
+        Syntax { data, source: None }
     }
 
     /// Create syntax with source info
-    pub fn with_source(value: Value, source: SourceInfo) -> Self {
-        Syntax { value, source: Some(source) }
+    pub fn with_source(data: T, source: SourceInfo) -> Self {
+        Syntax { data, source: Some(source) }
     }
 
-    /// Map the value while preserving source info
-    pub fn map_value<F>(self, f: F) -> Self
+    /// Map the data while preserving source info
+    pub fn map<F, U>(self, f: F) -> Syntax<U>
     where
-        F: FnOnce(Value) -> Value,
+        F: FnOnce(T) -> U,
     {
         Syntax {
-            value: f(self.value),
+            data: f(self.data),
             source: self.source,
         }
     }
 
-    /// Unwrap to get the value, discarding source info
-    pub fn into_value(self) -> Value {
-        self.value
+    /// Unwrap to get the data, discarding source info
+    pub fn into_inner(self) -> T {
+        self.data
+    }
+
+    /// Get a reference to the inner data
+    pub fn as_ref(&self) -> &T {
+        &self.data
     }
 }
 
+// Convenience type alias for current tree-walker implementation
+// This makes migration easier - code can use `ValueSyntax` initially,
+// then switch to generic `Syntax<T>` when adding new backends
+pub type ValueSyntax = Syntax<Value>;
+
 // Conversion from Value (for backward compatibility)
-impl From<Value> for Syntax {
+impl From<Value> for ValueSyntax {
     fn from(value: Value) -> Self {
         Syntax::without_source(value)
     }
@@ -437,7 +570,7 @@ impl Parser {
         // ...
     }
 
-    // Primary API - returns Syntax
+    // Primary API - returns Syntax<Value> (using default type parameter)
     pub fn parse(&mut self) -> Result<Syntax, ParseError> {
         self.parse_expr()
     }
@@ -459,6 +592,35 @@ impl Parser {
             span,
         }))
     }
+}
+
+// Note: `Syntax` without type parameter defaults to `Syntax<Value>`
+// This keeps the API simple while supporting future generic use
+```
+
+### Using Syntax in Code
+
+```rust
+// Reading the AST data (tree-walker backend)
+let syntax: Syntax = parser.parse()?;
+let value: &Value = &syntax.data;  // or syntax.as_ref()
+
+// Transforming while preserving source
+let new_syntax = syntax.map(|value| {
+    // Transform the value
+    expand_macro(value)
+});
+
+// Converting to runtime value (strips source info)
+let runtime_value = syntax.into_inner();
+
+// For future VM backend
+fn compile_to_vm(syntax: Syntax) -> Syntax<VMInstruction> {
+    syntax.map(|value| {
+        // Compile Value to VMInstruction
+        compile(value)
+    })
+    // Source info is preserved through transformation!
 }
 ```
 
@@ -537,9 +699,13 @@ eval(value, env)
 
 // After:
 let syntax = parser.parse()?;
-eval(syntax.value, env)
+eval(syntax.data, env)
 // Or keep syntax for better errors:
 eval_with_source(syntax, env)
+
+// Or use into_inner() for clarity:
+let syntax = parser.parse()?;
+eval(syntax.into_inner(), env)
 ```
 
 ### Phase 3: Remove Legacy API
@@ -658,7 +824,7 @@ impl<B: Backend> Interpreter<B> {
         let mut parser = Parser::new_with_file(input, source_name)?;
         let syntax = parser.parse()?;
         self.backend
-            .eval_global(&syntax.value)
+            .eval_global(&syntax.data)  // Extract Value from Syntax<Value>
             .map_err(InterpreterError::Backend)
     }
 
