@@ -2,7 +2,7 @@
 
 This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2025-11-11
+**Last Updated:** 2025-11-18
 
 ---
 
@@ -106,6 +106,27 @@ Implementation documentation for completed features:
 - Bug with nested macro calls (RESOLVED 2025-11-08)
 - Pattern variable preservation issue
 - Fixed by collecting symbols from binding values
+
+---
+
+### 📁 `completed_planning/`
+**Status:** ✅ COMPLETE - Planning documents for completed tasks
+
+#### `WORKSPACE_CLEANUP_PLAN.md` (2025-11-11)
+- Planning document for workspace migration cleanup
+- Documented outdated documentation and redundant files
+- All action items completed
+- Workspace successfully migrated and cleaned
+
+---
+
+### 📁 `documentation/`
+**Status:** Historical documentation meta-files
+
+#### `DOCUMENTATION_MAP.md` (2025-11-09)
+- Quick reference guide for documentation navigation
+- Superseded by CLAUDE.md's documentation section
+- Archived to reduce cognitive overhead (2025-11-18)
 
 ---
 

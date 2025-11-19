@@ -87,7 +87,6 @@ patina-tests → patina-interpreter
 
 - **`PRD/phase1/`** - Strategic planning and high-level design (current phase only)
   - **`IMPLEMENTATION_STATUS.md`** - ⭐ **CANONICAL** overall roadmap, priorities, and remaining work
-  - **`R7RS_ROADMAP.md`** - Strategic roadmap for R7RS compliance (phases, strategy, rationale)
   - **`NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
   - `STRING_OPTIMIZATION.md` - Future optimization plans (deferred)
   - `HELP_SYSTEM.md` - Future help system design (deferred)

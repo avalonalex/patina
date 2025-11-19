@@ -2,7 +2,7 @@
 
 This directory contains Product Requirement Documents (PRDs) for features that have been successfully implemented during Phase 1 (R7RS Compliance).
 
-**Last Updated:** 2025-11-11
+**Last Updated:** 2025-11-18
 
 ---
 
@@ -29,7 +29,7 @@ But preserved for:
 
 ## Archived Documents
 
-### 📁 `phase1_planning/` (NEW - 2025-11-11)
+### 📁 `phase1_planning/`
 
 **Completed high-level planning and strategy documents**
 
@@ -37,6 +37,11 @@ After workspace refactoring, these planning docs served their purpose:
 - `R7RS_ROADMAP.md` - Strategic roadmap (now in code structure)
 - `R7RS_TESTING_STRATEGY.md` - Test organization (now in `docs/TEST_ORGANIZATION.md`)
 - `CHIBI_TEST_SUITE_ANALYSIS.md` - Test suite analysis (tests now implemented)
+
+**Archived 2025-11-18:**
+- `ROADMAP_2025-11.md` - Root-level roadmap snapshot from Nov 2025 (outdated: showed 47% complete, actually 92%)
+- `PRD_ROADMAP_2025-11.md` - PRD-level roadmap snapshot from Nov 2025 (outdated)
+- **Current Source of Truth:** `PRD/phase1/IMPLEMENTATION_STATUS.md` (canonical, actively updated)
 
 These guided initial development but details are now captured in working code and active tests.
 
@@ -150,8 +155,8 @@ src/eval/
 ### In PRD/phase1/ (Active Phase 1)
 
 **Living Documents (Continuously Updated):**
-- ⭐ `IMPLEMENTATION_STATUS.md` - Current progress, roadmap, priorities
-- ⭐ `NUMERIC_SUMMARY.md` - Canonical numeric tower guide
+- ⭐ `IMPLEMENTATION_STATUS.md` - ⭐ **CANONICAL** Current progress, roadmap, priorities
+- ⭐ `NUMERIC_SUMMARY.md` - ⭐ **CANONICAL** Numeric tower guide
 - ⭐ `TAIL_CALL_OPTIMIZATION.md` - ✅ Complete technical summary (keep for reference!)
 
 **Implementation Plans (Not Yet Complete):**
@@ -215,8 +220,7 @@ This archive should:
 - ❌ Not be used for active development planning
 
 For current plans and status, always consult:
-- `PRD/phase1/IMPLEMENTATION_STATUS.md`
-- `PRD/phase1/R7RS_ROADMAP.md`
+- ⭐ `PRD/phase1/IMPLEMENTATION_STATUS.md` (canonical roadmap and status)
 - Active phase 1 docs in `PRD/phase1/`
 
 ---

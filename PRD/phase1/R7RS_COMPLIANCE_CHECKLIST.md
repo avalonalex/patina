@@ -743,8 +743,7 @@ This document provides a comprehensive checklist for achieving full R7RS-small c
 
 ### Related Documents
 
-- `PRD/phase1/IMPLEMENTATION_STATUS.md` - Overall status
-- `PRD/phase1/R7RS_ROADMAP.md` - Strategic roadmap
+- `PRD/phase1/IMPLEMENTATION_STATUS.md` - Overall status and strategic roadmap
 - `docs/FEATURE_STATUS.md` - Detailed feature matrix
 - `docs/TEST_ORGANIZATION.md` - Test structure
 

@@ -468,7 +468,6 @@ Based on chibi test results, the highest-impact missing features are:
 ### Documentation
 - **R7RS Spec:** `spec/r7rs-small-spec/`
 - **Feature Status:** `docs/FEATURE_STATUS.md` (detailed test matrix)
-- **Roadmap:** `PRD/phase1/R7RS_ROADMAP.md` (strategic planning)
 - **Internal Docs:** `internal/` (implementation notes)
 
 ### Reference Implementations
