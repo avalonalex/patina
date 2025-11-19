@@ -245,7 +245,30 @@ Evaluator → Value (strips source info during evaluation)
 
 **Breaking Changes**: Error type changes. Mostly internal.
 
-### Phase 5: Stack Trace Enhancement (Future)
+### Phase 5: REPL Integration
+
+**Goal**: Source tracking works seamlessly in the REPL
+
+**Tasks:**
+1. Update `Repl` struct:
+   - Add `expression_counter: usize` field
+   - Generate synthetic source names: `"<repl-N>"`
+
+2. Add new interpreter method:
+   - `eval_str_with_source(input: &str, source_name: &str)`
+   - Keep backward-compatible `eval_str()` calling with `"<input>"`
+
+3. Update REPL loop:
+   - Pass synthetic source name to interpreter
+   - Error messages automatically include source location
+
+4. Optional: Expression history tracking:
+   - Store mapping `"<repl-N>" -> source_code`
+   - Display full context when showing old errors
+
+**Breaking Changes**: None (REPL is user-facing, API unchanged)
+
+### Phase 6: Stack Trace Enhancement (Future)
 
 **Goal**: Show source locations in stack traces
 
@@ -258,9 +281,11 @@ Evaluator → Value (strips source info during evaluation)
    - `Procedure::Lambda` stores source info of definition site
    - Stack traces show where functions were defined
 
-3. REPL integration:
-   - Track REPL input as synthetic source files
-   - Show source context for REPL expressions
+3. Advanced REPL features:
+   - Show call stacks spanning multiple REPL expressions
+   - Cross-reference between REPL definitions
+
+**Breaking Changes**: Error type changes. Mostly internal.
 
 ## API Design
 
@@ -568,6 +593,187 @@ type Syntax = (Value, Option<SourceInfo>);
 
 **Rejected because**: Tuple destructuring is less clear. No encapsulation or helper methods.
 
+## REPL Integration
+
+### Problem: REPL Input is Ephemeral
+
+REPL expressions don't come from files, so we need a strategy for tracking their source:
+
+**Key Challenges:**
+1. No actual file to reference
+2. Multi-line expressions need line/column tracking
+3. User expects helpful error messages even for REPL input
+4. History should be referenceable
+
+### Solution: Synthetic Source Files
+
+Treat each REPL expression as a synthetic "file" with a unique identifier:
+
+```rust
+// In patina-repl/src/repl/mod.rs
+
+pub struct Repl {
+    editor: Editor<SchemeHelper, FileHistory>,
+    interpreter: TreeWalkInterpreter,
+    expression_counter: usize,  // NEW: Track REPL expressions
+}
+
+impl Repl {
+    pub fn run(&mut self) -> rustyline::Result<()> {
+        // ... REPL loop ...
+
+        match readline {
+            Ok(line) => {
+                self.expression_counter += 1;
+                let source_name = format!("<repl-{}>", self.expression_counter);
+
+                // Pass source identifier to interpreter
+                match self.interpreter.eval_str_with_source(&line, &source_name) {
+                    Ok(result) => {
+                        if !matches!(result, Value::Unspecified) {
+                            println!("{}", result);
+                        }
+                    }
+                    Err(e) => eprintln!("{}", e),  // Error includes source info
+                }
+            }
+            // ... error handling ...
+        }
+    }
+}
+```
+
+### New Interpreter API
+
+```rust
+// In patina-interpreter/src/lib.rs
+
+impl<B: Backend> Interpreter<B> {
+    /// Evaluate a string with source identification
+    pub fn eval_str_with_source(
+        &self,
+        input: &str,
+        source_name: &str
+    ) -> Result<Value, InterpreterError<B::Error>> {
+        let mut parser = Parser::new_with_file(input, source_name)?;
+        let syntax = parser.parse()?;
+        self.backend
+            .eval_global(&syntax.value)
+            .map_err(InterpreterError::Backend)
+    }
+
+    // Keep backward-compatible API
+    pub fn eval_str(&self, input: &str) -> Result<Value, InterpreterError<B::Error>> {
+        self.eval_str_with_source(input, "<input>")
+    }
+}
+```
+
+### Example REPL Sessions
+
+**Single-line error:**
+```scheme
+patina> (+ x 1)
+Error: Unbound variable: x
+  at <repl-1>:1:4
+     (+ x 1)
+        ^
+```
+
+**Multi-line expression error:**
+```scheme
+patina> (define (factorial n)
+...       (if (= n 0)
+...           1
+...           (* n (factoial (- n 1)))))
+Error: Unbound variable: factoial
+  at <repl-5>:4:18
+     (* n (factoial (- n 1)))))
+              ^
+  help: did you mean 'factorial'?
+```
+
+**Cross-reference previous definitions:**
+```scheme
+patina> (define x 10)
+patina> (define y (* x z))
+Error: Unbound variable: z
+  at <repl-2>:1:18
+     (define y (* x z))
+                    ^
+  note: x was defined at <repl-1>:1:9
+```
+
+**Macro expansion errors:**
+```scheme
+patina> (define-syntax bad-macro
+...       (syntax-rules ()
+...         [(bad-macro x) (+ x undefined-var)]))
+patina> (bad-macro 5)
+Error: Unbound variable: undefined-var
+  at <repl-4>:1:1
+     (bad-macro 5)
+     ^
+  note: in macro expansion of 'bad-macro' defined at <repl-3>:3:24
+```
+
+### REPL History Enhancement (Future)
+
+Store mapping of REPL expressions for better error context:
+
+```rust
+pub struct Repl {
+    // ...
+    expression_history: HashMap<String, String>,  // "<repl-N>" -> source code
+}
+
+// When displaying errors, can show full context even for old expressions
+Error: ...
+  at <repl-42>:2:5
+
+  Full expression from <repl-42>:
+  1 | (define (process data)
+  2 |   (map proces data))
+            ^
+  3 |   result)
+```
+
+### Benefits for REPL Users
+
+1. **Immediate feedback**: See exactly where syntax errors occur
+2. **Multi-line clarity**: Track position within complex expressions
+3. **History references**: Understand which expression caused an issue
+4. **Learning aid**: New Scheme users can see precise error locations
+5. **Macro debugging**: Trace errors through macro expansions
+
+### Testing REPL Source Tracking
+
+```rust
+// In patina-repl/tests/repl_errors.rs
+
+#[test]
+fn test_repl_error_shows_source_location() {
+    let mut repl = Repl::new().unwrap();
+
+    // Simulate REPL input
+    let result = repl.eval_expression("(+ x 1)", "<repl-1>");
+
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("<repl-1>:1:4"));
+    assert!(err.contains("(+ x 1)"));
+}
+
+#[test]
+fn test_multiline_repl_error() {
+    let input = "(define (foo)\n  (bar undefined-var))";
+    let result = repl.eval_expression(input, "<repl-2>");
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("<repl-2>:2:8"));
+}
+```
+
 ## Future Enhancements
 
 ### Phase 6+: Advanced Features
@@ -583,11 +789,16 @@ type Syntax = (Value, Option<SourceInfo>);
 3. **Pretty error messages**:
    - Color-coded output
    - Multi-line context with line numbers
-   - Suggestions for common mistakes
+   - Suggestions for common mistakes (like "did you mean 'factorial'?")
 
 4. **Coverage tracking**:
    - Track which source lines have been executed
    - Generate coverage reports
+
+5. **REPL session replay**:
+   - Save REPL sessions with source info
+   - Replay sessions with full error context
+   - Export REPL sessions to .scm files with preserved line numbers
 
 ## References
 
@@ -611,9 +822,10 @@ type Syntax = (Value, Option<SourceInfo>);
 - **Phase 2** (Parser Integration): 2-3 days
 - **Phase 3** (Macro Expander): 3-4 days
 - **Phase 4** (Error Reporting): 2-3 days
-- **Phase 5** (Stack Traces): 3-4 days (future)
+- **Phase 5** (REPL Integration): 1-2 days
+- **Phase 6** (Stack Traces): 3-4 days (future)
 
-**Total for Phases 1-4**: ~10-12 days of focused work
+**Total for Phases 1-5**: ~11-14 days of focused work
 
 ## Related Documentation
 
