@@ -48,6 +48,9 @@ pub enum LexError {
     #[error("Invalid escape sequence in identifier: \\{0}")]
     InvalidEscapeInIdentifier(String),
 
+    #[error("Unterminated block comment")]
+    UnterminatedBlockComment,
+
     #[allow(dead_code)]
     #[error("Invalid number format: {0}")]
     InvalidNumber(String),
@@ -67,7 +70,7 @@ impl Lexer {
     }
 
     pub fn next_token(&mut self) -> Result<Token, LexError> {
-        self.skip_whitespace_and_comments();
+        self.skip_whitespace_and_comments()?;
 
         if self.is_at_end() {
             return Ok(Token::Eof);
@@ -135,18 +138,60 @@ impl Lexer {
         self.position >= self.input.len()
     }
 
-    fn skip_whitespace_and_comments(&mut self) {
+    fn skip_whitespace_and_comments(&mut self) -> Result<(), LexError> {
         while !self.is_at_end() {
             match self.current_char() {
                 ' ' | '\t' | '\n' | '\r' => self.advance(),
                 ';' => {
+                    // Line comment: skip until end of line
                     while !self.is_at_end() && self.current_char() != '\n' {
                         self.advance();
                     }
                 }
+                '#' if self.peek_char() == Some('|') => {
+                    // Block comment: skip nested block comment
+                    self.skip_block_comment()?;
+                }
                 _ => break,
             }
         }
+        Ok(())
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        self.input.get(self.position + 1).copied()
+    }
+
+    fn skip_block_comment(&mut self) -> Result<(), LexError> {
+        // R7RS: Block comments can be nested
+        // #| ... |# where ... can contain more #| ... |#
+
+        self.advance(); // consume #
+        self.advance(); // consume |
+
+        let mut depth = 1;
+
+        while !self.is_at_end() && depth > 0 {
+            if self.current_char() == '#' && self.peek_char() == Some('|') {
+                // Nested block comment start
+                depth += 1;
+                self.advance(); // consume #
+                self.advance(); // consume |
+            } else if self.current_char() == '|' && self.peek_char() == Some('#') {
+                // Block comment end
+                depth -= 1;
+                self.advance(); // consume |
+                self.advance(); // consume #
+            } else {
+                self.advance();
+            }
+        }
+
+        if depth > 0 {
+            return Err(LexError::UnterminatedBlockComment);
+        }
+
+        Ok(())
     }
 
     fn is_delimiter_next(&self) -> bool {
@@ -254,14 +299,14 @@ impl Lexer {
                                     return Err(LexError::InvalidEscapeInIdentifier(format!(
                                         "x{};",
                                         hex_str
-                                    )))
+                                    )));
                                 }
                             },
                             Err(_) => {
                                 return Err(LexError::InvalidEscapeInIdentifier(format!(
                                     "x{};",
                                     hex_str
-                                )))
+                                )));
                             }
                         }
                     }
@@ -584,5 +629,54 @@ mod tests {
             Token::Identifier("hello world".to_string())
         );
         assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_block_comment_basic() {
+        let mut lexer = Lexer::new("#| this is a comment |# 42");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number("42".to_string()));
+    }
+
+    #[test]
+    fn test_block_comment_nested() {
+        let mut lexer = Lexer::new("#| outer #| inner |# outer |# 42");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number("42".to_string()));
+    }
+
+    #[test]
+    fn test_block_comment_with_code() {
+        let mut lexer = Lexer::new("(+ #| comment |# 1 2)");
+        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("+".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::Number("1".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Number("2".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_block_comment_multiline() {
+        let mut lexer = Lexer::new("#|\nline 1\nline 2\n|# 42");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number("42".to_string()));
+    }
+
+    #[test]
+    fn test_block_comment_unterminated() {
+        let mut lexer = Lexer::new("#| this is unterminated");
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::UnterminatedBlockComment)
+        ));
+    }
+
+    #[test]
+    fn test_block_comment_unterminated_nested() {
+        let mut lexer = Lexer::new("#| outer #| inner |# outer");
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::UnterminatedBlockComment)
+        ));
     }
 }

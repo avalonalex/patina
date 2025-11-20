@@ -34,7 +34,10 @@ fn test_vertical_bar_as_function_name() {
 #[test]
 fn test_vertical_bar_unicode() {
     // |\x3BB;| is λ (lambda)
-    assert_program_eval_to("(define |\\x3BB;| \"lambda symbol\") |\\x3BB;|", "\"lambda symbol\"");
+    assert_program_eval_to(
+        "(define |\\x3BB;| \"lambda symbol\") |\\x3BB;|",
+        "\"lambda symbol\"",
+    );
 }
 
 #[test]
@@ -64,14 +67,14 @@ fn test_vertical_bar_with_quote() {
 #[test]
 fn test_vertical_bar_display_edge_cases() {
     // R7RS test suite edge cases - symbols that need vertical bars
-    assert_eval_to("'|.|", "|.|");           // single dot
-    assert_eval_to("'|,a|", "|,a|");         // starts with comma
-    assert_eval_to(r#"'|"|"#, r#"|"|"#);     // contains quote
-    assert_eval_to("'|2|", "|2|");           // starts with digit
-    assert_eval_to("'|+3|", "|+3|");         // looks like number
-    assert_eval_to("'|-.4|", "|-.4|");       // looks like float
-    assert_eval_to("'|+i|", "|+i|");         // imaginary number
-    assert_eval_to("'|-i|", "|-i|");         // imaginary number
+    assert_eval_to("'|.|", "|.|"); // single dot
+    assert_eval_to("'|,a|", "|,a|"); // starts with comma
+    assert_eval_to(r#"'|"|"#, r#"|"|"#); // contains quote
+    assert_eval_to("'|2|", "|2|"); // starts with digit
+    assert_eval_to("'|+3|", "|+3|"); // looks like number
+    assert_eval_to("'|-.4|", "|-.4|"); // looks like float
+    assert_eval_to("'|+i|", "|+i|"); // imaginary number
+    assert_eval_to("'|-i|", "|-i|"); // imaginary number
     assert_eval_to("'|+inf.0|", "|+inf.0|"); // special float
     assert_eval_to("'|-inf.0|", "|-inf.0|"); // special float
     assert_eval_to("'|+nan.0|", "|+nan.0|"); // special float
@@ -83,7 +86,7 @@ fn test_vertical_bar_display_edge_cases() {
 #[test]
 fn test_vertical_bar_display_no_bars_needed() {
     // Symbols that don't need vertical bars
-    assert_eval_to("'|test|", "test");       // normal identifier
-    assert_eval_to("'|hello|", "hello");     // normal identifier
-    assert_eval_to("'|a-b-c|", "a-b-c");     // hyphens are fine
+    assert_eval_to("'|test|", "test"); // normal identifier
+    assert_eval_to("'|hello|", "hello"); // normal identifier
+    assert_eval_to("'|a-b-c|", "a-b-c"); // hyphens are fine
 }

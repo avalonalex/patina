@@ -8,7 +8,7 @@ fn main() {
     // TODO: Disable macro debug mode once all macro-related tests in r7rs-tests.scm pass
     // Currently enabled globally to help debug macro expansion issues
     // See: PRD/phase1/IMPLEMENTATION_STATUS.md for macro test status
-    patina_runtime::macro_debug::enable();
+    // patina_runtime::macro_debug::enable();
 
     let args: Vec<String> = env::args().collect();
 

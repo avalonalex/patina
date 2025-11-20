@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-20 08:44:04
+**Generated:** 2025-11-20 09:03:02
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 101 | 89.4% |
-| ❌ Failed | 0 | 0.0% |
-| ⚠️ Error (crashed) | 12 | 10.6% |
-| **Total** | **113** | **100%** |
+| ✅ Passed | 136 | 80.0% |
+| ❌ Failed | 9 | 5.3% |
+| ⚠️ Error (crashed) | 25 | 14.7% |
+| **Total** | **170** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -19,6 +19,13 @@
 ### Test Failures
 
 ```
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -38,7 +45,20 @@ Error: Undefined variable: part-2x
 Error: Undefined variable: part-2x
 Error: Not a procedure: ok
 Error: Undefined variable: ##bar399#1091
-Error: Lexer error: Unexpected character: |
+Error: Invalid syntax: syntax-rules literals must be a proper list
+Error: Undefined variable: define-values
+Error: Undefined variable: define-values
+Error: Undefined variable: define-values
+Error: Undefined variable: define-values
+Error: Undefined variable: define-values
+Error: Undefined variable: define-values
+Error: Undefined variable: define-record-type
+Error: Undefined variable: pare?
+Error: Undefined variable: pare?
+Error: Undefined variable: kar
+Error: Undefined variable: kdr
+Error: Undefined variable: kons
+Error: Lexer error: Unexpected character: e
 ```
 
 

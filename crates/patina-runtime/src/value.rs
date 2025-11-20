@@ -330,7 +330,8 @@ impl Value {
                 || lower.starts_with("+inf.0") // e.g., +inf.0xyz
                 || lower.starts_with("-inf.0")
                 || lower.starts_with("+nan.0") // e.g., +nan.0abc
-                || lower.starts_with("-nan.0") {
+                || lower.starts_with("-nan.0")
+            {
                 return true;
             }
         }
@@ -352,8 +353,22 @@ impl Value {
                 let is_valid_initial = ch.is_ascii_alphabetic()
                     || matches!(
                         ch,
-                        '!' | '$' | '%' | '&' | '*' | '/' | ':' | '<' | '=' | '>' | '?' | '^'
-                            | '_' | '~' | '+' | '-' | '.'
+                        '!' | '$'
+                            | '%'
+                            | '&'
+                            | '*'
+                            | '/'
+                            | ':'
+                            | '<'
+                            | '='
+                            | '>'
+                            | '?'
+                            | '^'
+                            | '_'
+                            | '~'
+                            | '+'
+                            | '-'
+                            | '.'
                     );
                 if !is_valid_initial {
                     return true;
@@ -363,8 +378,23 @@ impl Value {
                 let is_valid_subsequent = ch.is_ascii_alphanumeric()
                     || matches!(
                         ch,
-                        '!' | '$' | '%' | '&' | '*' | '/' | ':' | '<' | '=' | '>' | '?' | '^'
-                            | '_' | '~' | '+' | '-' | '.' | '@'
+                        '!' | '$'
+                            | '%'
+                            | '&'
+                            | '*'
+                            | '/'
+                            | ':'
+                            | '<'
+                            | '='
+                            | '>'
+                            | '?'
+                            | '^'
+                            | '_'
+                            | '~'
+                            | '+'
+                            | '-'
+                            | '.'
+                            | '@'
                     );
                 if !is_valid_subsequent {
                     return true;
