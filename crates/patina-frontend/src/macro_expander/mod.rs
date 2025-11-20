@@ -16,6 +16,9 @@ pub mod pattern;
 pub mod template;
 pub mod validator;
 
+#[cfg(test)]
+mod ellipsis_edge_cases_tests;
+
 // Re-export main functions
 pub use hygiene::apply_hygiene;
 
