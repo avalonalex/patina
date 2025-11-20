@@ -180,6 +180,11 @@ impl Parser {
     fn parse_number(&self, s: &str) -> Result<Value, ParseError> {
         // Parse numbers following the R7RS numeric tower
 
+        // Handle R7RS numeric prefixes: #e #i #b #o #d #x
+        if s.starts_with('#') {
+            return self.parse_number_with_prefix(s);
+        }
+
         // Check for special R7RS floating-point literals
         match s {
             "+inf.0" => return Ok(Value::Real(f64::INFINITY)),
@@ -252,6 +257,147 @@ impl Parser {
         Err(ParseError::InvalidSyntax(format!("Invalid number: {}", s)))
     }
 
+    fn parse_number_with_prefix(&self, s: &str) -> Result<Value, ParseError> {
+        // R7RS numeric prefixes: #e (exact), #i (inexact), #b (binary), #o (octal), #d (decimal), #x (hex)
+        // These can be combined, e.g., #e#x10, #i#b1010
+
+        let mut exactness: Option<bool> = None; // None = unspecified, Some(true) = exact, Some(false) = inexact
+        let mut radix = 10u32; // Default radix is 10
+        let mut rest = s;
+
+        // Parse prefixes
+        while rest.starts_with('#') {
+            if rest.len() < 2 {
+                return Err(ParseError::InvalidSyntax(format!("Invalid number: {}", s)));
+            }
+
+            let prefix_char = rest.chars().nth(1).unwrap().to_ascii_lowercase();
+
+            match prefix_char {
+                'e' => {
+                    if exactness.is_some() {
+                        return Err(ParseError::InvalidSyntax(format!(
+                            "Duplicate exactness prefix: {}",
+                            s
+                        )));
+                    }
+                    exactness = Some(true);
+                    rest = &rest[2..];
+                }
+                'i' => {
+                    if exactness.is_some() {
+                        return Err(ParseError::InvalidSyntax(format!(
+                            "Duplicate exactness prefix: {}",
+                            s
+                        )));
+                    }
+                    exactness = Some(false);
+                    rest = &rest[2..];
+                }
+                'b' => {
+                    radix = 2;
+                    rest = &rest[2..];
+                }
+                'o' => {
+                    radix = 8;
+                    rest = &rest[2..];
+                }
+                'd' => {
+                    radix = 10;
+                    rest = &rest[2..];
+                }
+                'x' => {
+                    radix = 16;
+                    rest = &rest[2..];
+                }
+                _ => {
+                    return Err(ParseError::InvalidSyntax(format!(
+                        "Unknown prefix: #{}",
+                        prefix_char
+                    )));
+                }
+            }
+        }
+
+        if rest.is_empty() {
+            return Err(ParseError::InvalidSyntax(format!(
+                "Number has prefixes but no digits: {}",
+                s
+            )));
+        }
+
+        // Parse the number based on radix
+        let value = if radix == 10 {
+            // For decimal, use the existing parse_number logic (handles floats, rationals, complex, etc.)
+            self.parse_number(rest)?
+        } else {
+            // For non-decimal radix, parse as integer only
+            match i64::from_str_radix(rest, radix) {
+                Ok(n) => Value::Integer(n),
+                Err(_) => {
+                    // Try BigInt if it doesn't fit in i64
+                    BigInt::parse_bytes(rest.as_bytes(), radix)
+                        .map(Value::BigInteger)
+                        .ok_or_else(|| {
+                            let radix_name = match radix {
+                                2 => "binary",
+                                8 => "octal",
+                                16 => "hexadecimal",
+                                _ => "numeric",
+                            };
+                            ParseError::InvalidSyntax(format!(
+                                "Invalid {} number: {}",
+                                radix_name, rest
+                            ))
+                        })?
+                }
+            }
+        };
+
+        // Apply exactness conversion if specified
+        match exactness {
+            Some(true) => {
+                // Force exact - if it's already exact, keep it; if inexact, convert to rational
+                match value {
+                    Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => Ok(value),
+                    Value::Real(f) => {
+                        // Convert float to rational (this is approximate)
+                        // For now, just return an error as exact conversion of arbitrary floats is complex
+                        // In a full implementation, we'd need to convert the float to a rational
+                        if f.fract() == 0.0 && f.is_finite() {
+                            Ok(Value::Integer(f as i64))
+                        } else {
+                            Err(ParseError::InvalidSyntax(format!(
+                                "#e prefix on inexact number not yet fully supported: {}",
+                                s
+                            )))
+                        }
+                    }
+                    _ => Ok(value),
+                }
+            }
+            Some(false) => {
+                // Force inexact - convert to float
+                match value {
+                    Value::Integer(n) => Ok(Value::Real(n as f64)),
+                    Value::BigInteger(ref b) => {
+                        // Convert BigInt to float (may lose precision)
+                        if let Some(n) = b.to_i64() {
+                            Ok(Value::Real(n as f64))
+                        } else {
+                            // Too large for precise float representation
+                            Ok(Value::Real(b.to_f64().unwrap_or(f64::INFINITY)))
+                        }
+                    }
+                    Value::Rational(ref r) => Ok(Value::Real(r.to_f64().unwrap_or(f64::NAN))),
+                    Value::Real(_) => Ok(value), // Already inexact
+                    _ => Ok(value),
+                }
+            }
+            None => Ok(value), // No exactness specified, keep as-is
+        }
+    }
+
     fn parse_rectangular(&self, s: &str) -> Result<Value, ParseError> {
         // Remove the trailing 'i' or 'I'
         let s_no_i = &s[..s.len() - 1];
@@ -322,6 +468,14 @@ impl Parser {
 
     /// Parse a component that should be a real number (int, bigint, rational, or float)
     fn parse_real_component(&self, s: &str) -> Result<f64, ParseError> {
+        // Check for special R7RS floating-point literals
+        match s {
+            "+inf.0" => return Ok(f64::INFINITY),
+            "-inf.0" => return Ok(f64::NEG_INFINITY),
+            "+nan.0" => return Ok(f64::NAN),
+            _ => {}
+        }
+
         // Try i64 first
         if let Ok(n) = s.parse::<i64>() {
             return Ok(n as f64);

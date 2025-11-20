@@ -649,4 +649,692 @@ FAIL:
 Testing: 
 (real? -2.5)
 
-Error: Lexer error: Unexpected character: e
+Testing: 
+(real? 10000000000)
+
+Testing: 
+(real? +inf.0)
+
+Testing: 
+(rational? -inf.0)
+
+Testing: 
+(rational? +nan.0)
+
+Testing: 
+(rational? 9007199254740991.0)
+
+FAIL: 
+(rational? 9007199254740991.0)
+
+  expected: 
+#t
+
+  but got:  
+#f
+
+
+Testing: 
+(rational? 9007199254740992.0)
+
+FAIL: 
+(rational? 9007199254740992.0)
+
+  expected: 
+#t
+
+  but got:  
+#f
+
+
+Testing: 
+(rational? 179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.0)
+
+FAIL: 
+(rational? 179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.0)
+
+  expected: 
+#t
+
+  but got:  
+#f
+
+
+Testing: 
+(rational? 3/5)
+
+Testing: 
+(rational? 2)
+
+Testing: 
+(integer? 3)
+
+FAIL: 
+(integer? 3)
+
+  expected: 
+#t
+
+  but got:  
+#f
+
+
+Testing: 
+(integer? 3.0)
+
+FAIL: 
+(integer? 3.0)
+
+  expected: 
+#t
+
+  but got:  
+#f
+
+
+Testing: 
+(integer? 2)
+
+Testing: 
+(exact? 3.0)
+
+Testing: 
+(exact? 3)
+
+Testing: 
+(inexact? 3.0)
+
+Testing: 
+(exact-integer? 32)
+
+Testing: 
+(exact-integer? 32.0)
+
+Testing: 
+(exact-integer? 32/5)
+
+Testing: 
+(finite? 3)
+
+Testing: 
+(finite? +inf.0)
+
+Testing: 
+(finite? 3+infi)
+
+Testing: 
+(infinite? 3)
+
+Testing: 
+(infinite? +inf.0)
+
+Testing: 
+(infinite? +nan.0)
+
+Testing: 
+(infinite? 3+infi)
+
+Testing: 
+(nan? +nan.0)
+
+Testing: 
+(nan? 32)
+
+Testing: 
+(nan? 1+2i)
+
+Testing: 
+(= 1 1.0 1)
+
+Error: Invalid syntax: Unknown primitive: =
+Testing: 
+(= 1.0 1+i)
+
+Error: Invalid syntax: Unknown primitive: =
+Testing: 
+(< 1 2 3)
+
+Testing: 
+(< 1 1 2)
+
+Testing: 
+(> 3.0 2.0 1.0)
+
+Testing: 
+(> -3.0 2.0 1.0)
+
+Testing: 
+(<= 1 1 2)
+
+Testing: 
+(<= 1 2 1)
+
+Testing: 
+(>= 2 1 1)
+
+Testing: 
+(>= 1 2 1)
+
+Testing: 
+(< +nan.0 0)
+
+Error: Invalid syntax: Unknown primitive: <
+Testing: 
+(> +nan.0 0)
+
+Error: Invalid syntax: Unknown primitive: >
+Testing: 
+(< +nan.0 0.0)
+
+Error: Invalid syntax: Unknown primitive: <
+Testing: 
+(> +nan.0 0.0)
+
+Error: Invalid syntax: Unknown primitive: >
+Testing: 
+(list (<= 1 1 2) (<= 2 1 3))
+
+Testing: 
+(= 9007199254740992.0 9007199254740993)
+
+Testing: 
+(if (and (= a b) (= b c)) (= a c) #t)
+
+Testing: 
+(if (and (<= a j) (< j (+ j 1))) (not (<= (+ j 1) a)) #t)
+
+Testing: 
+(zero? 0)
+
+Testing: 
+(zero? 0.0)
+
+Testing: 
+(zero? 0)
+
+Error: Invalid syntax: Unknown primitive: =
+Testing: 
+(zero? 1)
+
+Testing: 
+(zero? -1)
+
+Testing: 
+(positive? 0)
+
+Testing: 
+(positive? 0.0)
+
+Testing: 
+(positive? 1)
+
+Testing: 
+(positive? 1.0)
+
+Testing: 
+(positive? -1)
+
+Testing: 
+(positive? -1.0)
+
+Testing: 
+(positive? +inf.0)
+
+Error: Invalid syntax: Unknown primitive: >
+Testing: 
+(positive? -inf.0)
+
+Error: Invalid syntax: Unknown primitive: >
+Testing: 
+(positive? +nan.0)
+
+Error: Invalid syntax: Unknown primitive: >
+Testing: 
+(negative? 0)
+
+Testing: 
+(negative? 0.0)
+
+Testing: 
+(negative? 1)
+
+Testing: 
+(negative? 1.0)
+
+Testing: 
+(negative? -1)
+
+Testing: 
+(negative? -1.0)
+
+Testing: 
+(negative? +inf.0)
+
+Error: Invalid syntax: Unknown primitive: <
+Testing: 
+(negative? -inf.0)
+
+Error: Invalid syntax: Unknown primitive: <
+Testing: 
+(negative? +nan.0)
+
+Error: Invalid syntax: Unknown primitive: <
+Testing: 
+(odd? 0)
+
+Testing: 
+(odd? 1)
+
+Testing: 
+(odd? -1)
+
+FAIL: 
+(odd? -1)
+
+  expected: 
+#t
+
+  but got:  
+#f
+
+
+Testing: 
+(odd? 102)
+
+Testing: 
+(even? 0)
+
+Testing: 
+(even? 1)
+
+Testing: 
+(even? -2)
+
+Testing: 
+(even? 102)
+
+Testing: 
+(max 3)
+
+Testing: 
+(max 3 4)
+
+Testing: 
+(max 3.9 4)
+
+Error: Invalid syntax: Unknown primitive: max
+Testing: 
+(max 5 3.9 4)
+
+Error: Invalid syntax: Unknown primitive: max
+Testing: 
+(max 100 +inf.0)
+
+Error: Invalid syntax: Unknown primitive: max
+Testing: 
+(min 3)
+
+Testing: 
+(min 3 4)
+
+Testing: 
+(min 3 3.1)
+
+Error: Invalid syntax: Unknown primitive: min
+Testing: 
+(min -inf.0 -100)
+
+Error: Invalid syntax: Unknown primitive: min
+Testing: 
+(+ 3 4)
+
+Testing: 
+(+ 3)
+
+Testing: 
+(+)
+
+Testing: 
+(* 4)
+
+Testing: 
+(*)
+
+Testing: 
+(- 3 4)
+
+Testing: 
+(- 3 4 5)
+
+Testing: 
+(- 3)
+
+Testing: 
+(- 3/2)
+
+Testing: 
+(- 1.5+i)
+
+Testing: 
+(/ 3 4 5)
+
+Testing: 
+(/ 3)
+
+Testing: 
+(/ -1073741824 -1)
+
+Testing: 
+(quotient -1073741824 -1)
+
+Testing: 
+(remainder -1073741824 -1)
+
+Testing: 
+(/ -4611686018427387904 -1)
+
+Testing: 
+(quotient -4611686018427387904 -1)
+
+Testing: 
+(remainder -4611686018427387904 -1)
+
+Testing: 
+(abs -7)
+
+Testing: 
+(abs 7)
+
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Testing: 
+(modulo 13 4)
+
+Testing: 
+(remainder 13 4)
+
+Testing: 
+(modulo -13 4)
+
+Testing: 
+(remainder -13 4)
+
+Testing: 
+(modulo 13 -4)
+
+FAIL: 
+(modulo 13 -4)
+
+  expected: 
+-3
+
+  but got:  
+1
+
+
+Testing: 
+(remainder 13 -4)
+
+Testing: 
+(modulo -13 -4)
+
+FAIL: 
+(modulo -13 -4)
+
+  expected: 
+-1
+
+  but got:  
+3
+
+
+Testing: 
+(remainder -13 -4)
+
+Testing: 
+(remainder -13 -4.0)
+
+Error: Invalid syntax: Unknown primitive: remainder
+Testing: 
+(gcd 32 -36)
+
+Testing: 
+(gcd)
+
+Testing: 
+(lcm 32 -36)
+
+Testing: 
+(lcm 32.0 -36)
+
+Error: Invalid syntax: Unknown primitive: lcm
+Testing: 
+(lcm)
+
+Testing: 
+(numerator (/ 6 4))
+
+Testing: 
+(denominator (/ 6 4))
+
+Testing: 
+(denominator (inexact (/ 6 4)))
+
+Error: Invalid syntax: Unknown primitive: denominator
+Testing: 
+(numerator 5.5)
+
+Error: Invalid syntax: Unknown primitive: numerator
+Testing: 
+(denominator 5.5)
+
+Error: Invalid syntax: Unknown primitive: denominator
+Testing: 
+(numerator 5.0)
+
+Error: Invalid syntax: Unknown primitive: numerator
+Testing: 
+(denominator 5.0)
+
+Error: Invalid syntax: Unknown primitive: denominator
+Testing: 
+(floor -4.3)
+
+Testing: 
+(ceiling -4.3)
+
+Testing: 
+(truncate -4.3)
+
+Testing: 
+(round -4.3)
+
+Testing: 
+(floor 3.5)
+
+Testing: 
+(ceiling 3.5)
+
+Testing: 
+(truncate 3.5)
+
+Testing: 
+(round 3.5)
+
+Testing: 
+(round 7/2)
+
+FAIL: 
+(round 7/2)
+
+  expected: 
+4
+
+  but got:  
+4
+
+
+Testing: 
+(round 7)
+
+Testing: 
+(round 7/10)
+
+FAIL: 
+(round 7/10)
+
+  expected: 
+1
+
+  but got:  
+1
+
+
+Testing: 
+(round -7/2)
+
+FAIL: 
+(round -7/2)
+
+  expected: 
+-4
+
+  but got:  
+-4
+
+
+Testing: 
+(round -7)
+
+Testing: 
+(round -7/10)
+
+FAIL: 
+(round -7/10)
+
+  expected: 
+-1
+
+  but got:  
+-1
+
+
+Testing: 
+(rationalize (exact .3) 1/10)
+
+Error: Undefined variable: .3
+Testing: 
+(rationalize .3 1/10)
+
+Error: Undefined variable: .3
+Testing: 
+(inexact (exp 0))
+
+Testing: 
+(exp 3)
+
+Testing: 
+(inexact (log 1))
+
+Testing: 
+(log (exp 1))
+
+Testing: 
+(log (exp 42))
+
+Testing: 
+(log 100 10)
+
+Testing: 
+(log 4096 2)
+
+Testing: 
+(inexact (sin 0))
+
+Testing: 
+(sin 1.5707963267949)
+
+Testing: 
+(inexact (cos 0))
+
+Testing: 
+(cos 3.14159265358979)
+
+Testing: 
+(inexact (tan 0))
+
+Testing: 
+(tan 1)
+
+Testing: 
+(inexact (asin 0))
+
+Testing: 
+(asin 1)
+
+Testing: 
+(inexact (acos 1))
+
+Testing: 
+(acos -1)
+
+Testing: 
+(atan 0.0 1.0)
+
+Testing: 
+(atan -0.0 1.0)
+
+Testing: 
+(atan 1.0 1.0)
+
+Testing: 
+(atan 1.0 0.0)
+
+Testing: 
+(atan 1.0 -1.0)
+
+Testing: 
+(atan 0.0 -1.0)
+
+Testing: 
+(atan -0.0 -1.0)
+
+Testing: 
+(atan -1.0 -1.0)
+
+Testing: 
+(atan -1.0 0.0)
+
+Testing: 
+(atan -1.0 1.0)
+
+Testing: 
+(square 42)
+
+Testing: 
+(square 2)
+
+Testing: 
+(inexact (sqrt 9))
+
+Testing: 
+(sqrt 2)
+
+Testing: 
+(inexact (sqrt -1))
+
+Error: Invalid syntax: Unknown primitive: sqrt
+Testing: 
+(sqrt -1)
+
+
+thread 'main' (1660929) panicked at crates/patina-tree-walker/src/eval/primitives/arithmetic.rs:42:41:
+Cannot convert complex to f64
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

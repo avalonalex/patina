@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-20 09:03:02
+**Generated:** 2025-11-20 09:16:02
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 136 | 80.0% |
-| ❌ Failed | 9 | 5.3% |
-| ⚠️ Error (crashed) | 25 | 14.7% |
-| **Total** | **170** | **100%** |
+| ✅ Passed | 136 | 66.0% |
+| ❌ Failed | 9 | 4.4% |
+| ⚠️ Error (crashed) | 61 | 29.6% |
+| **Total** | **206** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -19,6 +19,18 @@
 ### Test Failures
 
 ```
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -58,7 +70,43 @@ Error: Undefined variable: pare?
 Error: Undefined variable: kar
 Error: Undefined variable: kdr
 Error: Undefined variable: kons
-Error: Lexer error: Unexpected character: e
+Error: Invalid syntax: Unknown primitive: =
+Error: Invalid syntax: Unknown primitive: =
+Error: Invalid syntax: Unknown primitive: <
+Error: Invalid syntax: Unknown primitive: >
+Error: Invalid syntax: Unknown primitive: <
+Error: Invalid syntax: Unknown primitive: >
+Error: Invalid syntax: Unknown primitive: =
+Error: Invalid syntax: Unknown primitive: >
+Error: Invalid syntax: Unknown primitive: >
+Error: Invalid syntax: Unknown primitive: >
+Error: Invalid syntax: Unknown primitive: <
+Error: Invalid syntax: Unknown primitive: <
+Error: Invalid syntax: Unknown primitive: <
+Error: Invalid syntax: Unknown primitive: max
+Error: Invalid syntax: Unknown primitive: max
+Error: Invalid syntax: Unknown primitive: max
+Error: Invalid syntax: Unknown primitive: min
+Error: Invalid syntax: Unknown primitive: min
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Undefined variable: test-values
+Error: Invalid syntax: Unknown primitive: remainder
+Error: Invalid syntax: Unknown primitive: lcm
+Error: Invalid syntax: Unknown primitive: denominator
+Error: Invalid syntax: Unknown primitive: numerator
+Error: Invalid syntax: Unknown primitive: denominator
+Error: Invalid syntax: Unknown primitive: numerator
+Error: Invalid syntax: Unknown primitive: denominator
+Error: Undefined variable: .3
+Error: Undefined variable: .3
+Error: Invalid syntax: Unknown primitive: sqrt
 ```
 
 

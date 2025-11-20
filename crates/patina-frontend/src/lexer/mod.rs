@@ -360,6 +360,10 @@ impl Lexer {
                     Err(LexError::UnexpectedChar(self.current_char()))
                 }
             }
+            // R7RS numeric prefixes: #e #i #b #o #d #x
+            'e' | 'E' | 'i' | 'I' | 'b' | 'B' | 'o' | 'O' | 'd' | 'D' | 'x' | 'X' => {
+                self.read_number_with_prefix()
+            }
             _ => Err(LexError::UnexpectedChar(self.current_char())),
         }
     }
@@ -414,6 +418,24 @@ impl Lexer {
     fn read_number(&mut self) -> Result<Token, LexError> {
         let start = self.position;
 
+        while !self.is_at_end()
+            && !self.current_char().is_whitespace()
+            && !matches!(self.current_char(), '(' | ')')
+        {
+            self.advance();
+        }
+
+        let num_str: String = self.input[start..self.position].iter().collect();
+        Ok(Token::Number(num_str))
+    }
+
+    fn read_number_with_prefix(&mut self) -> Result<Token, LexError> {
+        // We're at the first prefix character (e, i, b, o, d, or x)
+        // We need to go back to include the # that was consumed in read_hash_syntax
+        let start = self.position - 1; // -1 to include the #
+
+        // Read through all prefixes and the number
+        // R7RS allows combinations like #e#x10, #i#b1010, etc.
         while !self.is_at_end()
             && !self.current_char().is_whitespace()
             && !matches!(self.current_char(), '(' | ')')
