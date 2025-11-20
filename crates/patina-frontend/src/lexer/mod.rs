@@ -42,6 +42,12 @@ pub enum LexError {
     )]
     ReservedCharacter(char),
 
+    #[error("Unterminated vertical bar identifier")]
+    UnterminatedVerticalBarIdentifier,
+
+    #[error("Invalid escape sequence in identifier: \\{0}")]
+    InvalidEscapeInIdentifier(String),
+
     #[allow(dead_code)]
     #[error("Invalid number format: {0}")]
     InvalidNumber(String),
@@ -102,6 +108,7 @@ impl Lexer {
                 Ok(Token::Dot)
             }
             '"' => self.read_string(),
+            '|' => self.read_vertical_bar_identifier(),
             '#' => self.read_hash_syntax(),
             _ if ch.is_numeric()
                 || (ch == '-' || ch == '+')
@@ -204,6 +211,77 @@ impl Lexer {
 
         self.advance(); // consume closing "
         Ok(Token::String(result))
+    }
+
+    fn read_vertical_bar_identifier(&mut self) -> Result<Token, LexError> {
+        self.advance(); // consume opening |
+        let mut result = String::new();
+
+        while !self.is_at_end() && self.current_char() != '|' {
+            if self.current_char() == '\\' {
+                self.advance();
+                if self.is_at_end() {
+                    return Err(LexError::UnterminatedVerticalBarIdentifier);
+                }
+                let escaped = match self.current_char() {
+                    // R7RS mnemonic escapes
+                    'a' => '\u{0007}', // alarm
+                    'b' => '\u{0008}', // backspace
+                    't' => '\t',       // tab
+                    'n' => '\n',       // newline
+                    'r' => '\r',       // return
+                    '\\' => '\\',      // backslash
+                    '|' => '|',        // vertical bar
+                    '"' => '"',        // double quote
+                    // Inline hex escape: \x<hex>;
+                    'x' => {
+                        self.advance();
+                        let mut hex_str = String::new();
+                        while !self.is_at_end() && self.current_char() != ';' {
+                            hex_str.push(self.current_char());
+                            self.advance();
+                        }
+                        if self.current_char() != ';' {
+                            return Err(LexError::InvalidEscapeInIdentifier(format!(
+                                "x{} (missing semicolon)",
+                                hex_str
+                            )));
+                        }
+                        match u32::from_str_radix(&hex_str, 16) {
+                            Ok(code) => match char::from_u32(code) {
+                                Some(ch) => ch,
+                                None => {
+                                    return Err(LexError::InvalidEscapeInIdentifier(format!(
+                                        "x{};",
+                                        hex_str
+                                    )))
+                                }
+                            },
+                            Err(_) => {
+                                return Err(LexError::InvalidEscapeInIdentifier(format!(
+                                    "x{};",
+                                    hex_str
+                                )))
+                            }
+                        }
+                    }
+                    c => {
+                        return Err(LexError::InvalidEscapeInIdentifier(c.to_string()));
+                    }
+                };
+                result.push(escaped);
+            } else {
+                result.push(self.current_char());
+            }
+            self.advance();
+        }
+
+        if self.is_at_end() {
+            return Err(LexError::UnterminatedVerticalBarIdentifier);
+        }
+
+        self.advance(); // consume closing |
+        Ok(Token::Identifier(result))
     }
 
     fn read_hash_syntax(&mut self) -> Result<Token, LexError> {
@@ -383,5 +461,128 @@ mod tests {
             lexer.next_token(),
             Err(LexError::ReservedCharacter('}'))
         ));
+    }
+
+    #[test]
+    fn test_vertical_bar_identifier_basic() {
+        let mut lexer = Lexer::new("|hello world|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn test_vertical_bar_identifier_empty() {
+        // R7RS: || is a valid identifier
+        let mut lexer = Lexer::new("||");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("".to_string())
+        );
+    }
+
+    #[test]
+    fn test_vertical_bar_identifier_with_special_chars() {
+        let mut lexer = Lexer::new("|(hello world!)|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("(hello world!)".to_string())
+        );
+    }
+
+    #[test]
+    fn test_vertical_bar_identifier_with_escapes() {
+        // Test \| escape
+        let mut lexer = Lexer::new("|foo\\|bar|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("foo|bar".to_string())
+        );
+
+        // Test \t escape
+        let mut lexer = Lexer::new("|\\t\\t|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("\t\t".to_string())
+        );
+
+        // Test \n escape
+        let mut lexer = Lexer::new("|foo\\nbar|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("foo\nbar".to_string())
+        );
+
+        // Test \a (alarm) escape
+        let mut lexer = Lexer::new("|\\a|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("\u{0007}".to_string())
+        );
+
+        // Test \b (backspace) escape
+        let mut lexer = Lexer::new("|\\b|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("\u{0008}".to_string())
+        );
+    }
+
+    #[test]
+    fn test_vertical_bar_identifier_with_hex_escape() {
+        // R7RS example: |H\x65;llo| == Hello
+        let mut lexer = Lexer::new("|H\\x65;llo|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("Hello".to_string())
+        );
+
+        // R7RS example: |\x3BB;| == λ
+        let mut lexer = Lexer::new("|\\x3BB;|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("λ".to_string())
+        );
+
+        // R7RS example: |\x9;\x9;| == two tabs
+        let mut lexer = Lexer::new("|\\x9;\\x9;|");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("\t\t".to_string())
+        );
+    }
+
+    #[test]
+    fn test_vertical_bar_identifier_unterminated() {
+        let mut lexer = Lexer::new("|hello");
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::UnterminatedVerticalBarIdentifier)
+        ));
+    }
+
+    #[test]
+    fn test_vertical_bar_identifier_invalid_escape() {
+        let mut lexer = Lexer::new("|foo\\q|");
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::InvalidEscapeInIdentifier(_))
+        ));
+    }
+
+    #[test]
+    fn test_vertical_bar_identifier_in_expression() {
+        let mut lexer = Lexer::new("(|foo bar| |hello world|)");
+        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("foo bar".to_string())
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("hello world".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
     }
 }

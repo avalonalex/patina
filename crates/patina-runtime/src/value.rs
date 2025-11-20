@@ -221,7 +221,13 @@ impl std::fmt::Display for Value {
             }
             Value::Character(c) => write!(f, "#\\{}", c),
             Value::String(s) => write!(f, "\"{}\"", s.borrow()),
-            Value::Symbol(s) => write!(f, "{}", s),
+            Value::Symbol(s) => {
+                if Self::symbol_needs_vertical_bars(s) {
+                    write!(f, "|{}|", s)
+                } else {
+                    write!(f, "{}", s)
+                }
+            }
             Value::Null => write!(f, "()"),
             Value::Pair(_) => {
                 // Check for special shorthand forms: quote, quasiquote, unquote, unquote-splicing
@@ -277,6 +283,98 @@ impl std::fmt::Display for Value {
 }
 
 impl Value {
+    /// Check if a symbol name needs vertical bar notation when displayed
+    ///
+    /// Returns true if the symbol contains characters that require vertical bars
+    /// to be read back correctly (spaces, parentheses, starts with digit, etc.)
+    fn symbol_needs_vertical_bars(name: &str) -> bool {
+        // Empty symbol needs bars
+        if name.is_empty() {
+            return true;
+        }
+
+        // Check if it looks like a number (would be parsed as number, not symbol)
+        let first_char = name.chars().next().unwrap();
+
+        // Starts with digit -> looks like number (including partial like "123abc")
+        if first_char.is_ascii_digit() {
+            return true;
+        }
+
+        // Check for +/- prefix (complex number or signed number)
+        if (first_char == '+' || first_char == '-') && name.len() > 1 {
+            let second_char = name.chars().nth(1).unwrap();
+
+            // +/-digit -> number
+            if second_char.is_ascii_digit() {
+                return true;
+            }
+
+            // +/-.digit -> number (e.g., -.4)
+            if second_char == '.' && name.len() > 2 {
+                let third_char = name.chars().nth(2).unwrap();
+                if third_char.is_ascii_digit() {
+                    return true;
+                }
+            }
+
+            // +i, -i, +I, -I -> imaginary number
+            if matches!(second_char, 'i' | 'I') && name.len() == 2 {
+                return true;
+            }
+
+            // Check for special floats or things that start with them (case insensitive)
+            let lower = name.to_lowercase();
+            if lower == "+inf.0" || lower == "-inf.0"
+                || lower == "+nan.0" || lower == "-nan.0"
+                || lower.starts_with("+inf.0") // e.g., +inf.0xyz
+                || lower.starts_with("-inf.0")
+                || lower.starts_with("+nan.0") // e.g., +nan.0abc
+                || lower.starts_with("-nan.0") {
+                return true;
+            }
+        }
+
+        // Single dot needs bars
+        if name == "." {
+            return true;
+        }
+
+        // Check each character
+        for (i, ch) in name.chars().enumerate() {
+            // Non-ASCII needs bars (per R7RS spec)
+            if !ch.is_ascii() {
+                return true;
+            }
+
+            // First character must be initial or special initial
+            if i == 0 {
+                let is_valid_initial = ch.is_ascii_alphabetic()
+                    || matches!(
+                        ch,
+                        '!' | '$' | '%' | '&' | '*' | '/' | ':' | '<' | '=' | '>' | '?' | '^'
+                            | '_' | '~' | '+' | '-' | '.'
+                    );
+                if !is_valid_initial {
+                    return true;
+                }
+            } else {
+                // Subsequent characters can be initial, digit, or special subsequent
+                let is_valid_subsequent = ch.is_ascii_alphanumeric()
+                    || matches!(
+                        ch,
+                        '!' | '$' | '%' | '&' | '*' | '/' | ':' | '<' | '=' | '>' | '?' | '^'
+                            | '_' | '~' | '+' | '-' | '.' | '@'
+                    );
+                if !is_valid_subsequent {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     /// Check if this value is a special quote form that can be displayed with shorthand syntax
     ///
     /// Returns Some(formatted_string) if this is a quote-like form, None otherwise.
