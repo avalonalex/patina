@@ -267,7 +267,10 @@ fn test_all_features_combined() {
                      (quote rest)))))
     "#;
 
-    assert!(test_macro_parses(macro_def).is_ok(), "Ultimate macro should parse");
+    assert!(
+        test_macro_parses(macro_def).is_ok(),
+        "Ultimate macro should parse"
+    );
 }
 
 // ============================================================================
@@ -285,5 +288,8 @@ fn test_match_macro_style_pattern() {
              (cond (pat body) ... (else default)))))
     "#;
 
-    assert!(test_macro_parses(macro_def).is_ok(), "Match-style pattern should parse");
+    assert!(
+        test_macro_parses(macro_def).is_ok(),
+        "Match-style pattern should parse"
+    );
 }

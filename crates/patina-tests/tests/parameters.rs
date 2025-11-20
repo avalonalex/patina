@@ -5,14 +5,6 @@ use patina_interpreter::TreeWalkInterpreter;
 fn eval(code: &str) -> Result<String, String> {
     let interp = TreeWalkInterpreter::new_tree_walker();
     interp
-        .eval_str(code)
-        .map(|v| format!("{}", v))
-        .map_err(|e| format!("{}", e))
-}
-
-fn eval_program(code: &str) -> Result<String, String> {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-    interp
         .eval_program(code)
         .map(|v| format!("{}", v))
         .map_err(|e| format!("{}", e))
@@ -24,7 +16,7 @@ fn test_make_parameter_basic() {
         (define p (make-parameter 10))
         (p)
     "#;
-    assert_eq!(eval_program(code).unwrap(), "10");
+    assert_eq!(eval(code).unwrap(), "10");
 }
 
 #[test]
@@ -34,7 +26,7 @@ fn test_parameter_set() {
         (p 20)
         (p)
     "#;
-    assert_eq!(eval_program(code).unwrap(), "20");
+    assert_eq!(eval(code).unwrap(), "20");
 }
 
 #[test]
@@ -44,7 +36,7 @@ fn test_parameterize_simple() {
         (parameterize ((p 20))
           (p))
     "#;
-    assert_eq!(eval_program(code).unwrap(), "20");
+    assert_eq!(eval(code).unwrap(), "20");
 }
 
 #[test]
@@ -55,7 +47,7 @@ fn test_parameterize_restores() {
           (p))
         (p)
     "#;
-    assert_eq!(eval_program(code).unwrap(), "10");
+    assert_eq!(eval(code).unwrap(), "10");
 }
 
 #[test]
@@ -66,7 +58,7 @@ fn test_parameterize_multiple_params() {
         (parameterize ((p1 100) (p2 200))
           (list (p1) (p2)))
     "#;
-    assert_eq!(eval_program(code).unwrap(), "(100 200)");
+    assert_eq!(eval(code).unwrap(), "(100 200)");
 }
 
 #[test]
@@ -77,7 +69,7 @@ fn test_parameterize_nested() {
           (parameterize ((p 30))
             (p)))
     "#;
-    assert_eq!(eval_program(code).unwrap(), "30");
+    assert_eq!(eval(code).unwrap(), "30");
 }
 
 #[test]
@@ -89,7 +81,7 @@ fn test_parameterize_nested_restores() {
             (p))
           (p))
     "#;
-    assert_eq!(eval_program(code).unwrap(), "20");
+    assert_eq!(eval(code).unwrap(), "20");
 }
 
 #[test]
@@ -99,7 +91,7 @@ fn test_parameter_with_converter() {
         (p)
     "#;
     // Note: Converter not applied to initial value yet (TODO in implementation)
-    assert_eq!(eval_program(code).unwrap(), "10");
+    assert_eq!(eval(code).unwrap(), "10");
 }
 
 #[test]
@@ -109,7 +101,7 @@ fn test_parameter_converter_on_set() {
         (p 5)
         (p)
     "#;
-    assert_eq!(eval_program(code).unwrap(), "10");
+    assert_eq!(eval(code).unwrap(), "10");
 }
 
 #[test]
@@ -118,7 +110,7 @@ fn test_parameterize_empty_body_error() {
         (define p (make-parameter 10))
         (parameterize ((p 20)))
     "#;
-    assert!(eval_program(code).is_err());
+    assert!(eval(code).is_err());
 }
 
 #[test]
@@ -127,7 +119,7 @@ fn test_parameterize_non_parameter_error() {
         (parameterize ((42 20))
           (display "hello"))
     "#;
-    assert!(eval_program(code).is_err());
+    assert!(eval(code).is_err());
 }
 
 #[test]
@@ -139,5 +131,5 @@ fn test_parameterize_body_sequence() {
           (p)
           (p))
     "#;
-    assert_eq!(eval_program(code).unwrap(), "20");
+    assert_eq!(eval(code).unwrap(), "20");
 }

@@ -99,17 +99,14 @@ impl SpecialForm for ParameterizeForm {
 
                     // Apply converter if present
                     let converted_val = if let Some(conv) = converter {
-                        let result = evaluator.apply(
-                            *conv.clone(),
-                            vec![new_val.clone()],
-                            false,
-                        )?;
+                        let result =
+                            evaluator.apply(*conv.clone(), vec![new_val.clone()], false)?;
                         match result {
                             EvalResult::Value(v) => v,
                             _ => {
                                 return Err(EvalError::InvalidSyntax(
                                     "parameter converter returned non-value".to_string(),
-                                ))
+                                ));
                             }
                         }
                     } else {
