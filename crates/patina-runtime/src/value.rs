@@ -45,6 +45,14 @@ pub enum Value {
     // Procedures
     Procedure(Procedure),
 
+    // Parameters (R7RS dynamic parameters)
+    // Parameters are special procedures that maintain dynamic state
+    // Can be called with 0 args (get value) or 1 arg (set value)
+    Parameter {
+        value: Rc<RefCell<Value>>,
+        converter: Option<Box<Value>>, // Optional converter function
+    },
+
     // Ports (for I/O)
     InputPort,
     OutputPort,
@@ -139,6 +147,7 @@ impl Value {
             Value::Vector(_) => "vector",
             Value::Bytevector(_) => "bytevector",
             Value::Procedure(_) => "procedure",
+            Value::Parameter { .. } => "parameter",
             Value::InputPort | Value::OutputPort => "port",
             Value::Macro { .. } => "macro",
             Value::Library(_) => "library",
@@ -243,6 +252,7 @@ impl std::fmt::Display for Value {
                 Procedure::CaseLambda { .. } => write!(f, "#<procedure:case-lambda>"),
                 Procedure::Continuation => write!(f, "#<continuation>"),
             },
+            Value::Parameter { .. } => write!(f, "#<parameter>"),
             Value::InputPort => write!(f, "#<input-port>"),
             Value::OutputPort => write!(f, "#<output-port>"),
             Value::Macro { name, .. } => write!(f, "#<macro:{}>", name),

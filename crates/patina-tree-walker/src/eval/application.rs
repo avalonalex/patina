@@ -184,6 +184,46 @@ impl Evaluator {
                     actual: args.len(),
                 })
             }
+            Value::Parameter { value, converter } => {
+                // Parameters can be called with 0 or 1 arguments:
+                // (param)      => get current value
+                // (param val)  => set value (after applying converter)
+                match args.len() {
+                    0 => {
+                        // Get current value
+                        Ok(super::EvalResult::Value(value.borrow().clone()))
+                    }
+                    1 => {
+                        // Set value (applying converter if present)
+                        let new_val = if let Some(conv) = converter {
+                            // Apply converter to new value
+                            let result = self.apply(
+                                *conv.clone(),
+                                vec![args[0].clone()],
+                                false, // converter call is never in tail position
+                            )?;
+                            match result {
+                                super::EvalResult::Value(v) => v,
+                                _ => {
+                                    return Err(EvalError::InvalidSyntax(
+                                        "parameter converter returned non-value".to_string(),
+                                    ));
+                                }
+                            }
+                        } else {
+                            args[0].clone()
+                        };
+
+                        // Set the new value
+                        *value.borrow_mut() = new_val;
+                        Ok(super::EvalResult::Value(Value::Unspecified))
+                    }
+                    _ => Err(EvalError::WrongArity {
+                        expected: "0 or 1".to_string(),
+                        actual: args.len(),
+                    }),
+                }
+            }
             _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
         };
 

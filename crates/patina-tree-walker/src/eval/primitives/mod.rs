@@ -12,6 +12,7 @@
 //! - `values` - Multiple values support
 //! - `strings` - String operations
 //! - `vectors` - Vector operations
+//! - `parameters` - Dynamic parameters (make-parameter)
 
 pub mod registry;
 
@@ -23,6 +24,7 @@ mod higher_order;
 mod io;
 mod lazy;
 mod lists;
+mod parameters;
 mod predicates;
 mod strings;
 mod test;
@@ -95,6 +97,7 @@ impl Evaluator {
         debug::register(registry);
         test::register(registry);
         lazy::register(registry);
+        parameters::register(registry);
 
         // All core primitives are now in the registry!
     }
