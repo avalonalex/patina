@@ -38,6 +38,10 @@ pub fn build_scheme_char(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("integer->char", Arity::Exact(1)),
         // Digit value
         ("digit-value", Arity::Exact(1)),
+        // String case conversion (also in scheme.char per R7RS)
+        ("string-upcase", Arity::Exact(1)),
+        ("string-downcase", Arity::Exact(1)),
+        ("string-foldcase", Arity::Exact(1)),
     ];
 
     // Define each primitive in the environment

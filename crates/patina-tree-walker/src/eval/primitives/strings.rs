@@ -486,6 +486,211 @@ pub(super) fn string_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
     Ok(Value::String(Rc::new(RefCell::new(substr))))
 }
 
+// ========== String Case Conversion ==========
+
+/// (string-upcase string) - Convert string to uppercase
+pub(super) fn string_upcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 1, "string-upcase")?;
+
+    match &args[0] {
+        Value::String(s) => {
+            let upper = s.borrow().to_uppercase();
+            Ok(Value::String(Rc::new(RefCell::new(upper))))
+        }
+        _ => Err(EvalError::TypeError(
+            "string-upcase expects a string".to_string(),
+        )),
+    }
+}
+
+/// (string-downcase string) - Convert string to lowercase
+pub(super) fn string_downcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 1, "string-downcase")?;
+
+    match &args[0] {
+        Value::String(s) => {
+            let lower = s.borrow().to_lowercase();
+            Ok(Value::String(Rc::new(RefCell::new(lower))))
+        }
+        _ => Err(EvalError::TypeError(
+            "string-downcase expects a string".to_string(),
+        )),
+    }
+}
+
+/// (string-foldcase string) - Case-fold string for case-insensitive comparison
+pub(super) fn string_foldcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 1, "string-foldcase")?;
+
+    match &args[0] {
+        Value::String(s) => {
+            // R7RS: Case folding is the same as lowercasing for most purposes
+            let folded = s.borrow().to_lowercase();
+            Ok(Value::String(Rc::new(RefCell::new(folded))))
+        }
+        _ => Err(EvalError::TypeError(
+            "string-foldcase expects a string".to_string(),
+        )),
+    }
+}
+
+// ========== String Mutation ==========
+
+/// (string-fill! string fill [start [end]]) - Fill string with character
+pub(super) fn string_fill(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_range(&args, 2, 4, "string-fill!")?;
+
+    let s = match &args[0] {
+        Value::String(s) => s,
+        _ => {
+            return Err(EvalError::TypeError(
+                "string-fill! expects a string".to_string(),
+            ));
+        }
+    };
+
+    let fill_char = match &args[1] {
+        Value::Character(c) => *c,
+        _ => {
+            return Err(EvalError::TypeError(
+                "string-fill! expects a character as second argument".to_string(),
+            ));
+        }
+    };
+
+    let mut s_borrowed = s.borrow_mut();
+    let chars: Vec<char> = s_borrowed.chars().collect();
+    let len = chars.len();
+
+    let start = if args.len() >= 3 {
+        match &args[2] {
+            Value::Integer(n) if *n >= 0 => *n as usize,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string-fill! start index must be a non-negative integer".to_string(),
+                ));
+            }
+        }
+    } else {
+        0
+    };
+
+    let end = if args.len() >= 4 {
+        match &args[3] {
+            Value::Integer(n) if *n >= 0 => *n as usize,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string-fill! end index must be a non-negative integer".to_string(),
+                ));
+            }
+        }
+    } else {
+        len
+    };
+
+    if start > end || end > len {
+        return Err(EvalError::IndexOutOfBounds(
+            "string-fill! indices out of bounds".to_string(),
+        ));
+    }
+
+    // Reconstruct string with filled range
+    let mut new_chars = chars;
+    for char_slot in new_chars.iter_mut().take(end).skip(start) {
+        *char_slot = fill_char;
+    }
+    *s_borrowed = new_chars.iter().collect();
+
+    Ok(Value::Unspecified)
+}
+
+/// (string-copy! to at from [start [end]]) - Copy characters from one string to another
+pub(super) fn string_copy_mutate(
+    evaluator: &Evaluator,
+    args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    evaluator.check_arity_range(&args, 3, 5, "string-copy!")?;
+
+    let to = match &args[0] {
+        Value::String(s) => s,
+        _ => {
+            return Err(EvalError::TypeError(
+                "string-copy! expects a string as first argument".to_string(),
+            ));
+        }
+    };
+
+    let at = match &args[1] {
+        Value::Integer(n) if *n >= 0 => *n as usize,
+        _ => {
+            return Err(EvalError::TypeError(
+                "string-copy! at index must be a non-negative integer".to_string(),
+            ));
+        }
+    };
+
+    let from = match &args[2] {
+        Value::String(s) => s.borrow().clone(),
+        _ => {
+            return Err(EvalError::TypeError(
+                "string-copy! expects a string as third argument".to_string(),
+            ));
+        }
+    };
+
+    let from_chars: Vec<char> = from.chars().collect();
+    let from_len = from_chars.len();
+
+    let start = if args.len() >= 4 {
+        match &args[3] {
+            Value::Integer(n) if *n >= 0 => *n as usize,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string-copy! start index must be a non-negative integer".to_string(),
+                ));
+            }
+        }
+    } else {
+        0
+    };
+
+    let end = if args.len() >= 5 {
+        match &args[4] {
+            Value::Integer(n) if *n >= 0 => *n as usize,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string-copy! end index must be a non-negative integer".to_string(),
+                ));
+            }
+        }
+    } else {
+        from_len
+    };
+
+    if start > end || end > from_len {
+        return Err(EvalError::IndexOutOfBounds(
+            "string-copy! source indices out of bounds".to_string(),
+        ));
+    }
+
+    let mut to_borrowed = to.borrow_mut();
+    let mut to_chars: Vec<char> = to_borrowed.chars().collect();
+
+    let copy_len = end - start;
+    if at + copy_len > to_chars.len() {
+        return Err(EvalError::IndexOutOfBounds(
+            "string-copy! destination index out of bounds".to_string(),
+        ));
+    }
+
+    // Copy characters from source to destination
+    to_chars[at..(copy_len + at)].copy_from_slice(&from_chars[start..(copy_len + start)]);
+
+    *to_borrowed = to_chars.iter().collect();
+
+    Ok(Value::Unspecified)
+}
+
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use super::super::EvalResult;
     use super::registry::PrimitiveFn;
@@ -669,5 +874,47 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         Arity::Range(1, 3),
         "Returns a newly allocated copy of the part of the given string.",
         |eval, args, _tail| string_copy(eval, args).map(EvalResult::Value),
+    ));
+
+    // String case conversion (scheme.char library)
+    registry.register(PrimitiveFn::new(
+        "scheme.char",
+        "string-upcase",
+        Arity::Exact(1),
+        "Returns a newly allocated string with all characters converted to uppercase.",
+        |eval, args, _tail| string_upcase(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.char",
+        "string-downcase",
+        Arity::Exact(1),
+        "Returns a newly allocated string with all characters converted to lowercase.",
+        |eval, args, _tail| string_downcase(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.char",
+        "string-foldcase",
+        Arity::Exact(1),
+        "Returns a newly allocated string with all characters case-folded.",
+        |eval, args, _tail| string_foldcase(eval, args).map(EvalResult::Value),
+    ));
+
+    // String mutation (scheme.base)
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-fill!",
+        Arity::Range(2, 4),
+        "Stores fill character in every element of string between start and end.",
+        |eval, args, _tail| string_fill(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-copy!",
+        Arity::Range(3, 5),
+        "Copies characters from source string to destination string.",
+        |eval, args, _tail| string_copy_mutate(eval, args).map(EvalResult::Value),
     ));
 }

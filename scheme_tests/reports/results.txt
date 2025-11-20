@@ -2187,123 +2187,143 @@ Testing:
 Testing: 
 (string-upcase "abc")
 
-Error: Undefined variable: string-upcase
 Testing: 
 (string-upcase "ABC")
 
-Error: Undefined variable: string-upcase
 Testing: 
 (string-downcase "abc")
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-downcase "ABC")
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-foldcase "abc")
 
-Error: Undefined variable: string-foldcase
 Testing: 
 (string-foldcase "ABC")
 
-Error: Undefined variable: string-foldcase
 Testing: 
 (string-upcase "αβγ")
 
-Error: Undefined variable: string-upcase
 Testing: 
 (string-upcase "ΑΒΓ")
 
-Error: Undefined variable: string-upcase
 Testing: 
 (string-downcase "αβγ")
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-downcase "ΑΒΓ")
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-foldcase "αβγ")
 
-Error: Undefined variable: string-foldcase
 Testing: 
 (string-foldcase "ΑΒΓ")
 
-Error: Undefined variable: string-foldcase
 Testing: 
 (string-upcase "ßa")
 
-Error: Undefined variable: string-upcase
 Testing: 
 (string-downcase "ßa")
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-downcase "SSA")
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-downcase "Maß")
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-foldcase "Maß")
 
-Error: Undefined variable: string-foldcase
+FAIL: 
+(string-foldcase "Maß")
+
+  expected: 
+"mass"
+
+  but got:  
+"maß"
+
+
 Testing: 
 (string-upcase "İ")
 
-Error: Undefined variable: string-upcase
 Testing: 
 (string-downcase "İ")
 
-Error: Undefined variable: string-downcase
+FAIL: 
+(string-downcase "İ")
+
+  expected: 
+"ix0307;"
+
+  but got:  
+"i̇"
+
+
 Testing: 
 (string-foldcase "İ")
 
-Error: Undefined variable: string-foldcase
+FAIL: 
+(string-foldcase "İ")
+
+  expected: 
+"ix0307;"
+
+  but got:  
+"i̇"
+
+
 Testing: 
 (string-upcase "ǰ")
 
-Error: Undefined variable: string-upcase
 Testing: 
 (string-downcase "ſ")
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-foldcase "ſ")
 
-Error: Undefined variable: string-foldcase
+FAIL: 
+(string-foldcase "ſ")
+
+  expected: 
+"s"
+
+  but got:  
+"ſ"
+
+
 Testing: 
 (string-upcase "γλώσσα")
 
-Error: Undefined variable: string-upcase
 Testing: 
 (string-downcase "ΓΛΏΣΣΑ")
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-foldcase "ΓΛΏΣΣΑ")
 
-Error: Undefined variable: string-foldcase
 Testing: 
 (string-upcase "μέλος")
 
-Error: Undefined variable: string-upcase
 Testing: 
 (and (member (string-downcase "ΜΈΛΟΣ") '("μέλος" "μέλοσ")) #t)
 
-Error: Undefined variable: string-downcase
 Testing: 
 (string-foldcase "ΜΈΛΟΣ")
 
-Error: Undefined variable: string-foldcase
+FAIL: 
+(string-foldcase "ΜΈΛΟΣ")
+
+  expected: 
+"μέλοσ"
+
+  but got:  
+"μέλος"
+
+
 Testing: 
 (and (member (string-downcase "ΜΈΛΟΣ ΕΝΌΣ") '("μέλος ενός" "μέλοσ ενόσ")) #t)
 
-Error: Undefined variable: string-downcase
 Testing: 
 (substring "" 0 0)
 
@@ -2388,44 +2408,34 @@ Testing:
 Testing: 
 (let ((str (make-string 5 #\x))) (string-fill! str #\-) str)
 
-Error: Undefined variable: string-fill!
 Testing: 
 (let ((str (make-string 5 #\x))) (string-fill! str #\- 2) str)
 
-Error: Undefined variable: string-fill!
 Testing: 
 (let ((str (make-string 5 #\x))) (string-fill! str #\- 2 3) str)
 
-Error: Undefined variable: string-fill!
 Testing: 
 (let ((str (string-copy "abcde"))) (string-copy! str 1 "12345" 0 2) str)
 
-Error: Undefined variable: string-copy!
 Testing: 
 (let ((str (make-string 5 #\x))) (string-copy! str 0 "-----") str)
 
-Error: Undefined variable: string-copy!
 Testing: 
 (let ((str (make-string 5 #\x))) (string-copy! str 0 "-----" 2) str)
 
-Error: Undefined variable: string-copy!
 Testing: 
 (let ((str (make-string 5 #\x))) (string-copy! str 2 "-----" 0 3) str)
 
-Error: Undefined variable: string-copy!
 Testing: 
 (let ((str (make-string 5 #\x))) (string-copy! str 2 "-----" 2 3) str)
 
-Error: Undefined variable: string-copy!
 Testing: 
 (let ((str (string-copy "abcde"))) (string-copy! str 1 str 0 2) str)
 
-Error: Undefined variable: string-copy!
 Testing: 
 (let ((str (string-copy "abcde"))) (string-copy! str 3 str 0 2) str)
 
-Error: Undefined variable: string-copy!
-Tests run: 90, Passed: 90, Failed: 0
+Tests run: 130, Passed: 125, Failed: 5
 
 Running test suite: 6.8 Vectors
 Testing: 

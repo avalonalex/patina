@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-20 11:49:46
+**Generated:** 2025-11-20 11:59:17
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 575 | 76.0% |
-| ❌ Failed | 27 | 3.6% |
-| ⚠️ Error (crashed) | 155 | 20.5% |
+| ✅ Passed | 610 | 80.6% |
+| ❌ Failed | 32 | 4.2% |
+| ⚠️ Error (crashed) | 115 | 15.2% |
 | **Total** | **757** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
@@ -19,6 +19,11 @@
 ### Test Failures
 
 ```
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -134,46 +139,6 @@ Error: Undefined variable: string->symbol
 Error: Undefined variable: string->symbol
 Error: Undefined variable: string->symbol
 Error: Undefined variable: symbol->string
-Error: Undefined variable: string-upcase
-Error: Undefined variable: string-upcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-foldcase
-Error: Undefined variable: string-foldcase
-Error: Undefined variable: string-upcase
-Error: Undefined variable: string-upcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-foldcase
-Error: Undefined variable: string-foldcase
-Error: Undefined variable: string-upcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-foldcase
-Error: Undefined variable: string-upcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-foldcase
-Error: Undefined variable: string-upcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-foldcase
-Error: Undefined variable: string-upcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-foldcase
-Error: Undefined variable: string-upcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-foldcase
-Error: Undefined variable: string-downcase
-Error: Undefined variable: string-fill!
-Error: Undefined variable: string-fill!
-Error: Undefined variable: string-fill!
-Error: Undefined variable: string-copy!
-Error: Undefined variable: string-copy!
-Error: Undefined variable: string-copy!
-Error: Undefined variable: string-copy!
-Error: Undefined variable: string-copy!
-Error: Undefined variable: string-copy!
-Error: Undefined variable: string-copy!
 Error: Undefined variable: bytevector?
 Error: Undefined variable: bytevector?
 Error: Undefined variable: bytevector?
