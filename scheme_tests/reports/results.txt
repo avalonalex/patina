@@ -1551,7 +1551,6 @@ Error: Undefined variable: set-cdr!
 Testing: 
 (make-list 2 3)
 
-Error: Undefined variable: make-list
 Testing: 
 (list 'a (+ 3 4) 'c)
 
@@ -1648,25 +1647,54 @@ Testing:
 Testing: 
 (list-copy '(1 2 3))
 
-Error: Undefined variable: list-copy
 Testing: 
 (list-copy "foo")
 
-Error: Undefined variable: list-copy
 Testing: 
 (list-copy '())
 
-Error: Undefined variable: list-copy
 Testing: 
 (list-copy '(3 . 4))
 
-Error: Undefined variable: list-copy
 Testing: 
 (list-copy '(6 7 8 . 9))
 
-Error: Undefined variable: list-copy
-Error: Undefined variable: list-copy
-Tests run: 46, Passed: 46, Failed: 0
+Testing: 
+'((a b) (c d) e)
+
+Testing: 
+(eq? (car l1) (car l2))
+
+FAIL: 
+(eq? (car l1) (car l2))
+
+  expected: 
+#t
+
+  but got:  
+#f
+
+
+Testing: 
+(eq? (cadr l1) (cadr l2))
+
+FAIL: 
+(eq? (cadr l1) (cadr l2))
+
+  expected: 
+#t
+
+  but got:  
+#f
+
+
+Testing: 
+(eq? (cdr l1) (cdr l2))
+
+Testing: 
+(eq? (cddr l1) (cddr l2))
+
+Tests run: 57, Passed: 55, Failed: 2
 
 Running test suite: 6.5 Symbols
 Testing: 

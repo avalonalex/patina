@@ -69,6 +69,8 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("list", Arity::Min(0)),
         ("length", Arity::Exact(1)),
         ("append", Arity::Min(0)),
+        ("make-list", Arity::Range(1, 2)),
+        ("list-copy", Arity::Exact(1)),
         ("reverse", Arity::Exact(1)),
         ("list-ref", Arity::Exact(2)),
         ("list-tail", Arity::Exact(2)),

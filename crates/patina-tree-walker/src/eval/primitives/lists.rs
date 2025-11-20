@@ -301,6 +301,88 @@ pub(super) fn assoc(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
 
     Ok(Value::Boolean(false))
 }
+
+/// (make-list k [fill]) - Create list of k elements
+pub(super) fn make_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(EvalError::WrongArity {
+            expected: "1 or 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Get the length
+    let k = match &args[0] {
+        Value::Integer(n) if *n >= 0 => *n as usize,
+        Value::Integer(n) => {
+            return Err(EvalError::TypeError(format!(
+                "make-list: length must be non-negative, got {}",
+                n
+            )))
+        }
+        _ => {
+            return Err(EvalError::TypeError(
+                "make-list: first argument must be an integer".to_string(),
+            ))
+        }
+    };
+
+    // Get the fill value (default to unspecified)
+    let fill = if args.len() == 2 {
+        args[1].clone()
+    } else {
+        Value::Unspecified
+    };
+
+    // Create list of k elements
+    let elements = vec![fill; k];
+    Ok(evaluator.list_from_vec(elements))
+}
+
+/// (list-copy list) - Create shallow copy of list
+/// Handles both proper lists and improper lists (dotted lists)
+pub(super) fn list_copy(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Handle empty list
+    if matches!(args[0], Value::Null) {
+        return Ok(Value::Null);
+    }
+
+    // For non-pair values, return as-is
+    if !matches!(args[0], Value::Pair(_)) {
+        return Ok(args[0].clone());
+    }
+
+    // Walk the list and copy each pair
+    let mut result_pairs: Vec<(Value, Value)> = Vec::new();
+    let mut current = args[0].clone();
+
+    // Collect all pairs
+    while let Value::Pair(pair) = current {
+        let car = pair.0.clone();
+        let cdr = pair.1.clone();
+        result_pairs.push((car, cdr.clone()));
+        current = cdr;
+    }
+
+    // The final cdr (terminator) - could be Null (proper list) or other value (improper list)
+    let final_cdr = current;
+
+    // Build the copied list from right to left
+    let mut result = final_cdr;
+    for (car, _) in result_pairs.into_iter().rev() {
+        result = Value::Pair(Rc::new((car, result)));
+    }
+
+    Ok(result)
+}
+
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use super::super::EvalResult;
     use super::registry::PrimitiveFn;
@@ -439,5 +521,23 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         Arity::Exact(2),
         "Returns the first pair in alist whose car is obj (compared using equal?), or #f if not found.",
         |eval, args, _tail| assoc(eval, args).map(EvalResult::Value),
+    ));
+
+    // make-list - Create list of k elements with optional fill value
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "make-list",
+        Arity::Range(1, 2),
+        "Returns a newly allocated list of k elements. If fill is given, each element is initialized to fill; otherwise unspecified.",
+        |eval, args, _tail| make_list(eval, args).map(EvalResult::Value),
+    ));
+
+    // list-copy - Create shallow copy of list
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "list-copy",
+        Arity::Exact(1),
+        "Returns a newly allocated copy of list. Only the top level of structure is copied.",
+        |eval, args, _tail| list_copy(eval, args).map(EvalResult::Value),
     ));
 }

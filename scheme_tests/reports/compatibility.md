@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-20 11:59:17
+**Generated:** 2025-11-20 12:29:04
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 610 | 80.6% |
-| ❌ Failed | 32 | 4.2% |
-| ⚠️ Error (crashed) | 115 | 15.2% |
-| **Total** | **757** | **100%** |
+| ✅ Passed | 619 | 81.3% |
+| ❌ Failed | 34 | 4.5% |
+| ⚠️ Error (crashed) | 108 | 14.2% |
+| **Total** | **761** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -19,6 +19,8 @@
 ### Test Failures
 
 ```
+FAIL: 
+FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -118,16 +120,9 @@ Error: Undefined variable: .3
 Error: Undefined variable: .3
 Error: Undefined variable: set-cdr!
 Error: Undefined variable: set-cdr!
-Error: Undefined variable: make-list
 Error: Undefined variable: list-set!
 Error: Invalid syntax: Unknown primitive: member
 Error: Invalid syntax: Unknown primitive: assoc
-Error: Undefined variable: list-copy
-Error: Undefined variable: list-copy
-Error: Undefined variable: list-copy
-Error: Undefined variable: list-copy
-Error: Undefined variable: list-copy
-Error: Undefined variable: list-copy
 Error: Undefined variable: symbol=?
 Error: Undefined variable: symbol=?
 Error: Undefined variable: symbol=?
