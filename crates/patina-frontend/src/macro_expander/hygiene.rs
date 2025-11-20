@@ -136,6 +136,8 @@ fn is_special_form(name: &str) -> bool {
             | "let-syntax"        // Added 2025-11-19
             | "letrec-syntax"     // Added 2025-11-19
             | "syntax-rules"      // Added 2025-11-19
+            // Parameter-related special forms
+            | "parameterize"      // Added 2025-11-19
             // Derived special forms (could be macros but are special forms for now)
             | "cond"
             | "case"

@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-19 21:26:02
+**Generated:** 2025-11-19 22:27:42
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 98 | 86.0% |
+| ✅ Passed | 101 | 89.4% |
 | ❌ Failed | 0 | 0.0% |
-| ⚠️ Error (crashed) | 16 | 14.0% |
-| **Total** | **114** | **100%** |
+| ⚠️ Error (crashed) | 12 | 10.6% |
+| **Total** | **113** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -27,10 +27,6 @@ FAIL:
 ### Errors
 
 ```
-Error: Undefined variable: make-parameter
-Error: Undefined variable: radix
-Error: Undefined variable: parameterize
-Error: Undefined variable: radix
 Error: Undefined variable: ##x#901
 Error: Not a procedure: 8
 Error: Invalid syntax: No matching pattern for macro sequence1

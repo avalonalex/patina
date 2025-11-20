@@ -79,7 +79,7 @@ pub(super) fn make_parameter(evaluator: &Evaluator, args: Vec<Value>) -> Result<
     };
 
     Ok(Value::Parameter {
-        value: Rc::new(RefCell::new(value)),
+        values: Rc::new(RefCell::new(vec![value])),
         converter,
     })
 }

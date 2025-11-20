@@ -64,6 +64,7 @@ mod r#if;
 mod import;
 mod lambda;
 mod let_syntax;
+mod parameterize;
 mod quasiquote;
 mod quote;
 mod set;
@@ -136,6 +137,7 @@ pub fn build_registry() -> SpecialFormRegistry {
     registry.register(Box::new(define_syntax::DefineSyntaxForm));
     registry.register(Box::new(let_syntax::LetSyntaxForm));
     registry.register(Box::new(let_syntax::LetrecSyntaxForm));
+    registry.register(Box::new(parameterize::ParameterizeForm));
     registry.register(Box::new(quasiquote::QuasiquoteForm));
 
     // R7RS (scheme case-lambda) special forms

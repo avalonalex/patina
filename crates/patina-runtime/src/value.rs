@@ -48,9 +48,10 @@ pub enum Value {
     // Parameters (R7RS dynamic parameters)
     // Parameters are special procedures that maintain dynamic state
     // Can be called with 0 args (get value) or 1 arg (set value)
+    // Uses a stack to support nested parameterize
     Parameter {
-        value: Rc<RefCell<Value>>,
-        converter: Option<Box<Value>>, // Optional converter function
+        values: Rc<RefCell<Vec<Value>>>, // Stack of values (top = current value)
+        converter: Option<Box<Value>>,   // Optional converter function
     },
 
     // Ports (for I/O)

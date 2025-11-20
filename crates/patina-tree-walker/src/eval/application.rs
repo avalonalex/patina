@@ -184,17 +184,21 @@ impl Evaluator {
                     actual: args.len(),
                 })
             }
-            Value::Parameter { value, converter } => {
+            Value::Parameter { values, converter } => {
                 // Parameters can be called with 0 or 1 arguments:
-                // (param)      => get current value
-                // (param val)  => set value (after applying converter)
+                // (param)      => get current value (top of stack)
+                // (param val)  => set value (replace top of stack after applying converter)
                 match args.len() {
                     0 => {
-                        // Get current value
-                        Ok(super::EvalResult::Value(value.borrow().clone()))
+                        // Get current value (top of stack)
+                        let stack = values.borrow();
+                        let current_value = stack.last().ok_or_else(|| {
+                            EvalError::InvalidSyntax("parameter stack is empty".to_string())
+                        })?;
+                        Ok(super::EvalResult::Value(current_value.clone()))
                     }
                     1 => {
-                        // Set value (applying converter if present)
+                        // Set value (replace top of stack after applying converter)
                         let new_val = if let Some(conv) = converter {
                             // Apply converter to new value
                             let result = self.apply(
@@ -214,8 +218,15 @@ impl Evaluator {
                             args[0].clone()
                         };
 
-                        // Set the new value
-                        *value.borrow_mut() = new_val;
+                        // Set the new value (replace top of stack)
+                        let mut stack = values.borrow_mut();
+                        if let Some(last) = stack.last_mut() {
+                            *last = new_val;
+                        } else {
+                            return Err(EvalError::InvalidSyntax(
+                                "parameter stack is empty".to_string(),
+                            ));
+                        }
                         Ok(super::EvalResult::Value(Value::Unspecified))
                     }
                     _ => Err(EvalError::WrongArity {
