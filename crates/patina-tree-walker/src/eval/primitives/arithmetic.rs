@@ -9,6 +9,7 @@
 use super::super::Evaluator;
 use super::super::error::EvalError;
 use num_bigint::BigInt;
+use num_complex::Complex64;
 use num_rational::BigRational;
 use num_traits::{Signed, ToPrimitive, Zero};
 use patina_runtime::value::Value;
@@ -778,23 +779,63 @@ pub(super) fn round(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalEr
     }
 }
 
+// ========== Complex Number Helpers ==========
+
+/// Convert a Value to Complex64
+/// Real numbers are converted to complex with zero imaginary part
+fn value_to_complex64(v: &Value) -> Result<Complex64, EvalError> {
+    match v {
+        Value::Integer(n) => Ok(Complex64::new(*n as f64, 0.0)),
+        Value::BigInteger(n) => Ok(Complex64::new(
+            n.to_f64().unwrap_or(f64::INFINITY),
+            0.0,
+        )),
+        Value::Rational(r) => Ok(Complex64::new(
+            r.to_f64().unwrap_or(f64::INFINITY),
+            0.0,
+        )),
+        Value::Real(f) => Ok(Complex64::new(*f, 0.0)),
+        Value::Complex(r, i) => Ok(Complex64::new(*r, *i)),
+        other => Err(EvalError::TypeError(format!(
+            "Expected number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Convert Complex64 back to Value
+/// If imaginary part is essentially zero, return a real Value
+fn complex64_to_value(c: Complex64) -> Value {
+    if c.im.abs() < 1e-10 {
+        Value::Real(c.re)
+    } else {
+        Value::Complex(c.re, c.im)
+    }
+}
+
 // ========== Square Root and Exponentiation ==========
 
 /// (sqrt x) - Square root
+/// Uses Complex64 to handle all cases uniformly, including negative reals
+/// R7RS branch cut: principal square root is always in right half-plane (re >= 0)
 pub(super) fn sqrt(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "sqrt")?;
 
-    let num = NumericValue::from_value(args[0].clone())?;
-    let f = num.to_f64();
+    // Convert to complex and use num-complex's sqrt implementation
+    let z = value_to_complex64(&args[0])?;
 
-    if f < 0.0 {
-        // TODO: Return complex number for negative sqrt
-        return Err(EvalError::InternalError(
-            "sqrt of negative number not yet supported (requires complex numbers)".to_string(),
-        ));
-    }
+    // R7RS requires: sqrt of negative real should always return positive imaginary part
+    // num-complex respects signed zeros: sqrt(-1-0i) != sqrt(-1+0i)
+    // We normalize: on negative real axis, always use +0i
+    let normalized = if z.re < 0.0 && z.im == 0.0 {
+        Complex64::new(z.re, 0.0) // Force +0.0 imaginary part
+    } else {
+        z
+    };
 
-    Ok(Value::Real(f.sqrt()))
+    let result = normalized.sqrt();
+
+    Ok(complex64_to_value(result))
 }
 
 /// (square x) - Square of x
@@ -931,50 +972,57 @@ pub(super) fn nan_p(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalEr
 // ========== Trigonometric Functions ==========
 
 /// (sin x) - Sine
+/// Supports complex numbers: sin(z) = (e^(iz) - e^(-iz)) / 2i
 pub(super) fn sin(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "sin")?;
-    let num = NumericValue::from_value(args[0].clone())?;
-    Ok(Value::Real(num.to_f64().sin()))
+    let z = value_to_complex64(&args[0])?;
+    Ok(complex64_to_value(z.sin()))
 }
 
 /// (cos x) - Cosine
+/// Supports complex numbers: cos(z) = (e^(iz) + e^(-iz)) / 2
 pub(super) fn cos(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "cos")?;
-    let num = NumericValue::from_value(args[0].clone())?;
-    Ok(Value::Real(num.to_f64().cos()))
+    let z = value_to_complex64(&args[0])?;
+    Ok(complex64_to_value(z.cos()))
 }
 
 /// (tan x) - Tangent
+/// Supports complex numbers: tan(z) = sin(z) / cos(z)
 pub(super) fn tan(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "tan")?;
-    let num = NumericValue::from_value(args[0].clone())?;
-    Ok(Value::Real(num.to_f64().tan()))
+    let z = value_to_complex64(&args[0])?;
+    Ok(complex64_to_value(z.tan()))
 }
 
 /// (asin x) - Arc sine
+/// Supports complex numbers with branch cuts
 pub(super) fn asin(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "asin")?;
-    let num = NumericValue::from_value(args[0].clone())?;
-    Ok(Value::Real(num.to_f64().asin()))
+    let z = value_to_complex64(&args[0])?;
+    Ok(complex64_to_value(z.asin()))
 }
 
 /// (acos x) - Arc cosine
+/// Supports complex numbers with branch cuts
 pub(super) fn acos(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "acos")?;
-    let num = NumericValue::from_value(args[0].clone())?;
-    Ok(Value::Real(num.to_f64().acos()))
+    let z = value_to_complex64(&args[0])?;
+    Ok(complex64_to_value(z.acos()))
 }
 
 /// (atan x [y]) - Arc tangent (one or two arguments)
+/// One argument: supports complex numbers with branch cuts
+/// Two arguments: real-only atan2(y, x)
 pub(super) fn atan(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_range(&args, 1, 2, "atan")?;
 
     if args.len() == 1 {
-        // One-argument form: atan(x)
-        let num = NumericValue::from_value(args[0].clone())?;
-        Ok(Value::Real(num.to_f64().atan()))
+        // One-argument form: atan(z) - supports complex
+        let z = value_to_complex64(&args[0])?;
+        Ok(complex64_to_value(z.atan()))
     } else {
-        // Two-argument form: atan2(y, x)
+        // Two-argument form: atan2(y, x) - real numbers only
         let y = NumericValue::from_value(args[0].clone())?;
         let x = NumericValue::from_value(args[1].clone())?;
         Ok(Value::Real(y.to_f64().atan2(x.to_f64())))
@@ -984,25 +1032,40 @@ pub(super) fn atan(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErr
 // ========== Exponential and Logarithmic Functions ==========
 
 /// (exp x) - e^x
+/// Supports complex numbers: e^(a+bi) = e^a * (cos(b) + i*sin(b))
 pub(super) fn exp(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "exp")?;
-    let num = NumericValue::from_value(args[0].clone())?;
-    Ok(Value::Real(num.to_f64().exp()))
+    let z = value_to_complex64(&args[0])?;
+    Ok(complex64_to_value(z.exp()))
 }
 
 /// (log x [base]) - Natural log or log with base
+/// Supports complex numbers with branch cut on negative real axis
 pub(super) fn log(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_range(&args, 1, 2, "log")?;
 
     if args.len() == 1 {
-        // One-argument form: natural log
-        let num = NumericValue::from_value(args[0].clone())?;
-        Ok(Value::Real(num.to_f64().ln()))
+        // One-argument form: natural log (supports complex)
+        let z = value_to_complex64(&args[0])?;
+        Ok(complex64_to_value(z.ln()))
     } else {
         // Two-argument form: log with base
-        let x = NumericValue::from_value(args[0].clone())?;
-        let base = NumericValue::from_value(args[1].clone())?;
-        Ok(Value::Real(x.to_f64().log(base.to_f64())))
+        // Optimization: if both arguments are not complex, use f64 for better precision
+        let x_is_not_complex = !matches!(&args[0], Value::Complex(_, _));
+        let base_is_not_complex = !matches!(&args[1], Value::Complex(_, _));
+
+        if x_is_not_complex && base_is_not_complex {
+            // Use f64 math for better precision
+            let x_f64 = NumericValue::from_value(args[0].clone())?.to_f64();
+            let base_f64 = NumericValue::from_value(args[1].clone())?.to_f64();
+            Ok(Value::Real(x_f64.log(base_f64)))
+        } else {
+            // General complex case: log_base(x) = ln(x) / ln(base)
+            let x = value_to_complex64(&args[0])?;
+            let base = value_to_complex64(&args[1])?;
+            let result = x.ln() / base.ln();
+            Ok(complex64_to_value(result))
+        }
     }
 }
 
@@ -1192,6 +1255,7 @@ pub(super) fn inexact(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
     match &args[0] {
         // Already inexact - return as-is
         Value::Real(f) => Ok(Value::Real(*f)),
+        Value::Complex(r, i) => Ok(Value::Complex(*r, *i)),
 
         // Convert exact to inexact
         Value::Integer(n) => Ok(Value::Real(*n as f64)),

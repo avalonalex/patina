@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-20 09:16:02
+**Generated:** 2025-11-20 11:01:08
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 136 | 66.0% |
-| ❌ Failed | 9 | 4.4% |
-| ⚠️ Error (crashed) | 61 | 29.6% |
-| **Total** | **206** | **100%** |
+| ✅ Passed | 501 | 66.2% |
+| ❌ Failed | 26 | 3.4% |
+| ⚠️ Error (crashed) | 230 | 30.4% |
+| **Total** | **757** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -19,6 +19,10 @@
 ### Test Failures
 
 ```
+FAIL: 
+FAIL: 
+FAIL: 
+FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -106,7 +110,176 @@ Error: Invalid syntax: Unknown primitive: numerator
 Error: Invalid syntax: Unknown primitive: denominator
 Error: Undefined variable: .3
 Error: Undefined variable: .3
-Error: Invalid syntax: Unknown primitive: sqrt
+Error: Undefined variable: set-cdr!
+Error: Undefined variable: set-cdr!
+Error: Undefined variable: make-list
+Error: Undefined variable: list-set!
+Error: Invalid syntax: Unknown primitive: member
+Error: Invalid syntax: Unknown primitive: assoc
+Error: Undefined variable: list-copy
+Error: Undefined variable: list-copy
+Error: Undefined variable: list-copy
+Error: Undefined variable: list-copy
+Error: Undefined variable: list-copy
+Error: Undefined variable: list-copy
+Error: Undefined variable: symbol=?
+Error: Undefined variable: symbol=?
+Error: Undefined variable: symbol=?
+Error: Undefined variable: symbol=?
+Error: Undefined variable: symbol->string
+Error: Undefined variable: symbol->string
+Error: Undefined variable: symbol->string
+Error: Undefined variable: string->symbol
+Error: Undefined variable: string->symbol
+Error: Undefined variable: string->symbol
+Error: Undefined variable: symbol->string
+Error: Undefined variable: char=?
+Error: Undefined variable: char=?
+Error: Undefined variable: char<?
+Error: Undefined variable: char<?
+Error: Undefined variable: char<?
+Error: Undefined variable: char>?
+Error: Undefined variable: char>?
+Error: Undefined variable: char>?
+Error: Undefined variable: char<=?
+Error: Undefined variable: char<=?
+Error: Undefined variable: char<=?
+Error: Undefined variable: char>=?
+Error: Undefined variable: char>=?
+Error: Undefined variable: char>=?
+Error: Undefined variable: char-ci=?
+Error: Undefined variable: char-ci=?
+Error: Undefined variable: char-ci=?
+Error: Undefined variable: char-ci<?
+Error: Undefined variable: char-ci<?
+Error: Undefined variable: char-ci<?
+Error: Undefined variable: char-ci>?
+Error: Undefined variable: char-ci>?
+Error: Undefined variable: char-ci>?
+Error: Undefined variable: char-ci<=?
+Error: Undefined variable: char-ci<=?
+Error: Undefined variable: char-ci<=?
+Error: Undefined variable: char-ci>=?
+Error: Undefined variable: char-ci>=?
+Error: Undefined variable: char-ci>=?
+Error: Undefined variable: char-alphabetic?
+Error: Undefined variable: char-alphabetic?
+Error: Undefined variable: char-numeric?
+Error: Undefined variable: char-numeric?
+Error: Undefined variable: char-numeric?
+Error: Undefined variable: char-whitespace?
+Error: Undefined variable: char-whitespace?
+Error: Undefined variable: char-whitespace?
+Error: Undefined variable: char-whitespace?
+Error: Undefined variable: char-whitespace?
+Error: Undefined variable: char-upper-case?
+Error: Undefined variable: char-upper-case?
+Error: Undefined variable: char-upper-case?
+Error: Undefined variable: char-lower-case?
+Error: Undefined variable: char-lower-case?
+Error: Undefined variable: char-lower-case?
+Error: Undefined variable: char-alphabetic?
+Error: Undefined variable: char-alphabetic?
+Error: Undefined variable: char-upper-case?
+Error: Undefined variable: char-upper-case?
+Error: Undefined variable: char-lower-case?
+Error: Undefined variable: char-lower-case?
+Error: Undefined variable: char-numeric?
+Error: Undefined variable: char-numeric?
+Error: Undefined variable: char-whitespace?
+Error: Undefined variable: digit-value
+Error: Undefined variable: digit-value
+Error: Undefined variable: digit-value
+Error: Undefined variable: digit-value
+Error: Undefined variable: digit-value
+Error: Undefined variable: digit-value
+Error: Undefined variable: digit-value
+Error: Undefined variable: char->integer
+Error: Undefined variable: integer->char
+Error: Undefined variable: char-upcase
+Error: Undefined variable: char-upcase
+Error: Undefined variable: char-downcase
+Error: Undefined variable: char-downcase
+Error: Undefined variable: char-foldcase
+Error: Undefined variable: char-foldcase
+Error: Undefined variable: char-upcase
+Error: Undefined variable: char-upcase
+Error: Undefined variable: char-downcase
+Error: Undefined variable: char-downcase
+Error: Undefined variable: char-foldcase
+Error: Undefined variable: char-foldcase
+Error: Undefined variable: string-upcase
+Error: Undefined variable: string-upcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-foldcase
+Error: Undefined variable: string-foldcase
+Error: Undefined variable: string-upcase
+Error: Undefined variable: string-upcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-foldcase
+Error: Undefined variable: string-foldcase
+Error: Undefined variable: string-upcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-foldcase
+Error: Undefined variable: string-upcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-foldcase
+Error: Undefined variable: string-upcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-foldcase
+Error: Undefined variable: string-upcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-foldcase
+Error: Undefined variable: string-upcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-foldcase
+Error: Undefined variable: string-downcase
+Error: Undefined variable: string-fill!
+Error: Undefined variable: string-fill!
+Error: Undefined variable: string-fill!
+Error: Undefined variable: string-copy!
+Error: Undefined variable: string-copy!
+Error: Undefined variable: string-copy!
+Error: Undefined variable: string-copy!
+Error: Undefined variable: string-copy!
+Error: Undefined variable: string-copy!
+Error: Undefined variable: string-copy!
+Error: Undefined variable: bytevector?
+Error: Undefined variable: bytevector?
+Error: Undefined variable: bytevector?
+Error: Undefined variable: bytevector?
+Error: Undefined variable: bytevector?
+Error: Undefined variable: bytevector?
+Error: Undefined variable: bytevector-length
+Error: Undefined variable: bytevector-length
+Error: Undefined variable: bytevector-length
+Error: Undefined variable: bytevector-length
+Error: Undefined variable: bytevector-u8-ref
+Error: Undefined variable: bytevector-u8-ref
+Error: Undefined variable: bytevector-u8-ref
+Error: Undefined variable: bytevector
+Error: Undefined variable: bytevector-copy
+Error: Undefined variable: bytevector-copy
+Error: Undefined variable: bytevector-copy
+Error: Undefined variable: bytevector-copy
+Error: Undefined variable: bytevector
+Error: Undefined variable: bytevector
+Error: Undefined variable: bytevector
+Error: Undefined variable: bytevector
+Error: Undefined variable: bytevector
+Error: Undefined variable: bytevector
+Error: Undefined variable: bytevector
+Error: Undefined variable: bytevector-append
+Error: Undefined variable: bytevector-append
+Error: Undefined variable: bytevector-append
+Error: Undefined variable: bytevector-append
+Error: Undefined variable: bytevector-append
+Error: Undefined variable: bytevector-append
+Error: Invalid syntax: Invalid byte value
 ```
 
 

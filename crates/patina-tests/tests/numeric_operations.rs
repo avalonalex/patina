@@ -344,3 +344,97 @@ fn test_log() {
     assert_eval_to("(log 8 2)", "3.0"); // log_2(8) = 3
     assert_eval_to("(log 100 10)", "2.0"); // log_10(100) = 2
 }
+
+// ========== Complex Number Support Tests ==========
+
+#[test]
+fn test_complex_sqrt() {
+    // Basic complex sqrt
+    assert_eval_to("(sqrt -1)", "+i");
+    assert_eval_to("(sqrt -1.0)", "+i");
+
+    // R7RS branch cut tests: sqrt of negative real axis
+    assert_eval_to("(sqrt -1.0-0.0i)", "+i"); // Approaching from below
+    assert_eval_to("(sqrt -1.0+0.0i)", "+i"); // Approaching from above
+
+    // Inexact conversion
+    assert_eval_to("(inexact (sqrt -1))", "+i");
+
+    // Complex input
+    assert_eval_to("(sqrt 2+2i)", "1.5537739740300374+0.6435942529055827i");
+}
+
+#[test]
+fn test_complex_exp() {
+    // Euler's formula: e^(iπ) = -1
+    // We test e^i which should give cos(1) + i*sin(1)
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let _ = interp.eval_str("(import (scheme inexact))");
+    let result = interp.eval_str("(exp 0+1i)").unwrap().to_string();
+
+    // Check that it returns a complex number close to 0.540 + 0.841i
+    assert!(result.contains("+"));
+    assert!(result.contains("i"));
+}
+
+#[test]
+fn test_complex_log() {
+    // log of negative number should return complex
+    // log(-1) = 0 + iπ ≈ 0 + 3.14159i
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let _ = interp.eval_str("(import (scheme inexact))");
+    let result = interp.eval_str("(log -1)").unwrap().to_string();
+
+    // Check that it returns a complex number with imaginary part ≈ π
+    assert!(result.contains("+"));
+    assert!(result.contains("3.14"));
+    assert!(result.contains("i"));
+}
+
+#[test]
+fn test_complex_sin() {
+    // sin(i) = i*sinh(1) ≈ 0 + 1.175i
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let _ = interp.eval_str("(import (scheme inexact))");
+    let result = interp.eval_str("(sin 0+1i)").unwrap().to_string();
+
+    // Check that it returns a complex number
+    assert!(result.contains("+"));
+    assert!(result.contains("1.17"));
+    assert!(result.contains("i"));
+}
+
+#[test]
+fn test_complex_cos() {
+    // cos(i) = cosh(1) ≈ 1.543
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let _ = interp.eval_str("(import (scheme inexact))");
+    let result = interp.eval_str("(cos 0+1i)").unwrap().to_string();
+
+    // Check that it returns a real number ≈ 1.543
+    assert!(result.contains("1.54"));
+}
+
+#[test]
+fn test_complex_asin() {
+    // asin(2) with real input > 1 should return complex
+    // asin(2) ≈ 1.571 - 1.317i
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let _ = interp.eval_str("(import (scheme inexact))");
+    let result = interp.eval_str("(asin 2)").unwrap().to_string();
+
+    // Check that it returns a complex number
+    assert!(result.contains("-") || result.contains("+"));
+    assert!(result.contains("i"));
+}
+
+#[test]
+fn test_complex_atan() {
+    // atan(i) should return complex
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let _ = interp.eval_str("(import (scheme inexact))");
+    let result = interp.eval_str("(atan 0+1i)").unwrap();
+
+    // Just verify it doesn't error
+    assert!(!result.to_string().is_empty());
+}

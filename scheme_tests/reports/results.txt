@@ -1330,11 +1330,1423 @@ Testing:
 Testing: 
 (inexact (sqrt -1))
 
-Error: Invalid syntax: Unknown primitive: sqrt
 Testing: 
 (sqrt -1)
 
+FAIL: 
+(sqrt -1)
 
-thread 'main' (1660929) panicked at crates/patina-tree-walker/src/eval/primitives/arithmetic.rs:42:41:
-Cannot convert complex to f64
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  expected: 
++i
+
+  but got:  
+-i
+
+
+Testing: 
+(call-with-values (lambda () (exact-integer-sqrt 4)) list)
+
+Testing: 
+(call-with-values (lambda () (exact-integer-sqrt 5)) list)
+
+Testing: 
+(expt 3 3)
+
+Testing: 
+(expt 0 0)
+
+Testing: 
+(expt 0 1)
+
+Testing: 
+(expt 0.0 0)
+
+FAIL: 
+(expt 0.0 0)
+
+  expected: 
+1.0
+
+  but got:  
+1
+
+
+Testing: 
+(expt 0 1.0)
+
+Testing: 
+(make-rectangular 1 2)
+
+Testing: 
+(make-polar 1 1)
+
+Testing: 
+(real-part 1+2i)
+
+FAIL: 
+(real-part 1+2i)
+
+  expected: 
+1
+
+  but got:  
+1.0
+
+
+Testing: 
+(imag-part 1+2i)
+
+FAIL: 
+(imag-part 1+2i)
+
+  expected: 
+2
+
+  but got:  
+2.0
+
+
+Testing: 
+(magnitude 1+2i)
+
+Testing: 
+(angle 1+2i)
+
+Testing: 
+(inexact 1)
+
+Testing: 
+(inexact? (inexact 1))
+
+Testing: 
+(exact 1.0)
+
+Testing: 
+(exact? (exact 1.0))
+
+Testing: 
+(string->number "100")
+
+Testing: 
+(string->number "100" 16)
+
+Testing: 
+(string->number "1e2")
+
+Testing: 
+(string->number "1 2")
+
+Tests run: 175, Passed: 158, Failed: 17
+
+Running test suite: 6.3 Booleans
+Testing: 
+#t
+
+Testing: 
+#f
+
+Testing: 
+'#f
+
+Testing: 
+(not #t)
+
+Testing: 
+(not 3)
+
+Testing: 
+(not (list 3))
+
+Testing: 
+(not #f)
+
+Testing: 
+(not '())
+
+Testing: 
+(not (list))
+
+Testing: 
+(not 'nil)
+
+Testing: 
+(boolean? #f)
+
+Testing: 
+(boolean? 0)
+
+Testing: 
+(boolean? '())
+
+Testing: 
+(boolean=? #t #t)
+
+Testing: 
+(boolean=? #f #f)
+
+Testing: 
+(boolean=? #t #f)
+
+Testing: 
+(boolean=? #f #f #f)
+
+Testing: 
+(boolean=? #t #t #f)
+
+Tests run: 18, Passed: 18, Failed: 0
+
+Running test suite: 6.4 Lists
+Testing: 
+(values y)
+
+Testing: 
+(list? y)
+
+Error: Undefined variable: set-cdr!
+Testing: 
+(pair? '(a . b))
+
+Testing: 
+(pair? '(a b c))
+
+Testing: 
+(pair? '())
+
+Testing: 
+(pair? '#(a b))
+
+Testing: 
+(cons 'a '())
+
+Testing: 
+(cons '(a) '(b c d))
+
+Testing: 
+(cons "a" '(b c))
+
+Testing: 
+(cons 'a 3)
+
+Testing: 
+(cons '(a b) 'c)
+
+Testing: 
+(car '(a b c))
+
+Testing: 
+(car '((a) b c d))
+
+Testing: 
+(car '(1 . 2))
+
+Testing: 
+(cdr '((a) b c d))
+
+Testing: 
+(cdr '(1 . 2))
+
+Testing: 
+(list? '(a b c))
+
+Testing: 
+(list? '())
+
+Testing: 
+(list? '(a . b))
+
+Testing: 
+(let ((x (list 'a))) (set-cdr! x x) (list? x))
+
+Error: Undefined variable: set-cdr!
+Testing: 
+(make-list 2 3)
+
+Error: Undefined variable: make-list
+Testing: 
+(list 'a (+ 3 4) 'c)
+
+Testing: 
+(list)
+
+Testing: 
+(length '(a b c))
+
+Testing: 
+(length '(a (b) (c d e)))
+
+Testing: 
+(length '())
+
+Testing: 
+(append '(x) '(y))
+
+Testing: 
+(append '(a) '(b c d))
+
+Testing: 
+(append '(a (b)) '((c)))
+
+Testing: 
+(append '(a b) '(c . d))
+
+Testing: 
+(append '() 'a)
+
+Testing: 
+(reverse '(a b c))
+
+Testing: 
+(reverse '(a (b c) d (e (f))))
+
+Testing: 
+(list-tail '(a b c d e) 3)
+
+Testing: 
+(list-ref '(a b c d) 2)
+
+Testing: 
+(list-ref '(a b c d) (exact (round 1.8)))
+
+Testing: 
+(let ((lst (list 0 '(2 2 2 2) "Anna"))) (list-set! lst 1 '("Sue" "Sue")) lst)
+
+Error: Undefined variable: list-set!
+Testing: 
+(memq 'a '(a b c))
+
+Testing: 
+(memq 'b '(a b c))
+
+Testing: 
+(memq 'a '(b c d))
+
+Testing: 
+(memq (list 'a) '(b (a) c))
+
+Testing: 
+(member (list 'a) '(b (a) c))
+
+Testing: 
+(member "B" '("a" "b" "c") string-ci=?)
+
+Error: Invalid syntax: Unknown primitive: member
+Testing: 
+(memv 101 '(100 101 102))
+
+Testing: 
+(assq 'a e)
+
+Testing: 
+(assq 'b e)
+
+Testing: 
+(assq 'd e)
+
+Testing: 
+(assq (list 'a) '(((a)) ((b)) ((c))))
+
+Testing: 
+(assoc (list 'a) '(((a)) ((b)) ((c))))
+
+Testing: 
+(assoc 2.0 '((1 1) (2 4) (3 9)) =)
+
+Error: Invalid syntax: Unknown primitive: assoc
+Testing: 
+(assv 5 '((2 3) (5 7) (11 13)))
+
+Testing: 
+(list-copy '(1 2 3))
+
+Error: Undefined variable: list-copy
+Testing: 
+(list-copy "foo")
+
+Error: Undefined variable: list-copy
+Testing: 
+(list-copy '())
+
+Error: Undefined variable: list-copy
+Testing: 
+(list-copy '(3 . 4))
+
+Error: Undefined variable: list-copy
+Testing: 
+(list-copy '(6 7 8 . 9))
+
+Error: Undefined variable: list-copy
+Error: Undefined variable: list-copy
+Tests run: 46, Passed: 46, Failed: 0
+
+Running test suite: 6.5 Symbols
+Testing: 
+(symbol? 'foo)
+
+Testing: 
+(symbol? (car '(a b)))
+
+Testing: 
+(symbol? "bar")
+
+Testing: 
+(symbol? 'nil)
+
+Testing: 
+(symbol? '())
+
+Testing: 
+(symbol? #f)
+
+Testing: 
+(symbol=? 'a 'a)
+
+Error: Undefined variable: symbol=?
+Testing: 
+(symbol=? 'a 'A)
+
+Error: Undefined variable: symbol=?
+Testing: 
+(symbol=? 'a 'a 'a)
+
+Error: Undefined variable: symbol=?
+Testing: 
+(symbol=? 'a 'a 'A)
+
+Error: Undefined variable: symbol=?
+Testing: 
+(symbol->string 'flying-fish)
+
+Error: Undefined variable: symbol->string
+Testing: 
+(symbol->string 'Martin)
+
+Error: Undefined variable: symbol->string
+Testing: 
+(symbol->string (string->symbol "Malvina"))
+
+Error: Undefined variable: symbol->string
+Testing: 
+(string->symbol "mISSISSIppi")
+
+Error: Undefined variable: string->symbol
+Testing: 
+(eq? 'bitBlt (string->symbol "bitBlt"))
+
+Error: Undefined variable: string->symbol
+Testing: 
+(eq? 'LollyPop (string->symbol (symbol->string 'LollyPop)))
+
+Error: Undefined variable: string->symbol
+Testing: 
+(string=? "K. Harper, M.D." (symbol->string (string->symbol "K. Harper, M.D.")))
+
+Error: Undefined variable: symbol->string
+Tests run: 6, Passed: 6, Failed: 0
+
+Running test suite: 6.6 Characters
+Testing: 
+(char? #\a)
+
+Testing: 
+(char? "a")
+
+Testing: 
+(char? 'a)
+
+Testing: 
+(char? 0)
+
+Testing: 
+(char=? #\a #\a #\a)
+
+Error: Undefined variable: char=?
+Testing: 
+(char=? #\a #\A)
+
+Error: Undefined variable: char=?
+Testing: 
+(char<? #\a #\b #\c)
+
+Error: Undefined variable: char<?
+Testing: 
+(char<? #\a #\a)
+
+Error: Undefined variable: char<?
+Testing: 
+(char<? #\b #\a)
+
+Error: Undefined variable: char<?
+Testing: 
+(char>? #\a #\b)
+
+Error: Undefined variable: char>?
+Testing: 
+(char>? #\a #\a)
+
+Error: Undefined variable: char>?
+Testing: 
+(char>? #\c #\b #\a)
+
+Error: Undefined variable: char>?
+Testing: 
+(char<=? #\a #\b #\b)
+
+Error: Undefined variable: char<=?
+Testing: 
+(char<=? #\a #\a)
+
+Error: Undefined variable: char<=?
+Testing: 
+(char<=? #\b #\a)
+
+Error: Undefined variable: char<=?
+Testing: 
+(char>=? #\a #\b)
+
+Error: Undefined variable: char>=?
+Testing: 
+(char>=? #\a #\a)
+
+Error: Undefined variable: char>=?
+Testing: 
+(char>=? #\b #\b #\a)
+
+Error: Undefined variable: char>=?
+Testing: 
+(char-ci=? #\a #\a)
+
+Error: Undefined variable: char-ci=?
+Testing: 
+(char-ci=? #\a #\A #\a)
+
+Error: Undefined variable: char-ci=?
+Testing: 
+(char-ci=? #\a #\b)
+
+Error: Undefined variable: char-ci=?
+Testing: 
+(char-ci<? #\a #\B #\c)
+
+Error: Undefined variable: char-ci<?
+Testing: 
+(char-ci<? #\A #\a)
+
+Error: Undefined variable: char-ci<?
+Testing: 
+(char-ci<? #\b #\A)
+
+Error: Undefined variable: char-ci<?
+Testing: 
+(char-ci>? #\A #\b)
+
+Error: Undefined variable: char-ci>?
+Testing: 
+(char-ci>? #\a #\A)
+
+Error: Undefined variable: char-ci>?
+Testing: 
+(char-ci>? #\c #\B #\a)
+
+Error: Undefined variable: char-ci>?
+Testing: 
+(char-ci<=? #\a #\B #\b)
+
+Error: Undefined variable: char-ci<=?
+Testing: 
+(char-ci<=? #\A #\a)
+
+Error: Undefined variable: char-ci<=?
+Testing: 
+(char-ci<=? #\b #\A)
+
+Error: Undefined variable: char-ci<=?
+Testing: 
+(char-ci>=? #\A #\b)
+
+Error: Undefined variable: char-ci>=?
+Testing: 
+(char-ci>=? #\a #\A)
+
+Error: Undefined variable: char-ci>=?
+Testing: 
+(char-ci>=? #\b #\B #\a)
+
+Error: Undefined variable: char-ci>=?
+Testing: 
+(char-alphabetic? #\a)
+
+Error: Undefined variable: char-alphabetic?
+Testing: 
+(char-alphabetic? #\ )
+
+Error: Undefined variable: char-alphabetic?
+Testing: 
+(char-numeric? #\0)
+
+Error: Undefined variable: char-numeric?
+Testing: 
+(char-numeric? #\.)
+
+Error: Undefined variable: char-numeric?
+Testing: 
+(char-numeric? #\a)
+
+Error: Undefined variable: char-numeric?
+Testing: 
+(char-whitespace? #\ )
+
+Error: Undefined variable: char-whitespace?
+Testing: 
+(char-whitespace? #\	)
+
+Error: Undefined variable: char-whitespace?
+Testing: 
+(char-whitespace? #\
+)
+
+Error: Undefined variable: char-whitespace?
+Testing: 
+(char-whitespace? #\_)
+
+Error: Undefined variable: char-whitespace?
+Testing: 
+(char-whitespace? #\a)
+
+Error: Undefined variable: char-whitespace?
+Testing: 
+(char-upper-case? #\A)
+
+Error: Undefined variable: char-upper-case?
+Testing: 
+(char-upper-case? #\a)
+
+Error: Undefined variable: char-upper-case?
+Testing: 
+(char-upper-case? #\3)
+
+Error: Undefined variable: char-upper-case?
+Testing: 
+(char-lower-case? #\a)
+
+Error: Undefined variable: char-lower-case?
+Testing: 
+(char-lower-case? #\A)
+
+Error: Undefined variable: char-lower-case?
+Testing: 
+(char-lower-case? #\3)
+
+Error: Undefined variable: char-lower-case?
+Testing: 
+(char-alphabetic? #\Λ)
+
+Error: Undefined variable: char-alphabetic?
+Testing: 
+(char-alphabetic? #\๐)
+
+Error: Undefined variable: char-alphabetic?
+Testing: 
+(char-upper-case? #\Λ)
+
+Error: Undefined variable: char-upper-case?
+Testing: 
+(char-upper-case? #\λ)
+
+Error: Undefined variable: char-upper-case?
+Testing: 
+(char-lower-case? #\Λ)
+
+Error: Undefined variable: char-lower-case?
+Testing: 
+(char-lower-case? #\λ)
+
+Error: Undefined variable: char-lower-case?
+Testing: 
+(char-numeric? #\Λ)
+
+Error: Undefined variable: char-numeric?
+Testing: 
+(char-numeric? #\๐)
+
+Error: Undefined variable: char-numeric?
+Testing: 
+(char-whitespace? #\ )
+
+Error: Undefined variable: char-whitespace?
+Testing: 
+(digit-value #\0)
+
+Error: Undefined variable: digit-value
+Testing: 
+(digit-value #\3)
+
+Error: Undefined variable: digit-value
+Testing: 
+(digit-value #\9)
+
+Error: Undefined variable: digit-value
+Testing: 
+(digit-value #\٤)
+
+Error: Undefined variable: digit-value
+Testing: 
+(digit-value #\૦)
+
+Error: Undefined variable: digit-value
+Testing: 
+(digit-value #\.)
+
+Error: Undefined variable: digit-value
+Testing: 
+(digit-value #\-)
+
+Error: Undefined variable: digit-value
+Testing: 
+(char->integer #\a)
+
+Error: Undefined variable: char->integer
+Testing: 
+(integer->char 97)
+
+Error: Undefined variable: integer->char
+Testing: 
+(char-upcase #\a)
+
+Error: Undefined variable: char-upcase
+Testing: 
+(char-upcase #\A)
+
+Error: Undefined variable: char-upcase
+Testing: 
+(char-downcase #\a)
+
+Error: Undefined variable: char-downcase
+Testing: 
+(char-downcase #\A)
+
+Error: Undefined variable: char-downcase
+Testing: 
+(char-foldcase #\a)
+
+Error: Undefined variable: char-foldcase
+Testing: 
+(char-foldcase #\A)
+
+Error: Undefined variable: char-foldcase
+Testing: 
+(char-upcase #\λ)
+
+Error: Undefined variable: char-upcase
+Testing: 
+(char-upcase #\Λ)
+
+Error: Undefined variable: char-upcase
+Testing: 
+(char-downcase #\λ)
+
+Error: Undefined variable: char-downcase
+Testing: 
+(char-downcase #\Λ)
+
+Error: Undefined variable: char-downcase
+Testing: 
+(char-foldcase #\λ)
+
+Error: Undefined variable: char-foldcase
+Testing: 
+(char-foldcase #\Λ)
+
+Error: Undefined variable: char-foldcase
+Tests run: 4, Passed: 4, Failed: 0
+
+Running test suite: 6.7 Strings
+Testing: 
+(string? "")
+
+Testing: 
+(string? " ")
+
+Testing: 
+(string? 'a)
+
+Testing: 
+(string? #\a)
+
+Testing: 
+(string-length (make-string 3))
+
+Testing: 
+(make-string 3 #\-)
+
+Testing: 
+(string)
+
+Testing: 
+(string #\- #\- #\-)
+
+Testing: 
+(string #\k #\i #\t #\t #\e #\n)
+
+Testing: 
+(string-length "")
+
+Testing: 
+(string-length "a")
+
+Testing: 
+(string-length "abc")
+
+Testing: 
+(string-ref "abc" 0)
+
+Testing: 
+(string-ref "abc" 1)
+
+Testing: 
+(string-ref "abc" 2)
+
+Testing: 
+(let ((str (string #\a #\b #\c))) (string-set! str 1 #\-) str)
+
+Testing: 
+(let ((s (string #\a #\b #\c))) (string-set! s 1 #\🜀) s)
+
+Testing: 
+(string=? "" "")
+
+Testing: 
+(string=? "abc" "abc" "abc")
+
+Testing: 
+(string=? "" "abc")
+
+Testing: 
+(string=? "abc" "aBc")
+
+Testing: 
+(string<? "" "")
+
+Testing: 
+(string<? "abc" "abc")
+
+Testing: 
+(string<? "abc" "abcd" "acd")
+
+Testing: 
+(string<? "abcd" "abc")
+
+Testing: 
+(string<? "abc" "bbc")
+
+Testing: 
+(string>? "" "")
+
+Testing: 
+(string>? "abc" "abc")
+
+Testing: 
+(string>? "abc" "abcd")
+
+Testing: 
+(string>? "acd" "abcd" "abc")
+
+Testing: 
+(string>? "abc" "bbc")
+
+Testing: 
+(string<=? "" "")
+
+Testing: 
+(string<=? "abc" "abc")
+
+Testing: 
+(string<=? "abc" "abcd" "abcd")
+
+Testing: 
+(string<=? "abcd" "abc")
+
+Testing: 
+(string<=? "abc" "bbc")
+
+Testing: 
+(string>=? "" "")
+
+Testing: 
+(string>=? "abc" "abc")
+
+Testing: 
+(string>=? "abc" "abcd")
+
+Testing: 
+(string>=? "abcd" "abcd" "abc")
+
+Testing: 
+(string>=? "abc" "bbc")
+
+Testing: 
+(string-ci=? "" "")
+
+Testing: 
+(string-ci=? "abc" "abc")
+
+Testing: 
+(string-ci=? "" "abc")
+
+Testing: 
+(string-ci=? "abc" "aBc")
+
+Testing: 
+(string-ci=? "abc" "aBcD")
+
+Testing: 
+(string-ci<? "abc" "aBc")
+
+Testing: 
+(string-ci<? "abc" "aBcD")
+
+Testing: 
+(string-ci<? "ABCd" "aBc")
+
+Testing: 
+(string-ci>? "abc" "aBc")
+
+Testing: 
+(string-ci>? "abc" "aBcD")
+
+Testing: 
+(string-ci>? "ABCd" "aBc")
+
+Testing: 
+(string-ci<=? "abc" "aBc")
+
+Testing: 
+(string-ci<=? "abc" "aBcD")
+
+Testing: 
+(string-ci<=? "ABCd" "aBc")
+
+Testing: 
+(string-ci>=? "abc" "aBc")
+
+Testing: 
+(string-ci>=? "abc" "aBcD")
+
+Testing: 
+(string-ci>=? "ABCd" "aBc")
+
+Testing: 
+(string-ci=? "ΑΒΓ" "αβγ" "αβγ")
+
+Testing: 
+(string-ci<? "ΑΒΓ" "αβγ")
+
+Testing: 
+(string-ci>? "ΑΒΓ" "αβγ")
+
+Testing: 
+(string-ci<=? "ΑΒΓ" "αβγ")
+
+Testing: 
+(string-ci>=? "ΑΒΓ" "αβγ")
+
+Testing: 
+(string-upcase "abc")
+
+Error: Undefined variable: string-upcase
+Testing: 
+(string-upcase "ABC")
+
+Error: Undefined variable: string-upcase
+Testing: 
+(string-downcase "abc")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-downcase "ABC")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-foldcase "abc")
+
+Error: Undefined variable: string-foldcase
+Testing: 
+(string-foldcase "ABC")
+
+Error: Undefined variable: string-foldcase
+Testing: 
+(string-upcase "αβγ")
+
+Error: Undefined variable: string-upcase
+Testing: 
+(string-upcase "ΑΒΓ")
+
+Error: Undefined variable: string-upcase
+Testing: 
+(string-downcase "αβγ")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-downcase "ΑΒΓ")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-foldcase "αβγ")
+
+Error: Undefined variable: string-foldcase
+Testing: 
+(string-foldcase "ΑΒΓ")
+
+Error: Undefined variable: string-foldcase
+Testing: 
+(string-upcase "ßa")
+
+Error: Undefined variable: string-upcase
+Testing: 
+(string-downcase "ßa")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-downcase "SSA")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-downcase "Maß")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-foldcase "Maß")
+
+Error: Undefined variable: string-foldcase
+Testing: 
+(string-upcase "İ")
+
+Error: Undefined variable: string-upcase
+Testing: 
+(string-downcase "İ")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-foldcase "İ")
+
+Error: Undefined variable: string-foldcase
+Testing: 
+(string-upcase "ǰ")
+
+Error: Undefined variable: string-upcase
+Testing: 
+(string-downcase "ſ")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-foldcase "ſ")
+
+Error: Undefined variable: string-foldcase
+Testing: 
+(string-upcase "γλώσσα")
+
+Error: Undefined variable: string-upcase
+Testing: 
+(string-downcase "ΓΛΏΣΣΑ")
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-foldcase "ΓΛΏΣΣΑ")
+
+Error: Undefined variable: string-foldcase
+Testing: 
+(string-upcase "μέλος")
+
+Error: Undefined variable: string-upcase
+Testing: 
+(and (member (string-downcase "ΜΈΛΟΣ") '("μέλος" "μέλοσ")) #t)
+
+Error: Undefined variable: string-downcase
+Testing: 
+(string-foldcase "ΜΈΛΟΣ")
+
+Error: Undefined variable: string-foldcase
+Testing: 
+(and (member (string-downcase "ΜΈΛΟΣ ΕΝΌΣ") '("μέλος ενός" "μέλοσ ενόσ")) #t)
+
+Error: Undefined variable: string-downcase
+Testing: 
+(substring "" 0 0)
+
+Testing: 
+(substring "a" 0 0)
+
+Testing: 
+(substring "abc" 1 1)
+
+Testing: 
+(substring "abc" 0 2)
+
+Testing: 
+(substring "abc" 1 3)
+
+Testing: 
+(string-append "")
+
+Testing: 
+(string-append "" "")
+
+Testing: 
+(string-append "" "abc")
+
+Testing: 
+(string-append "abc" "")
+
+Testing: 
+(string-append "abc" "de")
+
+Testing: 
+(string-append "abc" "de" "f")
+
+Testing: 
+(string->list "")
+
+Testing: 
+(string->list "a")
+
+Testing: 
+(string->list "abc")
+
+Testing: 
+(string->list "abc" 0)
+
+Testing: 
+(string->list "abc" 1)
+
+Testing: 
+(string->list "abc" 1 3)
+
+Testing: 
+(list->string '())
+
+Testing: 
+(list->string '(#\a #\b #\c))
+
+Testing: 
+(string-copy "")
+
+Testing: 
+(string-copy "" 0)
+
+Testing: 
+(string-copy "" 0 0)
+
+Testing: 
+(string-copy "abc")
+
+Testing: 
+(string-copy "abc" 0)
+
+Testing: 
+(string-copy "abc" 1)
+
+Testing: 
+(string-copy "abc" 1 2)
+
+Testing: 
+(string-copy "abc" 1 3)
+
+Testing: 
+(let ((str (make-string 5 #\x))) (string-fill! str #\-) str)
+
+Error: Undefined variable: string-fill!
+Testing: 
+(let ((str (make-string 5 #\x))) (string-fill! str #\- 2) str)
+
+Error: Undefined variable: string-fill!
+Testing: 
+(let ((str (make-string 5 #\x))) (string-fill! str #\- 2 3) str)
+
+Error: Undefined variable: string-fill!
+Testing: 
+(let ((str (string-copy "abcde"))) (string-copy! str 1 "12345" 0 2) str)
+
+Error: Undefined variable: string-copy!
+Testing: 
+(let ((str (make-string 5 #\x))) (string-copy! str 0 "-----") str)
+
+Error: Undefined variable: string-copy!
+Testing: 
+(let ((str (make-string 5 #\x))) (string-copy! str 0 "-----" 2) str)
+
+Error: Undefined variable: string-copy!
+Testing: 
+(let ((str (make-string 5 #\x))) (string-copy! str 2 "-----" 0 3) str)
+
+Error: Undefined variable: string-copy!
+Testing: 
+(let ((str (make-string 5 #\x))) (string-copy! str 2 "-----" 2 3) str)
+
+Error: Undefined variable: string-copy!
+Testing: 
+(let ((str (string-copy "abcde"))) (string-copy! str 1 str 0 2) str)
+
+Error: Undefined variable: string-copy!
+Testing: 
+(let ((str (string-copy "abcde"))) (string-copy! str 3 str 0 2) str)
+
+Error: Undefined variable: string-copy!
+Tests run: 90, Passed: 90, Failed: 0
+
+Running test suite: 6.8 Vectors
+Testing: 
+(vector? #())
+
+Testing: 
+(vector? #(1 2 3))
+
+Testing: 
+(vector? '#(1 2 3))
+
+Testing: 
+(vector-length (make-vector 0))
+
+Testing: 
+(vector-length (make-vector 1000))
+
+Testing: 
+'#(0 (2 2 2 2) "Anna")
+
+Testing: 
+(vector 'a 'b 'c)
+
+Testing: 
+(vector-ref '#(1 1 2 3 5 8 13 21) 5)
+
+Testing: 
+(vector-ref '#(1 1 2 3 5 8 13 21) (let ((i (round (* 2 (acos -1))))) (if (inexact? i) (exact i) i)))
+
+Testing: 
+(let ((vec (vector 0 '(2 2 2 2) "Anna"))) (vector-set! vec 1 '("Sue" "Sue")) vec)
+
+Testing: 
+(vector->list '#(dah dah didah))
+
+Testing: 
+(vector->list '#(dah dah didah) 1)
+
+Testing: 
+(vector->list '#(dah dah didah) 1 2)
+
+Testing: 
+(list->vector '(dididit dah))
+
+Testing: 
+(string->vector "")
+
+Testing: 
+(string->vector "ABC")
+
+Testing: 
+(string->vector "ABC" 1)
+
+Testing: 
+(string->vector "ABC" 1 2)
+
+Testing: 
+(vector->string #())
+
+Testing: 
+(vector->string #(#\1 #\2 #\3))
+
+Testing: 
+(vector->string #(#\1 #\2 #\3) 1)
+
+Testing: 
+(vector->string #(#\1 #\2 #\3) 1 2)
+
+Testing: 
+(vector-copy #())
+
+Testing: 
+(vector-copy #(a b c))
+
+Testing: 
+(vector-copy #(a b c) 1)
+
+Testing: 
+(vector-copy #(a b c) 1 2)
+
+Testing: 
+(vector-append #())
+
+Testing: 
+(vector-append #() #())
+
+Testing: 
+(vector-append #() #(a b c))
+
+Testing: 
+(vector-append #(a b c) #())
+
+Testing: 
+(vector-append #(a b c) #(d e))
+
+Testing: 
+(vector-append #(a b c) #(d e) #(f))
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-fill! vec 'smash 2 4) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-fill! vec 'x) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-fill! vec 'x 2) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-fill! vec 'x 2 3) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 1 #(a b c d e) 0 2) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 0 #(a b c d e)) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 0 #(a b c d e) 2) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 2 #(a b c d e) 0 3) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 2 #(a b c d e) 2 3) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 1 vec 0 2) vec)
+
+Testing: 
+(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 3 vec 0 2) vec)
+
+Tests run: 43, Passed: 43, Failed: 0
+
+Running test suite: 6.9 Bytevectors
+Testing: 
+(bytevector? #u8([]))
+
+Error: Undefined variable: bytevector?
+Testing: 
+(bytevector? #u8([0, 1, 2]))
+
+Error: Undefined variable: bytevector?
+Testing: 
+(bytevector? #())
+
+Error: Undefined variable: bytevector?
+Testing: 
+(bytevector? #(0 1 2))
+
+Error: Undefined variable: bytevector?
+Testing: 
+(bytevector? '())
+
+Error: Undefined variable: bytevector?
+Testing: 
+(bytevector? (make-bytevector 0))
+
+Error: Undefined variable: bytevector?
+Testing: 
+(bytevector-length (make-bytevector 0))
+
+Error: Undefined variable: bytevector-length
+Testing: 
+(bytevector-length (make-bytevector 1024))
+
+Error: Undefined variable: bytevector-length
+Testing: 
+(bytevector-length (make-bytevector 1024 255))
+
+Error: Undefined variable: bytevector-length
+Testing: 
+(bytevector-length (bytevector 0 1 2))
+
+Error: Undefined variable: bytevector-length
+Testing: 
+(bytevector-u8-ref (bytevector 0 1 2) 0)
+
+Error: Undefined variable: bytevector-u8-ref
+Testing: 
+(bytevector-u8-ref (bytevector 0 1 2) 1)
+
+Error: Undefined variable: bytevector-u8-ref
+Testing: 
+(bytevector-u8-ref (bytevector 0 1 2) 2)
+
+Error: Undefined variable: bytevector-u8-ref
+Testing: 
+(let ((bv (bytevector 0 1 2))) (bytevector-u8-set! bv 1 255) bv)
+
+Error: Undefined variable: bytevector
+Testing: 
+(bytevector-copy #u8([]))
+
+Error: Undefined variable: bytevector-copy
+Testing: 
+(bytevector-copy #u8([0, 1, 2]))
+
+Error: Undefined variable: bytevector-copy
+Testing: 
+(bytevector-copy #u8([0, 1, 2]) 1)
+
+Error: Undefined variable: bytevector-copy
+Testing: 
+(bytevector-copy #u8([0, 1, 2]) 1 2)
+
+Error: Undefined variable: bytevector-copy
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 1 #u8([6, 7, 8, 9, 10]) 0 2) bv)
+
+Error: Undefined variable: bytevector
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8([6, 7, 8, 9, 10])) bv)
+
+Error: Undefined variable: bytevector
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8([6, 7, 8, 9, 10]) 2) bv)
+
+Error: Undefined variable: bytevector
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8([6, 7, 8, 9, 10]) 0 3) bv)
+
+Error: Undefined variable: bytevector
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8([6, 7, 8, 9, 10]) 2 3) bv)
+
+Error: Undefined variable: bytevector
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 1 bv 0 2) bv)
+
+Error: Undefined variable: bytevector
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 3 bv 0 2) bv)
+
+Error: Undefined variable: bytevector
+Testing: 
+(bytevector-append #u8([]))
+
+Error: Undefined variable: bytevector-append
+Testing: 
+(bytevector-append #u8([]) #u8([]))
+
+Error: Undefined variable: bytevector-append
+Testing: 
+(bytevector-append #u8([]) #u8([0, 1, 2]))
+
+Error: Undefined variable: bytevector-append
+Testing: 
+(bytevector-append #u8([0, 1, 2]) #u8([]))
+
+Error: Undefined variable: bytevector-append
+Testing: 
+(bytevector-append #u8([0, 1, 2]) #u8([3, 4]))
+
+Error: Undefined variable: bytevector-append
+Testing: 
+(bytevector-append #u8([0, 1, 2]) #u8([3, 4]) #u8([5]))
+
+Error: Undefined variable: bytevector-append
+Error: Invalid syntax: Invalid byte value
