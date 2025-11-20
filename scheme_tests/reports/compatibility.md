@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-18 22:33:25
+**Generated:** 2025-11-19 21:26:02
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 98 | 79.7% |
+| ✅ Passed | 98 | 86.0% |
 | ❌ Failed | 0 | 0.0% |
-| ⚠️ Error (crashed) | 25 | 20.3% |
-| **Total** | **123** | **100%** |
+| ⚠️ Error (crashed) | 16 | 14.0% |
+| **Total** | **114** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -19,6 +19,8 @@
 ### Test Failures
 
 ```
+FAIL: 
+FAIL: 
 FAIL: 
 ```
 
@@ -29,26 +31,17 @@ Error: Undefined variable: make-parameter
 Error: Undefined variable: radix
 Error: Undefined variable: parameterize
 Error: Undefined variable: radix
-Error: Undefined variable: let-syntax
-Error: Undefined variable: let-syntax
-Error: Undefined variable: letrec-syntax
-Error: Invalid syntax: Expected syntax-rules
-Error: Undefined variable: sequence1
-Error: Invalid syntax: Expected syntax-rules
-Error: Undefined variable: sequence2
-Error: Invalid syntax: Expected syntax-rules
+Error: Undefined variable: ##x#901
+Error: Not a procedure: 8
+Error: Invalid syntax: No matching pattern for macro sequence1
+Error: Invalid syntax: No matching pattern for macro sequence2
+Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: sequence3
 Error: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
 Error: Undefined variable: part-2x
 Error: Undefined variable: part-2x
-Error: Invalid syntax: Expected syntax-rules
-Error: Undefined variable: mad-hatter
 Error: Not a procedure: ok
-Error: Undefined variable: let-syntax
-Error: Invalid syntax: Expected syntax-rules
-Error: Undefined variable: let-syntax
-Error: Undefined variable: ##bar399#1069
-Error: Undefined variable: let-syntax
+Error: Undefined variable: ##bar399#1091
 Error: Lexer error: Unexpected character: |
 ```
 

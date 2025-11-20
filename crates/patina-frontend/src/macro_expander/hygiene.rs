@@ -113,16 +113,30 @@ fn find_free_identifiers(
 /// Check if a symbol is a special form keyword
 ///
 /// Special forms are part of the language syntax and should not be renamed.
+///
+/// TODO: This hardcoded list is brittle - we have to remember to update it
+/// every time we add a new special form. Consider:
+/// 1. Passing special form names from the SpecialFormRegistry
+/// 2. Having a centralized list shared between frontend and backend
+/// 3. Using a trait-based approach to identify special forms
 fn is_special_form(name: &str) -> bool {
     matches!(
         name,
+        // Core special forms
         "quote"
             | "if"
             | "define"
-            | "define-syntax"
             | "set!"
             | "lambda"
             | "begin"
+            | "apply"
+            | "call-with-values"  // Special form for tail call optimization
+            // Macro-related special forms
+            | "define-syntax"
+            | "let-syntax"        // Added 2025-11-19
+            | "letrec-syntax"     // Added 2025-11-19
+            | "syntax-rules"      // Added 2025-11-19
+            // Derived special forms (could be macros but are special forms for now)
             | "cond"
             | "case"
             | "let"
@@ -132,8 +146,6 @@ fn is_special_form(name: &str) -> bool {
             // Note: let-values and let*-values are now macros (defined in bootstrap.scm)
             | "and"
             | "or"
-            | "apply"
-            | "call-with-values"  // Special form for tail call optimization
             | "do"
     )
 }
