@@ -17,6 +17,7 @@
 pub mod registry;
 
 mod arithmetic;
+mod characters;
 mod conversion;
 mod debug;
 pub(in crate::eval) mod equality;
@@ -85,6 +86,7 @@ impl Evaluator {
     pub(super) fn register_all_primitives(registry: &mut PrimitiveRegistry) {
         // Register primitives by category
         arithmetic::register(registry);
+        characters::register(registry);
         conversion::register(registry);
         lists::register(registry);
         higher_order::register(registry);

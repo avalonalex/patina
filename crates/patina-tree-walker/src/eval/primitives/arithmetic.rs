@@ -786,14 +786,8 @@ pub(super) fn round(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalEr
 fn value_to_complex64(v: &Value) -> Result<Complex64, EvalError> {
     match v {
         Value::Integer(n) => Ok(Complex64::new(*n as f64, 0.0)),
-        Value::BigInteger(n) => Ok(Complex64::new(
-            n.to_f64().unwrap_or(f64::INFINITY),
-            0.0,
-        )),
-        Value::Rational(r) => Ok(Complex64::new(
-            r.to_f64().unwrap_or(f64::INFINITY),
-            0.0,
-        )),
+        Value::BigInteger(n) => Ok(Complex64::new(n.to_f64().unwrap_or(f64::INFINITY), 0.0)),
+        Value::Rational(r) => Ok(Complex64::new(r.to_f64().unwrap_or(f64::INFINITY), 0.0)),
         Value::Real(f) => Ok(Complex64::new(*f, 0.0)),
         Value::Complex(r, i) => Ok(Complex64::new(*r, *i)),
         other => Err(EvalError::TypeError(format!(

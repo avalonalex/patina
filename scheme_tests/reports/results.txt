@@ -1333,16 +1333,6 @@ Testing:
 Testing: 
 (sqrt -1)
 
-FAIL: 
-(sqrt -1)
-
-  expected: 
-+i
-
-  but got:  
--i
-
-
 Testing: 
 (call-with-values (lambda () (exact-integer-sqrt 4)) list)
 
@@ -1436,7 +1426,7 @@ Testing:
 Testing: 
 (string->number "1 2")
 
-Tests run: 175, Passed: 158, Failed: 17
+Tests run: 175, Passed: 159, Failed: 16
 
 Running test suite: 6.3 Booleans
 Testing: 
@@ -1759,305 +1749,250 @@ Testing:
 Testing: 
 (char=? #\a #\a #\a)
 
-Error: Undefined variable: char=?
 Testing: 
 (char=? #\a #\A)
 
-Error: Undefined variable: char=?
 Testing: 
 (char<? #\a #\b #\c)
 
-Error: Undefined variable: char<?
 Testing: 
 (char<? #\a #\a)
 
-Error: Undefined variable: char<?
 Testing: 
 (char<? #\b #\a)
 
-Error: Undefined variable: char<?
 Testing: 
 (char>? #\a #\b)
 
-Error: Undefined variable: char>?
 Testing: 
 (char>? #\a #\a)
 
-Error: Undefined variable: char>?
 Testing: 
 (char>? #\c #\b #\a)
 
-Error: Undefined variable: char>?
 Testing: 
 (char<=? #\a #\b #\b)
 
-Error: Undefined variable: char<=?
 Testing: 
 (char<=? #\a #\a)
 
-Error: Undefined variable: char<=?
 Testing: 
 (char<=? #\b #\a)
 
-Error: Undefined variable: char<=?
 Testing: 
 (char>=? #\a #\b)
 
-Error: Undefined variable: char>=?
 Testing: 
 (char>=? #\a #\a)
 
-Error: Undefined variable: char>=?
 Testing: 
 (char>=? #\b #\b #\a)
 
-Error: Undefined variable: char>=?
 Testing: 
 (char-ci=? #\a #\a)
 
-Error: Undefined variable: char-ci=?
 Testing: 
 (char-ci=? #\a #\A #\a)
 
-Error: Undefined variable: char-ci=?
 Testing: 
 (char-ci=? #\a #\b)
 
-Error: Undefined variable: char-ci=?
 Testing: 
 (char-ci<? #\a #\B #\c)
 
-Error: Undefined variable: char-ci<?
 Testing: 
 (char-ci<? #\A #\a)
 
-Error: Undefined variable: char-ci<?
 Testing: 
 (char-ci<? #\b #\A)
 
-Error: Undefined variable: char-ci<?
 Testing: 
 (char-ci>? #\A #\b)
 
-Error: Undefined variable: char-ci>?
 Testing: 
 (char-ci>? #\a #\A)
 
-Error: Undefined variable: char-ci>?
 Testing: 
 (char-ci>? #\c #\B #\a)
 
-Error: Undefined variable: char-ci>?
 Testing: 
 (char-ci<=? #\a #\B #\b)
 
-Error: Undefined variable: char-ci<=?
 Testing: 
 (char-ci<=? #\A #\a)
 
-Error: Undefined variable: char-ci<=?
 Testing: 
 (char-ci<=? #\b #\A)
 
-Error: Undefined variable: char-ci<=?
 Testing: 
 (char-ci>=? #\A #\b)
 
-Error: Undefined variable: char-ci>=?
 Testing: 
 (char-ci>=? #\a #\A)
 
-Error: Undefined variable: char-ci>=?
 Testing: 
 (char-ci>=? #\b #\B #\a)
 
-Error: Undefined variable: char-ci>=?
 Testing: 
 (char-alphabetic? #\a)
 
-Error: Undefined variable: char-alphabetic?
 Testing: 
 (char-alphabetic? #\ )
 
-Error: Undefined variable: char-alphabetic?
 Testing: 
 (char-numeric? #\0)
 
-Error: Undefined variable: char-numeric?
 Testing: 
 (char-numeric? #\.)
 
-Error: Undefined variable: char-numeric?
 Testing: 
 (char-numeric? #\a)
 
-Error: Undefined variable: char-numeric?
 Testing: 
 (char-whitespace? #\ )
 
-Error: Undefined variable: char-whitespace?
 Testing: 
 (char-whitespace? #\	)
 
-Error: Undefined variable: char-whitespace?
 Testing: 
 (char-whitespace? #\
 )
 
-Error: Undefined variable: char-whitespace?
 Testing: 
 (char-whitespace? #\_)
 
-Error: Undefined variable: char-whitespace?
 Testing: 
 (char-whitespace? #\a)
 
-Error: Undefined variable: char-whitespace?
 Testing: 
 (char-upper-case? #\A)
 
-Error: Undefined variable: char-upper-case?
 Testing: 
 (char-upper-case? #\a)
 
-Error: Undefined variable: char-upper-case?
 Testing: 
 (char-upper-case? #\3)
 
-Error: Undefined variable: char-upper-case?
 Testing: 
 (char-lower-case? #\a)
 
-Error: Undefined variable: char-lower-case?
 Testing: 
 (char-lower-case? #\A)
 
-Error: Undefined variable: char-lower-case?
 Testing: 
 (char-lower-case? #\3)
 
-Error: Undefined variable: char-lower-case?
 Testing: 
 (char-alphabetic? #\Λ)
 
-Error: Undefined variable: char-alphabetic?
 Testing: 
 (char-alphabetic? #\๐)
 
-Error: Undefined variable: char-alphabetic?
 Testing: 
 (char-upper-case? #\Λ)
 
-Error: Undefined variable: char-upper-case?
 Testing: 
 (char-upper-case? #\λ)
 
-Error: Undefined variable: char-upper-case?
 Testing: 
 (char-lower-case? #\Λ)
 
-Error: Undefined variable: char-lower-case?
 Testing: 
 (char-lower-case? #\λ)
 
-Error: Undefined variable: char-lower-case?
 Testing: 
 (char-numeric? #\Λ)
 
-Error: Undefined variable: char-numeric?
 Testing: 
 (char-numeric? #\๐)
 
-Error: Undefined variable: char-numeric?
 Testing: 
 (char-whitespace? #\ )
 
-Error: Undefined variable: char-whitespace?
 Testing: 
 (digit-value #\0)
 
-Error: Undefined variable: digit-value
 Testing: 
 (digit-value #\3)
 
-Error: Undefined variable: digit-value
 Testing: 
 (digit-value #\9)
 
-Error: Undefined variable: digit-value
 Testing: 
 (digit-value #\٤)
 
-Error: Undefined variable: digit-value
+FAIL: 
+(digit-value #\٤)
+
+  expected: 
+4
+
+  but got:  
+#f
+
+
 Testing: 
 (digit-value #\૦)
 
-Error: Undefined variable: digit-value
+FAIL: 
+(digit-value #\૦)
+
+  expected: 
+0
+
+  but got:  
+#f
+
+
 Testing: 
 (digit-value #\.)
 
-Error: Undefined variable: digit-value
 Testing: 
 (digit-value #\-)
 
-Error: Undefined variable: digit-value
 Testing: 
 (char->integer #\a)
 
-Error: Undefined variable: char->integer
 Testing: 
 (integer->char 97)
 
-Error: Undefined variable: integer->char
 Testing: 
 (char-upcase #\a)
 
-Error: Undefined variable: char-upcase
 Testing: 
 (char-upcase #\A)
 
-Error: Undefined variable: char-upcase
 Testing: 
 (char-downcase #\a)
 
-Error: Undefined variable: char-downcase
 Testing: 
 (char-downcase #\A)
 
-Error: Undefined variable: char-downcase
 Testing: 
 (char-foldcase #\a)
 
-Error: Undefined variable: char-foldcase
 Testing: 
 (char-foldcase #\A)
 
-Error: Undefined variable: char-foldcase
 Testing: 
 (char-upcase #\λ)
 
-Error: Undefined variable: char-upcase
 Testing: 
 (char-upcase #\Λ)
 
-Error: Undefined variable: char-upcase
 Testing: 
 (char-downcase #\λ)
 
-Error: Undefined variable: char-downcase
 Testing: 
 (char-downcase #\Λ)
 
-Error: Undefined variable: char-downcase
 Testing: 
 (char-foldcase #\λ)
 
-Error: Undefined variable: char-foldcase
 Testing: 
 (char-foldcase #\Λ)
 
-Error: Undefined variable: char-foldcase
-Tests run: 4, Passed: 4, Failed: 0
+Tests run: 79, Passed: 77, Failed: 2
 
 Running test suite: 6.7 Strings
 Testing: 

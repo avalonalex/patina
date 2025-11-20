@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-20 11:01:08
+**Generated:** 2025-11-20 11:49:46
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 501 | 66.2% |
-| ❌ Failed | 26 | 3.4% |
-| ⚠️ Error (crashed) | 230 | 30.4% |
+| ✅ Passed | 575 | 76.0% |
+| ❌ Failed | 27 | 3.6% |
+| ⚠️ Error (crashed) | 155 | 20.5% |
 | **Total** | **757** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
@@ -19,6 +19,7 @@
 ### Test Failures
 
 ```
+FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -133,81 +134,6 @@ Error: Undefined variable: string->symbol
 Error: Undefined variable: string->symbol
 Error: Undefined variable: string->symbol
 Error: Undefined variable: symbol->string
-Error: Undefined variable: char=?
-Error: Undefined variable: char=?
-Error: Undefined variable: char<?
-Error: Undefined variable: char<?
-Error: Undefined variable: char<?
-Error: Undefined variable: char>?
-Error: Undefined variable: char>?
-Error: Undefined variable: char>?
-Error: Undefined variable: char<=?
-Error: Undefined variable: char<=?
-Error: Undefined variable: char<=?
-Error: Undefined variable: char>=?
-Error: Undefined variable: char>=?
-Error: Undefined variable: char>=?
-Error: Undefined variable: char-ci=?
-Error: Undefined variable: char-ci=?
-Error: Undefined variable: char-ci=?
-Error: Undefined variable: char-ci<?
-Error: Undefined variable: char-ci<?
-Error: Undefined variable: char-ci<?
-Error: Undefined variable: char-ci>?
-Error: Undefined variable: char-ci>?
-Error: Undefined variable: char-ci>?
-Error: Undefined variable: char-ci<=?
-Error: Undefined variable: char-ci<=?
-Error: Undefined variable: char-ci<=?
-Error: Undefined variable: char-ci>=?
-Error: Undefined variable: char-ci>=?
-Error: Undefined variable: char-ci>=?
-Error: Undefined variable: char-alphabetic?
-Error: Undefined variable: char-alphabetic?
-Error: Undefined variable: char-numeric?
-Error: Undefined variable: char-numeric?
-Error: Undefined variable: char-numeric?
-Error: Undefined variable: char-whitespace?
-Error: Undefined variable: char-whitespace?
-Error: Undefined variable: char-whitespace?
-Error: Undefined variable: char-whitespace?
-Error: Undefined variable: char-whitespace?
-Error: Undefined variable: char-upper-case?
-Error: Undefined variable: char-upper-case?
-Error: Undefined variable: char-upper-case?
-Error: Undefined variable: char-lower-case?
-Error: Undefined variable: char-lower-case?
-Error: Undefined variable: char-lower-case?
-Error: Undefined variable: char-alphabetic?
-Error: Undefined variable: char-alphabetic?
-Error: Undefined variable: char-upper-case?
-Error: Undefined variable: char-upper-case?
-Error: Undefined variable: char-lower-case?
-Error: Undefined variable: char-lower-case?
-Error: Undefined variable: char-numeric?
-Error: Undefined variable: char-numeric?
-Error: Undefined variable: char-whitespace?
-Error: Undefined variable: digit-value
-Error: Undefined variable: digit-value
-Error: Undefined variable: digit-value
-Error: Undefined variable: digit-value
-Error: Undefined variable: digit-value
-Error: Undefined variable: digit-value
-Error: Undefined variable: digit-value
-Error: Undefined variable: char->integer
-Error: Undefined variable: integer->char
-Error: Undefined variable: char-upcase
-Error: Undefined variable: char-upcase
-Error: Undefined variable: char-downcase
-Error: Undefined variable: char-downcase
-Error: Undefined variable: char-foldcase
-Error: Undefined variable: char-foldcase
-Error: Undefined variable: char-upcase
-Error: Undefined variable: char-upcase
-Error: Undefined variable: char-downcase
-Error: Undefined variable: char-downcase
-Error: Undefined variable: char-foldcase
-Error: Undefined variable: char-foldcase
 Error: Undefined variable: string-upcase
 Error: Undefined variable: string-upcase
 Error: Undefined variable: string-downcase
