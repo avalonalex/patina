@@ -116,7 +116,7 @@ impl SpecialForm for LambdaForm {
             Value::Pair(pair) => {
                 // First argument is parameters (can be symbol, null, or list)
                 // Second and beyond are body expressions (must have at least one)
-                if matches!(pair.1, Value::Null) {
+                if matches!(pair.borrow().1, Value::Null) {
                     Err(EvalError::InvalidSyntax(
                         "lambda requires at least one body expression".to_string(),
                     ))

@@ -107,6 +107,7 @@ mod tests {
         let backend = TreeWalker::new();
 
         // Build (+ 1 2 3) as a Value
+        use std::cell::RefCell;
         use std::rc::Rc as StdRc;
 
         let plus = Value::Symbol(StdRc::from("+"));
@@ -115,16 +116,16 @@ mod tests {
         let three = Value::Integer(3);
 
         // (+ 1 2 3) = (+ . (1 . (2 . (3 . ()))))
-        let expr = Value::Pair(StdRc::new((
+        let expr = Value::Pair(StdRc::new(RefCell::new((
             plus,
-            Value::Pair(StdRc::new((
+            Value::Pair(StdRc::new(RefCell::new((
                 one,
-                Value::Pair(StdRc::new((
+                Value::Pair(StdRc::new(RefCell::new((
                     two,
-                    Value::Pair(StdRc::new((three, Value::Null))),
-                ))),
-            ))),
-        )));
+                    Value::Pair(StdRc::new(RefCell::new((three, Value::Null)))),
+                )))),
+            )))),
+        ))));
 
         let result = backend.eval_global(&expr).unwrap();
         assert!(matches!(result, Value::Integer(6)));

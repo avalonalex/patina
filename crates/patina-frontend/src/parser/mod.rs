@@ -507,17 +507,15 @@ impl Parser {
     }
 
     fn make_list(&self, elements: Vec<Value>) -> Value {
-        elements
-            .into_iter()
-            .rev()
-            .fold(Value::Null, |acc, elem| Value::Pair(Rc::new((elem, acc))))
+        elements.into_iter().rev().fold(Value::Null, |acc, elem| {
+            Value::Pair(Rc::new(RefCell::new((elem, acc))))
+        })
     }
 
     fn make_dotted_list(&self, elements: Vec<Value>, tail: Value) -> Value {
-        elements
-            .into_iter()
-            .rev()
-            .fold(tail, |acc, elem| Value::Pair(Rc::new((elem, acc))))
+        elements.into_iter().rev().fold(tail, |acc, elem| {
+            Value::Pair(Rc::new(RefCell::new((elem, acc))))
+        })
     }
 }
 
@@ -624,11 +622,13 @@ mod tests {
 
         // The result should be a list (pair chain)
         if let Value::Pair(pair) = result {
-            let (car, cdr) = pair.as_ref();
+            let borrowed = pair.borrow();
+            let (car, cdr) = (&borrowed.0, &borrowed.1);
             assert!(matches!(car, Value::Symbol(_))); // The '+'
 
             if let Value::Pair(pair2) = cdr {
-                let (car2, _) = pair2.as_ref();
+                let borrowed2 = pair2.borrow();
+                let (car2, _) = (&borrowed2.0, &borrowed2.1);
                 // The first argument should be BigInteger
                 match car2 {
                     Value::BigInteger(n) => {
@@ -686,11 +686,13 @@ mod tests {
         let result = parser.parse().unwrap();
 
         if let Value::Pair(pair) = result {
-            let (car, cdr) = pair.as_ref();
+            let borrowed = pair.borrow();
+            let (car, cdr) = (&borrowed.0, &borrowed.1);
             assert!(matches!(car, Value::Symbol(_))); // The '+'
 
             if let Value::Pair(pair2) = cdr {
-                let (car2, _) = pair2.as_ref();
+                let borrowed2 = pair2.borrow();
+                let (car2, _) = (&borrowed2.0, &borrowed2.1);
                 match car2 {
                     Value::Real(f) => {
                         assert!(f.is_infinite() && f.is_sign_positive());

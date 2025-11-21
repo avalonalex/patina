@@ -91,14 +91,16 @@ impl SpecialForm for CaseLambdaForm {
             // Each clause should be (params body ...)
             match clause {
                 Value::Pair(pair) => {
-                    let params_expr = &pair.0;
-                    let rest = &pair.1;
+                    let pair_ref = pair.borrow();
+                    let params_expr = pair_ref.0.clone();
+                    let rest = pair_ref.1.clone();
+                    drop(pair_ref);
 
                     // Parse parameters
-                    let (params, variadic) = evaluator.parse_lambda_params(params_expr)?;
+                    let (params, variadic) = evaluator.parse_lambda_params(&params_expr)?;
 
                     // Collect body expressions
-                    let body = evaluator.collect_list_items(rest)?;
+                    let body = evaluator.collect_list_items(&rest)?;
 
                     if body.is_empty() {
                         return Err(EvalError::InvalidSyntax(

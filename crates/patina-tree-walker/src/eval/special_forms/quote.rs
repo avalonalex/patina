@@ -64,7 +64,7 @@ impl SpecialForm for QuoteForm {
         // Check that we have exactly one argument
         match args {
             Value::Pair(pair) => {
-                if !matches!(pair.1, Value::Null) {
+                if !matches!(pair.borrow().1, Value::Null) {
                     Err(EvalError::InvalidSyntax(
                         "quote expects exactly one argument".to_string(),
                     ))

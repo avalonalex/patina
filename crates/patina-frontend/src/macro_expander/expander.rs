@@ -15,6 +15,7 @@
 
 use crate::macro_expander::template::{Identifier, Template};
 use patina_runtime::{MatchEnv, MatchValue, PVRef, Value};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// Error type for template expansion failures
@@ -268,7 +269,7 @@ impl Expander {
         // Build dotted list
         let mut result = tail_value;
         for item in items.into_iter().rev() {
-            result = Value::Pair(Rc::new((item, result)));
+            result = Value::Pair(Rc::new(RefCell::new((item, result))));
         }
 
         Ok(result)
@@ -572,9 +573,9 @@ impl Expander {
             match current {
                 Value::Null => break,
                 Value::Pair(p) => {
-                    let (car, cdr) = &*p;
-                    result.push(car.clone());
-                    current = cdr.clone();
+                    let borrowed = p.borrow();
+                    result.push(borrowed.0.clone());
+                    current = borrowed.1.clone();
                 }
                 _ => {
                     return Err(ExpandError::InvalidTemplate {
@@ -591,7 +592,7 @@ impl Expander {
     fn vec_to_list(&self, values: Vec<Value>) -> Value {
         let mut result = Value::Null;
         for value in values.into_iter().rev() {
-            result = Value::Pair(Rc::new((value, result)));
+            result = Value::Pair(Rc::new(RefCell::new((value, result))));
         }
         result
     }
@@ -612,7 +613,7 @@ mod tests {
     fn make_list(values: Vec<Value>) -> Value {
         let mut result = Value::Null;
         for value in values.into_iter().rev() {
-            result = Value::Pair(Rc::new((value, result)));
+            result = Value::Pair(Rc::new(RefCell::new((value, result))));
         }
         result
     }

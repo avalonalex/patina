@@ -36,6 +36,7 @@ mod vectors;
 pub use registry::PrimitiveRegistry;
 
 use patina_runtime::value::{Procedure, Value};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::Evaluator;
@@ -165,8 +166,9 @@ impl Evaluator {
         let mut current = list;
 
         while let Value::Pair(pair) = current {
-            items.push(pair.0.clone());
-            current = pair.1.clone();
+            let borrowed = pair.borrow();
+            items.push(borrowed.0.clone());
+            current = borrowed.1.clone();
         }
 
         if !matches!(current, Value::Null) {
@@ -181,10 +183,9 @@ impl Evaluator {
 
     /// Convert a Vec to a Scheme list
     pub(in crate::eval) fn list_from_vec(&self, items: Vec<Value>) -> Value {
-        items
-            .into_iter()
-            .rev()
-            .fold(Value::Null, |acc, item| Value::Pair(Rc::new((item, acc))))
+        items.into_iter().rev().fold(Value::Null, |acc, item| {
+            Value::Pair(Rc::new(RefCell::new((item, acc))))
+        })
     }
 
     /// Generic type predicate helper

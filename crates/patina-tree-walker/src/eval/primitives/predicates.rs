@@ -99,16 +99,16 @@ pub(super) fn list_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
     let mut fast = args[0].clone();
 
     loop {
-        match &fast {
+        match fast.clone() {
             Value::Null => return Ok(Value::Boolean(true)),
             Value::Pair(pair1) => {
-                fast = pair1.1.clone();
-                match &fast {
+                fast = pair1.borrow().1.clone();
+                match fast.clone() {
                     Value::Null => return Ok(Value::Boolean(true)),
                     Value::Pair(pair2) => {
-                        fast = pair2.1.clone();
-                        if let Value::Pair(slow_pair) = &slow {
-                            slow = slow_pair.1.clone();
+                        fast = pair2.borrow().1.clone();
+                        if let Value::Pair(slow_pair) = slow.clone() {
+                            slow = slow_pair.borrow().1.clone();
                         }
                         if super::equality::values_equal(&slow, &fast)? {
                             return Ok(Value::Boolean(false));

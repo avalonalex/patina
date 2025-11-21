@@ -89,7 +89,8 @@ impl TestExpander {
                 "syntax-rules must be a list".to_string(),
             ));
         };
-        let Value::Symbol(kw) = &p1.0 else {
+        let b1 = p1.borrow();
+        let Value::Symbol(kw) = &b1.0 else {
             return Err(FrontendError::InvalidSyntax(
                 "Expected syntax-rules keyword".to_string(),
             ));
@@ -102,26 +103,28 @@ impl TestExpander {
         }
 
         // Extract (literals) and rules
-        let Value::Pair(p2) = &p1.1 else {
+        let Value::Pair(p2) = &b1.1 else {
             return Err(FrontendError::InvalidSyntax(
                 "syntax-rules must have literals and rules".to_string(),
             ));
         };
-        let literals_form = &p2.0;
-        let rules_form = &p2.1;
+        let b2 = p2.borrow();
+        let literals_form = b2.0.clone();
+        let rules_form = b2.1.clone();
 
         // Parse literals list
         let mut literals = Vec::new();
-        let mut current = literals_form.clone();
+        let mut current = literals_form;
         while let Value::Pair(p) = current {
-            if let Value::Symbol(s) = &p.0 {
+            let borrowed = p.borrow();
+            if let Value::Symbol(s) = &borrowed.0 {
                 literals.push(s.clone());
             } else {
                 return Err(FrontendError::InvalidSyntax(
                     "Literals must be symbols".to_string(),
                 ));
             }
-            current = p.1.clone();
+            current = borrowed.1.clone();
         }
         if !matches!(current, Value::Null) {
             return Err(FrontendError::InvalidSyntax(
@@ -131,27 +134,30 @@ impl TestExpander {
 
         // Parse rules as (pattern template) pairs
         let mut rules = Vec::new();
-        let mut current = rules_form.clone();
+        let mut current = rules_form;
         while let Value::Pair(rule_pair) = current {
-            let Value::Pair(rule_p) = &rule_pair.0 else {
+            let rule_borrowed = rule_pair.borrow();
+            let Value::Pair(rule_p) = &rule_borrowed.0 else {
                 return Err(FrontendError::InvalidSyntax(
                     "Each rule must be a list".to_string(),
                 ));
             };
-            let pattern = rule_p.0.clone();
-            let Value::Pair(tmpl_p) = &rule_p.1 else {
+            let rule_p_borrowed = rule_p.borrow();
+            let pattern = rule_p_borrowed.0.clone();
+            let Value::Pair(tmpl_p) = &rule_p_borrowed.1 else {
                 return Err(FrontendError::InvalidSyntax(
                     "Rule must have a template".to_string(),
                 ));
             };
-            let template = tmpl_p.0.clone();
-            if !matches!(tmpl_p.1, Value::Null) {
+            let tmpl_p_borrowed = tmpl_p.borrow();
+            let template = tmpl_p_borrowed.0.clone();
+            if !matches!(tmpl_p_borrowed.1, Value::Null) {
                 return Err(FrontendError::InvalidSyntax(
                     "Each rule must have exactly pattern and template".to_string(),
                 ));
             }
             rules.push((pattern, template));
-            current = rule_pair.1.clone();
+            current = rule_borrowed.1.clone();
         }
         if !matches!(current, Value::Null) {
             return Err(FrontendError::InvalidSyntax(
@@ -269,8 +275,10 @@ impl TestExpander {
                 name1 == name2
             }
             (Pair(p1), Pair(p2)) => {
-                Self::forms_equal_ignoring_gensym(&p1.0, &p2.0)
-                    && Self::forms_equal_ignoring_gensym(&p1.1, &p2.1)
+                let b1 = p1.borrow();
+                let b2 = p2.borrow();
+                Self::forms_equal_ignoring_gensym(&b1.0, &b2.0)
+                    && Self::forms_equal_ignoring_gensym(&b1.1, &b2.1)
             }
             (Vector(v1), Vector(v2)) => {
                 v1.borrow().len() == v2.borrow().len()

@@ -87,7 +87,7 @@ impl SpecialForm for QuasiquoteForm {
         // Check that we have exactly one argument
         match args {
             Value::Pair(pair) => {
-                if matches!(pair.1, Value::Null) {
+                if matches!(pair.borrow().1, Value::Null) {
                     Ok(())
                 } else {
                     Err(EvalError::InvalidSyntax(
@@ -138,8 +138,9 @@ fn eval_quasiquote_impl(
 
         // Pairs: the interesting case
         Value::Pair(pair) => {
-            let car = &pair.0;
-            let cdr = &pair.1;
+            let borrowed = pair.borrow();
+            let car = &borrowed.0;
+            let cdr = &borrowed.1;
 
             // Check if car is a symbol that requires special handling
             if let Value::Symbol(sym) = car {
@@ -237,49 +238,98 @@ fn process_quasiquote_pair(
 
     // Walk the list
     loop {
-        match &current {
+        match current {
             Value::Null => break,
-            Value::Pair(pair) => {
-                let car = &pair.0;
-                let cdr = &pair.1;
+            Value::Pair(ref pair) => {
+                let (car, cdr) = {
+                    let borrowed = pair.borrow();
+                    (borrowed.0.clone(), borrowed.1.clone())
+                };
 
                 // Check if this element is (unquote-splicing ...)
                 if depth == 0
-                    && let Value::Pair(inner_pair) = car
-                    && let Value::Symbol(sym) = &inner_pair.0
-                    && sym.as_ref() == "unquote-splicing"
+                    && let Value::Pair(ref inner_pair) = car
                 {
-                    // Evaluate the splicing expression
-                    let (splice_expr, rest) = evaluator.extract_pair(&inner_pair.1)?;
-                    if !matches!(rest, Value::Null) {
-                        return Err(EvalError::InvalidSyntax(
-                            "unquote-splicing expects exactly one argument".to_string(),
-                        ));
+                    let (inner_car, inner_cdr) = {
+                        let b = inner_pair.borrow();
+                        (b.0.clone(), b.1.clone())
+                    };
+                    if let Value::Symbol(ref sym) = inner_car
+                        && sym.as_ref() == "unquote-splicing"
+                    {
+                        // Evaluate the splicing expression
+                        let (splice_expr, rest) = evaluator.extract_pair(&inner_cdr)?;
+                        if !matches!(rest, Value::Null) {
+                            return Err(EvalError::InvalidSyntax(
+                                "unquote-splicing expects exactly one argument".to_string(),
+                            ));
+                        }
+
+                        let splice_result = evaluator.eval_in_env(&splice_expr, env)?;
+
+                        // Must be a list
+                        if !is_list(&splice_result) {
+                            return Err(EvalError::InvalidSyntax(
+                                "unquote-splicing result must be a list".to_string(),
+                            ));
+                        }
+
+                        // Append all elements from the spliced list
+                        let mut splice_current = splice_result;
+                        while let Value::Pair(ref sp) = splice_current {
+                            let (sc, sn) = {
+                                let b = sp.borrow();
+                                (b.0.clone(), b.1.clone())
+                            };
+                            elements.push(sc);
+                            splice_current = sn;
+                        }
+
+                        // After splicing, check if CDR is an unquote form for improper list tail
+                        if let Value::Pair(ref cdr_pair) = cdr {
+                            let (cdr_car, cdr_cdr) = {
+                                let b = cdr_pair.borrow();
+                                (b.0.clone(), b.1.clone())
+                            };
+                            if let Value::Symbol(ref sym) = cdr_car
+                                && sym.as_ref() == "unquote"
+                            {
+                                // Evaluate the unquote expression as the tail
+                                let (unquote_expr, rest) =
+                                    evaluator.extract_pair(&cdr_cdr)?;
+                                if !matches!(rest, Value::Null) {
+                                    return Err(EvalError::InvalidSyntax(
+                                        "unquote expects exactly one argument".to_string(),
+                                    ));
+                                }
+                                tail = evaluator.eval_in_env(&unquote_expr, env)?;
+                                break;
+                            }
+                        }
+
+                        current = cdr;
+                        continue;
                     }
+                }
 
-                    let splice_result = evaluator.eval_in_env(&splice_expr, env)?;
-
-                    // Must be a list
-                    if !is_list(&splice_result) {
-                        return Err(EvalError::InvalidSyntax(
-                            "unquote-splicing result must be a list".to_string(),
-                        ));
-                    }
-
-                    // Append all elements from the spliced list
-                    let mut splice_current = splice_result;
-                    while let Value::Pair(splice_pair) = splice_current {
-                        elements.push(splice_pair.0.clone());
-                        splice_current = splice_pair.1.clone();
-                    }
-
-                    // After splicing, check if CDR is an unquote form for improper list tail
-                    if let Value::Pair(cdr_pair) = cdr
-                        && let Value::Symbol(sym) = &cdr_pair.0
+                // Check if CDR is an unquote form (for improper lists like (a . ,x))
+                if depth == 0
+                    && let Value::Pair(ref cdr_pair) = cdr
+                {
+                    let (cdr_car, cdr_cdr) = {
+                        let b = cdr_pair.borrow();
+                        (b.0.clone(), b.1.clone())
+                    };
+                    if let Value::Symbol(ref sym) = cdr_car
                         && sym.as_ref() == "unquote"
                     {
-                        // Evaluate the unquote expression as the tail
-                        let (unquote_expr, rest) = evaluator.extract_pair(&cdr_pair.1)?;
+                        // This is an improper list: (... car . ,expr)
+                        // Process car normally, then evaluate the unquote as tail
+                        let processed_car = eval_quasiquote_impl(evaluator, &car, env, depth)?;
+                        elements.push(processed_car);
+
+                        // Evaluate the unquote expression
+                        let (unquote_expr, rest) = evaluator.extract_pair(&cdr_cdr)?;
                         if !matches!(rest, Value::Null) {
                             return Err(EvalError::InvalidSyntax(
                                 "unquote expects exactly one argument".to_string(),
@@ -288,37 +338,12 @@ fn process_quasiquote_pair(
                         tail = evaluator.eval_in_env(&unquote_expr, env)?;
                         break;
                     }
-
-                    current = cdr.clone();
-                    continue;
-                }
-
-                // Check if CDR is an unquote form (for improper lists like (a . ,x))
-                if depth == 0
-                    && let Value::Pair(cdr_pair) = cdr
-                    && let Value::Symbol(sym) = &cdr_pair.0
-                    && sym.as_ref() == "unquote"
-                {
-                    // This is an improper list: (... car . ,expr)
-                    // Process car normally, then evaluate the unquote as tail
-                    let processed_car = eval_quasiquote_impl(evaluator, car, env, depth)?;
-                    elements.push(processed_car);
-
-                    // Evaluate the unquote expression
-                    let (unquote_expr, rest) = evaluator.extract_pair(&cdr_pair.1)?;
-                    if !matches!(rest, Value::Null) {
-                        return Err(EvalError::InvalidSyntax(
-                            "unquote expects exactly one argument".to_string(),
-                        ));
-                    }
-                    tail = evaluator.eval_in_env(&unquote_expr, env)?;
-                    break;
                 }
 
                 // Regular element: process recursively
-                let processed = eval_quasiquote_impl(evaluator, car, env, depth)?;
+                let processed = eval_quasiquote_impl(evaluator, &car, env, depth)?;
                 elements.push(processed);
-                current = cdr.clone();
+                current = cdr;
             }
             _ => {
                 // Improper list (dotted pair with non-list tail)
@@ -335,7 +360,7 @@ fn process_quasiquote_pair(
         // Improper list
         let mut result = tail;
         for elem in elements.iter().rev() {
-            result = Value::Pair(Rc::new((elem.clone(), result)));
+            result = Value::Pair(Rc::new(RefCell::new((elem.clone(), result))));
         }
         Ok(result)
     }
@@ -343,11 +368,14 @@ fn process_quasiquote_pair(
 
 /// Helper: check if a value is a proper list
 fn is_list(val: &Value) -> bool {
-    let mut current = val;
+    let mut current = val.clone();
     loop {
         match current {
             Value::Null => return true,
-            Value::Pair(pair) => current = &pair.1,
+            Value::Pair(ref pair) => {
+                let next = pair.borrow().1.clone();
+                current = next;
+            }
             _ => return false,
         }
     }
@@ -361,14 +389,18 @@ fn vector_to_list(vec: &[Value]) -> Value {
 /// Helper: convert list to vector
 fn list_to_vector(list: &Value) -> Result<Value, EvalError> {
     let mut vec = Vec::new();
-    let mut current = list;
+    let mut current = list.clone();
 
     loop {
         match current {
             Value::Null => break,
-            Value::Pair(pair) => {
-                vec.push(pair.0.clone());
-                current = &pair.1;
+            Value::Pair(ref pair) => {
+                let (car, cdr) = {
+                    let borrowed = pair.borrow();
+                    (borrowed.0.clone(), borrowed.1.clone())
+                };
+                vec.push(car);
+                current = cdr;
             }
             _ => {
                 return Err(EvalError::InvalidSyntax(
@@ -385,7 +417,7 @@ fn list_to_vector(list: &Value) -> Result<Value, EvalError> {
 fn list_from_vec(vec: Vec<Value>) -> Value {
     let mut result = Value::Null;
     for item in vec.into_iter().rev() {
-        result = Value::Pair(Rc::new((item, result)));
+        result = Value::Pair(Rc::new(RefCell::new((item, result))));
     }
     result
 }

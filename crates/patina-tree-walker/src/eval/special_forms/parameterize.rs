@@ -77,7 +77,8 @@ impl SpecialForm for ParameterizeForm {
         let mut current = bindings.clone();
         while let Value::Pair(pair) = current {
             // Each binding should be (param value)
-            let binding = &pair.0;
+            let pair_borrowed = pair.borrow();
+            let binding = &pair_borrowed.0;
             let (param_expr, value_rest) = evaluator.extract_pair(binding)?;
             let (value_expr, rest) = evaluator.extract_pair(&value_rest)?;
 
@@ -125,7 +126,7 @@ impl SpecialForm for ParameterizeForm {
                 }
             }
 
-            current = pair.1.clone();
+            current = pair_borrowed.1.clone();
         }
 
         // Bindings must be a proper list
@@ -139,7 +140,7 @@ impl SpecialForm for ParameterizeForm {
         let mut result = Value::Unspecified;
         let mut body_current = body;
 
-        while let Value::Pair(pair) = &body_current {
+        while let Value::Pair(pair) = body_current.clone() {
             // TODO: Bad interaction between tail call optimization and parameterize
             // We don't use tail call optimization for parameterize because we need to
             // ensure the parameter stack is popped AFTER the body completes, not before.
@@ -149,8 +150,12 @@ impl SpecialForm for ParameterizeForm {
             // The proper solution would be to implement dynamic-wind or use a similar
             // mechanism that ensures cleanup happens after tail calls complete.
             // For now, we sacrifice tail call optimization in parameterize bodies.
-            result = evaluator.eval_in_env(&pair.0, env)?;
-            body_current = pair.1.clone();
+            let (car, cdr) = {
+                let body_pair = pair.borrow();
+                (body_pair.0.clone(), body_pair.1.clone())
+            };
+            result = evaluator.eval_in_env(&car, env)?;
+            body_current = cdr;
         }
 
         // Pop parameter values from stack (restore to previous state)
@@ -167,15 +172,16 @@ impl SpecialForm for ParameterizeForm {
         // Must have at least bindings and one body expression
         match args {
             Value::Pair(pair1) => {
+                let pair1_borrowed = pair1.borrow();
                 // First argument is bindings - must be a list
-                if !matches!(pair1.0, Value::Pair(_) | Value::Null) {
+                if !matches!(pair1_borrowed.0, Value::Pair(_) | Value::Null) {
                     return Err(EvalError::InvalidSyntax(
                         "parameterize bindings must be a list".to_string(),
                     ));
                 }
 
                 // Must have at least one body expression
-                if matches!(pair1.1, Value::Null) {
+                if matches!(pair1_borrowed.1, Value::Null) {
                     return Err(EvalError::InvalidSyntax(
                         "parameterize body cannot be empty".to_string(),
                     ));

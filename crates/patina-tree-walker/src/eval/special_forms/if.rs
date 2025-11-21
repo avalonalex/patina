@@ -69,12 +69,13 @@ impl SpecialForm for IfForm {
         let else_branch = match rest {
             Value::Null => Value::Unspecified,
             Value::Pair(pair) => {
-                if !matches!(pair.1, Value::Null) {
+                let borrowed = pair.borrow();
+                if !matches!(borrowed.1, Value::Null) {
                     return Err(EvalError::InvalidSyntax(
                         "if expects 2 or 3 arguments".to_string(),
                     ));
                 }
-                pair.0.clone()
+                borrowed.0.clone()
             }
             _ => {
                 return Err(EvalError::InvalidSyntax(
@@ -107,15 +108,18 @@ impl SpecialForm for IfForm {
         // Check that we have 2 or 3 arguments
         match args {
             Value::Pair(pair1) => {
+                let borrowed1 = pair1.borrow();
                 // First argument (test) exists
-                match &pair1.1 {
+                match &borrowed1.1 {
                     Value::Pair(pair2) => {
+                        let borrowed2 = pair2.borrow();
                         // Second argument (consequent) exists
-                        match &pair2.1 {
+                        match &borrowed2.1 {
                             Value::Null => Ok(()), // 2 arguments - valid
                             Value::Pair(pair3) => {
+                                let borrowed3 = pair3.borrow();
                                 // Third argument (alternate) exists
-                                if matches!(pair3.1, Value::Null) {
+                                if matches!(borrowed3.1, Value::Null) {
                                     Ok(()) // 3 arguments - valid
                                 } else {
                                     Err(EvalError::InvalidSyntax(

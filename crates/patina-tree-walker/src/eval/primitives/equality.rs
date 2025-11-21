@@ -67,7 +67,11 @@ pub(in crate::eval) fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalEr
         (Value::Null, Value::Null) => true,
         (Value::String(x), Value::String(y)) => *x.borrow() == *y.borrow(),
         (Value::Symbol(x), Value::Symbol(y)) => x.as_ref() == y.as_ref(),
-        (Value::Pair(x), Value::Pair(y)) => values_equal(&x.0, &y.0)? && values_equal(&x.1, &y.1)?,
+        (Value::Pair(x), Value::Pair(y)) => {
+            let bx = x.borrow();
+            let by = y.borrow();
+            values_equal(&bx.0, &by.0)? && values_equal(&bx.1, &by.1)?
+        }
         (Value::Vector(x), Value::Vector(y)) => {
             let x_vec = x.borrow();
             let y_vec = y.borrow();

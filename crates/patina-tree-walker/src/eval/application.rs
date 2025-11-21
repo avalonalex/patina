@@ -23,8 +23,9 @@ impl Evaluator {
         let mut current = args.clone();
 
         while let Value::Pair(pair) = current {
-            result.push(self.eval_in_env(&pair.0, env)?);
-            current = pair.1.clone();
+            let borrowed = pair.borrow();
+            result.push(self.eval_in_env(&borrowed.0, env)?);
+            current = borrowed.1.clone();
         }
 
         Ok(result)

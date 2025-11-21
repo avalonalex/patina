@@ -354,14 +354,15 @@ impl LibraryDefinition {
     /// Helper: expect a list and return its elements
     fn expect_list(value: &Value) -> Result<Vec<Value>, ParseError> {
         let mut items = Vec::new();
-        let mut current = value;
+        let mut current = value.clone();
 
         loop {
             match current {
                 Value::Null => return Ok(items),
                 Value::Pair(pair) => {
-                    items.push(pair.0.clone());
-                    current = &pair.1;
+                    let borrowed = pair.borrow();
+                    items.push(borrowed.0.clone());
+                    current = borrowed.1.clone();
                 }
                 _ => {
                     return Err(ParseError::InvalidSyntax(format!(
@@ -396,6 +397,7 @@ impl LibraryDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     fn symbol(s: &str) -> Value {
@@ -406,7 +408,7 @@ mod tests {
         items
             .into_iter()
             .rev()
-            .fold(Value::Null, |acc, item| Value::Pair(Rc::new((item, acc))))
+            .fold(Value::Null, |acc, item| Value::Pair(Rc::new(RefCell::new((item, acc)))))
     }
 
     #[test]

@@ -31,8 +31,9 @@ pub enum Value {
     // Symbols
     Symbol(Rc<str>),
 
-    // Pairs and lists
-    Pair(Rc<(Value, Value)>),
+    // Pairs and lists (mutable via set-car!/set-cdr!)
+    // Uses RefCell to allow mutation through shared references
+    Pair(Rc<RefCell<(Value, Value)>>),
     Null,
 
     // Vectors (mutable via vector-set!)
@@ -416,8 +417,9 @@ impl Value {
     /// - (unquote-splicing expr) -> ,@expr
     fn check_quote_shorthand(&self) -> Option<String> {
         if let Value::Pair(pair) = self {
+            let borrowed = pair.borrow();
             // Check if car is one of the special symbols
-            if let Value::Symbol(sym) = &pair.0 {
+            if let Value::Symbol(sym) = &borrowed.0 {
                 let prefix = match sym.as_ref() {
                     "quote" => "'",
                     "quasiquote" => "`",
@@ -427,11 +429,12 @@ impl Value {
                 };
 
                 // Check if cdr is a proper 1-element list: (keyword expr)
-                if let Value::Pair(cdr_pair) = &pair.1
-                    && matches!(cdr_pair.1, Value::Null)
-                {
-                    // It's (keyword expr), format as prefix + expr
-                    return Some(format!("{}{}", prefix, cdr_pair.0));
+                if let Value::Pair(cdr_pair) = &borrowed.1 {
+                    let cdr_borrowed = cdr_pair.borrow();
+                    if matches!(cdr_borrowed.1, Value::Null) {
+                        // It's (keyword expr), format as prefix + expr
+                        return Some(format!("{}{}", prefix, cdr_borrowed.0));
+                    }
                 }
 
                 // If we get here, it's malformed (e.g., (quote a b) or (quote . a))
@@ -444,12 +447,13 @@ impl Value {
     fn fmt_list_contents(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Pair(p) => {
-                write!(f, "{}", p.0)?;
-                match &p.1 {
+                let borrowed = p.borrow();
+                write!(f, "{}", borrowed.0)?;
+                match &borrowed.1 {
                     Value::Null => Ok(()),
                     Value::Pair(_) => {
                         write!(f, " ")?;
-                        p.1.fmt_list_contents(f)
+                        borrowed.1.fmt_list_contents(f)
                     }
                     other => write!(f, " . {}", other),
                 }

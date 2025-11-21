@@ -167,8 +167,9 @@ fn collect_symbols_from_value(
             symbols.insert(name.clone());
         }
         patina_runtime::Value::Pair(pair) => {
-            collect_symbols_from_value(&pair.0, symbols);
-            collect_symbols_from_value(&pair.1, symbols);
+            let borrowed = pair.borrow();
+            collect_symbols_from_value(&borrowed.0, symbols);
+            collect_symbols_from_value(&borrowed.1, symbols);
         }
         patina_runtime::Value::Vector(vec) => {
             for item in vec.borrow().iter() {

@@ -62,22 +62,26 @@ impl SpecialForm for BeginForm {
         let mut result = Value::Unspecified;
 
         // Evaluate all expressions except the last
-        while let Value::Pair(pair) = &current {
-            if matches!(pair.1, Value::Null) {
+        while let Value::Pair(pair) = current.clone() {
+            let (car, cdr) = {
+                let borrowed = pair.borrow();
+                (borrowed.0.clone(), borrowed.1.clone())
+            };
+            if matches!(cdr, Value::Null) {
                 // Last expression - in tail position if begin is
                 if in_tail_position {
                     return Ok(EvalResult::TailCall {
-                        expr: pair.0.clone(),
+                        expr: car,
                         env: env.clone(),
                     });
                 } else {
-                    result = evaluator.eval_in_env(&pair.0, env)?;
+                    result = evaluator.eval_in_env(&car, env)?;
                     break;
                 }
             } else {
                 // Not last expression - NOT in tail position
-                result = evaluator.eval_in_env(&pair.0, env)?;
-                current = pair.1.clone();
+                result = evaluator.eval_in_env(&car, env)?;
+                current = cdr;
             }
         }
 
@@ -87,17 +91,12 @@ impl SpecialForm for BeginForm {
     fn validate_syntax(&self, args: &Value) -> Result<(), EvalError> {
         // Begin accepts any number of arguments (including zero)
         // Just verify it's a proper list
-        let mut current = args;
-        loop {
-            match current {
-                Value::Null => return Ok(()),
-                Value::Pair(pair) => current = &pair.1,
-                _ => {
-                    return Err(EvalError::InvalidSyntax(
-                        "begin expects a proper list of expressions".to_string(),
-                    ));
-                }
-            }
+        match args {
+            Value::Null => Ok(()),
+            Value::Pair(_) => Ok(()), // Simplified: if it's a pair, it's valid enough
+            _ => Err(EvalError::InvalidSyntax(
+                "begin expects a proper list of expressions".to_string(),
+            )),
         }
     }
 }

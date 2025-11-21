@@ -119,6 +119,7 @@ Patina now has proper tail recursion as required by R7RS Section 3.5. Tail calls
 **Known Issues:**
 - ⚠️ Parser has trouble with complex multi-rule macros (worked around in test macro)
 - 🔧 `real-part` and `imag-part` temporarily in `(scheme base)` (should move to `(scheme complex)`)
+- ⚠️ `list?` predicate causes stack overflow on circular lists created via `set-cdr!` (TODO: implement Floyd's cycle detection)
 
 **Implementation:** See `crates/patina-tree-walker/src/eval/mod.rs:267-356` for library extras loading
 

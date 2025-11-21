@@ -82,17 +82,18 @@ impl SpecialForm for SetForm {
         // Check that we have exactly 2 arguments
         match args {
             Value::Pair(pair1) => {
+                let pair1_ref = pair1.borrow();
                 // First argument must be a symbol
-                if !matches!(pair1.0, Value::Symbol(_)) {
+                if !matches!(pair1_ref.0, Value::Symbol(_)) {
                     return Err(EvalError::InvalidSyntax(
                         "set! expects a symbol".to_string(),
                     ));
                 }
 
                 // Second argument exists
-                match &pair1.1 {
+                match &pair1_ref.1 {
                     Value::Pair(pair2) => {
-                        if matches!(pair2.1, Value::Null) {
+                        if matches!(pair2.borrow().1, Value::Null) {
                             Ok(())
                         } else {
                             Err(EvalError::InvalidSyntax(

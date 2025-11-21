@@ -81,7 +81,8 @@ impl SpecialForm for ExpandForm {
 
         // Check if expr is a macro call
         if let Value::Pair(p) = &expr {
-            let (car, _cdr) = &**p;
+            let p_ref = p.borrow();
+            let car = &p_ref.0;
             if let Value::Symbol(sym) = car {
                 // Check if this symbol is bound to a macro
                 if let Some(Value::Macro { data, .. }) = env.get(sym) {
@@ -108,7 +109,7 @@ impl SpecialForm for ExpandForm {
         // Check that we have exactly one argument
         match args {
             Value::Pair(pair) => {
-                if !matches!(pair.1, Value::Null) {
+                if !matches!(pair.borrow().1, Value::Null) {
                     Err(EvalError::InvalidSyntax(
                         "expand expects exactly one argument".to_string(),
                     ))

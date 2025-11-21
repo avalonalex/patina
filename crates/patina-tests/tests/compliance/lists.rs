@@ -217,3 +217,106 @@ fn test_for_each_multiple_lists() {
         "21",
     );
 }
+
+// 6.4 Mutation primitives
+#[test]
+fn test_set_car() {
+    assert_program_eval_to(
+        r#"
+        (define p (cons 1 2))
+        (set-car! p 10)
+        (car p)
+        "#,
+        "10",
+    );
+}
+
+#[test]
+fn test_set_cdr() {
+    assert_program_eval_to(
+        r#"
+        (define p (cons 1 2))
+        (set-cdr! p 20)
+        (cdr p)
+        "#,
+        "20",
+    );
+}
+
+#[test]
+fn test_set_car_list() {
+    // set-car! on a list
+    assert_program_eval_to(
+        r#"
+        (define lst (list 'a 'b 'c))
+        (set-car! lst 'x)
+        lst
+        "#,
+        "(x b c)",
+    );
+}
+
+#[test]
+fn test_set_cdr_list() {
+    // set-cdr! on a list replaces the tail
+    assert_program_eval_to(
+        r#"
+        (define lst (list 'a 'b 'c))
+        (set-cdr! lst '(y z))
+        lst
+        "#,
+        "(a y z)",
+    );
+}
+
+#[test]
+fn test_list_set() {
+    assert_program_eval_to(
+        r#"
+        (define lst (list 0 1 2 3 4))
+        (list-set! lst 2 'x)
+        lst
+        "#,
+        "(0 1 x 3 4)",
+    );
+}
+
+#[test]
+fn test_list_set_first() {
+    // list-set! at index 0
+    assert_program_eval_to(
+        r#"
+        (define lst (list 'a 'b 'c))
+        (list-set! lst 0 'x)
+        lst
+        "#,
+        "(x b c)",
+    );
+}
+
+#[test]
+fn test_list_set_last() {
+    // list-set! at last index
+    assert_program_eval_to(
+        r#"
+        (define lst (list 'a 'b 'c))
+        (list-set! lst 2 'z)
+        lst
+        "#,
+        "(a b z)",
+    );
+}
+
+#[test]
+fn test_mutation_sharing() {
+    // Verify mutation is visible through shared references
+    assert_program_eval_to(
+        r#"
+        (define x (list 'a 'b 'c))
+        (define y x)
+        (set-car! x 'z)
+        (car y)
+        "#,
+        "z",
+    );
+}

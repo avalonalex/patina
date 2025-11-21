@@ -84,8 +84,9 @@ impl SpecialForm for ApplyForm {
         // Convert the last argument (list) to a vector and append to final_args
         let mut current = last_arg.clone();
         while let Value::Pair(pair) = current {
-            final_args.push(pair.0.clone());
-            current = pair.1.clone();
+            let borrowed = pair.borrow();
+            final_args.push(borrowed.0.clone());
+            current = borrowed.1.clone();
         }
 
         // Check that the last argument was a proper list
@@ -104,7 +105,7 @@ impl SpecialForm for ApplyForm {
         match args {
             Value::Pair(pair1) => {
                 // First argument (procedure) exists
-                match &pair1.1 {
+                match &pair1.borrow().1 {
                     Value::Pair(_) => Ok(()), // At least 2 arguments
                     _ => Err(EvalError::InvalidSyntax(
                         "apply expects at least 2 arguments".to_string(),

@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-20 12:29:04
+**Generated:** 2025-11-21 00:07:47
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 619 | 81.3% |
-| ❌ Failed | 34 | 4.5% |
-| ⚠️ Error (crashed) | 108 | 14.2% |
-| **Total** | **761** | **100%** |
+| ✅ Passed | 313 | 78.6% |
+| ❌ Failed | 25 | 6.3% |
+| ⚠️ Error (crashed) | 60 | 15.1% |
+| **Total** | **398** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -19,14 +19,6 @@
 ### Test Failures
 
 ```
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -118,54 +110,6 @@ Error: Invalid syntax: Unknown primitive: numerator
 Error: Invalid syntax: Unknown primitive: denominator
 Error: Undefined variable: .3
 Error: Undefined variable: .3
-Error: Undefined variable: set-cdr!
-Error: Undefined variable: set-cdr!
-Error: Undefined variable: list-set!
-Error: Invalid syntax: Unknown primitive: member
-Error: Invalid syntax: Unknown primitive: assoc
-Error: Undefined variable: symbol=?
-Error: Undefined variable: symbol=?
-Error: Undefined variable: symbol=?
-Error: Undefined variable: symbol=?
-Error: Undefined variable: symbol->string
-Error: Undefined variable: symbol->string
-Error: Undefined variable: symbol->string
-Error: Undefined variable: string->symbol
-Error: Undefined variable: string->symbol
-Error: Undefined variable: string->symbol
-Error: Undefined variable: symbol->string
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector-length
-Error: Undefined variable: bytevector-length
-Error: Undefined variable: bytevector-length
-Error: Undefined variable: bytevector-length
-Error: Undefined variable: bytevector-u8-ref
-Error: Undefined variable: bytevector-u8-ref
-Error: Undefined variable: bytevector-u8-ref
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector-copy
-Error: Undefined variable: bytevector-copy
-Error: Undefined variable: bytevector-copy
-Error: Undefined variable: bytevector-copy
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
-Error: Invalid syntax: Invalid byte value
 ```
 
 

@@ -7,6 +7,7 @@
 //! - Only free identifiers in templates are renamed
 
 use patina_runtime::Value;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -187,16 +188,17 @@ fn collect_free_identifiers(
             }
         }
         Value::Pair(pair) => {
+            let borrowed = pair.borrow();
             // Check if this is a quote form - if so, don't recurse into it
             // Quote forms are literal data and should not have identifiers renamed
-            if let Value::Symbol(sym) = &pair.0
+            if let Value::Symbol(sym) = &borrowed.0
                 && sym.as_ref() == "quote"
             {
                 return; // Don't collect identifiers inside quote
             }
 
-            collect_free_identifiers(&pair.0, pattern_vars, env, free_ids);
-            collect_free_identifiers(&pair.1, pattern_vars, env, free_ids);
+            collect_free_identifiers(&borrowed.0, pattern_vars, env, free_ids);
+            collect_free_identifiers(&borrowed.1, pattern_vars, env, free_ids);
         }
         Value::Vector(vec) => {
             for item in vec.borrow().iter() {
@@ -230,17 +232,18 @@ fn rename_identifiers(
             }
         }
         Value::Pair(pair) => {
+            let borrowed = pair.borrow();
             // Check if this is a quote form - if so, don't rename inside it
             // Quote forms are literal data and should not be modified
-            if let Value::Symbol(sym) = &pair.0
+            if let Value::Symbol(sym) = &borrowed.0
                 && sym.as_ref() == "quote"
             {
                 return expr.clone(); // Return quote form unchanged
             }
 
-            let car = rename_identifiers(&pair.0, renamings);
-            let cdr = rename_identifiers(&pair.1, renamings);
-            Value::Pair(Rc::new((car, cdr)))
+            let car = rename_identifiers(&borrowed.0, renamings);
+            let cdr = rename_identifiers(&borrowed.1, renamings);
+            Value::Pair(Rc::new(RefCell::new((car, cdr))))
         }
         Value::Vector(vec) => {
             let renamed_items: Vec<Value> = vec
@@ -375,9 +378,9 @@ mod tests {
 
         // Check that 'let' was renamed but 'x' was not
         if let Value::Pair(pair) = renamed {
-            assert!(matches!(pair.0, Value::Symbol(ref s) if s.as_ref() == "##let#0"));
-            if let Value::Pair(inner) = &pair.1 {
-                assert!(matches!(inner.0, Value::Symbol(ref s) if s.as_ref() == "x"));
+            assert!(matches!(pair.borrow().0, Value::Symbol(ref s) if s.as_ref() == "##let#0"));
+            if let Value::Pair(inner) = &pair.borrow().1 {
+                assert!(matches!(inner.borrow().0, Value::Symbol(ref s) if s.as_ref() == "x"));
             }
         } else {
             panic!("Expected pair");
@@ -404,7 +407,7 @@ mod tests {
 
         // Extract first symbol - should be gensym
         if let Value::Pair(pair) = hygienic {
-            if let Value::Symbol(sym) = &pair.0 {
+            if let Value::Symbol(sym) = &pair.borrow().0 {
                 assert!(is_gensym(sym.as_ref()));
                 assert!(sym.starts_with("##foo#"));
             } else {
@@ -412,10 +415,10 @@ mod tests {
             }
 
             // Check that pattern vars weren't renamed
-            if let Value::Pair(inner1) = &pair.1 {
-                assert!(matches!(inner1.0, Value::Symbol(ref s) if s.as_ref() == "test"));
-                if let Value::Pair(inner2) = &inner1.1 {
-                    assert!(matches!(inner2.0, Value::Symbol(ref s) if s.as_ref() == "body"));
+            if let Value::Pair(inner1) = &pair.borrow().1 {
+                assert!(matches!(inner1.borrow().0, Value::Symbol(ref s) if s.as_ref() == "test"));
+                if let Value::Pair(inner2) = &inner1.borrow().1 {
+                    assert!(matches!(inner2.borrow().0, Value::Symbol(ref s) if s.as_ref() == "body"));
                 }
             }
         } else {
@@ -428,6 +431,6 @@ mod tests {
         items
             .into_iter()
             .rev()
-            .fold(Value::Null, |acc, val| Value::Pair(Rc::new((val, acc))))
+            .fold(Value::Null, |acc, val| Value::Pair(Rc::new(RefCell::new((val, acc)))))
     }
 }

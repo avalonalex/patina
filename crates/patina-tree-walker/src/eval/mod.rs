@@ -969,9 +969,13 @@ impl Evaluator {
                             return Ok((params, Some(s.to_string())));
                         }
                         Value::Pair(pair) => {
-                            if let Value::Symbol(param) = &pair.0 {
+                            let (car, cdr) = {
+                                let pair_ref = pair.borrow();
+                                (pair_ref.0.clone(), pair_ref.1.clone())
+                            };
+                            if let Value::Symbol(param) = &car {
                                 params.push(param.to_string());
-                                current = pair.1.clone();
+                                current = cdr;
                             } else {
                                 return Err(EvalError::InvalidSyntax(
                                     "lambda parameters must be symbols".to_string(),
@@ -1001,8 +1005,9 @@ impl Evaluator {
         let mut current = list.clone();
 
         while let Value::Pair(pair) = current {
-            items.push(pair.0.clone());
-            current = pair.1.clone();
+            let pair_ref = pair.borrow();
+            items.push(pair_ref.0.clone());
+            current = pair_ref.1.clone();
         }
 
         if !matches!(current, Value::Null) {
@@ -1150,8 +1155,9 @@ impl Evaluator {
         let mut current = expr.clone();
 
         while let Value::Pair(rule_pair) = current {
+            let rule_pair_ref = rule_pair.borrow();
             // Each rule is (pattern template)
-            let (pattern, template_list) = self.extract_pair(&rule_pair.0)?;
+            let (pattern, template_list) = self.extract_pair(&rule_pair_ref.0)?;
             let (template, rest_of_rule) = self.extract_pair(&template_list)?;
 
             // Verify no extra elements in the rule
@@ -1163,7 +1169,7 @@ impl Evaluator {
             }
 
             rules.push((pattern, template));
-            current = rule_pair.1.clone();
+            current = rule_pair_ref.1.clone();
         }
 
         if !matches!(current, Value::Null) {
@@ -1187,7 +1193,8 @@ impl Evaluator {
         let mut current = expr.clone();
 
         while let Value::Pair(pair) = current {
-            match &pair.0 {
+            let pair_ref = pair.borrow();
+            match &pair_ref.0 {
                 Value::Symbol(s) => literals.push(s.clone()),
                 _ => {
                     return Err(EvalError::InvalidSyntax(
@@ -1195,7 +1202,7 @@ impl Evaluator {
                     ));
                 }
             }
-            current = pair.1.clone();
+            current = pair_ref.1.clone();
         }
 
         if !matches!(current, Value::Null) {
@@ -1212,7 +1219,10 @@ impl Evaluator {
     /// This is a common operation in special forms to parse argument lists.
     pub(crate) fn extract_pair(&self, expr: &Value) -> Result<(Value, Value), EvalError> {
         match expr {
-            Value::Pair(pair) => Ok((pair.0.clone(), pair.1.clone())),
+            Value::Pair(pair) => {
+                let pair_ref = pair.borrow();
+                Ok((pair_ref.0.clone(), pair_ref.1.clone()))
+            }
             _ => Err(EvalError::InvalidSyntax("Expected a pair".to_string())),
         }
     }

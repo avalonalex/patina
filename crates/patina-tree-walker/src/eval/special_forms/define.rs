@@ -139,13 +139,14 @@ impl SpecialForm for DefineForm {
         match args {
             Value::Pair(pair1) => {
                 // First argument exists (name or (name params...))
-                match &pair1.0 {
+                let pair1_borrowed = pair1.borrow();
+                match &pair1_borrowed.0 {
                     Value::Symbol(_) => {
                         // Variable definition: (define name value)
                         // Check for exactly 2 arguments
-                        match &pair1.1 {
+                        match &pair1_borrowed.1 {
                             Value::Pair(pair2) => {
-                                if matches!(pair2.1, Value::Null) {
+                                if matches!(pair2.borrow().1, Value::Null) {
                                     Ok(())
                                 } else {
                                     Err(EvalError::InvalidSyntax(
@@ -161,7 +162,7 @@ impl SpecialForm for DefineForm {
                     Value::Pair(_) => {
                         // Function definition: (define (name params...) body...)
                         // Need at least body
-                        if matches!(pair1.1, Value::Null) {
+                        if matches!(pair1_borrowed.1, Value::Null) {
                             Err(EvalError::InvalidSyntax(
                                 "define: function body cannot be empty".to_string(),
                             ))

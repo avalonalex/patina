@@ -36,8 +36,9 @@ pub(super) fn map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
         let mut current = list.clone();
 
         while let Value::Pair(pair) = current {
-            items.push(pair.0.clone());
-            current = pair.1.clone();
+            let borrowed = pair.borrow();
+            items.push(borrowed.0.clone());
+            current = borrowed.1.clone();
         }
 
         if !matches!(current, Value::Null) {
@@ -97,8 +98,9 @@ pub(super) fn for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value,
         let mut current = list.clone();
 
         while let Value::Pair(pair) = current {
-            items.push(pair.0.clone());
-            current = pair.1.clone();
+            let borrowed = pair.borrow();
+            items.push(borrowed.0.clone());
+            current = borrowed.1.clone();
         }
 
         if !matches!(current, Value::Null) {

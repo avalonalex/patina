@@ -22,17 +22,21 @@ use super::super::Evaluator;
 use super::super::error::EvalError;
 use super::equality::{values_eq, values_equal, values_eqv};
 use patina_runtime::value::Value;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 pub(super) fn cons(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 2, "cons")?;
-    Ok(Value::Pair(Rc::new((args[0].clone(), args[1].clone()))))
+    Ok(Value::Pair(Rc::new(RefCell::new((
+        args[0].clone(),
+        args[1].clone(),
+    )))))
 }
 
 pub(super) fn car(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "car")?;
     match &args[0] {
-        Value::Pair(pair) => Ok(pair.0.clone()),
+        Value::Pair(pair) => Ok(pair.borrow().0.clone()),
         _ => Err(EvalError::TypeError("car expects a pair".to_string())),
     }
 }
@@ -40,7 +44,7 @@ pub(super) fn car(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
 pub(super) fn cdr(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "cdr")?;
     match &args[0] {
-        Value::Pair(pair) => Ok(pair.1.clone()),
+        Value::Pair(pair) => Ok(pair.borrow().1.clone()),
         _ => Err(EvalError::TypeError("cdr expects a pair".to_string())),
     }
 }
@@ -73,15 +77,15 @@ pub(super) fn append(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
             }
             let mut result = list.clone();
             for item in result_items.into_iter().rev() {
-                result = Value::Pair(Rc::new((item, result)));
+                result = Value::Pair(Rc::new(RefCell::new((item, result))));
             }
             return Ok(result);
         }
 
         let mut current = list.clone();
         while let Value::Pair(pair) = current {
-            result_items.push(pair.0.clone());
-            current = pair.1.clone();
+            result_items.push(pair.borrow().0.clone());
+            current = pair.borrow().1.clone();
         }
 
         if !matches!(current, Value::Null) {
@@ -159,10 +163,12 @@ pub(super) fn memq(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eva
     let mut current = args[1].clone();
 
     while let Value::Pair(pair) = current {
-        if values_eq(obj, &pair.0) {
+        let borrowed = pair.borrow();
+        if values_eq(obj, &borrowed.0) {
+            drop(borrowed);
             return Ok(Value::Pair(pair));
         }
-        current = pair.1.clone();
+        current = borrowed.1.clone();
     }
 
     Ok(Value::Boolean(false))
@@ -175,10 +181,12 @@ pub(super) fn memv(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eva
     let mut current = args[1].clone();
 
     while let Value::Pair(pair) = current {
-        if values_eqv(obj, &pair.0) {
+        let borrowed = pair.borrow();
+        if values_eqv(obj, &borrowed.0) {
+            drop(borrowed);
             return Ok(Value::Pair(pair));
         }
-        current = pair.1.clone();
+        current = borrowed.1.clone();
     }
 
     Ok(Value::Boolean(false))
@@ -197,26 +205,34 @@ pub(super) fn member(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
     let compare_proc = args.get(2);
 
     while let Value::Pair(pair) = current.clone() {
+        let (car, cdr) = {
+            let borrowed = pair.borrow();
+            (borrowed.0.clone(), borrowed.1.clone())
+        };
         let matches = if let Some(proc) = compare_proc {
             // Custom comparison not in tail position
-            let result =
-                match evaluator.apply(proc.clone(), vec![obj.clone(), pair.0.clone()], false)? {
-                    super::super::EvalResult::Value(v) => v,
-                    _ => {
-                        return Err(EvalError::InternalError(
-                            "Unexpected tail call in member comparison".to_string(),
-                        ));
-                    }
-                };
+            let result = match evaluator.apply(proc.clone(), vec![obj.clone(), car], false)? {
+                super::super::EvalResult::Value(v) => v,
+                _ => {
+                    return Err(EvalError::InternalError(
+                        "Unexpected tail call in member comparison".to_string(),
+                    ));
+                }
+            };
             result.is_truthy()
         } else {
-            values_equal(obj, &pair.0)?
+            let result = values_equal(obj, &car)?;
+            current = cdr;
+            if result {
+                return Ok(Value::Pair(pair));
+            }
+            continue;
         };
 
         if matches {
             return Ok(Value::Pair(pair));
         }
-        current = pair.1.clone();
+        current = pair.borrow().1.clone();
     }
 
     Ok(Value::Boolean(false))
@@ -229,12 +245,14 @@ pub(super) fn assq(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eva
     let mut current = args[1].clone();
 
     while let Value::Pair(pair) = current {
-        if let Value::Pair(entry) = &pair.0
-            && values_eq(obj, &entry.0)
+        let borrowed = pair.borrow();
+        if let Value::Pair(entry) = &borrowed.0
+            && values_eq(obj, &entry.borrow().0)
         {
-            return Ok(pair.0.clone());
+            let result = borrowed.0.clone();
+            return Ok(result);
         }
-        current = pair.1.clone();
+        current = borrowed.1.clone();
     }
 
     Ok(Value::Boolean(false))
@@ -246,14 +264,15 @@ pub(super) fn assv(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eva
     let obj = &args[0];
     let mut current = args[1].clone();
 
-    while let Value::Pair(pair) = current
-        && let Value::Pair(entry) = &pair.0
-    {
-        if values_eqv(obj, &entry.0) {
-            return Ok(pair.0.clone());
+    while let Value::Pair(pair) = current {
+        let borrowed = pair.borrow();
+        if let Value::Pair(entry) = &borrowed.0
+            && values_eqv(obj, &entry.borrow().0)
+        {
+            let result = borrowed.0.clone();
+            return Ok(result);
         }
-
-        current = pair.1.clone();
+        current = borrowed.1.clone();
     }
 
     Ok(Value::Boolean(false))
@@ -272,31 +291,33 @@ pub(super) fn assoc(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
     let compare_proc = args.get(2);
 
     while let Value::Pair(pair) = current.clone() {
-        if let Value::Pair(entry) = &pair.0 {
+        let (entry_opt, cdr) = {
+            let borrowed = pair.borrow();
+            (borrowed.0.clone(), borrowed.1.clone())
+        };
+        if let Value::Pair(entry) = &entry_opt {
+            let entry_car = entry.borrow().0.clone();
             let matches = if let Some(proc) = compare_proc {
                 // Custom comparison not in tail position
-                let result = match evaluator.apply(
-                    proc.clone(),
-                    vec![obj.clone(), entry.0.clone()],
-                    false,
-                )? {
-                    super::super::EvalResult::Value(v) => v,
-                    _ => {
-                        return Err(EvalError::InternalError(
-                            "Unexpected tail call in assoc comparison".to_string(),
-                        ));
-                    }
-                };
+                let result =
+                    match evaluator.apply(proc.clone(), vec![obj.clone(), entry_car], false)? {
+                        super::super::EvalResult::Value(v) => v,
+                        _ => {
+                            return Err(EvalError::InternalError(
+                                "Unexpected tail call in assoc comparison".to_string(),
+                            ));
+                        }
+                    };
                 result.is_truthy()
             } else {
-                values_equal(obj, &entry.0)?
+                values_equal(obj, &entry_car)?
             };
 
             if matches {
-                return Ok(pair.0.clone());
+                return Ok(Value::Pair(entry.clone()));
             }
         }
-        current = pair.1.clone();
+        current = cdr;
     }
 
     Ok(Value::Boolean(false))
@@ -318,12 +339,12 @@ pub(super) fn make_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
             return Err(EvalError::TypeError(format!(
                 "make-list: length must be non-negative, got {}",
                 n
-            )))
+            )));
         }
         _ => {
             return Err(EvalError::TypeError(
                 "make-list: first argument must be an integer".to_string(),
-            ))
+            ));
         }
     };
 
@@ -365,8 +386,8 @@ pub(super) fn list_copy(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
 
     // Collect all pairs
     while let Value::Pair(pair) = current {
-        let car = pair.0.clone();
-        let cdr = pair.1.clone();
+        let car = pair.borrow().0.clone();
+        let cdr = pair.borrow().1.clone();
         result_pairs.push((car, cdr.clone()));
         current = cdr;
     }
@@ -377,10 +398,101 @@ pub(super) fn list_copy(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
     // Build the copied list from right to left
     let mut result = final_cdr;
     for (car, _) in result_pairs.into_iter().rev() {
-        result = Value::Pair(Rc::new((car, result)));
+        result = Value::Pair(Rc::new(RefCell::new((car, result))));
     }
 
     Ok(result)
+}
+
+/// (set-car! pair obj) - Mutate the car of a pair
+pub(super) fn set_car(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    if args.len() != 2 {
+        return Err(EvalError::WrongArity {
+            expected: "2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    match &args[0] {
+        Value::Pair(pair) => {
+            pair.borrow_mut().0 = args[1].clone();
+            Ok(Value::Unspecified)
+        }
+        _ => Err(EvalError::TypeError(
+            "set-car!: first argument must be a pair".to_string(),
+        )),
+    }
+}
+
+/// (set-cdr! pair obj) - Mutate the cdr of a pair
+pub(super) fn set_cdr(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    if args.len() != 2 {
+        return Err(EvalError::WrongArity {
+            expected: "2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    match &args[0] {
+        Value::Pair(pair) => {
+            pair.borrow_mut().1 = args[1].clone();
+            Ok(Value::Unspecified)
+        }
+        _ => Err(EvalError::TypeError(
+            "set-cdr!: first argument must be a pair".to_string(),
+        )),
+    }
+}
+
+/// (list-set! list k obj) - Set the k-th element of a list to obj
+pub(super) fn list_set(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    if args.len() != 3 {
+        return Err(EvalError::WrongArity {
+            expected: "3".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let index = match &args[1] {
+        Value::Integer(n) if *n >= 0 => *n as usize,
+        Value::Integer(n) => {
+            return Err(EvalError::TypeError(format!(
+                "list-set!: index must be non-negative, got {}",
+                n
+            )));
+        }
+        _ => {
+            return Err(EvalError::TypeError(
+                "list-set!: second argument must be an integer".to_string(),
+            ));
+        }
+    };
+
+    let mut current = args[0].clone();
+    for i in 0..index {
+        match current {
+            Value::Pair(pair) => {
+                current = pair.borrow().1.clone();
+            }
+            _ => {
+                return Err(EvalError::TypeError(format!(
+                    "list-set!: index {} out of bounds (list has {} elements)",
+                    index, i
+                )));
+            }
+        }
+    }
+
+    match current {
+        Value::Pair(pair) => {
+            pair.borrow_mut().0 = args[2].clone();
+            Ok(Value::Unspecified)
+        }
+        _ => Err(EvalError::TypeError(format!(
+            "list-set!: index {} out of bounds",
+            index
+        ))),
+    }
 }
 
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
@@ -539,5 +651,32 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         Arity::Exact(1),
         "Returns a newly allocated copy of list. Only the top level of structure is copied.",
         |eval, args, _tail| list_copy(eval, args).map(EvalResult::Value),
+    ));
+
+    // set-car! - Mutate car of pair
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "set-car!",
+        Arity::Exact(2),
+        "Stores obj in the car field of pair.",
+        |eval, args, _tail| set_car(eval, args).map(EvalResult::Value),
+    ));
+
+    // set-cdr! - Mutate cdr of pair
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "set-cdr!",
+        Arity::Exact(2),
+        "Stores obj in the cdr field of pair.",
+        |eval, args, _tail| set_cdr(eval, args).map(EvalResult::Value),
+    ));
+
+    // list-set! - Set element at index
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "list-set!",
+        Arity::Exact(3),
+        "Stores obj in the kth element of list.",
+        |eval, args, _tail| list_set(eval, args).map(EvalResult::Value),
     ));
 }

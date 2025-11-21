@@ -157,7 +157,8 @@ fn eval_let_syntax_impl(
 
     while let Value::Pair(pair) = current {
         // Each binding should be (name transformer)
-        let binding = &pair.0;
+        let pair_borrowed = pair.borrow();
+        let binding = &pair_borrowed.0;
         let (name_expr, trans_rest) = evaluator.extract_pair(binding)?;
         let (transformer_expr, trans_rest2) = evaluator.extract_pair(&trans_rest)?;
 
@@ -186,7 +187,7 @@ fn eval_let_syntax_impl(
 
         macro_bindings.push((name.clone(), compiled_macro));
 
-        current = pair.1.clone();
+        current = pair_borrowed.1.clone();
     }
 
     // Bindings must be a proper list
@@ -225,22 +226,26 @@ fn eval_let_syntax_impl(
     let mut current = rest;
     let mut result = Value::Unspecified;
 
-    while let Value::Pair(pair) = &current {
-        if matches!(pair.1, Value::Null) {
+    while let Value::Pair(pair) = current.clone() {
+        let (car, cdr) = {
+            let pair_borrowed = pair.borrow();
+            (pair_borrowed.0.clone(), pair_borrowed.1.clone())
+        };
+        if matches!(cdr, Value::Null) {
             // Last expression - in tail position if let-syntax is
             if in_tail_position {
                 return Ok(EvalResult::TailCall {
-                    expr: pair.0.clone(),
+                    expr: car,
                     env: body_env.clone(),
                 });
             } else {
-                result = evaluator.eval_in_env(&pair.0, &body_env)?;
+                result = evaluator.eval_in_env(&car, &body_env)?;
                 break;
             }
         } else {
             // Not last expression - NOT in tail position
-            result = evaluator.eval_in_env(&pair.0, &body_env)?;
-            current = pair.1.clone();
+            result = evaluator.eval_in_env(&car, &body_env)?;
+            current = cdr;
         }
     }
 
@@ -252,15 +257,16 @@ fn validate_let_syntax_syntax(args: &Value) -> Result<(), EvalError> {
     // Must have at least bindings and one body expression
     match args {
         Value::Pair(pair1) => {
+            let pair1_borrowed = pair1.borrow();
             // First argument is bindings - must be a list
-            if !matches!(pair1.0, Value::Pair(_) | Value::Null) {
+            if !matches!(pair1_borrowed.0, Value::Pair(_) | Value::Null) {
                 return Err(EvalError::InvalidSyntax(
                     "Macro bindings must be a list".to_string(),
                 ));
             }
 
             // Must have at least one body expression
-            if matches!(pair1.1, Value::Null) {
+            if matches!(pair1_borrowed.1, Value::Null) {
                 return Err(EvalError::InvalidSyntax("Body cannot be empty".to_string()));
             }
 

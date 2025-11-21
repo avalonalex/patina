@@ -485,20 +485,20 @@ impl Matcher {
 
         // Match the fixed patterns
         for pattern in patterns {
-            match &current {
-                Value::Pair(p) => {
-                    let (car, cdr) = &**p;
-                    self.match_impl(pattern, car, env, level)?;
-                    current = cdr.clone();
-                    matched_count += 1;
-                }
-                _ => {
-                    return Err(MatchError::TooFewElements {
-                        pattern: "dotted list".to_string(),
-                        expected: patterns.len(),
-                        actual: matched_count,
-                    });
-                }
+            if let Value::Pair(p) = current {
+                let borrowed = p.borrow();
+                let car = borrowed.0.clone();
+                let cdr = borrowed.1.clone();
+                drop(borrowed);
+                self.match_impl(pattern, &car, env, level)?;
+                current = cdr;
+                matched_count += 1;
+            } else {
+                return Err(MatchError::TooFewElements {
+                    pattern: "dotted list".to_string(),
+                    expected: patterns.len(),
+                    actual: matched_count,
+                });
             }
         }
 
@@ -538,9 +538,9 @@ impl Matcher {
             match current {
                 Value::Null => break,
                 Value::Pair(p) => {
-                    let (car, cdr) = &*p;
-                    result.push(car.clone());
-                    current = cdr.clone();
+                    let borrowed = p.borrow();
+                    result.push(borrowed.0.clone());
+                    current = borrowed.1.clone();
                 }
                 _ => {
                     // Improper list - not supported here
@@ -709,13 +709,14 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     // Helper to create a list from values
     fn make_list(values: Vec<Value>) -> Value {
         let mut result = Value::Null;
         for value in values.into_iter().rev() {
-            result = Value::Pair(Rc::new((value, result)));
+            result = Value::Pair(Rc::new(RefCell::new((value, result))));
         }
         result
     }

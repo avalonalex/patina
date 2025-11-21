@@ -509,18 +509,19 @@ impl Compiler {
         expr: &Value,
     ) -> Result<(Vec<Value>, Option<Value>), FrontendError> {
         let mut items = Vec::new();
-        let mut current = expr;
+        let mut current = expr.clone();
 
         loop {
             match current {
                 Value::Null => return Ok((items, None)),
                 Value::Pair(pair) => {
-                    items.push(pair.0.clone());
-                    current = &pair.1;
+                    let borrowed = pair.borrow();
+                    items.push(borrowed.0.clone());
+                    current = borrowed.1.clone();
                 }
                 _ => {
                     // Improper list: (a b . c)
-                    return Ok((items, Some(current.clone())));
+                    return Ok((items, Some(current)));
                 }
             }
         }
@@ -591,6 +592,7 @@ impl Compiler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     /// Helper to create a symbol
     fn sym(s: &str) -> Value {
@@ -602,7 +604,7 @@ mod tests {
         items
             .into_iter()
             .rev()
-            .fold(Value::Null, |acc, val| Value::Pair(Rc::new((val, acc))))
+            .fold(Value::Null, |acc, val| Value::Pair(Rc::new(RefCell::new((val, acc)))))
     }
 
     #[test]
