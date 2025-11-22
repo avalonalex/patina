@@ -6,11 +6,6 @@
 //! 3. Vector patterns with ellipsis
 //! 4. Zero-element ellipsis matching in complex contexts
 //!
-//! Most of these tests are currently marked #[ignore] because the features
-//! are not yet implemented. They serve as:
-//! - Documentation of expected behavior
-//! - Test-driven development targets
-//! - Regression prevention once implemented
 
 use crate::Parser;
 use patina_runtime::Value;
@@ -54,7 +49,6 @@ fn test_ellipsis_in_middle_simple() {
 }
 
 #[test]
-#[ignore] // Not yet implemented - This is the part-2x pattern from chibi!
 fn test_part_2x_from_chibi() {
     // Exact pattern from chibi-scheme r7rs-tests.scm
     let macro_def = r#"
@@ -77,7 +71,6 @@ fn test_part_2x_from_chibi() {
 }
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_ellipsis_in_middle_with_nested_pattern() {
     // Simplified version of part-2x without dotted tail
     let macro_def = r#"
@@ -91,7 +84,6 @@ fn test_ellipsis_in_middle_with_nested_pattern() {
 }
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_ellipsis_in_middle_multiple_fixed_after() {
     // Pattern with multiple fixed elements after ellipsis
     let macro_def = r#"
@@ -127,7 +119,6 @@ fn test_ellipsis_with_dotted_tail_simple() {
 }
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_ellipsis_with_dotted_tail_and_fixed() {
     // Pattern: (a b ... x y . rest) - complex combination
     let macro_def = r#"
@@ -141,7 +132,6 @@ fn test_ellipsis_with_dotted_tail_and_fixed() {
 }
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_ellipsis_with_empty_dotted_tail() {
     // Edge case: no elements before the dot
     let macro_def = r#"
@@ -159,7 +149,6 @@ fn test_ellipsis_with_empty_dotted_tail() {
 // ============================================================================
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_vector_pattern_with_ellipsis() {
     let macro_def = r#"
         (define-syntax vec-pattern
@@ -172,7 +161,6 @@ fn test_vector_pattern_with_ellipsis() {
 }
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_vector_pattern_ellipsis_in_middle() {
     let macro_def = r#"
         (define-syntax vec-middle
@@ -185,7 +173,6 @@ fn test_vector_pattern_ellipsis_in_middle() {
 }
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_nested_vector_with_ellipsis() {
     let macro_def = r#"
         (define-syntax nested-vec
@@ -202,7 +189,6 @@ fn test_nested_vector_with_ellipsis() {
 // ============================================================================
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_zero_element_ellipsis_with_fixed_after() {
     // No elements matched by ellipsis, but fixed elements present
     let macro_def = r#"
@@ -216,7 +202,6 @@ fn test_zero_element_ellipsis_with_fixed_after() {
 }
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_zero_element_nested_ellipsis() {
     // Zero elements in nested pattern
     let macro_def = r#"
@@ -230,7 +215,6 @@ fn test_zero_element_nested_ellipsis() {
 }
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_zero_element_with_dotted_tail() {
     let macro_def = r#"
         (define-syntax zero-dotted
@@ -243,7 +227,6 @@ fn test_zero_element_with_dotted_tail() {
 }
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_multiple_ellipsis_with_zero_elements() {
     // Multiple ellipsis patterns, some matching zero elements
     let macro_def = r#"
@@ -261,7 +244,6 @@ fn test_multiple_ellipsis_with_zero_elements() {
 // ============================================================================
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_all_features_combined() {
     // The ultimate stress test: ellipsis in middle + dotted tail + nested pattern + zero elements possible
     let macro_def = r#"
@@ -351,7 +333,6 @@ fn test_simple_dotted_pattern_no_ellipsis() {
 // ============================================================================
 
 #[test]
-#[ignore] // Not yet implemented
 fn test_match_macro_style_pattern() {
     // Pattern style commonly seen in match/pattern matching libraries
     let macro_def = r#"
