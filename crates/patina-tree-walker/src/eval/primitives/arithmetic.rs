@@ -106,6 +106,87 @@ impl NumericValue {
         }
     }
 
+    /// Check if a numeric value is NaN
+    fn is_nan(&self) -> bool {
+        match self {
+            NumericValue::Real(f) => f.is_nan(),
+            NumericValue::Complex(parts) => {
+                let (r, i) = &**parts;
+                r.is_nan() || i.is_nan()
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a numeric value is inexact (Real or Complex)
+    fn is_inexact(&self) -> bool {
+        matches!(self, NumericValue::Real(_) | NumericValue::Complex(_))
+    }
+
+    /// Convert a numeric value to inexact (Real)
+    fn to_inexact(&self) -> NumericValue {
+        match self {
+            NumericValue::Real(_) | NumericValue::Complex(_) => self.clone(), // Already inexact
+            _ => NumericValue::Real(self.to_f64()),
+        }
+    }
+
+    /// Compare if this number is greater than another
+    /// Returns false if either is NaN or if they can't be compared
+    fn greater_than(&self, other: &NumericValue) -> bool {
+        // Can't compare complex numbers or NaN
+        if self.is_nan() || other.is_nan() {
+            return false;
+        }
+        if matches!(self, NumericValue::Complex(_)) || matches!(other, NumericValue::Complex(_)) {
+            return false;
+        }
+
+        // Convert both to comparable form (BigRational or f64)
+        match (self, other) {
+            // If either is Real, use float comparison
+            (NumericValue::Real(_), _) | (_, NumericValue::Real(_)) => {
+                let a = self.to_f64();
+                let b = other.to_f64();
+                a > b
+            }
+            // Both exact - use rational comparison
+            _ => {
+                let a = self.to_rational();
+                let b = other.to_rational();
+                a > b
+            }
+        }
+    }
+
+    /// Compare if this number is less than another
+    /// Returns false if either is NaN or if they can't be compared
+    fn less_than(&self, other: &NumericValue) -> bool {
+        // Can't compare complex numbers or NaN
+        if self.is_nan() || other.is_nan() {
+            return false;
+        }
+        if matches!(self, NumericValue::Complex(_)) || matches!(other, NumericValue::Complex(_)) {
+            return false;
+        }
+
+        // Convert both to comparable form (BigRational or f64)
+        match (self, other) {
+            // If either is Real, use float comparison
+            (NumericValue::Real(_), _) | (_, NumericValue::Real(_)) => {
+                let a = self.to_f64();
+                let b = other.to_f64();
+                a < b
+            }
+            // Both exact - use rational comparison
+            _ => {
+                let a = self.to_rational();
+                let b = other.to_rational();
+                a < b
+            }
+        }
+    }
+
     /// Construct a complex number from real and imaginary parts
     /// Returns error if either component is itself complex (R7RS requires real components)
     #[allow(dead_code)]
@@ -329,6 +410,13 @@ impl Evaluator {
                 })?;
                 Ok((ratio, false))
             }
+            Value::Complex(_, _) => {
+                // Complex numbers are not ordered, so they can't be compared with <, >, etc.
+                // Only = works with complex numbers
+                Err(EvalError::TypeError(
+                    "Cannot order complex numbers (use = for equality)".to_string(),
+                ))
+            }
             other => Err(EvalError::TypeError(format!(
                 "Expected number, got {}",
                 other.type_name()
@@ -349,13 +437,76 @@ impl Evaluator {
         self.check_arity_min(&args, 2, op_name)?;
 
         for i in 0..args.len() - 1 {
-            let (a, _) = self.value_to_comparable(&args[i])?;
-            let (b, _) = self.value_to_comparable(&args[i + 1])?;
-            if !op(&a, &b) {
+            // Check for NaN - comparisons with NaN always return #f
+            if Self::is_nan(&args[i]) || Self::is_nan(&args[i + 1]) {
                 return Ok(Value::Boolean(false));
+            }
+
+            // Handle infinity comparisons using NumericValue which supports infinity
+            let has_infinity = match (&args[i], &args[i + 1]) {
+                (Value::Real(a), _) if a.is_infinite() => true,
+                (_, Value::Real(b)) if b.is_infinite() => true,
+                _ => false,
+            };
+
+            if has_infinity {
+                // Use NumericValue comparison which handles infinity correctly
+                let a_num = NumericValue::from_value(args[i].clone())?;
+                let b_num = NumericValue::from_value(args[i + 1].clone())?;
+
+                // Convert to f64 for comparison (this handles infinity)
+                let a_f64 = a_num.to_f64();
+                let b_f64 = b_num.to_f64();
+
+                // Create rationals from the f64s for the comparison function
+                // For infinity, this won't work, so we do direct f64 comparison
+                use num_rational::Ratio;
+                let (a_rat, b_rat) = if a_f64.is_infinite() || b_f64.is_infinite() {
+                    // For infinity, create dummy rationals and do direct comparison
+                    let result = match op_name {
+                        "<" => a_f64 < b_f64,
+                        ">" => a_f64 > b_f64,
+                        "<=" => a_f64 <= b_f64,
+                        ">=" => a_f64 >= b_f64,
+                        _ => {
+                            return Err(EvalError::TypeError(format!(
+                                "Unknown comparison operator: {}",
+                                op_name
+                            )));
+                        }
+                    };
+                    if !result {
+                        return Ok(Value::Boolean(false));
+                    }
+                    continue;
+                } else {
+                    (
+                        Ratio::from_float(a_f64).unwrap(),
+                        Ratio::from_float(b_f64).unwrap(),
+                    )
+                };
+
+                if !op(&a_rat, &b_rat) {
+                    return Ok(Value::Boolean(false));
+                }
+            } else {
+                // Regular rational comparison (no infinity)
+                let (a, _) = self.value_to_comparable(&args[i])?;
+                let (b, _) = self.value_to_comparable(&args[i + 1])?;
+                if !op(&a, &b) {
+                    return Ok(Value::Boolean(false));
+                }
             }
         }
         Ok(Value::Boolean(true))
+    }
+
+    /// Check if a value is NaN
+    fn is_nan(v: &Value) -> bool {
+        match v {
+            Value::Real(f) => f.is_nan(),
+            _ => false,
+        }
     }
 }
 
@@ -487,7 +638,70 @@ pub(super) fn divide(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
 }
 
 pub(super) fn numeric_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.primitive_numeric_compare(args, |a, b| a == b, "=")
+    evaluator.check_arity_min(&args, 2, "=")?;
+
+    // Handle complex numbers specially since they can't use value_to_comparable
+    for i in 0..args.len() - 1 {
+        // NaN is never equal to anything, including itself
+        // Infinity can be equal to infinity
+        if Evaluator::is_nan(&args[i]) || Evaluator::is_nan(&args[i + 1]) {
+            return Ok(Value::Boolean(false));
+        }
+
+        let equal = match (&args[i], &args[i + 1]) {
+            // If either is complex, use complex equality
+            (Value::Complex(r1, i1), Value::Complex(r2, i2)) => {
+                // NaN in complex numbers
+                if r1.is_nan() || i1.is_nan() || r2.is_nan() || i2.is_nan() {
+                    false
+                } else {
+                    r1 == r2 && i1 == i2
+                }
+            }
+            (Value::Complex(r, i), other) | (other, Value::Complex(r, i)) => {
+                // Complex number equals real if imaginary part is 0
+                if i.is_nan() || r.is_nan() {
+                    false
+                } else if *i == 0.0 {
+                    // Compare real part with the other number
+                    match evaluator.value_to_comparable(other) {
+                        Ok((rat, _)) => {
+                            use num_rational::Ratio;
+                            let r_rat = Ratio::from_float(*r);
+                            r_rat.is_some_and(|rr| rr == rat)
+                        }
+                        Err(_) => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            // Both are real numbers - use standard comparison
+            (a, b) => {
+                // Handle infinity specially (can't convert to rational)
+                let a_is_inf = matches!(a, Value::Real(f) if f.is_infinite());
+                let b_is_inf = matches!(b, Value::Real(f) if f.is_infinite());
+
+                if a_is_inf || b_is_inf {
+                    // If either is infinity, use direct f64 comparison
+                    let a_f64 = NumericValue::from_value(a.clone())?.to_f64();
+                    let b_f64 = NumericValue::from_value(b.clone())?.to_f64();
+                    a_f64 == b_f64
+                } else {
+                    // Neither is infinity, use rational comparison
+                    let (a_rat, _) = evaluator.value_to_comparable(a)?;
+                    let (b_rat, _) = evaluator.value_to_comparable(b)?;
+                    a_rat == b_rat
+                }
+            }
+        };
+
+        if !equal {
+            return Ok(Value::Boolean(false));
+        }
+    }
+
+    Ok(Value::Boolean(true))
 }
 
 pub(super) fn less_than(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -612,65 +826,85 @@ pub(super) fn abs(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
 pub(super) fn max(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_min(&args, 1, "max")?;
 
-    let mut max_val = match &args[0] {
-        Value::Integer(n) => *n,
-        _ => {
-            return Err(EvalError::TypeError(format!(
-                "max requires integers, got {}",
-                args[0].type_name()
-            )));
-        }
-    };
+    let mut max_num = NumericValue::from_value(args[0].clone()).map_err(|_| {
+        EvalError::TypeError(format!("max expects numbers, got {}", args[0].type_name()))
+    })?;
+
+    // Track if we've seen any inexact number (for inexact contagion)
+    let mut has_inexact = max_num.is_inexact();
 
     for arg in &args[1..] {
-        match arg {
-            Value::Integer(n) => {
-                if *n > max_val {
-                    max_val = *n;
-                }
-            }
-            _ => {
-                return Err(EvalError::TypeError(format!(
-                    "max requires integers, got {}",
-                    arg.type_name()
-                )));
-            }
+        let num = NumericValue::from_value(arg.clone()).map_err(|_| {
+            EvalError::TypeError(format!("max expects numbers, got {}", arg.type_name()))
+        })?;
+
+        // Track inexact contagion
+        if num.is_inexact() {
+            has_inexact = true;
+        }
+
+        // Skip NaN arguments (they don't affect max/min)
+        if num.is_nan() {
+            continue;
+        }
+
+        // If current max is NaN, replace it with first non-NaN value
+        if max_num.is_nan() {
+            max_num = num;
+        } else if num.greater_than(&max_num) {
+            // Otherwise, update max if this number is larger
+            max_num = num;
         }
     }
 
-    Ok(Value::Integer(max_val))
+    // Apply inexact contagion if we saw any inexact numbers
+    if has_inexact && !max_num.is_inexact() {
+        max_num = max_num.to_inexact();
+    }
+
+    Ok(max_num.into_value(evaluator))
 }
 
 pub(super) fn min(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_min(&args, 1, "min")?;
 
-    let mut min_val = match &args[0] {
-        Value::Integer(n) => *n,
-        _ => {
-            return Err(EvalError::TypeError(format!(
-                "min requires integers, got {}",
-                args[0].type_name()
-            )));
-        }
-    };
+    let mut min_num = NumericValue::from_value(args[0].clone()).map_err(|_| {
+        EvalError::TypeError(format!("min expects numbers, got {}", args[0].type_name()))
+    })?;
+
+    // Track if we've seen any inexact number (for inexact contagion)
+    let mut has_inexact = min_num.is_inexact();
 
     for arg in &args[1..] {
-        match arg {
-            Value::Integer(n) => {
-                if *n < min_val {
-                    min_val = *n;
-                }
-            }
-            _ => {
-                return Err(EvalError::TypeError(format!(
-                    "min requires integers, got {}",
-                    arg.type_name()
-                )));
-            }
+        let num = NumericValue::from_value(arg.clone()).map_err(|_| {
+            EvalError::TypeError(format!("min expects numbers, got {}", arg.type_name()))
+        })?;
+
+        // Track inexact contagion
+        if num.is_inexact() {
+            has_inexact = true;
+        }
+
+        // Skip NaN arguments (they don't affect max/min)
+        if num.is_nan() {
+            continue;
+        }
+
+        // If current min is NaN, replace it with first non-NaN value
+        if min_num.is_nan() {
+            min_num = num;
+        } else if num.less_than(&min_num) {
+            // Otherwise, update min if this number is smaller
+            min_num = num;
         }
     }
 
-    Ok(Value::Integer(min_val))
+    // Apply inexact contagion if we saw any inexact numbers
+    if has_inexact && !min_num.is_inexact() {
+        min_num = min_num.to_inexact();
+    }
+
+    Ok(min_num.into_value(evaluator))
 }
 
 // ========== Rounding Functions ==========

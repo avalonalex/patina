@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-21 20:22:39
+**Generated:** 2025-11-21 21:04:29
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 657 | 84.7% |
-| ❌ Failed | 33 | 4.3% |
-| ⚠️ Error (crashed) | 86 | 11.1% |
+| ✅ Passed | 673 | 86.7% |
+| ❌ Failed | 35 | 4.5% |
+| ⚠️ Error (crashed) | 68 | 8.8% |
 | **Total** | **776** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
@@ -19,6 +19,8 @@
 ### Test Failures
 
 ```
+FAIL: 
+FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -81,24 +83,6 @@ Error: Undefined variable: pare?
 Error: Undefined variable: kar
 Error: Undefined variable: kdr
 Error: Undefined variable: kons
-Error: Invalid syntax: Unknown primitive: =
-Error: Invalid syntax: Unknown primitive: =
-Error: Invalid syntax: Unknown primitive: <
-Error: Invalid syntax: Unknown primitive: >
-Error: Invalid syntax: Unknown primitive: <
-Error: Invalid syntax: Unknown primitive: >
-Error: Invalid syntax: Unknown primitive: =
-Error: Invalid syntax: Unknown primitive: >
-Error: Invalid syntax: Unknown primitive: >
-Error: Invalid syntax: Unknown primitive: >
-Error: Invalid syntax: Unknown primitive: <
-Error: Invalid syntax: Unknown primitive: <
-Error: Invalid syntax: Unknown primitive: <
-Error: Invalid syntax: Unknown primitive: max
-Error: Invalid syntax: Unknown primitive: max
-Error: Invalid syntax: Unknown primitive: max
-Error: Invalid syntax: Unknown primitive: min
-Error: Invalid syntax: Unknown primitive: min
 Error: Undefined variable: test-values
 Error: Undefined variable: test-values
 Error: Undefined variable: test-values

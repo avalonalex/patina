@@ -776,11 +776,9 @@ Testing:
 Testing: 
 (= 1 1.0 1)
 
-Error: Invalid syntax: Unknown primitive: =
 Testing: 
 (= 1.0 1+i)
 
-Error: Invalid syntax: Unknown primitive: =
 Testing: 
 (< 1 2 3)
 
@@ -808,19 +806,15 @@ Testing:
 Testing: 
 (< +nan.0 0)
 
-Error: Invalid syntax: Unknown primitive: <
 Testing: 
 (> +nan.0 0)
 
-Error: Invalid syntax: Unknown primitive: >
 Testing: 
 (< +nan.0 0.0)
 
-Error: Invalid syntax: Unknown primitive: <
 Testing: 
 (> +nan.0 0.0)
 
-Error: Invalid syntax: Unknown primitive: >
 Testing: 
 (list (<= 1 1 2) (<= 2 1 3))
 
@@ -842,7 +836,6 @@ Testing:
 Testing: 
 (zero? 0)
 
-Error: Invalid syntax: Unknown primitive: =
 Testing: 
 (zero? 1)
 
@@ -870,15 +863,12 @@ Testing:
 Testing: 
 (positive? +inf.0)
 
-Error: Invalid syntax: Unknown primitive: >
 Testing: 
 (positive? -inf.0)
 
-Error: Invalid syntax: Unknown primitive: >
 Testing: 
 (positive? +nan.0)
 
-Error: Invalid syntax: Unknown primitive: >
 Testing: 
 (negative? 0)
 
@@ -900,15 +890,12 @@ Testing:
 Testing: 
 (negative? +inf.0)
 
-Error: Invalid syntax: Unknown primitive: <
 Testing: 
 (negative? -inf.0)
 
-Error: Invalid syntax: Unknown primitive: <
 Testing: 
 (negative? +nan.0)
 
-Error: Invalid syntax: Unknown primitive: <
 Testing: 
 (odd? 0)
 
@@ -952,15 +939,22 @@ Testing:
 Testing: 
 (max 3.9 4)
 
-Error: Invalid syntax: Unknown primitive: max
 Testing: 
 (max 5 3.9 4)
 
-Error: Invalid syntax: Unknown primitive: max
 Testing: 
 (max 100 +inf.0)
 
-Error: Invalid syntax: Unknown primitive: max
+FAIL: 
+(max 100 +inf.0)
+
+  expected: 
++inf.0
+
+  but got:  
++inf.0
+
+
 Testing: 
 (min 3)
 
@@ -970,11 +964,19 @@ Testing:
 Testing: 
 (min 3 3.1)
 
-Error: Invalid syntax: Unknown primitive: min
 Testing: 
 (min -inf.0 -100)
 
-Error: Invalid syntax: Unknown primitive: min
+FAIL: 
+(min -inf.0 -100)
+
+  expected: 
+-inf.0
+
+  but got:  
+-inf.0
+
+
 Testing: 
 (+ 3 4)
 
@@ -1416,7 +1418,7 @@ Testing:
 Testing: 
 (string->number "1 2")
 
-Tests run: 175, Passed: 159, Failed: 16
+Tests run: 193, Passed: 175, Failed: 18
 
 Running test suite: 6.3 Booleans
 Testing: 

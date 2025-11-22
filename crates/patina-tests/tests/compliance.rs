@@ -24,6 +24,10 @@ mod numbers;
 #[path = "compliance/rationals.rs"]
 mod rationals;
 
+// Section 6.2.x: Numeric Edge Cases (NaN, infinity, complex)
+#[path = "compliance/numeric_edge_cases.rs"]
+mod numeric_edge_cases;
+
 // Section 6.4: Pairs and lists
 #[path = "compliance/lists.rs"]
 mod lists;
