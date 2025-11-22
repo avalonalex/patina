@@ -69,62 +69,9 @@ impl Evaluator {
                 body,
                 env,
             }) => {
-                // Check arity
-                if variadic.is_some() {
-                    // Variadic: need at least as many args as fixed params
-                    if args.len() < params.len() {
-                        return Err(EvalError::WrongArity {
-                            expected: format!("at least {}", params.len()),
-                            actual: args.len(),
-                        });
-                    }
-                } else {
-                    // Fixed arity: need exact number of args
-                    if args.len() != params.len() {
-                        return Err(EvalError::WrongArity {
-                            expected: params.len().to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                }
-
-                // Create new environment with lambda's captured environment as parent
-                let new_env = Rc::new(Environment::with_parent(env));
-
-                // Bind fixed parameters
-                for (param, arg) in params.iter().zip(args.iter()) {
-                    new_env.define(param.clone(), arg.clone());
-                }
-
-                // Bind rest parameter if variadic
-                if let Some(rest_param) = variadic {
-                    // Collect remaining args into a list
-                    let rest_args: Vec<Value> = args.into_iter().skip(params.len()).collect();
-                    let rest_list = self.list_from_vec(rest_args);
-                    new_env.define(rest_param, rest_list);
-                }
-
-                // Evaluate body expressions in sequence
-                // If we're in tail position, the last expression of the lambda body
-                // should be returned as a TailCall
-                if in_tail_position && !body.is_empty() {
-                    // Evaluate all but the last expression
-                    for expr in &body[..body.len() - 1] {
-                        self.eval_in_env(expr, &new_env)?;
-                    }
-                    // Last expression is in tail position
-                    Ok(super::EvalResult::TailCall {
-                        expr: body.last().unwrap().clone(),
-                        env: new_env,
-                    })
-                } else {
-                    // Not in tail position or empty body
-                    let mut result = Value::Unspecified;
-                    for expr in body {
-                        result = self.eval_in_env(&expr, &new_env)?;
-                    }
-                    Ok(super::EvalResult::Value(result))
-                }
+                // Use shared helper methods to prepare environment and evaluate body
+                let new_env = self.prepare_lambda_env(&params, &variadic, args, &env)?;
+                self.eval_lambda_body(&body, &new_env, in_tail_position)
             }
             Value::Procedure(Procedure::CaseLambda { clauses, env }) => {
                 // Try each clause in order to find one that matches the argument count
@@ -138,44 +85,9 @@ impl Evaluator {
                     };
 
                     if matches {
-                        // Found a matching clause - bind arguments and evaluate body
-                        let new_env = Rc::new(Environment::with_parent(env.clone()));
-
-                        // Bind fixed parameters
-                        for (param, arg) in params.iter().zip(args.iter()) {
-                            new_env.define(param.clone(), arg.clone());
-                        }
-
-                        // Bind rest parameter if variadic
-                        if let Some(rest_param) = variadic {
-                            // Collect remaining args into a list
-                            let rest_args: Vec<Value> =
-                                args.into_iter().skip(params.len()).collect();
-                            let rest_list = self.list_from_vec(rest_args);
-                            new_env.define(rest_param.clone(), rest_list);
-                        }
-
-                        // Evaluate body expressions in sequence
-                        // If we're in tail position, the last expression of the lambda body
-                        // should be returned as a TailCall
-                        if in_tail_position && !body.is_empty() {
-                            // Evaluate all but the last expression
-                            for expr in &body[..body.len() - 1] {
-                                self.eval_in_env(expr, &new_env)?;
-                            }
-                            // Last expression is in tail position
-                            return Ok(super::EvalResult::TailCall {
-                                expr: body.last().unwrap().clone(),
-                                env: new_env,
-                            });
-                        } else {
-                            // Not in tail position or empty body
-                            let mut result = Value::Unspecified;
-                            for expr in body {
-                                result = self.eval_in_env(&expr, &new_env)?;
-                            }
-                            return Ok(super::EvalResult::Value(result));
-                        }
+                        // Found a matching clause - use shared helper methods
+                        let new_env = self.prepare_lambda_env(&params, &variadic, args, &env)?;
+                        return self.eval_lambda_body(&body, &new_env, in_tail_position);
                     }
                 }
 
