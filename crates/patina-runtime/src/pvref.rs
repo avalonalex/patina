@@ -294,6 +294,11 @@ impl MatchEnv {
     pub fn num_vars(&self) -> usize {
         self.vars.len()
     }
+
+    /// Get all match values (for hygiene processing)
+    pub fn all_values(&self) -> &[MatchValue] {
+        &self.vars
+    }
 }
 
 impl std::fmt::Debug for MatchEnv {

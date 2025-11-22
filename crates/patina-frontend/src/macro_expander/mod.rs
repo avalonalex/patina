@@ -70,7 +70,7 @@ pub fn expand_macro(
         println!("[MACRO]   Trying {} rule(s):", compiled_macro.rules.len());
     }
 
-    let expander = Expander::new();
+    let expander = Expander::new(env.clone());
 
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
@@ -106,30 +106,16 @@ pub fn expand_macro(
                     .map_err(|e| crate::error::FrontendError::InvalidSyntax(e.to_string()))?;
 
                 if patina_runtime::macro_debug::is_enabled() {
-                    println!("[MACRO]   Expanded: {}", expanded);
-                }
-
-                // Apply hygiene: rename free identifiers
-                // For now, we collect all symbols from the input to prevent renaming them
-                let mut pattern_vars = std::collections::HashSet::new();
-                collect_symbols_from_value(args, &mut pattern_vars);
-
-                if patina_runtime::macro_debug::is_enabled() {
-                    println!("[MACRO]   ");
-                    println!("[MACRO]   === Applying hygiene ===");
-                }
-
-                let hygienic = hygiene::apply_hygiene(&expanded, &pattern_vars, env);
-
-                if patina_runtime::macro_debug::is_enabled() {
-                    println!("[MACRO]   Final: {}", hygienic);
+                    println!("[MACRO]   Expanded (with hygiene): {}", expanded);
                     println!("[MACRO] ");
                     println!("[MACRO] ========================================");
                     println!("[MACRO] Expansion complete!");
                     println!("[MACRO] ");
                 }
 
-                return Ok(hygienic);
+                // Hygiene is now applied during expansion in the Expander,
+                // not as a post-processing step
+                return Ok(expanded);
             }
             Err(e) => {
                 // This rule didn't match, try next one
@@ -154,32 +140,13 @@ pub fn expand_macro(
     )))
 }
 
-/// Recursively collect all symbols from a value
-///
-/// Used for hygiene: extracts all symbol identifiers from matched values
-/// so they won't be renamed by the macro system.
-fn collect_symbols_from_value(
-    value: &patina_runtime::Value,
-    symbols: &mut std::collections::HashSet<std::rc::Rc<str>>,
-) {
-    match value {
-        patina_runtime::Value::Symbol(name) => {
-            symbols.insert(name.clone());
-        }
-        patina_runtime::Value::Pair(pair) => {
-            let borrowed = pair.borrow();
-            collect_symbols_from_value(&borrowed.0, symbols);
-            collect_symbols_from_value(&borrowed.1, symbols);
-        }
-        patina_runtime::Value::Vector(vec) => {
-            for item in vec.borrow().iter() {
-                collect_symbols_from_value(item, symbols);
-            }
-        }
-        // All other values (numbers, strings, booleans, etc.) have no symbols
-        _ => {}
-    }
-}
+// NOTE: The following functions were used for post-expansion hygiene,
+// but hygiene is now implemented during expansion in the Expander.
+// Keeping them commented for reference in case they're needed in the future.
+//
+// fn collect_symbols_from_value(...)
+// fn collect_pattern_variable_symbols(...)
+// fn collect_symbols_from_match_value(...)
 
 /// Convert a pattern to a readable string with variable names for debug output
 fn pattern_to_string_with_names(

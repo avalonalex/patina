@@ -362,6 +362,25 @@ impl Compiler {
             Value::Pair(_) => {
                 let (items, tail) = self.collect_list_items(form)?;
 
+                // Check for quote form: (quote datum)
+                // R7RS requires pattern variables to be expanded inside quotes,
+                // but literal data without pattern variables should stay literal.
+                // For example: (syntax-rules () ((m x) '(x))) should expand (m 5) to '(5)
+                // But: (syntax-rules () ((m x) 'ok)) should expand (m 5) to 'ok (not renamed)
+                if items.len() == 2
+                    && matches!(&items[0], Value::Symbol(s) if s.as_ref() == "quote")
+                    && tail.is_none()
+                {
+                    // Check if the quoted datum contains pattern variables
+                    if self.contains_pattern_vars(&items[1]) {
+                        // Has pattern variables - compile normally so they expand
+                        // Fall through to normal list compilation
+                    } else {
+                        // No pattern variables - treat as literal (no hygiene renaming)
+                        return Ok(Template::Literal(form.clone()));
+                    }
+                }
+
                 // Check for ellipsis escape: (... template)
                 if items.len() == 2
                     && self.ellipsis.is_some()
@@ -625,6 +644,26 @@ impl Compiler {
         }
 
         Ok(())
+    }
+
+    /// Check if a value contains any pattern variables
+    /// Used to determine if a quoted expression needs template expansion
+    fn contains_pattern_vars(&self, value: &Value) -> bool {
+        match value {
+            Value::Symbol(s) => self.pvars.contains_key(s),
+            Value::Pair(_) => {
+                let items = match self.collect_list_items(value) {
+                    Ok((items, _)) => items,
+                    Err(_) => return false,
+                };
+                items.iter().any(|item| self.contains_pattern_vars(item))
+            }
+            Value::Vector(v) => v
+                .borrow()
+                .iter()
+                .any(|item| self.contains_pattern_vars(item)),
+            _ => false,
+        }
     }
 }
 

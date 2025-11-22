@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-22 07:37:00
+**Generated:** 2025-11-22 08:57:57
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
@@ -8,8 +8,8 @@
 | Status | Count | Percentage |
 |--------|-------|------------|
 | ✅ Passed | 704 | 63.5% |
-| ❌ Failed | 37 | 3.3% |
-| ⚠️ Error (crashed) | 367 | 33.1% |
+| ❌ Failed | 39 | 3.5% |
+| ⚠️ Error (crashed) | 365 | 32.9% |
 | **Total** | **1108** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
@@ -56,19 +56,19 @@ FAIL:
 FAIL: 
 FAIL: 
 FAIL: 
+FAIL: 
+FAIL: 
 ```
 
 ### Errors
 
 ```
-Error: Undefined variable: ##x#901
 Error: Not a procedure: 8
 Error: Invalid syntax: No matching pattern for macro sequence1
 Error: Invalid syntax: No matching pattern for macro sequence2
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: sequence3
 Error: Not a procedure: ok
-Error: Undefined variable: ##bar399#1109
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: define-record-type
 Error: Undefined variable: pare?
@@ -288,134 +288,134 @@ Error: Undefined variable: read
 Error: Undefined variable: read
 Error: Undefined variable: read
 Error: Undefined variable: read
-Error: Undefined variable: ##open-output-string#7808
-Error: Undefined variable: ##open-output-string#7815
-Error: Undefined variable: ##open-output-string#7817
-Error: Undefined variable: ##open-output-string#7822
-Error: Undefined variable: ##open-output-string#7827
-Error: Undefined variable: ##open-output-string#7831
-Error: Undefined variable: ##open-output-string#7835
-Error: Undefined variable: ##open-output-string#7837
-Error: Undefined variable: ##open-output-string#7840
-Error: Undefined variable: ##open-output-string#7845
-Error: Undefined variable: ##open-output-string#7850
-Error: Undefined variable: ##open-output-string#7854
-Error: Undefined variable: ##open-output-string#7856
-Error: Undefined variable: ##open-output-string#7860
-Error: Undefined variable: ##open-output-string#7865
-Error: Undefined variable: ##open-output-string#7869
-Error: Undefined variable: ##open-output-string#7873
-Error: Undefined variable: ##open-output-string#7877
-Error: Undefined variable: ##read#7884
-Error: Undefined variable: ##read#7895
-Error: Undefined variable: ##read#7906
-Error: Undefined variable: ##read#7918
-Error: Undefined variable: ##read#7926
-Error: Undefined variable: ##read#7939
-Error: Undefined variable: ##read#7945
-Error: Undefined variable: ##read#7956
-Error: Undefined variable: ##read#7968
-Error: Undefined variable: ##read#7974
-Error: Undefined variable: ##read#7984
-Error: Undefined variable: ##read#7994
-Error: Undefined variable: ##read#8001
-Error: Undefined variable: ##read#8011
-Error: Undefined variable: ##read#8026
-Error: Undefined variable: ##read#8033
-Error: Undefined variable: ##read#8040
-Error: Undefined variable: ##read#8051
-Error: Undefined variable: ##read#8068
-Error: Undefined variable: ##read#8070
-Error: Undefined variable: ##read#8086
-Error: Undefined variable: ##read#8095
-Error: Undefined variable: ##read#8109
-Error: Undefined variable: ##read#8113
-Error: Undefined variable: ##read#8126
-Error: Undefined variable: ##read#8132
-Error: Undefined variable: ##read#8146
-Error: Undefined variable: ##read#8154
-Error: Undefined variable: ##read#8164
-Error: Undefined variable: ##read#8172
-Error: Undefined variable: ##read#8181
-Error: Undefined variable: ##read#8191
-Error: Undefined variable: ##read#8209
-Error: Undefined variable: ##read#8216
-Error: Undefined variable: ##read#8228
-Error: Undefined variable: ##read#8234
-Error: Undefined variable: ##read#8246
-Error: Undefined variable: ##read#8250
-Error: Undefined variable: ##read#8261
-Error: Undefined variable: ##read#8276
-Error: Undefined variable: ##read#8282
-Error: Undefined variable: ##read#8294
-Error: Undefined variable: ##read#8308
-Error: Undefined variable: ##read#8318
-Error: Undefined variable: ##read#8321
-Error: Undefined variable: ##read#8331
-Error: Undefined variable: ##read#8346
-Error: Undefined variable: ##read#8356
-Error: Undefined variable: ##read#8369
-Error: Undefined variable: ##read#8370
-Error: Undefined variable: ##read#8389
-Error: Undefined variable: ##read#8397
-Error: Undefined variable: ##read#8406
-Error: Undefined variable: ##read#8411
-Error: Undefined variable: ##read#8428
-Error: Undefined variable: ##read#8434
-Error: Undefined variable: ##read#8447
-Error: Undefined variable: ##read#8452
-Error: Undefined variable: ##read#8466
-Error: Undefined variable: ##read#8473
-Error: Undefined variable: ##read#8483
-Error: Undefined variable: ##read#8497
-Error: Undefined variable: ##read#8509
-Error: Undefined variable: ##read#8512
-Error: Undefined variable: ##read#8527
-Error: Undefined variable: ##read#8534
-Error: Undefined variable: ##read#8546
-Error: Undefined variable: ##read#8550
-Error: Undefined variable: ##read#8568
-Error: Undefined variable: ##read#8574
-Error: Undefined variable: ##read#8586
-Error: Undefined variable: ##read#8590
-Error: Undefined variable: ##read#8600
-Error: Undefined variable: ##read#8611
-Error: Undefined variable: ##read#8626
-Error: Undefined variable: ##read#8639
-Error: Undefined variable: ##read#8641
-Error: Undefined variable: ##read#8655
-Error: Undefined variable: ##read#8666
-Error: Undefined variable: ##read#8673
-Error: Undefined variable: ##read#8680
-Error: Undefined variable: ##read#8693
-Error: Undefined variable: ##read#8706
-Error: Undefined variable: ##read#8712
-Error: Undefined variable: ##read#8727
-Error: Undefined variable: ##read#8735
-Error: Undefined variable: ##read#8740
-Error: Undefined variable: ##read#8753
-Error: Undefined variable: ##read#8761
-Error: Undefined variable: ##read#8774
-Error: Undefined variable: ##read#8788
-Error: Undefined variable: ##read#8791
-Error: Undefined variable: ##read#8807
-Error: Undefined variable: ##read#8810
-Error: Undefined variable: ##read#8826
-Error: Undefined variable: ##read#8833
-Error: Undefined variable: ##read#8840
-Error: Undefined variable: ##read#8857
-Error: Undefined variable: ##read#8860
-Error: Undefined variable: ##test-assert#8886
-Error: Undefined variable: ##test-assert#8896
-Error: Undefined variable: ##test-assert#8910
-Error: Undefined variable: ##test-assert#8922
-Error: Undefined variable: ##test-assert#8954
-Error: Undefined variable: ##test-assert#8969
-Error: Undefined variable: ##test-assert#8981
-Error: Undefined variable: ##test-assert#8991
-Error: Undefined variable: ##test-assert#9012
-Error: Undefined variable: ##test-assert#9034
-Error: Undefined variable: ##test-assert#9047
+Error: Undefined variable: ##open-output-string#2118
+Error: Undefined variable: ##open-output-string#2121
+Error: Undefined variable: ##open-output-string#2124
+Error: Undefined variable: ##open-output-string#2127
+Error: Undefined variable: ##open-output-string#2130
+Error: Undefined variable: ##open-output-string#2133
+Error: Undefined variable: ##open-output-string#2136
+Error: Undefined variable: ##open-output-string#2139
+Error: Undefined variable: ##open-output-string#2142
+Error: Undefined variable: ##open-output-string#2145
+Error: Undefined variable: ##open-output-string#2148
+Error: Undefined variable: ##open-output-string#2151
+Error: Undefined variable: ##open-output-string#2154
+Error: Undefined variable: ##open-output-string#2157
+Error: Undefined variable: ##open-output-string#2160
+Error: Undefined variable: ##open-output-string#2163
+Error: Undefined variable: ##open-output-string#2166
+Error: Undefined variable: ##open-output-string#2169
+Error: Undefined variable: ##read#2172
+Error: Undefined variable: ##read#2179
+Error: Undefined variable: ##read#2186
+Error: Undefined variable: ##read#2193
+Error: Undefined variable: ##read#2200
+Error: Undefined variable: ##read#2207
+Error: Undefined variable: ##read#2214
+Error: Undefined variable: ##read#2221
+Error: Undefined variable: ##read#2228
+Error: Undefined variable: ##read#2235
+Error: Undefined variable: ##read#2242
+Error: Undefined variable: ##read#2249
+Error: Undefined variable: ##read#2256
+Error: Undefined variable: ##read#2263
+Error: Undefined variable: ##read#2270
+Error: Undefined variable: ##read#2277
+Error: Undefined variable: ##read#2284
+Error: Undefined variable: ##read#2291
+Error: Undefined variable: ##read#2298
+Error: Undefined variable: ##read#2305
+Error: Undefined variable: ##read#2312
+Error: Undefined variable: ##read#2319
+Error: Undefined variable: ##read#2326
+Error: Undefined variable: ##read#2333
+Error: Undefined variable: ##read#2340
+Error: Undefined variable: ##read#2347
+Error: Undefined variable: ##read#2354
+Error: Undefined variable: ##read#2361
+Error: Undefined variable: ##read#2368
+Error: Undefined variable: ##read#2375
+Error: Undefined variable: ##read#2382
+Error: Undefined variable: ##read#2389
+Error: Undefined variable: ##read#2396
+Error: Undefined variable: ##read#2403
+Error: Undefined variable: ##read#2410
+Error: Undefined variable: ##read#2417
+Error: Undefined variable: ##read#2424
+Error: Undefined variable: ##read#2431
+Error: Undefined variable: ##read#2438
+Error: Undefined variable: ##read#2445
+Error: Undefined variable: ##read#2452
+Error: Undefined variable: ##read#2459
+Error: Undefined variable: ##read#2466
+Error: Undefined variable: ##read#2473
+Error: Undefined variable: ##read#2480
+Error: Undefined variable: ##read#2487
+Error: Undefined variable: ##read#2494
+Error: Undefined variable: ##read#2501
+Error: Undefined variable: ##read#2508
+Error: Undefined variable: ##read#2515
+Error: Undefined variable: ##read#2522
+Error: Undefined variable: ##read#2529
+Error: Undefined variable: ##read#2536
+Error: Undefined variable: ##read#2543
+Error: Undefined variable: ##read#2550
+Error: Undefined variable: ##read#2557
+Error: Undefined variable: ##read#2564
+Error: Undefined variable: ##read#2571
+Error: Undefined variable: ##read#2578
+Error: Undefined variable: ##read#2585
+Error: Undefined variable: ##read#2592
+Error: Undefined variable: ##read#2599
+Error: Undefined variable: ##read#2606
+Error: Undefined variable: ##read#2613
+Error: Undefined variable: ##read#2620
+Error: Undefined variable: ##read#2627
+Error: Undefined variable: ##read#2634
+Error: Undefined variable: ##read#2641
+Error: Undefined variable: ##read#2648
+Error: Undefined variable: ##read#2655
+Error: Undefined variable: ##read#2662
+Error: Undefined variable: ##read#2669
+Error: Undefined variable: ##read#2676
+Error: Undefined variable: ##read#2683
+Error: Undefined variable: ##read#2690
+Error: Undefined variable: ##read#2697
+Error: Undefined variable: ##read#2704
+Error: Undefined variable: ##read#2711
+Error: Undefined variable: ##read#2718
+Error: Undefined variable: ##read#2725
+Error: Undefined variable: ##read#2732
+Error: Undefined variable: ##read#2739
+Error: Undefined variable: ##read#2746
+Error: Undefined variable: ##read#2753
+Error: Undefined variable: ##read#2760
+Error: Undefined variable: ##read#2767
+Error: Undefined variable: ##read#2774
+Error: Undefined variable: ##read#2781
+Error: Undefined variable: ##read#2788
+Error: Undefined variable: ##read#2795
+Error: Undefined variable: ##read#2802
+Error: Undefined variable: ##read#2809
+Error: Undefined variable: ##read#2816
+Error: Undefined variable: ##read#2823
+Error: Undefined variable: ##read#2830
+Error: Undefined variable: ##read#2837
+Error: Undefined variable: ##read#2844
+Error: Undefined variable: ##read#2851
+Error: Undefined variable: ##read#2858
+Error: Undefined variable: ##test-assert#2868
+Error: Undefined variable: ##test-assert#2876
+Error: Undefined variable: ##test-assert#2884
+Error: Undefined variable: ##test-assert#2892
+Error: Undefined variable: ##test-assert#2900
+Error: Undefined variable: ##test-assert#2908
+Error: Undefined variable: ##test-assert#2916
+Error: Undefined variable: ##test-assert#2924
+Error: Undefined variable: ##test-assert#2932
+Error: Undefined variable: ##test-assert#2940
+Error: Undefined variable: ##test-assert#2948
 Error: Undefined variable: get-environment-variable
 Error: Undefined variable: get-environment-variables
 Error: Undefined variable: command-line
