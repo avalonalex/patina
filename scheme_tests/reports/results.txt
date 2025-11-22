@@ -2771,3 +2771,915 @@ Testing:
 Testing: 
 (let ((ls1 (list 10 100 1000)) (ls2 (list 1 2 3 4 5 6))) (set-cdr! (cddr ls1) ls1) (map * ls1 ls2))
 
+Testing: 
+(string-map char-foldcase "AbdEgH")
+
+Error: Undefined variable: string-map
+Testing: 
+(string-map (lambda (c) (integer->char (+ 1 (char->integer c)))) "HAL")
+
+Error: Undefined variable: string-map
+Testing: 
+(string-map (lambda (c k) (if (eqv? k #\u) (char-upcase c) (char-downcase c))) "studlycaps xxx" "ululululul")
+
+Error: Undefined variable: string-map
+Testing: 
+(vector-map cadr '#((a b) (d e) (g h)))
+
+Testing: 
+(vector-map (lambda (n) (expt n n)) '#(1 2 3 4 5))
+
+Testing: 
+(vector-map + '#(1 2 3) '#(4 5 6 7))
+
+Testing: 
+(let ((res (let ((count 0)) (vector-map (lambda (ignored) (set! count (+ count 1)) count) '#(a b))))) (or (equal? res #(1 2)) (equal? res #(2 1))))
+
+Testing: 
+(let ((v (make-vector 5))) (for-each (lambda (i) (vector-set! v i (* i i))) '(0 1 2 3 4)) v)
+
+Testing: 
+(let ((ls1 (list 10 100 1000)) (ls2 (list 1 2 3 4 5 6)) (count 0)) (set-cdr! (cddr ls1) ls1) (for-each (lambda (x y) (set! count (+ count (* x y)))) ls2 ls1) count)
+
+Testing: 
+(let ((v '())) (string-for-each (lambda (c) (set! v (cons (char->integer c) v))) "abcde") v)
+
+Error: Undefined variable: string-for-each
+Testing: 
+(let ((v (make-list 5))) (vector-for-each (lambda (i) (list-set! v i (* i i))) '#(0 1 2 3 4)) v)
+
+Testing: 
+(call-with-current-continuation (lambda (exit) (for-each (lambda (x) (if (negative? x) (exit x))) '(54 0 37 -3 245 19)) #t))
+
+Error: Undefined variable: call-with-current-continuation
+Testing: 
+(list-length '(1 2 3 4))
+
+Error: Undefined variable: call-with-current-continuation
+Testing: 
+(list-length '(a b . c))
+
+Error: Undefined variable: call-with-current-continuation
+Testing: 
+(call-with-values (lambda () (values 4 5)) (lambda (a b) b))
+
+Testing: 
+(call-with-values * -)
+
+Testing: 
+(let ((path '()) (c #f)) (let ((add (lambda (s) (set! path (cons s path))))) (dynamic-wind (lambda () (add 'connect)) (lambda () (add (call-with-current-continuation (lambda (c0) (set! c c0) 'talk1)))) (lambda () (add 'disconnect))) (if (< (length path) 4) (c 'talk2) (reverse path))))
+
+Error: Undefined variable: dynamic-wind
+Tests run: 21, Passed: 21, Failed: 0
+
+Running test suite: 6.11 Exceptions
+Testing: 
+(with-exception-handler (lambda (con) 42) (lambda () (+ (raise-continuable "should be a number") 23)))
+
+Error: Undefined variable: with-exception-handler
+Testing: 
+(error-object? (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
+
+Error: Undefined variable: error-object?
+Testing: 
+(error-object-message (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
+
+Error: Undefined variable: error-object-message
+Testing: 
+(error-object-irritants (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
+
+Error: Undefined variable: error-object-irritants
+Testing: 
+(file-error? (guard (exn (else exn)) (error "BOOM!")))
+
+Error: Undefined variable: file-error?
+Testing: 
+(file-error? (guard (exn (else exn)) (open-input-file " no such file ")))
+
+Error: Undefined variable: file-error?
+Testing: 
+(read-error? (guard (exn (else exn)) (error "BOOM!")))
+
+Error: Undefined variable: read-error?
+Testing: 
+(read-error? (guard (exn (else exn)) (read (open-input-string ")"))))
+
+Error: Undefined variable: read-error?
+Testing: 
+(read-error? (guard (exn (else exn)) (read (open-input-string """))))
+
+Error: Undefined variable: read-error?
+Testing: 
+(test-exception-handler-1 5)
+
+Error: Undefined variable: call-with-current-continuation
+Testing: 
+something-went-wrong
+
+Testing: 
+(test-exception-handler-1 -1)
+
+Error: Undefined variable: call-with-current-continuation
+Testing: 
+something-went-wrong
+
+FAIL: 
+something-went-wrong
+
+  expected: 
+("condition: " an-error)
+
+  but got:  
+#f
+
+
+Testing: 
+(test-exception-handler-2 5)
+
+Error: Undefined variable: guard
+Testing: 
+something-went-wrong
+
+Testing: 
+(test-exception-handler-2 -1)
+
+Error: Undefined variable: guard
+Testing: 
+something-went-wrong
+
+FAIL: 
+something-went-wrong
+
+  expected: 
+#t
+
+  but got:  
+#f
+
+
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Testing: 
+(guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'a 42))))
+
+Error: Undefined variable: guard
+Testing: 
+(guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'b 23))))
+
+Error: Undefined variable: guard
+Testing: 
+(guard (condition ((assq 'c condition) 'caught-c) ((assq 'd condition) 'caught-d)) (list (sqrt 8) (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'd 24))))))
+
+Error: Undefined variable: guard
+Tests run: 4, Passed: 2, Failed: 2
+
+Running test suite: 6.12 Environments and evaluation
+Testing: 
+(let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10))
+
+Error: Undefined variable: eval
+Testing: 
+(eval '(expt 2 10) (environment '(scheme base)))
+
+Error: Undefined variable: eval
+Testing: 
+(inexact (eval '(sin 0) (environment '(scheme inexact))))
+
+Error: Undefined variable: eval
+Testing: 
+(eval '(+ (expt 2 10) (inexact (sin 0))) (environment '(scheme base) '(scheme inexact)))
+
+Error: Undefined variable: eval
+Tests run: 0, Passed: 0, Failed: 0
+
+Running test suite: 6.13 Input and output
+Testing: 
+(port? (current-input-port))
+
+Error: Undefined variable: port?
+Testing: 
+(input-port? (current-input-port))
+
+Error: Undefined variable: input-port?
+Testing: 
+(output-port? (current-output-port))
+
+Error: Undefined variable: output-port?
+Testing: 
+(output-port? (current-error-port))
+
+Error: Undefined variable: output-port?
+Testing: 
+(input-port? (open-input-string "abc"))
+
+Error: Undefined variable: input-port?
+Testing: 
+(output-port? (open-output-string))
+
+Error: Undefined variable: output-port?
+Testing: 
+(textual-port? (open-input-string "abc"))
+
+Error: Undefined variable: textual-port?
+Testing: 
+(textual-port? (open-output-string))
+
+Error: Undefined variable: textual-port?
+Testing: 
+(binary-port? (open-input-bytevector #u8([0, 1, 2])))
+
+Error: Undefined variable: binary-port?
+Testing: 
+(binary-port? (open-output-bytevector))
+
+Error: Undefined variable: binary-port?
+Testing: 
+(input-port-open? (open-input-string "abc"))
+
+Error: Undefined variable: input-port-open?
+Testing: 
+(output-port-open? (open-output-string))
+
+Error: Undefined variable: output-port-open?
+Testing: 
+(let ((in (open-input-string "abc"))) (close-input-port in) (input-port-open? in))
+
+Error: Undefined variable: open-input-string
+Testing: 
+(let ((out (open-output-string))) (close-output-port out) (output-port-open? out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string))) (close-port out) (output-port-open? out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((in (open-input-string "abc"))) (close-input-port in) (guard (exn (else 'error)) (read-char in)))
+
+Error: Undefined variable: open-input-string
+Testing: 
+(let ((out (open-output-string))) (close-output-port out) (guard (exn (else 'error)) (write-char #\c out)))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(eof-object? (eof-object))
+
+Error: Undefined variable: eof-object?
+Testing: 
+(eof-object? (read (open-input-string "")))
+
+Error: Undefined variable: eof-object?
+Testing: 
+(char-ready? (open-input-string "42"))
+
+Error: Undefined variable: char-ready?
+Testing: 
+(read (open-input-string " 42 "))
+
+Error: Undefined variable: read
+Testing: 
+(eof-object? (read-char (open-input-string "")))
+
+Error: Undefined variable: eof-object?
+Testing: 
+(read-char (open-input-string "abc"))
+
+Error: Undefined variable: read-char
+Testing: 
+(eof-object? (read-line (open-input-string "")))
+
+Error: Undefined variable: eof-object?
+Testing: 
+(read-line (open-input-string "abc"))
+
+Error: Undefined variable: read-line
+Testing: 
+(read-line (open-input-string "abc
+def
+"))
+
+Error: Undefined variable: read-line
+Testing: 
+(eof-object? (read-string 3 (open-input-string "")))
+
+Error: Undefined variable: eof-object?
+Testing: 
+(read-string 3 (open-input-string "abcd"))
+
+Error: Undefined variable: read-string
+Testing: 
+(read-string 3 (open-input-string "abc
+def
+"))
+
+Error: Undefined variable: read-string
+Error: Undefined variable: open-input-string
+Testing: 
+(let ((out (open-output-string))) (write-char #\􏜀 out) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string))) (write 'abc out) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string))) (display "abc def" out) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string))) (display #\a out) (display "b" out) (display #\c out) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let* ((out (open-output-string)) (r (begin (newline out) (get-output-string out)))) (or (equal? r "
+") (equal? r "
+")))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string))) (write-string "abc def" out) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string))) (write-string "abc def" out 4) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string))) (write-string "abc def" out 2 5) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string))) (flush-output-port out) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(eof-object? (read-u8 (open-input-bytevector #u8([]))))
+
+Error: Undefined variable: eof-object?
+Testing: 
+(read-u8 (open-input-bytevector #u8([1, 2, 3])))
+
+Error: Undefined variable: read-u8
+Testing: 
+(eof-object? (read-bytevector 3 (open-input-bytevector #u8([]))))
+
+Error: Undefined variable: eof-object?
+Testing: 
+(u8-ready? (open-input-bytevector #u8([1])))
+
+Error: Undefined variable: u8-ready?
+Testing: 
+(read-bytevector 3 (open-input-bytevector #u8([1])))
+
+Error: Undefined variable: read-bytevector
+Testing: 
+(read-bytevector 3 (open-input-bytevector #u8([1, 2])))
+
+Error: Undefined variable: read-bytevector
+Testing: 
+(read-bytevector 3 (open-input-bytevector #u8([1, 2, 3])))
+
+Error: Undefined variable: read-bytevector
+Testing: 
+(read-bytevector 3 (open-input-bytevector #u8([1, 2, 3, 4])))
+
+Error: Undefined variable: read-bytevector
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (eof-object? (read-bytevector! bv (open-input-bytevector #u8([])))))
+
+Error: Undefined variable: eof-object?
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8([6, 7, 8, 9, 10])) 0 5) bv)
+
+Error: Undefined variable: read-bytevector!
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8([6, 7, 8, 9, 10])) 0 3) bv)
+
+Error: Undefined variable: read-bytevector!
+Testing: 
+(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8([6, 7, 8, 9, 10])) 3 4) bv)
+
+Error: Undefined variable: read-bytevector!
+Testing: 
+(let ((out (open-output-bytevector))) (write-u8 1 out) (write-u8 2 out) (write-u8 3 out) (get-output-bytevector out))
+
+Error: Undefined variable: open-output-bytevector
+Testing: 
+(let ((out (open-output-bytevector))) (write-bytevector #u8([1, 2, 3, 4, 5]) out) (get-output-bytevector out))
+
+Error: Undefined variable: open-output-bytevector
+Testing: 
+(let ((out (open-output-bytevector))) (write-bytevector #u8([1, 2, 3, 4, 5]) out 2) (get-output-bytevector out))
+
+Error: Undefined variable: open-output-bytevector
+Testing: 
+(let ((out (open-output-bytevector))) (write-bytevector #u8([1, 2, 3, 4, 5]) out 2 4) (get-output-bytevector out))
+
+Error: Undefined variable: open-output-bytevector
+Testing: 
+(let ((out (open-output-bytevector))) (flush-output-port out) (get-output-bytevector out))
+
+Error: Undefined variable: open-output-bytevector
+Testing: 
+(and (member (let ((out (open-output-string)) (x (list 1))) (set-cdr! x x) (write x out) (get-output-string out)) '("#0=(1 . #0#)" "#1=(1 . #1#)")) #t)
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string)) (x (list 1 2 3))) (write (list x x) out) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(let ((out (open-output-string)) (x (list 1 2 3))) (write-simple (list x x) out) (get-output-string out))
+
+Error: Undefined variable: open-output-string
+Testing: 
+(and (member (let ((out (open-output-string)) (x (list 1 2 3))) (write-shared (list x x) out) (get-output-string out)) '("(#0=(1 2 3) #0#)" "(#1=(1 2 3) #1#)")) #t)
+
+Error: Undefined variable: open-output-string
+Running test suite: Read syntax
+Testing: 
+(read (open-input-string "#t"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#true"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#f"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#false"))
+
+Error: Undefined variable: read
+Testing: 
+(read2 (open-input-string "#t(5)"))
+
+Error: Undefined variable: open-input-string
+Testing: 
+(read2 (open-input-string "#true 6 "))
+
+Error: Undefined variable: open-input-string
+Testing: 
+(read2 (open-input-string "#f 7"))
+
+Error: Undefined variable: open-input-string
+Testing: 
+(read2 (open-input-string "#false"8""))
+
+Error: Undefined variable: open-input-string
+Testing: 
+(read (open-input-string "()"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "(1 2)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "(1 . 2)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "(1 . (2))"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "(1 . (2 3 4 . (5)))"))
+
+Error: Undefined variable: read
+Testing: 
+(cadr (read (open-input-string "#0=(1 . #0#)")))
+
+Error: Undefined variable: read
+Testing: 
+(cadr (read (open-input-string "(#0=(1 2 3) #0#)")))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "'(1 2)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "'(1 ,2)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "'(1 ,@2)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "`(1 ,2)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#()"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#(a b)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#u8()"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#u8(0 1)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "abc"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "abc def"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "ABC"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "|H\x65;llo|"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#!fold-case ABC"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#!fold-case #!no-fold-case ABC"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#; abc def"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "; abc 
+def"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#| abc |# def"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#| abc #| def |# |# ghi"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#; ; abc
+ def ghi"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "(#;sqrt abs -16)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "(a #; #;b c d)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "(a #;(b #;c d) e)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "(a . #;b c)"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "(a . b #;c)"))
+
+Error: Undefined variable: read
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Testing: 
+(read (open-input-string "#\a"))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string "#\space"))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\null")))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\alarm")))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\backspace")))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\tab")))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\newline")))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\return")))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\delete")))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\escape")))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\λ")))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (read (open-input-string "#\x03BB")))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""abc""))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""abc" "def""))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""ABC""))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""H\x65;llo""))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (string-ref (read (open-input-string ""\a"")) 0))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (string-ref (read (open-input-string ""\b"")) 0))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (string-ref (read (open-input-string ""\t"")) 0))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (string-ref (read (open-input-string ""\n"")) 0))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (string-ref (read (open-input-string ""\r"")) 0))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (string-ref (read (open-input-string ""\""")) 0))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (string-ref (read (open-input-string ""\|"")) 0))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""line 1
+line 2
+""))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""line 1\
+continued
+""))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""line 1\ 
+continued
+""))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""line 1\
+ continued
+""))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""line 1\ 	 
+ 	 continued
+""))
+
+Error: Undefined variable: read
+Testing: 
+(read (open-input-string ""line 1\ 	 
+ 	 
+
+line 3
+""))
+
+Error: Undefined variable: read
+Testing: 
+(char->integer (string-ref (read (open-input-string ""\x03BB;"")) 0))
+
+Error: Undefined variable: read
+Error: Undefined variable: ##open-output-string#7770
+Error: Undefined variable: ##open-output-string#7775
+Error: Undefined variable: ##open-output-string#7779
+Error: Undefined variable: ##open-output-string#7784
+Error: Undefined variable: ##open-output-string#7787
+Error: Undefined variable: ##open-output-string#7791
+Error: Undefined variable: ##open-output-string#7795
+Error: Undefined variable: ##open-output-string#7801
+Error: Undefined variable: ##open-output-string#7803
+Error: Undefined variable: ##open-output-string#7807
+Error: Undefined variable: ##open-output-string#7811
+Error: Undefined variable: ##open-output-string#7817
+Error: Undefined variable: ##open-output-string#7820
+Error: Undefined variable: ##open-output-string#7823
+Error: Undefined variable: ##open-output-string#7827
+Error: Undefined variable: ##open-output-string#7831
+Error: Undefined variable: ##open-output-string#7837
+Error: Undefined variable: ##open-output-string#7839
+Tests run: 0, Passed: 0, Failed: 0
+
+Running test suite: Numeric syntax
+Error: Undefined variable: ##read#7849
+Error: Undefined variable: ##read#7856
+Error: Undefined variable: ##read#7866
+Error: Undefined variable: ##read#7872
+Error: Undefined variable: ##read#7890
+Error: Undefined variable: ##read#7897
+Error: Undefined variable: ##read#7906
+Error: Undefined variable: ##read#7921
+Error: Undefined variable: ##read#7928
+Error: Undefined variable: ##read#7939
+Error: Undefined variable: ##read#7947
+Error: Undefined variable: ##read#7961
+Error: Undefined variable: ##read#7968
+Error: Undefined variable: ##read#7975
+Error: Undefined variable: ##read#7982
+Error: Undefined variable: ##read#7996
+Error: Undefined variable: ##read#8004
+Error: Undefined variable: ##read#8019
+Error: Undefined variable: ##read#8031
+Error: Undefined variable: ##read#8037
+Error: Undefined variable: ##read#8049
+Error: Undefined variable: ##read#8053
+Error: Undefined variable: ##read#8068
+Error: Undefined variable: ##read#8079
+Error: Undefined variable: ##read#8083
+Error: Undefined variable: ##read#8094
+Error: Undefined variable: ##read#8103
+Error: Undefined variable: ##read#8117
+Error: Undefined variable: ##read#8122
+Error: Undefined variable: ##read#8137
+Error: Undefined variable: ##read#8142
+Error: Undefined variable: ##read#8153
+Error: Undefined variable: ##read#8163
+Error: Undefined variable: ##read#8179
+Error: Undefined variable: ##read#8191
+Error: Undefined variable: ##read#8194
+Error: Undefined variable: ##read#8208
+Error: Undefined variable: ##read#8215
+Error: Undefined variable: ##read#8225
+Error: Undefined variable: ##read#8233
+Error: Undefined variable: ##read#8245
+Error: Undefined variable: ##read#8259
+Error: Undefined variable: ##read#8267
+Error: Undefined variable: ##read#8275
+Error: Undefined variable: ##read#8282
+Error: Undefined variable: ##read#8300
+Error: Undefined variable: ##read#8311
+Error: Undefined variable: ##read#8314
+Error: Undefined variable: ##read#8327
+Error: Undefined variable: ##read#8338
+Error: Undefined variable: ##read#8342
+Error: Undefined variable: ##read#8359
+Error: Undefined variable: ##read#8369
+Error: Undefined variable: ##read#8374
+Error: Undefined variable: ##read#8384
+Error: Undefined variable: ##read#8393
+Error: Undefined variable: ##read#8406
+Error: Undefined variable: ##read#8417
+Error: Undefined variable: ##read#8430
+Error: Undefined variable: ##read#8433
+Error: Undefined variable: ##read#8443
+Error: Undefined variable: ##read#8456
+Error: Undefined variable: ##read#8467
+Error: Undefined variable: ##read#8479
+Error: Undefined variable: ##read#8488
+Error: Undefined variable: ##read#8495
+Error: Undefined variable: ##read#8502
+Error: Undefined variable: ##read#8513
+Error: Undefined variable: ##read#8526
+Error: Undefined variable: ##read#8532
+Error: Undefined variable: ##read#8543
+Error: Undefined variable: ##read#8554
+Error: Undefined variable: ##read#8566
+Error: Undefined variable: ##read#8578
+Error: Undefined variable: ##read#8587
+Error: Undefined variable: ##read#8599
+Error: Undefined variable: ##read#8608
+Error: Undefined variable: ##read#8615
+Error: Undefined variable: ##read#8624
+Error: Undefined variable: ##read#8634
+Error: Undefined variable: ##read#8645
+Error: Undefined variable: ##read#8659
+Error: Undefined variable: ##read#8665
+Error: Undefined variable: ##read#8675
+Error: Undefined variable: ##read#8687
+Error: Undefined variable: ##read#8700
+Error: Undefined variable: ##read#8707
+Error: Undefined variable: ##read#8718
+Error: Undefined variable: ##read#8728
+Error: Undefined variable: ##read#8733
+Error: Undefined variable: ##read#8751
+Error: Undefined variable: ##read#8753
+Error: Undefined variable: ##read#8769
+Error: Undefined variable: ##read#8777
+Error: Undefined variable: ##read#8784
+Error: Undefined variable: ##read#8793
+Error: Undefined variable: ##read#8808
+Error: Undefined variable: ##read#8816
+Error: Undefined variable: ##read#8827
+Error: Undefined variable: ##test-assert#8840
+Error: Undefined variable: ##test-assert#8850
+Error: Undefined variable: ##test-assert#8872
+Error: Undefined variable: ##test-assert#8892
+Error: Undefined variable: ##test-assert#8913
+Error: Undefined variable: ##test-assert#8925
+Error: Undefined variable: ##test-assert#8945
+Error: Undefined variable: ##test-assert#8962
+Error: Undefined variable: ##test-assert#8972
+Error: Undefined variable: ##test-assert#8993
+Error: Undefined variable: ##test-assert#9018
+Tests run: 0, Passed: 0, Failed: 0
+
+Tests run: 0, Passed: 0, Failed: 0
+
+Running test suite: 6.14 System interface
+Testing: 
+(string? (get-environment-variable "PATH"))
+
+Error: Undefined variable: get-environment-variable
+Error: Undefined variable: get-environment-variables
+Testing: 
+(list? (command-line))
+
+Error: Undefined variable: command-line
+Testing: 
+(real? (current-second))
+
+Error: Undefined variable: current-second
+Testing: 
+(inexact? (current-second))
+
+Error: Undefined variable: current-second
+Testing: 
+(exact? (current-jiffy))
+
+Error: Undefined variable: current-jiffy
+Testing: 
+(exact? (jiffies-per-second))
+
+Error: Undefined variable: jiffies-per-second
+Testing: 
+(list? (features))
+
+Error: Undefined variable: features
+Testing: 
+(and (memq 'r7rs (features)) #t)
+
+Error: Undefined variable: features
+Testing: 
+(file-exists? ".")
+
+Error: Undefined variable: file-exists?
+Testing: 
+(file-exists? " no such file ")
+
+Error: Undefined variable: file-exists?
+Testing: 
+(file-error? (guard (exn (else exn)) (delete-file " no such file ")))
+
+Error: Undefined variable: file-error?
+Tests run: 0, Passed: 0, Failed: 0
+
+Tests run: 0, Passed: 0, Failed: 0
+

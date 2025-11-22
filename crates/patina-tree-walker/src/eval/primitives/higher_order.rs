@@ -30,36 +30,49 @@ pub(super) fn map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
         });
     }
 
-    let mut list_vecs: Vec<Vec<Value>> = Vec::new();
-    for list in lists {
-        let mut items = Vec::new();
-        let mut current = list.clone();
-
-        while let Value::Pair(pair) = current {
-            let borrowed = pair.borrow();
-            items.push(borrowed.0.clone());
-            current = borrowed.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::TypeError(
-                "map: argument must be a proper list".to_string(),
-            ));
-        }
-
-        list_vecs.push(items);
-    }
-
-    let min_len = list_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
-
+    // Initialize list cursors - track current position in each list
+    let mut cursors: Vec<Value> = lists.to_vec();
     let mut results = Vec::new();
-    for i in 0..min_len {
-        let mut proc_args = Vec::new();
-        for list_vec in &list_vecs {
-            proc_args.push(list_vec[i].clone());
+
+    // Iterate in parallel through all lists
+    // Stop when ANY list is exhausted (reaches Null)
+    // This handles circular lists correctly - we stop when the shortest non-circular list ends
+    loop {
+        // Check if any list is exhausted
+        let mut all_have_elements = true;
+        for cursor in &cursors {
+            if matches!(cursor, Value::Null) {
+                all_have_elements = false;
+                break;
+            }
         }
 
-        // Procedure calls within map are not in tail position
+        if !all_have_elements {
+            break;
+        }
+
+        // Collect elements from current position in each list
+        let mut proc_args = Vec::new();
+        for (i, cursor) in cursors.iter().enumerate() {
+            match cursor {
+                Value::Pair(pair) => {
+                    let borrowed = pair.borrow();
+                    proc_args.push(borrowed.0.clone());
+                }
+                Value::Null => {
+                    // Already checked above, but handle for safety
+                    break;
+                }
+                _ => {
+                    return Err(EvalError::TypeError(format!(
+                        "map: argument {} must be a proper list (found improper list)",
+                        i + 2 // +1 for proc, +1 for 1-indexed
+                    )));
+                }
+            }
+        }
+
+        // Apply procedure to collected elements
         let result = match evaluator.apply(proc.clone(), proc_args, false)? {
             super::super::EvalResult::Value(v) => v,
             _ => {
@@ -69,6 +82,17 @@ pub(super) fn map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
             }
         };
         results.push(result);
+
+        // Advance all cursors to next element
+        for cursor in cursors.iter_mut() {
+            if let Value::Pair(pair) = cursor {
+                let next = {
+                    let borrowed = pair.borrow();
+                    borrowed.1.clone()
+                }; // borrowed is dropped here
+                *cursor = next;
+            }
+        }
     }
 
     Ok(evaluator.list_from_vec(results))
@@ -92,41 +116,65 @@ pub(super) fn for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value,
         });
     }
 
-    let mut list_vecs: Vec<Vec<Value>> = Vec::new();
-    for list in lists {
-        let mut items = Vec::new();
-        let mut current = list.clone();
+    // Initialize list cursors - track current position in each list
+    let mut cursors: Vec<Value> = lists.to_vec();
 
-        while let Value::Pair(pair) = current {
-            let borrowed = pair.borrow();
-            items.push(borrowed.0.clone());
-            current = borrowed.1.clone();
+    // Iterate in parallel through all lists
+    // Stop when ANY list is exhausted (reaches Null)
+    // This handles circular lists correctly - we stop when the shortest non-circular list ends
+    loop {
+        // Check if any list is exhausted
+        let mut all_have_elements = true;
+        for cursor in &cursors {
+            if matches!(cursor, Value::Null) {
+                all_have_elements = false;
+                break;
+            }
         }
 
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::TypeError(
-                "for-each: argument must be a proper list".to_string(),
-            ));
+        if !all_have_elements {
+            break;
         }
 
-        list_vecs.push(items);
-    }
-
-    let min_len = list_vecs.iter().map(|v| v.len()).min().unwrap_or(0);
-
-    for i in 0..min_len {
+        // Collect elements from current position in each list
         let mut proc_args = Vec::new();
-        for list_vec in &list_vecs {
-            proc_args.push(list_vec[i].clone());
+        for (i, cursor) in cursors.iter().enumerate() {
+            match cursor {
+                Value::Pair(pair) => {
+                    let borrowed = pair.borrow();
+                    proc_args.push(borrowed.0.clone());
+                }
+                Value::Null => {
+                    // Already checked above, but handle for safety
+                    break;
+                }
+                _ => {
+                    return Err(EvalError::TypeError(format!(
+                        "for-each: argument {} must be a proper list (found improper list)",
+                        i + 2 // +1 for proc, +1 for 1-indexed
+                    )));
+                }
+            }
         }
 
-        // Procedure calls within for-each are not in tail position
+        // Apply procedure to collected elements (for side effects)
         match evaluator.apply(proc.clone(), proc_args, false)? {
             super::super::EvalResult::Value(_) => {}
             _ => {
                 return Err(EvalError::InternalError(
                     "Unexpected tail call in for-each".to_string(),
                 ));
+            }
+        }
+
+        // Advance all cursors to next element
+        for cursor in cursors.iter_mut() {
+            if let Value::Pair(pair) = cursor {
+                let next = {
+                    let borrowed = pair.borrow();
+                    borrowed.1.clone()
+                }; // borrowed is dropped here
+                *cursor = next;
             }
         }
     }
