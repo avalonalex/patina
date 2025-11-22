@@ -1,370 +1,440 @@
 Running test suite: R7RS
 Running test suite: 4.1 Primitive expression types
 Testing: 
-x
+expr
 
 Testing: 
-'a
+expr
 
 Testing: 
-'#(a b c)
+expr
 
 Testing: 
-'(+ 1 2)
+expr
 
 Testing: 
-'a
+expr
 
 Testing: 
-'#(a b c)
+expr
 
 Testing: 
-'()
+expr
 
 Testing: 
-'(+ 1 2)
+expr
 
 Testing: 
-''a
+expr
 
 Testing: 
-''a
+expr
 
 Testing: 
-'"abc"
+expr
 
 Testing: 
-"abc"
+expr
 
 Testing: 
-'145932
+expr
 
 Testing: 
-145932
+expr
 
 Testing: 
-'#t
+expr
 
 Testing: 
-#t
+expr
 
 Testing: 
-(+ 3 4)
+expr
 
 Testing: 
-((if #f + *) 3 4)
+expr
 
 Testing: 
-((lambda (x) (+ x x)) 4)
+expr
 
 Testing: 
-(reverse-subtract 7 10)
+expr
 
 Testing: 
-(add4 6)
+expr
 
 Testing: 
-((lambda x x) 3 4 5 6)
+expr
 
 Testing: 
-((lambda (x y . z) z) 3 4 5 6)
+expr
 
 Testing: 
-(if (> 3 2) 'yes 'no)
+expr
 
 Testing: 
-(if (> 2 3) 'yes 'no)
+expr
 
 Testing: 
-(if (> 3 2) (- 3 2) (+ 3 2))
+expr
 
 Testing: 
-(+ x 1)
+expr
 
 Tests run: 27, Passed: 27, Failed: 0
 
 Running test suite: 4.2 Derived expression types
 Testing: 
-(cond ((> 3 2) 'greater) ((< 3 2) 'less))
+expr
 
 Testing: 
-(cond ((> 3 3) 'greater) ((< 3 3) 'less) (else 'equal))
+expr
 
 Testing: 
-(cond ((assv 'b '((a 1) (b 2))) => cadr) (else #f))
+expr
 
 Testing: 
-(case (* 2 3) ((2 3 5 7) 'prime) ((1 4 6 8 9) 'composite))
+expr
 
+FAIL: 
+expr
+
+  expected: 
+composite
+
+  but got:  
+#<unspecified>
+
+
 Testing: 
-(case (car '(c d)) ((a e i o u) 'vowel) ((w y) 'semivowel) (else => (lambda (x) x)))
+expr
 
 Testing: 
-(map (lambda (x) (case x ((a e i o u) => (lambda (w) (cons 'vowel w))) ((w y) (cons 'semivowel x)) (else => (lambda (w) (cons 'other w))))) '(z y x w u))
+expr
+
+FAIL: 
+expr
+
+  expected: 
+((other . z) (semivowel . y) (other . x) (semivowel . w) (vowel . u))
+
+  but got:  
+((other . z) (other . y) (other . x) (other . w) (other . u))
+
 
 Testing: 
-(and (= 2 2) (> 2 1))
+expr
 
 Testing: 
-(and (= 2 2) (< 2 1))
+expr
 
 Testing: 
-(and 1 2 'c '(f g))
+expr
 
 Testing: 
-(and)
+expr
 
 Testing: 
-(or (= 2 2) (> 2 1))
+expr
 
 Testing: 
-(or (= 2 2) (< 2 1))
+expr
 
 Testing: 
-(or #f #f #f)
+expr
 
 Testing: 
-(or (memq 'b '(a b c)) (/ 3 0))
+expr
 
 Testing: 
-(let ((x 2) (y 3)) (* x y))
+expr
 
 Testing: 
-(let ((x 2) (y 3)) (let ((x 7) (z (+ x y))) (* z x)))
+expr
 
 Testing: 
-(let ((x 2) (y 3)) (let* ((x 7) (z (+ x y))) (* z x)))
+expr
 
 Testing: 
-(letrec ((even? (lambda (n) (if (zero? n) #t (odd? (- n 1))))) (odd? (lambda (n) (if (zero? n) #f (even? (- n 1)))))) (even? 88))
+expr
 
 Testing: 
-(letrec* ((p (lambda (x) (+ 1 (q (- x 1))))) (q (lambda (y) (if (zero? y) 0 (+ 1 (p (- y 1)))))) (x (p 5)) (y x)) y)
+expr
 
 Testing: 
-a
+expr
 
 Testing: 
-b
+expr
 
 Testing: 
-c
+expr
 
 Testing: 
-(* root rem)
+expr
 
 Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 60)))) (list root rem))
+expr
 
 Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 61)))) (list root rem))
+expr
 
 Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 119)))) (list root rem))
+expr
 
 Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 120)))) (list root rem))
+expr
 
 Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 2 121)))) (list root rem))
+expr
 
 Testing: 
-(let*-values (((root rem) (exact-integer-sqrt (expt 10 39)))) (list root rem))
+expr
 
 Testing: 
-rem
+expr
 
 Testing: 
-(square root)
+expr
 
 Testing: 
-(let ((a 'a) (b 'b) (x 'x) (y 'y)) (let*-values (((a b) (values x y)) ((x y) (values a b))) (list a b x y)))
+expr
 
 Testing: 
-(let-values () 'ok)
+expr
 
 Testing: 
-(let ((x 1)) (let*-values () (define x 2) #f) x)
+expr
 
 Testing: 
-(+ x 1)
+expr
 
 Testing: 
-(do ((vec (make-vector 5)) (i 0 (+ i 1))) ((= i 5) vec) (vector-set! vec i i))
+expr
 
 Testing: 
-(let ((x '(1 3 5 7 9))) (do ((x x (cdr x)) (sum 0 (+ sum (car x)))) ((null? x) sum)))
+expr
 
 Testing: 
-(let loop ((numbers '(3 -2 1 6 -5)) (nonneg '()) (neg '())) (cond ((null? numbers) (list nonneg neg)) ((>= (car numbers) 0) (loop (cdr numbers) (cons (car numbers) nonneg) neg)) ((< (car numbers) 0) (loop (cdr numbers) nonneg (cons (car numbers) neg)))))
+expr
 
 Testing: 
-(force (delay (+ 1 2)))
+expr
 
 Testing: 
-(let ((p (delay (+ 1 2)))) (list (force p) (force p)))
+expr
 
 Testing: 
-(head (tail (tail integers)))
+expr
 
 Testing: 
-(head (tail (tail (stream-filter odd? integers))))
+expr
 
 Testing: 
-(force p)
+expr
 
 Testing: 
-(begin (set! x 10) (force p))
+expr
 
 Testing: 
-(promise? (delay (+ 2 2)))
+expr
 
 Testing: 
-(promise? (make-promise (+ 2 2)))
+expr
 
 Testing: 
-(let ((x (delay (+ 2 2)))) (force x) (promise? x))
+expr
 
 Testing: 
-(let ((x (make-promise (+ 2 2)))) (force x) (promise? x))
+expr
 
 Testing: 
-(force (make-promise (+ 2 2)))
+expr
 
 Testing: 
-(force (make-promise (make-promise (+ 2 2))))
+expr
 
 Testing: 
-(f 12)
+expr
 
 Testing: 
-(parameterize ((radix 2)) (f 12))
+expr
 
 Testing: 
-(f 12)
+expr
 
 Testing: 
-`(list ,(+ 1 2) 4)
+expr
 
 Testing: 
-`(list ,name ',name)
+expr
 
 Testing: 
-`(a ,(+ 1 2) ,@(map abs '(4 -5 6)) b)
+expr
 
 Testing: 
-`#(10 5 ,(square 2) ,@(map square '(4 3)) 8)
+expr
 
 Testing: 
-`(a `(b ,(+ 1 2) ,(foo ,(+ 1 3) d) e) f)
+expr
 
 Testing: 
-`(a `(b ,,name1 ,',name2 d) e)
+expr
 
 Testing: 
-`(list ,(+ 1 2) 4)
+expr
 
 Testing: 
-`(list ,(+ 1 2) 4)
+expr
 
 Testing: 
-(any-arity)
+expr
 
 Testing: 
-(any-arity 1)
+expr
 
 Testing: 
-(any-arity 1 2)
+expr
 
 Testing: 
-(any-arity 1 2 3)
+expr
 
 Testing: 
-(any-arity 1 2 3 4)
+expr
 
 Testing: 
-(rest-arity)
+expr
 
 Testing: 
-(rest-arity 1)
+expr
 
 Testing: 
-(rest-arity 1 2)
+expr
 
 Testing: 
-(rest-arity 1 2 3)
+expr
 
 Testing: 
-(dead-clause)
+expr
 
 Testing: 
-(dead-clause 1)
+expr
 
 Testing: 
-(dead-clause 1 2)
+expr
 
 Testing: 
-(dead-clause 1 2 3)
+expr
 
-Tests run: 74, Passed: 74, Failed: 0
+Tests run: 74, Passed: 72, Failed: 2
 
 Running test suite: 4.3 Macros
 Testing: 
-(let-syntax ((when (syntax-rules () ((when test stmt1 stmt2 ...) (if test (begin stmt1 stmt2 ...)))))) (let ((if #t)) (when if (set! if 'now)) if))
+expr
 
 Testing: 
-(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
+expr
 
-Error: Undefined variable: ##x#901
+Error: Undefined variable: ##x#903
 Testing: 
-(letrec-syntax ((my-or (syntax-rules () ((my-or) #f) ((my-or e) e) ((my-or e1 e2 ...) (let ((temp e1)) (if temp temp (my-or e2 ...))))))) (let ((x #f) (y 7) (temp 8) (let odd?) (if even?)) (my-or x (let temp) (if y) y)))
+expr
 
-Error: Not a procedure: 8
+Error: Undefined variable: ##temp#912
 Testing: 
-(sequence1 0 1 2 3)
+expr
 
 Error: Invalid syntax: No matching pattern for macro sequence1
 Testing: 
-(sequence2 1 2 3 4)
+expr
 
 Error: Invalid syntax: No matching pattern for macro sequence2
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Testing: 
-(sequence3 2 3 4 5)
+expr
 
 Error: Undefined variable: sequence3
 Testing: 
-(elli-esc-1)
-
-Testing: 
-(elli-esc-1 100)
-
-Testing: 
-(elli-esc-1 100 200)
-
-Testing: 
-(part-2 10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77)
-
-Testing: 
-(part-2x (10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77))
-
-Testing: 
-(part-2x (10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77 . "tail"))
-
-Testing: 
-(underscore foo)
-
-Testing: 
-(underscore2 (1 2))
-
-Testing: 
-(list (count-to-2 a b) (count-to-2) (count-to-2 a b c d))
-
-Testing: 
-(list (count-to-2_ _ _) (count-to-2_) (count-to-2_ a b) (count-to-2_ a b c d))
+expr
 
 FAIL: 
-(list (count-to-2_ _ _) (count-to-2_) (count-to-2_ a b) (count-to-2_ a b c d))
+expr
+
+  expected: 
+...
+
+  but got:  
+(... ...)
+
+
+Testing: 
+expr
+
+FAIL: 
+expr
+
+  expected: 
+(100 ...)
+
+  but got:  
+(... (x ...))
+
+
+Testing: 
+expr
+
+FAIL: 
+expr
+
+  expected: 
+(... 100 200)
+
+  but got:  
+(... (... x y))
+
+
+Testing: 
+expr
+
+Testing: 
+expr
+
+FAIL: 
+expr
+
+  expected: 
+#((10 43) (31 41 51) (32 42 52) (63 77) ("rest:"))
+
+  but got:  
+#((10 43) (31 41 51) (32 42 52) (63 77) ("rest:" . rest))
+
+
+Testing: 
+expr
+
+FAIL: 
+expr
+
+  expected: 
+#((10 43) (31 41 51) (32 42 52) (63 77) ("rest:" . "tail"))
+
+  but got:  
+#((10 43) (31 41 51) (32 42 52) (63 77) ("rest:" . rest))
+
+
+Testing: 
+expr
+
+Testing: 
+expr
+
+Testing: 
+expr
+
+Testing: 
+expr
+
+FAIL: 
+expr
 
   expected: 
 (2 0 fail fail)
@@ -374,138 +444,128 @@ FAIL:
 
 
 Testing: 
-(mad-hatter)
+expr
 
 Testing: 
-(let ((=> #f)) (cond (#t => 'ok)))
+expr
 
 Error: Not a procedure: ok
 Testing: 
-x
+expr
 
 Testing: 
-(bar 1)
+expr
 
 FAIL: 
-(bar 1)
+expr
 
   expected: 
 x
 
   but got:  
-1
+y
 
 
 Testing: 
-(ff 10)
+expr
 
 Testing: 
-(vector-lit)
+expr
 
 Testing: 
-(quux399)
+expr
 
-Error: Undefined variable: ##bar399#1109
+Error: Undefined variable: ##bar399#1111
 Testing: 
-(m k)
-
-FAIL: 
-(m k)
-
-  expected: 
-bound-identifier=?
-
-  but got:  
-free-identifier=?
-
+expr
 
 Error: Invalid syntax: syntax-rules literals must be a proper list
-Tests run: 17, Passed: 14, Failed: 3
+Tests run: 17, Passed: 10, Failed: 7
 
 Running test suite: 5 Program structure
 Testing: 
-(add3 3)
+expr
 
 Testing: 
-(first '(1 2))
+expr
 
 Testing: 
-(let ((x 5)) (define foo (lambda (y) (bar x y))) (define bar (lambda (a b) (+ (* a b) a))) (foo (+ x 3)))
+expr
 
 Testing: 
-(let () (define-values () (values)) 'ok)
+expr
 
 Testing: 
-(let () (define-values (x) (values 1)) x)
+expr
 
 Testing: 
-(let () (define-values x (values 1 2)) (apply + x))
+expr
 
 Testing: 
-(let () (define-values (x y) (values 1 2)) (+ x y))
+expr
 
 Testing: 
-(let () (define-values (x y z) (values 1 2 3)) (+ x y z))
+expr
 
 Testing: 
-(let () (define-values (x y . z) (values 1 2 3 4)) (+ x y (car z) (cadr z)))
+expr
 
 Testing: 
-(let ((x 1) (y 2)) (define-syntax swap! (syntax-rules () ((swap! a b) (let ((tmp a)) (set! a b) (set! b tmp))))) (swap! x y) (list x y))
+expr
 
 Error: Undefined variable: define-record-type
 Testing: 
-(pare? (kons 1 2))
+expr
 
 Error: Undefined variable: pare?
 Testing: 
-(pare? (cons 1 2))
+expr
 
 Error: Undefined variable: pare?
 Testing: 
-(kar (kons 1 2))
+expr
 
 Error: Undefined variable: kar
 Testing: 
-(kdr (kons 1 2))
+expr
 
 Error: Undefined variable: kdr
 Testing: 
-(let ((k (kons 1 2))) (set-kar! k 3) (kar k))
+expr
 
 Error: Undefined variable: kons
 Tests run: 10, Passed: 10, Failed: 0
 
 Running test suite: 6.1 Equivalence Predicates
 Testing: 
-(eqv? 'a 'a)
+expr
 
 Testing: 
-(eqv? 'a 'b)
+expr
 
 Testing: 
-(eqv? 2 2)
+expr
 
 Testing: 
-(eqv? '() '())
+expr
 
 Testing: 
-(eqv? 100000000 100000000)
+expr
 
 Testing: 
-(eqv? (cons 1 2) (cons 1 2))
+expr
 
 Testing: 
-(eqv? (lambda () 1) (lambda () 2))
+expr
 
 Testing: 
-(eqv? #f 'nil)
+expr
 
 Testing: 
-(let ((g (gen-counter))) (eqv? g g))
+expr
 
 FAIL: 
-(let ((g (gen-counter))) (eqv? g g))
+expr
 
   expected: 
 #t
@@ -515,13 +575,13 @@ FAIL:
 
 
 Testing: 
-(eqv? (gen-counter) (gen-counter))
+expr
 
 Testing: 
-(let ((g (gen-loser))) (eqv? g g))
+expr
 
 FAIL: 
-(let ((g (gen-loser))) (eqv? g g))
+expr
 
   expected: 
 #t
@@ -531,25 +591,25 @@ FAIL:
 
 
 Testing: 
-(letrec ((f (lambda () (if (eqv? f g) 'f 'both))) (g (lambda () (if (eqv? f g) 'g 'both)))) (eqv? f g))
+expr
 
 Testing: 
-(let ((x '(a))) (eqv? x x))
+expr
 
 Testing: 
-(eq? 'a 'a)
+expr
 
 Testing: 
-(eq? (list 'a) (list 'a))
+expr
 
 Testing: 
-(eq? '() '())
+expr
 
 Testing: 
-(let ((x '(a))) (eq? x x))
+expr
 
 FAIL: 
-(let ((x '(a))) (eq? x x))
+expr
 
   expected: 
 #t
@@ -559,10 +619,10 @@ FAIL:
 
 
 Testing: 
-(let ((x '#())) (eq? x x))
+expr
 
 FAIL: 
-(let ((x '#())) (eq? x x))
+expr
 
   expected: 
 #t
@@ -572,10 +632,10 @@ FAIL:
 
 
 Testing: 
-(let ((p (lambda (x) x))) (eq? p p))
+expr
 
 FAIL: 
-(let ((p (lambda (x) x))) (eq? p p))
+expr
 
   expected: 
 #t
@@ -585,40 +645,40 @@ FAIL:
 
 
 Testing: 
-(equal? 'a 'a)
+expr
 
 Testing: 
-(equal? '(a) '(a))
+expr
 
 Testing: 
-(equal? '(a (b) c) '(a (b) c))
+expr
 
 Testing: 
-(equal? "abc" "abc")
+expr
 
 Testing: 
-(equal? 2 2)
+expr
 
 Testing: 
-(equal? (make-vector 5 'a) (make-vector 5 'a))
+expr
 
 Tests run: 25, Passed: 20, Failed: 5
 
 Running test suite: 6.2 Numbers
 Testing: 
-(complex? 3+4i)
+expr
 
 Testing: 
-(complex? 3)
+expr
 
 Testing: 
-(real? 3)
+expr
 
 Testing: 
-(real? -2.5)
+expr
 
 FAIL: 
-(real? -2.5)
+expr
 
   expected: 
 #t
@@ -628,25 +688,25 @@ FAIL:
 
 
 Testing: 
-(real? -2.5)
+expr
 
 Testing: 
-(real? 10000000000)
+expr
 
 Testing: 
-(real? +inf.0)
+expr
 
 Testing: 
-(rational? -inf.0)
+expr
 
 Testing: 
-(rational? +nan.0)
+expr
 
 Testing: 
-(rational? 9007199254740991.0)
+expr
 
 FAIL: 
-(rational? 9007199254740991.0)
+expr
 
   expected: 
 #t
@@ -656,10 +716,10 @@ FAIL:
 
 
 Testing: 
-(rational? 9007199254740992.0)
+expr
 
 FAIL: 
-(rational? 9007199254740992.0)
+expr
 
   expected: 
 #t
@@ -669,10 +729,10 @@ FAIL:
 
 
 Testing: 
-(rational? 179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.0)
+expr
 
 FAIL: 
-(rational? 179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.0)
+expr
 
   expected: 
 #t
@@ -682,16 +742,16 @@ FAIL:
 
 
 Testing: 
-(rational? 3/5)
+expr
 
 Testing: 
-(rational? 2)
+expr
 
 Testing: 
-(integer? 3)
+expr
 
 FAIL: 
-(integer? 3)
+expr
 
   expected: 
 #t
@@ -701,10 +761,10 @@ FAIL:
 
 
 Testing: 
-(integer? 3.0)
+expr
 
 FAIL: 
-(integer? 3.0)
+expr
 
   expected: 
 #t
@@ -714,190 +774,190 @@ FAIL:
 
 
 Testing: 
-(integer? 2)
+expr
 
 Testing: 
-(exact? 3.0)
+expr
 
 Testing: 
-(exact? 3)
+expr
 
 Testing: 
-(inexact? 3.0)
+expr
 
 Testing: 
-(exact-integer? 32)
+expr
 
 Testing: 
-(exact-integer? 32.0)
+expr
 
 Testing: 
-(exact-integer? 32/5)
+expr
 
 Testing: 
-(finite? 3)
+expr
 
 Testing: 
-(finite? +inf.0)
+expr
 
 Testing: 
-(finite? 3+infi)
+expr
 
 Testing: 
-(infinite? 3)
+expr
 
 Testing: 
-(infinite? +inf.0)
+expr
 
 Testing: 
-(infinite? +nan.0)
+expr
 
 Testing: 
-(infinite? 3+infi)
+expr
 
 Testing: 
-(nan? +nan.0)
+expr
 
 Testing: 
-(nan? 32)
+expr
 
 Testing: 
-(nan? 1+2i)
+expr
 
 Testing: 
-(= 1 1.0 1)
+expr
 
 Testing: 
-(= 1.0 1+i)
+expr
 
 Testing: 
-(< 1 2 3)
+expr
 
 Testing: 
-(< 1 1 2)
+expr
 
 Testing: 
-(> 3.0 2.0 1.0)
+expr
 
 Testing: 
-(> -3.0 2.0 1.0)
+expr
 
 Testing: 
-(<= 1 1 2)
+expr
 
 Testing: 
-(<= 1 2 1)
+expr
 
 Testing: 
-(>= 2 1 1)
+expr
 
 Testing: 
-(>= 1 2 1)
+expr
 
 Testing: 
-(< +nan.0 0)
+expr
 
 Testing: 
-(> +nan.0 0)
+expr
 
 Testing: 
-(< +nan.0 0.0)
+expr
 
 Testing: 
-(> +nan.0 0.0)
+expr
 
 Testing: 
-(list (<= 1 1 2) (<= 2 1 3))
+expr
 
 Testing: 
-(= 9007199254740992.0 9007199254740993)
+expr
 
 Testing: 
-(if (and (= a b) (= b c)) (= a c) #t)
+expr
 
 Testing: 
-(if (and (<= a j) (< j (+ j 1))) (not (<= (+ j 1) a)) #t)
+expr
 
 Testing: 
-(zero? 0)
+expr
 
 Testing: 
-(zero? 0.0)
+expr
 
 Testing: 
-(zero? 0)
+expr
 
 Testing: 
-(zero? 1)
+expr
 
 Testing: 
-(zero? -1)
+expr
 
 Testing: 
-(positive? 0)
+expr
 
 Testing: 
-(positive? 0.0)
+expr
 
 Testing: 
-(positive? 1)
+expr
 
 Testing: 
-(positive? 1.0)
+expr
 
 Testing: 
-(positive? -1)
+expr
 
 Testing: 
-(positive? -1.0)
+expr
 
 Testing: 
-(positive? +inf.0)
+expr
 
 Testing: 
-(positive? -inf.0)
+expr
 
 Testing: 
-(positive? +nan.0)
+expr
 
 Testing: 
-(negative? 0)
+expr
 
 Testing: 
-(negative? 0.0)
+expr
 
 Testing: 
-(negative? 1)
+expr
 
 Testing: 
-(negative? 1.0)
+expr
 
 Testing: 
-(negative? -1)
+expr
 
 Testing: 
-(negative? -1.0)
+expr
 
 Testing: 
-(negative? +inf.0)
+expr
 
 Testing: 
-(negative? -inf.0)
+expr
 
 Testing: 
-(negative? +nan.0)
+expr
 
 Testing: 
-(odd? 0)
+expr
 
 Testing: 
-(odd? 1)
+expr
 
 Testing: 
-(odd? -1)
+expr
 
 FAIL: 
-(odd? -1)
+expr
 
   expected: 
 #t
@@ -907,37 +967,37 @@ FAIL:
 
 
 Testing: 
-(odd? 102)
+expr
 
 Testing: 
-(even? 0)
+expr
 
 Testing: 
-(even? 1)
+expr
 
 Testing: 
-(even? -2)
+expr
 
 Testing: 
-(even? 102)
+expr
 
 Testing: 
-(max 3)
+expr
 
 Testing: 
-(max 3 4)
+expr
 
 Testing: 
-(max 3.9 4)
+expr
 
 Testing: 
-(max 5 3.9 4)
+expr
 
 Testing: 
-(max 100 +inf.0)
+expr
 
 FAIL: 
-(max 100 +inf.0)
+expr
 
   expected: 
 +inf.0
@@ -947,19 +1007,19 @@ FAIL:
 
 
 Testing: 
-(min 3)
+expr
 
 Testing: 
-(min 3 4)
+expr
 
 Testing: 
-(min 3 3.1)
+expr
 
 Testing: 
-(min -inf.0 -100)
+expr
 
 FAIL: 
-(min -inf.0 -100)
+expr
 
   expected: 
 -inf.0
@@ -969,64 +1029,64 @@ FAIL:
 
 
 Testing: 
-(+ 3 4)
+expr
 
 Testing: 
-(+ 3)
+expr
 
 Testing: 
-(+)
+expr
 
 Testing: 
-(* 4)
+expr
 
 Testing: 
-(*)
+expr
 
 Testing: 
-(- 3 4)
+expr
 
 Testing: 
-(- 3 4 5)
+expr
 
 Testing: 
-(- 3)
+expr
 
 Testing: 
-(- 3/2)
+expr
 
 Testing: 
-(- 1.5+i)
+expr
 
 Testing: 
-(/ 3 4 5)
+expr
 
 Testing: 
-(/ 3)
+expr
 
 Testing: 
-(/ -1073741824 -1)
+expr
 
 Testing: 
-(quotient -1073741824 -1)
+expr
 
 Testing: 
-(remainder -1073741824 -1)
+expr
 
 Testing: 
-(/ -4611686018427387904 -1)
+expr
 
 Testing: 
-(quotient -4611686018427387904 -1)
+expr
 
 Testing: 
-(remainder -4611686018427387904 -1)
+expr
 
 Testing: 
-(abs -7)
+expr
 
 Testing: 
-(abs 7)
+expr
 
 Error: Undefined variable: test-values
 Error: Undefined variable: test-values
@@ -1038,22 +1098,22 @@ Error: Undefined variable: test-values
 Error: Undefined variable: test-values
 Error: Undefined variable: test-values
 Testing: 
-(modulo 13 4)
+expr
 
 Testing: 
-(remainder 13 4)
+expr
 
 Testing: 
-(modulo -13 4)
+expr
 
 Testing: 
-(remainder -13 4)
+expr
 
 Testing: 
-(modulo 13 -4)
+expr
 
 FAIL: 
-(modulo 13 -4)
+expr
 
   expected: 
 -3
@@ -1063,13 +1123,13 @@ FAIL:
 
 
 Testing: 
-(remainder 13 -4)
+expr
 
 Testing: 
-(modulo -13 -4)
+expr
 
 FAIL: 
-(modulo -13 -4)
+expr
 
   expected: 
 -1
@@ -1079,83 +1139,83 @@ FAIL:
 
 
 Testing: 
-(remainder -13 -4)
+expr
 
 Testing: 
-(remainder -13 -4.0)
+expr
 
 Error: Invalid syntax: Unknown primitive: remainder
 Testing: 
-(gcd 32 -36)
+expr
 
 Testing: 
-(gcd)
+expr
 
 Testing: 
-(lcm 32 -36)
+expr
 
 Testing: 
-(lcm 32.0 -36)
+expr
 
 Error: Invalid syntax: Unknown primitive: lcm
 Testing: 
-(lcm)
+expr
 
 Testing: 
-(numerator (/ 6 4))
+expr
 
 Testing: 
-(denominator (/ 6 4))
+expr
 
 Testing: 
-(denominator (inexact (/ 6 4)))
+expr
 
 Error: Invalid syntax: Unknown primitive: denominator
 Testing: 
-(numerator 5.5)
+expr
 
 Error: Invalid syntax: Unknown primitive: numerator
 Testing: 
-(denominator 5.5)
+expr
 
 Error: Invalid syntax: Unknown primitive: denominator
 Testing: 
-(numerator 5.0)
+expr
 
 Error: Invalid syntax: Unknown primitive: numerator
 Testing: 
-(denominator 5.0)
+expr
 
 Error: Invalid syntax: Unknown primitive: denominator
 Testing: 
-(floor -4.3)
+expr
 
 Testing: 
-(ceiling -4.3)
+expr
 
 Testing: 
-(truncate -4.3)
+expr
 
 Testing: 
-(round -4.3)
+expr
 
 Testing: 
-(floor 3.5)
+expr
 
 Testing: 
-(ceiling 3.5)
+expr
 
 Testing: 
-(truncate 3.5)
+expr
 
 Testing: 
-(round 3.5)
+expr
 
 Testing: 
-(round 7/2)
+expr
 
 FAIL: 
-(round 7/2)
+expr
 
   expected: 
 4
@@ -1165,13 +1225,13 @@ FAIL:
 
 
 Testing: 
-(round 7)
+expr
 
 Testing: 
-(round 7/10)
+expr
 
 FAIL: 
-(round 7/10)
+expr
 
   expected: 
 1
@@ -1181,10 +1241,10 @@ FAIL:
 
 
 Testing: 
-(round -7/2)
+expr
 
 FAIL: 
-(round -7/2)
+expr
 
   expected: 
 -4
@@ -1194,13 +1254,13 @@ FAIL:
 
 
 Testing: 
-(round -7)
+expr
 
 Testing: 
-(round -7/10)
+expr
 
 FAIL: 
-(round -7/10)
+expr
 
   expected: 
 -1
@@ -1210,132 +1270,132 @@ FAIL:
 
 
 Testing: 
-(rationalize (exact .3) 1/10)
+expr
 
 Error: Undefined variable: .3
 Testing: 
-(rationalize .3 1/10)
+expr
 
 Error: Undefined variable: .3
 Testing: 
-(inexact (exp 0))
+expr
 
 Testing: 
-(exp 3)
+expr
 
 Testing: 
-(inexact (log 1))
+expr
 
 Testing: 
-(log (exp 1))
+expr
 
 Testing: 
-(log (exp 42))
+expr
 
 Testing: 
-(log 100 10)
+expr
 
 Testing: 
-(log 4096 2)
+expr
 
 Testing: 
-(inexact (sin 0))
+expr
 
 Testing: 
-(sin 1.5707963267949)
+expr
 
 Testing: 
-(inexact (cos 0))
+expr
 
 Testing: 
-(cos 3.14159265358979)
+expr
 
 Testing: 
-(inexact (tan 0))
+expr
 
 Testing: 
-(tan 1)
+expr
 
 Testing: 
-(inexact (asin 0))
+expr
 
 Testing: 
-(asin 1)
+expr
 
 Testing: 
-(inexact (acos 1))
+expr
 
 Testing: 
-(acos -1)
+expr
 
 Testing: 
-(atan 0.0 1.0)
+expr
 
 Testing: 
-(atan -0.0 1.0)
+expr
 
 Testing: 
-(atan 1.0 1.0)
+expr
 
 Testing: 
-(atan 1.0 0.0)
+expr
 
 Testing: 
-(atan 1.0 -1.0)
+expr
 
 Testing: 
-(atan 0.0 -1.0)
+expr
 
 Testing: 
-(atan -0.0 -1.0)
+expr
 
 Testing: 
-(atan -1.0 -1.0)
+expr
 
 Testing: 
-(atan -1.0 0.0)
+expr
 
 Testing: 
-(atan -1.0 1.0)
+expr
 
 Testing: 
-(square 42)
+expr
 
 Testing: 
-(square 2)
+expr
 
 Testing: 
-(inexact (sqrt 9))
+expr
 
 Testing: 
-(sqrt 2)
+expr
 
 Testing: 
-(inexact (sqrt -1))
+expr
 
 Testing: 
-(sqrt -1)
+expr
 
 Testing: 
-(call-with-values (lambda () (exact-integer-sqrt 4)) list)
+expr
 
 Testing: 
-(call-with-values (lambda () (exact-integer-sqrt 5)) list)
+expr
 
 Testing: 
-(expt 3 3)
+expr
 
 Testing: 
-(expt 0 0)
+expr
 
 Testing: 
-(expt 0 1)
+expr
 
 Testing: 
-(expt 0.0 0)
+expr
 
 FAIL: 
-(expt 0.0 0)
+expr
 
   expected: 
 1.0
@@ -1345,19 +1405,19 @@ FAIL:
 
 
 Testing: 
-(expt 0 1.0)
+expr
 
 Testing: 
-(make-rectangular 1 2)
+expr
 
 Testing: 
-(make-polar 1 1)
+expr
 
 Testing: 
-(real-part 1+2i)
+expr
 
 FAIL: 
-(real-part 1+2i)
+expr
 
   expected: 
 1
@@ -1367,10 +1427,10 @@ FAIL:
 
 
 Testing: 
-(imag-part 1+2i)
+expr
 
 FAIL: 
-(imag-part 1+2i)
+expr
 
   expected: 
 2
@@ -1380,285 +1440,285 @@ FAIL:
 
 
 Testing: 
-(magnitude 1+2i)
+expr
 
 Testing: 
-(angle 1+2i)
+expr
 
 Testing: 
-(inexact 1)
+expr
 
 Testing: 
-(inexact? (inexact 1))
+expr
 
 Testing: 
-(exact 1.0)
+expr
 
 Testing: 
-(exact? (exact 1.0))
+expr
 
 Testing: 
-(string->number "100")
+expr
 
 Testing: 
-(string->number "100" 16)
+expr
 
 Testing: 
-(string->number "1e2")
+expr
 
 Testing: 
-(string->number "1 2")
+expr
 
 Tests run: 193, Passed: 175, Failed: 18
 
 Running test suite: 6.3 Booleans
 Testing: 
-#t
+expr
 
 Testing: 
-#f
+expr
 
 Testing: 
-'#f
+expr
 
 Testing: 
-(not #t)
+expr
 
 Testing: 
-(not 3)
+expr
 
 Testing: 
-(not (list 3))
+expr
 
 Testing: 
-(not #f)
+expr
 
 Testing: 
-(not '())
+expr
 
 Testing: 
-(not (list))
+expr
 
 Testing: 
-(not 'nil)
+expr
 
 Testing: 
-(boolean? #f)
+expr
 
 Testing: 
-(boolean? 0)
+expr
 
 Testing: 
-(boolean? '())
+expr
 
 Testing: 
-(boolean=? #t #t)
+expr
 
 Testing: 
-(boolean=? #f #f)
+expr
 
 Testing: 
-(boolean=? #t #f)
+expr
 
 Testing: 
-(boolean=? #f #f #f)
+expr
 
 Testing: 
-(boolean=? #t #t #f)
+expr
 
 Tests run: 18, Passed: 18, Failed: 0
 
 Running test suite: 6.4 Lists
 Testing: 
-(values y)
+expr
 
 Testing: 
-(list? y)
+expr
 
 Testing: 
-(values x)
+expr
 
 Testing: 
-(eqv? x y)
+expr
 
 Testing: 
-(list? y)
+expr
 
 Testing: 
-(list? x)
+expr
 
 Testing: 
-(pair? '(a . b))
+expr
 
 Testing: 
-(pair? '(a b c))
+expr
 
 Testing: 
-(pair? '())
+expr
 
 Testing: 
-(pair? '#(a b))
+expr
 
 Testing: 
-(cons 'a '())
+expr
 
 Testing: 
-(cons '(a) '(b c d))
+expr
 
 Testing: 
-(cons "a" '(b c))
+expr
 
 Testing: 
-(cons 'a 3)
+expr
 
 Testing: 
-(cons '(a b) 'c)
+expr
 
 Testing: 
-(car '(a b c))
+expr
 
 Testing: 
-(car '((a) b c d))
+expr
 
 Testing: 
-(car '(1 . 2))
+expr
 
 Testing: 
-(cdr '((a) b c d))
+expr
 
 Testing: 
-(cdr '(1 . 2))
+expr
 
 Testing: 
-(list? '(a b c))
+expr
 
 Testing: 
-(list? '())
+expr
 
 Testing: 
-(list? '(a . b))
+expr
 
 Testing: 
-(let ((x (list 'a))) (set-cdr! x x) (list? x))
+expr
 
 Testing: 
-(make-list 2 3)
+expr
 
 Testing: 
-(list 'a (+ 3 4) 'c)
+expr
 
 Testing: 
-(list)
+expr
 
 Testing: 
-(length '(a b c))
+expr
 
 Testing: 
-(length '(a (b) (c d e)))
+expr
 
 Testing: 
-(length '())
+expr
 
 Testing: 
-(append '(x) '(y))
+expr
 
 Testing: 
-(append '(a) '(b c d))
+expr
 
 Testing: 
-(append '(a (b)) '((c)))
+expr
 
 Testing: 
-(append '(a b) '(c . d))
+expr
 
 Testing: 
-(append '() 'a)
+expr
 
 Testing: 
-(reverse '(a b c))
+expr
 
 Testing: 
-(reverse '(a (b c) d (e (f))))
+expr
 
 Testing: 
-(list-tail '(a b c d e) 3)
+expr
 
 Testing: 
-(list-ref '(a b c d) 2)
+expr
 
 Testing: 
-(list-ref '(a b c d) (exact (round 1.8)))
+expr
 
 Testing: 
-(let ((lst (list 0 '(2 2 2 2) "Anna"))) (list-set! lst 1 '("Sue" "Sue")) lst)
+expr
 
 Testing: 
-(memq 'a '(a b c))
+expr
 
 Testing: 
-(memq 'b '(a b c))
+expr
 
 Testing: 
-(memq 'a '(b c d))
+expr
 
 Testing: 
-(memq (list 'a) '(b (a) c))
+expr
 
 Testing: 
-(member (list 'a) '(b (a) c))
+expr
 
 Testing: 
-(member "B" '("a" "b" "c") string-ci=?)
+expr
 
 Error: Invalid syntax: Unknown primitive: member
 Testing: 
-(memv 101 '(100 101 102))
+expr
 
 Testing: 
-(assq 'a e)
+expr
 
 Testing: 
-(assq 'b e)
+expr
 
 Testing: 
-(assq 'd e)
+expr
 
 Testing: 
-(assq (list 'a) '(((a)) ((b)) ((c))))
+expr
 
 Testing: 
-(assoc (list 'a) '(((a)) ((b)) ((c))))
+expr
 
 Testing: 
-(assoc 2.0 '((1 1) (2 4) (3 9)) =)
+expr
 
 Error: Invalid syntax: Unknown primitive: assoc
 Testing: 
-(assv 5 '((2 3) (5 7) (11 13)))
+expr
 
 Testing: 
-(list-copy '(1 2 3))
+expr
 
 Testing: 
-(list-copy "foo")
+expr
 
 Testing: 
-(list-copy '())
+expr
 
 Testing: 
-(list-copy '(3 . 4))
+expr
 
 Testing: 
-(list-copy '(6 7 8 . 9))
+expr
 
 Testing: 
-'((a b) (c d) e)
+expr
 
 Testing: 
-(eq? (car l1) (car l2))
+expr
 
 FAIL: 
-(eq? (car l1) (car l2))
+expr
 
   expected: 
 #t
@@ -1668,10 +1728,10 @@ FAIL:
 
 
 Testing: 
-(eq? (cadr l1) (cadr l2))
+expr
 
 FAIL: 
-(eq? (cadr l1) (cadr l2))
+expr
 
   expected: 
 #t
@@ -1681,268 +1741,267 @@ FAIL:
 
 
 Testing: 
-(eq? (cdr l1) (cdr l2))
+expr
 
 Testing: 
-(eq? (cddr l1) (cddr l2))
+expr
 
 Tests run: 63, Passed: 61, Failed: 2
 
 Running test suite: 6.5 Symbols
 Testing: 
-(symbol? 'foo)
+expr
 
 Testing: 
-(symbol? (car '(a b)))
+expr
 
 Testing: 
-(symbol? "bar")
+expr
 
 Testing: 
-(symbol? 'nil)
+expr
 
 Testing: 
-(symbol? '())
+expr
 
 Testing: 
-(symbol? #f)
+expr
 
 Testing: 
-(symbol=? 'a 'a)
-
-Error: Undefined variable: symbol=?
-Testing: 
-(symbol=? 'a 'A)
+expr
 
 Error: Undefined variable: symbol=?
 Testing: 
-(symbol=? 'a 'a 'a)
+expr
 
 Error: Undefined variable: symbol=?
 Testing: 
-(symbol=? 'a 'a 'A)
+expr
 
 Error: Undefined variable: symbol=?
 Testing: 
-(symbol->string 'flying-fish)
+expr
+
+Error: Undefined variable: symbol=?
+Testing: 
+expr
 
 Error: Undefined variable: symbol->string
 Testing: 
-(symbol->string 'Martin)
+expr
 
 Error: Undefined variable: symbol->string
 Testing: 
-(symbol->string (string->symbol "Malvina"))
+expr
 
 Error: Undefined variable: symbol->string
 Testing: 
-(string->symbol "mISSISSIppi")
+expr
 
 Error: Undefined variable: string->symbol
 Testing: 
-(eq? 'bitBlt (string->symbol "bitBlt"))
+expr
 
 Error: Undefined variable: string->symbol
 Testing: 
-(eq? 'LollyPop (string->symbol (symbol->string 'LollyPop)))
+expr
 
 Error: Undefined variable: string->symbol
 Testing: 
-(string=? "K. Harper, M.D." (symbol->string (string->symbol "K. Harper, M.D.")))
+expr
 
 Error: Undefined variable: symbol->string
 Tests run: 6, Passed: 6, Failed: 0
 
 Running test suite: 6.6 Characters
 Testing: 
-(char? #\a)
+expr
 
 Testing: 
-(char? "a")
+expr
 
 Testing: 
-(char? 'a)
+expr
 
 Testing: 
-(char? 0)
+expr
 
 Testing: 
-(char=? #\a #\a #\a)
+expr
 
 Testing: 
-(char=? #\a #\A)
+expr
 
 Testing: 
-(char<? #\a #\b #\c)
+expr
 
 Testing: 
-(char<? #\a #\a)
+expr
 
 Testing: 
-(char<? #\b #\a)
+expr
 
 Testing: 
-(char>? #\a #\b)
+expr
 
 Testing: 
-(char>? #\a #\a)
+expr
 
 Testing: 
-(char>? #\c #\b #\a)
+expr
 
 Testing: 
-(char<=? #\a #\b #\b)
+expr
 
 Testing: 
-(char<=? #\a #\a)
+expr
 
 Testing: 
-(char<=? #\b #\a)
+expr
 
 Testing: 
-(char>=? #\a #\b)
+expr
 
 Testing: 
-(char>=? #\a #\a)
+expr
 
 Testing: 
-(char>=? #\b #\b #\a)
+expr
 
 Testing: 
-(char-ci=? #\a #\a)
+expr
 
 Testing: 
-(char-ci=? #\a #\A #\a)
+expr
 
 Testing: 
-(char-ci=? #\a #\b)
+expr
 
 Testing: 
-(char-ci<? #\a #\B #\c)
+expr
 
 Testing: 
-(char-ci<? #\A #\a)
+expr
 
 Testing: 
-(char-ci<? #\b #\A)
+expr
 
 Testing: 
-(char-ci>? #\A #\b)
+expr
 
 Testing: 
-(char-ci>? #\a #\A)
+expr
 
 Testing: 
-(char-ci>? #\c #\B #\a)
+expr
 
 Testing: 
-(char-ci<=? #\a #\B #\b)
+expr
 
 Testing: 
-(char-ci<=? #\A #\a)
+expr
 
 Testing: 
-(char-ci<=? #\b #\A)
+expr
 
 Testing: 
-(char-ci>=? #\A #\b)
+expr
 
 Testing: 
-(char-ci>=? #\a #\A)
+expr
 
 Testing: 
-(char-ci>=? #\b #\B #\a)
+expr
 
 Testing: 
-(char-alphabetic? #\a)
+expr
 
 Testing: 
-(char-alphabetic? #\ )
+expr
 
 Testing: 
-(char-numeric? #\0)
+expr
 
 Testing: 
-(char-numeric? #\.)
+expr
 
 Testing: 
-(char-numeric? #\a)
+expr
 
 Testing: 
-(char-whitespace? #\ )
+expr
 
 Testing: 
-(char-whitespace? #\	)
+expr
 
 Testing: 
-(char-whitespace? #\
-)
+expr
 
 Testing: 
-(char-whitespace? #\_)
+expr
 
 Testing: 
-(char-whitespace? #\a)
+expr
 
 Testing: 
-(char-upper-case? #\A)
+expr
 
 Testing: 
-(char-upper-case? #\a)
+expr
 
 Testing: 
-(char-upper-case? #\3)
+expr
 
 Testing: 
-(char-lower-case? #\a)
+expr
 
 Testing: 
-(char-lower-case? #\A)
+expr
 
 Testing: 
-(char-lower-case? #\3)
+expr
 
 Testing: 
-(char-alphabetic? #\Λ)
+expr
 
 Testing: 
-(char-alphabetic? #\๐)
+expr
 
 Testing: 
-(char-upper-case? #\Λ)
+expr
 
 Testing: 
-(char-upper-case? #\λ)
+expr
 
 Testing: 
-(char-lower-case? #\Λ)
+expr
 
 Testing: 
-(char-lower-case? #\λ)
+expr
 
 Testing: 
-(char-numeric? #\Λ)
+expr
 
 Testing: 
-(char-numeric? #\๐)
+expr
 
 Testing: 
-(char-whitespace? #\ )
+expr
 
 Testing: 
-(digit-value #\0)
+expr
 
 Testing: 
-(digit-value #\3)
+expr
 
 Testing: 
-(digit-value #\9)
+expr
 
 Testing: 
-(digit-value #\٤)
+expr
 
 FAIL: 
-(digit-value #\٤)
+expr
 
   expected: 
 4
@@ -1952,10 +2011,10 @@ FAIL:
 
 
 Testing: 
-(digit-value #\૦)
+expr
 
 FAIL: 
-(digit-value #\૦)
+expr
 
   expected: 
 0
@@ -1965,298 +2024,298 @@ FAIL:
 
 
 Testing: 
-(digit-value #\.)
+expr
 
 Testing: 
-(digit-value #\-)
+expr
 
 Testing: 
-(char->integer #\a)
+expr
 
 Testing: 
-(integer->char 97)
+expr
 
 Testing: 
-(char-upcase #\a)
+expr
 
 Testing: 
-(char-upcase #\A)
+expr
 
 Testing: 
-(char-downcase #\a)
+expr
 
 Testing: 
-(char-downcase #\A)
+expr
 
 Testing: 
-(char-foldcase #\a)
+expr
 
 Testing: 
-(char-foldcase #\A)
+expr
 
 Testing: 
-(char-upcase #\λ)
+expr
 
 Testing: 
-(char-upcase #\Λ)
+expr
 
 Testing: 
-(char-downcase #\λ)
+expr
 
 Testing: 
-(char-downcase #\Λ)
+expr
 
 Testing: 
-(char-foldcase #\λ)
+expr
 
 Testing: 
-(char-foldcase #\Λ)
+expr
 
 Tests run: 79, Passed: 77, Failed: 2
 
 Running test suite: 6.7 Strings
 Testing: 
-(string? "")
+expr
 
 Testing: 
-(string? " ")
+expr
 
 Testing: 
-(string? 'a)
+expr
 
 Testing: 
-(string? #\a)
+expr
 
 Testing: 
-(string-length (make-string 3))
+expr
 
 Testing: 
-(make-string 3 #\-)
+expr
 
 Testing: 
-(string)
+expr
 
 Testing: 
-(string #\- #\- #\-)
+expr
 
 Testing: 
-(string #\k #\i #\t #\t #\e #\n)
+expr
 
 Testing: 
-(string-length "")
+expr
 
 Testing: 
-(string-length "a")
+expr
 
 Testing: 
-(string-length "abc")
+expr
 
 Testing: 
-(string-ref "abc" 0)
+expr
 
 Testing: 
-(string-ref "abc" 1)
+expr
 
 Testing: 
-(string-ref "abc" 2)
+expr
 
 Testing: 
-(let ((str (string #\a #\b #\c))) (string-set! str 1 #\-) str)
+expr
 
 Testing: 
-(let ((s (string #\a #\b #\c))) (string-set! s 1 #\🜀) s)
+expr
 
 Testing: 
-(string=? "" "")
+expr
 
 Testing: 
-(string=? "abc" "abc" "abc")
+expr
 
 Testing: 
-(string=? "" "abc")
+expr
 
 Testing: 
-(string=? "abc" "aBc")
+expr
 
 Testing: 
-(string<? "" "")
+expr
 
 Testing: 
-(string<? "abc" "abc")
+expr
 
 Testing: 
-(string<? "abc" "abcd" "acd")
+expr
 
 Testing: 
-(string<? "abcd" "abc")
+expr
 
 Testing: 
-(string<? "abc" "bbc")
+expr
 
 Testing: 
-(string>? "" "")
+expr
 
 Testing: 
-(string>? "abc" "abc")
+expr
 
 Testing: 
-(string>? "abc" "abcd")
+expr
 
 Testing: 
-(string>? "acd" "abcd" "abc")
+expr
 
 Testing: 
-(string>? "abc" "bbc")
+expr
 
 Testing: 
-(string<=? "" "")
+expr
 
 Testing: 
-(string<=? "abc" "abc")
+expr
 
 Testing: 
-(string<=? "abc" "abcd" "abcd")
+expr
 
 Testing: 
-(string<=? "abcd" "abc")
+expr
 
 Testing: 
-(string<=? "abc" "bbc")
+expr
 
 Testing: 
-(string>=? "" "")
+expr
 
 Testing: 
-(string>=? "abc" "abc")
+expr
 
 Testing: 
-(string>=? "abc" "abcd")
+expr
 
 Testing: 
-(string>=? "abcd" "abcd" "abc")
+expr
 
 Testing: 
-(string>=? "abc" "bbc")
+expr
 
 Testing: 
-(string-ci=? "" "")
+expr
 
 Testing: 
-(string-ci=? "abc" "abc")
+expr
 
 Testing: 
-(string-ci=? "" "abc")
+expr
 
 Testing: 
-(string-ci=? "abc" "aBc")
+expr
 
 Testing: 
-(string-ci=? "abc" "aBcD")
+expr
 
 Testing: 
-(string-ci<? "abc" "aBc")
+expr
 
 Testing: 
-(string-ci<? "abc" "aBcD")
+expr
 
 Testing: 
-(string-ci<? "ABCd" "aBc")
+expr
 
 Testing: 
-(string-ci>? "abc" "aBc")
+expr
 
 Testing: 
-(string-ci>? "abc" "aBcD")
+expr
 
 Testing: 
-(string-ci>? "ABCd" "aBc")
+expr
 
 Testing: 
-(string-ci<=? "abc" "aBc")
+expr
 
 Testing: 
-(string-ci<=? "abc" "aBcD")
+expr
 
 Testing: 
-(string-ci<=? "ABCd" "aBc")
+expr
 
 Testing: 
-(string-ci>=? "abc" "aBc")
+expr
 
 Testing: 
-(string-ci>=? "abc" "aBcD")
+expr
 
 Testing: 
-(string-ci>=? "ABCd" "aBc")
+expr
 
 Testing: 
-(string-ci=? "ΑΒΓ" "αβγ" "αβγ")
+expr
 
 Testing: 
-(string-ci<? "ΑΒΓ" "αβγ")
+expr
 
 Testing: 
-(string-ci>? "ΑΒΓ" "αβγ")
+expr
 
 Testing: 
-(string-ci<=? "ΑΒΓ" "αβγ")
+expr
 
 Testing: 
-(string-ci>=? "ΑΒΓ" "αβγ")
+expr
 
 Testing: 
-(string-upcase "abc")
+expr
 
 Testing: 
-(string-upcase "ABC")
+expr
 
 Testing: 
-(string-downcase "abc")
+expr
 
 Testing: 
-(string-downcase "ABC")
+expr
 
 Testing: 
-(string-foldcase "abc")
+expr
 
 Testing: 
-(string-foldcase "ABC")
+expr
 
 Testing: 
-(string-upcase "αβγ")
+expr
 
 Testing: 
-(string-upcase "ΑΒΓ")
+expr
 
 Testing: 
-(string-downcase "αβγ")
+expr
 
 Testing: 
-(string-downcase "ΑΒΓ")
+expr
 
 Testing: 
-(string-foldcase "αβγ")
+expr
 
 Testing: 
-(string-foldcase "ΑΒΓ")
+expr
 
 Testing: 
-(string-upcase "ßa")
+expr
 
 Testing: 
-(string-downcase "ßa")
+expr
 
 Testing: 
-(string-downcase "SSA")
+expr
 
 Testing: 
-(string-downcase "Maß")
+expr
 
 Testing: 
-(string-foldcase "Maß")
+expr
 
 FAIL: 
-(string-foldcase "Maß")
+expr
 
   expected: 
 "mass"
@@ -2266,13 +2325,13 @@ FAIL:
 
 
 Testing: 
-(string-upcase "İ")
+expr
 
 Testing: 
-(string-downcase "İ")
+expr
 
 FAIL: 
-(string-downcase "İ")
+expr
 
   expected: 
 "ix0307;"
@@ -2282,10 +2341,10 @@ FAIL:
 
 
 Testing: 
-(string-foldcase "İ")
+expr
 
 FAIL: 
-(string-foldcase "İ")
+expr
 
   expected: 
 "ix0307;"
@@ -2295,16 +2354,16 @@ FAIL:
 
 
 Testing: 
-(string-upcase "ǰ")
+expr
 
 Testing: 
-(string-downcase "ſ")
+expr
 
 Testing: 
-(string-foldcase "ſ")
+expr
 
 FAIL: 
-(string-foldcase "ſ")
+expr
 
   expected: 
 "s"
@@ -2314,25 +2373,25 @@ FAIL:
 
 
 Testing: 
-(string-upcase "γλώσσα")
+expr
 
 Testing: 
-(string-downcase "ΓΛΏΣΣΑ")
+expr
 
 Testing: 
-(string-foldcase "ΓΛΏΣΣΑ")
+expr
 
 Testing: 
-(string-upcase "μέλος")
+expr
 
 Testing: 
-(and (member (string-downcase "ΜΈΛΟΣ") '("μέλος" "μέλοσ")) #t)
+expr
 
 Testing: 
-(string-foldcase "ΜΈΛΟΣ")
+expr
 
 FAIL: 
-(string-foldcase "ΜΈΛΟΣ")
+expr
 
   expected: 
 "μέλοσ"
@@ -2342,540 +2401,540 @@ FAIL:
 
 
 Testing: 
-(and (member (string-downcase "ΜΈΛΟΣ ΕΝΌΣ") '("μέλος ενός" "μέλοσ ενόσ")) #t)
+expr
 
 Testing: 
-(substring "" 0 0)
+expr
 
 Testing: 
-(substring "a" 0 0)
+expr
 
 Testing: 
-(substring "abc" 1 1)
+expr
 
 Testing: 
-(substring "abc" 0 2)
+expr
 
 Testing: 
-(substring "abc" 1 3)
+expr
 
 Testing: 
-(string-append "")
+expr
 
 Testing: 
-(string-append "" "")
+expr
 
 Testing: 
-(string-append "" "abc")
+expr
 
 Testing: 
-(string-append "abc" "")
+expr
 
 Testing: 
-(string-append "abc" "de")
+expr
 
 Testing: 
-(string-append "abc" "de" "f")
+expr
 
 Testing: 
-(string->list "")
+expr
 
 Testing: 
-(string->list "a")
+expr
 
 Testing: 
-(string->list "abc")
+expr
 
 Testing: 
-(string->list "abc" 0)
+expr
 
 Testing: 
-(string->list "abc" 1)
+expr
 
 Testing: 
-(string->list "abc" 1 3)
+expr
 
 Testing: 
-(list->string '())
+expr
 
 Testing: 
-(list->string '(#\a #\b #\c))
+expr
 
 Testing: 
-(string-copy "")
+expr
 
 Testing: 
-(string-copy "" 0)
+expr
 
 Testing: 
-(string-copy "" 0 0)
+expr
 
 Testing: 
-(string-copy "abc")
+expr
 
 Testing: 
-(string-copy "abc" 0)
+expr
 
 Testing: 
-(string-copy "abc" 1)
+expr
 
 Testing: 
-(string-copy "abc" 1 2)
+expr
 
 Testing: 
-(string-copy "abc" 1 3)
+expr
 
 Testing: 
-(let ((str (make-string 5 #\x))) (string-fill! str #\-) str)
+expr
 
 Testing: 
-(let ((str (make-string 5 #\x))) (string-fill! str #\- 2) str)
+expr
 
 Testing: 
-(let ((str (make-string 5 #\x))) (string-fill! str #\- 2 3) str)
+expr
 
 Testing: 
-(let ((str (string-copy "abcde"))) (string-copy! str 1 "12345" 0 2) str)
+expr
 
 Testing: 
-(let ((str (make-string 5 #\x))) (string-copy! str 0 "-----") str)
+expr
 
 Testing: 
-(let ((str (make-string 5 #\x))) (string-copy! str 0 "-----" 2) str)
+expr
 
 Testing: 
-(let ((str (make-string 5 #\x))) (string-copy! str 2 "-----" 0 3) str)
+expr
 
 Testing: 
-(let ((str (make-string 5 #\x))) (string-copy! str 2 "-----" 2 3) str)
+expr
 
 Testing: 
-(let ((str (string-copy "abcde"))) (string-copy! str 1 str 0 2) str)
+expr
 
 Testing: 
-(let ((str (string-copy "abcde"))) (string-copy! str 3 str 0 2) str)
+expr
 
 Tests run: 130, Passed: 125, Failed: 5
 
 Running test suite: 6.8 Vectors
 Testing: 
-(vector? #())
+expr
 
 Testing: 
-(vector? #(1 2 3))
+expr
 
 Testing: 
-(vector? '#(1 2 3))
+expr
 
 Testing: 
-(vector-length (make-vector 0))
+expr
 
 Testing: 
-(vector-length (make-vector 1000))
+expr
 
 Testing: 
-'#(0 (2 2 2 2) "Anna")
+expr
 
 Testing: 
-(vector 'a 'b 'c)
+expr
 
 Testing: 
-(vector-ref '#(1 1 2 3 5 8 13 21) 5)
+expr
 
 Testing: 
-(vector-ref '#(1 1 2 3 5 8 13 21) (let ((i (round (* 2 (acos -1))))) (if (inexact? i) (exact i) i)))
+expr
 
 Testing: 
-(let ((vec (vector 0 '(2 2 2 2) "Anna"))) (vector-set! vec 1 '("Sue" "Sue")) vec)
+expr
 
 Testing: 
-(vector->list '#(dah dah didah))
+expr
 
 Testing: 
-(vector->list '#(dah dah didah) 1)
+expr
 
 Testing: 
-(vector->list '#(dah dah didah) 1 2)
+expr
 
 Testing: 
-(list->vector '(dididit dah))
+expr
 
 Testing: 
-(string->vector "")
+expr
 
 Testing: 
-(string->vector "ABC")
+expr
 
 Testing: 
-(string->vector "ABC" 1)
+expr
 
 Testing: 
-(string->vector "ABC" 1 2)
+expr
 
 Testing: 
-(vector->string #())
+expr
 
 Testing: 
-(vector->string #(#\1 #\2 #\3))
+expr
 
 Testing: 
-(vector->string #(#\1 #\2 #\3) 1)
+expr
 
 Testing: 
-(vector->string #(#\1 #\2 #\3) 1 2)
+expr
 
 Testing: 
-(vector-copy #())
+expr
 
 Testing: 
-(vector-copy #(a b c))
+expr
 
 Testing: 
-(vector-copy #(a b c) 1)
+expr
 
 Testing: 
-(vector-copy #(a b c) 1 2)
+expr
 
 Testing: 
-(vector-append #())
+expr
 
 Testing: 
-(vector-append #() #())
+expr
 
 Testing: 
-(vector-append #() #(a b c))
+expr
 
 Testing: 
-(vector-append #(a b c) #())
+expr
 
 Testing: 
-(vector-append #(a b c) #(d e))
+expr
 
 Testing: 
-(vector-append #(a b c) #(d e) #(f))
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-fill! vec 'smash 2 4) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-fill! vec 'x) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-fill! vec 'x 2) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-fill! vec 'x 2 3) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 1 #(a b c d e) 0 2) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 0 #(a b c d e)) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 0 #(a b c d e) 2) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 2 #(a b c d e) 0 3) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 2 #(a b c d e) 2 3) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 1 vec 0 2) vec)
+expr
 
 Testing: 
-(let ((vec (vector 1 2 3 4 5))) (vector-copy! vec 3 vec 0 2) vec)
+expr
 
 Tests run: 43, Passed: 43, Failed: 0
 
 Running test suite: 6.9 Bytevectors
 Testing: 
-(bytevector? #u8([]))
+expr
 
 Testing: 
-(bytevector? #u8([0, 1, 2]))
+expr
 
 Testing: 
-(bytevector? #())
+expr
 
 Testing: 
-(bytevector? #(0 1 2))
+expr
 
 Testing: 
-(bytevector? '())
+expr
 
 Testing: 
-(bytevector? (make-bytevector 0))
+expr
 
 Testing: 
-(bytevector-length (make-bytevector 0))
+expr
 
 Testing: 
-(bytevector-length (make-bytevector 1024))
+expr
 
 Testing: 
-(bytevector-length (make-bytevector 1024 255))
+expr
 
 Testing: 
-(bytevector-length (bytevector 0 1 2))
+expr
 
 Testing: 
-(bytevector-u8-ref (bytevector 0 1 2) 0)
+expr
 
 Testing: 
-(bytevector-u8-ref (bytevector 0 1 2) 1)
+expr
 
 Testing: 
-(bytevector-u8-ref (bytevector 0 1 2) 2)
+expr
 
 Testing: 
-(let ((bv (bytevector 0 1 2))) (bytevector-u8-set! bv 1 255) bv)
+expr
 
 Testing: 
-(bytevector-copy #u8([]))
+expr
 
 Testing: 
-(bytevector-copy #u8([0, 1, 2]))
+expr
 
 Testing: 
-(bytevector-copy #u8([0, 1, 2]) 1)
+expr
 
 Testing: 
-(bytevector-copy #u8([0, 1, 2]) 1 2)
+expr
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 1 #u8([6, 7, 8, 9, 10]) 0 2) bv)
+expr
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8([6, 7, 8, 9, 10])) bv)
+expr
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8([6, 7, 8, 9, 10]) 2) bv)
+expr
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8([6, 7, 8, 9, 10]) 0 3) bv)
+expr
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8([6, 7, 8, 9, 10]) 2 3) bv)
+expr
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 1 bv 0 2) bv)
+expr
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 3 bv 0 2) bv)
+expr
 
 Testing: 
-(bytevector-append #u8([]))
+expr
 
 Testing: 
-(bytevector-append #u8([]) #u8([]))
+expr
 
 Testing: 
-(bytevector-append #u8([]) #u8([0, 1, 2]))
+expr
 
 Testing: 
-(bytevector-append #u8([0, 1, 2]) #u8([]))
+expr
 
 Testing: 
-(bytevector-append #u8([0, 1, 2]) #u8([3, 4]))
+expr
 
 Testing: 
-(bytevector-append #u8([0, 1, 2]) #u8([3, 4]) #u8([5]))
+expr
 
 Testing: 
-(utf8->string #u8([65, 66, 67]))
-
-Error: Undefined variable: utf8->string
-Testing: 
-(utf8->string #u8([0, 65, 66, 67]) 1)
+expr
 
 Error: Undefined variable: utf8->string
 Testing: 
-(utf8->string #u8([0, 65, 66, 67, 0]) 1 4)
+expr
 
 Error: Undefined variable: utf8->string
 Testing: 
-(utf8->string #u8([0, 206, 187, 0]) 1 3)
+expr
 
 Error: Undefined variable: utf8->string
 Testing: 
-(string->utf8 "ABC")
+expr
+
+Error: Undefined variable: utf8->string
+Testing: 
+expr
 
 Error: Undefined variable: string->utf8
 Testing: 
-(string->utf8 "ABC" 1)
+expr
 
 Error: Undefined variable: string->utf8
 Testing: 
-(string->utf8 "ABC" 1 2)
+expr
 
 Error: Undefined variable: string->utf8
 Testing: 
-(string->utf8 "λ")
+expr
 
 Error: Undefined variable: string->utf8
 Tests run: 31, Passed: 31, Failed: 0
 
 Running test suite: 6.10 Control Features
 Testing: 
-(procedure? car)
+expr
 
 Testing: 
-(procedure? 'car)
+expr
 
 Testing: 
-(procedure? (lambda (x) (* x x)))
+expr
 
 Testing: 
-(procedure? '(lambda (x) (* x x)))
+expr
 
 Testing: 
-(call-with-current-continuation procedure?)
+expr
 
 Error: Undefined variable: call-with-current-continuation
 Testing: 
-(apply + (list 3 4))
+expr
 
 Testing: 
-(apply + 3 4 (list))
+expr
 
 Error: Undefined variable: test-error
 Error: Undefined variable: test-error
 Error: Undefined variable: test-error
 Error: Undefined variable: test-error
 Testing: 
-(call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
+expr
 
 Testing: 
-(map cadr '((a b) (d e) (g h)))
+expr
 
 Testing: 
-(map (lambda (n) (expt n n)) '(1 2 3 4 5))
+expr
 
 Testing: 
-(map + '(1 2 3) '(4 5 6 7))
+expr
 
 Testing: 
-(let ((res (let ((count 0)) (map (lambda (ignored) (set! count (+ count 1)) count) '(a b))))) (or (equal? res '(1 2)) (equal? res '(2 1))))
+expr
 
 Testing: 
-(let ((ls1 (list 10 100 1000)) (ls2 (list 1 2 3 4 5 6))) (set-cdr! (cddr ls1) ls1) (map * ls1 ls2))
+expr
 
 Testing: 
-(string-map char-foldcase "AbdEgH")
+expr
 
 Error: Undefined variable: string-map
 Testing: 
-(string-map (lambda (c) (integer->char (+ 1 (char->integer c)))) "HAL")
+expr
 
 Error: Undefined variable: string-map
 Testing: 
-(string-map (lambda (c k) (if (eqv? k #\u) (char-upcase c) (char-downcase c))) "studlycaps xxx" "ululululul")
+expr
 
 Error: Undefined variable: string-map
 Testing: 
-(vector-map cadr '#((a b) (d e) (g h)))
+expr
 
 Testing: 
-(vector-map (lambda (n) (expt n n)) '#(1 2 3 4 5))
+expr
 
 Testing: 
-(vector-map + '#(1 2 3) '#(4 5 6 7))
+expr
 
 Testing: 
-(let ((res (let ((count 0)) (vector-map (lambda (ignored) (set! count (+ count 1)) count) '#(a b))))) (or (equal? res #(1 2)) (equal? res #(2 1))))
+expr
 
 Testing: 
-(let ((v (make-vector 5))) (for-each (lambda (i) (vector-set! v i (* i i))) '(0 1 2 3 4)) v)
+expr
 
 Testing: 
-(let ((ls1 (list 10 100 1000)) (ls2 (list 1 2 3 4 5 6)) (count 0)) (set-cdr! (cddr ls1) ls1) (for-each (lambda (x y) (set! count (+ count (* x y)))) ls2 ls1) count)
+expr
 
 Testing: 
-(let ((v '())) (string-for-each (lambda (c) (set! v (cons (char->integer c) v))) "abcde") v)
+expr
 
 Error: Undefined variable: string-for-each
 Testing: 
-(let ((v (make-list 5))) (vector-for-each (lambda (i) (list-set! v i (* i i))) '#(0 1 2 3 4)) v)
+expr
 
 Testing: 
-(call-with-current-continuation (lambda (exit) (for-each (lambda (x) (if (negative? x) (exit x))) '(54 0 37 -3 245 19)) #t))
-
-Error: Undefined variable: call-with-current-continuation
-Testing: 
-(list-length '(1 2 3 4))
+expr
 
 Error: Undefined variable: call-with-current-continuation
 Testing: 
-(list-length '(a b . c))
+expr
 
 Error: Undefined variable: call-with-current-continuation
 Testing: 
-(call-with-values (lambda () (values 4 5)) (lambda (a b) b))
+expr
+
+Error: Undefined variable: call-with-current-continuation
+Testing: 
+expr
 
 Testing: 
-(call-with-values * -)
+expr
 
 Testing: 
-(let ((path '()) (c #f)) (let ((add (lambda (s) (set! path (cons s path))))) (dynamic-wind (lambda () (add 'connect)) (lambda () (add (call-with-current-continuation (lambda (c0) (set! c c0) 'talk1)))) (lambda () (add 'disconnect))) (if (< (length path) 4) (c 'talk2) (reverse path))))
+expr
 
 Error: Undefined variable: dynamic-wind
 Tests run: 21, Passed: 21, Failed: 0
 
 Running test suite: 6.11 Exceptions
 Testing: 
-(with-exception-handler (lambda (con) 42) (lambda () (+ (raise-continuable "should be a number") 23)))
+expr
 
 Error: Undefined variable: with-exception-handler
 Testing: 
-(error-object? (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
+expr
 
 Error: Undefined variable: error-object?
 Testing: 
-(error-object-message (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
+expr
 
 Error: Undefined variable: error-object-message
 Testing: 
-(error-object-irritants (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
+expr
 
 Error: Undefined variable: error-object-irritants
 Testing: 
-(file-error? (guard (exn (else exn)) (error "BOOM!")))
+expr
 
 Error: Undefined variable: file-error?
 Testing: 
-(file-error? (guard (exn (else exn)) (open-input-file " no such file ")))
+expr
 
 Error: Undefined variable: file-error?
 Testing: 
-(read-error? (guard (exn (else exn)) (error "BOOM!")))
+expr
 
 Error: Undefined variable: read-error?
 Testing: 
-(read-error? (guard (exn (else exn)) (read (open-input-string ")"))))
+expr
 
 Error: Undefined variable: read-error?
 Testing: 
-(read-error? (guard (exn (else exn)) (read (open-input-string """))))
+expr
 
 Error: Undefined variable: read-error?
 Testing: 
-(test-exception-handler-1 5)
+expr
 
 Error: Undefined variable: call-with-current-continuation
 Testing: 
-something-went-wrong
+expr
 
 Testing: 
-(test-exception-handler-1 -1)
+expr
 
 Error: Undefined variable: call-with-current-continuation
 Testing: 
-something-went-wrong
+expr
 
 FAIL: 
-something-went-wrong
+expr
 
   expected: 
 ("condition: " an-error)
@@ -2885,21 +2944,21 @@ something-went-wrong
 
 
 Testing: 
-(test-exception-handler-2 5)
+expr
 
 Error: Undefined variable: guard
 Testing: 
-something-went-wrong
+expr
 
 Testing: 
-(test-exception-handler-2 -1)
+expr
 
 Error: Undefined variable: guard
 Testing: 
-something-went-wrong
+expr
 
 FAIL: 
-something-went-wrong
+expr
 
   expected: 
 #t
@@ -2914,439 +2973,431 @@ Error: Undefined variable: open-output-string
 Error: Undefined variable: open-output-string
 Error: Undefined variable: open-output-string
 Testing: 
-(guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'a 42))))
+expr
 
 Error: Undefined variable: guard
 Testing: 
-(guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'b 23))))
+expr
 
 Error: Undefined variable: guard
 Testing: 
-(guard (condition ((assq 'c condition) 'caught-c) ((assq 'd condition) 'caught-d)) (list (sqrt 8) (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'd 24))))))
+expr
 
 Error: Undefined variable: guard
 Tests run: 4, Passed: 2, Failed: 2
 
 Running test suite: 6.12 Environments and evaluation
 Testing: 
-(let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10))
+expr
 
 Error: Undefined variable: eval
 Testing: 
-(eval '(expt 2 10) (environment '(scheme base)))
+expr
 
 Error: Undefined variable: eval
 Testing: 
-(inexact (eval '(sin 0) (environment '(scheme inexact))))
+expr
 
 Error: Undefined variable: eval
 Testing: 
-(eval '(+ (expt 2 10) (inexact (sin 0))) (environment '(scheme base) '(scheme inexact)))
+expr
 
 Error: Undefined variable: eval
 Tests run: 0, Passed: 0, Failed: 0
 
 Running test suite: 6.13 Input and output
 Testing: 
-(port? (current-input-port))
+expr
 
 Error: Undefined variable: port?
 Testing: 
-(input-port? (current-input-port))
+expr
 
 Error: Undefined variable: input-port?
 Testing: 
-(output-port? (current-output-port))
+expr
 
 Error: Undefined variable: output-port?
 Testing: 
-(output-port? (current-error-port))
+expr
 
 Error: Undefined variable: output-port?
 Testing: 
-(input-port? (open-input-string "abc"))
+expr
 
 Error: Undefined variable: input-port?
 Testing: 
-(output-port? (open-output-string))
+expr
 
 Error: Undefined variable: output-port?
 Testing: 
-(textual-port? (open-input-string "abc"))
+expr
 
 Error: Undefined variable: textual-port?
 Testing: 
-(textual-port? (open-output-string))
+expr
 
 Error: Undefined variable: textual-port?
 Testing: 
-(binary-port? (open-input-bytevector #u8([0, 1, 2])))
+expr
 
 Error: Undefined variable: binary-port?
 Testing: 
-(binary-port? (open-output-bytevector))
+expr
 
 Error: Undefined variable: binary-port?
 Testing: 
-(input-port-open? (open-input-string "abc"))
+expr
 
 Error: Undefined variable: input-port-open?
 Testing: 
-(output-port-open? (open-output-string))
+expr
 
 Error: Undefined variable: output-port-open?
 Testing: 
-(let ((in (open-input-string "abc"))) (close-input-port in) (input-port-open? in))
+expr
 
 Error: Undefined variable: open-input-string
 Testing: 
-(let ((out (open-output-string))) (close-output-port out) (output-port-open? out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string))) (close-port out) (output-port-open? out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((in (open-input-string "abc"))) (close-input-port in) (guard (exn (else 'error)) (read-char in)))
+expr
 
 Error: Undefined variable: open-input-string
 Testing: 
-(let ((out (open-output-string))) (close-output-port out) (guard (exn (else 'error)) (write-char #\c out)))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(eof-object? (eof-object))
+expr
 
 Error: Undefined variable: eof-object?
 Testing: 
-(eof-object? (read (open-input-string "")))
+expr
 
 Error: Undefined variable: eof-object?
 Testing: 
-(char-ready? (open-input-string "42"))
+expr
 
 Error: Undefined variable: char-ready?
 Testing: 
-(read (open-input-string " 42 "))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(eof-object? (read-char (open-input-string "")))
+expr
 
 Error: Undefined variable: eof-object?
 Testing: 
-(read-char (open-input-string "abc"))
+expr
 
 Error: Undefined variable: read-char
 Testing: 
-(eof-object? (read-line (open-input-string "")))
+expr
 
 Error: Undefined variable: eof-object?
 Testing: 
-(read-line (open-input-string "abc"))
+expr
 
 Error: Undefined variable: read-line
 Testing: 
-(read-line (open-input-string "abc
-def
-"))
+expr
 
 Error: Undefined variable: read-line
 Testing: 
-(eof-object? (read-string 3 (open-input-string "")))
+expr
 
 Error: Undefined variable: eof-object?
 Testing: 
-(read-string 3 (open-input-string "abcd"))
+expr
 
 Error: Undefined variable: read-string
 Testing: 
-(read-string 3 (open-input-string "abc
-def
-"))
+expr
 
 Error: Undefined variable: read-string
 Error: Undefined variable: open-input-string
 Testing: 
-(let ((out (open-output-string))) (write-char #\􏜀 out) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string))) (write 'abc out) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string))) (display "abc def" out) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string))) (display #\a out) (display "b" out) (display #\c out) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let* ((out (open-output-string)) (r (begin (newline out) (get-output-string out)))) (or (equal? r "
-") (equal? r "
-")))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string))) (write-string "abc def" out) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string))) (write-string "abc def" out 4) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string))) (write-string "abc def" out 2 5) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string))) (flush-output-port out) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(eof-object? (read-u8 (open-input-bytevector #u8([]))))
+expr
 
 Error: Undefined variable: eof-object?
 Testing: 
-(read-u8 (open-input-bytevector #u8([1, 2, 3])))
+expr
 
 Error: Undefined variable: read-u8
 Testing: 
-(eof-object? (read-bytevector 3 (open-input-bytevector #u8([]))))
+expr
 
 Error: Undefined variable: eof-object?
 Testing: 
-(u8-ready? (open-input-bytevector #u8([1])))
+expr
 
 Error: Undefined variable: u8-ready?
 Testing: 
-(read-bytevector 3 (open-input-bytevector #u8([1])))
+expr
 
 Error: Undefined variable: read-bytevector
 Testing: 
-(read-bytevector 3 (open-input-bytevector #u8([1, 2])))
+expr
 
 Error: Undefined variable: read-bytevector
 Testing: 
-(read-bytevector 3 (open-input-bytevector #u8([1, 2, 3])))
+expr
 
 Error: Undefined variable: read-bytevector
 Testing: 
-(read-bytevector 3 (open-input-bytevector #u8([1, 2, 3, 4])))
+expr
 
 Error: Undefined variable: read-bytevector
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (eof-object? (read-bytevector! bv (open-input-bytevector #u8([])))))
+expr
 
 Error: Undefined variable: eof-object?
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8([6, 7, 8, 9, 10])) 0 5) bv)
+expr
 
 Error: Undefined variable: read-bytevector!
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8([6, 7, 8, 9, 10])) 0 3) bv)
+expr
 
 Error: Undefined variable: read-bytevector!
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8([6, 7, 8, 9, 10])) 3 4) bv)
+expr
 
 Error: Undefined variable: read-bytevector!
 Testing: 
-(let ((out (open-output-bytevector))) (write-u8 1 out) (write-u8 2 out) (write-u8 3 out) (get-output-bytevector out))
+expr
 
 Error: Undefined variable: open-output-bytevector
 Testing: 
-(let ((out (open-output-bytevector))) (write-bytevector #u8([1, 2, 3, 4, 5]) out) (get-output-bytevector out))
+expr
 
 Error: Undefined variable: open-output-bytevector
 Testing: 
-(let ((out (open-output-bytevector))) (write-bytevector #u8([1, 2, 3, 4, 5]) out 2) (get-output-bytevector out))
+expr
 
 Error: Undefined variable: open-output-bytevector
 Testing: 
-(let ((out (open-output-bytevector))) (write-bytevector #u8([1, 2, 3, 4, 5]) out 2 4) (get-output-bytevector out))
+expr
 
 Error: Undefined variable: open-output-bytevector
 Testing: 
-(let ((out (open-output-bytevector))) (flush-output-port out) (get-output-bytevector out))
+expr
 
 Error: Undefined variable: open-output-bytevector
 Testing: 
-(and (member (let ((out (open-output-string)) (x (list 1))) (set-cdr! x x) (write x out) (get-output-string out)) '("#0=(1 . #0#)" "#1=(1 . #1#)")) #t)
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string)) (x (list 1 2 3))) (write (list x x) out) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(let ((out (open-output-string)) (x (list 1 2 3))) (write-simple (list x x) out) (get-output-string out))
+expr
 
 Error: Undefined variable: open-output-string
 Testing: 
-(and (member (let ((out (open-output-string)) (x (list 1 2 3))) (write-shared (list x x) out) (get-output-string out)) '("(#0=(1 2 3) #0#)" "(#1=(1 2 3) #1#)")) #t)
+expr
 
 Error: Undefined variable: open-output-string
 Running test suite: Read syntax
 Testing: 
-(read (open-input-string "#t"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#true"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#f"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#false"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read2 (open-input-string "#t(5)"))
-
-Error: Undefined variable: open-input-string
-Testing: 
-(read2 (open-input-string "#true 6 "))
+expr
 
 Error: Undefined variable: open-input-string
 Testing: 
-(read2 (open-input-string "#f 7"))
+expr
 
 Error: Undefined variable: open-input-string
 Testing: 
-(read2 (open-input-string "#false"8""))
+expr
 
 Error: Undefined variable: open-input-string
 Testing: 
-(read (open-input-string "()"))
+expr
+
+Error: Undefined variable: open-input-string
+Testing: 
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "(1 2)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "(1 . 2)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "(1 . (2))"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "(1 . (2 3 4 . (5)))"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(cadr (read (open-input-string "#0=(1 . #0#)")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(cadr (read (open-input-string "(#0=(1 2 3) #0#)")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "'(1 2)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "'(1 ,2)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "'(1 ,@2)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "`(1 ,2)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#()"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#(a b)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#u8()"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#u8(0 1)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "abc"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "abc def"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "ABC"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "|H\x65;llo|"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#!fold-case ABC"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#!fold-case #!no-fold-case ABC"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#; abc def"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "; abc 
-def"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#| abc |# def"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#| abc #| def |# |# ghi"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#; ; abc
- def ghi"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "(#;sqrt abs -16)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "(a #; #;b c d)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "(a #;(b #;c d) e)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "(a . #;b c)"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "(a . b #;c)"))
+expr
 
 Error: Undefined variable: read
 Error: Undefined variable: test-assert
@@ -3356,318 +3407,304 @@ Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Testing: 
-(read (open-input-string "#\a"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string "#\space"))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\null")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\alarm")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\backspace")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\tab")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\newline")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\return")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\delete")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\escape")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\λ")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (read (open-input-string "#\x03BB")))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""abc""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""abc" "def""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""ABC""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""H\x65;llo""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\a"")) 0))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\b"")) 0))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\t"")) 0))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\n"")) 0))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\r"")) 0))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\""")) 0))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\|"")) 0))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""line 1
-line 2
-""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""line 1\
-continued
-""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""line 1\ 
-continued
-""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""line 1\
- continued
-""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""line 1\ 	 
- 	 continued
-""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(read (open-input-string ""line 1\ 	 
- 	 
-
-line 3
-""))
+expr
 
 Error: Undefined variable: read
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\x03BB;"")) 0))
+expr
 
 Error: Undefined variable: read
-Error: Undefined variable: ##open-output-string#7808
-Error: Undefined variable: ##open-output-string#7815
-Error: Undefined variable: ##open-output-string#7817
+Error: Undefined variable: ##open-output-string#7818
 Error: Undefined variable: ##open-output-string#7822
-Error: Undefined variable: ##open-output-string#7827
-Error: Undefined variable: ##open-output-string#7831
-Error: Undefined variable: ##open-output-string#7835
-Error: Undefined variable: ##open-output-string#7837
-Error: Undefined variable: ##open-output-string#7840
-Error: Undefined variable: ##open-output-string#7845
+Error: Undefined variable: ##open-output-string#7826
+Error: Undefined variable: ##open-output-string#7830
+Error: Undefined variable: ##open-output-string#7834
+Error: Undefined variable: ##open-output-string#7838
+Error: Undefined variable: ##open-output-string#7842
+Error: Undefined variable: ##open-output-string#7846
 Error: Undefined variable: ##open-output-string#7850
 Error: Undefined variable: ##open-output-string#7854
-Error: Undefined variable: ##open-output-string#7856
-Error: Undefined variable: ##open-output-string#7860
-Error: Undefined variable: ##open-output-string#7865
-Error: Undefined variable: ##open-output-string#7869
-Error: Undefined variable: ##open-output-string#7873
-Error: Undefined variable: ##open-output-string#7877
+Error: Undefined variable: ##open-output-string#7858
+Error: Undefined variable: ##open-output-string#7862
+Error: Undefined variable: ##open-output-string#7866
+Error: Undefined variable: ##open-output-string#7870
+Error: Undefined variable: ##open-output-string#7874
+Error: Undefined variable: ##open-output-string#7878
+Error: Undefined variable: ##open-output-string#7882
+Error: Undefined variable: ##open-output-string#7886
 Tests run: 0, Passed: 0, Failed: 0
 
 Running test suite: Numeric syntax
-Error: Undefined variable: ##read#7884
-Error: Undefined variable: ##read#7895
-Error: Undefined variable: ##read#7906
-Error: Undefined variable: ##read#7918
-Error: Undefined variable: ##read#7926
-Error: Undefined variable: ##read#7939
-Error: Undefined variable: ##read#7945
-Error: Undefined variable: ##read#7956
-Error: Undefined variable: ##read#7968
-Error: Undefined variable: ##read#7974
-Error: Undefined variable: ##read#7984
-Error: Undefined variable: ##read#7994
-Error: Undefined variable: ##read#8001
-Error: Undefined variable: ##read#8011
-Error: Undefined variable: ##read#8026
-Error: Undefined variable: ##read#8033
+Error: Undefined variable: ##read#7890
+Error: Undefined variable: ##read#7900
+Error: Undefined variable: ##read#7910
+Error: Undefined variable: ##read#7920
+Error: Undefined variable: ##read#7930
+Error: Undefined variable: ##read#7940
+Error: Undefined variable: ##read#7950
+Error: Undefined variable: ##read#7960
+Error: Undefined variable: ##read#7970
+Error: Undefined variable: ##read#7980
+Error: Undefined variable: ##read#7990
+Error: Undefined variable: ##read#8000
+Error: Undefined variable: ##read#8010
+Error: Undefined variable: ##read#8020
+Error: Undefined variable: ##read#8030
 Error: Undefined variable: ##read#8040
-Error: Undefined variable: ##read#8051
-Error: Undefined variable: ##read#8068
+Error: Undefined variable: ##read#8050
+Error: Undefined variable: ##read#8060
 Error: Undefined variable: ##read#8070
-Error: Undefined variable: ##read#8086
-Error: Undefined variable: ##read#8095
-Error: Undefined variable: ##read#8109
-Error: Undefined variable: ##read#8113
-Error: Undefined variable: ##read#8126
-Error: Undefined variable: ##read#8132
-Error: Undefined variable: ##read#8146
-Error: Undefined variable: ##read#8154
-Error: Undefined variable: ##read#8164
-Error: Undefined variable: ##read#8172
-Error: Undefined variable: ##read#8181
-Error: Undefined variable: ##read#8191
-Error: Undefined variable: ##read#8209
-Error: Undefined variable: ##read#8216
-Error: Undefined variable: ##read#8228
-Error: Undefined variable: ##read#8234
-Error: Undefined variable: ##read#8246
+Error: Undefined variable: ##read#8080
+Error: Undefined variable: ##read#8090
+Error: Undefined variable: ##read#8100
+Error: Undefined variable: ##read#8110
+Error: Undefined variable: ##read#8120
+Error: Undefined variable: ##read#8130
+Error: Undefined variable: ##read#8140
+Error: Undefined variable: ##read#8150
+Error: Undefined variable: ##read#8160
+Error: Undefined variable: ##read#8170
+Error: Undefined variable: ##read#8180
+Error: Undefined variable: ##read#8190
+Error: Undefined variable: ##read#8200
+Error: Undefined variable: ##read#8210
+Error: Undefined variable: ##read#8220
+Error: Undefined variable: ##read#8230
+Error: Undefined variable: ##read#8240
 Error: Undefined variable: ##read#8250
-Error: Undefined variable: ##read#8261
-Error: Undefined variable: ##read#8276
-Error: Undefined variable: ##read#8282
-Error: Undefined variable: ##read#8294
-Error: Undefined variable: ##read#8308
-Error: Undefined variable: ##read#8318
-Error: Undefined variable: ##read#8321
-Error: Undefined variable: ##read#8331
-Error: Undefined variable: ##read#8346
-Error: Undefined variable: ##read#8356
-Error: Undefined variable: ##read#8369
+Error: Undefined variable: ##read#8260
+Error: Undefined variable: ##read#8270
+Error: Undefined variable: ##read#8280
+Error: Undefined variable: ##read#8290
+Error: Undefined variable: ##read#8300
+Error: Undefined variable: ##read#8310
+Error: Undefined variable: ##read#8320
+Error: Undefined variable: ##read#8330
+Error: Undefined variable: ##read#8340
+Error: Undefined variable: ##read#8350
+Error: Undefined variable: ##read#8360
 Error: Undefined variable: ##read#8370
-Error: Undefined variable: ##read#8389
-Error: Undefined variable: ##read#8397
-Error: Undefined variable: ##read#8406
-Error: Undefined variable: ##read#8411
-Error: Undefined variable: ##read#8428
-Error: Undefined variable: ##read#8434
-Error: Undefined variable: ##read#8447
-Error: Undefined variable: ##read#8452
-Error: Undefined variable: ##read#8466
-Error: Undefined variable: ##read#8473
-Error: Undefined variable: ##read#8483
-Error: Undefined variable: ##read#8497
-Error: Undefined variable: ##read#8509
-Error: Undefined variable: ##read#8512
-Error: Undefined variable: ##read#8527
-Error: Undefined variable: ##read#8534
-Error: Undefined variable: ##read#8546
+Error: Undefined variable: ##read#8380
+Error: Undefined variable: ##read#8390
+Error: Undefined variable: ##read#8400
+Error: Undefined variable: ##read#8410
+Error: Undefined variable: ##read#8420
+Error: Undefined variable: ##read#8430
+Error: Undefined variable: ##read#8440
+Error: Undefined variable: ##read#8450
+Error: Undefined variable: ##read#8460
+Error: Undefined variable: ##read#8470
+Error: Undefined variable: ##read#8480
+Error: Undefined variable: ##read#8490
+Error: Undefined variable: ##read#8500
+Error: Undefined variable: ##read#8510
+Error: Undefined variable: ##read#8520
+Error: Undefined variable: ##read#8530
+Error: Undefined variable: ##read#8540
 Error: Undefined variable: ##read#8550
-Error: Undefined variable: ##read#8568
-Error: Undefined variable: ##read#8574
-Error: Undefined variable: ##read#8586
+Error: Undefined variable: ##read#8560
+Error: Undefined variable: ##read#8570
+Error: Undefined variable: ##read#8580
 Error: Undefined variable: ##read#8590
 Error: Undefined variable: ##read#8600
-Error: Undefined variable: ##read#8611
-Error: Undefined variable: ##read#8626
-Error: Undefined variable: ##read#8639
-Error: Undefined variable: ##read#8641
-Error: Undefined variable: ##read#8655
-Error: Undefined variable: ##read#8666
-Error: Undefined variable: ##read#8673
+Error: Undefined variable: ##read#8610
+Error: Undefined variable: ##read#8620
+Error: Undefined variable: ##read#8630
+Error: Undefined variable: ##read#8640
+Error: Undefined variable: ##read#8650
+Error: Undefined variable: ##read#8660
+Error: Undefined variable: ##read#8670
 Error: Undefined variable: ##read#8680
-Error: Undefined variable: ##read#8693
-Error: Undefined variable: ##read#8706
-Error: Undefined variable: ##read#8712
-Error: Undefined variable: ##read#8727
-Error: Undefined variable: ##read#8735
+Error: Undefined variable: ##read#8690
+Error: Undefined variable: ##read#8700
+Error: Undefined variable: ##read#8710
+Error: Undefined variable: ##read#8720
+Error: Undefined variable: ##read#8730
 Error: Undefined variable: ##read#8740
-Error: Undefined variable: ##read#8753
-Error: Undefined variable: ##read#8761
-Error: Undefined variable: ##read#8774
-Error: Undefined variable: ##read#8788
-Error: Undefined variable: ##read#8791
-Error: Undefined variable: ##read#8807
+Error: Undefined variable: ##read#8750
+Error: Undefined variable: ##read#8760
+Error: Undefined variable: ##read#8770
+Error: Undefined variable: ##read#8780
+Error: Undefined variable: ##read#8790
+Error: Undefined variable: ##read#8800
 Error: Undefined variable: ##read#8810
-Error: Undefined variable: ##read#8826
-Error: Undefined variable: ##read#8833
+Error: Undefined variable: ##read#8820
+Error: Undefined variable: ##read#8830
 Error: Undefined variable: ##read#8840
-Error: Undefined variable: ##read#8857
+Error: Undefined variable: ##read#8850
 Error: Undefined variable: ##read#8860
-Error: Undefined variable: ##test-assert#8886
-Error: Undefined variable: ##test-assert#8896
-Error: Undefined variable: ##test-assert#8910
-Error: Undefined variable: ##test-assert#8922
-Error: Undefined variable: ##test-assert#8954
-Error: Undefined variable: ##test-assert#8969
-Error: Undefined variable: ##test-assert#8981
-Error: Undefined variable: ##test-assert#8991
-Error: Undefined variable: ##test-assert#9012
-Error: Undefined variable: ##test-assert#9034
-Error: Undefined variable: ##test-assert#9047
+Error: Undefined variable: ##read#8870
+Error: Undefined variable: ##test-assert#8887
+Error: Undefined variable: ##test-assert#8904
+Error: Undefined variable: ##test-assert#8921
+Error: Undefined variable: ##test-assert#8938
+Error: Undefined variable: ##test-assert#8955
+Error: Undefined variable: ##test-assert#8972
+Error: Undefined variable: ##test-assert#8989
+Error: Undefined variable: ##test-assert#9006
+Error: Undefined variable: ##test-assert#9023
+Error: Undefined variable: ##test-assert#9040
+Error: Undefined variable: ##test-assert#9057
 Tests run: 0, Passed: 0, Failed: 0
 
 Tests run: 0, Passed: 0, Failed: 0
 
 Running test suite: 6.14 System interface
 Testing: 
-(string? (get-environment-variable "PATH"))
+expr
 
 Error: Undefined variable: get-environment-variable
 Error: Undefined variable: get-environment-variables
 Testing: 
-(list? (command-line))
+expr
 
 Error: Undefined variable: command-line
 Testing: 
-(real? (current-second))
+expr
 
 Error: Undefined variable: current-second
 Testing: 
-(inexact? (current-second))
+expr
 
 Error: Undefined variable: current-second
 Testing: 
-(exact? (current-jiffy))
+expr
 
 Error: Undefined variable: current-jiffy
 Testing: 
-(exact? (jiffies-per-second))
+expr
 
 Error: Undefined variable: jiffies-per-second
 Testing: 
-(list? (features))
+expr
 
 Error: Undefined variable: features
 Testing: 
-(and (memq 'r7rs (features)) #t)
+expr
 
 Error: Undefined variable: features
 Testing: 
-(file-exists? ".")
+expr
 
 Error: Undefined variable: file-exists?
 Testing: 
-(file-exists? " no such file ")
+expr
 
 Error: Undefined variable: file-exists?
 Testing: 
-(file-error? (guard (exn (else exn)) (delete-file " no such file ")))
+expr
 
 Error: Undefined variable: file-error?
 Tests run: 0, Passed: 0, Failed: 0
