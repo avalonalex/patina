@@ -161,9 +161,24 @@ impl Parser {
             }
 
             if let Token::Number(s) = &self.current_token.clone() {
-                let byte: u8 = s
-                    .parse()
-                    .map_err(|_| ParseError::InvalidSyntax("Invalid byte value".to_string()))?;
+                // Parse the number (handles decimal, hex #x, binary #b, octal #o)
+                let value = self.parse_number(s)?;
+
+                // Extract integer value and validate it's a valid byte (0-255)
+                let byte = match value {
+                    Value::Integer(n) if (0..=255).contains(&n) => n as u8,
+                    Value::Integer(n) => {
+                        return Err(ParseError::InvalidSyntax(format!(
+                            "Byte value out of range (0-255): {}",
+                            n
+                        )));
+                    }
+                    _ => {
+                        return Err(ParseError::InvalidSyntax(
+                            "Bytevector must contain only integer bytes (0-255)".to_string(),
+                        ));
+                    }
+                };
                 bytes.push(byte);
                 self.advance()?;
             } else {
