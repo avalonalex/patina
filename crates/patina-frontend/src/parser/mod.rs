@@ -174,7 +174,7 @@ impl Parser {
         }
 
         self.advance()?; // consume )
-        Ok(Value::Bytevector(Rc::new(bytes)))
+        Ok(Value::Bytevector(Rc::new(RefCell::new(bytes))))
     }
 
     fn parse_number(&self, s: &str) -> Result<Value, ParseError> {

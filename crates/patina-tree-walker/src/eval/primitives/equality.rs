@@ -92,7 +92,7 @@ pub(in crate::eval) fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalEr
                 equal
             }
         }
-        (Value::Bytevector(x), Value::Bytevector(y)) => x == y,
+        (Value::Bytevector(x), Value::Bytevector(y)) => *x.borrow() == *y.borrow(),
         _ => false,
     })
 }

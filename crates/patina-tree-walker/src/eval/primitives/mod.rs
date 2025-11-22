@@ -17,6 +17,7 @@
 pub mod registry;
 
 mod arithmetic;
+mod bytevectors;
 mod characters;
 mod conversion;
 mod debug;
@@ -87,6 +88,7 @@ impl Evaluator {
     pub(super) fn register_all_primitives(registry: &mut PrimitiveRegistry) {
         // Register primitives by category
         arithmetic::register(registry);
+        bytevectors::register(registry);
         characters::register(registry);
         conversion::register(registry);
         lists::register(registry);

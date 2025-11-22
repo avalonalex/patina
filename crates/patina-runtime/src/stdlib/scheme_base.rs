@@ -104,6 +104,7 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("procedure?", Arity::Exact(1)),
         ("char?", Arity::Exact(1)),
         ("vector?", Arity::Exact(1)),
+        ("bytevector?", Arity::Exact(1)),
         ("exact-integer?", Arity::Exact(1)),
         // TODO: library? is a Patina extension, not part of R7RS.
         // Consider moving to a (patina core) or similar library in the future.
@@ -154,6 +155,15 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("vector-fill!", Arity::Range(2, 4)),
         ("vector-map", Arity::Min(2)),
         ("vector-for-each", Arity::Min(2)),
+        // Bytevector operations
+        ("make-bytevector", Arity::Range(1, 2)),
+        ("bytevector", Arity::Min(0)),
+        ("bytevector-length", Arity::Exact(1)),
+        ("bytevector-u8-ref", Arity::Exact(2)),
+        ("bytevector-u8-set!", Arity::Exact(3)),
+        ("bytevector-copy", Arity::Range(1, 3)),
+        ("bytevector-copy!", Arity::Range(3, 5)),
+        ("bytevector-append", Arity::Min(0)),
         // Conversion operations
         ("number->string", Arity::Range(1, 2)),
         ("string->number", Arity::Range(1, 2)),

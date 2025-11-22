@@ -2600,125 +2600,94 @@ Running test suite: 6.9 Bytevectors
 Testing: 
 (bytevector? #u8([]))
 
-Error: Undefined variable: bytevector?
 Testing: 
 (bytevector? #u8([0, 1, 2]))
 
-Error: Undefined variable: bytevector?
 Testing: 
 (bytevector? #())
 
-Error: Undefined variable: bytevector?
 Testing: 
 (bytevector? #(0 1 2))
 
-Error: Undefined variable: bytevector?
 Testing: 
 (bytevector? '())
 
-Error: Undefined variable: bytevector?
 Testing: 
 (bytevector? (make-bytevector 0))
 
-Error: Undefined variable: bytevector?
 Testing: 
 (bytevector-length (make-bytevector 0))
 
-Error: Undefined variable: bytevector-length
 Testing: 
 (bytevector-length (make-bytevector 1024))
 
-Error: Undefined variable: bytevector-length
 Testing: 
 (bytevector-length (make-bytevector 1024 255))
 
-Error: Undefined variable: bytevector-length
 Testing: 
 (bytevector-length (bytevector 0 1 2))
 
-Error: Undefined variable: bytevector-length
 Testing: 
 (bytevector-u8-ref (bytevector 0 1 2) 0)
 
-Error: Undefined variable: bytevector-u8-ref
 Testing: 
 (bytevector-u8-ref (bytevector 0 1 2) 1)
 
-Error: Undefined variable: bytevector-u8-ref
 Testing: 
 (bytevector-u8-ref (bytevector 0 1 2) 2)
 
-Error: Undefined variable: bytevector-u8-ref
 Testing: 
 (let ((bv (bytevector 0 1 2))) (bytevector-u8-set! bv 1 255) bv)
 
-Error: Undefined variable: bytevector
 Testing: 
 (bytevector-copy #u8([]))
 
-Error: Undefined variable: bytevector-copy
 Testing: 
 (bytevector-copy #u8([0, 1, 2]))
 
-Error: Undefined variable: bytevector-copy
 Testing: 
 (bytevector-copy #u8([0, 1, 2]) 1)
 
-Error: Undefined variable: bytevector-copy
 Testing: 
 (bytevector-copy #u8([0, 1, 2]) 1 2)
 
-Error: Undefined variable: bytevector-copy
 Testing: 
 (let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 1 #u8([6, 7, 8, 9, 10]) 0 2) bv)
 
-Error: Undefined variable: bytevector
 Testing: 
 (let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8([6, 7, 8, 9, 10])) bv)
 
-Error: Undefined variable: bytevector
 Testing: 
 (let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8([6, 7, 8, 9, 10]) 2) bv)
 
-Error: Undefined variable: bytevector
 Testing: 
 (let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8([6, 7, 8, 9, 10]) 0 3) bv)
 
-Error: Undefined variable: bytevector
 Testing: 
 (let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8([6, 7, 8, 9, 10]) 2 3) bv)
 
-Error: Undefined variable: bytevector
 Testing: 
 (let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 1 bv 0 2) bv)
 
-Error: Undefined variable: bytevector
 Testing: 
 (let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 3 bv 0 2) bv)
 
-Error: Undefined variable: bytevector
 Testing: 
 (bytevector-append #u8([]))
 
-Error: Undefined variable: bytevector-append
 Testing: 
 (bytevector-append #u8([]) #u8([]))
 
-Error: Undefined variable: bytevector-append
 Testing: 
 (bytevector-append #u8([]) #u8([0, 1, 2]))
 
-Error: Undefined variable: bytevector-append
 Testing: 
 (bytevector-append #u8([0, 1, 2]) #u8([]))
 
-Error: Undefined variable: bytevector-append
 Testing: 
 (bytevector-append #u8([0, 1, 2]) #u8([3, 4]))
 
-Error: Undefined variable: bytevector-append
 Testing: 
 (bytevector-append #u8([0, 1, 2]) #u8([3, 4]) #u8([5]))
 
-Error: Undefined variable: bytevector-append
 Error: Invalid syntax: Invalid byte value

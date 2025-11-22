@@ -41,7 +41,8 @@ pub enum Value {
     Vector(Rc<RefCell<Vec<Value>>>),
 
     // Bytevectors
-    Bytevector(Rc<Vec<u8>>),
+    // Uses RefCell to allow mutation through shared references
+    Bytevector(Rc<RefCell<Vec<u8>>>),
 
     // Procedures
     Procedure(Procedure),
@@ -251,7 +252,7 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Bytevector(bv) => write!(f, "#u8({:?})", bv),
+            Value::Bytevector(bv) => write!(f, "#u8({:?})", bv.borrow()),
             Value::Procedure(proc) => match proc {
                 Procedure::Primitive { name, library, .. } => {
                     write!(f, "#<procedure:{}:{}>", library.join("."), name)

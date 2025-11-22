@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-21 19:27:11
+**Generated:** 2025-11-21 20:13:50
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 626 | 81.9% |
-| ❌ Failed | 33 | 4.3% |
-| ⚠️ Error (crashed) | 105 | 13.7% |
-| **Total** | **764** | **100%** |
+| ✅ Passed | 626 | 85.4% |
+| ❌ Failed | 33 | 4.5% |
+| ⚠️ Error (crashed) | 74 | 10.1% |
+| **Total** | **733** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -130,37 +130,6 @@ Error: Undefined variable: string->symbol
 Error: Undefined variable: string->symbol
 Error: Undefined variable: string->symbol
 Error: Undefined variable: symbol->string
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector?
-Error: Undefined variable: bytevector-length
-Error: Undefined variable: bytevector-length
-Error: Undefined variable: bytevector-length
-Error: Undefined variable: bytevector-length
-Error: Undefined variable: bytevector-u8-ref
-Error: Undefined variable: bytevector-u8-ref
-Error: Undefined variable: bytevector-u8-ref
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector-copy
-Error: Undefined variable: bytevector-copy
-Error: Undefined variable: bytevector-copy
-Error: Undefined variable: bytevector-copy
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
-Error: Undefined variable: bytevector-append
 Error: Invalid syntax: Invalid byte value
 ```
 
