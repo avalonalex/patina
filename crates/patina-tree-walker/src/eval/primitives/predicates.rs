@@ -93,6 +93,8 @@ pub(super) fn pair_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
 }
 
 pub(super) fn list_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    use std::rc::Rc;
+
     evaluator.check_arity_exact(&args, 1, "list?")?;
 
     let mut slow = args[0].clone();
@@ -110,7 +112,10 @@ pub(super) fn list_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
                         if let Value::Pair(slow_pair) = slow.clone() {
                             slow = slow_pair.borrow().1.clone();
                         }
-                        if super::equality::values_equal(&slow, &fast)? {
+                        // Use pointer equality to detect cycles, not structural equality
+                        if let (Value::Pair(slow_ptr), Value::Pair(fast_ptr)) = (&slow, &fast)
+                            && Rc::ptr_eq(slow_ptr, fast_ptr)
+                        {
                             return Ok(Value::Boolean(false));
                         }
                     }

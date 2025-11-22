@@ -44,6 +44,8 @@ pub(in crate::eval) fn values_eq(a: &Value, b: &Value) -> bool {
 }
 
 pub(in crate::eval) fn values_eqv(a: &Value, b: &Value) -> bool {
+    use std::rc::Rc;
+
     match (a, b) {
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Null, Value::Null) => true,
@@ -51,6 +53,8 @@ pub(in crate::eval) fn values_eqv(a: &Value, b: &Value) -> bool {
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Real(a), Value::Real(b)) => a == b,
         (Value::Character(a), Value::Character(b)) => a == b,
+        // Pairs are eqv? only if they are the same object (pointer equality)
+        (Value::Pair(a), Value::Pair(b)) => Rc::ptr_eq(a, b),
         _ => false,
     }
 }

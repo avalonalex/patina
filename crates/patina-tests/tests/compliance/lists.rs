@@ -320,3 +320,30 @@ fn test_mutation_sharing() {
         "z",
     );
 }
+
+#[test]
+fn test_eqv_with_mutation() {
+    // eqv? should use pointer equality for pairs
+    assert_program_eval_to(
+        r#"
+        (define x (list 'a 'b 'c))
+        (define y x)
+        (set-cdr! x 4)
+        (eqv? x y)
+        "#,
+        "#t",
+    );
+}
+
+#[test]
+fn test_circular_list_detection() {
+    // list? should detect circular lists created via set-cdr!
+    assert_program_eval_to(
+        r#"
+        (define x (list 'a))
+        (set-cdr! x x)
+        (list? x)
+        "#,
+        "#f",
+    );
+}
