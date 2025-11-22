@@ -179,11 +179,12 @@ fn eval_let_syntax_impl(
             }
         };
 
-        // Compile the transformer
-        // Note: compile_syntax_rules doesn't use the environment parameter currently,
-        // so the distinction between let-syntax and letrec-syntax is handled by
-        // when we create the environment and add the bindings.
-        let compiled_macro = evaluator.compile_syntax_rules(&transformer_expr, name.clone())?;
+        // Compile the transformer with the appropriate environment for hygiene
+        // - For let-syntax: use parent environment (env) - macros don't see each other
+        // - For letrec-syntax: use new_env - macros can reference each other
+        let compile_env = if is_letrec { &new_env } else { env };
+        let compiled_macro =
+            evaluator.compile_syntax_rules(&transformer_expr, name.clone(), compile_env)?;
 
         macro_bindings.push((name.clone(), compiled_macro));
 

@@ -73,6 +73,10 @@ pub struct Compiler {
     /// None means ellipsis is disabled (inside escape)
     ellipsis: Option<Rc<str>>,
 
+    /// Environment where the macro is being defined (for hygiene)
+    /// Free variables in templates will capture this environment
+    env: Option<Rc<patina_runtime::Environment>>,
+
     // Per-rule compilation context
     /// Map from pattern variable name to PVREF
     pvars: HashMap<Rc<str>, PVRef>,
@@ -94,6 +98,28 @@ impl Compiler {
         Self {
             literals,
             ellipsis: ellipsis.or_else(|| Some("...".into())),
+            env: None,
+            pvars: HashMap::new(),
+            pvar_count: 0,
+            max_level: 0,
+        }
+    }
+
+    /// Create a new compiler with environment capture (for hygiene)
+    ///
+    /// # Arguments
+    /// - `literals`: List of literal identifier names
+    /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
+    /// - `env`: Environment where the macro is being defined
+    pub fn with_env(
+        literals: Vec<Rc<str>>,
+        ellipsis: Option<Rc<str>>,
+        env: Rc<patina_runtime::Environment>,
+    ) -> Self {
+        Self {
+            literals,
+            ellipsis: ellipsis.or_else(|| Some("...".into())),
+            env: Some(env),
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
@@ -353,8 +379,13 @@ impl Compiler {
                     }
                     Ok(Template::Var(*pvref))
                 } else {
-                    // Introduced symbol (will be renamed for hygiene)
-                    Ok(Template::Symbol(Identifier::new(s.clone())))
+                    // Free variable in template - capture definition environment for hygiene
+                    // This ensures the variable resolves to bindings visible at macro
+                    // definition time, not use-site
+                    Ok(Template::Symbol(Identifier::with_env(
+                        s.clone(),
+                        self.env.clone(),
+                    )))
                 }
             }
 

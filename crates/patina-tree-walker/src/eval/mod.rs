@@ -1159,10 +1159,16 @@ impl Evaluator {
     }
 
     /// Compile a syntax-rules form using the V2 PVREF-based compiler
+    ///
+    /// # Arguments
+    /// - `expr`: The syntax-rules expression to compile
+    /// - `name`: The macro name
+    /// - `env`: The environment where the macro is being defined (for hygiene)
     pub(crate) fn compile_syntax_rules(
         &self,
         expr: &Value,
         name: Rc<str>,
+        env: &Rc<Environment>,
     ) -> Result<patina_frontend::macro_expander::CompiledMacro, EvalError> {
         use patina_frontend::macro_expander::Compiler;
 
@@ -1185,8 +1191,8 @@ impl Evaluator {
         // Parse rules as (pattern, template) pairs
         let rules = self.parse_macro_rules(&rules_expr)?;
 
-        // Compile using V2 compiler
-        let mut compiler = Compiler::new(literals, None); // Use default ellipsis (...)
+        // Compile using V2 compiler with environment capture for hygiene
+        let mut compiler = Compiler::with_env(literals, None, env.clone());
         compiler
             .compile_macro(name, rules)
             .map_err(|e| EvalError::InvalidSyntax(format!("Failed to compile macro: {}", e)))

@@ -563,8 +563,10 @@ impl Expander {
 
     /// Rename an identifier for hygiene
     ///
-    /// For now, we just return the identifier as a symbol.
-    /// Full hygiene support would involve tracking scopes and renaming.
+    /// This implements lexical hygiene by checking bindings in the identifier's
+    /// captured environment (if any) rather than the expansion-time environment.
+    /// This ensures free variables in macro templates resolve to their definition-time
+    /// bindings, not use-site bindings.
     fn rename_identifier(&self, id: &Identifier) -> Value {
         // Implement hygiene by renaming free identifiers from the template
         // This ensures macro-introduced identifiers don't capture user bindings
@@ -572,19 +574,56 @@ impl Expander {
 
         let name = id.name();
 
-        // Don't rename if:
-        // 1. Already a gensym
-        // 2. A special form keyword
-        // 3. A macro (allows nested macro calls - do-helper, etc.)
-        // 4. Already bound in environment (primitives, user-defined procedures)
-        if is_gensym(name.as_ref())
-            || is_special_form(name.as_ref())
-            || self.is_macro(name)
-            || self.is_bound(name)
-        {
+        // Special case: if identifier has a captured environment and is bound there,
+        // return the symbol as-is (it will be looked up in evaluation environment)
+        // This is correct for special forms and macros that need to be in scope
+        if is_gensym(name.as_ref()) || is_special_form(name.as_ref()) || self.is_macro(name) {
+            return Value::Symbol(name.clone());
+        }
+
+        // Check if the identifier is bound in its defining environment (if captured)
+        // This is the KEY for lexical hygiene!
+        if let Some(def_env) = id.env() {
+            if def_env.get(name).is_some() {
+                // Bound in captured environment - don't rename, keep as-is
+                // The symbol will be looked up during evaluation
+                if patina_runtime::macro_debug::is_enabled() {
+                    println!(
+                        "[HYGIENE] Not renaming '{}' - bound in captured definition environment",
+                        name
+                    );
+                }
+                return Value::Symbol(name.clone());
+            } else {
+                // Not bound in defining environment - rename to avoid accidental capture
+                if patina_runtime::macro_debug::is_enabled() {
+                    println!(
+                        "[HYGIENE] Renaming '{}' - not bound in captured environment",
+                        name
+                    );
+                }
+                let mut renamings = self.renamings.borrow_mut();
+                let renamed = renamings
+                    .entry(name.clone())
+                    .or_insert_with(|| gensym(name));
+                return Value::Symbol(renamed.clone());
+            }
+        }
+
+        // No captured environment - use expansion-time environment check
+        if self.env.get(name).is_some() {
+            if patina_runtime::macro_debug::is_enabled() {
+                println!(
+                    "[HYGIENE] Not renaming '{}' - bound in expansion environment",
+                    name
+                );
+            }
             Value::Symbol(name.clone())
         } else {
-            // Check if we've already renamed this identifier in this expansion
+            // Not bound anywhere - rename to avoid capture
+            if patina_runtime::macro_debug::is_enabled() {
+                println!("[HYGIENE] Renaming '{}' - not bound anywhere", name);
+            }
             let mut renamings = self.renamings.borrow_mut();
             let renamed = renamings
                 .entry(name.clone())
@@ -604,6 +643,7 @@ impl Expander {
 
     /// Check if a name is bound in the environment
     /// This includes primitives, user-defined procedures, and other values
+    #[allow(dead_code)]
     fn is_bound(&self, name: &Rc<str>) -> bool {
         let bound = self.env.get(name).is_some();
         if patina_runtime::macro_debug::is_enabled() {

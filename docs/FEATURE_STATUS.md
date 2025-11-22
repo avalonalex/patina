@@ -143,10 +143,32 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | syntax-rules | ✅ | test_simple_macro | derived.rs, macros_advanced.rs |
 | Hygiene (basic) | ✅ | test_macro_hygiene_prevents_capture | derived.rs |
 | Hygiene (nested macros) | ✅ | test_nested_macros | derived.rs |
+| Hygiene (lexical scoping) | 🚧 | - | **Known limitation** - see below |
 | Ellipsis (...) | ✅ | 25+ tests | macros_advanced.rs |
+| Ellipsis escape (...) | ❌ | - | Not implemented |
 | Nested ellipsis (... ...) | ❌ | - | See internal/NESTED_ELLIPSIS_LIMITATION.md |
 | Pattern matching | ✅ | 50+ tests | macros_advanced.rs |
 | Literal identifiers | ✅ | test_macro_with_literals | macros_advanced.rs |
+| Underscore wildcard in literals | ❌ | - | Not implemented |
+
+**Known Hygiene Limitation (let-syntax):**
+Free variables in macro templates currently resolve in the expansion-time environment rather than the definition-time environment. This affects `let-syntax` and `letrec-syntax` when free variables are shadowed at the use site.
+
+Example that fails:
+```scheme
+(let ((x 'outer))
+  (let-syntax ((m (syntax-rules () ((m) x))))
+    (let ((x 'inner))
+      (m))))  ; Returns 'inner but should return 'outer
+```
+
+**Impact:** Affects 5 out of 19 macro tests in chibi R7RS suite (26%).
+
+**Research:** See `internal/HYGIENE_RESEARCH.md` for detailed analysis and potential solutions. The issue requires either:
+- Let-wrapping free variables (simple but partial fix)
+- Adding `Value::Identifier` variant (complete but invasive)
+
+**Decision:** Deferred pending CORE_IR_MIGRATION which may provide better foundation for hygiene.
 
 ---
 

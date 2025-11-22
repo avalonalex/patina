@@ -86,8 +86,9 @@ impl SpecialForm for DefineSyntaxForm {
         };
 
         // Transformer must be (syntax-rules (literals) rules...)
-        // Use V2 compiler to compile the macro
-        let compiled_macro = evaluator.compile_syntax_rules(&transformer_expr, name.clone())?;
+        // Use V2 compiler to compile the macro with current environment for hygiene
+        let compiled_macro =
+            evaluator.compile_syntax_rules(&transformer_expr, name.clone(), env)?;
 
         // Store the compiled macro
         let macro_value = Value::Macro {

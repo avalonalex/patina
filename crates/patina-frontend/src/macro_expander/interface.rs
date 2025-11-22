@@ -165,12 +165,12 @@ impl TestExpander {
             ));
         }
 
-        // Compile it
-        let mut compiler = super::Compiler::new(literals, None);
-        let compiled = compiler.compile_macro(name.into(), rules)?;
-
-        // Create test environment
+        // Create test environment first (needed for compilation)
         let test_env = Rc::new(Environment::new());
+
+        // Compile it with the test environment
+        let mut compiler = super::Compiler::with_env(literals, None, test_env.clone());
+        let compiled = compiler.compile_macro(name.into(), rules)?;
 
         Ok(Self {
             expander: Box::new(CompiledMacroExpander::new(compiled)),

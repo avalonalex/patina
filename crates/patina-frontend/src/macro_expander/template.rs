@@ -18,19 +18,47 @@ use std::rc::Rc;
 ///
 /// Wraps a symbol with scope information for hygienic macro expansion.
 /// This will be used to rename introduced identifiers.
+///
+/// The identifier captures the environment where it was introduced, ensuring
+/// that free variables in macro templates resolve to their definition-time bindings,
+/// not use-site bindings.
 #[derive(Clone, Debug)]
 pub struct Identifier {
     name: Rc<str>,
-    // TODO: Add scope information for full hygiene support
+    /// Environment where this identifier was introduced (for lexical hygiene).
+    /// When Some(env), the identifier should be looked up in this captured environment.
+    /// When None, the identifier is not bound to a specific environment (e.g., special forms).
+    env: Option<Rc<patina_runtime::Environment>>,
 }
 
 impl Identifier {
+    /// Create a new identifier without environment capture (for backwards compatibility)
     pub fn new(name: impl Into<Rc<str>>) -> Self {
-        Self { name: name.into() }
+        Self {
+            name: name.into(),
+            env: None,
+        }
     }
 
+    /// Create a new identifier with environment capture (for hygiene)
+    pub fn with_env(
+        name: impl Into<Rc<str>>,
+        env: Option<Rc<patina_runtime::Environment>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            env,
+        }
+    }
+
+    /// Get the identifier's name
     pub fn name(&self) -> &Rc<str> {
         &self.name
+    }
+
+    /// Get the captured environment (if any)
+    pub fn env(&self) -> Option<&Rc<patina_runtime::Environment>> {
+        self.env.as_ref()
     }
 }
 
