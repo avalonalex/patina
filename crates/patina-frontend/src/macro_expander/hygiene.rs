@@ -418,7 +418,9 @@ mod tests {
             if let Value::Pair(inner1) = &pair.borrow().1 {
                 assert!(matches!(inner1.borrow().0, Value::Symbol(ref s) if s.as_ref() == "test"));
                 if let Value::Pair(inner2) = &inner1.borrow().1 {
-                    assert!(matches!(inner2.borrow().0, Value::Symbol(ref s) if s.as_ref() == "body"));
+                    assert!(
+                        matches!(inner2.borrow().0, Value::Symbol(ref s) if s.as_ref() == "body")
+                    );
                 }
             }
         } else {
@@ -428,9 +430,8 @@ mod tests {
 
     // Helper function for building lists in tests
     fn list_from_vec(items: Vec<Value>) -> Value {
-        items
-            .into_iter()
-            .rev()
-            .fold(Value::Null, |acc, val| Value::Pair(Rc::new(RefCell::new((val, acc)))))
+        items.into_iter().rev().fold(Value::Null, |acc, val| {
+            Value::Pair(Rc::new(RefCell::new((val, acc))))
+        })
     }
 }

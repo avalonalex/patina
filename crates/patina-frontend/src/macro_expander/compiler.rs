@@ -601,10 +601,9 @@ mod tests {
 
     /// Helper to create a list
     fn list(items: Vec<Value>) -> Value {
-        items
-            .into_iter()
-            .rev()
-            .fold(Value::Null, |acc, val| Value::Pair(Rc::new(RefCell::new((val, acc)))))
+        items.into_iter().rev().fold(Value::Null, |acc, val| {
+            Value::Pair(Rc::new(RefCell::new((val, acc))))
+        })
     }
 
     #[test]

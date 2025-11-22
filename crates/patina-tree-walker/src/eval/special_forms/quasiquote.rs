@@ -295,8 +295,7 @@ fn process_quasiquote_pair(
                                 && sym.as_ref() == "unquote"
                             {
                                 // Evaluate the unquote expression as the tail
-                                let (unquote_expr, rest) =
-                                    evaluator.extract_pair(&cdr_cdr)?;
+                                let (unquote_expr, rest) = evaluator.extract_pair(&cdr_cdr)?;
                                 if !matches!(rest, Value::Null) {
                                     return Err(EvalError::InvalidSyntax(
                                         "unquote expects exactly one argument".to_string(),
