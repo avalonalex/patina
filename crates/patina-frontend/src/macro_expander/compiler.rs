@@ -272,6 +272,7 @@ impl Compiler {
     }
 
     /// Compile a dotted list pattern: (a b . rest)
+    /// Also handles patterns with ellipsis: (a b ... . rest)
     fn compile_dotted_pattern(
         &mut self,
         items: &[Value],
@@ -279,8 +280,46 @@ impl Compiler {
         level: usize,
     ) -> Result<Pattern, FrontendError> {
         let mut patterns = Vec::new();
-        for item in items {
-            patterns.push(self.compile_pattern(item, level)?);
+        let mut i = 0;
+
+        // Process items before the dot, checking for ellipsis
+        while i < items.len() {
+            // Check for ellipsis
+            if i + 1 < items.len() && self.is_ellipsis(&items[i + 1]) {
+                // Found ellipsis pattern: (item ...)
+
+                // Count trailing items before the dot
+                let num_following = items.len() - i - 2;
+
+                // Track which pattern variables are introduced in subpattern
+                let start_pvars = self.pvar_count;
+
+                // Compile the subpattern at increased level
+                let subpattern = self.compile_pattern(&items[i], level + 1)?;
+
+                let end_pvars = self.pvar_count;
+
+                // Collect PVREFs for variables introduced in this subpattern
+                let mut vars = Vec::new();
+                for idx in start_pvars..end_pvars {
+                    vars.push(PVRef::new((level + 1) as u8, idx as u8));
+                }
+
+                // Update max level
+                self.max_level = self.max_level.max(level + 1);
+
+                patterns.push(Pattern::Ellipsis {
+                    subpattern: Box::new(subpattern),
+                    level: (level + 1) as u8,
+                    num_following,
+                    vars,
+                });
+
+                i += 2; // Skip pattern and ellipsis
+            } else {
+                patterns.push(self.compile_pattern(&items[i], level)?);
+                i += 1;
+            }
         }
 
         let tail_pattern = Box::new(self.compile_pattern(tail, level)?);

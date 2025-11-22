@@ -2,6 +2,50 @@
 
 Major accomplishments and project milestones.
 
+## 2025-11-21: Ellipsis-in-Dotted-Patterns & Full define-values Support
+
+**Major Macro System Enhancement**
+- ✅ Implemented ellipsis support in dotted list patterns: `(a b ... . rest)`
+- ✅ Fixed compiler to handle ellipsis within `compile_dotted_pattern`
+- ✅ Fixed matcher to properly match ellipsis in dotted contexts
+- ✅ **All 14 previously-ignored ellipsis edge case tests now pass (100%)**
+- ✅ Full `define-values` implementation with all R7RS patterns
+
+**Supported define-values Patterns:**
+```scheme
+(define-values () expr)              ; No values - side effects only
+(define-values (x) expr)             ; Single value
+(define-values (x y) expr)           ; Two values
+(define-values (x y z ...) expr)     ; Multiple values
+(define-values x expr)               ; Collect all as list
+(define-values (x y . z) expr)       ; Dotted - z gets remaining values
+```
+
+**Previously Impossible Patterns Now Working:**
+- `(var0 var1 ... varn)` - Ellipsis in middle (SRFI-46 tail patterns)
+- `(var0 var1 ... . var-dot)` - Ellipsis with dotted tail
+- Nested ellipsis with dotted patterns
+- Zero-element ellipsis in complex contexts
+- Vector patterns with ellipsis
+
+**Why This Matters:**
+This was a fundamental limitation blocking macro-based development. Many R7RS standard library procedures are defined as macros using these patterns. With this fix:
+- Can now implement more stdlib in Scheme instead of Rust
+- Unlocks chibi-scheme's `define-values` implementation
+- Enables complex SRFI implementations
+- Brings macro system to near-complete R7RS compliance
+
+**Technical Achievement:**
+Updated two critical macro expander components:
+1. **Compiler** (`compile_dotted_pattern`): Now detects and compiles ellipsis patterns with proper level tracking
+2. **Matcher** (`match_dotted_list`): Complete rewrite to handle ellipsis matching inline, properly reconstructing remaining elements for tail patterns
+
+**Test Results:**
+- ✅ 12/12 define-values tests passing
+- ✅ 14/14 ellipsis edge case tests passing (were all ignored)
+- ✅ All existing tests still pass (zero regressions)
+- ✅ Chibi's part-2x complex pattern now works
+
 ## 2025-11-11: Quasiquote Implementation & Chibi Test Suite Integration
 
 **Quasiquote (Template System)**

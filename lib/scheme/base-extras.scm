@@ -328,4 +328,69 @@
                 (acc ... (var init var))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Multiple value binding (R7RS Section 5.3.3)
+
+;; define-values - bind multiple values from an expression
+;; Full R7RS-compliant implementation with all pattern types supported
+;; Implementation based on chibi-scheme (uses SRFI 46 tail patterns)
+(define-syntax define-values
+  (syntax-rules ()
+    ;; No variables case - evaluate expr for side effects
+    ((define-values () expr)
+     (define dummy
+       (call-with-values (lambda () expr)
+         (lambda args #f))))
+
+    ;; Single variable case - just use define
+    ((define-values (var) expr)
+     (define var expr))
+
+    ;; Two variables case - most common, handle directly
+    ((define-values (var0 var1) expr)
+     (begin
+       (define var0
+         (call-with-values (lambda () expr) list))
+       (define var1
+         (let ((v (cadr var0)))
+           (set! var0 (car var0))
+           v))))
+
+    ;; Multiple variables case (3+) - uses ellipsis-in-middle pattern
+    ((define-values (var0 var1 ... varn) expr)
+     (begin
+       (define var0
+         (call-with-values (lambda () expr) list))
+       (define var1
+         (let ((v (cadr var0)))
+           (set-cdr! var0 (cddr var0))
+           v))
+       ...
+       (define varn
+         (let ((v (cadr var0)))
+           (set! var0 (car var0))
+           v))))
+
+    ;; Dotted list pattern - last variable collects remaining values
+    ;; (define-values (x y . z) (values 1 2 3 4)) => x=1, y=2, z=(3 4)
+    ((define-values (var0 var1 ... . var-dot) expr)
+     (begin
+       (define var0
+         (call-with-values (lambda () expr) list))
+       (define var1
+         (let ((v (cadr var0)))
+           (set-cdr! var0 (cddr var0))
+           v))
+       ...
+       (define var-dot
+         (let ((v (cdr var0)))
+           (set! var0 (car var0))
+           v))))
+
+    ;; Single variable without list - collects all values as a list
+    ;; (define-values x (values 1 2 3)) => x is (1 2 3)
+    ((define-values var expr)
+     (define var
+       (call-with-values (lambda () expr) list)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; End of (scheme base) extras

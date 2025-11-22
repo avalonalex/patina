@@ -479,31 +479,96 @@ impl Matcher {
         env: &mut MatchEnv,
         level: usize,
     ) -> Result<(), MatchError> {
-        // Input must be a list (possibly improper)
+        // Convert the input to a vector for easier processing
+        // For dotted lists, we'll handle the tail separately
+        let mut input_list = Vec::new();
         let mut current = input.clone();
-        let mut matched_count = 0;
 
-        // Match the fixed patterns
+        // Collect elements into a vec, keeping track of the tail
+        while let Value::Pair(p) = current {
+            let borrowed = p.borrow();
+            input_list.push(borrowed.0.clone());
+            current = borrowed.1.clone();
+            drop(borrowed);
+        }
+
+        // current now holds the tail (could be Value::Null for proper lists,
+        // or some other value for improper lists)
+
+        // Match patterns against input elements
+        let mut input_idx = 0;
+
         for pattern in patterns {
-            if let Value::Pair(p) = current {
-                let borrowed = p.borrow();
-                let car = borrowed.0.clone();
-                let cdr = borrowed.1.clone();
-                drop(borrowed);
-                self.match_impl(pattern, &car, env, level)?;
-                current = cdr;
-                matched_count += 1;
+            if pattern.is_ellipsis() {
+                // Handle ellipsis pattern
+                if let Pattern::Ellipsis {
+                    subpattern,
+                    num_following,
+                    ..
+                } = pattern
+                {
+                    // Calculate how many elements to consume
+                    // Leave num_following elements for patterns after this
+                    let remaining_input = input_list.len() - input_idx;
+                    let to_consume = remaining_input.saturating_sub(*num_following);
+
+                    // Collect ALL variables from subpattern
+                    let all_vars = self.collect_all_pvars(subpattern);
+
+                    // Initialize branches for ALL variables
+                    let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue>> =
+                        all_vars.iter().map(|pvref| (*pvref, Vec::new())).collect();
+
+                    // Match subpattern against each consumed element
+                    for i in 0..to_consume {
+                        let elem = &input_list[input_idx + i];
+
+                        // Create a temporary environment for this iteration
+                        let mut temp_env = MatchEnv::new(self.num_pvars);
+                        self.match_impl(subpattern, elem, &mut temp_env, level + 1)?;
+
+                        // Extract matched values for ALL variables
+                        for pvref in &all_vars {
+                            if let Some(match_value) = temp_env.get_raw(*pvref) {
+                                branches.get_mut(pvref).unwrap().push(match_value.clone());
+                            }
+                        }
+                    }
+
+                    // Install branches into environment
+                    for (pvref, values) in branches {
+                        env.insert_branch(pvref, values);
+                    }
+
+                    input_idx += to_consume;
+                }
             } else {
-                return Err(MatchError::TooFewElements {
-                    pattern: "dotted list".to_string(),
-                    expected: patterns.len(),
-                    actual: matched_count,
-                });
+                // Regular pattern
+                if input_idx >= input_list.len() {
+                    return Err(MatchError::TooFewElements {
+                        pattern: "dotted list".to_string(),
+                        expected: input_idx + 1,
+                        actual: input_list.len(),
+                    });
+                }
+                self.match_impl(pattern, &input_list[input_idx], env, level)?;
+                input_idx += 1;
             }
         }
 
-        // Match the tail against the rest
-        self.match_impl(tail, &current, env, level)?;
+        // For dotted patterns, the tail captures remaining elements
+        // Reconstruct the remaining list for the tail pattern
+        let mut remaining = current; // This is the final cdr (could be Null or improper tail)
+
+        // Build up the remaining list from unconsumed elements
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        for i in (input_idx..input_list.len()).rev() {
+            remaining = Value::Pair(Rc::new(RefCell::new((input_list[i].clone(), remaining))));
+        }
+
+        // Match the tail against the remaining elements
+        self.match_impl(tail, &remaining, env, level)?;
 
         Ok(())
     }
