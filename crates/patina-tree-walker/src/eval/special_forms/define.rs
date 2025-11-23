@@ -78,7 +78,7 @@ impl SpecialForm for DefineForm {
         let (first, rest) = evaluator.extract_pair(args)?;
 
         match first {
-            Value::Symbol(name) => {
+            Value::Symbol(name) | Value::WrappedIdentifier { name, .. } => {
                 // (define var value)
                 let (value_expr, rest) = evaluator.extract_pair(&rest)?;
                 if !matches!(rest, Value::Null) {
@@ -141,7 +141,7 @@ impl SpecialForm for DefineForm {
                 // First argument exists (name or (name params...))
                 let pair1_borrowed = pair1.borrow();
                 match &pair1_borrowed.0 {
-                    Value::Symbol(_) => {
+                    Value::Symbol(_) | Value::WrappedIdentifier { .. } => {
                         // Variable definition: (define name value)
                         // Check for exactly 2 arguments
                         match &pair1_borrowed.1 {

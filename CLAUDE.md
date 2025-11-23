@@ -94,6 +94,9 @@ patina-tests → patina-interpreter
 - **`docs/`** - User-facing documentation and developer guides
   - **`FEATURE_STATUS.md`** - ⭐ **CANONICAL** detailed test-by-test R7RS compliance matrix
   - **`TEST_ORGANIZATION.md`** - ⭐ Test structure and running tests
+  - **`HYGIENE_SYSTEM_DESIGN.md`** - Guide for swapping hygiene implementations
+  - **`HYGIENE_COMPLIANCE_ANALYSIS.md`** - R7RS macro compliance measurements
+  - **`MACRO_DEBUGGING.md`** - Comprehensive macro debugging guide
   - `API.md` - Public API reference
   - `GETTING_STARTED.md` - User guide for getting started
   - `README.md` - Project overview
@@ -102,6 +105,8 @@ patina-tests → patina-interpreter
 
 - **`internal/`** - Implementation notes and progress tracking
   - **`MILESTONES.md`** - Historical achievements and progress milestones (keep updated)
+  - **`MACRO_HYGIENE_APPROACHES.md`** - Comprehensive research on hygiene algorithms (Racket, Chez, Chibi)
+  - **`HYGIENE_ABSTRACTION_SUMMARY.md`** - Trait-based hygiene abstraction implementation summary
   - `NESTED_ELLIPSIS_LIMITATION.md` - Future enhancement documentation
   - `reference_impls/` - Reference implementation notes (Chibi, Chez)
 

@@ -3,13 +3,12 @@
 //! This module implements R7RS-small `syntax-rules` macros with:
 //! - Pattern matching (including ellipsis patterns)
 //! - Template expansion
-//! - Hygienic identifier renaming
+//! - Hygienic identifier renaming using marks-and-ribs
 //!
 //! Based on Steel-scheme's native Rust approach.
 
 pub mod compiler;
 pub mod expander;
-pub mod hygiene;
 pub mod interface;
 pub mod matcher;
 pub mod pattern;
@@ -18,9 +17,6 @@ pub mod validator;
 
 #[cfg(test)]
 mod ellipsis_edge_cases_tests;
-
-// Re-export main functions
-pub use hygiene::apply_hygiene;
 
 // Re-export V2 types (now the only types)
 pub use compiler::{CompiledMacro, CompiledRule, Compiler};

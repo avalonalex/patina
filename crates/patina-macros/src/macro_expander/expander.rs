@@ -98,13 +98,13 @@ impl std::error::Error for ExpandError {}
 ///
 /// Based on Gauche's template expansion approach (macro.c:800+).
 pub struct Expander {
-    /// Renaming map for hygiene: original name -> renamed symbol
-    /// Created fresh for each macro expansion to ensure consistent renaming
-    renamings: std::cell::RefCell<std::collections::HashMap<Rc<str>, Rc<str>>>,
-
     /// Expansion-time environment (for checking if identifiers are macro names)
     /// We use the full runtime Environment directly to avoid duplication
     expansion_env: std::rc::Rc<patina_runtime::Environment>,
+
+    /// Mark for this expansion (fresh for each expansion)
+    /// Used by marks-and-ribs to track which expansion introduced identifiers
+    expansion_mark: usize,
 }
 
 impl Expander {
@@ -113,9 +113,12 @@ impl Expander {
     /// # Arguments
     /// * `expansion_env` - Runtime environment at expansion time
     pub fn new(expansion_env: std::rc::Rc<patina_runtime::Environment>) -> Self {
+        // Allocate a fresh mark for this expansion
+        let mark = crate::marks_and_ribs::MarksAndRibsHygiene::fresh_mark();
+
         Self {
-            renamings: std::cell::RefCell::new(std::collections::HashMap::new()),
             expansion_env,
+            expansion_mark: mark,
         }
     }
 
@@ -125,10 +128,6 @@ impl Expander {
     ///
     /// Inspired by Gauche's expand_template (macro.c:800+)
     pub fn expand(&self, template: &Template, env: &MatchEnv) -> Result<Value, ExpandError> {
-        // Clear the renaming map for this expansion
-        // Each macro expansion should get fresh gensyms
-        self.renamings.borrow_mut().clear();
-
         self.expand_impl(template, env, &[])
     }
 
@@ -568,21 +567,15 @@ impl Expander {
 
     /// Rename an identifier for hygiene
     ///
-    /// This implements lexical hygiene by checking bindings in the identifier's
-    /// captured environment (if any) rather than the expansion-time environment.
+    /// Rename an identifier using marks-and-ribs hygiene
+    ///
     /// This ensures free variables in macro templates resolve to their definition-time
     /// bindings, not use-site bindings.
     fn rename_identifier(&self, id: &Identifier) -> Value {
-        // Implement hygiene by renaming free identifiers from the template
-        // This ensures macro-introduced identifiers don't capture user bindings
-        use crate::macro_expander::hygiene::{gensym, is_gensym};
-
         let name = id.name();
 
-        // Special case: if identifier has a captured environment and is bound there,
-        // return the symbol as-is (it will be looked up in evaluation environment)
-        // This is correct for special forms and macros that need to be in scope
-        if is_gensym(name.as_ref()) || is_special_form(name.as_ref()) || self.is_macro(name) {
+        // Special forms and macros are never renamed
+        if is_special_form(name.as_ref()) || self.is_macro(name) {
             return Value::Symbol(name.clone());
         }
 
@@ -605,21 +598,16 @@ impl Expander {
         }
 
         // No captured environment - this is an INTRODUCED IDENTIFIER
-        // Rename it to avoid capturing use-site bindings
-        {
-            // No captured environment - this is an introduced identifier
-            // Rename it to avoid capturing use-site bindings
-            if patina_runtime::macro_debug::is_enabled() {
-                println!(
-                    "[HYGIENE] Renaming '{}' - introduced identifier (avoiding capture)",
-                    name
-                );
-            }
-            let mut renamings = self.renamings.borrow_mut();
-            let renamed = renamings
-                .entry(name.clone())
-                .or_insert_with(|| gensym(name));
-            Value::Symbol(renamed.clone())
+        // Add expansion mark to avoid capturing use-site bindings
+        if patina_runtime::macro_debug::is_enabled() {
+            println!(
+                "[MARKS-AND-RIBS] Marking '{}' with mark {} - introduced identifier",
+                name, self.expansion_mark
+            );
+        }
+        Value::WrappedIdentifier {
+            name: name.clone(),
+            marks: vec![self.expansion_mark],
         }
     }
 

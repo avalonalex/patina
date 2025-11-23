@@ -5,9 +5,10 @@ This guide explains how to debug macro expansions in Patina using the built-in d
 ## Table of Contents
 
 - [Quick Start](#quick-start)
-- [MACRO_DEBUG Environment Variable](#macro_debug-environment-variable)
+- [Enabling Macro Debug Output](#enabling-macro-debug-output)
 - [MacroTracer for Selective Debugging](#macrotracer-for-selective-debugging)
 - [Understanding Expansion Traces](#understanding-expansion-traces)
+- [Marks-and-Ribs Hygiene System](#marks-and-ribs-hygiene-system)
 - [Common Debugging Scenarios](#common-debugging-scenarios)
 - [Error Messages with Context](#error-messages-with-context)
 
@@ -15,10 +16,11 @@ This guide explains how to debug macro expansions in Patina using the built-in d
 
 ### Enable All Macro Debugging
 
-Set the `MACRO_DEBUG` environment variable:
+Use the `macro-debug-on` primitive from the REPL or in code:
 
-```bash
-MACRO_DEBUG=1 cargo run
+```scheme
+(macro-debug-on)   ; Enable macro debugging
+(macro-debug-off)  ; Disable macro debugging
 ```
 
 This will print detailed information about every macro expansion, including:
@@ -27,21 +29,11 @@ This will print detailed information about every macro expansion, including:
 - Which pattern rules are tried
 - Pattern matching results
 - Template expansion output
-- Hygiene renaming
+- Hygiene (marks-and-ribs) transformations
 
 ### Trace Specific Macros
 
-For more focused debugging, use `MacroTracer` in your code:
-
-```scheme
-; Enable tracing for specific macros
-(begin
-  ; Your code here - these macros will be traced
-  (let-values (((a b) (values 1 2)))
-    (list a b)))
-```
-
-Then in Rust:
+For more focused debugging, use `MacroTracer` from Rust code:
 
 ```rust
 use patina_macros::MacroTracer;
@@ -62,21 +54,39 @@ for step in history {
 }
 ```
 
-## MACRO_DEBUG Environment Variable
+## Enabling Macro Debug Output
 
-The `MACRO_DEBUG` environment variable enables comprehensive logging of all macro expansions.
+### From Scheme Code
 
-### Usage
+The recommended way to enable macro debugging is using the primitives:
 
-```bash
-# Enable macro debugging
-export MACRO_DEBUG=1
+```scheme
+; Enable debugging
+(macro-debug-on)
 
-# Run your program
-./patina my_program.scm
+; Your macro code here
+(let-values (((a b) (values 1 2)))
+  (list a b))
 
-# Or combine with cargo run
-MACRO_DEBUG=1 cargo run -- my_program.scm
+; Disable when done
+(macro-debug-off)
+```
+
+### From Rust Code
+
+You can also enable it programmatically:
+
+```rust
+use patina_runtime::macro_debug;
+
+// Enable debugging
+macro_debug::enable();
+
+// Run your code
+interpreter.eval_str(scheme_code)?;
+
+// Disable
+macro_debug::disable();
 ```
 
 ### Example Output
@@ -84,17 +94,18 @@ MACRO_DEBUG=1 cargo run -- my_program.scm
 ```
 [MACRO] Expanding macro: let-values
 [MACRO]   Definition (1 rule(s)):
-[MACRO]     Rule 1: ((let-values (binding ...) body1 body2 ...)) -> <template>
+[MACRO]     Rule 1: (let-values (binding ...) body1 body2 ...) -> <template>
 [MACRO]
-[MACRO]   Input: ((let-values (((a b) (values 1 2))) (list a b)))
+[MACRO]   Input: (let-values (((a b) (values 1 2))) (list a b))
 [MACRO]   Trying 1 rule(s):
 [MACRO]
 [MACRO]   === Trying rule 1 ===
-[MACRO]   Pattern: ((let-values (binding ...) body1 body2 ...))
+[MACRO]   Pattern: (let-values (binding ...) body1 body2 ...)
 [MACRO]   ✓ Match successful!
 [MACRO]
 [MACRO]   === Expanding template ===
 [MACRO]   Template: (call-with-values (lambda () (values 1 2)) (lambda (a b) (begin (list a b))))
+[MARKS-AND-RIBS] Marking 'call-with-values' with mark 42 - introduced identifier
 [MACRO]   Expanded (with hygiene): (call-with-values (lambda () (values 1 2)) (lambda (a b) (begin (list a b))))
 [MACRO]
 [MACRO] ========================================
@@ -109,7 +120,7 @@ MACRO_DEBUG=1 cargo run -- my_program.scm
 3. **Input**: The actual form being matched
 4. **Pattern Matching**: Each rule tried and whether it matched
 5. **Template Expansion**: The expanded result
-6. **Hygiene**: Any identifier renamings that occurred
+6. **Hygiene**: Marks-and-ribs transformations applied to identifiers
 
 ## MacroTracer for Selective Debugging
 
@@ -172,8 +183,97 @@ for (i, step) in history.iter().enumerate() {
 // Limit tracing to 5 levels deep
 MacroTracer::set_max_depth(5);
 
-// This prevents infinite recursion when debugging recursive macros
+// This prevents infinite output when debugging recursive macros
 ```
+
+## Marks-and-Ribs Hygiene System
+
+Patina uses the **marks-and-ribs** hygiene algorithm from Chez Scheme to ensure macros don't accidentally capture variables from the use site.
+
+### How It Works
+
+1. **Marks**: Each macro expansion gets a unique "mark" (integer ID)
+2. **Wrapping**: Template identifiers are wrapped with the expansion mark
+3. **Comparison**: Two identifiers are "the same" only if they have the same name AND same marks
+4. **Pattern Variables**: Variables from the input pattern are NOT marked (they should capture use-site bindings)
+
+### Example
+
+```scheme
+(define-syntax my-let
+  (syntax-rules ()
+    ((my-let ((var val)) body)
+     ((lambda (var) body) val))))
+
+(let ((x 'outer))
+  (my-let ((x 'inner))
+    x))  ; Returns 'inner
+```
+
+**What happens**:
+1. `my-let` expands with mark #42
+2. Template `lambda` gets mark: `lambda@42`
+3. Template `var` parameter is a pattern variable - no mark
+4. Template `body` is a pattern variable - no mark
+5. Final: `((lambda@42 (x) x) 'inner)`
+6. The `x` parameter and body `x` have no marks, so they match
+7. Result: `'inner`
+
+### Debugging Hygiene
+
+Enable macro debugging to see marks being applied:
+
+```scheme
+(macro-debug-on)
+
+(define-syntax swap
+  (syntax-rules ()
+    ((swap x y)
+     (let ((tmp x))
+       (set! x y)
+       (set! y tmp)))))
+
+(let ((a 1) (b 2))
+  (swap a b)
+  (list a b))
+```
+
+Output will show:
+```
+[MARKS-AND-RIBS] Marking 'let' with mark 123 - introduced identifier
+[MARKS-AND-RIBS] Marking 'tmp' with mark 123 - introduced identifier
+[MARKS-AND-RIBS] Marking 'set!' with mark 123 - introduced identifier
+```
+
+Pattern variables `x` and `y` are NOT marked, so they correctly refer to `a` and `b` from the use site.
+
+### Value Types for Hygiene
+
+Patina has several Value types to support hygiene:
+
+- **`Value::Symbol`**: Regular symbol (e.g., `x`)
+- **`Value::WrappedIdentifier`**: Symbol with marks (e.g., `tmp@123`)
+- **`Value::Identifier`**: Symbol with captured environment (for free variables in macros)
+
+### Hygiene in Error Messages
+
+The marks are internal - they don't appear in error messages or output:
+
+```scheme
+(define-syntax bad
+  (syntax-rules ()
+    ((bad) undefined-var)))
+
+(bad)
+; Error: Undefined variable: undefined-var
+; (NOT: "Undefined variable: undefined-var@42")
+```
+
+### References
+
+- **Original Paper**: Dybvig et al., "Syntactic abstraction in Scheme" (1993)
+- **Implementation**: Chez Scheme `syntax.ss`
+- **Code**: `crates/patina-macros/src/marks_and_ribs.rs`
 
 ## Understanding Expansion Traces
 
@@ -213,9 +313,9 @@ This helps you understand the macro expansion pipeline.
 
 **Debug Steps**:
 
-1. Enable `MACRO_DEBUG`:
-   ```bash
-   MACRO_DEBUG=1 ./patina
+1. Enable macro debugging:
+   ```scheme
+   (macro-debug-on)
    ```
 
 2. Look for the macro name in the output. If it doesn't appear, the macro might not be defined or in scope.
@@ -233,10 +333,10 @@ This helps you understand the macro expansion pipeline.
 
 **Debug Steps**:
 
-1. Enable `MACRO_DEBUG` to see which rules are tried:
+1. Enable macro debugging to see which rules are tried:
    ```
    [MACRO]   === Trying rule 1 ===
-   [MACRO]   Pattern: ((my-macro x y))
+   [MACRO]   Pattern: (my-macro x y)
    [MACRO]   ✗ Match failed: Expected list, got symbol
    ```
 
@@ -251,28 +351,39 @@ This helps you understand the macro expansion pipeline.
      ((my-macro x y) (list x y))) ; Two arguments
    ```
 
-### Scenario 3: Wrong Variables Captured (Hygiene Issue)
+### Scenario 3: Hygiene Issue - Variable Capture
 
-**Problem**: Macro is using wrong binding.
+**Problem**: Macro is capturing the wrong variable.
 
 **Example**:
 ```scheme
-(let ((x 'outer))
-  (let-syntax ((m (syntax-rules () ((m) x))))
-    (let ((x 'inner))
-      (m))))  ; Should return 'outer, but returns 'inner?
+; This should work correctly with marks-and-ribs
+(define-syntax bad-swap
+  (syntax-rules ()
+    ((bad-swap a b)
+     (let ((tmp a))
+       (set! a b)
+       (set! b tmp)))))
+
+(let ((tmp 'outer))
+  (let ((x 1) (y 2))
+    (bad-swap x y)
+    (list x y tmp)))  ; tmp should still be 'outer
 ```
 
 **Debug Steps**:
 
-1. Enable `MACRO_DEBUG` and look for hygiene messages:
-   ```
-   [HYGIENE] Not renaming 'x' - free variable in template (lexical scoping)
+1. Enable macro debugging:
+   ```scheme
+   (macro-debug-on)
    ```
 
-2. Check if `x` has a captured environment. Free variables should use definition-time bindings.
+2. Look for marks being applied:
+   ```
+   [MARKS-AND-RIBS] Marking 'tmp' with mark 123 - introduced identifier
+   ```
 
-3. The debug output will show if identifiers are being renamed or using captured environments.
+3. The introduced `tmp` has a mark, so it won't conflict with the user's `tmp`
 
 ### Scenario 4: Recursive Macro Stack Overflow
 
@@ -320,7 +431,7 @@ When a macro expansion fails, the error message includes expansion context.
 ### Example Error
 
 ```
-Macro expansion error: Undefined free variable in macro template: foo
+Macro expansion error: Undefined pattern variable
 
   in macro: my-macro
 
@@ -330,34 +441,19 @@ Expansion trace:
 ```
 
 This tells you:
-- **What went wrong**: Undefined variable `foo`
+- **What went wrong**: Undefined pattern variable
 - **Where**: In macro `my-macro`
 - **How you got there**: Via `let*-values` which expanded to `my-macro`
-
-### Accessing Error Context in Code
-
-```rust
-match interpreter.eval_str(code) {
-    Err(e) => {
-        // Get formatted error with trace
-        let error_msg = e.format_with_trace();
-        eprintln!("{}", error_msg);
-    }
-    Ok(result) => {
-        println!("Result: {}", result);
-    }
-}
-```
 
 ## Best Practices
 
 1. **Start Small**: Debug macros in isolation before using them in complex code.
 
-2. **Use MacroTracer for Specific Macros**: Instead of `MACRO_DEBUG` which shows everything, use `MacroTracer` to focus on problematic macros.
+2. **Use MacroTracer for Specific Macros**: Instead of enabling all debugging, use `MacroTracer` to focus on problematic macros.
 
 3. **Check Pattern Variables**: Ensure pattern variables match the expected structure.
 
-4. **Test Hygiene**: Verify that free variables capture the right bindings.
+4. **Test Hygiene**: Verify that temporary variables don't capture user bindings.
 
 5. **Limit Trace Depth**: When debugging recursive macros, use `set_max_depth()` to prevent overwhelming output.
 
@@ -365,27 +461,49 @@ match interpreter.eval_str(code) {
 
 ## API Reference
 
-### MacroTracer Methods
+### Scheme Primitives
 
-```rust
-// Enable/disable tracing
-MacroTracer::enable_for(&["macro1", "macro2"])
-MacroTracer::enable_all()
-MacroTracer::disable()
-
-// Control depth
-MacroTracer::set_max_depth(depth: usize)
-MacroTracer::current_depth() -> usize
-
-// Get trace data
-MacroTracer::get_history() -> Vec<ExpansionStep>
-MacroTracer::print_history()
-
-// Clear history
-MacroTracer::clear()
+```scheme
+(macro-debug-on)   ; Enable macro debugging output
+(macro-debug-off)  ; Disable macro debugging output
 ```
 
-### ExpansionStep Fields
+### Rust API
+
+#### macro_debug Module
+
+```rust
+use patina_runtime::macro_debug;
+
+// Enable/disable debugging
+macro_debug::enable();
+macro_debug::disable();
+macro_debug::is_enabled() -> bool;
+```
+
+#### MacroTracer Methods
+
+```rust
+use patina_macros::MacroTracer;
+
+// Enable/disable tracing
+MacroTracer::enable_for(&["macro1", "macro2"]);
+MacroTracer::enable_all();
+MacroTracer::disable();
+
+// Control depth
+MacroTracer::set_max_depth(depth: usize);
+MacroTracer::current_depth() -> usize;
+
+// Get trace data
+MacroTracer::get_history() -> Vec<ExpansionStep>;
+MacroTracer::print_history();
+
+// Clear history
+MacroTracer::clear();
+```
+
+#### ExpansionStep
 
 ```rust
 pub struct ExpansionStep {
@@ -396,65 +514,9 @@ pub struct ExpansionStep {
 }
 ```
 
-### MacroError Methods
-
-```rust
-// Add context to an error
-error.with_context(macro_name, expansion_trace)
-
-// Format with full trace
-error.format_with_trace() -> String
-```
-
-## Examples
-
-### Example 1: Debug a Failing Macro
-
-```rust
-use patina_interpreter::Interpreter;
-use patina_macros::MacroTracer;
-
-let interp = Interpreter::new();
-
-// Define a macro
-interp.eval_str(r#"
-(define-syntax broken-macro
-  (syntax-rules ()
-    ((broken-macro x) (undefined-function x))))
-"#)?;
-
-// Enable tracing
-MacroTracer::enable_for(&["broken-macro"]);
-
-// Try to use it (will fail)
-match interp.eval_str("(broken-macro 42)") {
-    Err(e) => {
-        eprintln!("Error: {}", e.format_with_trace());
-        MacroTracer::print_history();
-    }
-    Ok(_) => println!("Success"),
-}
-```
-
-### Example 2: Trace Macro Expansion Chain
-
-```rust
-MacroTracer::enable_for(&["let*-values", "let-values"]);
-
-interp.eval_str(r#"
-(let*-values (((a b) (values 1 2))
-              ((c d) (values a b)))
-  (list c d))
-"#)?;
-
-// See how let*-values expands to let-values
-for step in MacroTracer::get_history() {
-    println!("{}", step);
-}
-```
-
 ## See Also
 
-- [Macro Architecture Review](MACRO_ARCHITECTURE_REVIEW.md) - Deep dive into macro system internals
-- [Hygiene Research](../internal/HYGIENE_RESEARCH.md) - How hygienic macro expansion works
-- [Feature Status](FEATURE_STATUS.md) - Which macros are implemented
+- **Hygiene Implementation**: `crates/patina-macros/src/marks_and_ribs.rs`
+- **Macro Expander**: `crates/patina-macros/src/macro_expander/`
+- **Feature Status**: [FEATURE_STATUS.md](FEATURE_STATUS.md)
+- **Testing**: [TEST_ORGANIZATION.md](TEST_ORGANIZATION.md)

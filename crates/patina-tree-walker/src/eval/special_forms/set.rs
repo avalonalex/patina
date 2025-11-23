@@ -66,16 +66,20 @@ impl SpecialForm for SetForm {
             ));
         }
 
-        if let Value::Symbol(name) = var {
-            let value = evaluator.eval_in_env(&value_expr, env)?;
-            env.set(&name, value)
-                .map_err(EvalError::UndefinedVariable)?;
-            Ok(EvalResult::Value(Value::Unspecified))
-        } else {
-            Err(EvalError::InvalidSyntax(
-                "set! expects a symbol".to_string(),
-            ))
-        }
+        let name = match var {
+            Value::Symbol(s) => s.clone(),
+            Value::WrappedIdentifier { name, .. } => name.clone(),
+            _ => {
+                return Err(EvalError::InvalidSyntax(
+                    "set! expects a symbol or identifier".to_string(),
+                ));
+            }
+        };
+
+        let value = evaluator.eval_in_env(&value_expr, env)?;
+        env.set(&name, value)
+            .map_err(EvalError::UndefinedVariable)?;
+        Ok(EvalResult::Value(Value::Unspecified))
     }
 
     fn validate_syntax(&self, args: &Value) -> Result<(), EvalError> {
@@ -83,10 +87,13 @@ impl SpecialForm for SetForm {
         match args {
             Value::Pair(pair1) => {
                 let pair1_ref = pair1.borrow();
-                // First argument must be a symbol
-                if !matches!(pair1_ref.0, Value::Symbol(_)) {
+                // First argument must be a symbol or wrapped identifier
+                if !matches!(
+                    pair1_ref.0,
+                    Value::Symbol(_) | Value::WrappedIdentifier { .. }
+                ) {
                     return Err(EvalError::InvalidSyntax(
-                        "set! expects a symbol".to_string(),
+                        "set! expects a symbol or identifier".to_string(),
                     ));
                 }
 

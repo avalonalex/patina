@@ -110,6 +110,12 @@ impl Desugarer {
             // Treat as a variable reference - the evaluator will handle the captured env
             Value::Identifier { name, .. } => Ok(CoreExpr::Var(name.clone())),
 
+            // WrappedIdentifier (from marks-and-ribs hygiene)
+            // Treat as a variable reference - the marks are used during name resolution
+            // For now, we just use the name; full marks-and-ribs implementation will
+            // need to thread marks through the evaluator
+            Value::WrappedIdentifier { name, .. } => Ok(CoreExpr::Var(name.clone())),
+
             // Empty list (unusual in AST, but possible as literal)
             Value::Null => Ok(CoreExpr::Literal(Value::Null)),
 

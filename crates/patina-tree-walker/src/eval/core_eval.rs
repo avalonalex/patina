@@ -702,6 +702,7 @@ fn value_to_core_simple(value: &Value) -> Result<CoreExpr, EvalError> {
                         }
                         let var = match &elements[1] {
                             Value::Symbol(s) => s.clone(),
+                            Value::WrappedIdentifier { name, .. } => name.clone(),
                             _ => {
                                 return Err(EvalError::InvalidSyntax(
                                     "set! requires symbol as first argument".to_string(),

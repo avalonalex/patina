@@ -406,16 +406,8 @@ impl Evaluator {
                     eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
                 }
 
-                // First try looking up in current environment
+                // Look up in current environment
                 if let Some(value) = env.get(name) {
-                    return Ok(EvalResult::Value(value));
-                }
-
-                // If it's a gensym and not found, try looking it up in the global environment
-                if patina_macros::macro_expander::hygiene::is_gensym(name.as_ref())
-                    && let Some(original_name) = extract_original_from_gensym(name.as_ref())
-                    && let Some(value) = self.global_env.get(&Rc::from(original_name))
-                {
                     return Ok(EvalResult::Value(value));
                 }
 
@@ -447,6 +439,31 @@ impl Evaluator {
                 // If not found in captured env, fall back to undefined variable error
                 Err(EvalError::UndefinedVariable(format!(
                     "{} (identifier)",
+                    name
+                )))
+            }
+
+            // WrappedIdentifier lookup (from marks-and-ribs hygiene)
+            // Look up the variable by name in the current environment
+            // TODO: Full marks-and-ribs will need to use marks for proper hygiene
+            Value::WrappedIdentifier { name, marks } => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!(
+                        "[ENV]{} WrappedIdentifier lookup: '{}' (marks: {:?})",
+                        self.debug.current_indent(),
+                        name,
+                        marks
+                    );
+                }
+
+                // For now, just look up by name
+                // Full implementation would use marks to determine correct binding
+                if let Some(value) = env.get(name) {
+                    return Ok(EvalResult::Value(value));
+                }
+
+                Err(EvalError::UndefinedVariable(format!(
+                    "{} (wrapped identifier)",
                     name
                 )))
             }
@@ -540,6 +557,7 @@ impl Evaluator {
             let name = match &car {
                 Value::Symbol(s) => s.as_ref(),
                 Value::Identifier { name, .. } => name.as_ref(),
+                Value::WrappedIdentifier { name, .. } => name.as_ref(),
                 _ => unreachable!(),
             };
 
@@ -662,6 +680,9 @@ impl Evaluator {
 
             // Identifiers - no expansion needed (they're already from macro expansion)
             Value::Identifier { .. } => Ok(expr.clone()),
+
+            // WrappedIdentifiers - no expansion needed (from marks-and-ribs hygiene)
+            Value::WrappedIdentifier { .. } => Ok(expr.clone()),
 
             // Vectors - recursively expand elements
             Value::Vector(vec) => {
@@ -1221,6 +1242,9 @@ impl Evaluator {
             // (lambda args body...) - single symbol, all args go to it
             Value::Symbol(s) => Ok((vec![], Some(s.to_string()))),
 
+            // (lambda args body...) - single wrapped identifier (from marks-and-ribs)
+            Value::WrappedIdentifier { name, .. } => Ok((vec![], Some(name.to_string()))),
+
             // (lambda () body...) - no parameters
             Value::Null => Ok((vec![], None)),
 
@@ -1237,7 +1261,11 @@ impl Evaluator {
                             return Ok((params, Some(s.to_string())));
                         }
                         Value::Identifier { name, .. } => {
-                            // Rest parameter from macro expansion: (x y . rest)
+                            // Rest parameter from macro expansion (old hygiene): (x y . rest)
+                            return Ok((params, Some(name.to_string())));
+                        }
+                        Value::WrappedIdentifier { name, .. } => {
+                            // Rest parameter from macro expansion (marks-and-ribs): (x y . rest)
                             return Ok((params, Some(name.to_string())));
                         }
                         Value::Pair(pair) => {
@@ -1251,7 +1279,12 @@ impl Evaluator {
                                     current = cdr;
                                 }
                                 Value::Identifier { name, .. } => {
-                                    // Parameter from macro expansion
+                                    // Parameter from macro expansion (old hygiene)
+                                    params.push(name.to_string());
+                                    current = cdr;
+                                }
+                                Value::WrappedIdentifier { name, .. } => {
+                                    // Parameter from macro expansion (marks-and-ribs hygiene)
                                     params.push(name.to_string());
                                     current = cdr;
                                 }
@@ -1528,22 +1561,4 @@ impl Evaluator {
         patina_macros::expand_macro(compiled_macro, args, env)
             .map_err(|e| EvalError::InvalidSyntax(format!("Macro expansion failed: {}", e)))
     }
-}
-
-/// Extract the original identifier name from a gensym
-///
-/// Gensyms have format: ##name#counter
-/// This extracts "name" from that format.
-fn extract_original_from_gensym(gensym: &str) -> Option<String> {
-    if !gensym.starts_with("##") {
-        return None;
-    }
-
-    // Skip "##" prefix
-    let without_prefix = &gensym[2..];
-
-    // Find the last '#' which separates name from counter
-    without_prefix
-        .rfind('#')
-        .map(|last_hash| without_prefix[..last_hash].to_string())
 }
