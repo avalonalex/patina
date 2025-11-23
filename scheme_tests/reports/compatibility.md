@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-23 15:02:25
+**Generated:** 2025-11-23 15:55:00
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 701 | 63.3% |
+| ✅ Passed | 697 | 62.9% |
 | ❌ Failed | 38 | 3.4% |
-| ⚠️ Error (crashed) | 369 | 33.3% |
+| ⚠️ Error (crashed) | 373 | 33.7% |
 | **Total** | **1108** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
@@ -62,6 +62,9 @@ FAIL:
 ### Errors
 
 ```
+Error: Not a procedure: #<parameter>
+Error: Not a procedure: #<parameter>
+Error: Undefined variable: let-syntax
 Error: Not a procedure: 8
 Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence1
 Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
@@ -71,7 +74,8 @@ Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching patte
 Error: Not a procedure: ok
 Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro bar
 Error: Invalid syntax: define: function name must be a symbol
-Error: Invalid syntax: Macro name must be a symbol
+Error: Undefined variable: let-syntax
+Error: Undefined variable: let-syntax
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: define-record-type
 Error: Undefined variable: pare?
@@ -291,134 +295,134 @@ Error: Undefined variable: read
 Error: Undefined variable: read
 Error: Undefined variable: read
 Error: Undefined variable: read
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: open-output-string (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: read (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
-Error: Undefined variable: test-assert (wrapped identifier)
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: open-output-string
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: read
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
+Error: Undefined variable: test-assert
 Error: Undefined variable: get-environment-variable
 Error: Undefined variable: get-environment-variables
 Error: Undefined variable: command-line

@@ -369,6 +369,18 @@ impl Evaluator {
         self.eval_step_impl(expr, env, true)
     }
 
+    /// Evaluate one step of an already macro-expanded expression
+    ///
+    /// Like `eval_step()`, but assumes macros have already been expanded.
+    /// Calls `eval_list_impl_expanded()` instead of `eval_list_impl()`.
+    fn eval_step_expanded(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<EvalResult, EvalError> {
+        self.eval_step_impl_expanded(expr, env, true)
+    }
+
     /// Implementation of eval_step with tail position tracking
     fn eval_step_impl(
         &self,
@@ -609,37 +621,195 @@ impl Evaluator {
         self.apply(proc, args, in_tail_position)
     }
 
-    /// Helper to convert a Scheme list (Value) to a Rust Vec
-    fn value_to_vec(value: &Value) -> Result<Vec<Value>, EvalError> {
-        let mut result = Vec::new();
-        let mut current = value.clone();
+    /// Implementation of eval_step for already macro-expanded code
+    ///
+    /// This is identical to `eval_step_impl()` except it calls `eval_list_impl_expanded()`
+    /// instead of `eval_list_impl()` for lists.
+    fn eval_step_impl_expanded(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<EvalResult, EvalError> {
+        // Debug trace entry
+        if self.debug.is_enabled(debug::DebugStage::Eval) {
+            eprintln!(
+                "[EVAL]{} Evaluating (expanded): {} (tail={})",
+                self.debug.current_indent(),
+                expr,
+                in_tail_position
+            );
+            self.debug.indent();
+        }
 
-        loop {
-            match current {
-                Value::Null => break,
-                Value::Pair(pair) => {
-                    let (car, cdr) = pair.borrow().clone();
-                    result.push(car);
-                    current = cdr;
+        let result = match expr {
+            // Self-evaluating
+            Value::Boolean(_)
+            | Value::Integer(_)
+            | Value::BigInteger(_)
+            | Value::Rational(_)
+            | Value::Real(_)
+            | Value::Complex(_, _)
+            | Value::Character(_)
+            | Value::String(_)
+            | Value::Vector(_)
+            | Value::Bytevector(_) => Ok(EvalResult::Value(expr.clone())),
+
+            // Variable lookup
+            Value::Symbol(name) => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
                 }
-                _ => {
-                    return Err(EvalError::InvalidSyntax(
-                        "Improper list in macro expansion".to_string(),
-                    ));
+
+                // Look up in current environment
+                if let Some(value) = env.get(name) {
+                    return Ok(EvalResult::Value(value));
                 }
+
+                Err(EvalError::UndefinedVariable(name.to_string()))
+            }
+
+            // Identifier lookup (free variables from macro templates)
+            Value::Identifier {
+                name,
+                env: captured_env,
+            } => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!(
+                        "[ENV]{} Identifier lookup: '{}' (with captured env)",
+                        self.debug.current_indent(),
+                        name
+                    );
+                }
+
+                // Downcast the captured environment
+                if let Some(captured_env) = captured_env.downcast_ref::<Environment>() {
+                    // Look up in the captured environment (definition-time binding)
+                    if let Some(value) = captured_env.get(name) {
+                        return Ok(EvalResult::Value(value));
+                    }
+                }
+
+                // If not found in captured env, fall back to undefined variable error
+                Err(EvalError::UndefinedVariable(format!(
+                    "{} (identifier)",
+                    name
+                )))
+            }
+
+            // WrappedIdentifier lookup (from marks-and-ribs hygiene)
+            Value::WrappedIdentifier { name, marks } => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!(
+                        "[ENV]{} WrappedIdentifier lookup: '{}' (marks: {:?})",
+                        self.debug.current_indent(),
+                        name,
+                        marks
+                    );
+                }
+
+                // For now, just look up by name
+                // Full implementation would use marks to determine correct binding
+                if let Some(value) = env.get(name) {
+                    return Ok(EvalResult::Value(value));
+                }
+
+                Err(EvalError::UndefinedVariable(format!(
+                    "{} (wrapped identifier)",
+                    name
+                )))
+            }
+
+            // Empty list
+            Value::Null => Ok(EvalResult::Value(Value::Null)),
+
+            // Lists (procedure calls or special forms) - use expanded version
+            Value::Pair(_) => self.eval_list_impl_expanded(expr, env, in_tail_position),
+
+            _ => Ok(EvalResult::Value(expr.clone())),
+        };
+
+        // Debug trace exit
+        if self.debug.is_enabled(debug::DebugStage::Eval) {
+            self.debug.dedent();
+            match &result {
+                Ok(EvalResult::Value(val)) => {
+                    eprintln!("[EVAL]{} => {}", self.debug.current_indent(), val)
+                }
+                Ok(EvalResult::TailCall { expr, .. }) => eprintln!(
+                    "[EVAL]{} => TAIL CALL: {}",
+                    self.debug.current_indent(),
+                    expr
+                ),
+                Ok(EvalResult::TailCallPrimitive { proc, args }) => {
+                    let args_str = args
+                        .iter()
+                        .map(|v| format!("{}", v))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    eprintln!(
+                        "[EVAL]{} => TAIL CALL PRIMITIVE: {} ({})",
+                        self.debug.current_indent(),
+                        proc,
+                        args_str
+                    )
+                }
+                Err(e) => eprintln!("[EVAL]{} => ERROR: {}", self.debug.current_indent(), e),
             }
         }
 
-        Ok(result)
+        result
     }
 
-    /// Helper to convert a Rust Vec to a Scheme list (Value)
-    fn vec_to_value(elements: &[Value]) -> Value {
-        let mut result = Value::Null;
-        for elem in elements.iter().rev() {
-            result = Value::Pair(Rc::new(RefCell::new((elem.clone(), result))));
+    /// Evaluate a list for already macro-expanded code
+    ///
+    /// This is identical to `eval_list_impl()` except it SKIPS the macro expansion check.
+    /// All macros must have been expanded before calling this.
+    fn eval_list_impl_expanded(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<EvalResult, EvalError> {
+        let (car, cdr) = self.extract_pair(expr)?;
+
+        // Check if it's a special form in the registry first
+        if let Value::Symbol(ref sym) = car
+            && self.special_form_registry.contains(sym.as_ref())
+        {
+            return self.special_form_registry.eval(
+                sym.as_ref(),
+                &cdr,
+                self,
+                env,
+                in_tail_position,
+            );
         }
-        result
+
+        // SKIP macro expansion check - macros already expanded!
+        // (Lines 534-587 from eval_list_impl are omitted here)
+
+        // Regular procedure call - this can be a tail call if in tail position
+        // Use eval_expanded to avoid re-expanding macros
+        let proc = self.eval_expanded(&car, env)?;
+        let args = self.eval_arguments_expanded(&cdr, env)?;
+
+        // Check if this is a lambda in tail position
+        if in_tail_position
+            && let Value::Procedure(Procedure::Lambda {
+                params,
+                variadic,
+                body,
+                env: lambda_env,
+            }) = proc
+        {
+            // Tail call to lambda - use shared helper methods
+            let new_env = self.prepare_lambda_env(&params, &variadic, args, &lambda_env)?;
+            return self.eval_lambda_body(&body, &new_env, true);
+        }
+
+        // Not in tail position, or not a lambda - just apply normally
+        self.apply(proc, args, in_tail_position)
     }
 
     /// Expand all macros in an expression without evaluating
@@ -699,8 +869,16 @@ impl Evaluator {
                 // First get car and cdr
                 let (car, cdr) = pair.borrow().clone();
 
-                // Check if this is a macro call
+                // Check if this is a macro call or special form
                 if let Value::Symbol(ref sym) = car {
+                    // Check if it's a special form first - special forms handle their own expansion
+                    if self.special_form_registry.contains(sym.as_ref()) {
+                        // Special forms like import, quote, lambda, etc. should not be expanded
+                        // They handle macro expansion of their arguments themselves
+                        return Ok(expr.clone());
+                    }
+
+                    // Check if it's a macro
                     if let Some(Value::Macro { data, .. }) = env.get(sym) {
                         // This is a macro call - expand it
                         let compiled_macro = data
@@ -713,60 +891,6 @@ impl Evaluator {
 
                         // Recursively expand the result (macros can expand to macros)
                         return self.expand_all_macros(&expanded, env);
-                    }
-
-                    // Check if this is quote - don't expand inside quotes
-                    if sym.as_ref() == "quote" {
-                        return Ok(expr.clone());
-                    }
-
-                    // Check if this is define-syntax - don't expand the macro definition
-                    if sym.as_ref() == "define-syntax" {
-                        return Ok(expr.clone());
-                    }
-
-                    // For lambda, only expand the body, not the params
-                    if sym.as_ref() == "lambda" {
-                        // (lambda (params...) body...)
-                        let elements = Self::value_to_vec(expr)?;
-                        if elements.len() < 3 {
-                            return Ok(expr.clone()); // Malformed lambda, let evaluator handle error
-                        }
-
-                        let mut result_elements = vec![elements[0].clone(), elements[1].clone()];
-                        for body_expr in &elements[2..] {
-                            result_elements.push(self.expand_all_macros(body_expr, env)?);
-                        }
-
-                        return Ok(Self::vec_to_value(&result_elements));
-                    }
-
-                    // For define with function shorthand: (define (name params...) body...)
-                    if sym.as_ref() == "define" {
-                        let elements = Self::value_to_vec(expr)?;
-                        if elements.len() >= 2 {
-                            if let Value::Pair(_) = &elements[1] {
-                                // Function shorthand - expand body
-                                let mut result_elements =
-                                    vec![elements[0].clone(), elements[1].clone()];
-                                for body_expr in &elements[2..] {
-                                    result_elements.push(self.expand_all_macros(body_expr, env)?);
-                                }
-
-                                return Ok(Self::vec_to_value(&result_elements));
-                            } else {
-                                // Variable define: (define name value)
-                                if elements.len() == 3 {
-                                    let expanded_value =
-                                        self.expand_all_macros(&elements[2], env)?;
-                                    return Ok(Self::vec_to_value(&[
-                                        elements[0].clone(),
-                                        elements[1].clone(),
-                                        expanded_value,
-                                    ]));
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -782,6 +906,45 @@ impl Evaluator {
 
             // Unspecified and EOF - shouldn't appear in user code
             Value::Unspecified | Value::Eof => Ok(expr.clone()),
+        }
+    }
+
+    /// Evaluate an already macro-expanded expression in a specific environment
+    ///
+    /// This is like `eval_in_env()`, but assumes that all macros have already been expanded.
+    /// Used by the CoreExpr pipeline after `expand_all_macros()` has been called.
+    ///
+    /// IMPORTANT: This skips macro expansion in `eval_list_impl()`. Only use this if you've
+    /// already called `expand_all_macros()` on the expression.
+    ///
+    /// Like `eval()`, this uses the trampoline pattern for tail call optimization.
+    pub fn eval_expanded(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        let mut current_expr = expr.clone();
+        let mut current_env = env.clone();
+
+        // Trampoline loop for TCO
+        loop {
+            match self.eval_step_expanded(&current_expr, &current_env)? {
+                EvalResult::Value(v) => return Ok(v),
+                EvalResult::TailCall { expr, env } => {
+                    current_expr = expr;
+                    current_env = env;
+                }
+                EvalResult::TailCallPrimitive { proc, args } => {
+                    match self.apply(proc, args, true)? {
+                        EvalResult::Value(v) => return Ok(v),
+                        EvalResult::TailCall { expr, env } => {
+                            current_expr = expr;
+                            current_env = env;
+                        }
+                        EvalResult::TailCallPrimitive { proc, args } => {
+                            let mut app_list = vec![proc];
+                            app_list.extend(args);
+                            current_expr = self.list_from_vec(app_list);
+                        }
+                    }
+                }
+            }
         }
     }
 

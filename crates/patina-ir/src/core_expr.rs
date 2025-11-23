@@ -75,6 +75,14 @@ pub enum CoreExpr {
         args: Vec<CoreExpr>,
     },
 
+    /// Apply: apply procedure to list
+    /// Example: (apply + '(1 2 3)), (apply f x y zs)
+    /// Last argument is a list that gets spliced as arguments
+    Apply {
+        func: Box<CoreExpr>,
+        args: Vec<CoreExpr>, // All args including the final list
+    },
+
     // Optional optimized forms (added by passes)
     /// Primitive call (after optimization pass recognizes primitives)
     /// Example: (+ 1 2) where + is known to be the primitive
@@ -145,6 +153,7 @@ impl CoreExpr {
             CoreExpr::Begin(_) => "begin",
             CoreExpr::Define { .. } => "define",
             CoreExpr::App { .. } => "application",
+            CoreExpr::Apply { .. } => "apply",
             CoreExpr::PrimCall { .. } => "primitive-call",
             CoreExpr::Let { .. } => "let",
         }
@@ -203,6 +212,13 @@ impl std::fmt::Display for CoreExpr {
             }
             CoreExpr::App { func, args } => {
                 write!(f, "({}", func)?;
+                for arg in args {
+                    write!(f, " {}", arg)?;
+                }
+                write!(f, ")")
+            }
+            CoreExpr::Apply { func, args } => {
+                write!(f, "(apply {}", func)?;
                 for arg in args {
                     write!(f, " {}", arg)?;
                 }

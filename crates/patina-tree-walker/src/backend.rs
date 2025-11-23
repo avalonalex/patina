@@ -76,33 +76,34 @@ impl Backend for TreeWalker {
     type Error = EvalError;
 
     fn eval(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, Self::Error> {
-        // TEMPORARY: Disable CoreExpr path to fix chibi test regression
+        // CoreExpr pipeline with MACRO-AWARE DESUGARING:
+        // 1. Create desugarer with environment (enables macro expansion)
+        // 2. Desugar - the desugarer will expand macros as needed during desugaring
+        // 3. Evaluate via CoreExpr, or fall back to Value evaluator
         //
-        // The CoreExpr migration caused tests to drop from 704 passing to 18 passing.
-        // Issue: Calling expand_all_macros() at the Backend level breaks the existing
-        // macro expansion flow that happens inside eval_list_impl.
-        //
-        // TODO: Properly integrate CoreExpr path without breaking macro expansion.
-        // See docs/CHIBI_TEST_REGRESSION_ANALYSIS.md for details.
+        // This approach is better than pre-expanding all macros because:
+        // - The desugarer knows which parts of each special form to expand
+        // - No duplication of special form logic
+        // - Macros are expanded lazily, only when encountered
 
-        self.evaluator.eval_in_env(expr, env)
-
-        /* DISABLED CoreExpr path - causes regression
-        use patina_frontend::Desugarer;
         use crate::eval::eval_core;
+        use patina_frontend::Desugarer;
 
-        let expanded = self.evaluator.expand_all_macros(expr, env)?;
+        // Create macro-aware desugarer with the environment
+        let desugarer = Desugarer::with_env(env.clone());
 
-        let desugarer = Desugarer::new();
-        match desugarer.desugar(&expanded) {
+        // Try to desugar - this will expand macros as needed
+        match desugarer.desugar(expr) {
             Ok(core_expr) => {
+                // Successfully desugared to CoreExpr - evaluate it
                 eval_core(&core_expr, env.clone(), &self.evaluator)
             }
             Err(_) => {
+                // Desugaring failed (e.g., special form not in CoreExpr like import, apply)
+                // Fall back to Value evaluator
                 self.evaluator.eval_in_env(expr, env)
             }
         }
-        */
     }
 
     fn global_env(&self) -> &Rc<Environment> {

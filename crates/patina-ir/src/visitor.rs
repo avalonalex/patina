@@ -118,6 +118,11 @@ impl CoreExpr {
                 args: args.iter().map(&f).collect(),
             },
 
+            CoreExpr::Apply { func, args } => CoreExpr::Apply {
+                func: Box::new(f(func)),
+                args: args.iter().map(&f).collect(),
+            },
+
             CoreExpr::PrimCall { prim, args } => CoreExpr::PrimCall {
                 prim: *prim,
                 args: args.iter().map(&f).collect(),

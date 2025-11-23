@@ -70,17 +70,40 @@ mod utils;
 pub use error::{DesugarError, Result};
 
 use patina_ir::CoreExpr;
-use patina_runtime::Value;
+use patina_runtime::{Environment, Value};
+use std::rc::Rc;
 
 /// Desugarer converts Value (surface syntax) to CoreExpr (core IR)
+///
+/// **Macro-Aware Design**: The desugarer can optionally take an environment
+/// to enable macro expansion during desugaring. This allows the desugarer to:
+/// 1. Check if a form is a macro
+/// 2. Expand the macro
+/// 3. Recursively desugar the expanded result
+///
+/// This approach means we don't need to pre-expand all macros before desugaring.
+/// The desugarer handles macro expansion selectively, only when encountering
+/// macro calls during the desugaring process.
 pub struct Desugarer {
-    // Future: add configuration options, optimization flags, etc.
+    /// Optional environment for macro lookup
+    /// If None, macros cannot be expanded (will cause desugar errors)
+    env: Option<Rc<Environment>>,
 }
 
 impl Desugarer {
-    /// Create a new desugarer
+    /// Create a new desugarer without macro expansion support
+    ///
+    /// This is used when the input is already fully macro-expanded.
     pub fn new() -> Self {
-        Self {}
+        Self { env: None }
+    }
+
+    /// Create a new desugarer with macro expansion support
+    ///
+    /// This allows the desugarer to expand macros as it encounters them.
+    /// The environment is used to look up macro definitions.
+    pub fn with_env(env: Rc<Environment>) -> Self {
+        Self { env: Some(env) }
     }
 
     /// Desugar a Value (surface syntax) to CoreExpr (core IR)
@@ -101,7 +124,8 @@ impl Desugarer {
             | Value::Complex(_, _)
             | Value::Character(_)
             | Value::String(_)
-            | Value::Bytevector(_) => Ok(CoreExpr::Literal(value.clone())),
+            | Value::Bytevector(_)
+            | Value::Unspecified => Ok(CoreExpr::Literal(value.clone())),
 
             // Variable reference
             Value::Symbol(s) => Ok(CoreExpr::Var(s.clone())),
@@ -133,7 +157,6 @@ impl Desugarer {
             | Value::InputPort
             | Value::OutputPort
             | Value::Promise(_)
-            | Value::Unspecified
             | Value::Eof
             | Value::Values(_) => Err(DesugarError::RuntimeValueInAST {
                 value: value.clone(),
@@ -153,6 +176,27 @@ impl Desugarer {
             _ => return Err(DesugarError::InvalidSyntax("Expected pair".to_string())),
         };
 
+        // MACRO-AWARE DESUGARING: Check if this is a macro call FIRST
+        // If we have an environment, check for macros before special forms
+        if let (Some(env), Value::Symbol(sym)) = (&self.env, &car)
+            && let Some(Value::Macro { data, .. }) = env.get(sym)
+        {
+            // This is a macro! Expand it and recursively desugar the result
+            let compiled_macro = data
+                .downcast_ref::<patina_macros::CompiledMacro>()
+                .ok_or_else(|| DesugarError::InvalidSyntax("Invalid macro data".to_string()))?;
+
+            // Expand the macro
+            let expanded =
+                patina_macros::expand_macro(compiled_macro, value, env).map_err(|e| {
+                    DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e))
+                })?;
+
+            // Recursively desugar the expanded result
+            // This handles the case where macros expand to other macros
+            return self.desugar(&expanded);
+        }
+
         // Check if it's a core special form
         if let Value::Symbol(sym) = &car {
             match sym.as_ref() {
@@ -164,22 +208,18 @@ impl Desugarer {
                 "set!" => self.desugar_set(&cdr),
                 "define" => self.desugar_define(&cdr),
                 "begin" => self.desugar_begin(&cdr),
+                "apply" => self.desugar_apply(&cdr),
 
-                // Forms not yet supported by CoreExpr - return error to trigger fallback
-                // TODO: Implement case-lambda as a macro
-                "case-lambda" => Err(DesugarError::InvalidSyntax(
-                    "case-lambda not yet supported in CoreExpr (use Value evaluator)".to_string(),
-                )),
-
-                // Macro definition - not part of CoreExpr, handled by Value evaluator
+                // Macro definition - not part of CoreExpr, falls back to Value evaluator
                 "define-syntax" => Err(DesugarError::InvalidSyntax(
                     "define-syntax not part of CoreExpr (use Value evaluator)".to_string(),
                 )),
 
                 // Special forms not in CoreExpr - handled by Value evaluator
-                "apply" => Err(DesugarError::InvalidSyntax(
-                    "apply is a special form, not in CoreExpr (use Value evaluator)".to_string(),
-                )),
+                "import" | "parameterize" => Err(DesugarError::InvalidSyntax(format!(
+                    "{} is a special form not in CoreExpr (use Value evaluator)",
+                    sym
+                ))),
 
                 // Everything else is either:
                 // - A derived form that was already expanded by macros
@@ -327,6 +367,34 @@ impl Desugarer {
         } else {
             Ok(CoreExpr::Begin(core_exprs))
         }
+    }
+
+    /// Desugar apply: (apply proc arg1 ... argN list) → Apply { func, args }
+    ///
+    /// The last argument is a list that gets spliced as arguments.
+    /// This requires special handling during evaluation.
+    fn desugar_apply(&self, args: &Value) -> Result<CoreExpr> {
+        let exprs = utils::list_to_vec(args)?;
+
+        if exprs.len() < 2 {
+            return Err(DesugarError::InvalidSyntax(
+                "apply requires at least 2 arguments (procedure and list)".to_string(),
+            ));
+        }
+
+        // First argument is the procedure
+        let func = Box::new(self.desugar(&exprs[0])?);
+
+        // Remaining arguments (including the final list)
+        let args_exprs: Vec<CoreExpr> = exprs[1..]
+            .iter()
+            .map(|e| self.desugar(e))
+            .collect::<Result<_>>()?;
+
+        Ok(CoreExpr::Apply {
+            func,
+            args: args_exprs,
+        })
     }
 
     /// Desugar application: (func arg1 arg2 ...) → App { func, args }
@@ -764,8 +832,8 @@ mod tests {
     #[test]
     fn test_desugar_runtime_value_error() {
         let desugarer = Desugarer::new();
-        // Procedure values shouldn't appear in AST
-        let value = Value::Unspecified;
+        // Runtime-only values like Eof shouldn't appear in AST
+        let value = Value::Eof;
         let result = desugarer.desugar(&value);
         assert!(result.is_err());
     }

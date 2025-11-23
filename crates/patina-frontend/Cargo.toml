@@ -8,6 +8,7 @@ description = "Frontend for Patina Scheme: Lexer + Parser + Macro Expander"
 # Workspace crates
 patina-runtime = { path = "../patina-runtime" }
 patina-ir = { path = "../patina-ir" }
+patina-macros = { path = "../patina-macros" }
 
 # Numeric dependencies (needed by parser)
 num-bigint = { workspace = true }
