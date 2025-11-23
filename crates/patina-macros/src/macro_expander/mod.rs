@@ -47,7 +47,15 @@ pub fn expand_macro(
     args: &patina_runtime::Value,
     expansion_env: &std::rc::Rc<patina_runtime::Environment>,
 ) -> Result<patina_runtime::Value, crate::error::MacroError> {
-    if patina_runtime::macro_debug::is_enabled() {
+    use crate::tracer::MacroTracer;
+
+    // Enter macro expansion (for depth tracking)
+    MacroTracer::enter_expansion();
+
+    // Check if this macro should be traced
+    let should_trace = MacroTracer::should_trace(&compiled_macro.name);
+
+    if patina_runtime::macro_debug::is_enabled() || should_trace {
         println!("[MACRO] Expanding macro: {}", compiled_macro.name);
 
         // Print macro definition (pattern -> template for each rule)
@@ -107,13 +115,28 @@ pub fn expand_macro(
                     .expand(&rule.template, &match_env)
                     .map_err(|e| crate::error::MacroError::InvalidSyntax(e.to_string()))?;
 
-                if patina_runtime::macro_debug::is_enabled() {
+                if patina_runtime::macro_debug::is_enabled() || should_trace {
                     println!("[MACRO]   Expanded (with hygiene): {}", expanded);
                     println!("[MACRO] ");
                     println!("[MACRO] ========================================");
                     println!("[MACRO] Expansion complete!");
                     println!("[MACRO] ");
                 }
+
+                // Record expansion step for tracing
+                if should_trace {
+                    use crate::error::ExpansionStep;
+                    let step = ExpansionStep::new(
+                        compiled_macro.name.clone(),
+                        rule_idx,
+                        compiled_macro.rules.len(),
+                        format!("{}", args),
+                    );
+                    MacroTracer::record_step(step);
+                }
+
+                // Exit expansion (decrement depth)
+                MacroTracer::exit_expansion();
 
                 // Hygiene is now applied during expansion in the Expander,
                 // not as a post-processing step
@@ -131,10 +154,13 @@ pub fn expand_macro(
     }
 
     // No rule matched
-    if patina_runtime::macro_debug::is_enabled() {
+    if patina_runtime::macro_debug::is_enabled() || should_trace {
         println!("[MACRO]   No rules matched!");
         println!("[MACRO] ");
     }
+
+    // Exit expansion (decrement depth)
+    MacroTracer::exit_expansion();
 
     Err(crate::error::MacroError::InvalidSyntax(format!(
         "No matching pattern for macro {}",

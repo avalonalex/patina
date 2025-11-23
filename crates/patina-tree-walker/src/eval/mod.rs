@@ -738,7 +738,7 @@ impl Evaluator {
                                 if elements.len() == 3 {
                                     let expanded_value =
                                         self.expand_all_macros(&elements[2], env)?;
-                                    return Ok(Self::vec_to_value(&vec![
+                                    return Ok(Self::vec_to_value(&[
                                         elements[0].clone(),
                                         elements[1].clone(),
                                         expanded_value,

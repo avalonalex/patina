@@ -11,11 +11,13 @@
 
 pub mod error;
 pub mod macro_expander;
+pub mod tracer;
 
 // Re-export main types at crate level
-pub use error::MacroError;
+pub use error::{ExpansionStep, MacroError};
 pub use macro_expander::{
     CompiledMacro, CompiledMacroExpander, CompiledRule, Compiler, ExpandError, Expander,
     ExpansionResult, Identifier, MacroExpander, MatchError, Matcher, Pattern, Template,
     TestExpander, apply_hygiene, expand_macro,
 };
+pub use tracer::MacroTracer;
