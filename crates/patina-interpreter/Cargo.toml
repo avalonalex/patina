@@ -8,6 +8,7 @@ description = "High-level interpreter interface for Patina Scheme - supports mul
 # Core types
 patina-runtime = { path = "../patina-runtime" }
 patina-frontend = { path = "../patina-frontend" }
+patina-ir = { path = "../patina-ir" }
 
 # Default backend
 patina-tree-walker = { path = "../patina-tree-walker" }

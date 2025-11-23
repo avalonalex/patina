@@ -35,6 +35,12 @@ pub enum CoreExpr {
     /// Example: 'x, '(1 2 3)
     Quote(Value),
 
+    /// Quasiquote: template with selective evaluation
+    /// Example: `(a ,b ,@c) where b and c are evaluated
+    /// The template is stored as a Value, and will be processed
+    /// recursively by the evaluator to handle unquote/unquote-splicing
+    Quasiquote(Value),
+
     /// Lambda abstraction
     /// Example: (lambda (x y) (+ x y))
     Lambda {
@@ -132,6 +138,7 @@ impl CoreExpr {
             CoreExpr::Literal(_) => "literal",
             CoreExpr::Var(_) => "variable",
             CoreExpr::Quote(_) => "quote",
+            CoreExpr::Quasiquote(_) => "quasiquote",
             CoreExpr::Lambda { .. } => "lambda",
             CoreExpr::If { .. } => "if",
             CoreExpr::Set { .. } => "set!",
@@ -150,6 +157,7 @@ impl std::fmt::Display for CoreExpr {
             CoreExpr::Literal(v) => write!(f, "{}", v),
             CoreExpr::Var(s) => write!(f, "{}", s),
             CoreExpr::Quote(v) => write!(f, "'{}", v),
+            CoreExpr::Quasiquote(v) => write!(f, "`{}", v),
             CoreExpr::Lambda { params, .. } => {
                 write!(f, "(lambda ")?;
                 match params {

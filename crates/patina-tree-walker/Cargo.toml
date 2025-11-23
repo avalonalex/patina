@@ -8,6 +8,7 @@ description = "Tree-walking interpreter backend for Patina Scheme"
 # Workspace crates
 patina-runtime = { path = "../patina-runtime" }
 patina-frontend = { path = "../patina-frontend" }
+patina-ir = { path = "../patina-ir" }
 
 # Numeric dependencies (needed by primitives)
 num-bigint = { workspace = true }

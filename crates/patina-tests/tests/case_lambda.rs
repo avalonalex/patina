@@ -224,6 +224,8 @@ fn test_case_lambda_as_argument() {
     );
 }
 
+// TODO: Same issue as test_case_lambda_nested_closures - case-lambda inside
+// lambda body is not supported in CoreExpr pipeline. See comment above for solutions.
 #[test]
 fn test_case_lambda_returned_from_function() {
     assert_program_eval_to(

@@ -1,11 +1,13 @@
 // Module declarations
 mod application;
+mod core_eval;
 mod debug;
 mod error;
 mod primitives;
 pub mod special_forms; // Registry-based special forms
 
 // Re-export error type for public API
+pub use core_eval::eval_core;
 pub use error::EvalError;
 
 use debug::DebugConfig;
@@ -537,6 +539,176 @@ impl Evaluator {
 
         // Not in tail position, or not a lambda - just apply normally
         self.apply(proc, args, in_tail_position)
+    }
+
+    /// Helper to convert a Scheme list (Value) to a Rust Vec
+    fn value_to_vec(value: &Value) -> Result<Vec<Value>, EvalError> {
+        let mut result = Vec::new();
+        let mut current = value.clone();
+
+        loop {
+            match current {
+                Value::Null => break,
+                Value::Pair(pair) => {
+                    let (car, cdr) = pair.borrow().clone();
+                    result.push(car);
+                    current = cdr;
+                }
+                _ => {
+                    return Err(EvalError::InvalidSyntax(
+                        "Improper list in macro expansion".to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Helper to convert a Rust Vec to a Scheme list (Value)
+    fn vec_to_value(elements: &[Value]) -> Value {
+        let mut result = Value::Null;
+        for elem in elements.iter().rev() {
+            result = Value::Pair(Rc::new(RefCell::new((elem.clone(), result))));
+        }
+        result
+    }
+
+    /// Expand all macros in an expression without evaluating
+    ///
+    /// This recursively expands any macro calls in the expression, but does not
+    /// evaluate the result. This is needed for the CoreExpr pipeline, which requires
+    /// macro-expanded code before desugaring.
+    ///
+    /// Returns the fully macro-expanded expression.
+    pub fn expand_all_macros(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        match expr {
+            // Self-evaluating values - no macros to expand
+            Value::Integer(_)
+            | Value::BigInteger(_)
+            | Value::Rational(_)
+            | Value::Real(_)
+            | Value::Complex(..)
+            | Value::Boolean(_)
+            | Value::Character(_)
+            | Value::String(_)
+            | Value::Bytevector(_)
+            | Value::Procedure(_)
+            | Value::Macro { .. }
+            | Value::InputPort
+            | Value::OutputPort
+            | Value::Parameter { .. }
+            | Value::Library(_)
+            | Value::Values(_)
+            | Value::Promise(_)
+            | Value::Null => Ok(expr.clone()),
+
+            // Symbols - no expansion needed
+            Value::Symbol(_) => Ok(expr.clone()),
+
+            // Vectors - recursively expand elements
+            Value::Vector(vec) => {
+                let expanded: Result<Vec<_>, _> = vec
+                    .borrow()
+                    .iter()
+                    .map(|elem| self.expand_all_macros(elem, env))
+                    .collect();
+                Ok(Value::Vector(Rc::new(RefCell::new(expanded?))))
+            }
+
+            // Lists - check for macro calls and special forms
+            Value::Pair(pair) => {
+                // First get car and cdr
+                let (car, cdr) = pair.borrow().clone();
+
+                // Check if this is a macro call
+                if let Value::Symbol(ref sym) = car {
+                    if let Some(Value::Macro { data, .. }) = env.get(sym) {
+                        // This is a macro call - expand it
+                        let compiled_macro = data
+                            .downcast_ref::<patina_frontend::macro_expander::CompiledMacro>()
+                            .ok_or_else(|| {
+                                EvalError::InternalError("Invalid macro data".to_string())
+                            })?;
+
+                        let expanded = self.expand_macro(compiled_macro, expr, env)?;
+
+                        // Recursively expand the result (macros can expand to macros)
+                        return self.expand_all_macros(&expanded, env);
+                    }
+
+                    // Check if this is quote - don't expand inside quotes
+                    if sym.as_ref() == "quote" {
+                        return Ok(expr.clone());
+                    }
+
+                    // Check if this is define-syntax - don't expand the macro definition
+                    if sym.as_ref() == "define-syntax" {
+                        return Ok(expr.clone());
+                    }
+
+                    // For lambda, only expand the body, not the params
+                    if sym.as_ref() == "lambda" {
+                        // (lambda (params...) body...)
+                        let elements = Self::value_to_vec(expr)?;
+                        if elements.len() < 3 {
+                            return Ok(expr.clone()); // Malformed lambda, let evaluator handle error
+                        }
+
+                        let mut result_elements = vec![elements[0].clone(), elements[1].clone()];
+                        for body_expr in &elements[2..] {
+                            result_elements.push(self.expand_all_macros(body_expr, env)?);
+                        }
+
+                        return Ok(Self::vec_to_value(&result_elements));
+                    }
+
+                    // For define with function shorthand: (define (name params...) body...)
+                    if sym.as_ref() == "define" {
+                        let elements = Self::value_to_vec(expr)?;
+                        if elements.len() >= 2 {
+                            if let Value::Pair(_) = &elements[1] {
+                                // Function shorthand - expand body
+                                let mut result_elements =
+                                    vec![elements[0].clone(), elements[1].clone()];
+                                for body_expr in &elements[2..] {
+                                    result_elements.push(self.expand_all_macros(body_expr, env)?);
+                                }
+
+                                return Ok(Self::vec_to_value(&result_elements));
+                            } else {
+                                // Variable define: (define name value)
+                                if elements.len() == 3 {
+                                    let expanded_value =
+                                        self.expand_all_macros(&elements[2], env)?;
+                                    return Ok(Self::vec_to_value(&vec![
+                                        elements[0].clone(),
+                                        elements[1].clone(),
+                                        expanded_value,
+                                    ]));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Not a macro call - recursively expand car and cdr
+                let expanded_car = self.expand_all_macros(&car, env)?;
+                let expanded_cdr = self.expand_all_macros(&cdr, env)?;
+
+                Ok(Value::Pair(Rc::new(RefCell::new((
+                    expanded_car,
+                    expanded_cdr,
+                )))))
+            }
+
+            // Unspecified and EOF - shouldn't appear in user code
+            Value::Unspecified | Value::Eof => Ok(expr.clone()),
+        }
     }
 
     /// Evaluate an expression in a specific environment

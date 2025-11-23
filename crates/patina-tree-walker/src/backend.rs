@@ -76,7 +76,33 @@ impl Backend for TreeWalker {
     type Error = EvalError;
 
     fn eval(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, Self::Error> {
+        // TEMPORARY: Disable CoreExpr path to fix chibi test regression
+        //
+        // The CoreExpr migration caused tests to drop from 704 passing to 18 passing.
+        // Issue: Calling expand_all_macros() at the Backend level breaks the existing
+        // macro expansion flow that happens inside eval_list_impl.
+        //
+        // TODO: Properly integrate CoreExpr path without breaking macro expansion.
+        // See docs/CHIBI_TEST_REGRESSION_ANALYSIS.md for details.
+
         self.evaluator.eval_in_env(expr, env)
+
+        /* DISABLED CoreExpr path - causes regression
+        use patina_frontend::Desugarer;
+        use crate::eval::eval_core;
+
+        let expanded = self.evaluator.expand_all_macros(expr, env)?;
+
+        let desugarer = Desugarer::new();
+        match desugarer.desugar(&expanded) {
+            Ok(core_expr) => {
+                eval_core(&core_expr, env.clone(), &self.evaluator)
+            }
+            Err(_) => {
+                self.evaluator.eval_in_env(expr, env)
+            }
+        }
+        */
     }
 
     fn global_env(&self) -> &Rc<Environment> {

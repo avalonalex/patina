@@ -85,7 +85,10 @@ impl CoreExpr {
         F: Fn(&CoreExpr) -> CoreExpr,
     {
         match self {
-            CoreExpr::Literal(_) | CoreExpr::Var(_) | CoreExpr::Quote(_) => self.clone(),
+            CoreExpr::Literal(_)
+            | CoreExpr::Var(_)
+            | CoreExpr::Quote(_)
+            | CoreExpr::Quasiquote(_) => self.clone(),
 
             CoreExpr::Lambda { params, body } => CoreExpr::Lambda {
                 params: params.clone(),
