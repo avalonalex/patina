@@ -106,6 +106,10 @@ impl Desugarer {
             // Variable reference
             Value::Symbol(s) => Ok(CoreExpr::Var(s.clone())),
 
+            // Identifier (from macro expansion with captured environment)
+            // Treat as a variable reference - the evaluator will handle the captured env
+            Value::Identifier { name, .. } => Ok(CoreExpr::Var(name.clone())),
+
             // Empty list (unusual in AST, but possible as literal)
             Value::Null => Ok(CoreExpr::Literal(Value::Null)),
 

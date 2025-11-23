@@ -1,24 +1,20 @@
 [package]
-name = "patina-interpreter"
+name = "patina-pipeline"
 version = "0.1.0"
 edition = "2024"
-description = "High-level interpreter interface for Patina Scheme - supports multiple backends"
+description = "Flexible pipeline orchestration for Patina Scheme"
 
 [dependencies]
-# Core types
+# Workspace crates
 patina-runtime = { path = "../patina-runtime" }
 patina-frontend = { path = "../patina-frontend" }
+patina-macros = { path = "../patina-macros" }
 patina-ir = { path = "../patina-ir" }
-
-# Pipeline orchestration
-patina-pipeline = { path = "../patina-pipeline" }
-
-# Default backend
 patina-tree-walker = { path = "../patina-tree-walker" }
 
 # Error handling
 thiserror = { workspace = true }
 
 [lib]
-name = "patina_interpreter"
+name = "patina_pipeline"
 path = "src/lib.rs"

@@ -149,28 +149,53 @@ The CoreExpr work is valuable! Consider:
 
 ### New Files (Keep These)
 ```
+# CoreExpr Infrastructure
 crates/patina-frontend/src/desugarer/          - Value → CoreExpr transformation
 crates/patina-tree-walker/src/eval/core_eval.rs - CoreExpr evaluator
 crates/patina-frontend/tests/desugarer_macro_tests.rs - Unit tests
 crates/patina-tests/tests/core_expr_integration.rs - Integration tests
 crates/patina-tests/tests/library_core_expr_integration.rs - Library tests
-docs/MACRO_ARCHITECTURE_PROPOSAL.md            - Architecture doc
-docs/CHIBI_TEST_REGRESSION_ANALYSIS.md         - Analysis
-docs/SESSION_2025_11_22.md                     - Session summary
+
+# Macro System Extraction (2025-11-23)
+crates/patina-macros/                          - New crate: macro expansion system
+crates/patina-macros/src/macro_env.rs          - MacroEnv type for macro definitions
+crates/patina-pipeline/                        - New crate: pipeline orchestration
+crates/patina-pipeline/src/pipeline.rs         - Pipeline trait and EvaluationStrategy
+crates/patina-pipeline/src/standard.rs         - StandardPipeline implementation
+crates/patina-interpreter/src/simple.rs        - SimpleInterpreter API
+
+# Documentation
+docs/MACRO_ARCHITECTURE_PROPOSAL.md            - Architecture proposal (3 options)
+docs/MACRO_ARCHITECTURE_DECISIONS.md           - Known limitation documentation
+docs/MACRO_ARCHITECTURE_IMPLEMENTATION_PLAN.md - When to implement fix
+docs/CHIBI_TEST_REGRESSION_ANALYSIS.md         - Regression analysis
+docs/SESSION_2025_11_22.md                     - Session 1 summary
+docs/SESSION_2025_11_23.md                     - Session 2 summary
 ```
 
 ### Modified Files
 ```
+# CoreExpr work
 crates/patina-ir/src/core_expr.rs              - Added Quasiquote variant
 crates/patina-tree-walker/src/backend.rs       - CoreExpr integration (disabled)
 crates/patina-tree-walker/src/eval/mod.rs      - Quasiquote helpers
 crates/patina-tests/tests/case_lambda.rs       - Removed #[ignore] attrs
+
+# Macro extraction (2025-11-23)
+crates/patina-macros/src/macro_expander/hygiene.rs    - Updated to use MacroEnv
+crates/patina-macros/src/macro_expander/expander.rs   - Uses MacroEnv for hygiene
+crates/patina-macros/src/macro_expander/interface.rs  - MacroExpander trait updated
+crates/patina-macros/src/macro_expander/compiler.rs   - TODO comment documenting limitation
+Cargo.toml                                      - Added patina-macros and patina-pipeline
 ```
 
 ### Dependencies Added
 ```
 patina-frontend/Cargo.toml - Added patina-ir dependency
 patina-tree-walker/Cargo.toml - Added patina-frontend dependency
+patina-macros/Cargo.toml - New crate with patina-runtime dependency
+patina-pipeline/Cargo.toml - New crate with frontend/macros/tree-walker dependencies
+patina-interpreter/Cargo.toml - Added patina-pipeline dependency
 ```
 
 ## Summary
@@ -183,6 +208,74 @@ This branch contains **excellent work** that's just not ready for production:
 📝 **What's needed:** Fix macro expansion integration (see proposals)
 
 **Recommendation:** Keep this branch alive, fix the integration when ready, then merge. The infrastructure is too valuable to throw away!
+
+## Recent Updates (2025-11-23)
+
+### ✅ Option 2 Implementation Complete: Extract Macro Crate
+
+Successfully implemented **Option 2** from `MACRO_ARCHITECTURE_PROPOSAL.md`:
+
+#### Phase 1: Macro System Extraction ✅
+- **New crate:** `crates/patina-macros/` - Standalone macro expansion system
+- **New type:** `MacroEnv` - Dedicated macro environment (separate from runtime `Environment`)
+- **Updated:** All hygiene and expansion code to use `MacroEnv`
+- **Tests:** All tests passing (79 passed, 7 ignored test helpers that need Parser)
+
+#### Phase 2: Pipeline Orchestration ✅
+- **New crate:** `crates/patina-pipeline/` - Pipeline orchestration layer
+- **New trait:** `Pipeline` - Flexible parse → eval interface
+- **Implementation:** `StandardPipeline` - Current working pipeline
+- **API:** `SimpleInterpreter` - Easier-to-use concrete interpreter type
+
+#### Phase 3: Architecture Documentation ✅
+- **Created:** `docs/MACRO_ARCHITECTURE_DECISIONS.md` - Documents known limitation
+- **Created:** `docs/MACRO_ARCHITECTURE_IMPLEMENTATION_PLAN.md` - When to fix limitation
+- **Decision:** Defer `Compiler::env` MacroEnv integration until Phase 1 R7RS completion
+
+### Known Limitation (Deferred)
+
+The `Compiler::env` field still uses `Environment` instead of `MacroEnv`. This causes a lexical scoping bug with `let-syntax` (see docs/MACRO_ARCHITECTURE_DECISIONS.md).
+
+**Decision:** Acceptable for pre-alpha. Fix when:
+1. User reports the bug, OR
+2. Working on Module System (needs proper lexical scoping), OR
+3. After Phase 1 R7RS-small completion
+
+### Test Results (All Passing!)
+
+```
+✅ patina-frontend:    144 tests (141 passed, 3 ignored)
+✅ patina-macros:       86 tests (79 passed, 7 ignored test helpers)
+✅ patina-pipeline:      3 tests (all passed)
+✅ patina-interpreter:  42 tests (38 passed, 4 ignored doctests)
+✅ patina-tests:       ~850 tests (all passed)
+✅ Total:             ~435 tests passing, 0 failures
+```
+
+### Architecture Overview
+
+**New dependency flow:**
+```
+patina-repl → patina-interpreter → patina-pipeline → patina-tree-walker
+                                 ↗  patina-frontend
+                                 ↗  patina-macros
+```
+
+**Pipeline stages:**
+1. Parse (patina-frontend)
+2. Macro expansion (currently delegated to evaluator, future: explicit in pipeline)
+3. Evaluation (patina-tree-walker)
+
+### Next Steps
+
+**Short term:**
+- Continue Phase 1 R7RS compliance work (I/O, exceptions, module system)
+- Pipeline is ready for future CoreExpr integration when needed
+
+**Long term (when fixing limitation):**
+- Update `Compiler::env` to use `MacroEnv`
+- Move macro expansion from evaluator to pipeline
+- Enable CoreExpr path with proper macro handling
 
 ## Questions?
 

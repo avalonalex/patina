@@ -412,7 +412,7 @@ impl Evaluator {
                 }
 
                 // If it's a gensym and not found, try looking it up in the global environment
-                if patina_frontend::macro_expander::hygiene::is_gensym(name.as_ref())
+                if patina_macros::macro_expander::hygiene::is_gensym(name.as_ref())
                     && let Some(original_name) = extract_original_from_gensym(name.as_ref())
                     && let Some(value) = self.global_env.get(&Rc::from(original_name))
                 {
@@ -420,6 +420,35 @@ impl Evaluator {
                 }
 
                 Err(EvalError::UndefinedVariable(name.to_string()))
+            }
+
+            // Identifier lookup (free variables from macro templates)
+            // These have a captured environment from macro definition time
+            Value::Identifier {
+                name,
+                env: captured_env,
+            } => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!(
+                        "[ENV]{} Identifier lookup: '{}' (with captured env)",
+                        self.debug.current_indent(),
+                        name
+                    );
+                }
+
+                // Downcast the captured environment
+                if let Some(captured_env) = captured_env.downcast_ref::<Environment>() {
+                    // Look up in the captured environment (definition-time binding)
+                    if let Some(value) = captured_env.get(name) {
+                        return Ok(EvalResult::Value(value));
+                    }
+                }
+
+                // If not found in captured env, fall back to undefined variable error
+                Err(EvalError::UndefinedVariable(format!(
+                    "{} (identifier)",
+                    name
+                )))
             }
 
             // Empty list
@@ -486,18 +515,39 @@ impl Evaluator {
         }
 
         // Check if this symbol is bound to a macro
-        if let Value::Symbol(ref sym) = car
-            && let Some(Value::Macro { data, .. }) = env.get(sym)
-        {
+        // Handle both Symbol and Identifier (identifiers can reference macros via captured env)
+        let macro_binding = match &car {
+            Value::Symbol(sym) => env.get(sym),
+            Value::Identifier {
+                name,
+                env: captured_env,
+            } => {
+                // For identifiers, look up in the captured environment
+                if let Some(env_any) = captured_env.downcast_ref::<Environment>() {
+                    env_any.get(name)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        if let Some(Value::Macro { data, .. }) = macro_binding {
             let compiled_macro = data
-                .downcast_ref::<patina_frontend::macro_expander::CompiledMacro>()
+                .downcast_ref::<patina_macros::CompiledMacro>()
                 .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
+
+            let name = match &car {
+                Value::Symbol(s) => s.as_ref(),
+                Value::Identifier { name, .. } => name.as_ref(),
+                _ => unreachable!(),
+            };
 
             if self.debug.is_enabled(debug::DebugStage::Expand) {
                 eprintln!(
                     "[MACRO]{} Expanding macro '{}': {}",
                     self.debug.current_indent(),
-                    sym,
+                    name,
                     expr
                 );
                 self.debug.indent();
@@ -610,6 +660,9 @@ impl Evaluator {
             // Symbols - no expansion needed
             Value::Symbol(_) => Ok(expr.clone()),
 
+            // Identifiers - no expansion needed (they're already from macro expansion)
+            Value::Identifier { .. } => Ok(expr.clone()),
+
             // Vectors - recursively expand elements
             Value::Vector(vec) => {
                 let expanded: Result<Vec<_>, _> = vec
@@ -630,7 +683,7 @@ impl Evaluator {
                     if let Some(Value::Macro { data, .. }) = env.get(sym) {
                         // This is a macro call - expand it
                         let compiled_macro = data
-                            .downcast_ref::<patina_frontend::macro_expander::CompiledMacro>()
+                            .downcast_ref::<patina_macros::CompiledMacro>()
                             .ok_or_else(|| {
                                 EvalError::InternalError("Invalid macro data".to_string())
                             })?;
@@ -1183,18 +1236,31 @@ impl Evaluator {
                             // Rest parameter: (x y . rest)
                             return Ok((params, Some(s.to_string())));
                         }
+                        Value::Identifier { name, .. } => {
+                            // Rest parameter from macro expansion: (x y . rest)
+                            return Ok((params, Some(name.to_string())));
+                        }
                         Value::Pair(pair) => {
                             let (car, cdr) = {
                                 let pair_ref = pair.borrow();
                                 (pair_ref.0.clone(), pair_ref.1.clone())
                             };
-                            if let Value::Symbol(param) = &car {
-                                params.push(param.to_string());
-                                current = cdr;
-                            } else {
-                                return Err(EvalError::InvalidSyntax(
-                                    "lambda parameters must be symbols".to_string(),
-                                ));
+                            match &car {
+                                Value::Symbol(param) => {
+                                    params.push(param.to_string());
+                                    current = cdr;
+                                }
+                                Value::Identifier { name, .. } => {
+                                    // Parameter from macro expansion
+                                    params.push(name.to_string());
+                                    current = cdr;
+                                }
+                                _ => {
+                                    return Err(EvalError::InvalidSyntax(
+                                        "lambda parameters must be symbols or identifiers"
+                                            .to_string(),
+                                    ));
+                                }
                             }
                         }
                         _ => {
@@ -1341,8 +1407,8 @@ impl Evaluator {
         expr: &Value,
         name: Rc<str>,
         env: &Rc<Environment>,
-    ) -> Result<patina_frontend::macro_expander::CompiledMacro, EvalError> {
-        use patina_frontend::macro_expander::Compiler;
+    ) -> Result<patina_macros::CompiledMacro, EvalError> {
+        use patina_macros::Compiler;
 
         // Must be a list starting with 'syntax-rules
         let (keyword, rest) = self.extract_pair(expr)?;
@@ -1363,8 +1429,9 @@ impl Evaluator {
         // Parse rules as (pattern, template) pairs
         let rules = self.parse_macro_rules(&rules_expr)?;
 
-        // Compile using V2 compiler with environment capture for hygiene
-        let mut compiler = Compiler::with_env(literals, None, env.clone());
+        // Compile using Compiler with environment capture for hygiene
+        // Pass the runtime Environment as Rc<dyn Any> following Gauche's approach
+        let mut compiler = Compiler::with_env(literals, None, env.clone() as Rc<dyn std::any::Any>);
         compiler
             .compile_macro(name, rules)
             .map_err(|e| EvalError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
@@ -1453,14 +1520,13 @@ impl Evaluator {
     /// This is used by both define-syntax and the macro expansion logic in eval_list_impl.
     pub(crate) fn expand_macro(
         &self,
-        compiled_macro: &patina_frontend::macro_expander::CompiledMacro,
+        compiled_macro: &patina_macros::CompiledMacro,
         args: &Value,
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
-        use patina_frontend::macro_expander::{CompiledMacroExpander, MacroExpander};
-
-        let expander = CompiledMacroExpander::new(compiled_macro.clone());
-        expander.expand(args, env).map_err(EvalError::from)
+        // Use the expand_macro function from patina-macros, passing Environment directly
+        patina_macros::expand_macro(compiled_macro, args, env)
+            .map_err(|e| EvalError::InvalidSyntax(format!("Macro expansion failed: {}", e)))
     }
 }
 

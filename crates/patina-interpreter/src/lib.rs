@@ -46,9 +46,14 @@
 //! let result = interp.eval_str("(+ 1 2 3)").unwrap();
 //! ```
 
+// New pipeline-based interpreter (simpler API)
+pub mod simple;
+pub use simple::SimpleInterpreter;
+
 // Re-export types from workspace crates for convenience
 pub use patina_frontend::{DesugarError, Desugarer, LexError, Lexer, ParseError, Parser};
 pub use patina_ir::CoreExpr;
+pub use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_runtime::{Arity, Backend, Environment, Procedure, Value};
 pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker, eval_core};
 

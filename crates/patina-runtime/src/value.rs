@@ -31,6 +31,17 @@ pub enum Value {
     // Symbols
     Symbol(Rc<str>),
 
+    // Identifiers (for hygienic macros)
+    // An identifier is a symbol with a captured lexical environment
+    // Used for free variables in macro templates that should preserve their
+    // definition-time bindings (lexical hygiene)
+    Identifier {
+        name: Rc<str>,
+        /// Captured environment from macro definition time
+        /// Stored as dyn Any to avoid circular dependencies
+        env: Rc<dyn std::any::Any>,
+    },
+
     // Pairs and lists (mutable via set-car!/set-cdr!)
     // Uses RefCell to allow mutation through shared references
     Pair(Rc<RefCell<(Value, Value)>>),
@@ -146,6 +157,7 @@ impl Value {
             Value::Character(_) => "character",
             Value::String(_) => "string",
             Value::Symbol(_) => "symbol",
+            Value::Identifier { .. } => "identifier",
             Value::Pair(_) | Value::Null => "list",
             Value::Vector(_) => "vector",
             Value::Bytevector(_) => "bytevector",
@@ -228,6 +240,14 @@ impl std::fmt::Display for Value {
                     write!(f, "|{}|", s)
                 } else {
                     write!(f, "{}", s)
+                }
+            }
+            Value::Identifier { name, .. } => {
+                // Display identifiers the same as symbols
+                if Self::symbol_needs_vertical_bars(name) {
+                    write!(f, "|{}|", name)
+                } else {
+                    write!(f, "{}", name)
                 }
             }
             Value::Null => write!(f, "()"),

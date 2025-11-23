@@ -1,0 +1,19 @@
+[package]
+name = "patina-macros"
+version = "0.1.0"
+edition = "2024"
+description = "Macro expansion system for Patina Scheme: syntax-rules and hygiene"
+
+[dependencies]
+# Workspace crates
+patina-runtime = { path = "../patina-runtime" }
+
+# Error handling
+thiserror = { workspace = true }
+
+# For gensym (thread-safe counter)
+once_cell = { workspace = true }
+
+[lib]
+name = "patina_macros"
+path = "src/lib.rs"
