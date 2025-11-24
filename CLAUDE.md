@@ -38,8 +38,9 @@ patina/ (workspace root)
 **patina-frontend** (`crates/patina-frontend/src/`)
 - `lexer/`: Tokenizes Scheme source
 - `parser/`: Builds AST (as Value) from tokens
-- `macro_expander/`: Hygienic macro expansion (syntax-rules)
-- Unit tests: 61 tests for lexer/parser/macros
+- `macro_expander/`: Hygienic macro expansion (syntax-rules) with marks-and-ribs hygiene
+- `desugarer/`: Converts macro-expanded AST to CoreExpr IR
+- Unit tests: 61 tests for lexer/parser/macros, 15 tests for desugarer
 
 **patina-tree-walker** (`crates/patina-tree-walker/src/eval/`)
 - `mod.rs`: Core evaluator with TCO support
@@ -105,14 +106,13 @@ patina-tests → patina-interpreter
 
 - **`internal/`** - Implementation notes and progress tracking
   - **`MILESTONES.md`** - Historical achievements and progress milestones (keep updated)
-  - **`MACRO_HYGIENE_APPROACHES.md`** - Comprehensive research on hygiene algorithms (Racket, Chez, Chibi)
-  - **`HYGIENE_ABSTRACTION_SUMMARY.md`** - Trait-based hygiene abstraction implementation summary
   - `NESTED_ELLIPSIS_LIMITATION.md` - Future enhancement documentation
   - `reference_impls/` - Reference implementation notes (Chibi, Chez)
 
 ### 🗄️ Archived Documentation (Read-Only Reference)
 
 - **`internal/ARCHIVE/`** - Completed research and historical docs (see `internal/ARCHIVE/README.md`)
+  - `core_ir_migration_2025_11/` - CoreExpr migration work (✅ COMPLETE 2025-11-23)
   - `macro_research/` - Macro system research (✅ COMPLETE 2025-11-08)
   - `numeric_research/` - Numeric tower research (✅ 94% COMPLETE 2025-11-04)
   - `completed_features/` - Implementation docs for finished features (do loop, macros)
@@ -283,18 +283,31 @@ The `Value` enum represents all Scheme values:
 3. **Macro Expander** (`macro_expander/`):
    - Implements R7RS `syntax-rules` hygienic macros
    - Pattern matching and template expansion
-   - Gensym-based hygiene (format: `##name#counter`)
+   - Marks-and-ribs hygiene algorithm (Chez Scheme-style)
    - Core macros defined in `lib/bootstrap.scm`
+
+4. **Desugarer** (`desugarer/mod.rs`):
+   - Converts macro-expanded AST to CoreExpr IR
+   - Macro-aware: expands macros on-demand during desugaring
+   - Handles all special forms and converts to core primitives
+   - Produces simplified IR for evaluation
 
 ### Tree-Walking Interpreter
 
 **Location:** `crates/patina-tree-walker/src/eval/`
 
-**Core Evaluator** (`mod.rs`):
-- Trampoline pattern for tail call optimization (TCO)
+**CoreExpr Evaluator** (`core_eval.rs`) - PRIMARY PATH:
+- Evaluates CoreExpr IR from desugarer
+- Simplified evaluation logic with fewer cases
+- Full TCO support via trampoline pattern
+- No macro expansion needed (already desugared)
+
+**Legacy Evaluator** (`mod.rs`):
+- Direct AST evaluation (bypasses desugarer)
 - `eval_step_impl()` - Main evaluation loop
 - Handles special forms, macros, and procedure calls
 - Loads `lib/bootstrap.scm` on initialization
+- Still used for REPL and backwards compatibility
 
 **Special Forms** (`special_forms.rs`):
 - `quote`, `if`, `define`, `set!`, `lambda`, `begin`
