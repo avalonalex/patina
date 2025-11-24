@@ -31,6 +31,10 @@ pub enum DesugarError {
     /// Invalid formal parameter syntax
     InvalidFormals(String),
 
+    /// Special form that requires Value evaluator fallback (not in CoreExpr yet)
+    /// This is temporary until all forms are migrated to CoreExpr
+    FallbackFormNeeded { form: String },
+
     /// Generic error with message
     Other(String),
 }
@@ -66,6 +70,9 @@ impl fmt::Display for DesugarError {
             }
             DesugarError::InvalidFormals(msg) => {
                 write!(f, "Invalid formal parameters: {}", msg)
+            }
+            DesugarError::FallbackFormNeeded { form } => {
+                write!(f, "{} requires Value evaluator (not yet in CoreExpr)", form)
             }
             DesugarError::Other(msg) => write!(f, "{}", msg),
         }

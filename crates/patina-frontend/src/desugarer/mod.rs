@@ -213,11 +213,10 @@ impl Desugarer {
                 "begin" => self.desugar_begin(&cdr),
                 "apply" => self.desugar_apply(&cdr),
 
-                // Special forms not in CoreExpr - handled by Value evaluator
-                "let-syntax" | "letrec-syntax" => Err(DesugarError::InvalidSyntax(format!(
-                    "{} is a special form not in CoreExpr (use Value evaluator)",
-                    sym
-                ))),
+                // Special forms not in CoreExpr - require Value evaluator fallback
+                "let-syntax" | "letrec-syntax" => Err(DesugarError::FallbackFormNeeded {
+                    form: sym.to_string(),
+                }),
 
                 // Everything else is either:
                 // - A derived form that was already expanded by macros
@@ -294,6 +293,9 @@ impl Desugarer {
 
         let var_sym = match &var {
             Value::Symbol(s) => s.clone(),
+            // Handle hygienic identifiers from macro expansion
+            Value::Identifier { name, .. } => name.clone(),
+            Value::WrappedIdentifier { name, .. } => name.clone(),
             _ => {
                 return Err(DesugarError::InvalidSyntax(
                     "set! requires a symbol as first argument".to_string(),
@@ -308,6 +310,9 @@ impl Desugarer {
     }
 
     /// Desugar define: (define var value) or (define (name params...) body...)
+    ///
+    /// Special case: (define () value) - used by define-values with no variables.
+    /// Evaluates value for side effects, returns unspecified.
     fn desugar_define(&self, args: &Value) -> Result<CoreExpr> {
         let args_vec = utils::list_to_vec(args)?;
 
@@ -317,6 +322,23 @@ impl Desugarer {
                 name: name.clone(),
                 value: Box::new(self.desugar(value)?),
             }),
+
+            // Handle hygienic identifiers for variable names
+            [Value::Identifier { name, .. }, value]
+            | [Value::WrappedIdentifier { name, .. }, value] => Ok(CoreExpr::Define {
+                name: name.clone(),
+                value: Box::new(self.desugar(value)?),
+            }),
+
+            // (define () value) - empty variable list from define-values
+            // Evaluate value for side effects, discard result
+            [Value::Null, value] => {
+                // Transform to: (begin value #<unspecified>)
+                Ok(CoreExpr::Begin(vec![
+                    self.desugar(value)?,
+                    CoreExpr::Literal(Value::Unspecified),
+                ]))
+            }
 
             // (define (name params...) body...)
             [Value::Pair(_), body @ ..] => {
@@ -340,9 +362,15 @@ impl Desugarer {
                 })
             }
 
-            _ => Err(DesugarError::InvalidSyntax(
-                "define requires (define var value) or (define (name ...) body)".to_string(),
-            )),
+            other => Err(DesugarError::InvalidSyntax(format!(
+                "define requires (define var value) or (define (name ...) body), got {} args with first arg type: {}",
+                other.len(),
+                if other.is_empty() {
+                    "none"
+                } else {
+                    other[0].type_name()
+                }
+            ))),
         }
     }
 
@@ -426,17 +454,21 @@ impl Desugarer {
     }
 
     /// Desugar begin: (begin expr ...) → Begin(exprs)
+    ///
+    /// R7RS allows empty begin: (begin) → #<unspecified>
     fn desugar_begin(&self, args: &Value) -> Result<CoreExpr> {
         let exprs = utils::list_to_vec(args)?;
-
-        if exprs.is_empty() {
-            return Err(DesugarError::EmptyBody("begin".to_string()));
-        }
 
         let core_exprs: Vec<CoreExpr> = exprs
             .iter()
             .map(|e| self.desugar(e))
             .collect::<Result<_>>()?;
+
+        // Special cases:
+        // (begin) → #<unspecified> (R7RS allows this)
+        if core_exprs.is_empty() {
+            return Ok(CoreExpr::Literal(Value::Unspecified));
+        }
 
         // Optimize: (begin expr) → expr
         if core_exprs.len() == 1 {
@@ -839,13 +871,13 @@ mod tests {
     }
 
     #[test]
-    fn test_desugar_begin_empty_error() {
+    fn test_desugar_begin_empty() {
         let desugarer = Desugarer::new();
-        // (begin)
+        // (begin) → #<unspecified> (R7RS allows this)
         let list = utils::vec_to_list(&[Value::Symbol(Rc::from("begin"))]);
 
-        let result = desugarer.desugar(&list);
-        assert!(result.is_err());
+        let result = desugarer.desugar(&list).unwrap();
+        assert!(matches!(result, CoreExpr::Literal(Value::Unspecified)));
     }
 
     // =========================================================================

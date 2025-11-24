@@ -8,6 +8,35 @@ use crate::eval::{EvalError, Evaluator};
 use patina_runtime::{Backend, Environment, Value};
 use std::rc::Rc;
 
+/// Check if an expression is one of the special forms not yet in CoreExpr
+///
+/// These forms must use the Value evaluator as a fallback:
+/// - let-syntax / letrec-syntax: Deferred to future work (GitHub issue)
+/// - case-lambda: Not yet implemented in CoreExpr
+/// - expand: Debugging extension, not in CoreExpr
+fn is_value_evaluator_only_form(expr: &Value) -> bool {
+    if let Value::Pair(pair) = expr {
+        let car = &pair.borrow().0;
+        let name_str = match car {
+            Value::Symbol(name) => Some(name.as_ref()),
+            Value::Identifier { name, .. } => Some(name.as_ref()),
+            Value::WrappedIdentifier { name, .. } => Some(name.as_ref()),
+            _ => None,
+        };
+
+        if let Some(name) = name_str {
+            matches!(
+                name,
+                "let-syntax" | "letrec-syntax" | "case-lambda" | "expand"
+            )
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
 /// Tree-walking interpreter backend
 ///
 /// This is a lightweight wrapper around `Evaluator` that implements the
@@ -98,10 +127,24 @@ impl Backend for TreeWalker {
                 // Successfully desugared to CoreExpr - evaluate it
                 eval_core(&core_expr, env.clone(), &self.evaluator)
             }
-            Err(_) => {
-                // Desugaring failed (e.g., special form not in CoreExpr like import, apply)
-                // Fall back to Value evaluator
-                self.evaluator.eval_in_env(expr, env)
+            Err(e) => {
+                // Check if this is a fallback form error
+                use patina_frontend::DesugarError;
+
+                if matches!(e, DesugarError::FallbackFormNeeded { .. }) {
+                    // This form (or a nested form) is not yet in CoreExpr
+                    // Temporary fallback until let-syntax, letrec-syntax are migrated
+                    self.evaluator.eval_in_env(expr, env)
+                } else if is_value_evaluator_only_form(expr) {
+                    // Top-level case-lambda or expand (not errors from desugarer)
+                    self.evaluator.eval_in_env(expr, env)
+                } else {
+                    // All other desugar errors indicate a real problem
+                    Err(EvalError::InternalError(format!(
+                        "Failed to desugar expression: {}",
+                        e
+                    )))
+                }
             }
         }
     }
