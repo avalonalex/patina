@@ -8,34 +8,7 @@ use crate::eval::{EvalError, Evaluator};
 use patina_runtime::{Backend, Environment, Value};
 use std::rc::Rc;
 
-/// Check if an expression is one of the special forms not yet in CoreExpr
-///
-/// These forms must use the Value evaluator as a fallback:
-/// - let-syntax / letrec-syntax: Deferred to future work (GitHub issue)
-/// - case-lambda: Not yet implemented in CoreExpr
-/// - expand: Debugging extension, not in CoreExpr
-fn is_value_evaluator_only_form(expr: &Value) -> bool {
-    if let Value::Pair(pair) = expr {
-        let car = &pair.borrow().0;
-        let name_str = match car {
-            Value::Symbol(name) => Some(name.as_ref()),
-            Value::Identifier { name, .. } => Some(name.as_ref()),
-            Value::WrappedIdentifier { name, .. } => Some(name.as_ref()),
-            _ => None,
-        };
-
-        if let Some(name) = name_str {
-            matches!(
-                name,
-                "let-syntax" | "letrec-syntax" | "case-lambda" | "expand"
-            )
-        } else {
-            false
-        }
-    } else {
-        false
-    }
-}
+// Note: All special forms now in CoreExpr - no fallback forms needed!
 
 /// Tree-walking interpreter backend
 ///
@@ -108,7 +81,7 @@ impl Backend for TreeWalker {
         // CoreExpr pipeline with MACRO-AWARE DESUGARING:
         // 1. Create desugarer with environment (enables macro expansion)
         // 2. Desugar - the desugarer will expand macros as needed during desugaring
-        // 3. Evaluate via CoreExpr, or fall back to Value evaluator
+        // 3. Evaluate via CoreExpr
         //
         // This approach is better than pre-expanding all macros because:
         // - The desugarer knows which parts of each special form to expand
@@ -121,32 +94,13 @@ impl Backend for TreeWalker {
         // Create macro-aware desugarer with the environment
         let desugarer = Desugarer::with_env(env.clone());
 
-        // Try to desugar - this will expand macros as needed
-        match desugarer.desugar(expr) {
-            Ok(core_expr) => {
-                // Successfully desugared to CoreExpr - evaluate it
-                eval_core(&core_expr, env.clone(), &self.evaluator)
-            }
-            Err(e) => {
-                // Check if this is a fallback form error
-                use patina_frontend::DesugarError;
+        // Desugar to CoreExpr - this will expand macros as needed
+        let core_expr = desugarer.desugar(expr).map_err(|e| {
+            EvalError::InternalError(format!("Failed to desugar expression: {}", e))
+        })?;
 
-                if matches!(e, DesugarError::FallbackFormNeeded { .. }) {
-                    // This form (or a nested form) is not yet in CoreExpr
-                    // Temporary fallback until let-syntax, letrec-syntax are migrated
-                    self.evaluator.eval_in_env(expr, env)
-                } else if is_value_evaluator_only_form(expr) {
-                    // Top-level case-lambda or expand (not errors from desugarer)
-                    self.evaluator.eval_in_env(expr, env)
-                } else {
-                    // All other desugar errors indicate a real problem
-                    Err(EvalError::InternalError(format!(
-                        "Failed to desugar expression: {}",
-                        e
-                    )))
-                }
-            }
-        }
+        // Evaluate via CoreExpr
+        eval_core(&core_expr, env.clone(), &self.evaluator)
     }
 
     fn global_env(&self) -> &Rc<Environment> {

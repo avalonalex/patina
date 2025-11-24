@@ -130,6 +130,20 @@ impl CoreExpr {
                 body: body.iter().map(&f).collect(),
             },
 
+            CoreExpr::Expand { expr } => CoreExpr::Expand {
+                expr: Box::new(f(expr)),
+            },
+
+            CoreExpr::CaseLambda { clauses } => CoreExpr::CaseLambda {
+                clauses: clauses
+                    .iter()
+                    .map(|clause| crate::CaseLambdaClause {
+                        params: clause.params.clone(),
+                        body: clause.body.iter().map(&f).collect(),
+                    })
+                    .collect(),
+            },
+
             CoreExpr::App { func, args } => CoreExpr::App {
                 func: Box::new(f(func)),
                 args: args.iter().map(&f).collect(),

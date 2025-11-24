@@ -19,6 +19,6 @@ pub mod surface_syntax;
 pub mod visitor;
 
 // Re-export main types
-pub use core_expr::{CoreExpr, Formals, Symbol};
+pub use core_expr::{CaseLambdaClause, CoreExpr, Formals, Symbol};
 pub use surface_syntax::SurfaceSyntax;
 pub use visitor::ExprVisitor;

@@ -17,6 +17,15 @@ pub enum Formals {
     Mixed { fixed: Vec<Symbol>, rest: Symbol },
 }
 
+/// Case-lambda clause: (params body...)
+#[derive(Debug, Clone)]
+pub struct CaseLambdaClause {
+    /// Parameter specification
+    pub params: Formals,
+    /// Body expressions
+    pub body: Vec<CoreExpr>,
+}
+
 /// Core Scheme expressions after macro expansion and desugaring
 ///
 /// This is the minimal IR that backends must handle.
@@ -89,6 +98,16 @@ pub enum CoreExpr {
         bindings: Vec<(CoreExpr, CoreExpr)>, // (param-expr, value-expr) pairs
         body: Vec<CoreExpr>,
     },
+
+    /// Expand: show macro expansion without evaluating
+    /// Example: (expand '(let ((x 1)) x)) => ((lambda (x) x) 1)
+    /// This is a Patina debugging extension, not part of R7RS
+    Expand { expr: Box<CoreExpr> },
+
+    /// Case-lambda: multi-arity procedure with dispatch
+    /// Example: (case-lambda (() 'zero) ((x) x) ((x y) (cons x y)))
+    /// From R7RS (scheme case-lambda)
+    CaseLambda { clauses: Vec<CaseLambdaClause> },
 
     /// Function application
     /// Example: (f x y), (+ 1 2)
@@ -177,6 +196,8 @@ impl CoreExpr {
             CoreExpr::DefineSyntax { .. } => "define-syntax",
             CoreExpr::Import { .. } => "import",
             CoreExpr::Parameterize { .. } => "parameterize",
+            CoreExpr::Expand { .. } => "expand",
+            CoreExpr::CaseLambda { .. } => "case-lambda",
             CoreExpr::App { .. } => "application",
             CoreExpr::Apply { .. } => "apply",
             CoreExpr::PrimCall { .. } => "primitive-call",
@@ -256,6 +277,43 @@ impl std::fmt::Display for CoreExpr {
                 write!(f, ")")?;
                 for expr in body {
                     write!(f, " {}", expr)?;
+                }
+                write!(f, ")")
+            }
+            CoreExpr::Expand { expr } => {
+                write!(f, "(expand {})", expr)
+            }
+            CoreExpr::CaseLambda { clauses } => {
+                write!(f, "(case-lambda")?;
+                for clause in clauses {
+                    write!(f, " (")?;
+                    match &clause.params {
+                        Formals::Fixed(ps) => {
+                            write!(f, "(")?;
+                            for (i, p) in ps.iter().enumerate() {
+                                if i > 0 {
+                                    write!(f, " ")?;
+                                }
+                                write!(f, "{}", p)?;
+                            }
+                            write!(f, ")")?;
+                        }
+                        Formals::Variadic(p) => write!(f, "{}", p)?,
+                        Formals::Mixed { fixed, rest } => {
+                            write!(f, "(")?;
+                            for (i, p) in fixed.iter().enumerate() {
+                                if i > 0 {
+                                    write!(f, " ")?;
+                                }
+                                write!(f, "{}", p)?;
+                            }
+                            write!(f, " . {})", rest)?;
+                        }
+                    }
+                    for expr in &clause.body {
+                        write!(f, " {}", expr)?;
+                    }
+                    write!(f, ")")?;
                 }
                 write!(f, ")")
             }

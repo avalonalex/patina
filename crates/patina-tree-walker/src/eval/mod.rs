@@ -4,7 +4,7 @@ mod core_eval;
 mod debug;
 mod error;
 mod primitives;
-pub mod special_forms; // Registry-based special forms
+// Note: special_forms module removed - all special forms now in CoreExpr!
 
 // Re-export error type for public API
 pub use core_eval::eval_core;
@@ -75,8 +75,7 @@ pub struct Evaluator {
     pub(crate) loader_registry: RefCell<LibraryLoaderRegistry>,
     /// Registry of primitive procedures
     pub(crate) primitive_registry: primitives::PrimitiveRegistry,
-    /// Registry of special forms
-    pub(crate) special_form_registry: special_forms::SpecialFormRegistry,
+    // Note: special_form_registry removed - all special forms now in CoreExpr!
 }
 
 impl Evaluator {
@@ -91,8 +90,7 @@ impl Evaluator {
         // direct installation. The load_bootstrap() call below will load (scheme base)
         // and import it into the global environment.
 
-        // Create special form registry and register all special forms
-        let special_form_registry = special_forms::build_registry();
+        // Note: special_form_registry removed - all special forms now in CoreExpr!
 
         // Create library registries
         let library_registry = RefCell::new(LibraryRegistry::with_default_paths());
@@ -104,7 +102,6 @@ impl Evaluator {
             library_registry,
             loader_registry,
             primitive_registry,
-            special_form_registry,
         };
 
         // Initialize library loaders
@@ -610,18 +607,7 @@ impl Evaluator {
         }
 
         // Fallback to Value evaluator for forms not in CoreExpr
-        // Check if it's a special form in the registry (let-syntax, letrec-syntax, etc.)
-        if let Value::Symbol(ref sym) = car
-            && self.special_form_registry.contains(sym.as_ref())
-        {
-            return self.special_form_registry.eval(
-                sym.as_ref(),
-                &cdr,
-                self,
-                env,
-                in_tail_position,
-            );
-        }
+        // Note: All special forms now in CoreExpr - no registry lookup needed!
 
         // Check if this symbol is bound to a macro
         // Handle both Symbol and Identifier (identifiers can reference macros via captured env)
@@ -876,18 +862,7 @@ impl Evaluator {
     ) -> Result<EvalResult, EvalError> {
         let (car, cdr) = self.extract_pair(expr)?;
 
-        // Check if it's a special form in the registry first
-        if let Value::Symbol(ref sym) = car
-            && self.special_form_registry.contains(sym.as_ref())
-        {
-            return self.special_form_registry.eval(
-                sym.as_ref(),
-                &cdr,
-                self,
-                env,
-                in_tail_position,
-            );
-        }
+        // Note: All special forms now in CoreExpr - no registry lookup needed!
 
         // SKIP macro expansion check - macros already expanded!
         // (Lines 534-587 from eval_list_impl are omitted here)
@@ -972,15 +947,9 @@ impl Evaluator {
                 // First get car and cdr
                 let (car, cdr) = pair.borrow().clone();
 
-                // Check if this is a macro call or special form
+                // Check if this is a macro call
+                // Note: Special forms now in CoreExpr - no registry check needed
                 if let Value::Symbol(ref sym) = car {
-                    // Check if it's a special form first - special forms handle their own expansion
-                    if self.special_form_registry.contains(sym.as_ref()) {
-                        // Special forms like import, quote, lambda, etc. should not be expanded
-                        // They handle macro expansion of their arguments themselves
-                        return Ok(expr.clone());
-                    }
-
                     // Check if it's a macro
                     if let Some(Value::Macro { data, .. }) = env.get(sym) {
                         // This is a macro call - expand it
@@ -1524,112 +1493,6 @@ impl Evaluator {
                 Ok(())
             }
         }
-    }
-
-    /// Parse lambda parameter list
-    ///
-    /// Handles:
-    /// - `()` - no parameters
-    /// - `x` - single variadic parameter
-    /// - `(x y z)` - fixed parameters
-    /// - `(x y . rest)` - fixed parameters + variadic
-    ///
-    /// Returns `(fixed_params, variadic_param)`
-    pub(crate) fn parse_lambda_params(
-        &self,
-        params_expr: &Value,
-    ) -> Result<(Vec<String>, Option<String>), EvalError> {
-        match params_expr {
-            // (lambda args body...) - single symbol, all args go to it
-            Value::Symbol(s) => Ok((vec![], Some(s.to_string()))),
-
-            // (lambda args body...) - single wrapped identifier (from marks-and-ribs)
-            Value::WrappedIdentifier { name, .. } => Ok((vec![], Some(name.to_string()))),
-
-            // (lambda () body...) - no parameters
-            Value::Null => Ok((vec![], None)),
-
-            // (lambda (x y z) body...) or (lambda (x y . rest) body...)
-            Value::Pair(_) => {
-                let mut params = Vec::new();
-                let mut current = params_expr.clone();
-
-                loop {
-                    match &current {
-                        Value::Null => return Ok((params, None)),
-                        Value::Symbol(s) => {
-                            // Rest parameter: (x y . rest)
-                            return Ok((params, Some(s.to_string())));
-                        }
-                        Value::Identifier { name, .. } => {
-                            // Rest parameter from macro expansion (old hygiene): (x y . rest)
-                            return Ok((params, Some(name.to_string())));
-                        }
-                        Value::WrappedIdentifier { name, .. } => {
-                            // Rest parameter from macro expansion (marks-and-ribs): (x y . rest)
-                            return Ok((params, Some(name.to_string())));
-                        }
-                        Value::Pair(pair) => {
-                            let (car, cdr) = {
-                                let pair_ref = pair.borrow();
-                                (pair_ref.0.clone(), pair_ref.1.clone())
-                            };
-                            match &car {
-                                Value::Symbol(param) => {
-                                    params.push(param.to_string());
-                                    current = cdr;
-                                }
-                                Value::Identifier { name, .. } => {
-                                    // Parameter from macro expansion (old hygiene)
-                                    params.push(name.to_string());
-                                    current = cdr;
-                                }
-                                Value::WrappedIdentifier { name, .. } => {
-                                    // Parameter from macro expansion (marks-and-ribs hygiene)
-                                    params.push(name.to_string());
-                                    current = cdr;
-                                }
-                                _ => {
-                                    return Err(EvalError::InvalidSyntax(
-                                        "lambda parameters must be symbols or identifiers"
-                                            .to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                        _ => {
-                            return Err(EvalError::InvalidSyntax(
-                                "invalid lambda parameter list".to_string(),
-                            ));
-                        }
-                    }
-                }
-            }
-
-            _ => Err(EvalError::InvalidSyntax(
-                "lambda parameters must be a list or symbol".to_string(),
-            )),
-        }
-    }
-
-    /// Collect list items into a vector
-    ///
-    /// Verifies the list is proper (ends with null) and returns all elements.
-    pub(crate) fn collect_list_items(&self, list: &Value) -> Result<Vec<Value>, EvalError> {
-        let mut items = Vec::new();
-        let mut current = list.clone();
-
-        while let Value::Pair(pair) = current {
-            let pair_ref = pair.borrow();
-            items.push(pair_ref.0.clone());
-            current = pair_ref.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::InvalidSyntax("expected proper list".to_string()));
-        }
-
-        Ok(items)
     }
 
     /// Process an import set for eval context

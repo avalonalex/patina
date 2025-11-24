@@ -212,11 +212,12 @@ impl Desugarer {
                 "parameterize" => self.desugar_parameterize(&cdr),
                 "begin" => self.desugar_begin(&cdr),
                 "apply" => self.desugar_apply(&cdr),
+                "expand" => self.desugar_expand(&cdr),
+                "case-lambda" => self.desugar_case_lambda(&cdr),
 
-                // Special forms not in CoreExpr - require Value evaluator fallback
-                "let-syntax" | "letrec-syntax" => Err(DesugarError::FallbackFormNeeded {
-                    form: sym.to_string(),
-                }),
+                // Let-syntax forms: compile macros and desugar body
+                "let-syntax" => self.desugar_let_syntax(&cdr),
+                "letrec-syntax" => self.desugar_letrec_syntax(&cdr),
 
                 // Everything else is either:
                 // - A derived form that was already expanded by macros
@@ -504,6 +505,304 @@ impl Desugarer {
             func,
             args: args_exprs,
         })
+    }
+
+    /// Desugar expand: (expand expr) → Expand { expr }
+    ///
+    /// Expand is a Patina debugging extension that shows macro expansion
+    /// without evaluating the result. This is useful for understanding
+    /// macro transformations.
+    fn desugar_expand(&self, args: &Value) -> Result<CoreExpr> {
+        let expr = utils::expect_one_arg(args, "expand")?;
+
+        Ok(CoreExpr::Expand {
+            expr: Box::new(self.desugar(&expr)?),
+        })
+    }
+
+    /// Desugar case-lambda: (case-lambda clause ...) → CaseLambda { clauses }
+    ///
+    /// Each clause has the form (params body...) where params follows lambda syntax.
+    fn desugar_case_lambda(&self, args: &Value) -> Result<CoreExpr> {
+        let clauses = utils::list_to_vec(args)?;
+
+        if clauses.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "case-lambda requires at least one clause".to_string(),
+            ));
+        }
+
+        let mut desugared_clauses = Vec::new();
+
+        for clause in clauses {
+            // Each clause should be (params body...)
+            let clause_list = utils::list_to_vec(&clause)?;
+
+            if clause_list.len() < 2 {
+                return Err(DesugarError::InvalidSyntax(
+                    "case-lambda clause must have params and at least one body expression"
+                        .to_string(),
+                ));
+            }
+
+            // First element is params
+            let params = &clause_list[0];
+            let formals = utils::convert_formals(params)?;
+
+            // Rest are body expressions
+            let body_exprs: Vec<CoreExpr> = clause_list[1..]
+                .iter()
+                .map(|e| self.desugar(e))
+                .collect::<Result<_>>()?;
+
+            desugared_clauses.push(patina_ir::CaseLambdaClause {
+                params: formals,
+                body: body_exprs,
+            });
+        }
+
+        Ok(CoreExpr::CaseLambda {
+            clauses: desugared_clauses,
+        })
+    }
+
+    /// Desugar let-syntax: (let-syntax ((name transformer) ...) body ...)
+    ///
+    /// Compiles macros in parent environment, creates extended environment,
+    /// and desugars body in that environment. The result is just the desugared body -
+    /// macros are completely eliminated during desugaring (compile-time only).
+    fn desugar_let_syntax(&self, args: &Value) -> Result<CoreExpr> {
+        self.desugar_let_syntax_impl(args, false)
+    }
+
+    /// Desugar letrec-syntax: (letrec-syntax ((name transformer) ...) body ...)
+    ///
+    /// Compiles macros in new environment (allowing mutual recursion),
+    /// and desugars body in that environment. Macros are eliminated during desugaring.
+    fn desugar_letrec_syntax(&self, args: &Value) -> Result<CoreExpr> {
+        self.desugar_let_syntax_impl(args, true)
+    }
+
+    /// Common implementation for let-syntax and letrec-syntax
+    ///
+    /// # Arguments
+    /// - `args`: The arguments to let-syntax/letrec-syntax (bindings and body)
+    /// - `is_letrec`: true for letrec-syntax, false for let-syntax
+    fn desugar_let_syntax_impl(&self, args: &Value, is_letrec: bool) -> Result<CoreExpr> {
+        // We need an environment to compile macros
+        let env = self.env.as_ref().ok_or_else(|| {
+            DesugarError::InvalidSyntax(
+                "let-syntax requires macro environment (desugarer must be created with with_env)"
+                    .to_string(),
+            )
+        })?;
+
+        // Parse arguments: (bindings body...)
+        let args_vec = utils::list_to_vec(args)?;
+
+        if args_vec.len() < 2 {
+            return Err(DesugarError::InvalidSyntax(format!(
+                "{} requires bindings and at least one body expression",
+                if is_letrec {
+                    "letrec-syntax"
+                } else {
+                    "let-syntax"
+                }
+            )));
+        }
+
+        // Parse bindings: ((name transformer) ...)
+        let bindings_value = &args_vec[0];
+        let bindings_list = utils::list_to_vec(bindings_value)?;
+
+        // Determine compilation environment
+        // - let-syntax: compile in parent environment
+        // - letrec-syntax: compile in new environment (for mutual recursion)
+        let compile_env = if is_letrec {
+            Rc::new(Environment::with_parent(env.clone()))
+        } else {
+            env.clone()
+        };
+
+        // Compile each macro binding
+        let mut macro_bindings = Vec::new();
+
+        for binding in bindings_list {
+            let binding_vec = utils::list_to_vec(&binding)?;
+            if binding_vec.len() != 2 {
+                return Err(DesugarError::InvalidSyntax(
+                    "Each let-syntax binding must be (name transformer)".to_string(),
+                ));
+            }
+
+            // Extract name as symbol
+            let name = match &binding_vec[0] {
+                Value::Symbol(s) => s.clone(),
+                _ => {
+                    return Err(DesugarError::InvalidSyntax(
+                        "Macro name must be a symbol".to_string(),
+                    ));
+                }
+            };
+
+            // Compile transformer using patina_macros
+            let transformer = &binding_vec[1];
+            let compiled_macro =
+                self.compile_syntax_rules(transformer, name.clone(), &compile_env)?;
+
+            macro_bindings.push((name, compiled_macro));
+        }
+
+        // Create environment with macro bindings
+        let body_env = Rc::new(Environment::with_parent(env.clone()));
+        for (name, compiled_macro) in macro_bindings {
+            let macro_value = Value::Macro {
+                name: name.clone(),
+                data: Rc::new(compiled_macro),
+            };
+            body_env.define(name.to_string(), macro_value);
+        }
+
+        // Create desugarer with extended environment
+        let body_desugarer = Desugarer::with_env(body_env);
+
+        // Desugar body expressions in extended environment
+        let body = &args_vec[1..];
+        let desugared_body: Vec<CoreExpr> = body
+            .iter()
+            .map(|e| body_desugarer.desugar(e))
+            .collect::<Result<_>>()?;
+
+        // Return body as Begin expression
+        // Optimize: single expression doesn't need Begin wrapper
+        if desugared_body.len() == 1 {
+            Ok(desugared_body.into_iter().next().unwrap())
+        } else {
+            Ok(CoreExpr::Begin(desugared_body))
+        }
+    }
+
+    /// Compile a syntax-rules transformer into a CompiledMacro
+    ///
+    /// This is a helper method that mirrors what the evaluator does,
+    /// but is accessible during desugaring.
+    fn compile_syntax_rules(
+        &self,
+        expr: &Value,
+        name: Rc<str>,
+        env: &Rc<Environment>,
+    ) -> Result<patina_macros::CompiledMacro> {
+        use patina_macros::Compiler;
+
+        // Must be a list starting with 'syntax-rules
+        let list = utils::list_to_vec(expr)?;
+
+        if list.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "Expected syntax-rules".to_string(),
+            ));
+        }
+
+        // Check first element is 'syntax-rules
+        match &list[0] {
+            Value::Symbol(s) if s.as_ref() == "syntax-rules" => {}
+            _ => {
+                return Err(DesugarError::InvalidSyntax(
+                    "Expected syntax-rules".to_string(),
+                ));
+            }
+        }
+
+        if list.len() < 2 {
+            return Err(DesugarError::InvalidSyntax(
+                "syntax-rules requires literals and rules".to_string(),
+            ));
+        }
+
+        // Parse literals: (symbol ...)
+        let literals_value = &list[1];
+        let literals = self.parse_literals_list(literals_value)?;
+
+        // Parse rules as (pattern, template) pairs
+        let rules_list = if list.len() > 2 {
+            // Convert rules Vec back to list Value for parsing
+            utils::vec_to_list(&list[2..])
+        } else {
+            Value::Null
+        };
+
+        let rules = self.parse_macro_rules(&rules_list)?;
+
+        // Compile using Compiler with environment capture for hygiene
+        // Pass the runtime Environment as Rc<dyn Any> following Gauche's approach
+        let mut compiler = Compiler::with_env(literals, None, env.clone() as Rc<dyn std::any::Any>);
+        compiler
+            .compile_macro(name, rules)
+            .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
+    }
+
+    /// Parse the literals list: (lit1 lit2 ...)
+    fn parse_literals_list(&self, expr: &Value) -> Result<Vec<Rc<str>>> {
+        let mut literals = Vec::new();
+        let mut current = expr.clone();
+
+        while let Value::Pair(pair) = current {
+            let pair_ref = pair.borrow();
+            match &pair_ref.0 {
+                Value::Symbol(s) => literals.push(s.clone()),
+                _ => {
+                    return Err(DesugarError::InvalidSyntax(
+                        "syntax-rules literals must be symbols".to_string(),
+                    ));
+                }
+            }
+            current = pair_ref.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(DesugarError::InvalidSyntax(
+                "syntax-rules literals must be a proper list".to_string(),
+            ));
+        }
+
+        Ok(literals)
+    }
+
+    /// Parse macro rules as (pattern, template) pairs
+    fn parse_macro_rules(&self, expr: &Value) -> Result<Vec<(Value, Value)>> {
+        let mut rules = Vec::new();
+        let mut current = expr.clone();
+
+        while let Value::Pair(rule_pair) = current {
+            let rule_pair_ref = rule_pair.borrow();
+
+            // Each rule is (pattern template)
+            let rule_list = utils::list_to_vec(&rule_pair_ref.0)?;
+
+            if rule_list.len() != 2 {
+                return Err(DesugarError::InvalidSyntax(
+                    "Each syntax-rules rule must have exactly 2 elements (pattern template)"
+                        .to_string(),
+                ));
+            }
+
+            rules.push((rule_list[0].clone(), rule_list[1].clone()));
+            current = rule_pair_ref.1.clone();
+        }
+
+        if !matches!(current, Value::Null) {
+            return Err(DesugarError::InvalidSyntax(
+                "syntax-rules rules must be a proper list".to_string(),
+            ));
+        }
+
+        if rules.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "syntax-rules must have at least one rule".to_string(),
+            ));
+        }
+
+        Ok(rules)
     }
 
     /// Desugar application: (func arg1 arg2 ...) → App { func, args }

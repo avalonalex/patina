@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-23 20:45:04
+**Generated:** 2025-11-24 11:21:37
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 685 | 61.7% |
-| ❌ Failed | 38 | 3.4% |
-| ⚠️ Error (crashed) | 388 | 34.9% |
-| **Total** | **1111** | **100%** |
+| ✅ Passed | 699 | 63.1% |
+| ❌ Failed | 40 | 3.6% |
+| ⚠️ Error (crashed) | 369 | 33.3% |
+| **Total** | **1108** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -57,40 +57,23 @@ FAIL:
 FAIL: 
 FAIL: 
 FAIL: 
+FAIL: 
+FAIL: 
 ```
 
 ### Errors
 
 ```
-Error: Undefined variable: case-lambda
-Error: Undefined variable: any-arity
-Error: Undefined variable: any-arity
-Error: Undefined variable: any-arity
-Error: Undefined variable: any-arity
-Error: Undefined variable: any-arity
-Error: Internal error: Failed to desugar expression: Expected proper list: Expected proper list, got improper list ending with Symbol("z")
-Error: Undefined variable: rest-arity
-Error: Undefined variable: rest-arity
-Error: Undefined variable: rest-arity
-Error: Undefined variable: rest-arity
-Error: Internal error: Failed to desugar expression: Expected proper list: Expected proper list, got improper list ending with Symbol("y")
-Error: Undefined variable: dead-clause
-Error: Undefined variable: dead-clause
-Error: Undefined variable: dead-clause
-Error: Undefined variable: dead-clause
-Error: Undefined variable: begin
-Error: Undefined variable: begin
-Error: Undefined variable: begin
+Error: Internal error: Failed to desugar expression: if expects 2 or 3 arguments, got 1
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence1
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: sequence3
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro mad-hatter
 Error: Not a procedure: ok
-Error: Undefined variable: lambda
 Error: Invalid syntax: Desugaring failed: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro bar
 Error: Undefined variable: ff
-Error: Undefined variable: begin
+Error: Internal error: Failed to desugar expression: Invalid syntax: Macro name must be a symbol
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: define-record-type
 Error: Undefined variable: pare?
