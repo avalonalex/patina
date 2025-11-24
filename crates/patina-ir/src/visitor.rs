@@ -122,6 +122,14 @@ impl CoreExpr {
                 import_sets: import_sets.clone(), // import_sets are Values (data), not CoreExpr
             },
 
+            CoreExpr::Parameterize { bindings, body } => CoreExpr::Parameterize {
+                bindings: bindings
+                    .iter()
+                    .map(|(param, val)| (f(param), f(val)))
+                    .collect(),
+                body: body.iter().map(&f).collect(),
+            },
+
             CoreExpr::App { func, args } => CoreExpr::App {
                 func: Box::new(f(func)),
                 args: args.iter().map(&f).collect(),

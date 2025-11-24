@@ -81,6 +81,14 @@ pub enum CoreExpr {
     /// Import sets are kept as Values (declarative data, not code)
     Import { import_sets: Vec<Value> },
 
+    /// Parameterize: dynamically rebind parameters
+    /// Example: (parameterize ((param1 val1) (param2 val2)) body ...)
+    /// Note: Body is NOT in tail position (TCO disabled to ensure proper stack cleanup)
+    Parameterize {
+        bindings: Vec<(CoreExpr, CoreExpr)>, // (param-expr, value-expr) pairs
+        body: Vec<CoreExpr>,
+    },
+
     /// Function application
     /// Example: (f x y), (+ 1 2)
     App {
@@ -167,6 +175,7 @@ impl CoreExpr {
             CoreExpr::Define { .. } => "define",
             CoreExpr::DefineSyntax { .. } => "define-syntax",
             CoreExpr::Import { .. } => "import",
+            CoreExpr::Parameterize { .. } => "parameterize",
             CoreExpr::App { .. } => "application",
             CoreExpr::Apply { .. } => "apply",
             CoreExpr::PrimCall { .. } => "primitive-call",
@@ -232,6 +241,20 @@ impl std::fmt::Display for CoreExpr {
                 write!(f, "(import")?;
                 for import_set in import_sets {
                     write!(f, " {}", import_set)?;
+                }
+                write!(f, ")")
+            }
+            CoreExpr::Parameterize { bindings, body } => {
+                write!(f, "(parameterize (")?;
+                for (i, (param, val)) in bindings.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "({} {})", param, val)?;
+                }
+                write!(f, ")")?;
+                for expr in body {
+                    write!(f, " {}", expr)?;
                 }
                 write!(f, ")")
             }

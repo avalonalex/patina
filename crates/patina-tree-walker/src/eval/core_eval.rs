@@ -263,6 +263,67 @@ fn eval_core_step(
             Ok(CoreEvalResult::Value(Value::Unspecified))
         }
 
+        // Parameterize: dynamically rebind parameters
+        // Body is NOT in tail position (TCO disabled for proper stack cleanup)
+        CoreExpr::Parameterize { bindings, body } => {
+            // Evaluate bindings and push new values onto parameter stacks
+            let mut params = Vec::new();
+
+            for (param_expr, value_expr) in bindings {
+                // Evaluate param expression
+                let param = eval_non_tail(param_expr, env.clone(), evaluator)?;
+
+                // Verify it's a parameter
+                match &param {
+                    Value::Parameter { values, converter } => {
+                        // Evaluate value expression
+                        let new_val = eval_non_tail(value_expr, env.clone(), evaluator)?;
+
+                        // Apply converter if present
+                        let converted_val = if let Some(conv) = converter {
+                            match evaluator.apply(*conv.clone(), vec![new_val.clone()], false)? {
+                                super::EvalResult::Value(v) => v,
+                                _ => {
+                                    return Err(EvalError::InvalidSyntax(
+                                        "parameter converter returned non-value".to_string(),
+                                    ));
+                                }
+                            }
+                        } else {
+                            new_val
+                        };
+
+                        // Push new value onto parameter stack
+                        values.borrow_mut().push(converted_val);
+                        params.push(param.clone());
+                    }
+                    _ => {
+                        return Err(EvalError::TypeError(format!(
+                            "parameterize: expected parameter, got {}",
+                            param.type_name()
+                        )));
+                    }
+                }
+            }
+
+            // Evaluate body expressions in sequence (NOT in tail position)
+            // We can't use TCO here because we need to pop the parameter stack
+            // AFTER the body completes, not before.
+            let mut result = Value::Unspecified;
+            for expr in body {
+                result = eval_non_tail(expr, env.clone(), evaluator)?;
+            }
+
+            // Pop parameter values from stack (restore to previous state)
+            for param in &params {
+                if let Value::Parameter { values, .. } = param {
+                    values.borrow_mut().pop();
+                }
+            }
+
+            Ok(CoreEvalResult::Value(result))
+        }
+
         // Begin: evaluate expressions in sequence, return last
         // Last expression is in TAIL POSITION
         CoreExpr::Begin(exprs) => {
@@ -644,6 +705,27 @@ fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
             // (import import-set ...)
             let import_list = vec_to_list(import_sets);
             Ok(cons(Value::Symbol(Rc::from("import")), import_list))
+        }
+        CoreExpr::Parameterize { bindings, body } => {
+            // (parameterize ((param val) ...) body ...)
+            let bindings_values: Result<Vec<Value>, EvalError> = bindings
+                .iter()
+                .map(|(param, val)| {
+                    let param_val = core_expr_to_value(param)?;
+                    let val_val = core_expr_to_value(val)?;
+                    Ok(cons(param_val, cons(val_val, Value::Null)))
+                })
+                .collect();
+            let bindings_list = vec_to_list(&bindings_values?);
+
+            let body_values: Result<Vec<Value>, EvalError> =
+                body.iter().map(core_expr_to_value).collect();
+            let body_list = vec_to_list(&body_values?);
+
+            Ok(cons(
+                Value::Symbol(Rc::from("parameterize")),
+                cons(bindings_list, body_list),
+            ))
         }
         CoreExpr::Begin(exprs) => {
             // (begin expr...)

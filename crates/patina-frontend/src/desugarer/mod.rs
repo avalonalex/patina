@@ -209,16 +209,15 @@ impl Desugarer {
                 "define" => self.desugar_define(&cdr),
                 "define-syntax" => self.desugar_define_syntax(&cdr),
                 "import" => self.desugar_import(&cdr),
+                "parameterize" => self.desugar_parameterize(&cdr),
                 "begin" => self.desugar_begin(&cdr),
                 "apply" => self.desugar_apply(&cdr),
 
                 // Special forms not in CoreExpr - handled by Value evaluator
-                "parameterize" | "let-syntax" | "letrec-syntax" => {
-                    Err(DesugarError::InvalidSyntax(format!(
-                        "{} is a special form not in CoreExpr (use Value evaluator)",
-                        sym
-                    )))
-                }
+                "let-syntax" | "letrec-syntax" => Err(DesugarError::InvalidSyntax(format!(
+                    "{} is a special form not in CoreExpr (use Value evaluator)",
+                    sym
+                ))),
 
                 // Everything else is either:
                 // - A derived form that was already expanded by macros
@@ -377,6 +376,50 @@ impl Desugarer {
         }
 
         Ok(CoreExpr::Import { import_sets })
+    }
+
+    /// Desugar parameterize: (parameterize ((param val) ...) body ...)
+    fn desugar_parameterize(&self, args: &Value) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec(args)?;
+
+        if args_vec.len() < 2 {
+            return Err(DesugarError::InvalidSyntax(
+                "parameterize requires bindings and at least one body expression".to_string(),
+            ));
+        }
+
+        // First element is bindings list
+        let bindings_value = &args_vec[0];
+        let bindings_list = utils::list_to_vec(bindings_value)?;
+
+        // Parse each binding as (param value)
+        let mut bindings = Vec::new();
+        for binding in bindings_list {
+            let binding_vec = utils::list_to_vec(&binding)?;
+            if binding_vec.len() != 2 {
+                return Err(DesugarError::InvalidSyntax(
+                    "Each parameterize binding must be (param value)".to_string(),
+                ));
+            }
+            let param_expr = self.desugar(&binding_vec[0])?;
+            let value_expr = self.desugar(&binding_vec[1])?;
+            bindings.push((param_expr, value_expr));
+        }
+
+        // Rest are body expressions
+        let body_exprs: Vec<CoreExpr> = args_vec[1..]
+            .iter()
+            .map(|e| self.desugar(e))
+            .collect::<Result<_>>()?;
+
+        if body_exprs.is_empty() {
+            return Err(DesugarError::EmptyBody("parameterize".to_string()));
+        }
+
+        Ok(CoreExpr::Parameterize {
+            bindings,
+            body: body_exprs,
+        })
     }
 
     /// Desugar begin: (begin expr ...) → Begin(exprs)
