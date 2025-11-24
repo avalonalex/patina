@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-23 15:55:00
+**Generated:** 2025-11-23 20:45:04
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 697 | 62.9% |
+| ✅ Passed | 685 | 61.7% |
 | ❌ Failed | 38 | 3.4% |
-| ⚠️ Error (crashed) | 373 | 33.7% |
-| **Total** | **1108** | **100%** |
+| ⚠️ Error (crashed) | 388 | 34.9% |
+| **Total** | **1111** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
 
@@ -62,20 +62,35 @@ FAIL:
 ### Errors
 
 ```
-Error: Not a procedure: #<parameter>
-Error: Not a procedure: #<parameter>
-Error: Undefined variable: let-syntax
-Error: Not a procedure: 8
-Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence1
-Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
+Error: Undefined variable: case-lambda
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Undefined variable: any-arity
+Error: Internal error: Failed to desugar expression: Expected proper list: Expected proper list, got improper list ending with Symbol("z")
+Error: Undefined variable: rest-arity
+Error: Undefined variable: rest-arity
+Error: Undefined variable: rest-arity
+Error: Undefined variable: rest-arity
+Error: Internal error: Failed to desugar expression: Expected proper list: Expected proper list, got improper list ending with Symbol("y")
+Error: Undefined variable: dead-clause
+Error: Undefined variable: dead-clause
+Error: Undefined variable: dead-clause
+Error: Undefined variable: dead-clause
+Error: Undefined variable: begin
+Error: Undefined variable: begin
+Error: Undefined variable: begin
+Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence1
+Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: sequence3
-Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro mad-hatter
+Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro mad-hatter
 Error: Not a procedure: ok
-Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro bar
-Error: Invalid syntax: define: function name must be a symbol
-Error: Undefined variable: let-syntax
-Error: Undefined variable: let-syntax
+Error: Undefined variable: lambda
+Error: Invalid syntax: Desugaring failed: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro bar
+Error: Undefined variable: ff
+Error: Undefined variable: begin
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: define-record-type
 Error: Undefined variable: pare?
@@ -123,7 +138,7 @@ Error: Undefined variable: string->utf8
 Error: Undefined variable: string->utf8
 Error: Undefined variable: string->utf8
 Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: test-error
+Error: Internal error: Failed to desugar expression: Invalid syntax: apply requires at least 2 arguments (procedure and list)
 Error: Undefined variable: test-error
 Error: Undefined variable: test-error
 Error: Undefined variable: test-error

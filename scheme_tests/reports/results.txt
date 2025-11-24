@@ -237,14 +237,12 @@ Testing:
 Testing: 
 (f 12)
 
-Error: Not a procedure: #<parameter>
 Testing: 
 (parameterize ((radix 2)) (f 12))
 
 Testing: 
 (f 12)
 
-Error: Not a procedure: #<parameter>
 Testing: 
 `(list ,(+ 1 2) 4)
 
@@ -269,67 +267,93 @@ Testing:
 Testing: 
 `(list ,(+ 1 2) 4)
 
+Error: Undefined variable: case-lambda
 Testing: 
 (any-arity)
 
+Error: Undefined variable: any-arity
 Testing: 
 (any-arity 1)
 
+Error: Undefined variable: any-arity
 Testing: 
 (any-arity 1 2)
 
+Error: Undefined variable: any-arity
 Testing: 
 (any-arity 1 2 3)
 
+Error: Undefined variable: any-arity
 Testing: 
 (any-arity 1 2 3 4)
 
+Error: Undefined variable: any-arity
+Error: Internal error: Failed to desugar expression: Expected proper list: Expected proper list, got improper list ending with Symbol("z")
 Testing: 
 (rest-arity)
 
+Error: Undefined variable: rest-arity
 Testing: 
 (rest-arity 1)
 
+Error: Undefined variable: rest-arity
 Testing: 
 (rest-arity 1 2)
 
+Error: Undefined variable: rest-arity
 Testing: 
 (rest-arity 1 2 3)
 
+Error: Undefined variable: rest-arity
+Error: Internal error: Failed to desugar expression: Expected proper list: Expected proper list, got improper list ending with Symbol("y")
 Testing: 
 (dead-clause)
 
+Error: Undefined variable: dead-clause
 Testing: 
 (dead-clause 1)
 
+Error: Undefined variable: dead-clause
 Testing: 
 (dead-clause 1 2)
 
+Error: Undefined variable: dead-clause
 Testing: 
 (dead-clause 1 2 3)
 
-Tests run: 72, Passed: 72, Failed: 0
+Error: Undefined variable: dead-clause
+Tests run: 61, Passed: 61, Failed: 0
 
 Running test suite: 4.3 Macros
-Testing: 
-(let-syntax ((when (syntax-rules () ((when test stmt1 stmt2 ...) (if test (begin stmt1 stmt2 ...)))))) (let ((if #t)) (when if (set! if 'now)) if))
-
-Testing: 
-(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
-
-Error: Undefined variable: let-syntax
-Testing: 
-(letrec-syntax ((my-or (syntax-rules () ((my-or) #f) ((my-or e) e) ((my-or e1 e2 ...) (let ((temp e1)) (if temp temp (my-or e2 ...))))))) (let ((x #f) (y 7) (temp 8) (let odd?) (if even?)) (my-or x (let temp) (if y) y)))
-
-Error: Not a procedure: 8
-Testing: 
-(sequence1 0 1 2 3)
-
-Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence1
-Testing: 
-(sequence2 1 2 3 4)
-
-Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (test 'now (let-syntax ((when (syntax-rules () ((when test stmt1 stmt2 ...) (if test (begin stmt1 stmt2 ...)))))) (let ((if #t)) (when if (set! if 'now)) if)))
+   Reason: let-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (begin (display "Testing: ") (write '(let-syntax ((when (syntax-rules () ((when test stmt1 stmt2 ...) (if test (begin stmt1 stmt2 ...)))))) (let ((if #t)) (when if (set! if 'now)) if))) (newline) (let ((expected-val 'now)) (let ((actual-val (let-syntax ((when (syntax-rules () ((when test stmt1 stmt2 ...) (if test (begin stmt1 stmt2 ...)))))) (let ((if #t)) (when if (set! if 'now)) if)))) (if (test-equal? expected-val actual-val) (begin (test-increment-passed) #t) (begin (test-increment-failed) (display "FAIL: ") (write '(let-syntax ((when (syntax-rules () ((when test stmt1 stmt2 ...) (if test (begin stmt1 stmt2 ...)))))) (let ((if #t)) (when if (set! if 'now)) if))) (newline) (display "  expected: ") (write expected-val) (newline) (display "  but got:  ") (write actual-val) (newline) (newline) #f)))))
+   Reason: let-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+Error: Undefined variable: begin
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (test 'outer (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m)))))
+   Reason: let-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (begin (display "Testing: ") (write '(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))) (newline) (let ((expected-val 'outer)) (let ((actual-val (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m)))))) (if (test-equal? expected-val actual-val) (begin (test-increment-passed) #t) (begin (test-increment-failed) (display "FAIL: ") (write '(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))) (newline) (display "  expected: ") (write expected-val) (newline) (display "  but got:  ") (write actual-val) (newline) (newline) #f)))))
+   Reason: let-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+Error: Undefined variable: begin
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (test 7 (letrec-syntax ((my-or (syntax-rules () ((my-or) #f) ((my-or e) e) ((my-or e1 e2 ...) (let ((temp e1)) (if temp temp (my-or e2 ...))))))) (let ((x #f) (y 7) (temp 8) (let odd?) (if even?)) (my-or x (let temp) (if y) y))))
+   Reason: letrec-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (begin (display "Testing: ") (write '(letrec-syntax ((my-or (syntax-rules () ((my-or) #f) ((my-or e) e) ((my-or e1 e2 ...) (let ((temp e1)) (if temp temp (my-or e2 ...))))))) (let ((x #f) (y 7) (temp 8) (let odd?) (if even?)) (my-or x (let temp) (if y) y)))) (newline) (let ((expected-val 7)) (let ((actual-val (letrec-syntax ((my-or (syntax-rules () ((my-or) #f) ((my-or e) e) ((my-or e1 e2 ...) (let ((temp e1)) (if temp temp (my-or e2 ...))))))) (let ((x #f) (y 7) (temp 8) (let odd?) (if even?)) (my-or x (let temp) (if y) y))))) (if (test-equal? expected-val actual-val) (begin (test-increment-passed) #t) (begin (test-increment-failed) (display "FAIL: ") (write '(letrec-syntax ((my-or (syntax-rules () ((my-or) #f) ((my-or e) e) ((my-or e1 e2 ...) (let ((temp e1)) (if temp temp (my-or e2 ...))))))) (let ((x #f) (y 7) (temp 8) (let odd?) (if even?)) (my-or x (let temp) (if y) y)))) (newline) (display "  expected: ") (write expected-val) (newline) (display "  but got:  ") (write actual-val) (newline) (newline) #f)))))
+   Reason: letrec-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+Error: Undefined variable: begin
+Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence1
+Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Testing: 
 (sequence3 2 3 4 5)
@@ -405,29 +429,43 @@ FAIL:
 (2 0 2 fail)
 
 
-Testing: 
-(mad-hatter)
-
-Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro mad-hatter
+Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro mad-hatter
 Testing: 
 (let ((=> #f)) (cond (#t => 'ok)))
 
 Error: Not a procedure: ok
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (let () (define x 1) (let-syntax () (define x 2) #f) (test 1 x))
+   Reason: let-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: ((lambda () (define x 1) (let-syntax () (define x 2) #f) (test 1 x)))
+   Reason: let-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (lambda () (define x 1) (let-syntax () (define x 2) #f) (test 1 x))
+   Reason: let-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+Error: Undefined variable: lambda
+Error: Invalid syntax: Desugaring failed: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro bar
+Error: Undefined variable: ff
 Testing: 
-x
+(vector-lit)
 
-Testing: 
-(bar 1)
-
-Error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro bar
-Error: Invalid syntax: define: function name must be a symbol
-Error: Undefined variable: let-syntax
 Testing: 
 (quux399)
 
-Error: Undefined variable: let-syntax
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (test 'bound-identifier=? (m k))
+   Reason: let-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form
+   Expression: (begin (display "Testing: ") (write '(m k)) (newline) (let ((expected-val 'bound-identifier=?)) (let ((actual-val (m k))) (if (test-equal? expected-val actual-val) (begin (test-increment-passed) #t) (begin (test-increment-failed) (display "FAIL: ") (write '(m k)) (newline) (display "  expected: ") (write expected-val) (newline) (display "  but got:  ") (write actual-val) (newline) (newline) #f)))))
+   Reason: let-syntax requires Value evaluator (not yet in CoreExpr)
+   → Falling through to Value evaluator (may fail if form not in registry)
+Error: Undefined variable: begin
 Error: Invalid syntax: syntax-rules literals must be a proper list
-Tests run: 13, Passed: 9, Failed: 4
+Tests run: 12, Passed: 8, Failed: 4
 
 Running test suite: 5 Program structure
 Testing: 
@@ -2747,7 +2785,7 @@ Testing:
 Testing: 
 (apply + 3 4 (list))
 
-Error: Undefined variable: test-error
+Error: Internal error: Failed to desugar expression: Invalid syntax: apply requires at least 2 arguments (procedure and list)
 Error: Undefined variable: test-error
 Error: Undefined variable: test-error
 Error: Undefined variable: test-error

@@ -19,6 +19,35 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+/// Check if an expression is one of the special forms not yet in CoreExpr
+///
+/// These forms must use the Value evaluator as a fallback:
+/// - let-syntax / letrec-syntax: Deferred to future work (GitHub issue)
+/// - case-lambda: Not yet implemented in CoreExpr
+/// - expand: Debugging extension, not in CoreExpr
+fn is_value_evaluator_only_form(expr: &Value) -> bool {
+    if let Value::Pair(pair) = expr {
+        let car = &pair.borrow().0;
+        let name_str = match car {
+            Value::Symbol(name) => Some(name.as_ref()),
+            Value::Identifier { name, .. } => Some(name.as_ref()),
+            Value::WrappedIdentifier { name, .. } => Some(name.as_ref()),
+            _ => None,
+        };
+
+        if let Some(name) = name_str {
+            matches!(
+                name,
+                "let-syntax" | "letrec-syntax" | "case-lambda" | "expand"
+            )
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
 /// Result of evaluation step in the trampoline
 ///
 /// The trampoline pattern enables tail call optimization by converting
@@ -547,7 +576,41 @@ impl Evaluator {
     ) -> Result<EvalResult, EvalError> {
         let (car, cdr) = self.extract_pair(expr)?;
 
-        // Check if it's a special form in the registry first
+        // First, try to route through CoreExpr for all forms (except fallback-only forms)
+        // This ensures that core special forms like define, set!, if, etc. use CoreExpr
+        if !is_value_evaluator_only_form(expr) {
+            use patina_frontend::Desugarer;
+            let desugarer = Desugarer::with_env(env.clone());
+            match desugarer.desugar(expr) {
+                Ok(core_expr) => {
+                    // Successfully desugared to CoreExpr - evaluate it
+                    let value = eval_core(&core_expr, env.clone(), self)?;
+                    return Ok(EvalResult::Value(value));
+                }
+                Err(e) => {
+                    use patina_frontend::DesugarError;
+                    // If desugaring fails with FallbackFormNeeded, fall through to Value evaluator
+                    // Note: This can happen when a CoreExpr form (like define) contains a nested
+                    // fallback form (like let-syntax). Until all forms are migrated to CoreExpr,
+                    // some tests with nested let-syntax will fail.
+                    if matches!(e, DesugarError::FallbackFormNeeded { .. }) {
+                        eprintln!(
+                            "⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form"
+                        );
+                        eprintln!("   Expression: {}", expr);
+                        eprintln!("   Reason: {}", e);
+                        eprintln!(
+                            "   → Falling through to Value evaluator (may fail if form not in registry)"
+                        );
+                    }
+                    // For other errors, fall through to Value evaluator (might be a procedure call)
+                    // Don't fail here - let the Value evaluator try
+                }
+            }
+        }
+
+        // Fallback to Value evaluator for forms not in CoreExpr
+        // Check if it's a special form in the registry (let-syntax, letrec-syntax, etc.)
         if let Value::Symbol(ref sym) = car
             && self.special_form_registry.contains(sym.as_ref())
         {
@@ -611,8 +674,31 @@ impl Evaluator {
                 self.debug.dedent();
             }
 
-            // Evaluate the expanded form, preserving tail position
-            return self.eval_step_impl(&expanded, env, in_tail_position);
+            // Route expanded code through CoreExpr pipeline
+            // This ensures macro-expanded code uses the primary evaluation path
+            use patina_frontend::Desugarer;
+            let desugarer = Desugarer::with_env(env.clone());
+            match desugarer.desugar(&expanded) {
+                Ok(core_expr) => {
+                    // Successfully desugared to CoreExpr - evaluate it
+                    let value = eval_core(&core_expr, env.clone(), self)?;
+                    return Ok(EvalResult::Value(value));
+                }
+                Err(e) => {
+                    use patina_frontend::DesugarError;
+                    if matches!(e, DesugarError::FallbackFormNeeded { .. })
+                        || is_value_evaluator_only_form(&expanded)
+                    {
+                        // Fallback to Value evaluator for forms not in CoreExpr
+                        return self.eval_step_impl(&expanded, env, in_tail_position);
+                    } else {
+                        return Err(EvalError::InternalError(format!(
+                            "Failed to desugar macro expansion: {}",
+                            e
+                        )));
+                    }
+                }
+            }
         }
 
         // Regular procedure call - this can be a tail call if in tail position
@@ -1060,6 +1146,41 @@ impl Evaluator {
     ///
     /// If in_tail_position is true and body is non-empty, returns TailCall for the last expression.
     /// Otherwise evaluates all expressions and returns the final result.
+    /// Evaluate an expression with CoreExpr routing (with fallback to Value evaluator)
+    ///
+    /// This is similar to the Backend::eval implementation but returns Result<Value, EvalError>
+    /// instead of going through the trampoline.
+    pub(crate) fn eval_with_core_routing(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        use patina_frontend::Desugarer;
+        let desugarer = Desugarer::with_env(env.clone());
+
+        match desugarer.desugar(expr) {
+            Ok(core_expr) => {
+                // Successfully desugared to CoreExpr - evaluate it
+                eval_core(&core_expr, env.clone(), self)
+            }
+            Err(e) => {
+                use patina_frontend::DesugarError;
+                if matches!(e, DesugarError::FallbackFormNeeded { .. })
+                    || is_value_evaluator_only_form(expr)
+                {
+                    // Fallback to Value evaluator for forms not in CoreExpr
+                    self.eval_in_env(expr, env)
+                } else {
+                    // All other desugar errors indicate a real problem
+                    Err(EvalError::InternalError(format!(
+                        "Failed to desugar expression: {}",
+                        e
+                    )))
+                }
+            }
+        }
+    }
+
     pub(crate) fn eval_lambda_body(
         &self,
         body: &[Value],
@@ -1071,9 +1192,9 @@ impl Evaluator {
         }
 
         if in_tail_position {
-            // Evaluate all but the last expression
+            // Evaluate all but the last expression using CoreExpr routing
             for expr in &body[..body.len() - 1] {
-                self.eval_in_env(expr, env)?;
+                self.eval_with_core_routing(expr, env)?;
             }
             // Last expression is in tail position
             Ok(EvalResult::TailCall {
@@ -1081,10 +1202,10 @@ impl Evaluator {
                 env: env.clone(),
             })
         } else {
-            // Not in tail position - evaluate all expressions
+            // Not in tail position - evaluate all expressions using CoreExpr routing
             let mut result = Value::Unspecified;
             for expr in body {
-                result = self.eval_in_env(expr, env)?;
+                result = self.eval_with_core_routing(expr, env)?;
             }
             Ok(EvalResult::Value(result))
         }

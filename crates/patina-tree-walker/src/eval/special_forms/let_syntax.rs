@@ -235,17 +235,21 @@ fn eval_let_syntax_impl(
         if matches!(cdr, Value::Null) {
             // Last expression - in tail position if let-syntax is
             if in_tail_position {
+                // For tail calls, we still need to use TailCall for TCO
+                // But the expression will be routed through CoreExpr by eval_list_impl
                 return Ok(EvalResult::TailCall {
                     expr: car,
                     env: body_env.clone(),
                 });
             } else {
-                result = evaluator.eval_in_env(&car, &body_env)?;
+                // Use CoreExpr routing for evaluation
+                result = evaluator.eval_with_core_routing(&car, &body_env)?;
                 break;
             }
         } else {
             // Not last expression - NOT in tail position
-            result = evaluator.eval_in_env(&car, &body_env)?;
+            // Use CoreExpr routing for evaluation
+            result = evaluator.eval_with_core_routing(&car, &body_env)?;
             current = cdr;
         }
     }
