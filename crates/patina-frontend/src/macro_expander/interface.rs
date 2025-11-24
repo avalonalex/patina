@@ -1,65 +1,21 @@
-//! Clean macro expander interface
+//! Clean macro expander interface and test helpers
 //!
-//! This module provides a trait-based abstraction for macro expansion that:
-//! - Decouples the expansion algorithm from the consumer
-//! - Enables easy testing with test helpers
-//! - Allows swapping implementations (V1 vs V2, experimental algorithms, etc.)
-//! - Provides a unified API for both compiled and interpreted macros
+//! This module provides:
+//! - `TestExpander`: A test helper for creating and testing macros
+//!
+//! The TestExpander uses `patina_macros` for compilation and expansion,
+//! and provides convenient methods for testing macro behavior.
 
 use crate::error::FrontendError;
 use patina_runtime::{Environment, Value};
 use std::rc::Rc;
 
-/// Result type for macro expansion operations
-pub type ExpansionResult = Result<Value, FrontendError>;
-
-/// Trait for macro expansion engines
-///
-/// Implementations can use different algorithms (pattern matching, procedural, etc.)
-/// but must all implement this common interface.
-pub trait MacroExpander {
-    /// Expand a macro call
-    ///
-    /// # Arguments
-    /// - `macro_form`: The complete macro form including the macro name
-    /// - `env`: Environment for hygiene and nested macro resolution
-    ///
-    /// # Returns
-    /// The expanded expression, or an error if expansion fails
-    fn expand(&self, macro_form: &Value, env: &Rc<Environment>) -> ExpansionResult;
-
-    /// Get the name of this macro (for error messages)
-    fn name(&self) -> &str;
-}
-
-/// A macro expander created from compiled macro data (V2 PVREF system)
-pub struct CompiledMacroExpander {
-    compiled: super::CompiledMacro,
-}
-
-impl CompiledMacroExpander {
-    /// Create a new expander from compiled macro data
-    pub fn new(compiled: super::CompiledMacro) -> Self {
-        Self { compiled }
-    }
-}
-
-impl MacroExpander for CompiledMacroExpander {
-    fn expand(&self, macro_form: &Value, env: &Rc<Environment>) -> ExpansionResult {
-        super::expand_macro(&self.compiled, macro_form, env)
-    }
-
-    fn name(&self) -> &str {
-        &self.compiled.name
-    }
-}
-
 /// Test helper for creating macro expanders and testing expansions
 ///
 /// This is available in all builds to support testing in downstream crates.
-/// The implementation and tests are only compiled in test mode.
+/// Uses `patina_macros` for the underlying macro compilation and expansion.
 pub struct TestExpander {
-    expander: Box<dyn MacroExpander>,
+    compiled: patina_macros::CompiledMacro,
     test_env: Rc<Environment>,
 }
 
@@ -168,23 +124,19 @@ impl TestExpander {
         // Create test environment first (needed for compilation)
         let test_env = Rc::new(Environment::new());
 
-        // Compile it with the test environment
-        let mut compiler = super::Compiler::with_env(literals, None, test_env.clone());
-        let compiled = compiler.compile_macro(name.into(), rules)?;
+        // Compile it with the test environment using patina_macros
+        let mut compiler = patina_macros::Compiler::with_env(literals, None, test_env.clone());
+        let compiled = compiler
+            .compile_macro(name.into(), rules)
+            .map_err(|e| FrontendError::InvalidSyntax(e.to_string()))?;
 
-        Ok(Self {
-            expander: Box::new(CompiledMacroExpander::new(compiled)),
-            test_env,
-        })
+        Ok(Self { compiled, test_env })
     }
 
     /// Create a test expander from a compiled macro
-    pub fn from_compiled(compiled: super::CompiledMacro) -> Self {
+    pub fn from_compiled(compiled: patina_macros::CompiledMacro) -> Self {
         let test_env = Rc::new(Environment::new());
-        Self {
-            expander: Box::new(CompiledMacroExpander::new(compiled)),
-            test_env,
-        }
+        Self { compiled, test_env }
     }
 
     /// Assert that the given input expands to the expected output
@@ -212,10 +164,8 @@ impl TestExpander {
             .parse()
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
-        // Expand
-        let expanded = self
-            .expander
-            .expand(&input_form, &self.test_env)
+        // Expand using patina_macros
+        let expanded = patina_macros::expand_macro(&self.compiled, &input_form, &self.test_env)
             .map_err(|e| format!("Expansion failed: {}", e))?;
 
         // Compare (ignoring gensym differences)
@@ -236,9 +186,7 @@ impl TestExpander {
         let mut parser = Parser::new(input).map_err(|e| format!("Parse error: {}", e))?;
         let input_form = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
 
-        let expanded = self
-            .expander
-            .expand(&input_form, &self.test_env)
+        let expanded = patina_macros::expand_macro(&self.compiled, &input_form, &self.test_env)
             .map_err(|e| format!("Expansion error: {}", e))?;
 
         Ok(format!("{}", expanded))

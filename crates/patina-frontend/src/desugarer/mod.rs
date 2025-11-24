@@ -130,14 +130,9 @@ impl Desugarer {
             // Variable reference
             Value::Symbol(s) => Ok(CoreExpr::Var(s.clone())),
 
-            // Identifier (from macro expansion with captured environment)
-            // Treat as a variable reference - the evaluator will handle the captured env
-            Value::Identifier { name, .. } => Ok(CoreExpr::Var(name.clone())),
-
             // WrappedIdentifier (from marks-and-ribs hygiene)
             // Treat as a variable reference - the marks are used during name resolution
-            // For now, we just use the name; full marks-and-ribs implementation will
-            // need to thread marks through the evaluator
+            // The evaluator uses get_with_marks() to resolve the binding
             Value::WrappedIdentifier { name, .. } => Ok(CoreExpr::Var(name.clone())),
 
             // Empty list (unusual in AST, but possible as literal)
@@ -295,7 +290,6 @@ impl Desugarer {
         let var_sym = match &var {
             Value::Symbol(s) => s.clone(),
             // Handle hygienic identifiers from macro expansion
-            Value::Identifier { name, .. } => name.clone(),
             Value::WrappedIdentifier { name, .. } => name.clone(),
             _ => {
                 return Err(DesugarError::InvalidSyntax(
@@ -325,8 +319,7 @@ impl Desugarer {
             }),
 
             // Handle hygienic identifiers for variable names
-            [Value::Identifier { name, .. }, value]
-            | [Value::WrappedIdentifier { name, .. }, value] => Ok(CoreExpr::Define {
+            [Value::WrappedIdentifier { name, .. }, value] => Ok(CoreExpr::Define {
                 name: name.clone(),
                 value: Box::new(self.desugar(value)?),
             }),

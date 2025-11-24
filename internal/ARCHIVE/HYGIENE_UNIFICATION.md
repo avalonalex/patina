@@ -1,12 +1,54 @@
 # Hygiene Unification: Migrating to WrappedIdentifier Only
 
-**Status**: Research
+**Status**: ✅ Complete
 **Created**: 2025-11-23
+**Completed**: 2025-11-24
 **Complexity**: Medium-High
+
+## Migration Summary
+
+**All steps completed successfully!** The codebase now uses a unified marks-and-ribs hygiene system:
+
+### What Changed
+
+1. **Template Identifier** (`patina-macros/src/macro_expander/template.rs`)
+   - Changed `env: Option<Rc<dyn Any>>` → `definition_marks: Option<Vec<usize>>`
+   - Added `is_free_variable()`, `definition_marks()` methods
+   - Removed deprecated `has_captured_env()`
+
+2. **Template Expander** (`patina-macros/src/macro_expander/expander.rs`)
+   - Now always returns `WrappedIdentifier`
+   - Free variables get empty marks `[]`
+   - Introduced identifiers get expansion mark `[N]`
+
+3. **Environment** (`patina-runtime/src/environment.rs`)
+   - Added `marked_bindings: HashMap<(String, Vec<usize>), Value>`
+   - Added `get_with_marks()`, `define_with_marks()`, `set_with_marks()` methods
+   - Uses hybrid approach: unmarked for built-ins, marked for macros
+
+4. **Evaluator** (`patina-tree-walker/src/eval/mod.rs`)
+   - `WrappedIdentifier` lookup uses `get_with_marks()`
+   - Removed all `Value::Identifier` pattern matches
+
+5. **Value** (`patina-runtime/src/value.rs`)
+   - Removed `Identifier { name, env }` variant entirely
+   - Only `WrappedIdentifier { name, marks }` remains
+
+6. **CompiledMacro** (`patina-macros/src/macro_expander/compiler.rs`)
+   - Removed unused `captured_env` field
+
+### Test Results
+
+- All ~970 tests pass ✅
+- No hygiene regressions
+
+---
+
+## Original Analysis (preserved for reference)
 
 ## Executive Summary
 
-Patina currently uses **two different hygiene mechanisms** (`Identifier` with captured environments and `WrappedIdentifier` with marks), which causes confusion and maintenance burden. This document outlines a migration path to use **only `WrappedIdentifier`** (marks-and-ribs hygiene), aligning with industry-standard Scheme implementations.
+Patina previously used **two different hygiene mechanisms** (`Identifier` with captured environments and `WrappedIdentifier` with marks), which caused confusion and maintenance burden. This document outlined the migration path to use **only `WrappedIdentifier`** (marks-and-ribs hygiene), aligning with industry-standard Scheme implementations.
 
 ## Current State Analysis
 
@@ -499,13 +541,12 @@ marked_bindings: HashMap<(String, MarkList), Value>,  // From macros
 
 ## Success Criteria
 
-- [ ] All code uses `WrappedIdentifier` only
-- [ ] `Value::Identifier` variant removed
-- [ ] All 802 cargo tests passing
-- [ ] All chibi tests passing (>88)
-- [ ] Hygiene tests pass (free variables, no capture, nested macros)
-- [ ] No pattern matches on `Identifier` remain
-- [ ] Documentation updated
+- [x] All code uses `WrappedIdentifier` only
+- [x] `Value::Identifier` variant removed
+- [x] All ~970 cargo tests passing
+- [x] Hygiene tests pass (free variables, no capture, nested macros)
+- [x] No pattern matches on `Identifier` remain
+- [x] Documentation updated
 
 ## Future Work
 

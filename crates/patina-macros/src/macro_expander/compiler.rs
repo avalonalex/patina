@@ -58,25 +58,6 @@ pub struct CompiledMacro {
 
     /// Maximum number of pattern variables in any rule
     pub max_pvars: usize,
-
-    /// Captured lexical environment at definition time
-    ///
-    /// Used for resolving free identifiers in templates (lexical scoping).
-    /// When a macro is defined inside a `let-syntax`, this captures the
-    /// lexical environment at that point so free variables in templates
-    /// refer to the correct bindings.
-    ///
-    /// Stored as `dyn Any` to avoid circular dependencies. The tree-walker
-    /// stores an `Rc<Environment>` here.
-    ///
-    /// Example:
-    /// ```scheme
-    /// (let ((x 'outer))
-    ///   (let-syntax ((m (syntax-rules () ((m) x))))
-    ///     (let ((x 'inner))
-    ///       (m))))  ;; Should expand to 'outer, not 'inner
-    /// ```
-    pub captured_env: Option<std::rc::Rc<dyn std::any::Any>>,
 }
 
 /// Pattern and template compiler
@@ -208,7 +189,6 @@ impl Compiler {
             literals: self.literals.clone(),
             rules: compiled_rules,
             max_pvars,
-            captured_env: self.env.clone(),
         })
     }
 
@@ -416,13 +396,11 @@ impl Compiler {
                     };
 
                     if should_capture {
-                        // Free variable - capture definition environment
-                        Ok(Template::Symbol(Identifier::with_env(
-                            s.clone(),
-                            self.env.clone(),
-                        )))
+                        // Free variable - use empty marks (definition-time binding)
+                        // Empty marks means: "this identifier existed before any macro expansion"
+                        Ok(Template::Symbol(Identifier::with_marks(s.clone(), vec![])))
                     } else {
-                        // Introduced identifier - no environment capture (will be renamed for hygiene)
+                        // Introduced identifier - no definition marks (will get expansion mark)
                         Ok(Template::Symbol(Identifier::new(s.clone())))
                     }
                 }

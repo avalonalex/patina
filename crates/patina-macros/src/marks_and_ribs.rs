@@ -441,9 +441,6 @@ impl MarksAndRibsHygiene {
                 }
             }
 
-            // Keep Identifiers as-is (old hygiene system)
-            Value::Identifier { .. } => expr.clone(),
-
             // Recursively mark pairs (lists)
             Value::Pair(pair) => {
                 let borrowed = pair.borrow();

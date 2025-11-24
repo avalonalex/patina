@@ -565,12 +565,13 @@ impl Expander {
         }
     }
 
-    /// Rename an identifier for hygiene
+    /// Rename an identifier for hygiene using marks-and-ribs
     ///
-    /// Rename an identifier using marks-and-ribs hygiene
+    /// All identifiers become `WrappedIdentifier` with appropriate marks:
+    /// - Free variables: use definition marks (typically empty for definition-time bindings)
+    /// - Introduced identifiers: add expansion mark to avoid capturing use-site bindings
     ///
-    /// This ensures free variables in macro templates resolve to their definition-time
-    /// bindings, not use-site bindings.
+    /// This unified approach ensures hygiene through marks comparison, not environment capture.
     fn rename_identifier(&self, id: &Identifier) -> Value {
         let name = id.name();
 
@@ -579,35 +580,32 @@ impl Expander {
             return Value::Symbol(name.clone());
         }
 
-        // Check if the identifier has a captured environment
-        // The compiler already determined at compile time whether this is a free variable
-        // (by checking if it was bound in the definition environment)
-        if id.has_captured_env() {
-            // This is a FREE VARIABLE - it was bound at macro definition time
-            // Return it as an Identifier value so it uses the captured environment
+        // Determine marks based on whether this is a free variable or introduced identifier
+        let marks = if let Some(def_marks) = id.definition_marks() {
+            // FREE VARIABLE - preserve definition-time marks
+            // Empty marks means: "this identifier existed before any macro expansion"
             if patina_runtime::macro_debug::is_enabled() {
                 println!(
-                    "[HYGIENE] Not renaming '{}' - free variable in template (lexical scoping)",
-                    name
+                    "[MARKS-AND-RIBS] Free variable '{}' with marks {:?}",
+                    name, def_marks
                 );
             }
-            return Value::Identifier {
-                name: name.clone(),
-                env: id.captured_env().unwrap().clone(),
-            };
-        }
+            def_marks.clone()
+        } else {
+            // INTRODUCED IDENTIFIER - add expansion mark
+            if patina_runtime::macro_debug::is_enabled() {
+                println!(
+                    "[MARKS-AND-RIBS] Introduced '{}' with mark {}",
+                    name, self.expansion_mark
+                );
+            }
+            vec![self.expansion_mark]
+        };
 
-        // No captured environment - this is an INTRODUCED IDENTIFIER
-        // Add expansion mark to avoid capturing use-site bindings
-        if patina_runtime::macro_debug::is_enabled() {
-            println!(
-                "[MARKS-AND-RIBS] Marking '{}' with mark {} - introduced identifier",
-                name, self.expansion_mark
-            );
-        }
+        // Always return WrappedIdentifier - unified hygiene through marks
         Value::WrappedIdentifier {
             name: name.clone(),
-            marks: vec![self.expansion_mark],
+            marks,
         }
     }
 

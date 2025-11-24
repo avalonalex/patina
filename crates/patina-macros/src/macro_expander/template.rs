@@ -17,49 +17,59 @@ use std::rc::Rc;
 /// Identifier for hygiene
 ///
 /// Wraps a symbol with scope information for hygienic macro expansion.
-/// This will be used to rename introduced identifiers.
-///
-/// The identifier captures the lexical environment where it was introduced, ensuring
-/// that free variables in macro templates resolve to their definition-time bindings,
-/// not use-site bindings.
+/// Uses marks-and-ribs hygiene (Chez Scheme approach).
 ///
 /// This follows Gauche's approach: "symbols which a template inserts into the expanded
 /// form are converted to identifiers at the macro definition time, encapsulating
 /// the defining environment of the macro."
+///
+/// ## Hygiene Model
+///
+/// - **Free variables** (bound at macro definition time): Have `definition_marks = Some([])`
+///   These preserve their definition-time binding by having empty marks.
+/// - **Introduced identifiers** (from macro template): Have `definition_marks = None`
+///   These get an expansion mark during expansion to avoid capturing use-site bindings.
+///
+/// Two identifiers are "the same" if they have the same name AND same marks.
+/// This allows hygiene without renaming - marks discriminate identifiers.
 #[derive(Clone, Debug)]
 pub struct Identifier {
     name: Rc<str>,
-    /// Lexical environment where this identifier was introduced (for lexical hygiene).
-    /// When Some(env), this is a free variable that should NOT be renamed - it captures
-    /// the definition-time environment. When None, this is an introduced identifier that
-    /// should be renamed to avoid capture.
+    /// Marks this identifier should have (for marks-and-ribs hygiene).
     ///
-    /// NOTE: This uses an opaque Any type because:
-    /// - patina-macros can't depend on patina-runtime (circular dependency)
-    /// - But we need to store Environment from the tree-walker evaluator
-    /// - So we use type erasure and downcast when needed
-    env: Option<std::rc::Rc<dyn std::any::Any>>,
+    /// - `Some(marks)` = FREE VARIABLE from macro definition time.
+    ///   These marks (typically empty for top-level bindings) are preserved during expansion.
+    ///   The identifier resolves to definition-time bindings.
+    ///
+    /// - `None` = INTRODUCED IDENTIFIER from macro template.
+    ///   During expansion, an expansion mark will be added to avoid capturing use-site bindings.
+    definition_marks: Option<Vec<usize>>,
 }
 
 impl Identifier {
-    /// Create a new identifier without environment capture
+    /// Create a new identifier without definition marks (introduced identifier)
     ///
-    /// Used for introduced identifiers that should be renamed for hygiene.
+    /// Used for introduced identifiers that should get an expansion mark during expansion.
+    /// These identifiers avoid capturing use-site bindings.
     pub fn new(name: impl Into<Rc<str>>) -> Self {
         Self {
             name: name.into(),
-            env: None,
+            definition_marks: None,
         }
     }
 
-    /// Create a new identifier with environment capture (for free variables)
+    /// Create a new identifier with definition marks (free variable)
     ///
     /// Used for free variables in templates that should preserve their
     /// lexical scope from macro definition time.
-    pub fn with_env(name: impl Into<Rc<str>>, env: Option<std::rc::Rc<dyn std::any::Any>>) -> Self {
+    ///
+    /// # Arguments
+    /// * `name` - The identifier name
+    /// * `marks` - The marks this identifier should have (typically empty for definition-time bindings)
+    pub fn with_marks(name: impl Into<Rc<str>>, marks: Vec<usize>) -> Self {
         Self {
             name: name.into(),
-            env,
+            definition_marks: Some(marks),
         }
     }
 
@@ -68,16 +78,19 @@ impl Identifier {
         &self.name
     }
 
-    /// Check if this identifier has a captured environment
+    /// Check if this is a free variable (has definition marks)
     ///
-    /// Returns true if this is a free variable from macro definition time.
-    pub fn has_captured_env(&self) -> bool {
-        self.env.is_some()
+    /// Returns true if this identifier was bound at macro definition time
+    /// and should preserve its definition-time binding.
+    pub fn is_free_variable(&self) -> bool {
+        self.definition_marks.is_some()
     }
 
-    /// Get the captured environment (as Any - caller must downcast)
-    pub fn captured_env(&self) -> Option<&std::rc::Rc<dyn std::any::Any>> {
-        self.env.as_ref()
+    /// Get the definition marks (for free variables)
+    ///
+    /// Returns Some(marks) for free variables, None for introduced identifiers.
+    pub fn definition_marks(&self) -> Option<&Vec<usize>> {
+        self.definition_marks.as_ref()
     }
 }
 

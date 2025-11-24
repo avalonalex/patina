@@ -30,7 +30,6 @@ fn is_value_evaluator_only_form(expr: &Value) -> bool {
         let car = &pair.borrow().0;
         let name_str = match car {
             Value::Symbol(name) => Some(name.as_ref()),
-            Value::Identifier { name, .. } => Some(name.as_ref()),
             Value::WrappedIdentifier { name, .. } => Some(name.as_ref()),
             _ => None,
         };
@@ -469,38 +468,8 @@ impl Evaluator {
                 Err(EvalError::UndefinedVariable(name.to_string()))
             }
 
-            // Identifier lookup (free variables from macro templates)
-            // These have a captured environment from macro definition time
-            Value::Identifier {
-                name,
-                env: captured_env,
-            } => {
-                if self.debug.is_enabled(debug::DebugStage::Env) {
-                    eprintln!(
-                        "[ENV]{} Identifier lookup: '{}' (with captured env)",
-                        self.debug.current_indent(),
-                        name
-                    );
-                }
-
-                // Downcast the captured environment
-                if let Some(captured_env) = captured_env.downcast_ref::<Environment>() {
-                    // Look up in the captured environment (definition-time binding)
-                    if let Some(value) = captured_env.get(name) {
-                        return Ok(EvalResult::Value(value));
-                    }
-                }
-
-                // If not found in captured env, fall back to undefined variable error
-                Err(EvalError::UndefinedVariable(format!(
-                    "{} (identifier)",
-                    name
-                )))
-            }
-
-            // WrappedIdentifier lookup (from marks-and-ribs hygiene)
-            // Look up the variable by name in the current environment
-            // TODO: Full marks-and-ribs will need to use marks for proper hygiene
+            // WrappedIdentifier lookup (marks-and-ribs hygiene)
+            // Uses mark-aware lookup for proper hygiene resolution
             Value::WrappedIdentifier { name, marks } => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
                     eprintln!(
@@ -511,15 +480,16 @@ impl Evaluator {
                     );
                 }
 
-                // For now, just look up by name
-                // Full implementation would use marks to determine correct binding
-                if let Some(value) = env.get(name) {
+                // Mark-aware lookup:
+                // - Empty marks: simple lookup (free variables from macro definition)
+                // - Non-empty marks: search marked bindings, then fall back to unmarked
+                if let Some(value) = env.get_with_marks(name, marks) {
                     return Ok(EvalResult::Value(value));
                 }
 
                 Err(EvalError::UndefinedVariable(format!(
-                    "{} (wrapped identifier)",
-                    name
+                    "{} (wrapped identifier with marks {:?})",
+                    name, marks
                 )))
             }
 
@@ -610,19 +580,12 @@ impl Evaluator {
         // Note: All special forms now in CoreExpr - no registry lookup needed!
 
         // Check if this symbol is bound to a macro
-        // Handle both Symbol and Identifier (identifiers can reference macros via captured env)
+        // Handle both Symbol and WrappedIdentifier (marks-and-ribs hygiene)
         let macro_binding = match &car {
             Value::Symbol(sym) => env.get(sym),
-            Value::Identifier {
-                name,
-                env: captured_env,
-            } => {
-                // For identifiers, look up in the captured environment
-                if let Some(env_any) = captured_env.downcast_ref::<Environment>() {
-                    env_any.get(name)
-                } else {
-                    None
-                }
+            Value::WrappedIdentifier { name, marks } => {
+                // For wrapped identifiers, use mark-aware lookup
+                env.get_with_marks(name, marks)
             }
             _ => None,
         };
@@ -634,7 +597,6 @@ impl Evaluator {
 
             let name = match &car {
                 Value::Symbol(s) => s.as_ref(),
-                Value::Identifier { name, .. } => name.as_ref(),
                 Value::WrappedIdentifier { name, .. } => name.as_ref(),
                 _ => unreachable!(),
             };
@@ -758,35 +720,7 @@ impl Evaluator {
                 Err(EvalError::UndefinedVariable(name.to_string()))
             }
 
-            // Identifier lookup (free variables from macro templates)
-            Value::Identifier {
-                name,
-                env: captured_env,
-            } => {
-                if self.debug.is_enabled(debug::DebugStage::Env) {
-                    eprintln!(
-                        "[ENV]{} Identifier lookup: '{}' (with captured env)",
-                        self.debug.current_indent(),
-                        name
-                    );
-                }
-
-                // Downcast the captured environment
-                if let Some(captured_env) = captured_env.downcast_ref::<Environment>() {
-                    // Look up in the captured environment (definition-time binding)
-                    if let Some(value) = captured_env.get(name) {
-                        return Ok(EvalResult::Value(value));
-                    }
-                }
-
-                // If not found in captured env, fall back to undefined variable error
-                Err(EvalError::UndefinedVariable(format!(
-                    "{} (identifier)",
-                    name
-                )))
-            }
-
-            // WrappedIdentifier lookup (from marks-and-ribs hygiene)
+            // WrappedIdentifier lookup (marks-and-ribs hygiene)
             Value::WrappedIdentifier { name, marks } => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
                     eprintln!(
@@ -925,9 +859,6 @@ impl Evaluator {
 
             // Symbols - no expansion needed
             Value::Symbol(_) => Ok(expr.clone()),
-
-            // Identifiers - no expansion needed (they're already from macro expansion)
-            Value::Identifier { .. } => Ok(expr.clone()),
 
             // WrappedIdentifiers - no expansion needed (from marks-and-ribs hygiene)
             Value::WrappedIdentifier { .. } => Ok(expr.clone()),
