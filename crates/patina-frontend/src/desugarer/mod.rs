@@ -208,11 +208,12 @@ impl Desugarer {
                 "set!" => self.desugar_set(&cdr),
                 "define" => self.desugar_define(&cdr),
                 "define-syntax" => self.desugar_define_syntax(&cdr),
+                "import" => self.desugar_import(&cdr),
                 "begin" => self.desugar_begin(&cdr),
                 "apply" => self.desugar_apply(&cdr),
 
                 // Special forms not in CoreExpr - handled by Value evaluator
-                "import" | "parameterize" | "let-syntax" | "letrec-syntax" => {
+                "parameterize" | "let-syntax" | "letrec-syntax" => {
                     Err(DesugarError::InvalidSyntax(format!(
                         "{} is a special form not in CoreExpr (use Value evaluator)",
                         sym
@@ -361,6 +362,21 @@ impl Desugarer {
                 "define-syntax requires (define-syntax name transformer)".to_string(),
             )),
         }
+    }
+
+    /// Desugar import: (import import-set ...) → Import { import_sets }
+    fn desugar_import(&self, args: &Value) -> Result<CoreExpr> {
+        // Extract import sets as a vector
+        // Import sets are kept as Values (declarative data, not code to evaluate)
+        let import_sets = utils::list_to_vec(args)?;
+
+        if import_sets.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "import requires at least one import set".to_string(),
+            ));
+        }
+
+        Ok(CoreExpr::Import { import_sets })
     }
 
     /// Desugar begin: (begin expr ...) → Begin(exprs)

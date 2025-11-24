@@ -76,6 +76,11 @@ pub enum CoreExpr {
         transformer: Box<CoreExpr>,
     },
 
+    /// Import: load library bindings
+    /// Example: (import (scheme base))
+    /// Import sets are kept as Values (declarative data, not code)
+    Import { import_sets: Vec<Value> },
+
     /// Function application
     /// Example: (f x y), (+ 1 2)
     App {
@@ -161,6 +166,7 @@ impl CoreExpr {
             CoreExpr::Begin(_) => "begin",
             CoreExpr::Define { .. } => "define",
             CoreExpr::DefineSyntax { .. } => "define-syntax",
+            CoreExpr::Import { .. } => "import",
             CoreExpr::App { .. } => "application",
             CoreExpr::Apply { .. } => "apply",
             CoreExpr::PrimCall { .. } => "primitive-call",
@@ -221,6 +227,13 @@ impl std::fmt::Display for CoreExpr {
             }
             CoreExpr::DefineSyntax { name, transformer } => {
                 write!(f, "(define-syntax {} {})", name, transformer)
+            }
+            CoreExpr::Import { import_sets } => {
+                write!(f, "(import")?;
+                for import_set in import_sets {
+                    write!(f, " {}", import_set)?;
+                }
+                write!(f, ")")
             }
             CoreExpr::App { func, args } => {
                 write!(f, "({}", func)?;

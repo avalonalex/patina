@@ -246,6 +246,23 @@ fn eval_core_step(
             Ok(CoreEvalResult::Value(Value::Unspecified))
         }
 
+        // Import: load library bindings into environment
+        CoreExpr::Import { import_sets } => {
+            // Process each import set
+            for import_set_expr in import_sets {
+                // Parse the import set
+                let import_set = patina_frontend::LibraryDefinition::parse_import_set(
+                    import_set_expr,
+                )
+                .map_err(|e| EvalError::InvalidSyntax(format!("Invalid import set: {}", e)))?;
+
+                // Process the import set: this will import the identifiers into env
+                evaluator.process_import_for_eval(&import_set, &env)?;
+            }
+
+            Ok(CoreEvalResult::Value(Value::Unspecified))
+        }
+
         // Begin: evaluate expressions in sequence, return last
         // Last expression is in TAIL POSITION
         CoreExpr::Begin(exprs) => {
@@ -622,6 +639,11 @@ fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
                     cons(transformer_val, Value::Null),
                 ),
             ))
+        }
+        CoreExpr::Import { import_sets } => {
+            // (import import-set ...)
+            let import_list = vec_to_list(import_sets);
+            Ok(cons(Value::Symbol(Rc::from("import")), import_list))
         }
         CoreExpr::Begin(exprs) => {
             // (begin expr...)

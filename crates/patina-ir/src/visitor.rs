@@ -118,6 +118,10 @@ impl CoreExpr {
                 transformer: Box::new(f(transformer)),
             },
 
+            CoreExpr::Import { import_sets } => CoreExpr::Import {
+                import_sets: import_sets.clone(), // import_sets are Values (data), not CoreExpr
+            },
+
             CoreExpr::App { func, args } => CoreExpr::App {
                 func: Box::new(f(func)),
                 args: args.iter().map(&f).collect(),
