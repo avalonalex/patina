@@ -113,6 +113,11 @@ impl CoreExpr {
                 value: Box::new(f(value)),
             },
 
+            CoreExpr::DefineSyntax { name, transformer } => CoreExpr::DefineSyntax {
+                name: name.clone(),
+                transformer: Box::new(f(transformer)),
+            },
+
             CoreExpr::App { func, args } => CoreExpr::App {
                 func: Box::new(f(func)),
                 args: args.iter().map(&f).collect(),

@@ -207,19 +207,17 @@ impl Desugarer {
                 "if" => self.desugar_if(&cdr),
                 "set!" => self.desugar_set(&cdr),
                 "define" => self.desugar_define(&cdr),
+                "define-syntax" => self.desugar_define_syntax(&cdr),
                 "begin" => self.desugar_begin(&cdr),
                 "apply" => self.desugar_apply(&cdr),
 
-                // Macro definition - not part of CoreExpr, falls back to Value evaluator
-                "define-syntax" => Err(DesugarError::InvalidSyntax(
-                    "define-syntax not part of CoreExpr (use Value evaluator)".to_string(),
-                )),
-
                 // Special forms not in CoreExpr - handled by Value evaluator
-                "import" | "parameterize" => Err(DesugarError::InvalidSyntax(format!(
-                    "{} is a special form not in CoreExpr (use Value evaluator)",
-                    sym
-                ))),
+                "import" | "parameterize" | "let-syntax" | "letrec-syntax" => {
+                    Err(DesugarError::InvalidSyntax(format!(
+                        "{} is a special form not in CoreExpr (use Value evaluator)",
+                        sym
+                    )))
+                }
 
                 // Everything else is either:
                 // - A derived form that was already expanded by macros
@@ -344,6 +342,23 @@ impl Desugarer {
 
             _ => Err(DesugarError::InvalidSyntax(
                 "define requires (define var value) or (define (name ...) body)".to_string(),
+            )),
+        }
+    }
+
+    /// Desugar define-syntax: (define-syntax name transformer)
+    fn desugar_define_syntax(&self, args: &Value) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec(args)?;
+
+        match args_vec.as_slice() {
+            // (define-syntax name transformer)
+            [Value::Symbol(name), transformer] => Ok(CoreExpr::DefineSyntax {
+                name: name.clone(),
+                transformer: Box::new(self.desugar(transformer)?),
+            }),
+
+            _ => Err(DesugarError::InvalidSyntax(
+                "define-syntax requires (define-syntax name transformer)".to_string(),
             )),
         }
     }

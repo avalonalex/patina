@@ -345,11 +345,11 @@ fn test_let_values_empty() {
 fn test_simple_macro() {
     assert_program_eval_to(
         r#"
-        (define-syntax when
+        (define-syntax test-when
           (syntax-rules ()
-            ((when test body ...)
+            ((test-when test body ...)
              (if test (begin body ...)))))
-        (when #t 42)
+        (test-when #t 42)
         "#,
         "42",
     );
@@ -359,11 +359,11 @@ fn test_simple_macro() {
 fn test_simple_macro_false() {
     assert_program_eval_to(
         r#"
-        (define-syntax when
+        (define-syntax test-when
           (syntax-rules ()
-            ((when test body ...)
+            ((test-when test body ...)
              (if test (begin body ...)))))
-        (when #f 42)
+        (test-when #f 42)
         "#,
         "#<unspecified>",
     );

@@ -235,7 +235,7 @@ fn test_case_lambda_nested_closures() {
 #[test]
 #[ignore = "need to properly support import"]
 fn test_case_lambda_as_argument() {
-    assert_program_eval_to(        
+    assert_program_eval_to(
         r#"
         (import (scheme case-lambda))
         (define apply-twice

@@ -68,6 +68,14 @@ pub enum CoreExpr {
     /// Example: (define x 42), (define (f x) x)
     Define { name: Symbol, value: Box<CoreExpr> },
 
+    /// Macro definition
+    /// Example: (define-syntax when (syntax-rules () ...))
+    /// The transformer is evaluated to produce a Macro value
+    DefineSyntax {
+        name: Symbol,
+        transformer: Box<CoreExpr>,
+    },
+
     /// Function application
     /// Example: (f x y), (+ 1 2)
     App {
@@ -152,6 +160,7 @@ impl CoreExpr {
             CoreExpr::Set { .. } => "set!",
             CoreExpr::Begin(_) => "begin",
             CoreExpr::Define { .. } => "define",
+            CoreExpr::DefineSyntax { .. } => "define-syntax",
             CoreExpr::App { .. } => "application",
             CoreExpr::Apply { .. } => "apply",
             CoreExpr::PrimCall { .. } => "primitive-call",
@@ -209,6 +218,9 @@ impl std::fmt::Display for CoreExpr {
             }
             CoreExpr::Define { name, value } => {
                 write!(f, "(define {} {})", name, value)
+            }
+            CoreExpr::DefineSyntax { name, transformer } => {
+                write!(f, "(define-syntax {} {})", name, transformer)
             }
             CoreExpr::App { func, args } => {
                 write!(f, "({}", func)?;

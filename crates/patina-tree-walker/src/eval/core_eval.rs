@@ -224,6 +224,28 @@ fn eval_core_step(
             Ok(CoreEvalResult::Value(Value::Unspecified))
         }
 
+        // DefineSyntax: compile transformer and install macro
+        // The transformer is typically (syntax-rules ...) which needs special handling
+        CoreExpr::DefineSyntax { name, transformer } => {
+            // Convert transformer back to Value for compilation
+            // (syntax-rules is not a regular expression, it's a special form)
+            let transformer_value = core_expr_to_value(transformer)?;
+
+            // Compile the syntax-rules transformer
+            let compiled_macro =
+                evaluator.compile_syntax_rules(&transformer_value, name.clone(), &env)?;
+
+            // Store the compiled macro
+            let macro_value = Value::Macro {
+                name: name.clone(),
+                data: Rc::new(compiled_macro),
+            };
+
+            // Bind the macro in the environment
+            env.define(name.to_string(), macro_value);
+            Ok(CoreEvalResult::Value(Value::Unspecified))
+        }
+
         // Begin: evaluate expressions in sequence, return last
         // Last expression is in TAIL POSITION
         CoreExpr::Begin(exprs) => {
@@ -376,9 +398,9 @@ fn apply_procedure(
                     // Convert Value to CoreExpr and return TailCall
                     // Use desugarer with environment to handle macros
                     let desugarer = patina_frontend::Desugarer::with_env(env.clone());
-                    let core_expr = desugarer
-                        .desugar(&expr)
-                        .map_err(|e| EvalError::InvalidSyntax(format!("Desugaring failed: {}", e)))?;
+                    let core_expr = desugarer.desugar(&expr).map_err(|e| {
+                        EvalError::InvalidSyntax(format!("Desugaring failed: {}", e))
+                    })?;
                     Ok(CoreEvalResult::TailCall {
                         expr: core_expr,
                         env,
@@ -427,9 +449,9 @@ fn apply_procedure(
                     let last_expr_value = &body[body.len() - 1];
                     // Use desugarer with environment to handle macros in lambda bodies
                     let desugarer = patina_frontend::Desugarer::with_env(call_env.clone());
-                    let last_expr_core = desugarer
-                        .desugar(last_expr_value)
-                        .map_err(|e| EvalError::InvalidSyntax(format!("Desugaring failed: {}", e)))?;
+                    let last_expr_core = desugarer.desugar(last_expr_value).map_err(|e| {
+                        EvalError::InvalidSyntax(format!("Desugaring failed: {}", e))
+                    })?;
 
                     return Ok(CoreEvalResult::TailCall {
                         expr: last_expr_core,
@@ -443,6 +465,17 @@ fn apply_procedure(
                 expected: format!("case-lambda: no clause matches {} arguments", args.len()),
                 actual: args.len(),
             })
+        }
+
+        Value::Parameter { .. } => {
+            // Parameters are handled by the Value evaluator's apply function
+            // Delegate to it (not in tail position since parameters just get/set values)
+            match evaluator.apply(proc.clone(), args.to_vec(), false)? {
+                super::EvalResult::Value(v) => Ok(CoreEvalResult::Value(v)),
+                _ => Err(EvalError::InvalidSyntax(
+                    "parameter application returned unexpected result".to_string(),
+                )),
+            }
         }
 
         _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
@@ -577,6 +610,17 @@ fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
             Ok(cons(
                 Value::Symbol(Rc::from("define")),
                 cons(Value::Symbol(name.clone()), cons(value_val, Value::Null)),
+            ))
+        }
+        CoreExpr::DefineSyntax { name, transformer } => {
+            // (define-syntax name transformer)
+            let transformer_val = core_expr_to_value(transformer)?;
+            Ok(cons(
+                Value::Symbol(Rc::from("define-syntax")),
+                cons(
+                    Value::Symbol(name.clone()),
+                    cons(transformer_val, Value::Null),
+                ),
             ))
         }
         CoreExpr::Begin(exprs) => {
