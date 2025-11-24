@@ -31,6 +31,27 @@ impl Evaluator {
         Ok(result)
     }
 
+    /// Evaluate a list of already macro-expanded argument expressions
+    ///
+    /// Like `eval_arguments()`, but assumes macros have already been expanded.
+    /// Uses `eval_expanded()` instead of `eval_in_env()` to avoid re-expansion.
+    pub(super) fn eval_arguments_expanded(
+        &self,
+        args: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Vec<Value>, EvalError> {
+        let mut result = Vec::new();
+        let mut current = args.clone();
+
+        while let Value::Pair(pair) = current {
+            let borrowed = pair.borrow();
+            result.push(self.eval_expanded(&borrowed.0, env)?);
+            current = borrowed.1.clone();
+        }
+
+        Ok(result)
+    }
+
     /// Apply a procedure to a vector of evaluated arguments
     ///
     /// The `in_tail_position` parameter enables tail call optimization for primitives.

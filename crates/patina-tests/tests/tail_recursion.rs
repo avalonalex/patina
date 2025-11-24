@@ -685,13 +685,13 @@ fn test_let_values_case_combined_tail() {
     // Let-values with case in tail position
     assert_program_eval_to(
         r#"
-        (define (test n)
+        (define (foobar n)
           (let-values (((x y) (values n 0)))
             (case (remainder x 3)
-              ((0) (if (= x 0) 'done (test (- x 3))))
-              (else (test (- x 1))))))
+              ((0) (if (= x 0) 'done (foobar (- x 3))))
+              (else (foobar (- x 1))))))
 
-        (test 900)
+        (foobar 900)
         "#,
         "done",
     );

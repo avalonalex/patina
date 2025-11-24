@@ -54,20 +54,11 @@ pub use registry::SpecialFormRegistry;
 pub use trait_def::SpecialForm;
 
 // Individual special form implementations
-mod apply;
-mod begin;
-mod case_lambda;
-mod define;
-mod define_syntax;
-mod expand;
-mod r#if;
-mod import;
-mod lambda;
-mod let_syntax;
-mod parameterize;
-mod quasiquote;
-mod quote;
-mod set;
+// Note: Most special forms are now handled by CoreExpr evaluator
+// Only forms not yet in CoreExpr remain here:
+mod case_lambda; // Not in CoreExpr yet
+mod expand; // Patina debugging extension, not in CoreExpr
+mod let_syntax; // Deferred to future (GitHub issue)
 
 /// Build and populate the special form registry with all standard forms
 ///
@@ -125,26 +116,20 @@ pub fn build_registry() -> SpecialFormRegistry {
     //   - Pro: Clear separation, allows library-specific forms
     //   - Con: Most complex implementation
 
-    // R7RS (scheme base) special forms
-    registry.register(Box::new(quote::QuoteForm));
-    registry.register(Box::new(r#if::IfForm));
-    registry.register(Box::new(begin::BeginForm));
-    registry.register(Box::new(define::DefineForm));
-    registry.register(Box::new(set::SetForm));
-    registry.register(Box::new(lambda::LambdaForm));
-    registry.register(Box::new(apply::ApplyForm));
-    registry.register(Box::new(import::ImportForm));
-    registry.register(Box::new(define_syntax::DefineSyntaxForm));
+    // Note: Most R7RS special forms are now handled exclusively by CoreExpr evaluator
+    // (quote, if, begin, define, set!, lambda, apply, quasiquote, define-syntax,
+    //  import, parameterize)
+    //
+    // Only forms not yet migrated to CoreExpr are registered here:
+
+    // R7RS special forms still using Value evaluator
     registry.register(Box::new(let_syntax::LetSyntaxForm));
     registry.register(Box::new(let_syntax::LetrecSyntaxForm));
-    registry.register(Box::new(parameterize::ParameterizeForm));
-    registry.register(Box::new(quasiquote::QuasiquoteForm));
 
-    // R7RS (scheme case-lambda) special forms
+    // R7RS (scheme case-lambda) special form
     registry.register(Box::new(case_lambda::CaseLambdaForm));
 
     // Patina debugging extensions
-    // TODO: Move to (patina debug) library when we implement library-specific special forms
     registry.register(Box::new(expand::ExpandForm));
 
     registry

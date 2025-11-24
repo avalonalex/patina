@@ -1,11 +1,13 @@
 // Module declarations
 mod application;
+mod core_eval;
 mod debug;
 mod error;
 mod primitives;
 pub mod special_forms; // Registry-based special forms
 
 // Re-export error type for public API
+pub use core_eval::eval_core;
 pub use error::EvalError;
 
 use debug::DebugConfig;
@@ -16,6 +18,35 @@ use patina_runtime::value::{Procedure, Value};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+
+/// Check if an expression is one of the special forms not yet in CoreExpr
+///
+/// These forms must use the Value evaluator as a fallback:
+/// - let-syntax / letrec-syntax: Deferred to future work (GitHub issue)
+/// - case-lambda: Not yet implemented in CoreExpr
+/// - expand: Debugging extension, not in CoreExpr
+fn is_value_evaluator_only_form(expr: &Value) -> bool {
+    if let Value::Pair(pair) = expr {
+        let car = &pair.borrow().0;
+        let name_str = match car {
+            Value::Symbol(name) => Some(name.as_ref()),
+            Value::Identifier { name, .. } => Some(name.as_ref()),
+            Value::WrappedIdentifier { name, .. } => Some(name.as_ref()),
+            _ => None,
+        };
+
+        if let Some(name) = name_str {
+            matches!(
+                name,
+                "let-syntax" | "letrec-syntax" | "case-lambda" | "expand"
+            )
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
 
 /// Result of evaluation step in the trampoline
 ///
@@ -324,10 +355,27 @@ impl Evaluator {
             }
         };
 
+        // Create desugarer with environment for macro expansion
+        let desugarer = patina_frontend::Desugarer::with_env(eval_env.clone());
+
         loop {
             match parser.parse() {
                 Ok(expr) => {
-                    if let Err(e) = self.eval_in_env(&expr, &eval_env) {
+                    // Desugar to CoreExpr
+                    let core_expr = match desugarer.desugar(&expr) {
+                        Ok(ce) => ce,
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to desugar expression in {}: {}",
+                                extras_path.display(),
+                                e
+                            );
+                            continue;
+                        }
+                    };
+
+                    // Evaluate using CoreExpr evaluator
+                    if let Err(e) = eval_core(&core_expr, eval_env.clone(), self) {
                         eprintln!(
                             "Warning: Failed to evaluate expression in {}: {}",
                             extras_path.display(),
@@ -367,6 +415,18 @@ impl Evaluator {
         self.eval_step_impl(expr, env, true)
     }
 
+    /// Evaluate one step of an already macro-expanded expression
+    ///
+    /// Like `eval_step()`, but assumes macros have already been expanded.
+    /// Calls `eval_list_impl_expanded()` instead of `eval_list_impl()`.
+    fn eval_step_expanded(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<EvalResult, EvalError> {
+        self.eval_step_impl_expanded(expr, env, true)
+    }
+
     /// Implementation of eval_step with tail position tracking
     fn eval_step_impl(
         &self,
@@ -404,20 +464,66 @@ impl Evaluator {
                     eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
                 }
 
-                // First try looking up in current environment
+                // Look up in current environment
                 if let Some(value) = env.get(name) {
                     return Ok(EvalResult::Value(value));
                 }
 
-                // If it's a gensym and not found, try looking it up in the global environment
-                if patina_frontend::macro_expander::hygiene::is_gensym(name.as_ref())
-                    && let Some(original_name) = extract_original_from_gensym(name.as_ref())
-                    && let Some(value) = self.global_env.get(&Rc::from(original_name))
-                {
+                Err(EvalError::UndefinedVariable(name.to_string()))
+            }
+
+            // Identifier lookup (free variables from macro templates)
+            // These have a captured environment from macro definition time
+            Value::Identifier {
+                name,
+                env: captured_env,
+            } => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!(
+                        "[ENV]{} Identifier lookup: '{}' (with captured env)",
+                        self.debug.current_indent(),
+                        name
+                    );
+                }
+
+                // Downcast the captured environment
+                if let Some(captured_env) = captured_env.downcast_ref::<Environment>() {
+                    // Look up in the captured environment (definition-time binding)
+                    if let Some(value) = captured_env.get(name) {
+                        return Ok(EvalResult::Value(value));
+                    }
+                }
+
+                // If not found in captured env, fall back to undefined variable error
+                Err(EvalError::UndefinedVariable(format!(
+                    "{} (identifier)",
+                    name
+                )))
+            }
+
+            // WrappedIdentifier lookup (from marks-and-ribs hygiene)
+            // Look up the variable by name in the current environment
+            // TODO: Full marks-and-ribs will need to use marks for proper hygiene
+            Value::WrappedIdentifier { name, marks } => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!(
+                        "[ENV]{} WrappedIdentifier lookup: '{}' (marks: {:?})",
+                        self.debug.current_indent(),
+                        name,
+                        marks
+                    );
+                }
+
+                // For now, just look up by name
+                // Full implementation would use marks to determine correct binding
+                if let Some(value) = env.get(name) {
                     return Ok(EvalResult::Value(value));
                 }
 
-                Err(EvalError::UndefinedVariable(name.to_string()))
+                Err(EvalError::UndefinedVariable(format!(
+                    "{} (wrapped identifier)",
+                    name
+                )))
             }
 
             // Empty list
@@ -470,7 +576,41 @@ impl Evaluator {
     ) -> Result<EvalResult, EvalError> {
         let (car, cdr) = self.extract_pair(expr)?;
 
-        // Check if it's a special form in the registry first
+        // First, try to route through CoreExpr for all forms (except fallback-only forms)
+        // This ensures that core special forms like define, set!, if, etc. use CoreExpr
+        if !is_value_evaluator_only_form(expr) {
+            use patina_frontend::Desugarer;
+            let desugarer = Desugarer::with_env(env.clone());
+            match desugarer.desugar(expr) {
+                Ok(core_expr) => {
+                    // Successfully desugared to CoreExpr - evaluate it
+                    let value = eval_core(&core_expr, env.clone(), self)?;
+                    return Ok(EvalResult::Value(value));
+                }
+                Err(e) => {
+                    use patina_frontend::DesugarError;
+                    // If desugaring fails with FallbackFormNeeded, fall through to Value evaluator
+                    // Note: This can happen when a CoreExpr form (like define) contains a nested
+                    // fallback form (like let-syntax). Until all forms are migrated to CoreExpr,
+                    // some tests with nested let-syntax will fail.
+                    if matches!(e, DesugarError::FallbackFormNeeded { .. }) {
+                        eprintln!(
+                            "⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form"
+                        );
+                        eprintln!("   Expression: {}", expr);
+                        eprintln!("   Reason: {}", e);
+                        eprintln!(
+                            "   → Falling through to Value evaluator (may fail if form not in registry)"
+                        );
+                    }
+                    // For other errors, fall through to Value evaluator (might be a procedure call)
+                    // Don't fail here - let the Value evaluator try
+                }
+            }
+        }
+
+        // Fallback to Value evaluator for forms not in CoreExpr
+        // Check if it's a special form in the registry (let-syntax, letrec-syntax, etc.)
         if let Value::Symbol(ref sym) = car
             && self.special_form_registry.contains(sym.as_ref())
         {
@@ -484,18 +624,40 @@ impl Evaluator {
         }
 
         // Check if this symbol is bound to a macro
-        if let Value::Symbol(ref sym) = car
-            && let Some(Value::Macro { data, .. }) = env.get(sym)
-        {
+        // Handle both Symbol and Identifier (identifiers can reference macros via captured env)
+        let macro_binding = match &car {
+            Value::Symbol(sym) => env.get(sym),
+            Value::Identifier {
+                name,
+                env: captured_env,
+            } => {
+                // For identifiers, look up in the captured environment
+                if let Some(env_any) = captured_env.downcast_ref::<Environment>() {
+                    env_any.get(name)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        if let Some(Value::Macro { data, .. }) = macro_binding {
             let compiled_macro = data
-                .downcast_ref::<patina_frontend::macro_expander::CompiledMacro>()
+                .downcast_ref::<patina_macros::CompiledMacro>()
                 .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
+
+            let name = match &car {
+                Value::Symbol(s) => s.as_ref(),
+                Value::Identifier { name, .. } => name.as_ref(),
+                Value::WrappedIdentifier { name, .. } => name.as_ref(),
+                _ => unreachable!(),
+            };
 
             if self.debug.is_enabled(debug::DebugStage::Expand) {
                 eprintln!(
                     "[MACRO]{} Expanding macro '{}': {}",
                     self.debug.current_indent(),
-                    sym,
+                    name,
                     expr
                 );
                 self.debug.indent();
@@ -512,8 +674,31 @@ impl Evaluator {
                 self.debug.dedent();
             }
 
-            // Evaluate the expanded form, preserving tail position
-            return self.eval_step_impl(&expanded, env, in_tail_position);
+            // Route expanded code through CoreExpr pipeline
+            // This ensures macro-expanded code uses the primary evaluation path
+            use patina_frontend::Desugarer;
+            let desugarer = Desugarer::with_env(env.clone());
+            match desugarer.desugar(&expanded) {
+                Ok(core_expr) => {
+                    // Successfully desugared to CoreExpr - evaluate it
+                    let value = eval_core(&core_expr, env.clone(), self)?;
+                    return Ok(EvalResult::Value(value));
+                }
+                Err(e) => {
+                    use patina_frontend::DesugarError;
+                    if matches!(e, DesugarError::FallbackFormNeeded { .. })
+                        || is_value_evaluator_only_form(&expanded)
+                    {
+                        // Fallback to Value evaluator for forms not in CoreExpr
+                        return self.eval_step_impl(&expanded, env, in_tail_position);
+                    } else {
+                        return Err(EvalError::InternalError(format!(
+                            "Failed to desugar macro expansion: {}",
+                            e
+                        )));
+                    }
+                }
+            }
         }
 
         // Regular procedure call - this can be a tail call if in tail position
@@ -537,6 +722,333 @@ impl Evaluator {
 
         // Not in tail position, or not a lambda - just apply normally
         self.apply(proc, args, in_tail_position)
+    }
+
+    /// Implementation of eval_step for already macro-expanded code
+    ///
+    /// This is identical to `eval_step_impl()` except it calls `eval_list_impl_expanded()`
+    /// instead of `eval_list_impl()` for lists.
+    fn eval_step_impl_expanded(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<EvalResult, EvalError> {
+        // Debug trace entry
+        if self.debug.is_enabled(debug::DebugStage::Eval) {
+            eprintln!(
+                "[EVAL]{} Evaluating (expanded): {} (tail={})",
+                self.debug.current_indent(),
+                expr,
+                in_tail_position
+            );
+            self.debug.indent();
+        }
+
+        let result = match expr {
+            // Self-evaluating
+            Value::Boolean(_)
+            | Value::Integer(_)
+            | Value::BigInteger(_)
+            | Value::Rational(_)
+            | Value::Real(_)
+            | Value::Complex(_, _)
+            | Value::Character(_)
+            | Value::String(_)
+            | Value::Vector(_)
+            | Value::Bytevector(_) => Ok(EvalResult::Value(expr.clone())),
+
+            // Variable lookup
+            Value::Symbol(name) => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
+                }
+
+                // Look up in current environment
+                if let Some(value) = env.get(name) {
+                    return Ok(EvalResult::Value(value));
+                }
+
+                Err(EvalError::UndefinedVariable(name.to_string()))
+            }
+
+            // Identifier lookup (free variables from macro templates)
+            Value::Identifier {
+                name,
+                env: captured_env,
+            } => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!(
+                        "[ENV]{} Identifier lookup: '{}' (with captured env)",
+                        self.debug.current_indent(),
+                        name
+                    );
+                }
+
+                // Downcast the captured environment
+                if let Some(captured_env) = captured_env.downcast_ref::<Environment>() {
+                    // Look up in the captured environment (definition-time binding)
+                    if let Some(value) = captured_env.get(name) {
+                        return Ok(EvalResult::Value(value));
+                    }
+                }
+
+                // If not found in captured env, fall back to undefined variable error
+                Err(EvalError::UndefinedVariable(format!(
+                    "{} (identifier)",
+                    name
+                )))
+            }
+
+            // WrappedIdentifier lookup (from marks-and-ribs hygiene)
+            Value::WrappedIdentifier { name, marks } => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!(
+                        "[ENV]{} WrappedIdentifier lookup: '{}' (marks: {:?})",
+                        self.debug.current_indent(),
+                        name,
+                        marks
+                    );
+                }
+
+                // For now, just look up by name
+                // Full implementation would use marks to determine correct binding
+                if let Some(value) = env.get(name) {
+                    return Ok(EvalResult::Value(value));
+                }
+
+                Err(EvalError::UndefinedVariable(format!(
+                    "{} (wrapped identifier)",
+                    name
+                )))
+            }
+
+            // Empty list
+            Value::Null => Ok(EvalResult::Value(Value::Null)),
+
+            // Lists (procedure calls or special forms) - use expanded version
+            Value::Pair(_) => self.eval_list_impl_expanded(expr, env, in_tail_position),
+
+            _ => Ok(EvalResult::Value(expr.clone())),
+        };
+
+        // Debug trace exit
+        if self.debug.is_enabled(debug::DebugStage::Eval) {
+            self.debug.dedent();
+            match &result {
+                Ok(EvalResult::Value(val)) => {
+                    eprintln!("[EVAL]{} => {}", self.debug.current_indent(), val)
+                }
+                Ok(EvalResult::TailCall { expr, .. }) => eprintln!(
+                    "[EVAL]{} => TAIL CALL: {}",
+                    self.debug.current_indent(),
+                    expr
+                ),
+                Ok(EvalResult::TailCallPrimitive { proc, args }) => {
+                    let args_str = args
+                        .iter()
+                        .map(|v| format!("{}", v))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    eprintln!(
+                        "[EVAL]{} => TAIL CALL PRIMITIVE: {} ({})",
+                        self.debug.current_indent(),
+                        proc,
+                        args_str
+                    )
+                }
+                Err(e) => eprintln!("[EVAL]{} => ERROR: {}", self.debug.current_indent(), e),
+            }
+        }
+
+        result
+    }
+
+    /// Evaluate a list for already macro-expanded code
+    ///
+    /// This is identical to `eval_list_impl()` except it SKIPS the macro expansion check.
+    /// All macros must have been expanded before calling this.
+    fn eval_list_impl_expanded(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<EvalResult, EvalError> {
+        let (car, cdr) = self.extract_pair(expr)?;
+
+        // Check if it's a special form in the registry first
+        if let Value::Symbol(ref sym) = car
+            && self.special_form_registry.contains(sym.as_ref())
+        {
+            return self.special_form_registry.eval(
+                sym.as_ref(),
+                &cdr,
+                self,
+                env,
+                in_tail_position,
+            );
+        }
+
+        // SKIP macro expansion check - macros already expanded!
+        // (Lines 534-587 from eval_list_impl are omitted here)
+
+        // Regular procedure call - this can be a tail call if in tail position
+        // Use eval_expanded to avoid re-expanding macros
+        let proc = self.eval_expanded(&car, env)?;
+        let args = self.eval_arguments_expanded(&cdr, env)?;
+
+        // Check if this is a lambda in tail position
+        if in_tail_position
+            && let Value::Procedure(Procedure::Lambda {
+                params,
+                variadic,
+                body,
+                env: lambda_env,
+            }) = proc
+        {
+            // Tail call to lambda - use shared helper methods
+            let new_env = self.prepare_lambda_env(&params, &variadic, args, &lambda_env)?;
+            return self.eval_lambda_body(&body, &new_env, true);
+        }
+
+        // Not in tail position, or not a lambda - just apply normally
+        self.apply(proc, args, in_tail_position)
+    }
+
+    /// Expand all macros in an expression without evaluating
+    ///
+    /// This recursively expands any macro calls in the expression, but does not
+    /// evaluate the result. This is needed for the CoreExpr pipeline, which requires
+    /// macro-expanded code before desugaring.
+    ///
+    /// Returns the fully macro-expanded expression.
+    pub fn expand_all_macros(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        match expr {
+            // Self-evaluating values - no macros to expand
+            Value::Integer(_)
+            | Value::BigInteger(_)
+            | Value::Rational(_)
+            | Value::Real(_)
+            | Value::Complex(..)
+            | Value::Boolean(_)
+            | Value::Character(_)
+            | Value::String(_)
+            | Value::Bytevector(_)
+            | Value::Procedure(_)
+            | Value::Macro { .. }
+            | Value::InputPort
+            | Value::OutputPort
+            | Value::Parameter { .. }
+            | Value::Library(_)
+            | Value::Values(_)
+            | Value::Promise(_)
+            | Value::Null => Ok(expr.clone()),
+
+            // Symbols - no expansion needed
+            Value::Symbol(_) => Ok(expr.clone()),
+
+            // Identifiers - no expansion needed (they're already from macro expansion)
+            Value::Identifier { .. } => Ok(expr.clone()),
+
+            // WrappedIdentifiers - no expansion needed (from marks-and-ribs hygiene)
+            Value::WrappedIdentifier { .. } => Ok(expr.clone()),
+
+            // Vectors - recursively expand elements
+            Value::Vector(vec) => {
+                let expanded: Result<Vec<_>, _> = vec
+                    .borrow()
+                    .iter()
+                    .map(|elem| self.expand_all_macros(elem, env))
+                    .collect();
+                Ok(Value::Vector(Rc::new(RefCell::new(expanded?))))
+            }
+
+            // Lists - check for macro calls and special forms
+            Value::Pair(pair) => {
+                // First get car and cdr
+                let (car, cdr) = pair.borrow().clone();
+
+                // Check if this is a macro call or special form
+                if let Value::Symbol(ref sym) = car {
+                    // Check if it's a special form first - special forms handle their own expansion
+                    if self.special_form_registry.contains(sym.as_ref()) {
+                        // Special forms like import, quote, lambda, etc. should not be expanded
+                        // They handle macro expansion of their arguments themselves
+                        return Ok(expr.clone());
+                    }
+
+                    // Check if it's a macro
+                    if let Some(Value::Macro { data, .. }) = env.get(sym) {
+                        // This is a macro call - expand it
+                        let compiled_macro = data
+                            .downcast_ref::<patina_macros::CompiledMacro>()
+                            .ok_or_else(|| {
+                                EvalError::InternalError("Invalid macro data".to_string())
+                            })?;
+
+                        let expanded = self.expand_macro(compiled_macro, expr, env)?;
+
+                        // Recursively expand the result (macros can expand to macros)
+                        return self.expand_all_macros(&expanded, env);
+                    }
+                }
+
+                // Not a macro call - recursively expand car and cdr
+                let expanded_car = self.expand_all_macros(&car, env)?;
+                let expanded_cdr = self.expand_all_macros(&cdr, env)?;
+
+                Ok(Value::Pair(Rc::new(RefCell::new((
+                    expanded_car,
+                    expanded_cdr,
+                )))))
+            }
+
+            // Unspecified and EOF - shouldn't appear in user code
+            Value::Unspecified | Value::Eof => Ok(expr.clone()),
+        }
+    }
+
+    /// Evaluate an already macro-expanded expression in a specific environment
+    ///
+    /// This is like `eval_in_env()`, but assumes that all macros have already been expanded.
+    /// Used by the CoreExpr pipeline after `expand_all_macros()` has been called.
+    ///
+    /// IMPORTANT: This skips macro expansion in `eval_list_impl()`. Only use this if you've
+    /// already called `expand_all_macros()` on the expression.
+    ///
+    /// Like `eval()`, this uses the trampoline pattern for tail call optimization.
+    pub fn eval_expanded(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, EvalError> {
+        let mut current_expr = expr.clone();
+        let mut current_env = env.clone();
+
+        // Trampoline loop for TCO
+        loop {
+            match self.eval_step_expanded(&current_expr, &current_env)? {
+                EvalResult::Value(v) => return Ok(v),
+                EvalResult::TailCall { expr, env } => {
+                    current_expr = expr;
+                    current_env = env;
+                }
+                EvalResult::TailCallPrimitive { proc, args } => {
+                    match self.apply(proc, args, true)? {
+                        EvalResult::Value(v) => return Ok(v),
+                        EvalResult::TailCall { expr, env } => {
+                            current_expr = expr;
+                            current_env = env;
+                        }
+                        EvalResult::TailCallPrimitive { proc, args } => {
+                            let mut app_list = vec![proc];
+                            app_list.extend(args);
+                            current_expr = self.list_from_vec(app_list);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Evaluate an expression in a specific environment
@@ -634,6 +1146,41 @@ impl Evaluator {
     ///
     /// If in_tail_position is true and body is non-empty, returns TailCall for the last expression.
     /// Otherwise evaluates all expressions and returns the final result.
+    /// Evaluate an expression with CoreExpr routing (with fallback to Value evaluator)
+    ///
+    /// This is similar to the Backend::eval implementation but returns Result<Value, EvalError>
+    /// instead of going through the trampoline.
+    pub(crate) fn eval_with_core_routing(
+        &self,
+        expr: &Value,
+        env: &Rc<Environment>,
+    ) -> Result<Value, EvalError> {
+        use patina_frontend::Desugarer;
+        let desugarer = Desugarer::with_env(env.clone());
+
+        match desugarer.desugar(expr) {
+            Ok(core_expr) => {
+                // Successfully desugared to CoreExpr - evaluate it
+                eval_core(&core_expr, env.clone(), self)
+            }
+            Err(e) => {
+                use patina_frontend::DesugarError;
+                if matches!(e, DesugarError::FallbackFormNeeded { .. })
+                    || is_value_evaluator_only_form(expr)
+                {
+                    // Fallback to Value evaluator for forms not in CoreExpr
+                    self.eval_in_env(expr, env)
+                } else {
+                    // All other desugar errors indicate a real problem
+                    Err(EvalError::InternalError(format!(
+                        "Failed to desugar expression: {}",
+                        e
+                    )))
+                }
+            }
+        }
+    }
+
     pub(crate) fn eval_lambda_body(
         &self,
         body: &[Value],
@@ -645,9 +1192,9 @@ impl Evaluator {
         }
 
         if in_tail_position {
-            // Evaluate all but the last expression
+            // Evaluate all but the last expression using CoreExpr routing
             for expr in &body[..body.len() - 1] {
-                self.eval_in_env(expr, env)?;
+                self.eval_with_core_routing(expr, env)?;
             }
             // Last expression is in tail position
             Ok(EvalResult::TailCall {
@@ -655,10 +1202,10 @@ impl Evaluator {
                 env: env.clone(),
             })
         } else {
-            // Not in tail position - evaluate all expressions
+            // Not in tail position - evaluate all expressions using CoreExpr routing
             let mut result = Value::Unspecified;
             for expr in body {
-                result = self.eval_in_env(expr, env)?;
+                result = self.eval_with_core_routing(expr, env)?;
             }
             Ok(EvalResult::Value(result))
         }
@@ -996,6 +1543,9 @@ impl Evaluator {
             // (lambda args body...) - single symbol, all args go to it
             Value::Symbol(s) => Ok((vec![], Some(s.to_string()))),
 
+            // (lambda args body...) - single wrapped identifier (from marks-and-ribs)
+            Value::WrappedIdentifier { name, .. } => Ok((vec![], Some(name.to_string()))),
+
             // (lambda () body...) - no parameters
             Value::Null => Ok((vec![], None)),
 
@@ -1011,18 +1561,40 @@ impl Evaluator {
                             // Rest parameter: (x y . rest)
                             return Ok((params, Some(s.to_string())));
                         }
+                        Value::Identifier { name, .. } => {
+                            // Rest parameter from macro expansion (old hygiene): (x y . rest)
+                            return Ok((params, Some(name.to_string())));
+                        }
+                        Value::WrappedIdentifier { name, .. } => {
+                            // Rest parameter from macro expansion (marks-and-ribs): (x y . rest)
+                            return Ok((params, Some(name.to_string())));
+                        }
                         Value::Pair(pair) => {
                             let (car, cdr) = {
                                 let pair_ref = pair.borrow();
                                 (pair_ref.0.clone(), pair_ref.1.clone())
                             };
-                            if let Value::Symbol(param) = &car {
-                                params.push(param.to_string());
-                                current = cdr;
-                            } else {
-                                return Err(EvalError::InvalidSyntax(
-                                    "lambda parameters must be symbols".to_string(),
-                                ));
+                            match &car {
+                                Value::Symbol(param) => {
+                                    params.push(param.to_string());
+                                    current = cdr;
+                                }
+                                Value::Identifier { name, .. } => {
+                                    // Parameter from macro expansion (old hygiene)
+                                    params.push(name.to_string());
+                                    current = cdr;
+                                }
+                                Value::WrappedIdentifier { name, .. } => {
+                                    // Parameter from macro expansion (marks-and-ribs hygiene)
+                                    params.push(name.to_string());
+                                    current = cdr;
+                                }
+                                _ => {
+                                    return Err(EvalError::InvalidSyntax(
+                                        "lambda parameters must be symbols or identifiers"
+                                            .to_string(),
+                                    ));
+                                }
                             }
                         }
                         _ => {
@@ -1169,8 +1741,8 @@ impl Evaluator {
         expr: &Value,
         name: Rc<str>,
         env: &Rc<Environment>,
-    ) -> Result<patina_frontend::macro_expander::CompiledMacro, EvalError> {
-        use patina_frontend::macro_expander::Compiler;
+    ) -> Result<patina_macros::CompiledMacro, EvalError> {
+        use patina_macros::Compiler;
 
         // Must be a list starting with 'syntax-rules
         let (keyword, rest) = self.extract_pair(expr)?;
@@ -1191,8 +1763,9 @@ impl Evaluator {
         // Parse rules as (pattern, template) pairs
         let rules = self.parse_macro_rules(&rules_expr)?;
 
-        // Compile using V2 compiler with environment capture for hygiene
-        let mut compiler = Compiler::with_env(literals, None, env.clone());
+        // Compile using Compiler with environment capture for hygiene
+        // Pass the runtime Environment as Rc<dyn Any> following Gauche's approach
+        let mut compiler = Compiler::with_env(literals, None, env.clone() as Rc<dyn std::any::Any>);
         compiler
             .compile_macro(name, rules)
             .map_err(|e| EvalError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
@@ -1281,31 +1854,12 @@ impl Evaluator {
     /// This is used by both define-syntax and the macro expansion logic in eval_list_impl.
     pub(crate) fn expand_macro(
         &self,
-        compiled_macro: &patina_frontend::macro_expander::CompiledMacro,
+        compiled_macro: &patina_macros::CompiledMacro,
         args: &Value,
         env: &Rc<Environment>,
     ) -> Result<Value, EvalError> {
-        use patina_frontend::macro_expander::{CompiledMacroExpander, MacroExpander};
-
-        let expander = CompiledMacroExpander::new(compiled_macro.clone());
-        expander.expand(args, env).map_err(EvalError::from)
+        // Use the expand_macro function from patina-macros, passing Environment directly
+        patina_macros::expand_macro(compiled_macro, args, env)
+            .map_err(|e| EvalError::InvalidSyntax(format!("Macro expansion failed: {}", e)))
     }
-}
-
-/// Extract the original identifier name from a gensym
-///
-/// Gensyms have format: ##name#counter
-/// This extracts "name" from that format.
-fn extract_original_from_gensym(gensym: &str) -> Option<String> {
-    if !gensym.starts_with("##") {
-        return None;
-    }
-
-    // Skip "##" prefix
-    let without_prefix = &gensym[2..];
-
-    // Find the last '#' which separates name from counter
-    without_prefix
-        .rfind('#')
-        .map(|last_hash| without_prefix[..last_hash].to_string())
 }

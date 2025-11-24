@@ -31,6 +31,35 @@ pub enum Value {
     // Symbols
     Symbol(Rc<str>),
 
+    // Identifiers (for hygienic macros)
+    // An identifier is a symbol with a captured lexical environment
+    // Used for free variables in macro templates that should preserve their
+    // definition-time bindings (lexical hygiene)
+    Identifier {
+        name: Rc<str>,
+        /// Captured environment from macro definition time
+        /// Stored as dyn Any to avoid circular dependencies
+        env: Rc<dyn std::any::Any>,
+    },
+
+    // Wrapped Identifier (for marks-and-ribs hygiene)
+    // An identifier with a list of marks tracking expansion history
+    // Used by the marks-and-ribs hygiene algorithm (Chez Scheme approach)
+    //
+    // ## References
+    // - Dybvig et al. "Syntactic abstraction in Scheme" (1993)
+    // - Chez Scheme syntax.ss implementation
+    //
+    // Two identifiers are "the same" if they have the same name AND same marks.
+    // This allows hygiene without renaming - marks discriminate identifiers.
+    WrappedIdentifier {
+        name: Rc<str>,
+        /// List of expansion marks (most recent first)
+        /// Empty list = user-written identifier
+        /// [3, 1] = introduced in expansion 1, then passed through expansion 3
+        marks: Vec<usize>,
+    },
+
     // Pairs and lists (mutable via set-car!/set-cdr!)
     // Uses RefCell to allow mutation through shared references
     Pair(Rc<RefCell<(Value, Value)>>),
@@ -146,6 +175,8 @@ impl Value {
             Value::Character(_) => "character",
             Value::String(_) => "string",
             Value::Symbol(_) => "symbol",
+            Value::Identifier { .. } => "identifier",
+            Value::WrappedIdentifier { .. } => "identifier",
             Value::Pair(_) | Value::Null => "list",
             Value::Vector(_) => "vector",
             Value::Bytevector(_) => "bytevector",
@@ -228,6 +259,24 @@ impl std::fmt::Display for Value {
                     write!(f, "|{}|", s)
                 } else {
                     write!(f, "{}", s)
+                }
+            }
+            Value::Identifier { name, .. } => {
+                // Display identifiers the same as symbols
+                if Self::symbol_needs_vertical_bars(name) {
+                    write!(f, "|{}|", name)
+                } else {
+                    write!(f, "{}", name)
+                }
+            }
+            Value::WrappedIdentifier { name, .. } => {
+                // Display wrapped identifiers just as their name
+                // Marks are internal - they shouldn't appear in output
+                // Full marks-and-ribs will use marks for lookup, not display
+                if Self::symbol_needs_vertical_bars(name) {
+                    write!(f, "|{}|", name)
+                } else {
+                    write!(f, "{}", name)
                 }
             }
             Value::Null => write!(f, "()"),

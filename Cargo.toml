@@ -4,6 +4,8 @@ members = [
     "crates/patina-runtime",
     "crates/patina-ir",
     "crates/patina-frontend",
+    "crates/patina-macros",
+    "crates/patina-pipeline",
     "crates/patina-tree-walker",
     "crates/patina-interpreter",
     "crates/patina-repl",

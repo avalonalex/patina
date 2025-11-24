@@ -41,9 +41,9 @@ fn test_macro_when() {
     // Define the when macro
     let define_result = interp.eval_str(
         r#"
-(define-syntax when
+(define-syntax test-when
   (syntax-rules ()
-    ((when test body ...)
+    ((test-when test body ...)
      (if test (begin body ...)))))
 "#,
     );
@@ -53,7 +53,7 @@ fn test_macro_when() {
     }
 
     // Test single body
-    let result = interp.eval_str("(when #t 42)");
+    let result = interp.eval_str("(test-when #t 42)");
     match &result {
         Ok(val) => println!("when macro result: {}", val),
         Err(e) => panic!("when macro expansion error: {}", e),
@@ -62,11 +62,11 @@ fn test_macro_when() {
     assert!(matches!(result, Value::Integer(42)));
 
     // Test multiple body forms
-    let result = interp.eval_str("(when #t 1 2 3)").unwrap();
+    let result = interp.eval_str("(test-when #t 1 2 3)").unwrap();
     assert!(matches!(result, Value::Integer(3)));
 
     // Test false condition
-    let result = interp.eval_str("(when #f 42)").unwrap();
+    let result = interp.eval_str("(test-when #f 42)").unwrap();
     assert!(matches!(result, Value::Unspecified));
 }
 
@@ -78,20 +78,20 @@ fn test_macro_unless() {
     interp
         .eval_str(
             r#"
-(define-syntax unless
+(define-syntax test-unless
   (syntax-rules ()
-    ((unless test body ...)
+    ((test-unless test body ...)
      (if (not test) (begin body ...)))))
 "#,
         )
         .unwrap();
 
     // Test with false condition (should execute)
-    let result = interp.eval_str("(unless #f 42)").unwrap();
+    let result = interp.eval_str("(test-unless #f 42)").unwrap();
     assert!(matches!(result, Value::Integer(42)));
 
     // Test with true condition (should not execute)
-    let result = interp.eval_str("(unless #t 42)").unwrap();
+    let result = interp.eval_str("(test-unless #t 42)").unwrap();
     assert!(matches!(result, Value::Unspecified));
 }
 

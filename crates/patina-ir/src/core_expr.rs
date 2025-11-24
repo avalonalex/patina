@@ -35,6 +35,12 @@ pub enum CoreExpr {
     /// Example: 'x, '(1 2 3)
     Quote(Value),
 
+    /// Quasiquote: template with selective evaluation
+    /// Example: `(a ,b ,@c) where b and c are evaluated
+    /// The template is stored as a Value, and will be processed
+    /// recursively by the evaluator to handle unquote/unquote-splicing
+    Quasiquote(Value),
+
     /// Lambda abstraction
     /// Example: (lambda (x y) (+ x y))
     Lambda {
@@ -62,11 +68,41 @@ pub enum CoreExpr {
     /// Example: (define x 42), (define (f x) x)
     Define { name: Symbol, value: Box<CoreExpr> },
 
+    /// Macro definition
+    /// Example: (define-syntax when (syntax-rules () ...))
+    /// The transformer is typically (syntax-rules ...) and is stored as-is (not desugared)
+    /// It will be compiled to a Macro value by the evaluator
+    DefineSyntax {
+        name: Symbol,
+        transformer: Value, // Template data, not code - similar to Quote
+    },
+
+    /// Import: load library bindings
+    /// Example: (import (scheme base))
+    /// Import sets are kept as Values (declarative data, not code)
+    Import { import_sets: Vec<Value> },
+
+    /// Parameterize: dynamically rebind parameters
+    /// Example: (parameterize ((param1 val1) (param2 val2)) body ...)
+    /// Note: Body is NOT in tail position (TCO disabled to ensure proper stack cleanup)
+    Parameterize {
+        bindings: Vec<(CoreExpr, CoreExpr)>, // (param-expr, value-expr) pairs
+        body: Vec<CoreExpr>,
+    },
+
     /// Function application
     /// Example: (f x y), (+ 1 2)
     App {
         func: Box<CoreExpr>,
         args: Vec<CoreExpr>,
+    },
+
+    /// Apply: apply procedure to list
+    /// Example: (apply + '(1 2 3)), (apply f x y zs)
+    /// Last argument is a list that gets spliced as arguments
+    Apply {
+        func: Box<CoreExpr>,
+        args: Vec<CoreExpr>, // All args including the final list
     },
 
     // Optional optimized forms (added by passes)
@@ -132,12 +168,17 @@ impl CoreExpr {
             CoreExpr::Literal(_) => "literal",
             CoreExpr::Var(_) => "variable",
             CoreExpr::Quote(_) => "quote",
+            CoreExpr::Quasiquote(_) => "quasiquote",
             CoreExpr::Lambda { .. } => "lambda",
             CoreExpr::If { .. } => "if",
             CoreExpr::Set { .. } => "set!",
             CoreExpr::Begin(_) => "begin",
             CoreExpr::Define { .. } => "define",
+            CoreExpr::DefineSyntax { .. } => "define-syntax",
+            CoreExpr::Import { .. } => "import",
+            CoreExpr::Parameterize { .. } => "parameterize",
             CoreExpr::App { .. } => "application",
+            CoreExpr::Apply { .. } => "apply",
             CoreExpr::PrimCall { .. } => "primitive-call",
             CoreExpr::Let { .. } => "let",
         }
@@ -150,6 +191,7 @@ impl std::fmt::Display for CoreExpr {
             CoreExpr::Literal(v) => write!(f, "{}", v),
             CoreExpr::Var(s) => write!(f, "{}", s),
             CoreExpr::Quote(v) => write!(f, "'{}", v),
+            CoreExpr::Quasiquote(v) => write!(f, "`{}", v),
             CoreExpr::Lambda { params, .. } => {
                 write!(f, "(lambda ")?;
                 match params {
@@ -193,8 +235,39 @@ impl std::fmt::Display for CoreExpr {
             CoreExpr::Define { name, value } => {
                 write!(f, "(define {} {})", name, value)
             }
+            CoreExpr::DefineSyntax { name, transformer } => {
+                write!(f, "(define-syntax {} {})", name, transformer)
+            }
+            CoreExpr::Import { import_sets } => {
+                write!(f, "(import")?;
+                for import_set in import_sets {
+                    write!(f, " {}", import_set)?;
+                }
+                write!(f, ")")
+            }
+            CoreExpr::Parameterize { bindings, body } => {
+                write!(f, "(parameterize (")?;
+                for (i, (param, val)) in bindings.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "({} {})", param, val)?;
+                }
+                write!(f, ")")?;
+                for expr in body {
+                    write!(f, " {}", expr)?;
+                }
+                write!(f, ")")
+            }
             CoreExpr::App { func, args } => {
                 write!(f, "({}", func)?;
+                for arg in args {
+                    write!(f, " {}", arg)?;
+                }
+                write!(f, ")")
+            }
+            CoreExpr::Apply { func, args } => {
+                write!(f, "(apply {}", func)?;
                 for arg in args {
                     write!(f, " {}", arg)?;
                 }

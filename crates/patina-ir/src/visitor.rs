@@ -85,7 +85,10 @@ impl CoreExpr {
         F: Fn(&CoreExpr) -> CoreExpr,
     {
         match self {
-            CoreExpr::Literal(_) | CoreExpr::Var(_) | CoreExpr::Quote(_) => self.clone(),
+            CoreExpr::Literal(_)
+            | CoreExpr::Var(_)
+            | CoreExpr::Quote(_)
+            | CoreExpr::Quasiquote(_) => self.clone(),
 
             CoreExpr::Lambda { params, body } => CoreExpr::Lambda {
                 params: params.clone(),
@@ -110,7 +113,29 @@ impl CoreExpr {
                 value: Box::new(f(value)),
             },
 
+            CoreExpr::DefineSyntax { name, transformer } => CoreExpr::DefineSyntax {
+                name: name.clone(),
+                transformer: transformer.clone(), // transformer is Value (data), not transformed
+            },
+
+            CoreExpr::Import { import_sets } => CoreExpr::Import {
+                import_sets: import_sets.clone(), // import_sets are Values (data), not CoreExpr
+            },
+
+            CoreExpr::Parameterize { bindings, body } => CoreExpr::Parameterize {
+                bindings: bindings
+                    .iter()
+                    .map(|(param, val)| (f(param), f(val)))
+                    .collect(),
+                body: body.iter().map(&f).collect(),
+            },
+
             CoreExpr::App { func, args } => CoreExpr::App {
+                func: Box::new(f(func)),
+                args: args.iter().map(&f).collect(),
+            },
+
+            CoreExpr::Apply { func, args } => CoreExpr::Apply {
                 func: Box::new(f(func)),
                 args: args.iter().map(&f).collect(),
             },

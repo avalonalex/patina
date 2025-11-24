@@ -30,5 +30,5 @@ pub mod library_support;
 
 // Re-export main types
 pub use backend::TreeWalker;
-pub use eval::{EvalError, Evaluator};
+pub use eval::{EvalError, Evaluator, eval_core};
 pub use library_support::SchemeLibraryLoader;

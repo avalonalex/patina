@@ -179,3 +179,50 @@ fn test_let_syntax_non_symbol_name_error() {
     "#;
     assert!(eval(code).is_err());
 }
+
+#[test]
+fn test_let_syntax_lexical_scoping() {
+    // Test case from chibi-scheme r7rs-tests.scm
+    // This tests that free variables in macro templates capture the
+    // lexical environment at macro definition time, not at use site.
+    //
+    // The macro 'm' is defined when x='outer is in scope.
+    // When m is used, x='inner is in scope at the use site.
+    // The macro should expand to 'outer (definition-time binding), not 'inner.
+    let code = r#"
+        (let ((x 'outer))
+          (let-syntax ((m (syntax-rules () ((m) x))))
+            (let ((x 'inner))
+              (m))))
+    "#;
+    assert_eq!(eval(code).unwrap(), "outer");
+}
+
+#[test]
+fn test_let_syntax_lexical_scoping_multiple_vars() {
+    // Similar test but with multiple free variables
+    let code = r#"
+        (let ((x 'outer-x)
+              (y 'outer-y))
+          (let-syntax ((m (syntax-rules ()
+                            ((m) (list x y)))))
+            (let ((x 'inner-x)
+                  (y 'inner-y))
+              (m))))
+    "#;
+    assert_eq!(eval(code).unwrap(), "(outer-x outer-y)");
+}
+
+#[test]
+fn test_let_syntax_nested_lexical_scoping() {
+    // Nested let-syntax with lexical scoping
+    let code = r#"
+        (let ((x 'outer))
+          (let-syntax ((m1 (syntax-rules () ((m1) x))))
+            (let ((x 'middle))
+              (let-syntax ((m2 (syntax-rules () ((m2) x))))
+                (let ((x 'inner))
+                  (list (m1) (m2)))))))
+    "#;
+    assert_eq!(eval(code).unwrap(), "(outer middle)");
+}
