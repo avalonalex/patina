@@ -227,13 +227,9 @@ fn eval_core_step(
         // DefineSyntax: compile transformer and install macro
         // The transformer is typically (syntax-rules ...) which needs special handling
         CoreExpr::DefineSyntax { name, transformer } => {
-            // Convert transformer back to Value for compilation
-            // (syntax-rules is not a regular expression, it's a special form)
-            let transformer_value = core_expr_to_value(transformer)?;
-
+            // Transformer is already a Value (stored as data, not desugared code)
             // Compile the syntax-rules transformer
-            let compiled_macro =
-                evaluator.compile_syntax_rules(&transformer_value, name.clone(), &env)?;
+            let compiled_macro = evaluator.compile_syntax_rules(transformer, name.clone(), &env)?;
 
             // Store the compiled macro
             let macro_value = Value::Macro {
@@ -692,12 +688,12 @@ fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
         }
         CoreExpr::DefineSyntax { name, transformer } => {
             // (define-syntax name transformer)
-            let transformer_val = core_expr_to_value(transformer)?;
+            // Transformer is already a Value (template data)
             Ok(cons(
                 Value::Symbol(Rc::from("define-syntax")),
                 cons(
                     Value::Symbol(name.clone()),
-                    cons(transformer_val, Value::Null),
+                    cons(transformer.clone(), Value::Null),
                 ),
             ))
         }

@@ -326,10 +326,27 @@ impl Evaluator {
             }
         };
 
+        // Create desugarer with environment for macro expansion
+        let desugarer = patina_frontend::Desugarer::with_env(eval_env.clone());
+
         loop {
             match parser.parse() {
                 Ok(expr) => {
-                    if let Err(e) = self.eval_in_env(&expr, &eval_env) {
+                    // Desugar to CoreExpr
+                    let core_expr = match desugarer.desugar(&expr) {
+                        Ok(ce) => ce,
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to desugar expression in {}: {}",
+                                extras_path.display(),
+                                e
+                            );
+                            continue;
+                        }
+                    };
+
+                    // Evaluate using CoreExpr evaluator
+                    if let Err(e) = eval_core(&core_expr, eval_env.clone(), self) {
                         eprintln!(
                             "Warning: Failed to evaluate expression in {}: {}",
                             extras_path.display(),

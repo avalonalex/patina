@@ -115,7 +115,7 @@ impl CoreExpr {
 
             CoreExpr::DefineSyntax { name, transformer } => CoreExpr::DefineSyntax {
                 name: name.clone(),
-                transformer: Box::new(f(transformer)),
+                transformer: transformer.clone(), // transformer is Value (data), not transformed
             },
 
             CoreExpr::Import { import_sets } => CoreExpr::Import {

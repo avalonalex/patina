@@ -58,13 +58,10 @@ mod apply;
 mod begin;
 mod case_lambda;
 mod define;
-mod define_syntax;
 mod expand;
 mod r#if;
-mod import;
 mod lambda;
 mod let_syntax;
-mod parameterize;
 mod quasiquote;
 mod quote;
 mod set;
@@ -133,12 +130,12 @@ pub fn build_registry() -> SpecialFormRegistry {
     registry.register(Box::new(set::SetForm));
     registry.register(Box::new(lambda::LambdaForm));
     registry.register(Box::new(apply::ApplyForm));
-    registry.register(Box::new(import::ImportForm));
-    registry.register(Box::new(define_syntax::DefineSyntaxForm));
     registry.register(Box::new(let_syntax::LetSyntaxForm));
     registry.register(Box::new(let_syntax::LetrecSyntaxForm));
-    registry.register(Box::new(parameterize::ParameterizeForm));
     registry.register(Box::new(quasiquote::QuasiquoteForm));
+
+    // Note: define-syntax, import, and parameterize are now handled
+    // exclusively by the CoreExpr evaluator, not the Value evaluator
 
     // R7RS (scheme case-lambda) special forms
     registry.register(Box::new(case_lambda::CaseLambdaForm));

@@ -347,6 +347,9 @@ impl Desugarer {
     }
 
     /// Desugar define-syntax: (define-syntax name transformer)
+    ///
+    /// The transformer is kept as a Value (not desugared) because it's template data,
+    /// not code to be evaluated. Similar to how quote keeps its datum as a Value.
     fn desugar_define_syntax(&self, args: &Value) -> Result<CoreExpr> {
         let args_vec = utils::list_to_vec(args)?;
 
@@ -354,7 +357,7 @@ impl Desugarer {
             // (define-syntax name transformer)
             [Value::Symbol(name), transformer] => Ok(CoreExpr::DefineSyntax {
                 name: name.clone(),
-                transformer: Box::new(self.desugar(transformer)?),
+                transformer: transformer.clone(), // Keep as Value, don't desugar
             }),
 
             _ => Err(DesugarError::InvalidSyntax(

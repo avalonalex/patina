@@ -70,10 +70,11 @@ pub enum CoreExpr {
 
     /// Macro definition
     /// Example: (define-syntax when (syntax-rules () ...))
-    /// The transformer is evaluated to produce a Macro value
+    /// The transformer is typically (syntax-rules ...) and is stored as-is (not desugared)
+    /// It will be compiled to a Macro value by the evaluator
     DefineSyntax {
         name: Symbol,
-        transformer: Box<CoreExpr>,
+        transformer: Value, // Template data, not code - similar to Quote
     },
 
     /// Import: load library bindings
