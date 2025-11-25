@@ -200,3 +200,95 @@ fn test_recursive_macro_hygiene() {
     assert!(result.is_ok());
     assert_eq!(result.unwrap().to_string(), "0");
 }
+
+/// Test scope-based hygiene: macro captures binding from definition site
+///
+/// This is the classic R7RS hygiene test case where a macro defined inside
+/// a let should capture the outer binding of 'x', not the inner one.
+///
+/// From R7RS Section 4.3: "If a macro transformer inserts a free reference
+/// to an identifier, the reference refers to the binding that was visible
+/// where the transformer was specified, regardless of any local bindings
+/// that surround the use of the macro."
+#[test]
+fn test_let_syntax_captures_definition_site_binding() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ((x 'outer))
+          (let-syntax ((m (syntax-rules () ((m) x))))
+            (let ((x 'inner))
+              (m))))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // The macro's 'x' should refer to 'outer' (definition site),
+    // not 'inner' (expansion site)
+    assert_eq!(result.unwrap().to_string(), "outer");
+}
+
+/// Test scope-based hygiene with define wrapper
+///
+/// Same as above but wrapped in a define to ensure hygiene works
+/// across function boundaries.
+#[test]
+fn test_let_syntax_hygiene_in_define() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define (test-hygiene)
+          (let ((x 'outer))
+            (let-syntax ((m (syntax-rules () ((m) x))))
+              (let ((x 'inner))
+                (m)))))
+        (test-hygiene)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().to_string(), "outer");
+}
+
+/// Test scope-based hygiene with lambda wrapper
+///
+/// Ensure hygiene works when the macro is defined inside a lambda parameter scope.
+#[test]
+fn test_let_syntax_hygiene_in_lambda() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        ((lambda (x)
+           (let-syntax ((m (syntax-rules () ((m) x))))
+             (let ((x 'inner))
+               (m))))
+         'outer)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().to_string(), "outer");
+}
+
+/// Test scope-based hygiene with multiple nested lets
+#[test]
+fn test_let_syntax_hygiene_multiple_nesting() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ((x 'level1))
+          (let ((y 'level2))
+            (let-syntax ((m (syntax-rules () ((m) x))))
+              (let ((x 'inner))
+                (m)))))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // Should return 'level1, not 'inner
+    assert_eq!(result.unwrap().to_string(), "level1");
+}

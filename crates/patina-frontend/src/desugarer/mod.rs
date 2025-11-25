@@ -70,7 +70,7 @@ mod utils;
 pub use error::{DesugarError, Result};
 
 use patina_ir::CoreExpr;
-use patina_runtime::{Environment, Value};
+use patina_runtime::{Environment, ScopeId, ScopeSet, Value};
 use std::rc::Rc;
 
 /// Desugarer converts Value (surface syntax) to CoreExpr (core IR)
@@ -84,10 +84,18 @@ use std::rc::Rc;
 /// This approach means we don't need to pre-expand all macros before desugaring.
 /// The desugarer handles macro expansion selectively, only when encountering
 /// macro calls during the desugaring process.
+///
+/// **Scope-Based Hygiene**: The desugarer tracks a current scope set that
+/// accumulates as we enter binding forms (lambda, let-syntax, etc.). This
+/// enables scope-based hygiene lookup where identifiers carry scope information.
 pub struct Desugarer {
     /// Optional environment for macro lookup
     /// If None, macros cannot be expanded (will cause desugar errors)
     env: Option<Rc<Environment>>,
+
+    /// Current scope set for scope-based hygiene
+    /// Accumulates scopes as we enter binding forms
+    current_scopes: ScopeSet,
 }
 
 impl Desugarer {
@@ -95,7 +103,10 @@ impl Desugarer {
     ///
     /// This is used when the input is already fully macro-expanded.
     pub fn new() -> Self {
-        Self { env: None }
+        Self {
+            env: None,
+            current_scopes: ScopeSet::new(),
+        }
     }
 
     /// Create a new desugarer with macro expansion support
@@ -103,7 +114,39 @@ impl Desugarer {
     /// This allows the desugarer to expand macros as it encounters them.
     /// The environment is used to look up macro definitions.
     pub fn with_env(env: Rc<Environment>) -> Self {
-        Self { env: Some(env) }
+        Self {
+            env: Some(env),
+            current_scopes: ScopeSet::new(),
+        }
+    }
+
+    /// Create a new desugarer with environment and specific scope set
+    ///
+    /// Used when creating child desugarers that inherit scope context.
+    pub fn with_env_and_scopes(env: Rc<Environment>, scopes: ScopeSet) -> Self {
+        Self {
+            env: Some(env),
+            current_scopes: scopes,
+        }
+    }
+
+    /// Get the current scope set
+    pub fn current_scopes(&self) -> &ScopeSet {
+        &self.current_scopes
+    }
+
+    /// Create a child desugarer with an additional scope
+    ///
+    /// Used when entering a binding form (lambda, let-syntax, etc.)
+    #[allow(dead_code)]
+    fn with_fresh_scope(&self) -> (Self, ScopeId) {
+        let scope = ScopeId::fresh();
+        let new_scopes = self.current_scopes.with_scope(scope);
+        let desugarer = Self {
+            env: self.env.clone(),
+            current_scopes: new_scopes,
+        };
+        (desugarer, scope)
     }
 
     /// Desugar a Value (surface syntax) to CoreExpr (core IR)
@@ -134,6 +177,13 @@ impl Desugarer {
             // Treat as a variable reference - the marks are used during name resolution
             // The evaluator uses get_with_marks() to resolve the binding
             Value::WrappedIdentifier { name, .. } => Ok(CoreExpr::Var(name.clone())),
+
+            // ScopedIdentifier (from scope-sets hygiene)
+            // Convert to ScopedVar - the evaluator uses get_with_scopes() to resolve
+            Value::ScopedIdentifier { name, scopes } => Ok(CoreExpr::ScopedVar {
+                name: name.clone(),
+                scopes: scopes.clone(),
+            }),
 
             // Empty list (unusual in AST, but possible as literal)
             Value::Null => Ok(CoreExpr::Literal(Value::Null)),
@@ -243,14 +293,28 @@ impl Desugarer {
     fn desugar_lambda(&self, args: &Value) -> Result<CoreExpr> {
         let (formals, body) = utils::parse_lambda_syntax(args)?;
 
+        // Create a fresh scope for this lambda's bindings
+        // Every lambda gets a scope so that let-syntax inside can properly capture
+        // the lexical context.
+        let binding_scope = ScopeId::fresh();
+        let body_scopes = self.current_scopes.with_scope(binding_scope);
+
+        // Desugar body with the new scope set
+        // This ensures any let-syntax inside the lambda will capture the lambda's scope
+        let body_desugarer = Desugarer {
+            env: self.env.clone(),
+            current_scopes: body_scopes,
+        };
+
         let body_exprs: Vec<CoreExpr> = body
             .iter()
-            .map(|e| self.desugar(e))
+            .map(|e| body_desugarer.desugar(e))
             .collect::<Result<_>>()?;
 
         Ok(CoreExpr::Lambda {
             params: utils::convert_formals(&formals)?,
             body: body_exprs,
+            binding_scope: Some(binding_scope),
         })
     }
 
@@ -342,12 +406,24 @@ impl Desugarer {
                     return Err(DesugarError::EmptyBody("define".to_string()));
                 }
 
+                // Create a fresh scope for this lambda's bindings
+                // Every lambda gets a scope for proper hygiene
+                let binding_scope = ScopeId::fresh();
+                let body_scopes = self.current_scopes.with_scope(binding_scope);
+
+                // Desugar body with the new scope set
+                let body_desugarer = Desugarer {
+                    env: self.env.clone(),
+                    current_scopes: body_scopes,
+                };
+
                 let lambda = CoreExpr::Lambda {
                     params: utils::convert_formals(&params)?,
                     body: body
                         .iter()
-                        .map(|e| self.desugar(e))
+                        .map(|e| body_desugarer.desugar(e))
                         .collect::<Result<_>>()?,
+                    binding_scope: Some(binding_scope),
                 };
 
                 Ok(CoreExpr::Define {
@@ -380,6 +456,7 @@ impl Desugarer {
             [Value::Symbol(name), transformer] => Ok(CoreExpr::DefineSyntax {
                 name: name.clone(),
                 transformer: transformer.clone(), // Keep as Value, don't desugar
+                definition_scopes: self.current_scopes.clone(), // Capture scopes for hygiene
             }),
 
             _ => Err(DesugarError::InvalidSyntax(
@@ -590,6 +667,13 @@ impl Desugarer {
             )
         })?;
 
+        // Create a fresh scope for this let-syntax binding form
+        // This is critical for scope-based hygiene: macros defined here
+        // will capture this scope, allowing free variables to resolve
+        // to definition-time bindings.
+        let let_syntax_scope = ScopeId::fresh();
+        let definition_scopes = self.current_scopes.with_scope(let_syntax_scope);
+
         // Parse arguments: (bindings body...)
         let args_vec = utils::list_to_vec(args)?;
 
@@ -617,7 +701,7 @@ impl Desugarer {
             env.clone()
         };
 
-        // Compile each macro binding
+        // Compile each macro binding with definition scopes
         let mut macro_bindings = Vec::new();
 
         for binding in bindings_list {
@@ -638,10 +722,14 @@ impl Desugarer {
                 }
             };
 
-            // Compile transformer using patina_macros
+            // Compile transformer using patina_macros with definition scopes
             let transformer = &binding_vec[1];
-            let compiled_macro =
-                self.compile_syntax_rules(transformer, name.clone(), &compile_env)?;
+            let compiled_macro = self.compile_syntax_rules_with_scopes(
+                transformer,
+                name.clone(),
+                &compile_env,
+                &definition_scopes,
+            )?;
 
             macro_bindings.push((name, compiled_macro));
         }
@@ -656,8 +744,9 @@ impl Desugarer {
             body_env.define(name.to_string(), macro_value);
         }
 
-        // Create desugarer with extended environment
-        let body_desugarer = Desugarer::with_env(body_env);
+        // Create desugarer with extended environment AND scope set
+        // The body sees the let-syntax scope (for bindings introduced by macros)
+        let body_desugarer = Desugarer::with_env_and_scopes(body_env, definition_scopes);
 
         // Desugar body expressions in extended environment
         let body = &args_vec[1..];
@@ -679,6 +768,7 @@ impl Desugarer {
     ///
     /// This is a helper method that mirrors what the evaluator does,
     /// but is accessible during desugaring.
+    #[allow(dead_code)]
     fn compile_syntax_rules(
         &self,
         expr: &Value,
@@ -729,6 +819,70 @@ impl Desugarer {
         // Compile using Compiler with environment capture for hygiene
         // Pass the runtime Environment as Rc<dyn Any> following Gauche's approach
         let mut compiler = Compiler::with_env(literals, None, env.clone() as Rc<dyn std::any::Any>);
+        compiler
+            .compile_macro(name, rules)
+            .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
+    }
+
+    /// Compile a syntax-rules transformer with scope set for scope-based hygiene
+    ///
+    /// This version passes the definition scopes to the compiler so that
+    /// free variables in templates carry the correct scope set.
+    fn compile_syntax_rules_with_scopes(
+        &self,
+        expr: &Value,
+        name: Rc<str>,
+        env: &Rc<Environment>,
+        scopes: &ScopeSet,
+    ) -> Result<patina_macros::CompiledMacro> {
+        use patina_macros::Compiler;
+
+        // Must be a list starting with 'syntax-rules
+        let list = utils::list_to_vec(expr)?;
+
+        if list.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "Expected syntax-rules".to_string(),
+            ));
+        }
+
+        // Check first element is 'syntax-rules
+        match &list[0] {
+            Value::Symbol(s) if s.as_ref() == "syntax-rules" => {}
+            _ => {
+                return Err(DesugarError::InvalidSyntax(
+                    "Expected syntax-rules".to_string(),
+                ));
+            }
+        }
+
+        if list.len() < 2 {
+            return Err(DesugarError::InvalidSyntax(
+                "syntax-rules requires literals and rules".to_string(),
+            ));
+        }
+
+        // Parse literals: (symbol ...)
+        let literals_value = &list[1];
+        let literals = self.parse_literals_list(literals_value)?;
+
+        // Parse rules as (pattern, template) pairs
+        let rules_list = if list.len() > 2 {
+            // Convert rules Vec back to list Value for parsing
+            utils::vec_to_list(&list[2..])
+        } else {
+            Value::Null
+        };
+
+        let rules = self.parse_macro_rules(&rules_list)?;
+
+        // Compile using Compiler with environment AND scope set for scope-based hygiene
+        let mut compiler = Compiler::with_env_and_scopes(
+            literals,
+            None,
+            env.clone() as Rc<dyn std::any::Any>,
+            scopes.clone(),
+        );
         compiler
             .compile_macro(name, rules)
             .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
@@ -940,7 +1094,7 @@ mod tests {
         ]);
 
         let result = desugarer.desugar(&list).unwrap();
-        if let CoreExpr::Lambda { params, body } = result {
+        if let CoreExpr::Lambda { params, body, .. } = result {
             assert!(matches!(params, Formals::Fixed(_)));
             assert_eq!(body.len(), 1);
         } else {
@@ -962,7 +1116,7 @@ mod tests {
         ]);
 
         let result = desugarer.desugar(&list).unwrap();
-        if let CoreExpr::Lambda { params, body } = result {
+        if let CoreExpr::Lambda { params, body, .. } = result {
             assert!(matches!(params, Formals::Variadic(_)));
             assert_eq!(body.len(), 1);
         } else {

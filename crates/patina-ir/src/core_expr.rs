@@ -1,4 +1,4 @@
-use patina_runtime::Value;
+use patina_runtime::{ScopeId, ScopeSet, Value};
 use std::rc::Rc;
 
 /// Symbol type (interned string)
@@ -40,6 +40,13 @@ pub enum CoreExpr {
     /// Example: x, my-function
     Var(Symbol),
 
+    /// Variable reference with scope set (for hygienic macros)
+    /// Used when an identifier carries scope information from macro expansion.
+    /// The evaluator uses scope-based lookup: finds binding where
+    /// binding.scopes ⊆ reference.scopes.
+    /// Example: x with scopes {S1, S2}
+    ScopedVar { name: Symbol, scopes: ScopeSet },
+
     /// Quote: literal data
     /// Example: 'x, '(1 2 3)
     Quote(Value),
@@ -55,6 +62,11 @@ pub enum CoreExpr {
     Lambda {
         params: Formals,
         body: Vec<CoreExpr>,
+        /// Optional scope for parameter bindings (for scope-based hygiene)
+        /// If Some, parameters are bound with this scope added to current scope set.
+        /// This enables scope-based hygiene: free variables with matching scopes
+        /// can see these bindings, while others cannot.
+        binding_scope: Option<ScopeId>,
     },
 
     /// Conditional (always ternary after desugaring)
@@ -83,7 +95,8 @@ pub enum CoreExpr {
     /// It will be compiled to a Macro value by the evaluator
     DefineSyntax {
         name: Symbol,
-        transformer: Value, // Template data, not code - similar to Quote
+        transformer: Value,          // Template data, not code - similar to Quote
+        definition_scopes: ScopeSet, // Scopes at macro definition time for hygiene
     },
 
     /// Import: load library bindings
@@ -186,6 +199,7 @@ impl CoreExpr {
         match self {
             CoreExpr::Literal(_) => "literal",
             CoreExpr::Var(_) => "variable",
+            CoreExpr::ScopedVar { .. } => "scoped-variable",
             CoreExpr::Quote(_) => "quote",
             CoreExpr::Quasiquote(_) => "quasiquote",
             CoreExpr::Lambda { .. } => "lambda",
@@ -211,6 +225,10 @@ impl std::fmt::Display for CoreExpr {
         match self {
             CoreExpr::Literal(v) => write!(f, "{}", v),
             CoreExpr::Var(s) => write!(f, "{}", s),
+            CoreExpr::ScopedVar { name, scopes } => {
+                // Display scoped var with debug info showing scopes
+                write!(f, "{}@{}", name, scopes)
+            }
             CoreExpr::Quote(v) => write!(f, "'{}", v),
             CoreExpr::Quasiquote(v) => write!(f, "`{}", v),
             CoreExpr::Lambda { params, .. } => {
@@ -256,7 +274,9 @@ impl std::fmt::Display for CoreExpr {
             CoreExpr::Define { name, value } => {
                 write!(f, "(define {} {})", name, value)
             }
-            CoreExpr::DefineSyntax { name, transformer } => {
+            CoreExpr::DefineSyntax {
+                name, transformer, ..
+            } => {
                 write!(f, "(define-syntax {} {})", name, transformer)
             }
             CoreExpr::Import { import_sets } => {

@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use crate::environment::Environment;
 use crate::library::Library;
+use crate::scope::{ScopeId, ScopeSet};
 
 /// Represents a Scheme value in the R7RS-small language
 #[derive(Debug, Clone)]
@@ -47,6 +48,24 @@ pub enum Value {
         /// Empty list = user-written identifier
         /// [3, 1] = introduced in expansion 1, then passed through expansion 3
         marks: Vec<usize>,
+    },
+
+    // Scoped Identifier (for scope-sets hygiene - Racket approach)
+    // An identifier with a set of scopes tracking lexical context
+    // Used by the scope sets hygiene algorithm (Matthew Flatt, POPL 2016)
+    //
+    // ## References
+    // - Flatt "Binding as Sets of Scopes" (POPL 2016)
+    // - Racket's syntax system implementation
+    //
+    // Each binding form creates a unique scope. An identifier's scopes
+    // track which binding forms it's "inside of". Lookup finds the binding
+    // where binding.scopes ⊆ reference.scopes.
+    ScopedIdentifier {
+        name: Rc<str>,
+        /// Set of scopes this identifier is inside of
+        /// Empty set = top-level identifier
+        scopes: ScopeSet,
     },
 
     // Pairs and lists (mutable via set-car!/set-cdr!)
@@ -111,6 +130,15 @@ pub enum PromiseState {
     Forced(Value),
 }
 
+/// A clause in a case-lambda: (params, variadic, body, binding_scope)
+#[derive(Debug, Clone)]
+pub struct CaseLambdaClause {
+    pub params: Vec<String>,
+    pub variadic: Option<String>,
+    pub body: Vec<Value>,
+    pub binding_scope: Option<ScopeId>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum Procedure {
@@ -127,12 +155,21 @@ pub enum Procedure {
         variadic: Option<String>, // For rest parameters
         body: Vec<Value>,
         env: Rc<Environment>, // Captured environment for closures
+        /// Optional scope for parameter bindings (for scope-based hygiene)
+        /// If Some, parameters are bound with this scope in their scope set.
+        /// This enables hygienic macro expansion: free variables with matching
+        /// scopes can see these bindings, while others cannot.
+        binding_scope: Option<ScopeId>,
+        /// Optional CoreExpr body stored directly (avoids re-desugaring)
+        /// This is used to preserve scope IDs across lambda calls.
+        /// Without this, each lambda call would re-desugar the body,
+        /// creating fresh scope IDs that don't match definition_scopes.
+        body_core: Option<Rc<dyn std::any::Any>>,
     },
 
     /// Case-lambda procedure (dispatches on argument count)
-    /// Each clause is (params, variadic, body)
     CaseLambda {
-        clauses: Vec<(Vec<String>, Option<String>, Vec<Value>)>,
+        clauses: Vec<CaseLambdaClause>,
         env: Rc<Environment>, // Captured environment for closures
     },
 
@@ -165,6 +202,7 @@ impl Value {
             Value::String(_) => "string",
             Value::Symbol(_) => "symbol",
             Value::WrappedIdentifier { .. } => "identifier",
+            Value::ScopedIdentifier { .. } => "identifier",
             Value::Pair(_) | Value::Null => "list",
             Value::Vector(_) => "vector",
             Value::Bytevector(_) => "bytevector",
@@ -253,6 +291,16 @@ impl std::fmt::Display for Value {
                 // Display wrapped identifiers just as their name
                 // Marks are internal - they shouldn't appear in output
                 // Full marks-and-ribs will use marks for lookup, not display
+                if Self::symbol_needs_vertical_bars(name) {
+                    write!(f, "|{}|", name)
+                } else {
+                    write!(f, "{}", name)
+                }
+            }
+            Value::ScopedIdentifier { name, .. } => {
+                // Display scoped identifiers just as their name
+                // Scopes are internal - they shouldn't appear in output
+                // Scope sets are used for lookup, not display
                 if Self::symbol_needs_vertical_bars(name) {
                     write!(f, "|{}|", name)
                 } else {

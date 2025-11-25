@@ -493,6 +493,29 @@ impl Evaluator {
                 )))
             }
 
+            // ScopedIdentifier lookup (scope-sets hygiene)
+            // Uses scope-aware lookup for proper hygiene resolution
+            Value::ScopedIdentifier { name, scopes } => {
+                if self.debug.is_enabled(debug::DebugStage::Env) {
+                    eprintln!(
+                        "[ENV]{} ScopedIdentifier lookup: '{}' (scopes: {})",
+                        self.debug.current_indent(),
+                        name,
+                        scopes
+                    );
+                }
+
+                // Scope-based lookup using subset matching
+                if let Some(value) = env.get_with_scopes(name, scopes) {
+                    return Ok(EvalResult::Value(value));
+                }
+
+                Err(EvalError::UndefinedVariable(format!(
+                    "{} (scoped identifier with scopes {})",
+                    name, scopes
+                )))
+            }
+
             // Empty list
             Value::Null => Ok(EvalResult::Value(Value::Null)),
 
@@ -660,11 +683,14 @@ impl Evaluator {
                 variadic,
                 body,
                 env: lambda_env,
+                binding_scope,
+                body_core: _, // Not used in legacy evaluator path
             }) = proc
         {
             // Tail call to lambda - use shared helper methods
             // This is the key to tail recursion!
-            let new_env = self.prepare_lambda_env(&params, &variadic, args, &lambda_env)?;
+            let new_env =
+                self.prepare_lambda_env(&params, &variadic, args, &lambda_env, binding_scope)?;
             return self.eval_lambda_body(&body, &new_env, true);
         }
 
@@ -813,10 +839,13 @@ impl Evaluator {
                 variadic,
                 body,
                 env: lambda_env,
+                binding_scope,
+                body_core: _, // Not used in legacy evaluator path
             }) = proc
         {
             // Tail call to lambda - use shared helper methods
-            let new_env = self.prepare_lambda_env(&params, &variadic, args, &lambda_env)?;
+            let new_env =
+                self.prepare_lambda_env(&params, &variadic, args, &lambda_env, binding_scope)?;
             return self.eval_lambda_body(&body, &new_env, true);
         }
 
@@ -862,6 +891,9 @@ impl Evaluator {
 
             // WrappedIdentifiers - no expansion needed (from marks-and-ribs hygiene)
             Value::WrappedIdentifier { .. } => Ok(expr.clone()),
+
+            // ScopedIdentifiers - no expansion needed (from scope-sets hygiene)
+            Value::ScopedIdentifier { .. } => Ok(expr.clone()),
 
             // Vectors - recursively expand elements
             Value::Vector(vec) => {
@@ -997,13 +1029,19 @@ impl Evaluator {
     ///
     /// Returns a new environment with all parameters bound to their arguments.
     /// Handles both fixed-arity and variadic lambdas.
+    ///
+    /// If `binding_scope` is Some, uses scope-based hygiene by binding parameters
+    /// with a scope set containing that scope. This enables hygienic macro expansion.
     pub(crate) fn prepare_lambda_env(
         &self,
         params: &[String],
         variadic: &Option<String>,
         args: Vec<Value>,
         parent_env: &Rc<Environment>,
+        binding_scope: Option<patina_runtime::ScopeId>,
     ) -> Result<Rc<Environment>, EvalError> {
+        use patina_runtime::ScopeSet;
+
         // Check arity
         if variadic.is_some() {
             // Variadic: need at least as many args as fixed params
@@ -1026,9 +1064,23 @@ impl Evaluator {
         // Create new environment with lambda's captured environment as parent
         let new_env = Rc::new(Environment::with_parent(parent_env.clone()));
 
+        // Helper to define bindings
+        // We ALWAYS use regular define for marks-based hygiene compatibility
+        // We ALSO use scoped define when binding_scope is present for scope-based hygiene
+        let define = |name: String, value: Value| {
+            // Regular binding for marks-based lookup (get, get_with_marks)
+            new_env.define(name.clone(), value.clone());
+
+            // Additional scoped binding for scope-based lookup (get_with_scopes)
+            if let Some(scope_id) = binding_scope {
+                let scopes = ScopeSet::singleton(scope_id);
+                new_env.define_with_scopes(name, scopes, value);
+            }
+        };
+
         // Bind fixed parameters
         for (param, arg) in params.iter().zip(args.iter()) {
-            new_env.define(param.clone(), arg.clone());
+            define(param.clone(), arg.clone());
         }
 
         // Bind rest parameter if variadic
@@ -1036,7 +1088,7 @@ impl Evaluator {
             // Collect remaining args into a list
             let rest_args: Vec<Value> = args.into_iter().skip(params.len()).collect();
             let rest_list = self.list_from_vec(rest_args);
-            new_env.define(rest_param.clone(), rest_list);
+            define(rest_param.clone(), rest_list);
         }
 
         Ok(new_env)
@@ -1530,11 +1582,13 @@ impl Evaluator {
     /// - `expr`: The syntax-rules expression to compile
     /// - `name`: The macro name
     /// - `env`: The environment where the macro is being defined (for hygiene)
+    /// - `definition_scopes`: Scopes at macro definition time (for scope-based hygiene)
     pub(crate) fn compile_syntax_rules(
         &self,
         expr: &Value,
         name: Rc<str>,
         env: &Rc<Environment>,
+        definition_scopes: &patina_runtime::ScopeSet,
     ) -> Result<patina_macros::CompiledMacro, EvalError> {
         use patina_macros::Compiler;
 
@@ -1557,9 +1611,14 @@ impl Evaluator {
         // Parse rules as (pattern, template) pairs
         let rules = self.parse_macro_rules(&rules_expr)?;
 
-        // Compile using Compiler with environment capture for hygiene
+        // Compile using Compiler with environment and scope capture for hygiene
         // Pass the runtime Environment as Rc<dyn Any> following Gauche's approach
-        let mut compiler = Compiler::with_env(literals, None, env.clone() as Rc<dyn std::any::Any>);
+        let mut compiler = Compiler::with_env_and_scopes(
+            literals,
+            None,
+            env.clone() as Rc<dyn std::any::Any>,
+            definition_scopes.clone(),
+        );
         compiler
             .compile_macro(name, rules)
             .map_err(|e| EvalError::InvalidSyntax(format!("Failed to compile macro: {}", e)))

@@ -565,13 +565,13 @@ impl Expander {
         }
     }
 
-    /// Rename an identifier for hygiene using marks-and-ribs
+    /// Rename an identifier for hygiene using marks-and-ribs or scope sets
     ///
-    /// All identifiers become `WrappedIdentifier` with appropriate marks:
-    /// - Free variables: use definition marks (typically empty for definition-time bindings)
+    /// All identifiers become `WrappedIdentifier` or `ScopedIdentifier` with appropriate context:
+    /// - Free variables: use definition marks/scopes (for binding resolution)
     /// - Introduced identifiers: add expansion mark to avoid capturing use-site bindings
     ///
-    /// This unified approach ensures hygiene through marks comparison, not environment capture.
+    /// This unified approach ensures hygiene through marks/scopes comparison, not environment capture.
     fn rename_identifier(&self, id: &Identifier) -> Value {
         let name = id.name();
 
@@ -580,6 +580,22 @@ impl Expander {
             return Value::Symbol(name.clone());
         }
 
+        // Prefer scope-based hygiene if definition scopes are available
+        if let Some(def_scopes) = id.definition_scopes() {
+            // FREE VARIABLE with scope-based hygiene
+            if patina_runtime::macro_debug::is_enabled() {
+                println!(
+                    "[SCOPE-SETS] Free variable '{}' with scopes {}",
+                    name, def_scopes
+                );
+            }
+            return Value::ScopedIdentifier {
+                name: name.clone(),
+                scopes: def_scopes.clone(),
+            };
+        }
+
+        // Fall back to marks-and-ribs hygiene
         // Determine marks based on whether this is a free variable or introduced identifier
         let marks = if let Some(def_marks) = id.definition_marks() {
             // FREE VARIABLE - preserve definition-time marks
@@ -602,7 +618,7 @@ impl Expander {
             vec![self.expansion_mark]
         };
 
-        // Always return WrappedIdentifier - unified hygiene through marks
+        // Return WrappedIdentifier - unified hygiene through marks
         Value::WrappedIdentifier {
             name: name.clone(),
             marks,

@@ -315,16 +315,6 @@ Testing:
 Testing: 
 (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
 
-FAIL: 
-(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
-
-  expected: 
-outer
-
-  but got:  
-inner
-
-
 Error: Internal error: Failed to desugar expression: if expects 2 or 3 arguments, got 1
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence1
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
@@ -387,6 +377,7 @@ Testing:
 Testing: 
 (underscore2 (1 2))
 
+Error: Not a procedure: 1
 Testing: 
 (list (count-to-2 a b) (count-to-2) (count-to-2 a b c d))
 
@@ -421,7 +412,7 @@ x
 2
 
 
-Error: Invalid syntax: Desugaring failed: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro bar
+Error: Undefined variable: bar
 Error: Undefined variable: ff
 Testing: 
 (vector-lit)
@@ -429,9 +420,10 @@ Testing:
 Testing: 
 (quux399)
 
+Error: Not a procedure: #<macro:foo399>
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro name must be a symbol
 Error: Invalid syntax: syntax-rules literals must be a proper list
-Tests run: 15, Passed: 9, Failed: 6
+Tests run: 13, Passed: 8, Failed: 5
 
 Running test suite: 5 Program structure
 Testing: 
@@ -464,6 +456,7 @@ Testing:
 Testing: 
 (let ((x 1) (y 2)) (define-syntax swap! (syntax-rules () ((swap! a b) (let ((tmp a)) (set! a b) (set! b tmp))))) (swap! x y) (list x y))
 
+Error: Not a procedure: #<macro:swap!>
 Error: Undefined variable: define-record-type
 Testing: 
 (pare? (kons 1 2))
@@ -485,7 +478,7 @@ Testing:
 (let ((k (kons 1 2))) (set-kar! k 3) (kar k))
 
 Error: Undefined variable: kons
-Tests run: 10, Passed: 10, Failed: 0
+Tests run: 9, Passed: 9, Failed: 0
 
 Running test suite: 6.1 Equivalence Predicates
 Testing: 

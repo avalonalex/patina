@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-24 12:10:04
+**Generated:** 2025-11-24 19:43:37
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 699 | 63.1% |
-| ❌ Failed | 40 | 3.6% |
-| ⚠️ Error (crashed) | 369 | 33.3% |
+| ✅ Passed | 697 | 62.9% |
+| ❌ Failed | 39 | 3.5% |
+| ⚠️ Error (crashed) | 372 | 33.6% |
 | **Total** | **1108** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
@@ -19,7 +19,6 @@
 ### Test Failures
 
 ```
-FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -69,12 +68,15 @@ Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expan
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: sequence3
+Error: Not a procedure: 1
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro mad-hatter
 Error: Not a procedure: ok
-Error: Invalid syntax: Desugaring failed: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro bar
+Error: Undefined variable: bar
 Error: Undefined variable: ff
+Error: Not a procedure: #<macro:foo399>
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro name must be a symbol
 Error: Invalid syntax: syntax-rules literals must be a proper list
+Error: Not a procedure: #<macro:swap!>
 Error: Undefined variable: define-record-type
 Error: Undefined variable: pare?
 Error: Undefined variable: pare?

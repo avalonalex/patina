@@ -106,10 +106,11 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
                         let car = &borrowed.0;
                         let cdr = borrowed.1.clone();
 
-                        // Car must be a symbol or wrapped identifier
+                        // Car must be a symbol, wrapped identifier, or scoped identifier
                         match car {
                             Value::Symbol(s) => params.push(s.clone()),
                             Value::WrappedIdentifier { name, .. } => params.push(name.clone()),
+                            Value::ScopedIdentifier { name, .. } => params.push(name.clone()),
                             _ => {
                                 return Err(DesugarError::InvalidFormals(format!(
                                     "Parameter must be a symbol, got {:?}",
@@ -148,6 +149,20 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
                             rest,
                         });
                     }
+                    Value::ScopedIdentifier { name: rest, .. } => {
+                        // Improper list with scoped identifier - mixed arity: (x y . rest)
+                        check_no_duplicates(&params, "lambda")?;
+                        if params.contains(&rest) {
+                            return Err(DesugarError::DuplicateParameter {
+                                name: rest.to_string(),
+                                context: "lambda".to_string(),
+                            });
+                        }
+                        return Ok(Formals::Mixed {
+                            fixed: params,
+                            rest,
+                        });
+                    }
                     _ => {
                         return Err(DesugarError::InvalidFormals(format!(
                             "Invalid formal parameters: {:?}",
@@ -163,6 +178,9 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
 
         // Variadic with wrapped identifier
         Value::WrappedIdentifier { name, .. } => Ok(Formals::Variadic(name.clone())),
+
+        // Variadic with scoped identifier
+        Value::ScopedIdentifier { name, .. } => Ok(Formals::Variadic(name.clone())),
 
         _ => Err(DesugarError::InvalidFormals(format!(
             "Invalid formal parameters: {:?}",

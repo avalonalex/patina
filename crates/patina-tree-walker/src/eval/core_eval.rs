@@ -152,6 +152,12 @@ fn eval_core_step(
             .map(CoreEvalResult::Value)
             .ok_or_else(|| EvalError::UndefinedVariable(name.to_string())),
 
+        // Scoped variables: look up using scope-based hygiene
+        CoreExpr::ScopedVar { name, scopes } => env
+            .get_with_scopes(name, scopes)
+            .map(CoreEvalResult::Value)
+            .ok_or_else(|| EvalError::UndefinedVariable(name.to_string())),
+
         // Quote: return the quoted value as-is
         CoreExpr::Quote(v) => Ok(CoreEvalResult::Value(v.clone())),
 
@@ -162,22 +168,33 @@ fn eval_core_step(
         }
 
         // Lambda: create a closure
-        // NOTE: We convert CoreExpr body to Value body for compatibility with existing runtime
-        CoreExpr::Lambda { params, body } => {
+        // NOTE: We store BOTH Value and CoreExpr body
+        // - Value body for backward compatibility with legacy code paths
+        // - CoreExpr body for direct evaluation (preserves scope IDs)
+        CoreExpr::Lambda {
+            params,
+            body,
+            binding_scope,
+        } => {
             // Convert Formals to (params, variadic) format
             let (param_names, variadic) = formals_to_params(params)?;
 
-            // Convert CoreExpr body to Value body
-            // This is a temporary bridge - ideally we'd store CoreExpr in closures
+            // Convert CoreExpr body to Value body for backward compatibility
             let body_values: Result<Vec<Value>, EvalError> =
                 body.iter().map(core_expr_to_value).collect();
             let body_values = body_values?;
+
+            // Store CoreExpr body directly to avoid re-desugaring
+            // This preserves scope IDs for hygiene
+            let body_core: Rc<dyn std::any::Any> = Rc::new(body.clone());
 
             Ok(CoreEvalResult::Value(Value::Procedure(Procedure::Lambda {
                 params: param_names,
                 variadic,
                 body: body_values,
                 env: env.clone(),
+                binding_scope: *binding_scope,
+                body_core: Some(body_core),
             })))
         }
 
@@ -226,10 +243,19 @@ fn eval_core_step(
 
         // DefineSyntax: compile transformer and install macro
         // The transformer is typically (syntax-rules ...) which needs special handling
-        CoreExpr::DefineSyntax { name, transformer } => {
+        CoreExpr::DefineSyntax {
+            name,
+            transformer,
+            definition_scopes,
+        } => {
             // Transformer is already a Value (stored as data, not desugared code)
-            // Compile the syntax-rules transformer
-            let compiled_macro = evaluator.compile_syntax_rules(transformer, name.clone(), &env)?;
+            // Compile the syntax-rules transformer with definition scopes for hygiene
+            let compiled_macro = evaluator.compile_syntax_rules(
+                transformer,
+                name.clone(),
+                &env,
+                definition_scopes,
+            )?;
 
             // Store the compiled macro
             let macro_value = Value::Macro {
@@ -436,7 +462,8 @@ fn eval_core_step(
         // Case-lambda: create a multi-arity procedure
         CoreExpr::CaseLambda { clauses } => {
             // Convert clauses to runtime representation
-            let runtime_clauses: Vec<(Vec<String>, Option<String>, Vec<Value>)> = clauses
+            // Each clause includes an optional binding_scope for hygiene
+            let runtime_clauses: Vec<patina_runtime::CaseLambdaClause> = clauses
                 .iter()
                 .map(|clause| {
                     // Convert Formals to (params, variadic) format
@@ -447,7 +474,14 @@ fn eval_core_step(
                         clause.body.iter().map(core_expr_to_value).collect();
                     let body_values = body_values?;
 
-                    Ok((param_names, variadic, body_values))
+                    // TODO: When CoreExpr::CaseLambda gets binding_scope per clause, use it here
+                    // For now, case-lambda clauses don't have hygiene scopes
+                    Ok(patina_runtime::CaseLambdaClause {
+                        params: param_names,
+                        variadic,
+                        body: body_values,
+                        binding_scope: None,
+                    })
                 })
                 .collect::<Result<Vec<_>, EvalError>>()?;
 
@@ -488,29 +522,50 @@ fn apply_procedure(
             variadic,
             body,
             env: closure_env,
+            binding_scope,
+            body_core,
         }) => {
             // Create new environment extending closure environment
             let call_env = Rc::new(Environment::with_parent(closure_env.clone()));
 
-            // Bind parameters
-            bind_params(params, variadic.as_ref(), args, &call_env)?;
+            // Bind parameters (with scope if available for hygiene)
+            bind_params(params, variadic.as_ref(), args, &call_env, *binding_scope)?;
 
-            // Evaluate body expressions in sequence
+            // Try to use CoreExpr body directly (preserves scope IDs for hygiene)
+            // This is critical: re-desugaring would create fresh scope IDs that
+            // don't match definition_scopes captured at macro definition time.
+            if let Some(body_core) = body_core {
+                if let Some(core_body) = body_core.downcast_ref::<Vec<CoreExpr>>() {
+                    if core_body.is_empty() {
+                        return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
+                    }
+
+                    // Evaluate all but last for side effects
+                    for expr in &core_body[..core_body.len() - 1] {
+                        eval_non_tail(expr, call_env.clone(), evaluator)?;
+                    }
+
+                    // Last expression is in tail position
+                    return Ok(CoreEvalResult::TailCall {
+                        expr: core_body[core_body.len() - 1].clone(),
+                        env: call_env,
+                    });
+                }
+            }
+
+            // Fallback: use Value body (for lambdas created without body_core)
             if body.is_empty() {
                 return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
             }
 
             // Evaluate all but last for side effects
             for expr in &body[..body.len() - 1] {
-                // Since body is Vec<Value>, we need to evaluate it using the Value evaluator
-                // TODO: This is a temporary bridge - we should use CoreExpr bodies
-                // For now, we use a minimal evaluation strategy
                 eval_value_simple(expr, call_env.clone(), evaluator)?;
             }
 
-            // Last expression is in tail position - convert to CoreExpr and return TailCall
+            // Last expression - need to desugar (creates fresh scopes, but this
+            // path is only used for lambdas without body_core)
             let last_expr_value = &body[body.len() - 1];
-            // Use desugarer with environment to handle macros in lambda bodies
             let desugarer = patina_frontend::Desugarer::with_env(call_env.clone());
             let last_expr_core = desugarer
                 .desugar(last_expr_value)
@@ -553,34 +608,40 @@ fn apply_procedure(
             env: case_env,
         }) => {
             // case-lambda: try each clause in order to find one that matches the argument count
-            for (params, variadic, body) in clauses {
-                let matches = if variadic.is_some() {
+            for clause in clauses {
+                let matches = if clause.variadic.is_some() {
                     // Variadic clause: need at least as many args as fixed params
-                    args.len() >= params.len()
+                    args.len() >= clause.params.len()
                 } else {
                     // Fixed arity clause: need exact number of args
-                    args.len() == params.len()
+                    args.len() == clause.params.len()
                 };
 
                 if matches {
                     // Found a matching clause - create new environment and evaluate
                     let call_env = Rc::new(Environment::with_parent(case_env.clone()));
-                    bind_params(params, variadic.as_ref(), args, &call_env)?;
+                    bind_params(
+                        &clause.params,
+                        clause.variadic.as_ref(),
+                        args,
+                        &call_env,
+                        clause.binding_scope,
+                    )?;
 
                     // Evaluate body (Vec<Value>) using eval_value_simple
-                    if body.is_empty() {
+                    if clause.body.is_empty() {
                         return Err(EvalError::InvalidSyntax(
                             "Empty case-lambda body".to_string(),
                         ));
                     }
 
                     // Evaluate all but last for side effects
-                    for expr in &body[..body.len() - 1] {
+                    for expr in &clause.body[..clause.body.len() - 1] {
                         eval_value_simple(expr, call_env.clone(), evaluator)?;
                     }
 
                     // Last expression is in tail position
-                    let last_expr_value = &body[body.len() - 1];
+                    let last_expr_value = &clause.body[clause.body.len() - 1];
                     // Use desugarer with environment to handle macros in lambda bodies
                     let desugarer = patina_frontend::Desugarer::with_env(call_env.clone());
                     let last_expr_core = desugarer.desugar(last_expr_value).map_err(|e| {
@@ -617,13 +678,34 @@ fn apply_procedure(
 }
 
 /// Bind parameters to arguments
+///
+/// If `binding_scope` is Some, uses scope-based hygiene by binding parameters
+/// with a scope set containing that scope. This enables hygienic macro expansion
+/// where free variables in macro templates can't see bindings from the expansion site.
 fn bind_params(
     params: &[String],
     variadic: Option<&String>,
     args: &[Value],
     env: &Environment,
+    binding_scope: Option<patina_runtime::ScopeId>,
 ) -> Result<(), EvalError> {
+    use patina_runtime::ScopeSet;
+
     let required = params.len();
+
+    // Helper to define bindings
+    // We ALWAYS use regular define for marks-based hygiene compatibility
+    // We ALSO use scoped define when binding_scope is present for scope-based hygiene
+    let define = |name: String, value: Value| {
+        // Regular binding for marks-based lookup (get, get_with_marks)
+        env.define(name.clone(), value.clone());
+
+        // Additional scoped binding for scope-based lookup (get_with_scopes)
+        if let Some(scope_id) = binding_scope {
+            let scopes = ScopeSet::singleton(scope_id);
+            env.define_with_scopes(name, scopes, value);
+        }
+    };
 
     match variadic {
         None => {
@@ -635,7 +717,7 @@ fn bind_params(
                 });
             }
             for (param, arg) in params.iter().zip(args.iter()) {
-                env.define(param.clone(), arg.clone());
+                define(param.clone(), arg.clone());
             }
         }
         Some(rest_param) => {
@@ -648,12 +730,12 @@ fn bind_params(
             }
             // Bind required parameters
             for (param, arg) in params.iter().zip(args.iter()) {
-                env.define(param.clone(), arg.clone());
+                define(param.clone(), arg.clone());
             }
             // Bind rest parameters as list
             let rest_args = &args[required..];
             let rest_list = args_to_list(rest_args);
-            env.define(rest_param.clone(), rest_list);
+            define(rest_param.clone(), rest_list);
         }
     }
 
@@ -694,6 +776,10 @@ fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
     match expr {
         CoreExpr::Literal(v) => Ok(v.clone()),
         CoreExpr::Var(name) => Ok(Value::Symbol(name.clone())),
+        CoreExpr::ScopedVar { name, scopes } => Ok(Value::ScopedIdentifier {
+            name: name.clone(),
+            scopes: scopes.clone(),
+        }),
         CoreExpr::Quote(v) => {
             // (quote datum)
             Ok(cons(
@@ -708,8 +794,9 @@ fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
                 cons(template.clone(), Value::Null),
             ))
         }
-        CoreExpr::Lambda { params, body } => {
+        CoreExpr::Lambda { params, body, .. } => {
             // (lambda params body...)
+            // Note: binding_scope is not serialized to Value - it's only used at runtime
             let params_value = formals_to_value_list(params);
             let body_values: Result<Vec<Value>, _> = body.iter().map(core_expr_to_value).collect();
             let body_list = vec_to_list(&body_values?);
@@ -746,7 +833,9 @@ fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
                 cons(Value::Symbol(name.clone()), cons(value_val, Value::Null)),
             ))
         }
-        CoreExpr::DefineSyntax { name, transformer } => {
+        CoreExpr::DefineSyntax {
+            name, transformer, ..
+        } => {
             // (define-syntax name transformer)
             // Transformer is already a Value (template data)
             Ok(cons(
@@ -1347,6 +1436,7 @@ mod tests {
         let expr = CoreExpr::Lambda {
             params: Formals::Fixed(vec![Rc::from("x")]),
             body: vec![CoreExpr::Var(Rc::from("x"))],
+            binding_scope: None,
         };
 
         let result = eval_core(&expr, env, &evaluator).unwrap();

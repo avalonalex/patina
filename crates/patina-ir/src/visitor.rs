@@ -87,12 +87,18 @@ impl CoreExpr {
         match self {
             CoreExpr::Literal(_)
             | CoreExpr::Var(_)
+            | CoreExpr::ScopedVar { .. }
             | CoreExpr::Quote(_)
             | CoreExpr::Quasiquote(_) => self.clone(),
 
-            CoreExpr::Lambda { params, body } => CoreExpr::Lambda {
+            CoreExpr::Lambda {
+                params,
+                body,
+                binding_scope,
+            } => CoreExpr::Lambda {
                 params: params.clone(),
                 body: body.iter().map(&f).collect(),
+                binding_scope: *binding_scope,
             },
 
             CoreExpr::If { test, then, else_ } => CoreExpr::If {
@@ -113,9 +119,14 @@ impl CoreExpr {
                 value: Box::new(f(value)),
             },
 
-            CoreExpr::DefineSyntax { name, transformer } => CoreExpr::DefineSyntax {
+            CoreExpr::DefineSyntax {
+                name,
+                transformer,
+                definition_scopes,
+            } => CoreExpr::DefineSyntax {
                 name: name.clone(),
                 transformer: transformer.clone(), // transformer is Value (data), not transformed
+                definition_scopes: definition_scopes.clone(),
             },
 
             CoreExpr::Import { import_sets } => CoreExpr::Import {

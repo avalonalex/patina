@@ -17,6 +17,7 @@ pub mod library_registry;
 pub mod macro_debug;
 pub mod pvref;
 pub mod rust_library_loader;
+pub mod scope;
 pub mod stdlib;
 pub mod value;
 
@@ -29,4 +30,5 @@ pub use library_loader::{LibraryLoader, LibraryLoaderRegistry, RustLibraryBuilde
 pub use library_registry::{LibraryError, LibraryRegistry};
 pub use pvref::{MatchEnv, MatchValue, PVRef};
 pub use rust_library_loader::RustLibraryLoader;
-pub use value::{Arity, Procedure, Value};
+pub use scope::{ScopeId, ScopeSet};
+pub use value::{Arity, CaseLambdaClause, Procedure, Value};

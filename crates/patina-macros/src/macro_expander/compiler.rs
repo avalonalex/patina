@@ -16,7 +16,7 @@
 use super::pattern::Pattern;
 use super::template::{Identifier, Template};
 use crate::error::MacroError;
-use patina_runtime::{PVRef, Value};
+use patina_runtime::{PVRef, ScopeSet, Value};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -58,6 +58,13 @@ pub struct CompiledMacro {
 
     /// Maximum number of pattern variables in any rule
     pub max_pvars: usize,
+
+    /// Scope set at macro definition time (for scope-based hygiene)
+    ///
+    /// Free variables in templates will carry this scope set, enabling
+    /// correct binding resolution even when the macro is used inside
+    /// a different lexical scope.
+    pub definition_scopes: ScopeSet,
 }
 
 /// Pattern and template compiler
@@ -82,6 +89,12 @@ pub struct Compiler {
     /// and patina-runtime. The tree-walker evaluator will pass an `Rc<Environment>`.
     env: Option<std::rc::Rc<dyn std::any::Any>>,
 
+    /// Scope set at macro definition time (for scope-based hygiene)
+    ///
+    /// Free variables will carry this scope set so they resolve to
+    /// definition-time bindings, not use-site bindings.
+    definition_scopes: ScopeSet,
+
     // Per-rule compilation context
     /// Map from pattern variable name to PVREF
     pvars: HashMap<Rc<str>, PVRef>,
@@ -104,6 +117,7 @@ impl Compiler {
             literals,
             ellipsis: ellipsis.or_else(|| Some("...".into())),
             env: None,
+            definition_scopes: ScopeSet::new(),
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
@@ -127,6 +141,34 @@ impl Compiler {
             literals,
             ellipsis: ellipsis.or_else(|| Some("...".into())),
             env: Some(env),
+            definition_scopes: ScopeSet::new(),
+            pvars: HashMap::new(),
+            pvar_count: 0,
+            max_level: 0,
+        }
+    }
+
+    /// Create a new compiler with environment and scope set (for scope-based hygiene)
+    ///
+    /// # Arguments
+    /// - `literals`: List of literal identifier names
+    /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
+    /// - `env`: Lexical environment where the macro is being defined (as `Rc<dyn Any>`)
+    /// - `scopes`: Scope set at macro definition time
+    ///
+    /// Free variables in templates will carry the scope set so they resolve to
+    /// definition-time bindings, not use-site bindings.
+    pub fn with_env_and_scopes(
+        literals: Vec<Rc<str>>,
+        ellipsis: Option<Rc<str>>,
+        env: std::rc::Rc<dyn std::any::Any>,
+        scopes: ScopeSet,
+    ) -> Self {
+        Self {
+            literals,
+            ellipsis: ellipsis.or_else(|| Some("...".into())),
+            env: Some(env),
+            definition_scopes: scopes,
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
@@ -189,6 +231,7 @@ impl Compiler {
             literals: self.literals.clone(),
             rules: compiled_rules,
             max_pvars,
+            definition_scopes: self.definition_scopes.clone(),
         })
     }
 
@@ -383,25 +426,44 @@ impl Compiler {
                     // If bound → it's a FREE VARIABLE (capture environment)
                     // If not bound → it's an INTRODUCED IDENTIFIER (no environment capture, will be renamed)
 
-                    let should_capture = if let Some(env_any) = &self.env {
-                        // Try to downcast to Environment and check if symbol is bound
-                        use patina_runtime::Environment;
-                        if let Some(env) = env_any.downcast_ref::<Environment>() {
-                            env.get(s).is_some()
+                    // Scope-based hygiene approach (Racket-style):
+                    // ALL non-pattern-variable identifiers in templates are tagged with definition scopes.
+                    // The scopes represent the lexical context at macro definition time.
+                    // At expansion time, the identifier will carry these scopes.
+                    // At lookup time, we find the binding with matching scope subset.
+                    //
+                    // This differs from the old marks-and-ribs approach which only tagged
+                    // identifiers that were bound at definition time ("free variables").
+                    // In scope-based hygiene, the scopes ARE the mechanism for hygiene -
+                    // we don't need to distinguish free vs introduced at compile time.
+
+                    if !self.definition_scopes.is_empty() {
+                        // Scope-based hygiene: tag with definition scopes
+                        Ok(Template::Symbol(Identifier::with_scopes(
+                            s.clone(),
+                            self.definition_scopes.clone(),
+                        )))
+                    } else {
+                        // Fall back to marks-and-ribs hygiene (no scopes available)
+                        // Check if it's bound in the captured environment at compile time
+                        let should_capture = if let Some(env_any) = &self.env {
+                            use patina_runtime::Environment;
+                            if let Some(env) = env_any.downcast_ref::<Environment>() {
+                                env.get(s).is_some()
+                            } else {
+                                false
+                            }
                         } else {
                             false
-                        }
-                    } else {
-                        false
-                    };
+                        };
 
-                    if should_capture {
-                        // Free variable - use empty marks (definition-time binding)
-                        // Empty marks means: "this identifier existed before any macro expansion"
-                        Ok(Template::Symbol(Identifier::with_marks(s.clone(), vec![])))
-                    } else {
-                        // Introduced identifier - no definition marks (will get expansion mark)
-                        Ok(Template::Symbol(Identifier::new(s.clone())))
+                        if should_capture {
+                            // Free variable - use empty marks
+                            Ok(Template::Symbol(Identifier::with_marks(s.clone(), vec![])))
+                        } else {
+                            // Introduced identifier - will get expansion mark
+                            Ok(Template::Symbol(Identifier::new(s.clone())))
+                        }
                     }
                 }
             }
