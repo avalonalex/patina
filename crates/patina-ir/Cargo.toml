@@ -5,8 +5,8 @@ edition = "2024"
 description = "Core intermediate representation for Patina Scheme compiler"
 
 [dependencies]
-# Runtime types
-patina-runtime = { path = "../patina-runtime" }
+# Core types (foundation crate)
+patina-core = { path = "../patina-core" }
 
 # Error handling
 thiserror = { workspace = true }

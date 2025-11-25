@@ -90,7 +90,6 @@ impl Evaluator {
                 body,
                 env,
                 binding_scope,
-                body_core: _, // Not used in legacy evaluator path
             }) => {
                 // Use shared helper methods to prepare environment and evaluate body
                 let new_env =

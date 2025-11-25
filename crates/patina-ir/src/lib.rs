@@ -1,24 +1,19 @@
-//! Patina IR - Core Intermediate Representation
+//! Patina IR - Intermediate Representation utilities
 //!
-//! This crate defines the Core IR that all compiler passes operate on.
+//! This crate provides IR utilities for the Patina compiler:
+//! - Visitor patterns for IR transformation
+//! - Surface syntax helpers
 //!
-//! The Core IR is a minimal Scheme syntax with only 7 core forms:
-//! - `quote` - Literal data
-//! - `lambda` - Function abstraction
-//! - `if` - Conditional (always ternary)
-//! - `set!` - Mutation
-//! - `begin` - Sequencing
-//! - `define` - Top-level binding
-//! - Application - Function calls
-//!
-//! All macros and derived forms (cond, case, let, and, or, etc.) are
-//! desugared by the frontend before reaching the Core IR.
+//! Core IR types (`CoreExpr`, `Formals`, `Symbol`) are defined in `patina-core`
+//! and re-exported here for convenience.
 
-pub mod core_expr;
 pub mod surface_syntax;
 pub mod visitor;
 
-// Re-export main types
-pub use core_expr::{CaseLambdaClause, CoreExpr, Formals, Symbol};
+// Re-export core IR types from patina-core
+pub use patina_core::core_expr::CaseLambdaClause;
+pub use patina_core::{CoreExpr, Formals, Primitive, Symbol};
+
+// Local types
 pub use surface_syntax::SurfaceSyntax;
 pub use visitor::ExprVisitor;

@@ -1,6 +1,7 @@
 # Workspace configuration
 [workspace]
 members = [
+    "crates/patina-core",
     "crates/patina-runtime",
     "crates/patina-ir",
     "crates/patina-frontend",

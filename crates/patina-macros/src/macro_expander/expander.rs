@@ -618,7 +618,7 @@ impl Expander {
     /// Check if a name is bound to a macro in the expansion environment
     fn is_macro(&self, name: &Rc<str>) -> bool {
         use patina_runtime::Value;
-        matches!(self.expansion_env.get(name), Some(Value::Macro { .. }))
+        matches!(self.expansion_env.get(name), Some(Value::Macro(_)))
     }
 
     /// Convert a Scheme list to a Vec

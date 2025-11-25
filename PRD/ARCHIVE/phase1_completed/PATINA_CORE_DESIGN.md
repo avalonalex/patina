@@ -1,5 +1,9 @@
 # Patina Core Crate Design
 
+> **Status: ✅ COMPLETE (2025-11-25)**
+>
+> This design has been fully implemented. See `internal/MILESTONES.md` for details.
+
 ## Overview
 
 This document proposes creating a `patina-core` foundation crate to eliminate `dyn Any` usage and create a cleaner architecture.

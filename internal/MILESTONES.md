@@ -2,6 +2,117 @@
 
 Major accomplishments and project milestones.
 
+## 2025-11-25: Complete `dyn Any` Elimination - Zero `dyn Any` in Codebase
+
+**Major Type Safety Achievement**
+
+Fully eliminated all `dyn Any` usage from the codebase:
+1. `CompiledMacro` and related types moved to `patina-core`
+2. `Value::Macro` changed to tuple variant with `Rc<CompiledMacro>`
+3. `Compiler::env` changed from `Rc<dyn Any>` to `Rc<Environment>`
+
+**What Changed:**
+- ✅ Moved `CompiledMacro`, `CompiledRule`, `Pattern`, `Template`, `Identifier` to `patina-core`
+- ✅ Changed `Value::Macro { name, data: Rc<dyn Any> }` → `Value::Macro(Rc<CompiledMacro>)`
+- ✅ Changed `Compiler::env` from `Option<Rc<dyn Any>>` → `Option<Rc<Environment>>`
+- ✅ Removed all `downcast_ref()` calls from the codebase
+- ✅ Updated all macro creation/usage sites (desugarer, core_eval, mod.rs)
+- ✅ `patina-macros` now imports types from `patina-core` via `patina-runtime`
+
+**New Type-Safe Macro Representation:**
+```rust
+// In patina-core/src/value.rs
+Macro(Rc<CompiledMacro>),  // Type-safe, no dyn Any!
+
+// In patina-core/src/compiled_macro.rs
+pub struct CompiledMacro {
+    pub name: Rc<str>,
+    pub literals: Vec<Rc<str>>,
+    pub rules: Vec<CompiledRule>,
+    pub max_pvars: usize,
+    pub definition_scopes: ScopeSet,
+}
+```
+
+**Why This Matters:**
+- **Type safety**: No more runtime downcasting from `dyn Any` for macros
+- **Cleaner API**: `Value::Macro(compiled)` is simpler than `Value::Macro { name, data }`
+- **Compile-time guarantees**: Invalid macro data detected at compile time
+- **Complete dyn Any elimination**: Only acceptable `dyn Any` remains in compiler env
+
+**Files Added/Changed:**
+- `crates/patina-core/src/compiled_macro.rs` - New module with macro data structures
+- `crates/patina-core/src/lib.rs` - Exports new macro types
+- `crates/patina-core/src/value.rs` - Changed `Value::Macro` variant
+- `crates/patina-macros/src/macro_expander/pattern.rs` - Re-exports from patina-core
+- `crates/patina-macros/src/macro_expander/template.rs` - Re-exports from patina-core
+- `crates/patina-macros/src/macro_expander/compiler.rs` - Imports from patina-core
+- `crates/patina-frontend/src/desugarer/mod.rs` - Updated macro usage
+- `crates/patina-tree-walker/src/eval/core_eval.rs` - Updated macro creation/usage
+- `crates/patina-tree-walker/src/eval/mod.rs` - Updated macro expansion
+
+**Test Results:**
+- ✅ All ~900+ tests pass
+- ✅ Zero regressions
+
+---
+
+## 2025-11-25: Foundation Crate & Type-Safe Lambda Bodies
+
+**Major Architectural Improvement**
+
+Created `patina-core` foundation crate and eliminated `dyn Any` from `Procedure::Lambda`, achieving type-safe lambda body representation.
+
+**What Changed:**
+- ✅ Created `patina-core` crate with core types (Value, Environment, CoreExpr, etc.)
+- ✅ Introduced `LambdaBody` enum replacing `dyn Any` in `Procedure::Lambda`
+- ✅ Updated `CaseLambdaClause` to use `LambdaBody` for consistency
+- ✅ Migrated all shared types to foundation crate
+- ✅ Resolved namespace conflict for `CaseLambdaClause` (IR vs runtime versions)
+
+**New Type-Safe Lambda Representation:**
+```rust
+pub enum LambdaBody {
+    Values(Vec<Value>),   // Legacy: body as syntax Values
+    Core(Vec<CoreExpr>),  // Optimized: body as CoreExpr (preserves hygiene)
+}
+
+pub enum Procedure {
+    Lambda {
+        params: Vec<String>,
+        variadic: Option<String>,
+        body: LambdaBody,         // Type-safe, no dyn Any!
+        env: Rc<Environment>,
+        binding_scope: Option<ScopeId>,
+    },
+    // ...
+}
+```
+
+**Why This Matters:**
+- **Type safety**: No more runtime downcasting from `dyn Any`
+- **Cleaner architecture**: Foundation crate prevents circular dependencies
+- **Better hygiene**: CoreExpr bodies preserve scope IDs across lambda calls
+- **Improved performance**: Avoids re-desugaring on each lambda call
+
+**Files Added/Changed:**
+- `crates/patina-core/` - New foundation crate
+  - `value.rs` - Value, LambdaBody, Procedure, CaseLambdaClause
+  - `environment.rs` - Environment, ScopedBinding
+  - `core_expr.rs` - CoreExpr, Formals, Primitive
+  - `scope.rs` - ScopeId, ScopeSet
+  - `library.rs` - Library type
+  - `pvref.rs` - Pattern variable references
+- `patina-runtime/src/lib.rs` - Now re-exports from patina-core
+- `patina-ir/src/lib.rs` - Now re-exports from patina-core
+- `patina-tree-walker/src/eval/` - Updated to use LambdaBody
+
+**Test Results:**
+- ✅ All ~900+ tests pass
+- ✅ Zero regressions
+
+---
+
 ## 2025-11-25: Hygiene System Unification - Scope Sets Only
 
 **Major Architectural Simplification**

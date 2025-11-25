@@ -203,7 +203,7 @@ impl Desugarer {
             // Runtime-only values should never appear in AST
             Value::Procedure(_)
             | Value::Parameter { .. }
-            | Value::Macro { .. }
+            | Value::Macro(_)
             | Value::Library(_)
             | Value::InputPort
             | Value::OutputPort
@@ -230,16 +230,12 @@ impl Desugarer {
         // MACRO-AWARE DESUGARING: Check if this is a macro call FIRST
         // If we have an environment, check for macros before special forms
         if let (Some(env), Value::Symbol(sym)) = (&self.env, &car)
-            && let Some(Value::Macro { data, .. }) = env.get(sym)
+            && let Some(Value::Macro(compiled_macro)) = env.get(sym)
         {
             // This is a macro! Expand it and recursively desugar the result
-            let compiled_macro = data
-                .downcast_ref::<patina_macros::CompiledMacro>()
-                .ok_or_else(|| DesugarError::InvalidSyntax("Invalid macro data".to_string()))?;
-
             // Expand the macro
             let expanded =
-                patina_macros::expand_macro(compiled_macro, value, env).map_err(|e| {
+                patina_macros::expand_macro(&compiled_macro, value, env).map_err(|e| {
                     DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e))
                 })?;
 
@@ -743,10 +739,7 @@ impl Desugarer {
         // Create environment with macro bindings
         let body_env = Rc::new(Environment::with_parent(env.clone()));
         for (name, compiled_macro) in macro_bindings {
-            let macro_value = Value::Macro {
-                name: name.clone(),
-                data: Rc::new(compiled_macro),
-            };
+            let macro_value = Value::Macro(Rc::new(compiled_macro));
             body_env.define(name.to_string(), macro_value);
         }
 
@@ -823,8 +816,7 @@ impl Desugarer {
         let rules = self.parse_macro_rules(&rules_list)?;
 
         // Compile using Compiler with environment capture for hygiene
-        // Pass the runtime Environment as Rc<dyn Any> following Gauche's approach
-        let mut compiler = Compiler::with_env(literals, None, env.clone() as Rc<dyn std::any::Any>);
+        let mut compiler = Compiler::with_env(literals, None, env.clone());
         compiler
             .compile_macro(name, rules)
             .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
@@ -883,12 +875,8 @@ impl Desugarer {
         let rules = self.parse_macro_rules(&rules_list)?;
 
         // Compile using Compiler with environment AND scope set for scope-based hygiene
-        let mut compiler = Compiler::with_env_and_scopes(
-            literals,
-            None,
-            env.clone() as Rc<dyn std::any::Any>,
-            scopes.clone(),
-        );
+        let mut compiler =
+            Compiler::with_env_and_scopes(literals, None, env.clone(), scopes.clone());
         compiler
             .compile_macro(name, rules)
             .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))

@@ -1,44 +1,61 @@
 # Avoiding `dyn Any` in Patina
 
-This document analyzes the current uses of `dyn Any` in Patina and proposes alternatives to make the codebase more type-safe.
+> **Status: ✅ FULLY RESOLVED (2025-11-25)**
+>
+> All `dyn Any` usages have been completely eliminated:
+> - Lambda body storage resolved with `LambdaBody` enum in `patina-core`
+> - Macro storage resolved with `CompiledMacro` moved to `patina-core`
+> - Compiler environment now uses `Rc<Environment>` directly
+>
+> **Zero `dyn Any` remains in the codebase.**
 
-## Current `dyn Any` Usage
+This document analyzes the uses of `dyn Any` that existed in Patina and documents how they were resolved.
 
-### 1. Macro Storage in `Value::Macro`
+## Resolved `dyn Any` Usage
 
-**Location:** `crates/patina-runtime/src/value.rs:102-106`
+### 1. Macro Storage in `Value::Macro` - ✅ RESOLVED
+
+**Solution implemented:** `CompiledMacro` moved to `patina-core/src/compiled_macro.rs`
 
 ```rust
-Macro {
-    name: Rc<str>,
-    data: Rc<dyn std::any::Any>,  // Stores CompiledMacro from patina-macros
-},
+// In patina-core/src/value.rs
+Macro(Rc<CompiledMacro>),  // Type-safe, no dyn Any!
 ```
 
-**Why `dyn Any`:** `patina-runtime` cannot depend on `patina-macros` (would create circular dependency), so it stores the compiled macro opaquely.
+By placing `CompiledMacro` (and its dependencies `Pattern`, `Template`, `Identifier`) in the
+`patina-core` foundation crate, we avoided the circular dependency and achieved type safety.
+The `patina-macros` crate now imports these types from `patina-core` via `patina-runtime`.
 
-### 2. Lambda Body Storage
+### 2. Lambda Body Storage - ✅ RESOLVED
 
-**Location:** `crates/patina-runtime/src/value.rs:154-158`
+**Solution implemented:** `LambdaBody` enum in `patina-core/src/value.rs`
 
 ```rust
+pub enum LambdaBody {
+    Values(Vec<Value>),   // Legacy: body as syntax Values
+    Core(Vec<CoreExpr>),  // Optimized: body as CoreExpr
+}
+
 Lambda {
+    body: LambdaBody,  // Type-safe, no dyn Any!
     // ...
-    body_core: Option<Rc<dyn std::any::Any>>,  // Stores Vec<CoreExpr>
 },
 ```
 
-**Why `dyn Any`:** `patina-runtime` cannot depend on `patina-ir` (would create circular dependency), so the CoreExpr body is stored opaquely to avoid re-desugaring which would create fresh scope IDs.
+By placing `CoreExpr` in the `patina-core` foundation crate, we avoided the circular dependency and achieved type safety.
 
-### 3. Compiler Environment
+### 3. Compiler Environment - ✅ RESOLVED
 
-**Location:** `crates/patina-macros/src/macro_expander/compiler.rs:80`
+**Solution implemented:** Changed `Compiler::env` from `Rc<dyn Any>` to `Rc<Environment>`
 
 ```rust
-env: Option<Rc<dyn Any>>,  // Stores Environment for hygiene lookup
+// In patina-macros/src/macro_expander/compiler.rs
+env: Option<Rc<Environment>>,  // Type-safe, no dyn Any!
 ```
 
-**Why `dyn Any`:** `patina-macros` uses the environment for hygiene checks but stores it opaquely.
+Since `Environment` is already in `patina-core`, and `patina-macros` already depends on
+`patina-runtime` (which re-exports `patina-core`), we can use `Rc<Environment>` directly.
+The simplified code no longer needs `downcast_ref()` calls
 
 ---
 

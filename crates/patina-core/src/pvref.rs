@@ -13,7 +13,7 @@
 //! - MatchVar structure: macro.c:709-726
 //! - Tree navigation: macro.c:730-750
 
-use crate::Value;
+use crate::value::Value;
 
 /// Pattern Variable Reference (PVREF) - compact encoding of pattern variable location
 ///

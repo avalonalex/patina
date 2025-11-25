@@ -5,6 +5,9 @@ edition = "2024"
 description = "Runtime value types and environment for Patina Scheme interpreter"
 
 [dependencies]
+# Core types (foundation crate)
+patina-core = { path = "../patina-core" }
+
 # Numeric tower support
 num-bigint = { workspace = true }
 num-rational = { workspace = true }

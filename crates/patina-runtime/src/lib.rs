@@ -1,34 +1,37 @@
-//! Patina Runtime - Core value types and environment model
+//! Patina Runtime - Runtime services for Patina Scheme interpreter
 //!
-//! This crate provides the foundational runtime types used by all Patina components:
+//! This crate provides runtime services and re-exports core types from `patina-core`:
+//!
+//! **From patina-core (re-exported for convenience):**
 //! - `Value`: The Scheme value representation (numbers, lists, procedures, etc.)
 //! - `Environment`: Lexical environment for variable bindings
 //! - `Procedure` and `Arity`: Procedure representation
-//! - `Backend`: Trait for pluggable interpreter implementations
+//! - `ScopeId`, `ScopeSet`: Scope tracking for hygiene
+//! - `PVRef`, `MatchEnv`, `MatchValue`: Macro pattern variables
+//! - `CoreExpr`, `Formals`: Core IR types
+//! - `Library`: R7RS library representation
 //!
-//! This crate is intentionally minimal and stable - it should rarely change.
+//! **Runtime services (defined here):**
+//! - `Backend`: Trait for pluggable interpreter implementations
+//! - `LibraryRegistry`, `LibraryLoader`: Library management
+//! - Standard library implementations
 
+// Runtime-specific modules
 pub mod backend;
-pub mod environment;
 pub mod error;
-pub mod library;
 pub mod library_loader;
 pub mod library_registry;
 pub mod macro_debug;
-pub mod pvref;
 pub mod rust_library_loader;
-pub mod scope;
 pub mod stdlib;
-pub mod value;
 
-// Re-export main types for convenience
+// Re-export all types from patina-core for backwards compatibility
+// This allows existing code using `patina_runtime::Value` to continue working
+pub use patina_core::*;
+
+// Re-export runtime-specific types
 pub use backend::Backend;
-pub use environment::Environment;
 pub use error::RuntimeError;
-pub use library::Library;
 pub use library_loader::{LibraryLoader, LibraryLoaderRegistry, RustLibraryBuilder};
 pub use library_registry::{LibraryError, LibraryRegistry};
-pub use pvref::{MatchEnv, MatchValue, PVRef};
 pub use rust_library_loader::RustLibraryLoader;
-pub use scope::{ScopeId, ScopeSet};
-pub use value::{Arity, CaseLambdaClause, Procedure, Value};

@@ -16,56 +16,12 @@
 use super::pattern::Pattern;
 use super::template::{Identifier, Template};
 use crate::error::MacroError;
-use patina_runtime::{PVRef, ScopeSet, Value};
+use patina_runtime::{Environment, PVRef, ScopeSet, Value};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// Compiled macro rule
-///
-/// Contains both pattern and template in PVREF-based representation,
-/// along with metadata for efficient matching and expansion.
-#[derive(Clone, Debug)]
-pub struct CompiledRule {
-    /// Compiled pattern
-    pub pattern: Pattern,
-
-    /// Compiled template
-    pub template: Template,
-
-    /// Number of pattern variables in this rule
-    pub num_pvars: usize,
-
-    /// Maximum ellipsis nesting level in this rule
-    pub max_level: usize,
-
-    /// Mapping from pattern variable names to their PVREFs (for debug output)
-    pub pvar_names: HashMap<PVRef, Rc<str>>,
-}
-
-/// Compiled macro definition
-///
-/// Contains all rules for a syntax-rules macro in compiled form.
-#[derive(Clone, Debug)]
-pub struct CompiledMacro {
-    /// Macro name (for error messages)
-    pub name: Rc<str>,
-
-    /// Literal identifiers (e.g., "else" in cond)
-    pub literals: Vec<Rc<str>>,
-
-    /// Compiled rules (tried in order, first-match-wins)
-    pub rules: Vec<CompiledRule>,
-
-    /// Maximum number of pattern variables in any rule
-    pub max_pvars: usize,
-
-    /// Scope set at macro definition time (for scope-based hygiene)
-    ///
-    /// Free variables in templates will carry this scope set, enabling
-    /// correct binding resolution even when the macro is used inside
-    /// a different lexical scope.
-    pub definition_scopes: ScopeSet,
-}
+// Re-export CompiledMacro and CompiledRule from patina-core (via patina-runtime)
+pub use patina_runtime::{CompiledMacro, CompiledRule};
 
 /// Pattern and template compiler
 ///
@@ -84,10 +40,7 @@ pub struct Compiler {
     ///
     /// Free variables in templates will capture this environment.
     /// This enables proper lexical scoping for macros following Gauche's approach.
-    ///
-    /// Stored as `dyn Any` to avoid circular dependency between patina-macros
-    /// and patina-runtime. The tree-walker evaluator will pass an `Rc<Environment>`.
-    env: Option<std::rc::Rc<dyn std::any::Any>>,
+    env: Option<Rc<Environment>>,
 
     /// Scope set at macro definition time (for scope-based hygiene)
     ///
@@ -129,13 +82,11 @@ impl Compiler {
     /// # Arguments
     /// - `literals`: List of literal identifier names
     /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
-    /// - `env`: Lexical environment where the macro is being defined (as `Rc<dyn Any>`)
-    ///
-    /// The caller (usually tree-walker evaluator) should pass `Rc<Environment> as Rc<dyn Any>`.
+    /// - `env`: Lexical environment where the macro is being defined
     pub fn with_env(
         literals: Vec<Rc<str>>,
         ellipsis: Option<Rc<str>>,
-        env: std::rc::Rc<dyn std::any::Any>,
+        env: Rc<Environment>,
     ) -> Self {
         Self {
             literals,
@@ -153,7 +104,7 @@ impl Compiler {
     /// # Arguments
     /// - `literals`: List of literal identifier names
     /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
-    /// - `env`: Lexical environment where the macro is being defined (as `Rc<dyn Any>`)
+    /// - `env`: Lexical environment where the macro is being defined
     /// - `scopes`: Scope set at macro definition time
     ///
     /// Free variables in templates will carry the scope set so they resolve to
@@ -161,7 +112,7 @@ impl Compiler {
     pub fn with_env_and_scopes(
         literals: Vec<Rc<str>>,
         ellipsis: Option<Rc<str>>,
-        env: std::rc::Rc<dyn std::any::Any>,
+        env: Rc<Environment>,
         scopes: ScopeSet,
     ) -> Self {
         Self {
@@ -539,16 +490,7 @@ impl Compiler {
             } else {
                 // Fall back to marks-and-ribs hygiene (no scopes available)
                 // Check if it's bound in the captured environment at compile time
-                let should_capture = if let Some(env_any) = &self.env {
-                    use patina_runtime::Environment;
-                    if let Some(env) = env_any.downcast_ref::<Environment>() {
-                        env.get(s).is_some()
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                let should_capture = self.env.as_ref().is_some_and(|env| env.get(s).is_some());
 
                 if should_capture {
                     // Free variable - use empty scopes (definition-time scopes)
@@ -786,16 +728,8 @@ impl Compiler {
                         )))
                     } else {
                         // Fall back to marks-and-ribs hygiene
-                        let should_capture = if let Some(env_any) = &self.env {
-                            use patina_runtime::Environment;
-                            if let Some(env) = env_any.downcast_ref::<Environment>() {
-                                env.get(s).is_some()
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
+                        let should_capture =
+                            self.env.as_ref().is_some_and(|env| env.get(s).is_some());
 
                         if should_capture {
                             Ok(Template::Symbol(Identifier::with_scopes(

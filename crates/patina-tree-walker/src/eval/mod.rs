@@ -11,10 +11,11 @@ pub use core_eval::eval_core;
 pub use error::EvalError;
 
 use debug::DebugConfig;
+use patina_runtime::CoreExpr;
 use patina_runtime::environment::Environment;
 use patina_runtime::library_loader::LibraryLoaderRegistry;
 use patina_runtime::library_registry::LibraryRegistry;
-use patina_runtime::value::{Procedure, Value};
+use patina_runtime::value::{LambdaBody, Procedure, Value};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -600,11 +601,7 @@ impl Evaluator {
             _ => None,
         };
 
-        if let Some(Value::Macro { data, .. }) = macro_binding {
-            let compiled_macro = data
-                .downcast_ref::<patina_macros::CompiledMacro>()
-                .ok_or_else(|| EvalError::InternalError("Invalid macro data".to_string()))?;
-
+        if let Some(Value::Macro(compiled_macro)) = macro_binding {
             let name = match &car {
                 Value::Symbol(s) => s.as_ref(),
                 Value::Identifier { name, .. } => name.as_ref(),
@@ -621,7 +618,7 @@ impl Evaluator {
                 self.debug.indent();
             }
 
-            let expanded = self.expand_macro(compiled_macro, expr, env)?;
+            let expanded = self.expand_macro(&compiled_macro, expr, env)?;
 
             if self.debug.is_enabled(debug::DebugStage::Expand) {
                 eprintln!(
@@ -671,7 +668,6 @@ impl Evaluator {
                 body,
                 env: lambda_env,
                 binding_scope,
-                body_core: _, // Not used in legacy evaluator path
             }) = proc
         {
             // Tail call to lambda - use shared helper methods
@@ -834,7 +830,6 @@ impl Evaluator {
                 body,
                 env: lambda_env,
                 binding_scope,
-                body_core: _, // Not used in legacy evaluator path
             }) = proc
         {
             // Tail call to lambda - use shared helper methods
@@ -905,15 +900,9 @@ impl Evaluator {
                 // Note: Special forms now in CoreExpr - no registry check needed
                 if let Value::Symbol(ref sym) = car {
                     // Check if it's a macro
-                    if let Some(Value::Macro { data, .. }) = env.get(sym) {
+                    if let Some(Value::Macro(compiled_macro)) = env.get(sym) {
                         // This is a macro call - expand it
-                        let compiled_macro = data
-                            .downcast_ref::<patina_macros::CompiledMacro>()
-                            .ok_or_else(|| {
-                                EvalError::InternalError("Invalid macro data".to_string())
-                            })?;
-
-                        let expanded = self.expand_macro(compiled_macro, expr, env)?;
+                        let expanded = self.expand_macro(&compiled_macro, expr, env)?;
 
                         // Recursively expand the result (macros can expand to macros)
                         return self.expand_all_macros(&expanded, env);
@@ -1126,6 +1115,23 @@ impl Evaluator {
 
     pub(crate) fn eval_lambda_body(
         &self,
+        body: &LambdaBody,
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<EvalResult, EvalError> {
+        match body {
+            LambdaBody::Values(body_values) => {
+                self.eval_lambda_body_values(body_values, env, in_tail_position)
+            }
+            LambdaBody::Core(body_core) => {
+                self.eval_lambda_body_core(body_core, env, in_tail_position)
+            }
+        }
+    }
+
+    /// Evaluate lambda body stored as Values (legacy path)
+    fn eval_lambda_body_values(
+        &self,
         body: &[Value],
         env: &Rc<Environment>,
         in_tail_position: bool,
@@ -1151,6 +1157,71 @@ impl Evaluator {
                 result = self.eval_with_core_routing(expr, env)?;
             }
             Ok(EvalResult::Value(result))
+        }
+    }
+
+    /// Evaluate lambda body stored as CoreExpr (optimized path)
+    fn eval_lambda_body_core(
+        &self,
+        body: &[CoreExpr],
+        env: &Rc<Environment>,
+        in_tail_position: bool,
+    ) -> Result<EvalResult, EvalError> {
+        use crate::eval::core_eval::{CoreEvalResult, eval_core_step};
+
+        if body.is_empty() {
+            return Ok(EvalResult::Value(Value::Unspecified));
+        }
+
+        // Evaluate all but the last expression
+        for expr in &body[..body.len() - 1] {
+            eval_core_step(expr, env.clone(), self)?;
+        }
+
+        // Evaluate last expression
+        let last = body.last().unwrap();
+        let result = eval_core_step(last, env.clone(), self)?;
+
+        match result {
+            CoreEvalResult::Value(v) => Ok(EvalResult::Value(v)),
+            CoreEvalResult::TailCall {
+                expr,
+                env: tail_env,
+            } => {
+                if in_tail_position {
+                    // Convert CoreExpr to Value for tail call
+                    use crate::eval::core_eval::core_expr_to_value;
+                    Ok(EvalResult::TailCall {
+                        expr: core_expr_to_value(&expr)?,
+                        env: tail_env,
+                    })
+                } else {
+                    // Not in tail position - must resolve the tail call
+                    self.resolve_tail_call_core(expr, &tail_env)
+                }
+            }
+        }
+    }
+
+    /// Resolve a CoreExpr tail call when not in tail position
+    fn resolve_tail_call_core(
+        &self,
+        expr: CoreExpr,
+        env: &Rc<Environment>,
+    ) -> Result<EvalResult, EvalError> {
+        use crate::eval::core_eval::{CoreEvalResult, eval_core_step};
+
+        let mut current_expr = expr;
+        let mut current_env = env.clone();
+
+        loop {
+            match eval_core_step(&current_expr, current_env.clone(), self)? {
+                CoreEvalResult::Value(v) => return Ok(EvalResult::Value(v)),
+                CoreEvalResult::TailCall { expr, env } => {
+                    current_expr = expr;
+                    current_env = env;
+                }
+            }
         }
     }
 }
@@ -1603,13 +1674,8 @@ impl Evaluator {
         let rules = self.parse_macro_rules(&rules_expr)?;
 
         // Compile using Compiler with environment and scope capture for hygiene
-        // Pass the runtime Environment as Rc<dyn Any> following Gauche's approach
-        let mut compiler = Compiler::with_env_and_scopes(
-            literals,
-            None,
-            env.clone() as Rc<dyn std::any::Any>,
-            definition_scopes.clone(),
-        );
+        let mut compiler =
+            Compiler::with_env_and_scopes(literals, None, env.clone(), definition_scopes.clone());
         compiler
             .compile_macro(name, rules)
             .map_err(|e| EvalError::InvalidSyntax(format!("Failed to compile macro: {}", e)))

@@ -510,7 +510,7 @@ primitives/
 - No renaming needed - scopes provide discrimination
 
 **Macro Expansion Integration**:
-- Macros stored as `Value::Macro { name, data }`
+- Macros stored as `Value::Macro(Rc<CompiledMacro>)` (type-safe, no `dyn Any`)
 - Desugarer checks environment for macro bindings
 - When found, calls macro expander with flip-scope hygiene
 - Expands recursively until a special form or application remains

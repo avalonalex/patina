@@ -1,4 +1,5 @@
-use patina_runtime::{ScopeId, ScopeSet, Value};
+use crate::scope::{ScopeId, ScopeSet};
+use crate::value::Value;
 use std::rc::Rc;
 
 /// Symbol type (interned string)
@@ -216,6 +217,109 @@ impl CoreExpr {
             CoreExpr::Apply { .. } => "apply",
             CoreExpr::PrimCall { .. } => "primitive-call",
             CoreExpr::Let { .. } => "let",
+        }
+    }
+
+    /// Map a function over all immediate children of this expression
+    ///
+    /// This is useful for implementing recursive transformations in compiler passes.
+    pub fn map_children<F>(&self, f: F) -> CoreExpr
+    where
+        F: Fn(&CoreExpr) -> CoreExpr,
+    {
+        match self {
+            CoreExpr::Literal(_)
+            | CoreExpr::Var(_)
+            | CoreExpr::ScopedVar { .. }
+            | CoreExpr::Quote(_)
+            | CoreExpr::Quasiquote(_) => self.clone(),
+
+            CoreExpr::Lambda {
+                params,
+                body,
+                binding_scope,
+            } => CoreExpr::Lambda {
+                params: params.clone(),
+                body: body.iter().map(&f).collect(),
+                binding_scope: *binding_scope,
+            },
+
+            CoreExpr::If { test, then, else_ } => CoreExpr::If {
+                test: Box::new(f(test)),
+                then: Box::new(f(then)),
+                else_: Box::new(f(else_)),
+            },
+
+            CoreExpr::Set { var, value } => CoreExpr::Set {
+                var: var.clone(),
+                value: Box::new(f(value)),
+            },
+
+            CoreExpr::Begin(exprs) => CoreExpr::Begin(exprs.iter().map(&f).collect()),
+
+            CoreExpr::Define { name, value } => CoreExpr::Define {
+                name: name.clone(),
+                value: Box::new(f(value)),
+            },
+
+            CoreExpr::DefineSyntax {
+                name,
+                transformer,
+                definition_scopes,
+            } => CoreExpr::DefineSyntax {
+                name: name.clone(),
+                transformer: transformer.clone(),
+                definition_scopes: definition_scopes.clone(),
+            },
+
+            CoreExpr::Import { import_sets } => CoreExpr::Import {
+                import_sets: import_sets.clone(),
+            },
+
+            CoreExpr::Parameterize { bindings, body } => CoreExpr::Parameterize {
+                bindings: bindings
+                    .iter()
+                    .map(|(param, val)| (f(param), f(val)))
+                    .collect(),
+                body: body.iter().map(&f).collect(),
+            },
+
+            CoreExpr::Expand { expr } => CoreExpr::Expand {
+                expr: Box::new(f(expr)),
+            },
+
+            CoreExpr::CaseLambda { clauses } => CoreExpr::CaseLambda {
+                clauses: clauses
+                    .iter()
+                    .map(|clause| CaseLambdaClause {
+                        params: clause.params.clone(),
+                        body: clause.body.iter().map(&f).collect(),
+                    })
+                    .collect(),
+            },
+
+            CoreExpr::App { func, args } => CoreExpr::App {
+                func: Box::new(f(func)),
+                args: args.iter().map(&f).collect(),
+            },
+
+            CoreExpr::Apply { func, args } => CoreExpr::Apply {
+                func: Box::new(f(func)),
+                args: args.iter().map(&f).collect(),
+            },
+
+            CoreExpr::PrimCall { prim, args } => CoreExpr::PrimCall {
+                prim: *prim,
+                args: args.iter().map(&f).collect(),
+            },
+
+            CoreExpr::Let { bindings, body } => CoreExpr::Let {
+                bindings: bindings
+                    .iter()
+                    .map(|(var, val)| (var.clone(), f(val)))
+                    .collect(),
+                body: Box::new(f(body)),
+            },
         }
     }
 }

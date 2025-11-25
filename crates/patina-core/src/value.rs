@@ -3,6 +3,8 @@ use num_rational::BigRational;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::compiled_macro::CompiledMacro;
+use crate::core_expr::CoreExpr;
 use crate::environment::Environment;
 use crate::library::Library;
 use crate::scope::{ScopeId, ScopeSet};
@@ -86,12 +88,8 @@ pub enum Value {
     OutputPort,
 
     // Macros (for syntax-rules)
-    // Note: Macro type will be defined in frontend, stored as opaque data here
-    Macro {
-        name: Rc<str>,
-        // Opaque macro data - frontend will cast this appropriately
-        data: Rc<dyn std::any::Any>,
-    },
+    // Type-safe macro storage - no dyn Any needed
+    Macro(Rc<CompiledMacro>),
 
     // Libraries (R7RS Section 5.6)
     // Represents a loaded library with its exports and environment
@@ -118,12 +116,25 @@ pub enum PromiseState {
     Forced(Value),
 }
 
+/// Lambda body representation - type-safe replacement for `dyn Any`
+///
+/// This enum allows storing lambda bodies in either:
+/// - `Values`: Legacy format as syntax Values (requires desugaring on each call)
+/// - `Core`: Optimized format as CoreExpr (preserves scope IDs for hygiene)
+#[derive(Debug, Clone)]
+pub enum LambdaBody {
+    /// Legacy: body as syntax Values (requires desugaring on each call)
+    Values(Vec<Value>),
+    /// Optimized: body as CoreExpr (preserves scope IDs for hygiene)
+    Core(Vec<CoreExpr>),
+}
+
 /// A clause in a case-lambda: (params, variadic, body, binding_scope)
 #[derive(Debug, Clone)]
 pub struct CaseLambdaClause {
     pub params: Vec<String>,
     pub variadic: Option<String>,
-    pub body: Vec<Value>,
+    pub body: LambdaBody,
     pub binding_scope: Option<ScopeId>,
 }
 
@@ -141,18 +152,13 @@ pub enum Procedure {
     Lambda {
         params: Vec<String>,
         variadic: Option<String>, // For rest parameters
-        body: Vec<Value>,
-        env: Rc<Environment>, // Captured environment for closures
+        body: LambdaBody,         // Type-safe body representation
+        env: Rc<Environment>,     // Captured environment for closures
         /// Optional scope for parameter bindings (for scope-based hygiene)
         /// If Some, parameters are bound with this scope in their scope set.
         /// This enables hygienic macro expansion: free variables with matching
         /// scopes can see these bindings, while others cannot.
         binding_scope: Option<ScopeId>,
-        /// Optional CoreExpr body stored directly (avoids re-desugaring)
-        /// This is used to preserve scope IDs across lambda calls.
-        /// Without this, each lambda call would re-desugar the body,
-        /// creating fresh scope IDs that don't match definition_scopes.
-        body_core: Option<Rc<dyn std::any::Any>>,
     },
 
     /// Case-lambda procedure (dispatches on argument count)
@@ -196,7 +202,7 @@ impl Value {
             Value::Procedure(_) => "procedure",
             Value::Parameter { .. } => "parameter",
             Value::InputPort | Value::OutputPort => "port",
-            Value::Macro { .. } => "macro",
+            Value::Macro(_) => "macro",
             Value::Library(_) => "library",
             Value::Values(_) => "values",
             Value::Promise(_) => "promise",
@@ -318,7 +324,7 @@ impl std::fmt::Display for Value {
             Value::Parameter { .. } => write!(f, "#<parameter>"),
             Value::InputPort => write!(f, "#<input-port>"),
             Value::OutputPort => write!(f, "#<output-port>"),
-            Value::Macro { name, .. } => write!(f, "#<macro:{}>", name),
+            Value::Macro(compiled) => write!(f, "#<macro:{}>", compiled.name),
             Value::Library(lib) => write!(f, "{}", lib),
             Value::Values(vals) => {
                 // Multiple values are usually only seen internally

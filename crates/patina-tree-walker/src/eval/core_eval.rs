@@ -61,7 +61,7 @@
 use super::error::EvalError;
 use patina_ir::{CoreExpr, Formals};
 use patina_runtime::environment::Environment;
-use patina_runtime::value::{Procedure, Value};
+use patina_runtime::value::{LambdaBody, Procedure, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -70,7 +70,7 @@ use std::rc::Rc;
 /// Used for tail call optimization via trampoline pattern.
 /// Instead of recursing directly, tail positions return TailCall
 /// which tells the trampoline to continue with the next expression.
-enum CoreEvalResult {
+pub(crate) enum CoreEvalResult {
     /// Final value - evaluation complete
     Value(Value),
     /// Tail call - continue with this expression and environment
@@ -137,7 +137,7 @@ pub fn eval_core(
 ///
 /// Returns CoreEvalResult to enable tail call optimization.
 /// Tail positions return TailCall, non-tail positions return Value.
-fn eval_core_step(
+pub(crate) fn eval_core_step(
     expr: &CoreExpr,
     env: Rc<Environment>,
     evaluator: &super::Evaluator,
@@ -179,22 +179,13 @@ fn eval_core_step(
             // Convert Formals to (params, variadic) format
             let (param_names, variadic) = formals_to_params(params)?;
 
-            // Convert CoreExpr body to Value body for backward compatibility
-            let body_values: Result<Vec<Value>, EvalError> =
-                body.iter().map(core_expr_to_value).collect();
-            let body_values = body_values?;
-
-            // Store CoreExpr body directly to avoid re-desugaring
-            // This preserves scope IDs for hygiene
-            let body_core: Rc<dyn std::any::Any> = Rc::new(body.clone());
-
+            // Store CoreExpr body directly - this preserves scope IDs for hygiene
             Ok(CoreEvalResult::Value(Value::Procedure(Procedure::Lambda {
                 params: param_names,
                 variadic,
-                body: body_values,
+                body: LambdaBody::Core(body.clone()),
                 env: env.clone(),
                 binding_scope: *binding_scope,
-                body_core: Some(body_core),
             })))
         }
 
@@ -258,10 +249,7 @@ fn eval_core_step(
             )?;
 
             // Store the compiled macro
-            let macro_value = Value::Macro {
-                name: name.clone(),
-                data: Rc::new(compiled_macro),
-            };
+            let macro_value = Value::Macro(Rc::new(compiled_macro));
 
             // Bind the macro in the environment
             env.define(name.to_string(), macro_value);
@@ -438,18 +426,16 @@ fn eval_core_step(
                 let car = &p_ref.0;
                 if let Value::Symbol(sym) = car {
                     // Check if this symbol is bound to a macro
-                    if let Some(Value::Macro { data, .. }) = env.get(sym) {
-                        let compiled_macro = data
-                            .downcast_ref::<patina_macros::CompiledMacro>()
-                            .ok_or_else(|| {
-                                EvalError::InternalError("Invalid macro data".to_string())
-                            })?;
-
+                    if let Some(Value::Macro(compiled_macro)) = env.get(sym) {
                         // Expand the macro
-                        let expanded = patina_macros::expand_macro(compiled_macro, &expr_val, &env)
-                            .map_err(|e| {
-                                EvalError::InvalidSyntax(format!("Macro expansion failed: {}", e))
-                            })?;
+                        let expanded = patina_macros::expand_macro(
+                            &compiled_macro,
+                            &expr_val,
+                            &env,
+                        )
+                        .map_err(|e| {
+                            EvalError::InvalidSyntax(format!("Macro expansion failed: {}", e))
+                        })?;
                         return Ok(CoreEvalResult::Value(expanded));
                     }
                 }
@@ -461,25 +447,18 @@ fn eval_core_step(
 
         // Case-lambda: create a multi-arity procedure
         CoreExpr::CaseLambda { clauses } => {
-            // Convert clauses to runtime representation
-            // Each clause includes an optional binding_scope for hygiene
-            let runtime_clauses: Vec<patina_runtime::CaseLambdaClause> = clauses
+            // Convert clauses to runtime representation with CoreExpr bodies
+            let runtime_clauses: Vec<patina_runtime::value::CaseLambdaClause> = clauses
                 .iter()
                 .map(|clause| {
                     // Convert Formals to (params, variadic) format
                     let (param_names, variadic) = formals_to_params(&clause.params)?;
 
-                    // Convert CoreExpr body to Value body (for compatibility with runtime)
-                    let body_values: Result<Vec<Value>, EvalError> =
-                        clause.body.iter().map(core_expr_to_value).collect();
-                    let body_values = body_values?;
-
-                    // TODO: When CoreExpr::CaseLambda gets binding_scope per clause, use it here
-                    // For now, case-lambda clauses don't have hygiene scopes
-                    Ok(patina_runtime::CaseLambdaClause {
+                    // Store CoreExpr body directly - preserves scope IDs for hygiene
+                    Ok(patina_runtime::value::CaseLambdaClause {
                         params: param_names,
                         variadic,
-                        body: body_values,
+                        body: LambdaBody::Core(clause.body.clone()),
                         binding_scope: None,
                     })
                 })
@@ -523,7 +502,6 @@ fn apply_procedure(
             body,
             env: closure_env,
             binding_scope,
-            body_core,
         }) => {
             // Create new environment extending closure environment
             let call_env = Rc::new(Environment::with_parent(closure_env.clone()));
@@ -531,50 +509,52 @@ fn apply_procedure(
             // Bind parameters (with scope if available for hygiene)
             bind_params(params, variadic.as_ref(), args, &call_env, *binding_scope)?;
 
-            // Try to use CoreExpr body directly (preserves scope IDs for hygiene)
-            // This is critical: re-desugaring would create fresh scope IDs that
-            // don't match definition_scopes captured at macro definition time.
-            if let Some(body_core) = body_core
-                && let Some(core_body) = body_core.downcast_ref::<Vec<CoreExpr>>()
-            {
-                if core_body.is_empty() {
-                    return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
+            match body {
+                // Optimized path: CoreExpr body (preserves scope IDs for hygiene)
+                // This is critical: re-desugaring would create fresh scope IDs that
+                // don't match definition_scopes captured at macro definition time.
+                LambdaBody::Core(core_body) => {
+                    if core_body.is_empty() {
+                        return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
+                    }
+
+                    // Evaluate all but last for side effects
+                    for expr in &core_body[..core_body.len() - 1] {
+                        eval_non_tail(expr, call_env.clone(), evaluator)?;
+                    }
+
+                    // Last expression is in tail position
+                    Ok(CoreEvalResult::TailCall {
+                        expr: core_body[core_body.len() - 1].clone(),
+                        env: call_env,
+                    })
                 }
 
-                // Evaluate all but last for side effects
-                for expr in &core_body[..core_body.len() - 1] {
-                    eval_non_tail(expr, call_env.clone(), evaluator)?;
+                // Legacy path: Value body (for lambdas from legacy code paths)
+                LambdaBody::Values(body_values) => {
+                    if body_values.is_empty() {
+                        return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
+                    }
+
+                    // Evaluate all but last for side effects
+                    for expr in &body_values[..body_values.len() - 1] {
+                        eval_value_simple(expr, call_env.clone(), evaluator)?;
+                    }
+
+                    // Last expression - need to desugar (creates fresh scopes, but this
+                    // path is only used for lambdas without CoreExpr body)
+                    let last_expr_value = &body_values[body_values.len() - 1];
+                    let desugarer = patina_frontend::Desugarer::with_env(call_env.clone());
+                    let last_expr_core = desugarer.desugar(last_expr_value).map_err(|e| {
+                        EvalError::InvalidSyntax(format!("Desugaring failed: {}", e))
+                    })?;
+
+                    Ok(CoreEvalResult::TailCall {
+                        expr: last_expr_core,
+                        env: call_env,
+                    })
                 }
-
-                // Last expression is in tail position
-                return Ok(CoreEvalResult::TailCall {
-                    expr: core_body[core_body.len() - 1].clone(),
-                    env: call_env,
-                });
             }
-
-            // Fallback: use Value body (for lambdas created without body_core)
-            if body.is_empty() {
-                return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
-            }
-
-            // Evaluate all but last for side effects
-            for expr in &body[..body.len() - 1] {
-                eval_value_simple(expr, call_env.clone(), evaluator)?;
-            }
-
-            // Last expression - need to desugar (creates fresh scopes, but this
-            // path is only used for lambdas without body_core)
-            let last_expr_value = &body[body.len() - 1];
-            let desugarer = patina_frontend::Desugarer::with_env(call_env.clone());
-            let last_expr_core = desugarer
-                .desugar(last_expr_value)
-                .map_err(|e| EvalError::InvalidSyntax(format!("Desugaring failed: {}", e)))?;
-
-            Ok(CoreEvalResult::TailCall {
-                expr: last_expr_core,
-                env: call_env,
-            })
         }
 
         Value::Procedure(procedure @ Procedure::Primitive { .. }) => {
@@ -628,30 +608,52 @@ fn apply_procedure(
                         clause.binding_scope,
                     )?;
 
-                    // Evaluate body (Vec<Value>) using eval_value_simple
-                    if clause.body.is_empty() {
-                        return Err(EvalError::InvalidSyntax(
-                            "Empty case-lambda body".to_string(),
-                        ));
+                    // Evaluate body based on LambdaBody type
+                    match &clause.body {
+                        LambdaBody::Core(core_body) => {
+                            if core_body.is_empty() {
+                                return Err(EvalError::InvalidSyntax(
+                                    "Empty case-lambda body".to_string(),
+                                ));
+                            }
+
+                            // Evaluate all but last for side effects
+                            for expr in &core_body[..core_body.len() - 1] {
+                                eval_non_tail(expr, call_env.clone(), evaluator)?;
+                            }
+
+                            // Last expression is in tail position
+                            return Ok(CoreEvalResult::TailCall {
+                                expr: core_body[core_body.len() - 1].clone(),
+                                env: call_env,
+                            });
+                        }
+                        LambdaBody::Values(body_values) => {
+                            if body_values.is_empty() {
+                                return Err(EvalError::InvalidSyntax(
+                                    "Empty case-lambda body".to_string(),
+                                ));
+                            }
+
+                            // Evaluate all but last for side effects
+                            for expr in &body_values[..body_values.len() - 1] {
+                                eval_value_simple(expr, call_env.clone(), evaluator)?;
+                            }
+
+                            // Last expression is in tail position - need to desugar
+                            let last_expr_value = &body_values[body_values.len() - 1];
+                            let desugarer = patina_frontend::Desugarer::with_env(call_env.clone());
+                            let last_expr_core =
+                                desugarer.desugar(last_expr_value).map_err(|e| {
+                                    EvalError::InvalidSyntax(format!("Desugaring failed: {}", e))
+                                })?;
+
+                            return Ok(CoreEvalResult::TailCall {
+                                expr: last_expr_core,
+                                env: call_env,
+                            });
+                        }
                     }
-
-                    // Evaluate all but last for side effects
-                    for expr in &clause.body[..clause.body.len() - 1] {
-                        eval_value_simple(expr, call_env.clone(), evaluator)?;
-                    }
-
-                    // Last expression is in tail position
-                    let last_expr_value = &clause.body[clause.body.len() - 1];
-                    // Use desugarer with environment to handle macros in lambda bodies
-                    let desugarer = patina_frontend::Desugarer::with_env(call_env.clone());
-                    let last_expr_core = desugarer.desugar(last_expr_value).map_err(|e| {
-                        EvalError::InvalidSyntax(format!("Desugaring failed: {}", e))
-                    })?;
-
-                    return Ok(CoreEvalResult::TailCall {
-                        expr: last_expr_core,
-                        env: call_env,
-                    });
                 }
             }
 
@@ -772,7 +774,7 @@ fn args_to_list(args: &[Value]) -> Value {
 /// Ideally we'd have a CoreClosure type that stores CoreExpr bodies directly.
 ///
 /// For now, we convert the CoreExpr back to an equivalent Value representation.
-fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
+pub(crate) fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
     match expr {
         CoreExpr::Literal(v) => Ok(v.clone()),
         CoreExpr::Var(name) => Ok(Value::Symbol(name.clone())),
