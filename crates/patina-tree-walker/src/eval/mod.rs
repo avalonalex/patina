@@ -30,7 +30,7 @@ fn is_value_evaluator_only_form(expr: &Value) -> bool {
         let car = &pair.borrow().0;
         let name_str = match car {
             Value::Symbol(name) => Some(name.as_ref()),
-            Value::WrappedIdentifier { name, .. } => Some(name.as_ref()),
+            Value::Identifier { name, .. } => Some(name.as_ref()),
             _ => None,
         };
 
@@ -468,52 +468,35 @@ impl Evaluator {
                 Err(EvalError::UndefinedVariable(name.to_string()))
             }
 
-            // WrappedIdentifier lookup (marks-and-ribs hygiene)
-            // Uses mark-aware lookup for proper hygiene resolution
-            Value::WrappedIdentifier { name, marks } => {
+            // Identifier lookup (Racket-style scope sets)
+            // Uses scope-based lookup for hygienic binding resolution
+            Value::Identifier { name, scopes } => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
                     eprintln!(
-                        "[ENV]{} WrappedIdentifier lookup: '{}' (marks: {:?})",
-                        self.debug.current_indent(),
-                        name,
-                        marks
-                    );
-                }
-
-                // Mark-aware lookup:
-                // - Empty marks: simple lookup (free variables from macro definition)
-                // - Non-empty marks: search marked bindings, then fall back to unmarked
-                if let Some(value) = env.get_with_marks(name, marks) {
-                    return Ok(EvalResult::Value(value));
-                }
-
-                Err(EvalError::UndefinedVariable(format!(
-                    "{} (wrapped identifier with marks {:?})",
-                    name, marks
-                )))
-            }
-
-            // ScopedIdentifier lookup (scope-sets hygiene)
-            // Uses scope-aware lookup for proper hygiene resolution
-            Value::ScopedIdentifier { name, scopes } => {
-                if self.debug.is_enabled(debug::DebugStage::Env) {
-                    eprintln!(
-                        "[ENV]{} ScopedIdentifier lookup: '{}' (scopes: {})",
+                        "[ENV]{} Identifier lookup: '{}' (scopes: {})",
                         self.debug.current_indent(),
                         name,
                         scopes
                     );
                 }
 
-                // Scope-based lookup using subset matching
-                if let Some(value) = env.get_with_scopes(name, scopes) {
+                // Use scope-based lookup if scopes are present
+                if !scopes.is_empty() {
+                    if let Some(value) = env.get_with_scopes(name, scopes) {
+                        return Ok(EvalResult::Value(value));
+                    }
+                    return Err(EvalError::UndefinedVariable(format!(
+                        "{} (identifier with scopes {})",
+                        name, scopes
+                    )));
+                }
+
+                // Empty scopes: fall back to simple name lookup
+                if let Some(value) = env.get(name) {
                     return Ok(EvalResult::Value(value));
                 }
 
-                Err(EvalError::UndefinedVariable(format!(
-                    "{} (scoped identifier with scopes {})",
-                    name, scopes
-                )))
+                Err(EvalError::UndefinedVariable(name.to_string()))
             }
 
             // Empty list
@@ -603,12 +586,16 @@ impl Evaluator {
         // Note: All special forms now in CoreExpr - no registry lookup needed!
 
         // Check if this symbol is bound to a macro
-        // Handle both Symbol and WrappedIdentifier (marks-and-ribs hygiene)
+        // Handle both Symbol and Identifier (scope-sets hygiene)
         let macro_binding = match &car {
             Value::Symbol(sym) => env.get(sym),
-            Value::WrappedIdentifier { name, marks } => {
-                // For wrapped identifiers, use mark-aware lookup
-                env.get_with_marks(name, marks)
+            Value::Identifier { name, scopes } => {
+                // Use scope-based lookup if scopes are present
+                if !scopes.is_empty() {
+                    env.get_with_scopes(name, scopes)
+                } else {
+                    env.get(name)
+                }
             }
             _ => None,
         };
@@ -620,7 +607,7 @@ impl Evaluator {
 
             let name = match &car {
                 Value::Symbol(s) => s.as_ref(),
-                Value::WrappedIdentifier { name, .. } => name.as_ref(),
+                Value::Identifier { name, .. } => name.as_ref(),
                 _ => unreachable!(),
             };
 
@@ -746,27 +733,34 @@ impl Evaluator {
                 Err(EvalError::UndefinedVariable(name.to_string()))
             }
 
-            // WrappedIdentifier lookup (marks-and-ribs hygiene)
-            Value::WrappedIdentifier { name, marks } => {
+            // Identifier lookup (Racket-style scope sets)
+            Value::Identifier { name, scopes } => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
                     eprintln!(
-                        "[ENV]{} WrappedIdentifier lookup: '{}' (marks: {:?})",
+                        "[ENV]{} Identifier lookup: '{}' (scopes: {})",
                         self.debug.current_indent(),
                         name,
-                        marks
+                        scopes
                     );
                 }
 
-                // For now, just look up by name
-                // Full implementation would use marks to determine correct binding
+                // Use scope-based lookup if scopes are present
+                if !scopes.is_empty() {
+                    if let Some(value) = env.get_with_scopes(name, scopes) {
+                        return Ok(EvalResult::Value(value));
+                    }
+                    return Err(EvalError::UndefinedVariable(format!(
+                        "{} (identifier with scopes {})",
+                        name, scopes
+                    )));
+                }
+
+                // Empty scopes: fall back to simple name lookup
                 if let Some(value) = env.get(name) {
                     return Ok(EvalResult::Value(value));
                 }
 
-                Err(EvalError::UndefinedVariable(format!(
-                    "{} (wrapped identifier)",
-                    name
-                )))
+                Err(EvalError::UndefinedVariable(name.to_string()))
             }
 
             // Empty list
@@ -889,11 +883,8 @@ impl Evaluator {
             // Symbols - no expansion needed
             Value::Symbol(_) => Ok(expr.clone()),
 
-            // WrappedIdentifiers - no expansion needed (from marks-and-ribs hygiene)
-            Value::WrappedIdentifier { .. } => Ok(expr.clone()),
-
-            // ScopedIdentifiers - no expansion needed (from scope-sets hygiene)
-            Value::ScopedIdentifier { .. } => Ok(expr.clone()),
+            // Identifiers - no expansion needed (unified hygiene)
+            Value::Identifier { .. } => Ok(expr.clone()),
 
             // Vectors - recursively expand elements
             Value::Vector(vec) => {

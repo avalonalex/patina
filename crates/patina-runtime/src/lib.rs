@@ -23,7 +23,7 @@ pub mod value;
 
 // Re-export main types for convenience
 pub use backend::Backend;
-pub use environment::{Environment, MarkList};
+pub use environment::Environment;
 pub use error::RuntimeError;
 pub use library::Library;
 pub use library_loader::{LibraryLoader, LibraryLoaderRegistry, RustLibraryBuilder};

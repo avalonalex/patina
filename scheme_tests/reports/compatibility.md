@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-24 20:53:43
+**Generated:** 2025-11-25 09:43:27
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary

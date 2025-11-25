@@ -1,13 +1,50 @@
-# Hygiene Unification: Migrating to WrappedIdentifier Only
+# Hygiene Unification: Scope Sets Only
 
-**Status**: ✅ Complete
+**Status**: ✅ Complete (Phase 3 - Final)
 **Created**: 2025-11-23
-**Completed**: 2025-11-24
+**Phase 1 Completed**: 2025-11-24 (marks-and-ribs only)
+**Phase 2 Completed**: 2025-11-25 (unified Identifier with marks + scopes)
+**Phase 3 Completed**: 2025-11-25 (scope sets only, marks removed)
 **Complexity**: Medium-High
 
-## Migration Summary
+## Final State
 
-**All steps completed successfully!** The codebase now uses a unified marks-and-ribs hygiene system:
+**Phase 3 completed!** The codebase now uses **Racket-style scope sets only** for hygiene. The marks-and-ribs infrastructure has been completely removed.
+
+### Current Hygiene Implementation
+
+```rust
+// patina-runtime/src/value.rs
+Identifier {
+    name: Rc<str>,
+    scopes: ScopeSet,  // Scope sets only - no marks field
+}
+```
+
+**Algorithm**: Racket's flip-scope (based on "Binding as Sets of Scopes", Flatt 2016)
+1. Before pattern matching: flip macro_scope on INPUT (adds scope to use-site identifiers)
+2. After template expansion: flip macro_scope on OUTPUT (removes from use-site, adds to introduced)
+
+**Lookup**: Uses `env.get_with_scopes()` with subset matching. Most specific binding wins.
+
+---
+
+## Phase History
+
+### Phase 1 (2025-11-24): Marks-and-ribs only
+Removed `Identifier { name, env }` variant, unified to `WrappedIdentifier { name, marks }`.
+
+### Phase 2 (2025-11-25 morning): Unified with both
+Added scope sets support: `Identifier { name, marks, scopes }` supporting both hygiene algorithms.
+
+### Phase 3 (2025-11-25 evening): Scope sets only - FINAL
+Removed marks completely, implemented flip-scope, deleted marks_and_ribs.rs (~490 lines removed).
+
+---
+
+## Migration Summary (Historical)
+
+**Phase 2 completed!** The codebase now uses a single unified `Identifier` variant that supports both hygiene algorithms:
 
 ### What Changed
 
@@ -37,10 +74,49 @@
 6. **CompiledMacro** (`patina-macros/src/macro_expander/compiler.rs`)
    - Removed unused `captured_env` field
 
-### Test Results
+### Phase 1 Test Results
 
 - All ~970 tests pass ✅
 - No hygiene regressions
+
+---
+
+## Phase 2: Full Unification (2025-11-25)
+
+Phase 2 unified `WrappedIdentifier` and `ScopedIdentifier` into a single `Identifier` variant.
+
+### What Changed in Phase 2
+
+1. **Value** (`patina-runtime/src/value.rs`)
+   - Removed `WrappedIdentifier { name, marks }` and `ScopedIdentifier { name, scopes }`
+   - Added unified `Identifier { name, marks, scopes }` supporting both hygiene algorithms
+
+2. **Lookup Priority**
+   - If `scopes` is non-empty → use `env.get_with_scopes()` (Racket-style)
+   - Else if `marks` is non-empty → use `env.get_with_marks()` (Chez-style)
+   - Else use simple `env.get()` (built-ins, top-level)
+
+3. **Files Updated**
+   - `patina-macros/compiler.rs` - Pattern matching for identifier types
+   - `patina-macros/expander.rs` - `rename_identifier()` returns unified Identifier
+   - `patina-macros/marks_and_ribs.rs` - `add_mark_to_expr()` uses unified Identifier
+   - `patina-frontend/desugarer/utils.rs` - Formal parameter parsing
+   - `patina-frontend/desugarer/mod.rs` - Variable/set!/define desugaring
+   - `patina-frontend/macro_expander/interface.rs` - Symbol comparison helper
+   - `patina-tree-walker/eval/mod.rs` - All identifier lookup cases merged
+   - `patina-tree-walker/eval/core_eval.rs` - `core_expr_to_value()` for ScopedVar
+
+### Phase 2 Test Results
+
+- All ~560 tests pass ✅
+- No hygiene regressions
+
+### Benefits of Full Unification
+
+1. **Simpler codebase** - One identifier type instead of two
+2. **Fewer pattern matches** - Reduced code duplication
+3. **Gradual migration ready** - Can use marks-only, scopes-only, or both
+4. **Future-proof** - Scope sets can express everything marks can
 
 ---
 

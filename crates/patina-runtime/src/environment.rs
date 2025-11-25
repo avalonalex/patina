@@ -4,9 +4,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// Type alias for mark lists used in hygiene
-pub type MarkList = Vec<usize>;
-
 /// A binding with its associated scope set
 /// Used for scope-based hygiene lookup
 #[derive(Debug, Clone)]
@@ -21,29 +18,22 @@ pub struct ScopedBinding {
 ///
 /// ## Hygiene Support
 ///
-/// The environment supports multiple hygiene approaches:
+/// Uses Racket-style scope sets hygiene (based on "Binding as Sets of Scopes", Flatt 2016):
 ///
-/// ### Marks-and-ribs (Chez Scheme style)
-/// - `bindings`: Simple name → value mapping for unmarked bindings (built-ins, top-level defines)
-/// - `marked_bindings`: (name, marks) → value mapping for macro-introduced bindings
-///
-/// ### Scope sets (Racket style) - Preferred for complex hygiene
-/// - `scoped_bindings`: name → Vec<ScopedBinding> mapping
-/// - Each binding has an associated scope set
-/// - Lookup finds binding where `binding.scopes ⊆ reference.scopes`
-/// - Most specific (largest) matching scope set wins
+/// - `bindings`: Simple name → value mapping for top-level bindings (built-ins, global defines)
+/// - `scoped_bindings`: name → Vec<ScopedBinding> mapping for hygienic bindings
+///   - Each binding has an associated scope set
+///   - Lookup finds binding where `binding.scopes ⊆ reference.scopes`
+///   - Most specific (largest) matching scope set wins
 ///
 /// Lookup order for `get_with_scopes(name, scopes)`:
 /// 1. Collect all bindings where `binding.scopes ⊆ scopes`
 /// 2. Return the binding with the largest scope set (most specific)
-/// 3. Fall back to unmarked bindings if no scoped binding matches
+/// 3. Fall back to simple bindings if no scoped binding matches
 #[derive(Debug, Clone)]
 pub struct Environment {
-    /// Simple name-based bindings (unmarked, for built-ins and top-level)
+    /// Simple name-based bindings (for built-ins and top-level)
     bindings: Rc<RefCell<HashMap<String, Value>>>,
-    /// Mark-aware bindings (for macro-introduced identifiers)
-    /// Key is (name, marks) tuple
-    marked_bindings: Rc<RefCell<HashMap<(String, MarkList), Value>>>,
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
     scoped_bindings: Rc<RefCell<HashMap<String, Vec<ScopedBinding>>>>,
@@ -55,7 +45,6 @@ impl Environment {
     pub fn new() -> Self {
         Environment {
             bindings: Rc::new(RefCell::new(HashMap::new())),
-            marked_bindings: Rc::new(RefCell::new(HashMap::new())),
             scoped_bindings: Rc::new(RefCell::new(HashMap::new())),
             parent: None,
         }
@@ -66,33 +55,16 @@ impl Environment {
     pub fn with_parent(parent: Rc<Environment>) -> Self {
         Environment {
             bindings: Rc::new(RefCell::new(HashMap::new())),
-            marked_bindings: Rc::new(RefCell::new(HashMap::new())),
             scoped_bindings: Rc::new(RefCell::new(HashMap::new())),
             parent: Some(parent),
         }
     }
 
-    /// Define a new binding in this environment (unmarked)
+    /// Define a new binding in this environment
     ///
-    /// Use this for top-level defines, built-ins, and other non-macro bindings.
+    /// Use this for top-level defines, built-ins, and other simple bindings.
     pub fn define(&self, name: String, value: Value) {
         self.bindings.borrow_mut().insert(name, value);
-    }
-
-    /// Define a new binding with marks (for macro-introduced identifiers)
-    ///
-    /// Use this when creating bindings from macro-expanded code where
-    /// the identifier has hygiene marks.
-    pub fn define_with_marks(&self, name: String, marks: MarkList, value: Value) {
-        if marks.is_empty() {
-            // Empty marks = unmarked binding
-            self.bindings.borrow_mut().insert(name, value);
-        } else {
-            // Non-empty marks = marked binding
-            self.marked_bindings
-                .borrow_mut()
-                .insert((name, marks), value);
-        }
     }
 
     /// Set an existing binding (searches parent environments)
@@ -107,32 +79,9 @@ impl Environment {
         }
     }
 
-    /// Set an existing binding with marks (searches parent environments)
-    pub fn set_with_marks(&self, name: &str, marks: &MarkList, value: Value) -> Result<(), String> {
-        if marks.is_empty() {
-            // Empty marks - use simple lookup
-            return self.set(name, value);
-        }
-
-        // Check marked bindings first
-        let key = (name.to_string(), marks.clone());
-        if self.marked_bindings.borrow().contains_key(&key) {
-            self.marked_bindings.borrow_mut().insert(key, value);
-            return Ok(());
-        }
-
-        // Check parent
-        if let Some(parent) = &self.parent {
-            parent.set_with_marks(name, marks, value)
-        } else {
-            // Fall back to unmarked binding
-            self.set(name, value)
-        }
-    }
-
     /// Get a value from the environment (searches parent environments)
     ///
-    /// This is the simple name-based lookup for unmarked identifiers.
+    /// This is the simple name-based lookup for identifiers.
     pub fn get(&self, name: &str) -> Option<Value> {
         if let Some(value) = self.bindings.borrow().get(name) {
             Some(value.clone())
@@ -141,36 +90,6 @@ impl Environment {
         } else {
             None
         }
-    }
-
-    /// Get a value with marks (for hygienic lookup)
-    ///
-    /// Lookup order:
-    /// 1. If marks is empty, use simple lookup
-    /// 2. Search marked_bindings for exact (name, marks) match
-    /// 3. Fall back to unmarked bindings (built-ins, global defines)
-    pub fn get_with_marks(&self, name: &str, marks: &MarkList) -> Option<Value> {
-        if marks.is_empty() {
-            // Empty marks = simple lookup (free variables, primitives)
-            return self.get(name);
-        }
-
-        // Try marked bindings first (exact match)
-        let key = (name.to_string(), marks.clone());
-        if let Some(value) = self.marked_bindings.borrow().get(&key) {
-            return Some(value.clone());
-        }
-
-        // Try parent's marked bindings
-        if let Some(parent) = &self.parent
-            && let Some(value) = parent.get_with_marks(name, marks)
-        {
-            return Some(value);
-        }
-
-        // Fall back to unmarked bindings (primitives, global defines)
-        // This allows macro-introduced identifiers to access built-ins
-        self.get(name)
     }
 
     /// Define a binding with a scope set (for scope-based hygiene)
@@ -296,8 +215,8 @@ impl Environment {
     /// Get all variable names defined in this environment and parent environments
     pub fn get_all_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.bindings.borrow().keys().cloned().collect();
-        // Include names from marked bindings
-        for (name, _marks) in self.marked_bindings.borrow().keys() {
+        // Include names from scoped bindings
+        for name in self.scoped_bindings.borrow().keys() {
             if !names.contains(name) {
                 names.push(name.clone());
             }

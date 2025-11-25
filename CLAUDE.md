@@ -26,7 +26,7 @@ patina/ (workspace root)
     ├── patina-runtime/     # Core types, Backend trait, Library system
     ├── patina-ir/          # CoreExpr IR definition (7 core forms)
     ├── patina-frontend/    # Lexer, Parser, Desugarer
-    ├── patina-macros/      # Macro expansion (syntax-rules with marks-and-ribs)
+    ├── patina-macros/      # Macro expansion (syntax-rules with scope sets hygiene)
     ├── patina-pipeline/    # Pipeline orchestration (pluggable strategies)
     ├── patina-tree-walker/ # Tree-walking interpreter backend
     ├── patina-interpreter/ # High-level Interpreter API
@@ -59,7 +59,8 @@ patina/ (workspace root)
 
 **patina-macros** (`crates/patina-macros/src/`)
 - Hygienic macro expansion (syntax-rules)
-- Marks-and-ribs hygiene algorithm (Chez Scheme-style)
+- Racket-style scope sets hygiene (based on "Binding as Sets of Scopes", Flatt 2016)
+- Flip-scope algorithm for distinguishing use-site vs introduced identifiers
 - Pattern matching and template expansion
 - Separated into own crate for modularity
 
@@ -133,9 +134,6 @@ patina-tests → patina-interpreter
 - **`docs/`** - User-facing documentation and developer guides
   - **`FEATURE_STATUS.md`** - ⭐ **CANONICAL** detailed test-by-test R7RS compliance matrix
   - **`TEST_ORGANIZATION.md`** - ⭐ Test structure and running tests
-  - **`HYGIENE_SYSTEM_DESIGN.md`** - Guide for swapping hygiene implementations
-  - **`HYGIENE_COMPLIANCE_ANALYSIS.md`** - R7RS macro compliance measurements
-  - **`MACRO_DEBUGGING.md`** - Comprehensive macro debugging guide
   - `API.md` - Public API reference
   - `GETTING_STARTED.md` - User guide for getting started
   - `README.md` - Project overview
@@ -356,9 +354,11 @@ The `Value` enum represents all Scheme values (26 variants):
   - `Continuation(...)` - First-class continuations
 
 **Hygiene Support**:
-- `Symbol(Rc<str>)` - Regular symbols
-- `Identifier { name, env }` - Lexically-scoped identifiers
-- `WrappedIdentifier { name, marks }` - Identifiers with hygiene marks
+- `Symbol(Rc<str>)` - Regular symbols (special forms, built-ins)
+- `Identifier { name, scopes }` - Hygienic identifier with scope set
+  - Uses Racket-style scope sets for hygiene
+  - Scopes track lexical context through macro expansions
+  - Flip-scope algorithm toggles scopes to distinguish use-site vs introduced identifiers
 
 **Special Values**:
 - `Boolean(bool)` - #t and #f
@@ -499,16 +499,20 @@ primitives/
 
 **Location:** `crates/patina-macros/` (separate crate)
 
-**Hygiene Algorithm**: Marks-and-ribs (Chez Scheme style)
-- `WrappedIdentifier` Value variant stores marks
-- Marks are added at each expansion
-- Identifiers compared by (name, marks) tuple
-- No renaming needed - marks provide discrimination
+**Hygiene Algorithm**: Racket-style scope sets (based on "Binding as Sets of Scopes", Flatt 2016)
+- `Identifier { name, scopes }` stores hygiene context via scope sets
+- Each macro expansion creates a fresh scope
+- **Flip-scope algorithm**:
+  1. Before pattern matching: flip macro_scope on INPUT (adds scope to use-site identifiers)
+  2. After template expansion: flip macro_scope on OUTPUT (removes from use-site, adds to introduced)
+- Lookup uses subset matching: binding with `binding.scopes ⊆ reference.scopes` wins
+- Most specific (largest scope set) binding shadows less specific ones
+- No renaming needed - scopes provide discrimination
 
 **Macro Expansion Integration**:
 - Macros stored as `Value::Macro { name, data }`
 - Desugarer checks environment for macro bindings
-- When found, calls macro expander
+- When found, calls macro expander with flip-scope hygiene
 - Expands recursively until a special form or application remains
 
 **Core Macros** (in `lib/scheme/base-extras.scm`):
@@ -755,7 +759,7 @@ See `docs/FEATURE_STATUS.md` for detailed test-by-test compliance matrix (canoni
 - Vector operations (vector, vector-ref, vector-set!, make-vector, etc.)
 - Type predicates and equality (number?, string?, eq?, eqv?, equal?, etc.)
 - Tail call optimization (via trampoline pattern)
-- Hygienic macros (syntax-rules with marks-and-ribs)
+- Hygienic macros (syntax-rules with scope sets hygiene)
 - Multiple values (values, call-with-values)
 - Library system (import, library loading, dual loaders)
 - CoreExpr IR evaluation (primary path)

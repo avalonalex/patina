@@ -97,10 +97,32 @@ impl ScopeSet {
     }
 
     /// Remove a scope from the set (returns new set, original unchanged)
-    /// Used during macro expansion when "flipping" scopes
     pub fn without_scope(&self, scope: ScopeId) -> Self {
         let mut scopes = self.scopes.clone();
         scopes.remove(&scope);
+        ScopeSet { scopes }
+    }
+
+    /// Flip (toggle) a scope in the set (returns new set, original unchanged)
+    ///
+    /// This is the key operation for macro hygiene (Racket-style):
+    /// - If scope is present, removes it
+    /// - If scope is absent, adds it
+    ///
+    /// Used during macro expansion:
+    /// 1. Before expansion: flip macro scope on input (adds to all identifiers)
+    /// 2. After expansion: flip macro scope on output
+    ///    - Use-site identifiers (from input): had scope added, now removed
+    ///    - Introduced identifiers (from template): didn't have scope, now added
+    ///
+    /// This distinguishes introduced vs use-site identifiers using only scopes.
+    pub fn flip_scope(&self, scope: ScopeId) -> Self {
+        let mut scopes = self.scopes.clone();
+        if scopes.contains(&scope) {
+            scopes.remove(&scope);
+        } else {
+            scopes.insert(scope);
+        }
         ScopeSet { scopes }
     }
 
@@ -296,5 +318,68 @@ mod tests {
         // Order might vary, but should contain both
         assert!(display.contains("S1"));
         assert!(display.contains("S2"));
+    }
+
+    #[test]
+    fn test_flip_scope() {
+        let s1 = ScopeId(1);
+        let s2 = ScopeId(2);
+
+        // Start with empty set
+        let empty = ScopeSet::new();
+        assert!(!empty.contains(&s1));
+
+        // Flip adds when absent
+        let with_s1 = empty.flip_scope(s1);
+        assert!(with_s1.contains(&s1));
+
+        // Flip removes when present
+        let back_to_empty = with_s1.flip_scope(s1);
+        assert!(!back_to_empty.contains(&s1));
+
+        // Flip twice returns to original
+        let set = ScopeSet::from_iter([s1, s2]);
+        let flipped_once = set.flip_scope(s1);
+        let flipped_twice = flipped_once.flip_scope(s1);
+        assert_eq!(set, flipped_twice);
+    }
+
+    #[test]
+    fn test_flip_scope_macro_hygiene() {
+        // Simulate Racket's macro expansion hygiene:
+        // 1. Create macro scope
+        // 2. Flip on input (adds scope to use-site identifiers)
+        // 3. After expansion, flip on output
+        //    - Use-site: scope gets removed (was added, then flipped off)
+        //    - Introduced: scope gets added (wasn't there, then flipped on)
+
+        let macro_scope = ScopeId(100);
+
+        // Use-site identifier (from macro call input)
+        let use_site = ScopeSet::from_iter([ScopeId(1), ScopeId(2)]);
+
+        // Step 1: Flip on input (adds macro_scope)
+        let use_site_after_input_flip = use_site.flip_scope(macro_scope);
+        assert!(use_site_after_input_flip.contains(&macro_scope));
+
+        // Step 2: After expansion, flip on output (removes macro_scope)
+        let use_site_final = use_site_after_input_flip.flip_scope(macro_scope);
+        assert!(!use_site_final.contains(&macro_scope));
+        assert_eq!(use_site, use_site_final); // Back to original!
+
+        // Introduced identifier (from macro template, no macro_scope initially)
+        let introduced = ScopeSet::from_iter([ScopeId(1)]);
+        assert!(!introduced.contains(&macro_scope));
+
+        // Introduced identifiers don't go through input flip, only output flip
+        // Step 2: Flip on output (adds macro_scope)
+        let introduced_final = introduced.flip_scope(macro_scope);
+        assert!(introduced_final.contains(&macro_scope));
+
+        // Now use_site_final and introduced_final have different scopes
+        // use_site_final: {S1, S2} (no macro_scope)
+        // introduced_final: {S1, S100} (has macro_scope)
+        assert!(!use_site_final.contains(&macro_scope));
+        assert!(introduced_final.contains(&macro_scope));
     }
 }

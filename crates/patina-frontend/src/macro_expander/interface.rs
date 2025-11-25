@@ -213,8 +213,7 @@ impl TestExpander {
                         Some(s.as_ref())
                     }
                 }
-                ScopedIdentifier { name, .. } => Some(name.as_ref()),
-                WrappedIdentifier { name, .. } => Some(name.as_ref()),
+                Identifier { name, .. } => Some(name.as_ref()),
                 _ => None,
             }
         }

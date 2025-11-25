@@ -2,6 +2,49 @@
 
 Major accomplishments and project milestones.
 
+## 2025-11-25: Hygiene System Unification - Scope Sets Only
+
+**Major Architectural Simplification**
+
+Unified the macro hygiene system from two approaches (marks-and-ribs + scope sets) to a single Racket-style scope sets implementation.
+
+**What Changed:**
+- ✅ Removed `marks` field from `Identifier { name, scopes }` variant
+- ✅ Removed `marked_bindings` from `Environment` (only `scoped_bindings` remains)
+- ✅ Removed entire `marks_and_ribs.rs` module (~490 lines deleted)
+- ✅ Implemented Racket's flip-scope algorithm for hygiene
+- ✅ Updated all documentation to reflect scope-sets-only approach
+
+**Flip-Scope Algorithm (Racket-style):**
+```
+1. Before pattern matching: flip macro_scope on INPUT
+   - Adds scope to all use-site identifiers
+
+2. After template expansion: flip macro_scope on OUTPUT
+   - Use-site identifiers: scope gets REMOVED (they had it, flip removes)
+   - Introduced identifiers: scope gets ADDED (they didn't have it, flip adds)
+```
+
+**Why This Matters:**
+- **Simpler mental model**: One hygiene mechanism instead of two
+- **Cleaner codebase**: ~490 lines of legacy marks-and-ribs code removed
+- **Well-understood theory**: Based on "Binding as Sets of Scopes" (Flatt 2016)
+- **Future-proof**: Racket's approach is the modern standard for hygiene
+
+**Files Changed:**
+- `patina-runtime/src/value.rs` - Simplified `Identifier` to `{ name, scopes }`
+- `patina-runtime/src/environment.rs` - Removed `marked_bindings`, marks methods
+- `patina-runtime/src/scope.rs` - Added `flip_scope()` operation
+- `patina-macros/src/macro_expander/mod.rs` - Implemented flip-scope expansion
+- `patina-macros/src/macro_expander/expander.rs` - Simplified to use macro_scope
+- `patina-macros/src/macro_expander/template.rs` - Removed marks from Identifier
+- `patina-macros/src/marks_and_ribs.rs` - **DELETED** (no longer needed)
+
+**Test Results:**
+- ✅ All ~414 tests pass
+- ✅ Zero regressions
+- ✅ All hygiene tests continue to work correctly
+
 ## 2025-11-21: Ellipsis-in-Dotted-Patterns & Full define-values Support
 
 **Major Macro System Enhancement**

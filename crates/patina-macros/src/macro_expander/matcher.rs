@@ -1,7 +1,7 @@
 //! PVREF-based pattern matching (Version 2)
 //!
 //! This module implements pattern matching for the PVREF-based macro system.
-//! It takes compiled Pattern2 structures and matches them against input expressions,
+//! It takes compiled Pattern structures and matches them against input expressions,
 //! building MatchEnv trees that properly represent nested ellipsis bindings.
 //!
 //! Key improvements over the original matcher:
@@ -125,7 +125,7 @@ impl std::error::Error for MatchError {}
 /// Pattern matcher for PVREF-based macro system
 ///
 /// This implements the pattern matching phase of macro expansion.
-/// It takes a compiled Pattern2 and an input expression, returning
+/// It takes a compiled Pattern and an input expression, returning
 /// a MatchEnv with all pattern variables bound.
 ///
 /// Based on Gauche's pattern matching approach (macro.c:600+).

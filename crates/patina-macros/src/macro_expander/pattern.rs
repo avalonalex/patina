@@ -1,4 +1,4 @@
-//! PVREF-based pattern representation (Version 2)
+//! PVREF-based pattern representation
 //!
 //! This module implements the new PVREF (Pattern Variable Reference) based
 //! pattern representation for the macro system. This is a complete rewrite
@@ -160,7 +160,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pattern2_wildcard() {
+    fn test_pattern_wildcard() {
         let pat = Pattern::Wildcard;
         assert!(pat.is_wildcard());
         assert!(!pat.is_var());
@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pattern2_var() {
+    fn test_pattern_var() {
         let pvref = PVRef::new(0, 0);
         let pat = Pattern::Var(pvref);
         assert!(pat.is_var());
@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pattern2_list() {
+    fn test_pattern_list() {
         let pat = Pattern::List(vec![
             Pattern::Var(PVRef::new(0, 0)),
             Pattern::Var(PVRef::new(0, 1)),
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pattern2_ellipsis() {
+    fn test_pattern_ellipsis() {
         let pat = Pattern::Ellipsis {
             subpattern: Box::new(Pattern::Var(PVRef::new(1, 0))),
             level: 1,

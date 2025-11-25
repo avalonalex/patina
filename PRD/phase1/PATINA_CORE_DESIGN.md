@@ -64,7 +64,6 @@ patina-tree-walker (core, runtime, frontend, macros, ir)   │
 | `Arity` | patina-runtime/value.rs | Part of Procedure |
 | `PromiseState` | patina-runtime/value.rs | Part of Value |
 | `Environment` | patina-runtime/environment.rs | Used by Value (closures) |
-| `MarkList` | patina-runtime/environment.rs | Used by Environment |
 | `ScopedBinding` | patina-runtime/environment.rs | Used by Environment |
 | `ScopeId` | patina-runtime/scope.rs | Used by Value, Environment |
 | `ScopeSet` | patina-runtime/scope.rs | Used by Value, Environment |
@@ -141,7 +140,7 @@ crates/patina-core/
 └── src/
     ├── lib.rs              # Re-exports
     ├── value.rs            # Value, Procedure, LambdaBody, Arity
-    ├── environment.rs      # Environment, MarkList, ScopedBinding
+    ├── environment.rs      # Environment, ScopedBinding
     ├── scope.rs            # ScopeId, ScopeSet
     ├── core_expr.rs        # CoreExpr, Formals, Symbol, CaseLambdaClause
     └── pvref.rs            # PVRef, MatchValue, MatchEnv

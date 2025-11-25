@@ -177,17 +177,19 @@ impl Desugarer {
             // Variable reference
             Value::Symbol(s) => Ok(CoreExpr::Var(s.clone())),
 
-            // WrappedIdentifier (from marks-and-ribs hygiene)
-            // Treat as a variable reference - the marks are used during name resolution
-            // The evaluator uses get_with_marks() to resolve the binding
-            Value::WrappedIdentifier { name, .. } => Ok(CoreExpr::Var(name.clone())),
-
-            // ScopedIdentifier (from scope-sets hygiene)
-            // Convert to ScopedVar - the evaluator uses get_with_scopes() to resolve
-            Value::ScopedIdentifier { name, scopes } => Ok(CoreExpr::ScopedVar {
-                name: name.clone(),
-                scopes: scopes.clone(),
-            }),
+            // Identifier (unified hygiene: marks-and-ribs + scope-sets)
+            // If scopes is non-empty, use scope-based lookup (ScopedVar)
+            // Otherwise use simple name lookup (Var) - marks handled at eval time
+            Value::Identifier { name, scopes, .. } => {
+                if scopes.is_empty() {
+                    Ok(CoreExpr::Var(name.clone()))
+                } else {
+                    Ok(CoreExpr::ScopedVar {
+                        name: name.clone(),
+                        scopes: scopes.clone(),
+                    })
+                }
+            }
 
             // Empty list (unusual in AST, but possible as literal)
             Value::Null => Ok(CoreExpr::Literal(Value::Null)),
@@ -358,7 +360,7 @@ impl Desugarer {
         let var_sym = match &var {
             Value::Symbol(s) => s.clone(),
             // Handle hygienic identifiers from macro expansion
-            Value::WrappedIdentifier { name, .. } => name.clone(),
+            Value::Identifier { name, .. } => name.clone(),
             _ => {
                 return Err(DesugarError::InvalidSyntax(
                     "set! requires a symbol as first argument".to_string(),
@@ -387,7 +389,7 @@ impl Desugarer {
             }),
 
             // Handle hygienic identifiers for variable names
-            [Value::WrappedIdentifier { name, .. }, value] => Ok(CoreExpr::Define {
+            [Value::Identifier { name, .. }, value] => Ok(CoreExpr::Define {
                 name: name.clone(),
                 value: Box::new(self.desugar(value)?),
             }),

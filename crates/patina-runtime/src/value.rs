@@ -32,38 +32,26 @@ pub enum Value {
     // Symbols
     Symbol(Rc<str>),
 
-    // Wrapped Identifier (for marks-and-ribs hygiene)
-    // An identifier with a list of marks tracking expansion history
-    // Used by the marks-and-ribs hygiene algorithm (Chez Scheme approach)
+    // Identifier for hygienic macro expansion (Racket-style scope sets)
     //
-    // ## References
-    // - Dybvig et al. "Syntactic abstraction in Scheme" (1993)
-    // - Chez Scheme syntax.ss implementation
+    // Each identifier carries a set of scopes that track which binding forms it's inside.
+    // This is the key to hygienic macro expansion: identifiers from different lexical
+    // contexts have different scope sets, allowing them to be distinguished.
     //
-    // Two identifiers are "the same" if they have the same name AND same marks.
-    // This allows hygiene without renaming - marks discriminate identifiers.
-    WrappedIdentifier {
-        name: Rc<str>,
-        /// List of expansion marks (most recent first)
-        /// Empty list = user-written identifier
-        /// [3, 1] = introduced in expansion 1, then passed through expansion 3
-        marks: Vec<usize>,
-    },
-
-    // Scoped Identifier (for scope-sets hygiene - Racket approach)
-    // An identifier with a set of scopes tracking lexical context
-    // Used by the scope sets hygiene algorithm (Matthew Flatt, POPL 2016)
-    //
-    // ## References
+    // ## Reference
     // - Flatt "Binding as Sets of Scopes" (POPL 2016)
-    // - Racket's syntax system implementation
     //
-    // Each binding form creates a unique scope. An identifier's scopes
-    // track which binding forms it's "inside of". Lookup finds the binding
-    // where binding.scopes ⊆ reference.scopes.
-    ScopedIdentifier {
+    // ## Hygiene via flip-scope
+    // During macro expansion:
+    // 1. Before expansion: flip macro_scope on INPUT (adds to use-site identifiers)
+    // 2. After expansion: flip macro_scope on OUTPUT
+    //    - Use-site identifiers: scope removed (was added, then toggled off)
+    //    - Introduced identifiers: scope added (wasn't there, then toggled on)
+    //
+    // This distinguishes use-site vs introduced identifiers using only scopes.
+    Identifier {
         name: Rc<str>,
-        /// Set of scopes this identifier is inside of
+        /// Set of scopes for scope-sets hygiene
         /// Empty set = top-level identifier
         scopes: ScopeSet,
     },
@@ -201,8 +189,7 @@ impl Value {
             Value::Character(_) => "character",
             Value::String(_) => "string",
             Value::Symbol(_) => "symbol",
-            Value::WrappedIdentifier { .. } => "identifier",
-            Value::ScopedIdentifier { .. } => "identifier",
+            Value::Identifier { .. } => "identifier",
             Value::Pair(_) | Value::Null => "list",
             Value::Vector(_) => "vector",
             Value::Bytevector(_) => "bytevector",
@@ -287,20 +274,10 @@ impl std::fmt::Display for Value {
                     write!(f, "{}", s)
                 }
             }
-            Value::WrappedIdentifier { name, .. } => {
-                // Display wrapped identifiers just as their name
-                // Marks are internal - they shouldn't appear in output
-                // Full marks-and-ribs will use marks for lookup, not display
-                if Self::symbol_needs_vertical_bars(name) {
-                    write!(f, "|{}|", name)
-                } else {
-                    write!(f, "{}", name)
-                }
-            }
-            Value::ScopedIdentifier { name, .. } => {
-                // Display scoped identifiers just as their name
-                // Scopes are internal - they shouldn't appear in output
-                // Scope sets are used for lookup, not display
+            Value::Identifier { name, .. } => {
+                // Display identifiers just as their name
+                // Marks and scopes are internal - they shouldn't appear in output
+                // They are used for lookup, not display
                 if Self::symbol_needs_vertical_bars(name) {
                     write!(f, "|{}|", name)
                 } else {

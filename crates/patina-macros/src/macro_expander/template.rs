@@ -17,80 +17,48 @@ use std::rc::Rc;
 /// Identifier for hygiene
 ///
 /// Wraps a symbol with scope information for hygienic macro expansion.
-/// Supports both marks-and-ribs (Chez Scheme) and scope sets (Racket) hygiene.
+/// Uses Racket-style scope sets for hygiene (based on "Binding as Sets of Scopes", Flatt 2016).
 ///
 /// This follows Gauche's approach: "symbols which a template inserts into the expanded
 /// form are converted to identifiers at the macro definition time, encapsulating
 /// the defining environment of the macro."
 ///
-/// ## Hygiene Models
+/// ## Hygiene Model (Scope Sets)
 ///
-/// ### Marks-and-Ribs (Original)
-/// - **Free variables** (bound at macro definition time): Have `definition_marks = Some([])`
-///   These preserve their definition-time binding by having empty marks.
-/// - **Introduced identifiers** (from macro template): Have `definition_marks = None`
-///   These get an expansion mark during expansion to avoid capturing use-site bindings.
+/// - **Free variables** (bound at macro definition time): Have `definition_scopes` set
+///   to the scope set at macro definition time. These scopes enable correct binding
+///   resolution using subset matching.
 ///
-/// ### Scope Sets (Preferred)
-/// - **Free variables**: Have `definition_scopes` set to the scope set at macro definition time.
-///   These scopes enable correct binding resolution using subset matching.
-/// - **Introduced identifiers**: Have `definition_scopes` empty or None.
-///   They get an expansion scope during expansion.
+/// - **Introduced identifiers** (from macro template): Have `definition_scopes` as None.
+///   They get an expansion scope during expansion via the flip-scope algorithm.
 ///
-/// Two identifiers are "the same" if they have the same name AND same marks/scopes.
-/// This allows hygiene without renaming - marks/scopes discriminate identifiers.
+/// Two identifiers are "the same" if they have the same name AND same scopes.
+/// This allows hygiene without renaming - scopes discriminate identifiers.
 #[derive(Clone, Debug)]
 pub struct Identifier {
     name: Rc<str>,
-    /// Marks this identifier should have (for marks-and-ribs hygiene).
-    ///
-    /// - `Some(marks)` = FREE VARIABLE from macro definition time.
-    ///   These marks (typically empty for top-level bindings) are preserved during expansion.
-    ///   The identifier resolves to definition-time bindings.
-    ///
-    /// - `None` = INTRODUCED IDENTIFIER from macro template.
-    ///   During expansion, an expansion mark will be added to avoid capturing use-site bindings.
-    definition_marks: Option<Vec<usize>>,
-
     /// Scope set from macro definition time (for scope-based hygiene).
     ///
     /// - `Some(scopes)` = FREE VARIABLE with definition-time scopes.
     ///   These scopes enable correct binding resolution using subset matching.
     ///
-    /// - `None` = INTRODUCED IDENTIFIER (will get expansion scope).
+    /// - `None` = INTRODUCED IDENTIFIER (will get expansion scope via flip-scope).
     definition_scopes: Option<ScopeSet>,
 }
 
 impl Identifier {
-    /// Create a new identifier without definition marks/scopes (introduced identifier)
+    /// Create a new identifier without definition scopes (introduced identifier)
     ///
-    /// Used for introduced identifiers that should get an expansion mark/scope during expansion.
-    /// These identifiers avoid capturing use-site bindings.
+    /// Used for introduced identifiers that should get an expansion scope during expansion.
+    /// These identifiers avoid capturing use-site bindings via the flip-scope algorithm.
     pub fn new(name: impl Into<Rc<str>>) -> Self {
         Self {
             name: name.into(),
-            definition_marks: None,
             definition_scopes: None,
         }
     }
 
-    /// Create a new identifier with definition marks (free variable, marks-and-ribs hygiene)
-    ///
-    /// Used for free variables in templates that should preserve their
-    /// lexical scope from macro definition time.
-    ///
-    /// # Arguments
-    /// * `name` - The identifier name
-    /// * `marks` - The marks this identifier should have (typically empty for definition-time bindings)
-    pub fn with_marks(name: impl Into<Rc<str>>, marks: Vec<usize>) -> Self {
-        Self {
-            name: name.into(),
-            definition_marks: Some(marks),
-            definition_scopes: None,
-        }
-    }
-
-    /// Create a new identifier with definition scopes (free variable, scope-based hygiene)
+    /// Create a new identifier with definition scopes (free variable)
     ///
     /// Used for free variables in templates that should preserve their
     /// lexical scope from macro definition time using scope sets.
@@ -101,20 +69,6 @@ impl Identifier {
     pub fn with_scopes(name: impl Into<Rc<str>>, scopes: ScopeSet) -> Self {
         Self {
             name: name.into(),
-            definition_marks: Some(vec![]), // Also set empty marks for backwards compatibility
-            definition_scopes: Some(scopes),
-        }
-    }
-
-    /// Create a new identifier with both marks and scopes (for hybrid hygiene)
-    pub fn with_marks_and_scopes(
-        name: impl Into<Rc<str>>,
-        marks: Vec<usize>,
-        scopes: ScopeSet,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            definition_marks: Some(marks),
             definition_scopes: Some(scopes),
         }
     }
@@ -124,22 +78,15 @@ impl Identifier {
         &self.name
     }
 
-    /// Check if this is a free variable (has definition marks or scopes)
+    /// Check if this is a free variable (has definition scopes)
     ///
     /// Returns true if this identifier was bound at macro definition time
     /// and should preserve its definition-time binding.
     pub fn is_free_variable(&self) -> bool {
-        self.definition_marks.is_some() || self.definition_scopes.is_some()
+        self.definition_scopes.is_some()
     }
 
-    /// Get the definition marks (for marks-and-ribs hygiene)
-    ///
-    /// Returns Some(marks) for free variables, None for introduced identifiers.
-    pub fn definition_marks(&self) -> Option<&Vec<usize>> {
-        self.definition_marks.as_ref()
-    }
-
-    /// Get the definition scopes (for scope-based hygiene)
+    /// Get the definition scopes
     ///
     /// Returns Some(scopes) for free variables, None for introduced identifiers.
     pub fn definition_scopes(&self) -> Option<&ScopeSet> {

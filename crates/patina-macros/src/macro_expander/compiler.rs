@@ -551,10 +551,13 @@ impl Compiler {
                 };
 
                 if should_capture {
-                    // Free variable - use empty marks
-                    return Ok(Template::Symbol(Identifier::with_marks(s.clone(), vec![])));
+                    // Free variable - use empty scopes (definition-time scopes)
+                    return Ok(Template::Symbol(Identifier::with_scopes(
+                        s.clone(),
+                        ScopeSet::new(),
+                    )));
                 } else {
-                    // Introduced identifier - will get expansion mark
+                    // Introduced identifier - will get expansion scope via flip-scope
                     return Ok(Template::Symbol(Identifier::new(s.clone())));
                 }
             }
@@ -795,7 +798,10 @@ impl Compiler {
                         };
 
                         if should_capture {
-                            Ok(Template::Symbol(Identifier::with_marks(s.clone(), vec![])))
+                            Ok(Template::Symbol(Identifier::with_scopes(
+                                s.clone(),
+                                ScopeSet::new(),
+                            )))
                         } else {
                             Ok(Template::Symbol(Identifier::new(s.clone())))
                         }
@@ -960,15 +966,14 @@ impl Compiler {
 
     /// Check if a value is the ellipsis symbol
     ///
-    /// Recognizes both plain Symbol and identifier types (ScopedIdentifier, WrappedIdentifier)
+    /// Recognizes both plain Symbol and Identifier (with marks/scopes)
     /// to support nested macro definitions where ellipsis may be wrapped.
     fn is_ellipsis(&self, form: &Value) -> bool {
         match &self.ellipsis {
             None => false, // Ellipsis disabled
             Some(elli) => match form {
                 Value::Symbol(s) => s == elli,
-                Value::ScopedIdentifier { name, .. } => name == elli,
-                Value::WrappedIdentifier { name, .. } => name == elli,
+                Value::Identifier { name, .. } => name == elli,
                 _ => false,
             },
         }
@@ -976,13 +981,12 @@ impl Compiler {
 
     /// Extract symbol name from any identifier type
     ///
-    /// Returns Some(name) for Symbol, ScopedIdentifier, or WrappedIdentifier.
+    /// Returns Some(name) for Symbol or Identifier.
     /// Returns None for other value types.
     fn extract_symbol_name(form: &Value) -> Option<&Rc<str>> {
         match form {
             Value::Symbol(s) => Some(s),
-            Value::ScopedIdentifier { name, .. } => Some(name),
-            Value::WrappedIdentifier { name, .. } => Some(name),
+            Value::Identifier { name, .. } => Some(name),
             _ => None,
         }
     }

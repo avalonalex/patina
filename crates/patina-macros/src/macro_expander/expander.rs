@@ -102,23 +102,24 @@ pub struct Expander {
     /// We use the full runtime Environment directly to avoid duplication
     expansion_env: std::rc::Rc<patina_runtime::Environment>,
 
-    /// Mark for this expansion (fresh for each expansion)
-    /// Used by marks-and-ribs to track which expansion introduced identifiers
-    expansion_mark: usize,
+    /// Macro scope for this expansion (Racket-style hygiene)
+    /// Used to distinguish use-site vs introduced identifiers
+    macro_scope: patina_runtime::ScopeId,
 }
 
 impl Expander {
-    /// Create a new expander with runtime environment for hygiene
+    /// Create a new expander with runtime environment and macro scope
     ///
     /// # Arguments
     /// * `expansion_env` - Runtime environment at expansion time
-    pub fn new(expansion_env: std::rc::Rc<patina_runtime::Environment>) -> Self {
-        // Allocate a fresh mark for this expansion
-        let mark = crate::marks_and_ribs::MarksAndRibsHygiene::fresh_mark();
-
+    /// * `macro_scope` - Fresh scope for this macro expansion (for Racket-style hygiene)
+    pub fn new(
+        expansion_env: std::rc::Rc<patina_runtime::Environment>,
+        macro_scope: patina_runtime::ScopeId,
+    ) -> Self {
         Self {
             expansion_env,
-            expansion_mark: mark,
+            macro_scope,
         }
     }
 
@@ -565,13 +566,18 @@ impl Expander {
         }
     }
 
-    /// Rename an identifier for hygiene using marks-and-ribs or scope sets
+    /// Rename an identifier for hygiene using Racket-style scope sets
     ///
-    /// All identifiers become `WrappedIdentifier` or `ScopedIdentifier` with appropriate context:
-    /// - Free variables: use definition marks/scopes (for binding resolution)
-    /// - Introduced identifiers: add expansion mark to avoid capturing use-site bindings
+    /// All identifiers become `Identifier` with appropriate scopes:
+    /// - Free variables: use definition scopes (for binding resolution)
+    /// - Introduced identifiers: empty scopes (macro_scope will be added by flip on output)
     ///
-    /// This unified approach ensures hygiene through marks/scopes comparison, not environment capture.
+    /// The actual hygiene discrimination happens via flip-scope:
+    /// 1. Before expansion: flip macro_scope on INPUT (adds to use-site identifiers)
+    /// 2. Template symbols get their definition_scopes here
+    /// 3. After expansion: flip macro_scope on OUTPUT
+    ///    - Use-site (from pattern vars): macro_scope removed (was added, then flipped off)
+    ///    - Introduced (from template): macro_scope added (wasn't there, then flipped on)
     fn rename_identifier(&self, id: &Identifier) -> Value {
         let name = id.name();
 
@@ -580,48 +586,32 @@ impl Expander {
             return Value::Symbol(name.clone());
         }
 
-        // Prefer scope-based hygiene if definition scopes are available
-        if let Some(def_scopes) = id.definition_scopes() {
-            // FREE VARIABLE with scope-based hygiene
+        // Get scopes for the identifier
+        let scopes = if let Some(def_scopes) = id.definition_scopes() {
+            // FREE VARIABLE - use definition-time scopes
             if patina_runtime::macro_debug::is_enabled() {
                 println!(
                     "[SCOPE-SETS] Free variable '{}' with scopes {}",
                     name, def_scopes
                 );
             }
-            return Value::ScopedIdentifier {
-                name: name.clone(),
-                scopes: def_scopes.clone(),
-            };
-        }
-
-        // Fall back to marks-and-ribs hygiene
-        // Determine marks based on whether this is a free variable or introduced identifier
-        let marks = if let Some(def_marks) = id.definition_marks() {
-            // FREE VARIABLE - preserve definition-time marks
-            // Empty marks means: "this identifier existed before any macro expansion"
-            if patina_runtime::macro_debug::is_enabled() {
-                println!(
-                    "[MARKS-AND-RIBS] Free variable '{}' with marks {:?}",
-                    name, def_marks
-                );
-            }
-            def_marks.clone()
+            def_scopes.clone()
         } else {
-            // INTRODUCED IDENTIFIER - add expansion mark
+            // INTRODUCED IDENTIFIER - empty scopes for now
+            // The macro_scope will be added when we flip on the output
             if patina_runtime::macro_debug::is_enabled() {
                 println!(
-                    "[MARKS-AND-RIBS] Introduced '{}' with mark {}",
-                    name, self.expansion_mark
+                    "[SCOPE-SETS] Introduced '{}' (will get macro scope {} on output flip)",
+                    name, self.macro_scope
                 );
             }
-            vec![self.expansion_mark]
+            patina_runtime::ScopeSet::new()
         };
 
-        // Return WrappedIdentifier - unified hygiene through marks
-        Value::WrappedIdentifier {
+        // Return Identifier with scopes (Racket-style hygiene)
+        Value::Identifier {
             name: name.clone(),
-            marks,
+            scopes,
         }
     }
 
@@ -669,7 +659,10 @@ impl Default for Expander {
     fn default() -> Self {
         // Create an empty runtime environment for tests
         use patina_runtime::Environment;
-        Self::new(std::rc::Rc::new(Environment::new()))
+        Self::new(
+            std::rc::Rc::new(Environment::new()),
+            patina_runtime::ScopeId::fresh(),
+        )
     }
 }
 

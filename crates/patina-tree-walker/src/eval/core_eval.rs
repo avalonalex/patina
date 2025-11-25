@@ -694,13 +694,13 @@ fn bind_params(
     let required = params.len();
 
     // Helper to define bindings
-    // We ALWAYS use regular define for marks-based hygiene compatibility
-    // We ALSO use scoped define when binding_scope is present for scope-based hygiene
+    // We use regular define for simple lookup (built-ins, top-level)
+    // We ALSO use scoped define when binding_scope is present for hygienic lookup
     let define = |name: String, value: Value| {
-        // Regular binding for marks-based lookup (get, get_with_marks)
+        // Regular binding for simple lookup (get)
         env.define(name.clone(), value.clone());
 
-        // Additional scoped binding for scope-based lookup (get_with_scopes)
+        // Additional scoped binding for hygienic lookup (get_with_scopes)
         if let Some(scope_id) = binding_scope {
             let scopes = ScopeSet::singleton(scope_id);
             env.define_with_scopes(name, scopes, value);
@@ -776,7 +776,7 @@ fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
     match expr {
         CoreExpr::Literal(v) => Ok(v.clone()),
         CoreExpr::Var(name) => Ok(Value::Symbol(name.clone())),
-        CoreExpr::ScopedVar { name, scopes } => Ok(Value::ScopedIdentifier {
+        CoreExpr::ScopedVar { name, scopes } => Ok(Value::Identifier {
             name: name.clone(),
             scopes: scopes.clone(),
         }),
