@@ -316,8 +316,12 @@ Testing:
 (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
 
 Error: Internal error: Failed to desugar expression: if expects 2 or 3 arguments, got 1
-Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence1
-Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
+Testing: 
+(sequence1 0 1 2 3)
+
+Testing: 
+(sequence2 1 2 3 4)
+
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Testing: 
 (sequence3 2 3 4 5)
@@ -326,41 +330,11 @@ Error: Undefined variable: sequence3
 Testing: 
 (elli-esc-1)
 
-FAIL: 
-(elli-esc-1)
-
-  expected: 
-...
-
-  but got:  
-(... ...)
-
-
 Testing: 
 (elli-esc-1 100)
 
-FAIL: 
-(elli-esc-1 100)
-
-  expected: 
-(100 ...)
-
-  but got:  
-(100 ...)
-
-
 Testing: 
 (elli-esc-1 100 200)
-
-FAIL: 
-(elli-esc-1 100 200)
-
-  expected: 
-(... 100 200)
-
-  but got:  
-(... 100 200)
-
 
 Testing: 
 (part-2 10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77)
@@ -384,17 +358,9 @@ Testing:
 Testing: 
 (list (count-to-2_ _ _) (count-to-2_) (count-to-2_ a b) (count-to-2_ a b c d))
 
-FAIL: 
-(list (count-to-2_ _ _) (count-to-2_) (count-to-2_ a b) (count-to-2_ a b c d))
+Testing: 
+(mad-hatter)
 
-  expected: 
-(2 0 fail fail)
-
-  but got:  
-(2 0 2 fail)
-
-
-Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro mad-hatter
 Testing: 
 (let ((=> #f)) (cond (#t => 'ok)))
 
@@ -423,7 +389,7 @@ Testing:
 Error: Not a procedure: #<macro:foo399>
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro name must be a symbol
 Error: Invalid syntax: syntax-rules literals must be a proper list
-Tests run: 13, Passed: 8, Failed: 5
+Tests run: 16, Passed: 15, Failed: 1
 
 Running test suite: 5 Program structure
 Testing: 

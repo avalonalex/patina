@@ -200,6 +200,30 @@ impl TestExpander {
     fn forms_equal_ignoring_gensym(a: &Value, b: &Value) -> bool {
         use Value::*;
 
+        // Helper to extract base name from any identifier form
+        fn base_name(v: &Value) -> Option<&str> {
+            match v {
+                Symbol(s) => {
+                    if s.starts_with("##") {
+                        // Extract name between ## and last #
+                        s.strip_prefix("##")
+                            .and_then(|ss| ss.rfind('#').map(|i| &ss[..i]))
+                            .or(Some(s.as_ref()))
+                    } else {
+                        Some(s.as_ref())
+                    }
+                }
+                ScopedIdentifier { name, .. } => Some(name.as_ref()),
+                WrappedIdentifier { name, .. } => Some(name.as_ref()),
+                _ => None,
+            }
+        }
+
+        // Try to compare as identifiers first
+        if let (Some(name1), Some(name2)) = (base_name(a), base_name(b)) {
+            return name1 == name2;
+        }
+
         match (a, b) {
             (Symbol(s1), Symbol(s2)) => {
                 // Extract base name from potentially hygienic symbols

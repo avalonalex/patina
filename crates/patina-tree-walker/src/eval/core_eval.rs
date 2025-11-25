@@ -534,23 +534,23 @@ fn apply_procedure(
             // Try to use CoreExpr body directly (preserves scope IDs for hygiene)
             // This is critical: re-desugaring would create fresh scope IDs that
             // don't match definition_scopes captured at macro definition time.
-            if let Some(body_core) = body_core {
-                if let Some(core_body) = body_core.downcast_ref::<Vec<CoreExpr>>() {
-                    if core_body.is_empty() {
-                        return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
-                    }
-
-                    // Evaluate all but last for side effects
-                    for expr in &core_body[..core_body.len() - 1] {
-                        eval_non_tail(expr, call_env.clone(), evaluator)?;
-                    }
-
-                    // Last expression is in tail position
-                    return Ok(CoreEvalResult::TailCall {
-                        expr: core_body[core_body.len() - 1].clone(),
-                        env: call_env,
-                    });
+            if let Some(body_core) = body_core
+                && let Some(core_body) = body_core.downcast_ref::<Vec<CoreExpr>>()
+            {
+                if core_body.is_empty() {
+                    return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
                 }
+
+                // Evaluate all but last for side effects
+                for expr in &core_body[..core_body.len() - 1] {
+                    eval_non_tail(expr, call_env.clone(), evaluator)?;
+                }
+
+                // Last expression is in tail position
+                return Ok(CoreEvalResult::TailCall {
+                    expr: core_body[core_body.len() - 1].clone(),
+                    env: call_env,
+                });
             }
 
             // Fallback: use Value body (for lambdas created without body_core)

@@ -1,3 +1,7 @@
+// InterpreterError contains DesugarError which contains Value (large)
+// Boxing would add complexity for minimal benefit in this interpreter context
+#![allow(clippy::result_large_err)]
+
 //! Patina Interpreter - High-level interface for Scheme evaluation
 //!
 //! This crate provides the `Interpreter` API that combines frontend (parsing)

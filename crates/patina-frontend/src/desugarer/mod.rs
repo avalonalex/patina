@@ -1,3 +1,7 @@
+// DesugarError contains Value which is large, but boxing it would add complexity
+// for minimal benefit in this interpreter context
+#![allow(clippy::result_large_err)]
+
 //! Desugarer: Transform surface syntax (Value) to core IR (CoreExpr)
 //!
 //! This module converts Scheme's surface syntax into a minimal core IR.

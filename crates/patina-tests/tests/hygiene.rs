@@ -292,3 +292,252 @@ fn test_let_syntax_hygiene_multiple_nesting() {
     // Should return 'level1, not 'inner
     assert_eq!(result.unwrap().to_string(), "level1");
 }
+
+// =============================================================================
+// Underscore Literal Tests
+// =============================================================================
+//
+// R7RS Section 4.3.2: When `_` appears in the literals list, it should only
+// match the literal symbol `_`, not act as a wildcard pattern.
+
+/// Test underscore as wildcard (default behavior when not in literals)
+#[test]
+fn test_underscore_as_wildcard() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax count-args
+          (syntax-rules ()
+            ((_ a) 1)
+            ((_ a b) 2)
+            ((_ a b c) 3)))
+
+        (list (count-args x) (count-args x y) (count-args x y z))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // _ should match any symbol in macro keyword position
+    assert_eq!(result.unwrap().to_string(), "(1 2 3)");
+}
+
+/// Test underscore as literal (when explicitly in literals list)
+///
+/// R7RS: When `_` is in the literals list, `_` in patterns should only
+/// match the literal symbol `_`, not act as a wildcard.
+#[test]
+fn test_underscore_as_literal() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax count-to-2_
+          (syntax-rules (_)
+            ((_) 0)
+            ((_ _) 1)
+            ((_ _ _) 2)
+            ((x . y) 'fail)))
+
+        (list (count-to-2_ _ _)
+              (count-to-2_)
+              (count-to-2_ a b)
+              (count-to-2_ a b c d))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // Pattern (_ _ _) should only match literal _, not a and b
+    assert_eq!(result.unwrap().to_string(), "(2 0 fail fail)");
+}
+
+// =============================================================================
+// Ellipsis Escape Tests
+// =============================================================================
+//
+// R7RS Section 4.3.2: "(... template)" is an escape form that produces
+// "template" with ellipsis treated as a regular symbol.
+
+/// Test basic ellipsis escape: (... ...) produces literal ...
+#[test]
+fn test_ellipsis_escape_basic() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax make-ellipsis
+          (syntax-rules ()
+            ((_) (quote (... ...)))))
+
+        (make-ellipsis)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // (... ...) should produce just ...
+    assert_eq!(result.unwrap().to_string(), "...");
+}
+
+/// Test ellipsis escape preserves pattern variable substitution
+#[test]
+fn test_ellipsis_escape_with_pattern_variable() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax elli-esc-1
+          (syntax-rules ()
+            ((_ x) (quote (... (x ...))))))
+
+        (elli-esc-1 foo)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // x should be substituted, but ... remains literal
+    assert_eq!(result.unwrap().to_string(), "(foo ...)");
+}
+
+/// Test ellipsis escape with multiple pattern variables
+#[test]
+fn test_ellipsis_escape_multiple_vars() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax elli-esc-2
+          (syntax-rules ()
+            ((_ x y) (quote (... (... x y))))))
+
+        (elli-esc-2 bar baz)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // Both x and y should be substituted, ... remains literal
+    assert_eq!(result.unwrap().to_string(), "(... bar baz)");
+}
+
+/// Test that ellipsis escape produces proper Symbol values
+#[test]
+fn test_ellipsis_escape_produces_symbol() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax make-ellipsis
+          (syntax-rules ()
+            ((_) (quote (... ...)))))
+
+        (equal? (make-ellipsis) '...)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // Should be equal to '...
+    assert_eq!(result.unwrap().to_string(), "#t");
+}
+
+/// Test ellipsis escape in list produces equal? results
+#[test]
+fn test_ellipsis_escape_equal_list() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax elli-with-var
+          (syntax-rules ()
+            ((_ x) (quote (... (x ...))))))
+
+        (equal? (elli-with-var 100) '(100 ...))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().to_string(), "#t");
+}
+
+// =============================================================================
+// Nested Macro Definition Tests
+// =============================================================================
+//
+// R7RS: Macros that generate other macros using ellipsis escape should work
+// correctly. The inner macro's ellipsis should be preserved as a literal
+// symbol so it can be recognized when the inner macro is compiled.
+
+/// Test simple nested macro definition
+///
+/// A macro that generates another macro with no ellipsis in the inner template.
+#[test]
+fn test_nested_macro_simple() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax gen-const-macro
+          (syntax-rules ()
+            ((gen-const-macro name value)
+             (... (define-syntax name
+                    (syntax-rules ()
+                      ((name) value)))))))
+
+        (gen-const-macro answer 42)
+        (answer)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().to_string(), "42");
+}
+
+/// Test nested macro with ellipsis in inner template
+///
+/// This is the classic "be-like-begin" example from chibi-scheme tests.
+/// The outer macro generates an inner macro that uses ellipsis.
+#[test]
+fn test_nested_macro_with_ellipsis() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax be-like-begin
+          (syntax-rules ()
+            ((be-like-begin name)
+             (define-syntax name
+               (... (syntax-rules ()
+                      ((name expr ...)
+                       (begin expr ...))))))))
+
+        (be-like-begin sequence)
+        (sequence 1 2 3 4)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // sequence should work like begin, returning the last value
+    assert_eq!(result.unwrap().to_string(), "4");
+}
+
+/// Test nested macro generating a list macro
+#[test]
+fn test_nested_macro_listify() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax gen-list-macro
+          (syntax-rules ()
+            ((gen-list-macro name)
+             (... (define-syntax name
+                    (syntax-rules ()
+                      ((name x ...)
+                       (list x ...))))))))
+
+        (gen-list-macro make-list)
+        (make-list 1 2 3 4 5)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().to_string(), "(1 2 3 4 5)");
+}

@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-24 19:43:37
+**Generated:** 2025-11-24 20:53:43
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 697 | 62.9% |
-| ❌ Failed | 39 | 3.5% |
-| ⚠️ Error (crashed) | 372 | 33.6% |
+| ✅ Passed | 704 | 63.5% |
+| ❌ Failed | 35 | 3.2% |
+| ⚠️ Error (crashed) | 369 | 33.3% |
 | **Total** | **1108** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
@@ -54,22 +54,15 @@ FAIL:
 FAIL: 
 FAIL: 
 FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
 ```
 
 ### Errors
 
 ```
 Error: Internal error: Failed to desugar expression: if expects 2 or 3 arguments, got 1
-Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence1
-Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro sequence2
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: sequence3
 Error: Not a procedure: 1
-Error: Internal error: Failed to desugar expression: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro mad-hatter
 Error: Not a procedure: ok
 Error: Undefined variable: bar
 Error: Undefined variable: ff

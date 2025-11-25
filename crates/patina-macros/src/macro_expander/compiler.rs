@@ -197,7 +197,10 @@ impl Compiler {
             self.pvar_count = 0;
             self.max_level = 0;
 
-            let pattern = self.compile_pattern(&pat_form, 0)?;
+            // R7RS: The first element of each pattern is the macro keyword placeholder
+            // and should be ignored (treated as wildcard). This is true even if the
+            // symbol appears in the literals list (e.g., when _ is in literals).
+            let pattern = self.compile_rule_pattern(&pat_form, 0)?;
             let template = self.compile_template(&tmpl_form, 0)?;
 
             // Build reverse mapping: PVREF -> name (for debug output)
@@ -235,6 +238,95 @@ impl Compiler {
         })
     }
 
+    /// Compile a top-level syntax-rules pattern (a rule pattern)
+    ///
+    /// R7RS Section 4.3.2: "The first element of each clause is the keyword, which
+    /// is ignored." This means the first element of the pattern list is a placeholder
+    /// for the macro name and should always be treated as a wildcard, regardless of
+    /// whether it appears in the literals list.
+    ///
+    /// For example, in:
+    ///   (syntax-rules (_) ((_ x) x))
+    /// The first `_` in the pattern `(_ x)` is the macro keyword placeholder and should
+    /// match the macro name, NOT be treated as a literal that only matches `_`.
+    fn compile_rule_pattern(&mut self, form: &Value, level: usize) -> Result<Pattern, MacroError> {
+        match form {
+            Value::Pair(_) => {
+                let (items, tail) = self.collect_list_items(form)?;
+                if items.is_empty() {
+                    return Err(MacroError::InvalidSyntax(
+                        "Pattern must have at least a macro keyword".to_string(),
+                    ));
+                }
+
+                if let Some(tail_value) = tail {
+                    // Dotted list pattern: (keyword p1 p2 . rest)
+                    // First element is keyword (wildcard), rest are normal patterns
+                    let mut patterns = vec![Pattern::Wildcard];
+                    for item in items.iter().skip(1) {
+                        patterns.push(self.compile_pattern(item, level)?);
+                    }
+                    let tail_pattern = Box::new(self.compile_pattern(&tail_value, level)?);
+                    Ok(Pattern::DottedList {
+                        patterns,
+                        tail: tail_pattern,
+                    })
+                } else {
+                    // Regular list pattern: (keyword p1 p2 ...)
+                    // First element is keyword (wildcard), rest are compiled with ellipsis detection
+                    self.compile_rule_list_pattern(&items, level)
+                }
+            }
+            _ => Err(MacroError::InvalidSyntax(
+                "Pattern must be a list starting with macro keyword".to_string(),
+            )),
+        }
+    }
+
+    /// Compile a rule list pattern where the first element is the macro keyword
+    ///
+    /// This is similar to compile_list_pattern but treats the first element as a wildcard.
+    fn compile_rule_list_pattern(
+        &mut self,
+        items: &[Value],
+        level: usize,
+    ) -> Result<Pattern, MacroError> {
+        let mut patterns = vec![Pattern::Wildcard]; // First element is always wildcard
+        let mut i = 1; // Start from second element
+
+        while i < items.len() {
+            // Check for ellipsis
+            if i + 1 < items.len() && self.is_ellipsis(&items[i + 1]) {
+                // Found ellipsis pattern: (item ...)
+                let num_following = items.len() - i - 2;
+                let start_pvars = self.pvar_count;
+                let subpattern = self.compile_pattern(&items[i], level + 1)?;
+                let end_pvars = self.pvar_count;
+
+                let mut vars = Vec::new();
+                for idx in start_pvars..end_pvars {
+                    vars.push(PVRef::new((level + 1) as u8, idx as u8));
+                }
+
+                self.max_level = self.max_level.max(level + 1);
+
+                patterns.push(Pattern::Ellipsis {
+                    subpattern: Box::new(subpattern),
+                    level: (level + 1) as u8,
+                    num_following,
+                    vars,
+                });
+
+                i += 2; // Skip pattern and ellipsis
+            } else {
+                patterns.push(self.compile_pattern(&items[i], level)?);
+                i += 1;
+            }
+        }
+
+        Ok(Pattern::List(patterns))
+    }
+
     /// Compile a pattern at the given ellipsis level
     ///
     /// Based on Gauche's compile_rule1 (macro.c:400+).
@@ -243,48 +335,51 @@ impl Compiler {
     /// - `form`: S-expression representing the pattern
     /// - `level`: Current ellipsis nesting level (0 = not in ellipsis)
     pub fn compile_pattern(&mut self, form: &Value, level: usize) -> Result<Pattern, MacroError> {
-        match form {
-            // Underscore wildcard
-            Value::Symbol(s) if s.as_ref() == "_" => Ok(Pattern::Wildcard),
-
-            // Symbol - could be literal or pattern variable
-            Value::Symbol(s) => {
-                if self.is_literal(s) {
-                    // Literal identifier
-                    Ok(Pattern::Literal(form.clone()))
-                } else {
-                    // Pattern variable - assign PVREF
-                    let pvref = self.add_pvar(s.clone(), level)?;
-                    Ok(Pattern::Var(pvref))
-                }
+        // Handle all identifier types (Symbol, ScopedIdentifier, WrappedIdentifier)
+        // This is needed for nested macro definitions where identifiers may be wrapped.
+        if let Some(s) = Self::extract_symbol_name(form) {
+            // R7RS: Check literals FIRST (including _ if it's in the literals list)
+            if self.is_literal(s) {
+                // Literal identifier (including _ if explicitly listed)
+                // Use the original form to preserve identifier type
+                Ok(Pattern::Literal(form.clone()))
+            } else if s.as_ref() == "_" {
+                // Underscore is wildcard only if NOT in literals
+                Ok(Pattern::Wildcard)
+            } else {
+                // Pattern variable - assign PVREF
+                let pvref = self.add_pvar(s.clone(), level)?;
+                Ok(Pattern::Var(pvref))
             }
-
-            // List - check for ellipsis and dotted tails
-            Value::Pair(_) => {
-                let (items, tail) = self.collect_list_items(form)?;
-                if let Some(tail_value) = tail {
-                    // Dotted list pattern
-                    self.compile_dotted_pattern(&items, &tail_value, level)
-                } else {
-                    // Regular list pattern
-                    self.compile_list_pattern(&items, level)
+        } else {
+            match form {
+                // List - check for ellipsis and dotted tails
+                Value::Pair(_) => {
+                    let (items, tail) = self.collect_list_items(form)?;
+                    if let Some(tail_value) = tail {
+                        // Dotted list pattern
+                        self.compile_dotted_pattern(&items, &tail_value, level)
+                    } else {
+                        // Regular list pattern
+                        self.compile_list_pattern(&items, level)
+                    }
                 }
-            }
 
-            Value::Null => Ok(Pattern::List(vec![])),
+                Value::Null => Ok(Pattern::List(vec![])),
 
-            // Vector
-            Value::Vector(v) => {
-                let items = v.borrow();
-                let mut patterns = Vec::new();
-                for item in items.iter() {
-                    patterns.push(self.compile_pattern(item, level)?);
+                // Vector
+                Value::Vector(v) => {
+                    let items = v.borrow();
+                    let mut patterns = Vec::new();
+                    for item in items.iter() {
+                        patterns.push(self.compile_pattern(item, level)?);
+                    }
+                    Ok(Pattern::Vector(patterns))
                 }
-                Ok(Pattern::Vector(patterns))
-            }
 
-            // Literal value (boolean, number, string, character, etc.)
-            other => Ok(Pattern::Literal(other.clone())),
+                // Literal value (boolean, number, string, character, etc.)
+                other => Ok(Pattern::Literal(other.clone())),
+            }
         }
     }
 
@@ -406,68 +501,66 @@ impl Compiler {
     ///
     /// Based on Gauche's template compilation (macro.c:400+).
     pub fn compile_template(&mut self, form: &Value, level: usize) -> Result<Template, MacroError> {
-        match form {
-            Value::Symbol(s) => {
-                // Check if it's a pattern variable
-                if let Some(pvref) = self.pvars.get(s) {
-                    // Verify level is valid
-                    if pvref.level() > level {
-                        return Err(MacroError::InvalidSyntax(format!(
-                            "Pattern variable {} at level {} used at level {}",
-                            s,
-                            pvref.level(),
-                            level
-                        )));
-                    }
-                    Ok(Template::Var(*pvref))
-                } else {
-                    // Symbol is not a pattern variable
-                    // Check if it's bound in the captured environment at compile time
-                    // If bound → it's a FREE VARIABLE (capture environment)
-                    // If not bound → it's an INTRODUCED IDENTIFIER (no environment capture, will be renamed)
-
-                    // Scope-based hygiene approach (Racket-style):
-                    // ALL non-pattern-variable identifiers in templates are tagged with definition scopes.
-                    // The scopes represent the lexical context at macro definition time.
-                    // At expansion time, the identifier will carry these scopes.
-                    // At lookup time, we find the binding with matching scope subset.
-                    //
-                    // This differs from the old marks-and-ribs approach which only tagged
-                    // identifiers that were bound at definition time ("free variables").
-                    // In scope-based hygiene, the scopes ARE the mechanism for hygiene -
-                    // we don't need to distinguish free vs introduced at compile time.
-
-                    if !self.definition_scopes.is_empty() {
-                        // Scope-based hygiene: tag with definition scopes
-                        Ok(Template::Symbol(Identifier::with_scopes(
-                            s.clone(),
-                            self.definition_scopes.clone(),
-                        )))
-                    } else {
-                        // Fall back to marks-and-ribs hygiene (no scopes available)
-                        // Check if it's bound in the captured environment at compile time
-                        let should_capture = if let Some(env_any) = &self.env {
-                            use patina_runtime::Environment;
-                            if let Some(env) = env_any.downcast_ref::<Environment>() {
-                                env.get(s).is_some()
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-
-                        if should_capture {
-                            // Free variable - use empty marks
-                            Ok(Template::Symbol(Identifier::with_marks(s.clone(), vec![])))
-                        } else {
-                            // Introduced identifier - will get expansion mark
-                            Ok(Template::Symbol(Identifier::new(s.clone())))
-                        }
-                    }
+        // Handle all identifier types (Symbol, ScopedIdentifier, WrappedIdentifier)
+        // This is needed for nested macro definitions where identifiers may be wrapped.
+        if let Some(s) = Self::extract_symbol_name(form) {
+            // Check if it's a pattern variable
+            if let Some(pvref) = self.pvars.get(s) {
+                // Verify level is valid
+                if pvref.level() > level {
+                    return Err(MacroError::InvalidSyntax(format!(
+                        "Pattern variable {} at level {} used at level {}",
+                        s,
+                        pvref.level(),
+                        level
+                    )));
                 }
+                return Ok(Template::Var(*pvref));
             }
 
+            // Not a pattern variable - apply hygiene handling
+            // Scope-based hygiene approach (Racket-style):
+            // ALL non-pattern-variable identifiers in templates are tagged with definition scopes.
+            // The scopes represent the lexical context at macro definition time.
+            // At expansion time, the identifier will carry these scopes.
+            // At lookup time, we find the binding with matching scope subset.
+            //
+            // This differs from the old marks-and-ribs approach which only tagged
+            // identifiers that were bound at definition time ("free variables").
+            // In scope-based hygiene, the scopes ARE the mechanism for hygiene -
+            // we don't need to distinguish free vs introduced at compile time.
+
+            if !self.definition_scopes.is_empty() {
+                // Scope-based hygiene: tag with definition scopes
+                return Ok(Template::Symbol(Identifier::with_scopes(
+                    s.clone(),
+                    self.definition_scopes.clone(),
+                )));
+            } else {
+                // Fall back to marks-and-ribs hygiene (no scopes available)
+                // Check if it's bound in the captured environment at compile time
+                let should_capture = if let Some(env_any) = &self.env {
+                    use patina_runtime::Environment;
+                    if let Some(env) = env_any.downcast_ref::<Environment>() {
+                        env.get(s).is_some()
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if should_capture {
+                    // Free variable - use empty marks
+                    return Ok(Template::Symbol(Identifier::with_marks(s.clone(), vec![])));
+                } else {
+                    // Introduced identifier - will get expansion mark
+                    return Ok(Template::Symbol(Identifier::new(s.clone())));
+                }
+            }
+        }
+
+        match form {
             // List - check for ellipsis and ellipsis escape
             Value::Pair(_) => {
                 let (items, tail) = self.collect_list_items(form)?;
@@ -477,10 +570,34 @@ impl Compiler {
                 // but literal data without pattern variables should stay literal.
                 // For example: (syntax-rules () ((m x) '(x))) should expand (m 5) to '(5)
                 // But: (syntax-rules () ((m x) 'ok)) should expand (m 5) to 'ok (not renamed)
+                // Note: Check for identifier types to support nested macros
                 if items.len() == 2
-                    && matches!(&items[0], Value::Symbol(s) if s.as_ref() == "quote")
+                    && Self::extract_symbol_name(&items[0])
+                        .map(|s| s.as_ref() == "quote")
+                        .unwrap_or(false)
                     && tail.is_none()
                 {
+                    // Check for ellipsis escape inside quote: '(... template)
+                    // R7RS: (... template) produces template with ... treated literally
+                    // but pattern variables are still substituted.
+                    // So '(... ...) should produce '...
+                    // And '(... (x ...)) where x is a pvar should produce '(val ...)
+                    if let Value::Pair(_) = &items[1]
+                        && let Ok((inner_items, None)) = self.collect_list_items(&items[1])
+                        && inner_items.len() == 2
+                        && self.is_ellipsis(&inner_items[0])
+                    {
+                        // Ellipsis escape inside quote: '(... template) → '(compiled_template_with_no_ellipsis)
+                        // Compile the inner template with ellipsis disabled, using quote compilation
+                        // so that symbols become Literal values, not ScopedIdentifiers
+                        let inner_template =
+                            self.compile_quote_template_escaped(&inner_items[1], level)?;
+
+                        // Wrap in a quote template
+                        let quote_symbol = Template::Literal(Value::Symbol("quote".into()));
+                        return Ok(Template::List(vec![quote_symbol, inner_template]));
+                    }
+
                     // Check if the quoted datum contains pattern variables
                     if self.contains_pattern_vars(&items[1]) {
                         // Has pattern variables - compile normally so they expand
@@ -492,10 +609,7 @@ impl Compiler {
                 }
 
                 // Check for ellipsis escape: (... template)
-                if items.len() == 2
-                    && self.ellipsis.is_some()
-                    && matches!(&items[0], Value::Symbol(s) if self.ellipsis.as_ref() == Some(s))
-                {
+                if items.len() == 2 && self.is_ellipsis(&items[0]) {
                     // Ellipsis escape - compile inner template with ellipsis disabled
                     return self.compile_with_escaped_ellipsis(&items[1], level);
                 }
@@ -603,6 +717,11 @@ impl Compiler {
     /// Compile template with ellipsis temporarily disabled
     ///
     /// Used for ellipsis escape: (... template)
+    ///
+    /// When ellipsis is escaped, `...` symbols should become literal Symbol values,
+    /// not ScopedIdentifier/WrappedIdentifier values. This is crucial for nested
+    /// macro definitions where the inner `syntax-rules` needs to recognize `...`
+    /// as the ellipsis symbol.
     fn compile_with_escaped_ellipsis(
         &mut self,
         form: &Value,
@@ -611,13 +730,192 @@ impl Compiler {
         // Save current ellipsis setting
         let saved_ellipsis = self.ellipsis.take();
 
-        // Compile with ellipsis disabled
-        let result = self.compile_template(form, level);
+        // Compile with special handling for ellipsis symbols
+        let result = self.compile_template_escaped(form, level, &saved_ellipsis);
 
         // Restore ellipsis setting
         self.ellipsis = saved_ellipsis;
 
         result
+    }
+
+    /// Compile a template inside an ellipsis escape context
+    ///
+    /// This is similar to compile_template but:
+    /// 1. Ellipsis is disabled (not treated as an operator)
+    /// 2. The ellipsis symbol itself becomes a literal Symbol value
+    ///
+    /// This ensures that nested macro definitions work correctly - the `...`
+    /// symbol in the inner syntax-rules will be a plain Symbol that the
+    /// macro compiler can recognize.
+    fn compile_template_escaped(
+        &mut self,
+        form: &Value,
+        level: usize,
+        escaped_ellipsis: &Option<Rc<str>>,
+    ) -> Result<Template, MacroError> {
+        match form {
+            Value::Symbol(s) => {
+                // Check if it's the ellipsis symbol that was escaped
+                if escaped_ellipsis.as_ref() == Some(s) {
+                    // Produce literal Symbol value so nested macros can use it
+                    return Ok(Template::Literal(form.clone()));
+                }
+
+                // Check if it's a pattern variable
+                if let Some(pvref) = self.pvars.get(s) {
+                    // Verify level is valid
+                    if pvref.level() > level {
+                        return Err(MacroError::InvalidSyntax(format!(
+                            "Pattern variable {} at level {} used at level {}",
+                            s,
+                            pvref.level(),
+                            level
+                        )));
+                    }
+                    Ok(Template::Var(*pvref))
+                } else {
+                    // Non-ellipsis, non-pvar symbol - use normal hygiene handling
+                    if !self.definition_scopes.is_empty() {
+                        Ok(Template::Symbol(Identifier::with_scopes(
+                            s.clone(),
+                            self.definition_scopes.clone(),
+                        )))
+                    } else {
+                        // Fall back to marks-and-ribs hygiene
+                        let should_capture = if let Some(env_any) = &self.env {
+                            use patina_runtime::Environment;
+                            if let Some(env) = env_any.downcast_ref::<Environment>() {
+                                env.get(s).is_some()
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        if should_capture {
+                            Ok(Template::Symbol(Identifier::with_marks(s.clone(), vec![])))
+                        } else {
+                            Ok(Template::Symbol(Identifier::new(s.clone())))
+                        }
+                    }
+                }
+            }
+
+            Value::Pair(_) => {
+                let (items, tail) = self.collect_list_items(form)?;
+
+                // Check for quote form
+                if items.len() == 2
+                    && matches!(&items[0], Value::Symbol(s) if s.as_ref() == "quote")
+                    && tail.is_none()
+                {
+                    // Check if quoted datum contains pattern variables
+                    if self.contains_pattern_vars(&items[1]) {
+                        // Has pattern variables - compile recursively
+                    } else {
+                        // No pattern variables - keep as literal
+                        return Ok(Template::Literal(form.clone()));
+                    }
+                }
+
+                if let Some(tail_value) = tail {
+                    // Dotted list template
+                    let mut templates = Vec::new();
+                    for item in items {
+                        templates.push(self.compile_template_escaped(
+                            &item,
+                            level,
+                            escaped_ellipsis,
+                        )?);
+                    }
+                    let tail_template = Box::new(self.compile_template_escaped(
+                        &tail_value,
+                        level,
+                        escaped_ellipsis,
+                    )?);
+                    Ok(Template::DottedList {
+                        templates,
+                        tail: tail_template,
+                    })
+                } else {
+                    // Regular list template
+                    let mut templates = Vec::new();
+                    for item in items {
+                        templates.push(self.compile_template_escaped(
+                            &item,
+                            level,
+                            escaped_ellipsis,
+                        )?);
+                    }
+                    Ok(Template::List(templates))
+                }
+            }
+
+            Value::Null => Ok(Template::List(vec![])),
+
+            Value::Vector(v) => {
+                let items = v.borrow();
+                let mut templates = Vec::new();
+                for item in items.iter() {
+                    templates.push(self.compile_template_escaped(item, level, escaped_ellipsis)?);
+                }
+                Ok(Template::Vector(templates))
+            }
+
+            // Literal value
+            other => Ok(Template::Literal(other.clone())),
+        }
+    }
+
+    /// Compile a template inside an escaped quote (for ellipsis escape inside quotes)
+    ///
+    /// This produces Literal templates for non-pattern-variable symbols,
+    /// ensuring they stay as plain Symbol values rather than ScopedIdentifiers.
+    /// Pattern variables are still expanded normally.
+    fn compile_quote_template_escaped(
+        &mut self,
+        form: &Value,
+        _level: usize,
+    ) -> Result<Template, MacroError> {
+        match form {
+            Value::Symbol(s) => {
+                // Check if it's a pattern variable
+                if let Some(pvref) = self.pvars.get(s) {
+                    Ok(Template::Var(*pvref))
+                } else {
+                    // Non-pvar symbol: produce literal Symbol value
+                    Ok(Template::Literal(form.clone()))
+                }
+            }
+            Value::Pair(_) => {
+                let (items, tail) = self.collect_list_items(form)?;
+                if let Some(_tail_value) = tail {
+                    // Dotted list - not supported in escaped quote for now
+                    return Err(MacroError::InvalidSyntax(
+                        "Dotted list in ellipsis-escaped quote not supported".to_string(),
+                    ));
+                }
+                // Compile each item recursively
+                let mut templates = Vec::new();
+                for item in items {
+                    templates.push(self.compile_quote_template_escaped(&item, _level)?);
+                }
+                Ok(Template::List(templates))
+            }
+            Value::Null => Ok(Template::List(vec![])),
+            Value::Vector(v) => {
+                let items = v.borrow();
+                let mut templates = Vec::new();
+                for item in items.iter() {
+                    templates.push(self.compile_quote_template_escaped(item, _level)?);
+                }
+                Ok(Template::Vector(templates))
+            }
+            // All other values are literal
+            other => Ok(Template::Literal(other.clone())),
+        }
     }
 
     /// Add a pattern variable and assign it a PVREF
@@ -661,11 +959,31 @@ impl Compiler {
     }
 
     /// Check if a value is the ellipsis symbol
+    ///
+    /// Recognizes both plain Symbol and identifier types (ScopedIdentifier, WrappedIdentifier)
+    /// to support nested macro definitions where ellipsis may be wrapped.
     fn is_ellipsis(&self, form: &Value) -> bool {
-        match (&self.ellipsis, form) {
-            (None, _) => false, // Ellipsis disabled
-            (Some(elli), Value::Symbol(s)) => s == elli,
-            _ => false,
+        match &self.ellipsis {
+            None => false, // Ellipsis disabled
+            Some(elli) => match form {
+                Value::Symbol(s) => s == elli,
+                Value::ScopedIdentifier { name, .. } => name == elli,
+                Value::WrappedIdentifier { name, .. } => name == elli,
+                _ => false,
+            },
+        }
+    }
+
+    /// Extract symbol name from any identifier type
+    ///
+    /// Returns Some(name) for Symbol, ScopedIdentifier, or WrappedIdentifier.
+    /// Returns None for other value types.
+    fn extract_symbol_name(form: &Value) -> Option<&Rc<str>> {
+        match form {
+            Value::Symbol(s) => Some(s),
+            Value::ScopedIdentifier { name, .. } => Some(name),
+            Value::WrappedIdentifier { name, .. } => Some(name),
+            _ => None,
         }
     }
 
@@ -756,8 +1074,12 @@ impl Compiler {
     /// Check if a value contains any pattern variables
     /// Used to determine if a quoted expression needs template expansion
     fn contains_pattern_vars(&self, value: &Value) -> bool {
+        // Handle all identifier types (Symbol, ScopedIdentifier, WrappedIdentifier)
+        if let Some(s) = Self::extract_symbol_name(value) {
+            return self.pvars.contains_key(s);
+        }
+
         match value {
-            Value::Symbol(s) => self.pvars.contains_key(s),
             Value::Pair(_) => {
                 let items = match self.collect_list_items(value) {
                     Ok((items, _)) => items,
@@ -974,7 +1296,9 @@ mod tests {
 
         assert_eq!(compiled.name.as_ref(), "when");
         assert_eq!(compiled.rules.len(), 1);
-        assert_eq!(compiled.rules[0].num_pvars, 3); // when, test and body
+        // R7RS: First element "when" is the macro keyword placeholder (compiled as wildcard)
+        // Only "test" and "body" are actual pattern variables
+        assert_eq!(compiled.rules[0].num_pvars, 2); // test and body (not when!)
         assert_eq!(compiled.rules[0].max_level, 1); // body is at level 1
     }
 
@@ -1021,5 +1345,53 @@ mod tests {
                 .to_string()
                 .contains("at level 1 used at level 0")
         );
+    }
+
+    #[test]
+    fn test_underscore_as_wildcard() {
+        // When _ is NOT in literals, it should be Wildcard
+        let mut compiler = Compiler::new(vec![], Some("...".into()));
+
+        let pattern_form = list(vec![sym("foo"), sym("_"), sym("bar")]);
+        let pattern = compiler.compile_pattern(&pattern_form, 0).unwrap();
+
+        match pattern {
+            Pattern::List(patterns) => {
+                assert_eq!(patterns.len(), 3);
+                // "foo" is a pattern variable
+                assert!(matches!(&patterns[0], Pattern::Var(_)));
+                // "_" is a wildcard
+                assert!(matches!(&patterns[1], Pattern::Wildcard));
+                // "bar" is a pattern variable
+                assert!(matches!(&patterns[2], Pattern::Var(_)));
+            }
+            _ => panic!("Expected list"),
+        }
+    }
+
+    #[test]
+    fn test_underscore_as_literal() {
+        // When _ IS in literals, it should be Literal, not Wildcard
+        let mut compiler = Compiler::new(vec!["_".into()], Some("...".into()));
+
+        let pattern_form = list(vec![sym("foo"), sym("_"), sym("bar")]);
+        let pattern = compiler.compile_pattern(&pattern_form, 0).unwrap();
+
+        match pattern {
+            Pattern::List(patterns) => {
+                assert_eq!(patterns.len(), 3);
+                // "foo" is a pattern variable
+                assert!(matches!(&patterns[0], Pattern::Var(_)));
+                // "_" is a LITERAL (not wildcard!)
+                assert!(
+                    matches!(&patterns[1], Pattern::Literal(Value::Symbol(s)) if s.as_ref() == "_"),
+                    "Expected Literal(_), got {:?}",
+                    patterns[1]
+                );
+                // "bar" is a pattern variable
+                assert!(matches!(&patterns[2], Pattern::Var(_)));
+            }
+            _ => panic!("Expected list"),
+        }
     }
 }
