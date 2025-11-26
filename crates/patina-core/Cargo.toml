@@ -13,3 +13,6 @@ num-complex.workspace = true
 
 # Thread-safe lazy statics (for scope ID generation)
 once_cell.workspace = true
+
+# Small vector optimization for ScopeSet
+smallvec.workspace = true

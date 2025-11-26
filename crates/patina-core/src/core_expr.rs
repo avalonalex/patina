@@ -35,7 +35,8 @@ pub struct CaseLambdaClause {
 pub enum CoreExpr {
     /// Literal values: numbers, booleans, strings, etc.
     /// Example: 42, #t, "hello"
-    Literal(Value),
+    /// Uses Rc<Value> to reduce CoreExpr size (pointer vs inline 64 bytes)
+    Literal(Rc<Value>),
 
     /// Variable reference
     /// Example: x, my-function
@@ -50,13 +51,15 @@ pub enum CoreExpr {
 
     /// Quote: literal data
     /// Example: 'x, '(1 2 3)
-    Quote(Value),
+    /// Uses Rc<Value> to reduce CoreExpr size
+    Quote(Rc<Value>),
 
     /// Quasiquote: template with selective evaluation
     /// Example: `(a ,b ,@c) where b and c are evaluated
     /// The template is stored as a Value, and will be processed
     /// recursively by the evaluator to handle unquote/unquote-splicing
-    Quasiquote(Value),
+    /// Uses Rc<Value> to reduce CoreExpr size
+    Quasiquote(Rc<Value>),
 
     /// Lambda abstraction
     /// Example: (lambda (x y) (+ x y))
@@ -72,15 +75,16 @@ pub enum CoreExpr {
 
     /// Conditional (always ternary after desugaring)
     /// Example: (if test then else)
+    /// Uses Rc<CoreExpr> for efficient sharing in tail call optimization
     If {
-        test: Box<CoreExpr>,
-        then: Box<CoreExpr>,
-        else_: Box<CoreExpr>,
+        test: Rc<CoreExpr>,
+        then: Rc<CoreExpr>,
+        else_: Rc<CoreExpr>,
     },
 
     /// Assignment
     /// Example: (set! x 42)
-    Set { var: Symbol, value: Box<CoreExpr> },
+    Set { var: Symbol, value: Rc<CoreExpr> },
 
     /// Sequencing
     /// Example: (begin expr1 expr2 expr3)
@@ -88,15 +92,16 @@ pub enum CoreExpr {
 
     /// Top-level definition
     /// Example: (define x 42), (define (f x) x)
-    Define { name: Symbol, value: Box<CoreExpr> },
+    Define { name: Symbol, value: Rc<CoreExpr> },
 
     /// Macro definition
     /// Example: (define-syntax when (syntax-rules () ...))
     /// The transformer is typically (syntax-rules ...) and is stored as-is (not desugared)
     /// It will be compiled to a Macro value by the evaluator
+    /// Uses Rc<Value> to reduce CoreExpr size
     DefineSyntax {
         name: Symbol,
-        transformer: Value,          // Template data, not code - similar to Quote
+        transformer: Rc<Value>, // Template data, not code - similar to Quote
         definition_scopes: ScopeSet, // Scopes at macro definition time for hygiene
     },
 
@@ -116,7 +121,7 @@ pub enum CoreExpr {
     /// Expand: show macro expansion without evaluating
     /// Example: (expand '(let ((x 1)) x)) => ((lambda (x) x) 1)
     /// This is a Patina debugging extension, not part of R7RS
-    Expand { expr: Box<CoreExpr> },
+    Expand { expr: Rc<CoreExpr> },
 
     /// Case-lambda: multi-arity procedure with dispatch
     /// Example: (case-lambda (() 'zero) ((x) x) ((x y) (cons x y)))
@@ -126,7 +131,7 @@ pub enum CoreExpr {
     /// Function application
     /// Example: (f x y), (+ 1 2)
     App {
-        func: Box<CoreExpr>,
+        func: Rc<CoreExpr>,
         args: Vec<CoreExpr>,
     },
 
@@ -134,7 +139,7 @@ pub enum CoreExpr {
     /// Example: (apply + '(1 2 3)), (apply f x y zs)
     /// Last argument is a list that gets spliced as arguments
     Apply {
-        func: Box<CoreExpr>,
+        func: Rc<CoreExpr>,
         args: Vec<CoreExpr>, // All args including the final list
     },
 
@@ -150,7 +155,7 @@ pub enum CoreExpr {
     /// Example: Internal representation of ((lambda (x) body) value)
     Let {
         bindings: Vec<(Symbol, CoreExpr)>,
-        body: Box<CoreExpr>,
+        body: Rc<CoreExpr>,
     },
 }
 
@@ -245,21 +250,21 @@ impl CoreExpr {
             },
 
             CoreExpr::If { test, then, else_ } => CoreExpr::If {
-                test: Box::new(f(test)),
-                then: Box::new(f(then)),
-                else_: Box::new(f(else_)),
+                test: Rc::new(f(test)),
+                then: Rc::new(f(then)),
+                else_: Rc::new(f(else_)),
             },
 
             CoreExpr::Set { var, value } => CoreExpr::Set {
                 var: var.clone(),
-                value: Box::new(f(value)),
+                value: Rc::new(f(value)),
             },
 
             CoreExpr::Begin(exprs) => CoreExpr::Begin(exprs.iter().map(&f).collect()),
 
             CoreExpr::Define { name, value } => CoreExpr::Define {
                 name: name.clone(),
-                value: Box::new(f(value)),
+                value: Rc::new(f(value)),
             },
 
             CoreExpr::DefineSyntax {
@@ -285,7 +290,7 @@ impl CoreExpr {
             },
 
             CoreExpr::Expand { expr } => CoreExpr::Expand {
-                expr: Box::new(f(expr)),
+                expr: Rc::new(f(expr)),
             },
 
             CoreExpr::CaseLambda { clauses } => CoreExpr::CaseLambda {
@@ -299,12 +304,12 @@ impl CoreExpr {
             },
 
             CoreExpr::App { func, args } => CoreExpr::App {
-                func: Box::new(f(func)),
+                func: Rc::new(f(func)),
                 args: args.iter().map(&f).collect(),
             },
 
             CoreExpr::Apply { func, args } => CoreExpr::Apply {
-                func: Box::new(f(func)),
+                func: Rc::new(f(func)),
                 args: args.iter().map(&f).collect(),
             },
 
@@ -318,7 +323,7 @@ impl CoreExpr {
                     .iter()
                     .map(|(var, val)| (var.clone(), f(val)))
                     .collect(),
-                body: Box::new(f(body)),
+                body: Rc::new(f(body)),
             },
         }
     }

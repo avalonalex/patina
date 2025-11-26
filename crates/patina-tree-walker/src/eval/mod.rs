@@ -31,7 +31,7 @@ fn is_value_evaluator_only_form(expr: &Value) -> bool {
         let car = &pair.borrow().0;
         let name_str = match car {
             Value::Symbol(name) => Some(name.as_ref()),
-            Value::Identifier { name, .. } => Some(name.as_ref()),
+            Value::Identifier(id) => Some(id.name.as_ref()),
             _ => None,
         };
 
@@ -471,33 +471,33 @@ impl Evaluator {
 
             // Identifier lookup (Racket-style scope sets)
             // Uses scope-based lookup for hygienic binding resolution
-            Value::Identifier { name, scopes } => {
+            Value::Identifier(id) => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
                     eprintln!(
                         "[ENV]{} Identifier lookup: '{}' (scopes: {})",
                         self.debug.current_indent(),
-                        name,
-                        scopes
+                        id.name,
+                        id.scopes
                     );
                 }
 
                 // Use scope-based lookup if scopes are present
-                if !scopes.is_empty() {
-                    if let Some(value) = env.get_with_scopes(name, scopes) {
+                if !id.scopes.is_empty() {
+                    if let Some(value) = env.get_with_scopes(&id.name, &id.scopes) {
                         return Ok(EvalResult::Value(value));
                     }
                     return Err(EvalError::UndefinedVariable(format!(
                         "{} (identifier with scopes {})",
-                        name, scopes
+                        id.name, id.scopes
                     )));
                 }
 
                 // Empty scopes: fall back to simple name lookup
-                if let Some(value) = env.get(name) {
+                if let Some(value) = env.get(&id.name) {
                     return Ok(EvalResult::Value(value));
                 }
 
-                Err(EvalError::UndefinedVariable(name.to_string()))
+                Err(EvalError::UndefinedVariable(id.name.to_string()))
             }
 
             // Empty list
@@ -590,12 +590,12 @@ impl Evaluator {
         // Handle both Symbol and Identifier (scope-sets hygiene)
         let macro_binding = match &car {
             Value::Symbol(sym) => env.get(sym),
-            Value::Identifier { name, scopes } => {
+            Value::Identifier(id) => {
                 // Use scope-based lookup if scopes are present
-                if !scopes.is_empty() {
-                    env.get_with_scopes(name, scopes)
+                if !id.scopes.is_empty() {
+                    env.get_with_scopes(&id.name, &id.scopes)
                 } else {
-                    env.get(name)
+                    env.get(&id.name)
                 }
             }
             _ => None,
@@ -604,7 +604,7 @@ impl Evaluator {
         if let Some(Value::Macro(compiled_macro)) = macro_binding {
             let name = match &car {
                 Value::Symbol(s) => s.as_ref(),
-                Value::Identifier { name, .. } => name.as_ref(),
+                Value::Identifier(id) => id.name.as_ref(),
                 _ => unreachable!(),
             };
 
@@ -662,19 +662,20 @@ impl Evaluator {
 
         // Check if this is a lambda in tail position
         if in_tail_position
-            && let Value::Procedure(Procedure::Lambda {
+            && let Value::Procedure(proc_box) = &proc
+            && let Procedure::Lambda {
                 params,
                 variadic,
                 body,
                 env: lambda_env,
                 binding_scope,
-            }) = proc
+            } = proc_box.as_ref()
         {
             // Tail call to lambda - use shared helper methods
             // This is the key to tail recursion!
             let new_env =
-                self.prepare_lambda_env(&params, &variadic, args, &lambda_env, binding_scope)?;
-            return self.eval_lambda_body(&body, &new_env, true);
+                self.prepare_lambda_env(params, variadic, args, lambda_env, *binding_scope)?;
+            return self.eval_lambda_body(body, &new_env, true);
         }
 
         // Not in tail position, or not a lambda - just apply normally
@@ -730,33 +731,33 @@ impl Evaluator {
             }
 
             // Identifier lookup (Racket-style scope sets)
-            Value::Identifier { name, scopes } => {
+            Value::Identifier(id) => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
                     eprintln!(
                         "[ENV]{} Identifier lookup: '{}' (scopes: {})",
                         self.debug.current_indent(),
-                        name,
-                        scopes
+                        id.name,
+                        id.scopes
                     );
                 }
 
                 // Use scope-based lookup if scopes are present
-                if !scopes.is_empty() {
-                    if let Some(value) = env.get_with_scopes(name, scopes) {
+                if !id.scopes.is_empty() {
+                    if let Some(value) = env.get_with_scopes(&id.name, &id.scopes) {
                         return Ok(EvalResult::Value(value));
                     }
                     return Err(EvalError::UndefinedVariable(format!(
                         "{} (identifier with scopes {})",
-                        name, scopes
+                        id.name, id.scopes
                     )));
                 }
 
                 // Empty scopes: fall back to simple name lookup
-                if let Some(value) = env.get(name) {
+                if let Some(value) = env.get(&id.name) {
                     return Ok(EvalResult::Value(value));
                 }
 
-                Err(EvalError::UndefinedVariable(name.to_string()))
+                Err(EvalError::UndefinedVariable(id.name.to_string()))
             }
 
             // Empty list
@@ -824,18 +825,19 @@ impl Evaluator {
 
         // Check if this is a lambda in tail position
         if in_tail_position
-            && let Value::Procedure(Procedure::Lambda {
+            && let Value::Procedure(proc_box) = &proc
+            && let Procedure::Lambda {
                 params,
                 variadic,
                 body,
                 env: lambda_env,
                 binding_scope,
-            }) = proc
+            } = proc_box.as_ref()
         {
             // Tail call to lambda - use shared helper methods
             let new_env =
-                self.prepare_lambda_env(&params, &variadic, args, &lambda_env, binding_scope)?;
-            return self.eval_lambda_body(&body, &new_env, true);
+                self.prepare_lambda_env(params, variadic, args, lambda_env, *binding_scope)?;
+            return self.eval_lambda_body(body, &new_env, true);
         }
 
         // Not in tail position, or not a lambda - just apply normally
@@ -1197,16 +1199,17 @@ impl Evaluator {
                     })
                 } else {
                     // Not in tail position - must resolve the tail call
-                    self.resolve_tail_call_core(expr, &tail_env)
+                    self.resolve_tail_call_core_rc(expr, &tail_env)
                 }
             }
         }
     }
 
     /// Resolve a CoreExpr tail call when not in tail position
-    fn resolve_tail_call_core(
+    /// Takes Rc<CoreExpr> to match TailCall representation
+    fn resolve_tail_call_core_rc(
         &self,
-        expr: CoreExpr,
+        expr: Rc<CoreExpr>,
         env: &Rc<Environment>,
     ) -> Result<EvalResult, EvalError> {
         use crate::eval::core_eval::{CoreEvalResult, eval_core_step};

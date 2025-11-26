@@ -113,7 +113,7 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
                         // Car must be a symbol or identifier
                         match car {
                             Value::Symbol(s) => params.push(s.clone()),
-                            Value::Identifier { name, .. } => params.push(name.clone()),
+                            Value::Identifier(id) => params.push(id.name.clone()),
                             _ => {
                                 return Err(DesugarError::InvalidFormals(format!(
                                     "Parameter must be a symbol, got {:?}",
@@ -138,8 +138,9 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
                             rest,
                         });
                     }
-                    Value::Identifier { name: rest, .. } => {
+                    Value::Identifier(id) => {
                         // Improper list with identifier - mixed arity: (x y . rest)
+                        let rest = id.name.clone();
                         check_no_duplicates(&params, "lambda")?;
                         if params.contains(&rest) {
                             return Err(DesugarError::DuplicateParameter {
@@ -166,7 +167,7 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
         Value::Symbol(s) => Ok(Formals::Variadic(s.clone())),
 
         // Variadic with identifier
-        Value::Identifier { name, .. } => Ok(Formals::Variadic(name.clone())),
+        Value::Identifier(id) => Ok(Formals::Variadic(id.name.clone())),
 
         _ => Err(DesugarError::InvalidFormals(format!(
             "Invalid formal parameters: {:?}",
@@ -229,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_convert_formals_fixed() {
-        let formals = vec_to_list(&[Value::Symbol(Rc::from("x")), Value::Symbol(Rc::from("y"))]);
+        let formals = vec_to_list(&[Value::symbol("x"), Value::symbol("y")]);
 
         let result = convert_formals(&formals).unwrap();
         assert!(matches!(result, Formals::Fixed(_)));
@@ -237,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_convert_formals_variadic() {
-        let formals = Value::Symbol(Rc::from("args"));
+        let formals = Value::symbol("args");
         let result = convert_formals(&formals).unwrap();
         assert!(matches!(result, Formals::Variadic(_)));
     }

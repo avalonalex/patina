@@ -179,11 +179,11 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
     for (name, arity) in &primitives {
         env.define(
             name.to_string(),
-            Value::Procedure(Procedure::Primitive {
+            Value::Procedure(Box::new(Procedure::Primitive {
                 name,
                 arity: arity.clone(),
                 library: library_name.clone(),
-            }),
+            })),
         );
     }
 

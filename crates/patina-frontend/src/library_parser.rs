@@ -401,7 +401,7 @@ mod tests {
     use std::rc::Rc;
 
     fn symbol(s: &str) -> Value {
-        Value::Symbol(Rc::from(s))
+        Value::symbol(s)
     }
 
     fn list(items: Vec<Value>) -> Value {

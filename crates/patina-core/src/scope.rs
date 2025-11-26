@@ -26,6 +26,7 @@
 //!
 //! Result: correctly finds outer x, achieving hygiene.
 
+use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -64,42 +65,65 @@ impl std::fmt::Display for ScopeId {
 ///
 /// Identifiers accumulate scopes as they pass through binding forms.
 /// An identifier introduced at top-level has an empty scope set.
+///
+/// This implementation uses SmallVec to store up to 3 scopes inline (24 bytes),
+/// avoiding heap allocation for the common case. Scopes are kept sorted
+/// for efficient subset checking.
+///
+/// # Future Optimization Opportunities
+///
+/// TODO: Current size is 40 bytes. Could potentially reduce further:
+/// - Use a bitset for small scope IDs (would need scope ID recycling)
+/// - Use Rc-sharing for common scope sets (many identifiers share same scopes)
+/// - Use u32 for ScopeId instead of usize (4B vs 8B per scope)
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScopeSet {
-    scopes: HashSet<ScopeId>,
+    // Inline storage for up to 3 scopes (most identifiers have 0-3 scopes)
+    // Kept sorted for efficient is_subset_of operation
+    scopes: SmallVec<[ScopeId; 3]>,
 }
 
 impl ScopeSet {
     /// Create an empty scope set (for top-level identifiers)
     pub fn new() -> Self {
         ScopeSet {
-            scopes: HashSet::new(),
+            scopes: SmallVec::new(),
         }
     }
 
     /// Create a scope set with a single scope
     pub fn singleton(scope: ScopeId) -> Self {
-        let mut scopes = HashSet::new();
-        scopes.insert(scope);
+        let mut scopes = SmallVec::new();
+        scopes.push(scope);
         ScopeSet { scopes }
     }
 
     /// Add a scope to the set (returns new set, original unchanged)
     pub fn with_scope(&self, scope: ScopeId) -> Self {
+        if self.contains(&scope) {
+            return self.clone();
+        }
         let mut scopes = self.scopes.clone();
-        scopes.insert(scope);
+        // Insert in sorted order
+        let pos = scopes.binary_search(&scope).unwrap_or_else(|p| p);
+        scopes.insert(pos, scope);
         ScopeSet { scopes }
     }
 
     /// Add a scope to this set (mutates in place)
     pub fn add_scope(&mut self, scope: ScopeId) {
-        self.scopes.insert(scope);
+        if !self.contains(&scope) {
+            let pos = self.scopes.binary_search(&scope).unwrap_or_else(|p| p);
+            self.scopes.insert(pos, scope);
+        }
     }
 
     /// Remove a scope from the set (returns new set, original unchanged)
     pub fn without_scope(&self, scope: ScopeId) -> Self {
         let mut scopes = self.scopes.clone();
-        scopes.remove(&scope);
+        if let Ok(pos) = scopes.binary_search(&scope) {
+            scopes.remove(pos);
+        }
         ScopeSet { scopes }
     }
 
@@ -118,10 +142,13 @@ impl ScopeSet {
     /// This distinguishes introduced vs use-site identifiers using only scopes.
     pub fn flip_scope(&self, scope: ScopeId) -> Self {
         let mut scopes = self.scopes.clone();
-        if scopes.contains(&scope) {
-            scopes.remove(&scope);
-        } else {
-            scopes.insert(scope);
+        match scopes.binary_search(&scope) {
+            Ok(pos) => {
+                scopes.remove(pos);
+            }
+            Err(pos) => {
+                scopes.insert(pos, scope);
+            }
         }
         ScopeSet { scopes }
     }
@@ -130,13 +157,49 @@ impl ScopeSet {
     ///
     /// This is the key operation for hygiene: a binding matches a reference
     /// if `binding.scopes ⊆ reference.scopes`
+    ///
+    /// Since both sets are sorted, we can use a merge-like algorithm in O(n+m).
     pub fn is_subset_of(&self, other: &ScopeSet) -> bool {
-        self.scopes.is_subset(&other.scopes)
+        // Empty set is subset of everything
+        if self.scopes.is_empty() {
+            return true;
+        }
+        // Non-empty can't be subset of empty
+        if other.scopes.is_empty() {
+            return false;
+        }
+
+        // Merge-style comparison on sorted arrays
+        let mut self_iter = self.scopes.iter();
+        let mut other_iter = other.scopes.iter();
+        let mut self_curr = self_iter.next();
+        let mut other_curr = other_iter.next();
+
+        while let (Some(s), Some(o)) = (self_curr, other_curr) {
+            match s.cmp(o) {
+                std::cmp::Ordering::Equal => {
+                    // Found match, advance both
+                    self_curr = self_iter.next();
+                    other_curr = other_iter.next();
+                }
+                std::cmp::Ordering::Less => {
+                    // self has element not in other -> not a subset
+                    return false;
+                }
+                std::cmp::Ordering::Greater => {
+                    // other has element self doesn't need, advance other
+                    other_curr = other_iter.next();
+                }
+            }
+        }
+
+        // If we exhausted self, it's a subset. If self has remaining, it's not.
+        self_curr.is_none()
     }
 
     /// Check if this scope set is a proper subset of another
     pub fn is_proper_subset_of(&self, other: &ScopeSet) -> bool {
-        self.scopes.is_subset(&other.scopes) && self.scopes.len() < other.scopes.len()
+        self.is_subset_of(other) && self.scopes.len() < other.scopes.len()
     }
 
     /// Check if the scope set is empty
@@ -151,7 +214,7 @@ impl ScopeSet {
 
     /// Check if a specific scope is in the set
     pub fn contains(&self, scope: &ScopeId) -> bool {
-        self.scopes.contains(scope)
+        self.scopes.binary_search(scope).is_ok()
     }
 
     /// Iterate over the scopes
@@ -160,18 +223,16 @@ impl ScopeSet {
     }
 
     /// Convert to a sorted vector (for consistent display/comparison)
+    /// Note: already sorted internally, so this is just a copy
     pub fn to_sorted_vec(&self) -> Vec<ScopeId> {
-        let mut vec: Vec<_> = self.scopes.iter().copied().collect();
-        vec.sort();
-        vec
+        self.scopes.to_vec()
     }
 }
 
 impl std::fmt::Display for ScopeSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let sorted = self.to_sorted_vec();
         write!(f, "{{")?;
-        for (i, scope) in sorted.iter().enumerate() {
+        for (i, scope) in self.scopes.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
@@ -182,22 +243,26 @@ impl std::fmt::Display for ScopeSet {
 }
 
 impl From<HashSet<ScopeId>> for ScopeSet {
-    fn from(scopes: HashSet<ScopeId>) -> Self {
+    fn from(set: HashSet<ScopeId>) -> Self {
+        let mut scopes: SmallVec<[ScopeId; 3]> = set.into_iter().collect();
+        scopes.sort();
         ScopeSet { scopes }
     }
 }
 
 impl std::iter::FromIterator<ScopeId> for ScopeSet {
     fn from_iter<I: IntoIterator<Item = ScopeId>>(iter: I) -> Self {
-        ScopeSet {
-            scopes: iter.into_iter().collect(),
-        }
+        let mut scopes: SmallVec<[ScopeId; 3]> = iter.into_iter().collect();
+        scopes.sort();
+        // Remove duplicates (stable sort + dedup)
+        scopes.dedup();
+        ScopeSet { scopes }
     }
 }
 
 impl From<ScopeSet> for HashSet<ScopeId> {
     fn from(scope_set: ScopeSet) -> Self {
-        scope_set.scopes
+        scope_set.scopes.into_iter().collect()
     }
 }
 
@@ -315,9 +380,8 @@ mod tests {
 
         let set = ScopeSet::from_iter([s1, s2]);
         let display = format!("{}", set);
-        // Order might vary, but should contain both
-        assert!(display.contains("S1"));
-        assert!(display.contains("S2"));
+        // Should be sorted: {S1, S2}
+        assert_eq!(display, "{S1, S2}");
     }
 
     #[test]
@@ -381,5 +445,46 @@ mod tests {
         // introduced_final: {S1, S100} (has macro_scope)
         assert!(!use_site_final.contains(&macro_scope));
         assert!(introduced_final.contains(&macro_scope));
+    }
+
+    #[test]
+    fn test_sorted_invariant() {
+        // Test that scopes are always kept sorted
+        let s1 = ScopeId(1);
+        let s2 = ScopeId(2);
+        let s3 = ScopeId(3);
+
+        // From iterator (potentially unsorted input)
+        let set = ScopeSet::from_iter([s3, s1, s2]);
+        let vec = set.to_sorted_vec();
+        assert_eq!(vec, vec![s1, s2, s3]);
+
+        // Adding in non-sorted order
+        let set2 = ScopeSet::new().with_scope(s3).with_scope(s1).with_scope(s2);
+        let vec2 = set2.to_sorted_vec();
+        assert_eq!(vec2, vec![s1, s2, s3]);
+    }
+
+    #[test]
+    fn test_with_scope_idempotent() {
+        let s1 = ScopeId(1);
+        let set = ScopeSet::singleton(s1);
+
+        // Adding same scope again should be idempotent
+        let set2 = set.with_scope(s1);
+        assert_eq!(set, set2);
+        assert_eq!(set2.len(), 1);
+    }
+
+    #[test]
+    fn test_from_hashset() {
+        let mut hs = HashSet::new();
+        hs.insert(ScopeId(3));
+        hs.insert(ScopeId(1));
+        hs.insert(ScopeId(2));
+
+        let ss = ScopeSet::from(hs);
+        assert_eq!(ss.len(), 3);
+        assert_eq!(ss.to_sorted_vec(), vec![ScopeId(1), ScopeId(2), ScopeId(3)]);
     }
 }

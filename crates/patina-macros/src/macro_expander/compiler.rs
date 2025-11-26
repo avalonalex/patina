@@ -907,7 +907,7 @@ impl Compiler {
             None => false, // Ellipsis disabled
             Some(elli) => match form {
                 Value::Symbol(s) => s == elli,
-                Value::Identifier { name, .. } => name == elli,
+                Value::Identifier(id) => &id.name == elli,
                 _ => false,
             },
         }
@@ -920,7 +920,7 @@ impl Compiler {
     fn extract_symbol_name(form: &Value) -> Option<&Rc<str>> {
         match form {
             Value::Symbol(s) => Some(s),
-            Value::Identifier { name, .. } => Some(name),
+            Value::Identifier(id) => Some(&id.name),
             _ => None,
         }
     }

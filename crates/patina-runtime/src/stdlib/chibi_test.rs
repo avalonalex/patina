@@ -33,41 +33,41 @@ pub fn build_chibi_test(_name: Vec<String>, env: Rc<Environment>) -> Vec<String>
     // test-begin: Start a test suite
     env.define(
         "test-begin".to_string(),
-        Value::Procedure(Procedure::Primitive {
+        Value::Procedure(Box::new(Procedure::Primitive {
             name: "test-begin",
             arity: Arity::Exact(1),
             library: library_name.clone(),
-        }),
+        })),
     );
 
     // test-end: End a test suite
     env.define(
         "test-end".to_string(),
-        Value::Procedure(Procedure::Primitive {
+        Value::Procedure(Box::new(Procedure::Primitive {
             name: "test-end",
             arity: Arity::Min(0),
             library: library_name.clone(),
-        }),
+        })),
     );
 
     // test-increment-passed: Increment passed count (internal)
     env.define(
         "test-increment-passed".to_string(),
-        Value::Procedure(Procedure::Primitive {
+        Value::Procedure(Box::new(Procedure::Primitive {
             name: "test-increment-passed",
             arity: Arity::Exact(0),
             library: library_name.clone(),
-        }),
+        })),
     );
 
     // test-increment-failed: Increment failed count (internal)
     env.define(
         "test-increment-failed".to_string(),
-        Value::Procedure(Procedure::Primitive {
+        Value::Procedure(Box::new(Procedure::Primitive {
             name: "test-increment-failed",
             arity: Arity::Exact(0),
             library: library_name.clone(),
-        }),
+        })),
     );
 
     // Note: 'test' is defined as a macro in bootstrap.scm and is globally available

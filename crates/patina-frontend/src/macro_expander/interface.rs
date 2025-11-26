@@ -213,7 +213,7 @@ impl TestExpander {
                         Some(s.as_ref())
                     }
                 }
-                Identifier { name, .. } => Some(name.as_ref()),
+                Identifier(id) => Some(id.name.as_ref()),
                 _ => None,
             }
         }

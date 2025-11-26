@@ -170,7 +170,7 @@ mod tests {
         custom_env.define("x".to_string(), Value::Integer(99));
 
         // Evaluate x in custom env
-        let expr = Value::Symbol(Rc::from("x"));
+        let expr = Value::symbol("x");
         let result = backend.eval(&expr, &custom_env).unwrap();
 
         assert!(matches!(result, Value::Integer(99)));

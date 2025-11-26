@@ -28,4 +28,7 @@ thiserror = "2.0"
 # Thread-safe lazy statics
 once_cell = "1.19"
 
+# Small vector optimization
+smallvec = "1.13"
+
 # No main package anymore - workspace only

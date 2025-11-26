@@ -70,29 +70,29 @@ impl Parser {
                 Ok(val)
             }
             Token::Identifier(s) => {
-                let val = Value::Symbol(Rc::from(s.as_str()));
+                let val = Value::symbol(s);
                 self.advance()?;
                 Ok(val)
             }
             Token::Quote => {
                 self.advance()?;
                 let quoted = self.parse_expr()?;
-                Ok(self.make_list(vec![Value::Symbol(Rc::from("quote")), quoted]))
+                Ok(self.make_list(vec![Value::symbol("quote"), quoted]))
             }
             Token::Quasiquote => {
                 self.advance()?;
                 let quoted = self.parse_expr()?;
-                Ok(self.make_list(vec![Value::Symbol(Rc::from("quasiquote")), quoted]))
+                Ok(self.make_list(vec![Value::symbol("quasiquote"), quoted]))
             }
             Token::Unquote => {
                 self.advance()?;
                 let quoted = self.parse_expr()?;
-                Ok(self.make_list(vec![Value::Symbol(Rc::from("unquote")), quoted]))
+                Ok(self.make_list(vec![Value::symbol("unquote"), quoted]))
             }
             Token::UnquoteSplicing => {
                 self.advance()?;
                 let quoted = self.parse_expr()?;
-                Ok(self.make_list(vec![Value::Symbol(Rc::from("unquote-splicing")), quoted]))
+                Ok(self.make_list(vec![Value::symbol("unquote-splicing"), quoted]))
             }
             Token::LeftParen => self.parse_list(),
             Token::VectorOpen => self.parse_vector(),
@@ -243,7 +243,7 @@ impl Parser {
                 if ratio.denom() == &BigInt::from(1) {
                     let numer = ratio.numer();
                     if let Some(n) = numer.to_i64() {
-                        return Ok(Value::Integer(n));
+                        return Ok(Value::integer(n));
                     } else {
                         return Ok(Value::BigInteger(numer.clone()));
                     }
@@ -255,7 +255,7 @@ impl Parser {
 
         // Try i64 first (fast path for small integers)
         if let Ok(n) = s.parse::<i64>() {
-            return Ok(Value::Integer(n));
+            return Ok(Value::integer(n));
         }
 
         // If it doesn't fit in i64, try BigInt (for large integers)
@@ -348,7 +348,7 @@ impl Parser {
         } else {
             // For non-decimal radix, parse as integer only
             match i64::from_str_radix(rest, radix) {
-                Ok(n) => Value::Integer(n),
+                Ok(n) => Value::integer(n),
                 Err(_) => {
                     // Try BigInt if it doesn't fit in i64
                     BigInt::parse_bytes(rest.as_bytes(), radix)
@@ -380,7 +380,7 @@ impl Parser {
                         // For now, just return an error as exact conversion of arbitrary floats is complex
                         // In a full implementation, we'd need to convert the float to a rational
                         if f.fract() == 0.0 && f.is_finite() {
-                            Ok(Value::Integer(f as i64))
+                            Ok(Value::integer(f as i64))
                         } else {
                             Err(ParseError::InvalidSyntax(format!(
                                 "#e prefix on inexact number not yet fully supported: {}",

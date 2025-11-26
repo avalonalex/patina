@@ -1,6 +1,7 @@
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::compiled_macro::CompiledMacro;
@@ -8,6 +9,34 @@ use crate::core_expr::CoreExpr;
 use crate::environment::Environment;
 use crate::library::Library;
 use crate::scope::{ScopeId, ScopeSet};
+
+// =============================================================================
+// Value Interning Infrastructure
+// =============================================================================
+//
+// Symbol interning and small integer caching reduce allocations by sharing
+// common values. This is Phase 4 of the VALUE_SIZE_OPTIMIZATION plan.
+//
+// Both use thread-local storage because Value contains Rc<...> types which
+// are not Sync (not safe to share across threads). Thread-local storage
+// provides per-thread caching without synchronization overhead.
+
+// Thread-local symbol interner
+// Maps symbol names to their interned `Rc<str>` representations.
+thread_local! {
+    static SYMBOL_INTERNER: RefCell<HashMap<String, Rc<str>>> = RefCell::new(HashMap::new());
+}
+
+// Thread-local cache for small integers (-128 to 127)
+// These 256 integers are pre-allocated per thread and reused.
+thread_local! {
+    static SMALL_INTEGER_CACHE: RefCell<Option<Vec<Value>>> = const { RefCell::new(None) };
+}
+
+/// Initialize the small integer cache for the current thread
+fn init_integer_cache() -> Vec<Value> {
+    (-128i64..128).map(Value::Integer).collect()
+}
 
 /// Represents a Scheme value in the R7RS-small language
 #[derive(Debug, Clone)]
@@ -35,6 +64,7 @@ pub enum Value {
     Symbol(Rc<str>),
 
     // Identifier for hygienic macro expansion (Racket-style scope sets)
+    // Boxed to reduce enum size: 64 bytes -> 8 bytes
     //
     // Each identifier carries a set of scopes that track which binding forms it's inside.
     // This is the key to hygienic macro expansion: identifiers from different lexical
@@ -51,12 +81,7 @@ pub enum Value {
     //    - Introduced identifiers: scope added (wasn't there, then toggled on)
     //
     // This distinguishes use-site vs introduced identifiers using only scopes.
-    Identifier {
-        name: Rc<str>,
-        /// Set of scopes for scope-sets hygiene
-        /// Empty set = top-level identifier
-        scopes: ScopeSet,
-    },
+    Identifier(Box<IdentifierData>),
 
     // Pairs and lists (mutable via set-car!/set-cdr!)
     // Uses RefCell to allow mutation through shared references
@@ -71,8 +96,8 @@ pub enum Value {
     // Uses RefCell to allow mutation through shared references
     Bytevector(Rc<RefCell<Vec<u8>>>),
 
-    // Procedures
-    Procedure(Procedure),
+    // Procedures (boxed to reduce enum size: 104 bytes -> 8 bytes)
+    Procedure(Box<Procedure>),
 
     // Parameters (R7RS dynamic parameters)
     // Parameters are special procedures that maintain dynamic state
@@ -114,6 +139,15 @@ pub enum PromiseState {
     Delayed(Value),
     /// Evaluated - contains the cached result
     Forced(Value),
+}
+
+/// Data for a hygienic identifier (boxed in Value::Identifier)
+#[derive(Debug, Clone)]
+pub struct IdentifierData {
+    pub name: Rc<str>,
+    /// Set of scopes for scope-sets hygiene
+    /// Empty set = top-level identifier
+    pub scopes: ScopeSet,
 }
 
 /// Lambda body representation - type-safe replacement for `dyn Any`
@@ -195,7 +229,7 @@ impl Value {
             Value::Character(_) => "character",
             Value::String(_) => "string",
             Value::Symbol(_) => "symbol",
-            Value::Identifier { .. } => "identifier",
+            Value::Identifier(_) => "identifier",
             Value::Pair(_) | Value::Null => "list",
             Value::Vector(_) => "vector",
             Value::Bytevector(_) => "bytevector",
@@ -209,6 +243,71 @@ impl Value {
             Value::Unspecified => "unspecified",
             Value::Eof => "eof-object",
         }
+    }
+
+    // =========================================================================
+    // Interned Constructors
+    // =========================================================================
+
+    /// Create an interned symbol
+    ///
+    /// Symbols with the same name share the same `Rc<str>`, making `eq?`
+    /// comparison O(1) (pointer comparison) and reducing memory usage.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let a = Value::symbol("foo");
+    /// let b = Value::symbol("foo");
+    /// // a and b share the same Rc<str>
+    /// ```
+    pub fn symbol(name: &str) -> Value {
+        SYMBOL_INTERNER.with(|interner| {
+            let mut map = interner.borrow_mut();
+            let rc = map
+                .entry(name.to_string())
+                .or_insert_with(|| Rc::from(name))
+                .clone();
+            Value::Symbol(rc)
+        })
+    }
+
+    /// Create an integer value, using cache for small integers
+    ///
+    /// Integers in the range -128..128 are cached and reused, avoiding
+    /// allocation for the most commonly used integer values.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let a = Value::integer(42);  // Cached, no allocation
+    /// let b = Value::integer(42);  // Returns same cached value
+    /// let c = Value::integer(1000); // Not cached, creates new value
+    /// ```
+    pub fn integer(n: i64) -> Value {
+        if (-128..128).contains(&n) {
+            // Use cached value (index: -128 -> 0, 127 -> 255)
+            SMALL_INTEGER_CACHE.with(|cache| {
+                let mut cache_ref = cache.borrow_mut();
+                if cache_ref.is_none() {
+                    *cache_ref = Some(init_integer_cache());
+                }
+                cache_ref.as_ref().unwrap()[(n + 128) as usize].clone()
+            })
+        } else {
+            Value::Integer(n)
+        }
+    }
+
+    /// Get the interned `Rc<str>` for a symbol name
+    ///
+    /// This is useful when you need just the `Rc<str>` without wrapping
+    /// it in a `Value::Symbol`, e.g., for use in `IdentifierData`.
+    pub fn intern_symbol_name(name: &str) -> Rc<str> {
+        SYMBOL_INTERNER.with(|interner| {
+            let mut map = interner.borrow_mut();
+            map.entry(name.to_string())
+                .or_insert_with(|| Rc::from(name))
+                .clone()
+        })
     }
 }
 
@@ -280,14 +379,14 @@ impl std::fmt::Display for Value {
                     write!(f, "{}", s)
                 }
             }
-            Value::Identifier { name, .. } => {
+            Value::Identifier(id) => {
                 // Display identifiers just as their name
                 // Marks and scopes are internal - they shouldn't appear in output
                 // They are used for lookup, not display
-                if Self::symbol_needs_vertical_bars(name) {
-                    write!(f, "|{}|", name)
+                if Self::symbol_needs_vertical_bars(&id.name) {
+                    write!(f, "|{}|", id.name)
                 } else {
-                    write!(f, "{}", name)
+                    write!(f, "{}", id.name)
                 }
             }
             Value::Null => write!(f, "()"),
@@ -313,7 +412,7 @@ impl std::fmt::Display for Value {
                 write!(f, ")")
             }
             Value::Bytevector(bv) => write!(f, "#u8({:?})", bv.borrow()),
-            Value::Procedure(proc) => match proc {
+            Value::Procedure(proc) => match proc.as_ref() {
                 Procedure::Primitive { name, library, .. } => {
                     write!(f, "#<procedure:{}:{}>", library.join("."), name)
                 }

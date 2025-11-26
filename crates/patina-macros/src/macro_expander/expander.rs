@@ -609,10 +609,10 @@ impl Expander {
         };
 
         // Return Identifier with scopes (Racket-style hygiene)
-        Value::Identifier {
+        Value::Identifier(Box::new(patina_runtime::IdentifierData {
             name: name.clone(),
             scopes,
-        }
+        }))
     }
 
     /// Check if a name is bound to a macro in the expansion environment
@@ -783,7 +783,7 @@ mod tests {
 
         // Should produce (if 1 2)
         let expected = make_list(vec![
-            Value::Symbol(Rc::from("if")),
+            Value::symbol("if"),
             Value::Integer(1),
             Value::Integer(2),
         ]);
@@ -859,12 +859,12 @@ mod tests {
 
         // Should produce ((+ 10 1) (+ 20 1))
         let elem1 = make_list(vec![
-            Value::Symbol(Rc::from("+")),
+            Value::symbol("+"),
             Value::Integer(10),
             Value::Integer(1),
         ]);
         let elem2 = make_list(vec![
-            Value::Symbol(Rc::from("+")),
+            Value::symbol("+"),
             Value::Integer(20),
             Value::Integer(1),
         ]);
@@ -907,7 +907,7 @@ mod tests {
 
         // Should produce (begin 1 2 99)
         let expected = make_list(vec![
-            Value::Symbol(Rc::from("begin")),
+            Value::symbol("begin"),
             Value::Integer(1),
             Value::Integer(2),
             Value::Integer(99),
@@ -946,13 +946,13 @@ mod tests {
         //   Branch([Leaf((- j 1))])     // Second binding has 1 step
         // ])
         let step_i = make_list(vec![
-            Value::Symbol(Rc::from("+")),
-            Value::Symbol(Rc::from("i")),
+            Value::symbol("+"),
+            Value::symbol("i"),
             Value::Integer(1),
         ]);
         let step_j = make_list(vec![
-            Value::Symbol(Rc::from("-")),
-            Value::Symbol(Rc::from("j")),
+            Value::symbol("-"),
+            Value::symbol("j"),
             Value::Integer(1),
         ]);
 
@@ -968,7 +968,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Should produce (loop (+ i 1) (- j 1))
-        let expected = make_list(vec![Value::Symbol(Rc::from("loop")), step_i, step_j]);
+        let expected = make_list(vec![Value::symbol("loop"), step_i, step_j]);
 
         assert_eq!(format!("{:?}", result.unwrap()), format!("{:?}", expected));
     }
@@ -1012,7 +1012,7 @@ mod tests {
 
         // Should produce (result 1 2) - second group contributes nothing
         let expected = make_list(vec![
-            Value::Symbol(Rc::from("result")),
+            Value::symbol("result"),
             Value::Integer(1),
             Value::Integer(2),
         ]);

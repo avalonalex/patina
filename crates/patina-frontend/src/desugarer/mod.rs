@@ -172,7 +172,7 @@ impl Desugarer {
             | Value::Character(_)
             | Value::String(_)
             | Value::Bytevector(_)
-            | Value::Unspecified => Ok(CoreExpr::Literal(value.clone())),
+            | Value::Unspecified => Ok(CoreExpr::Literal(Rc::new(value.clone()))),
 
             // Variable reference
             Value::Symbol(s) => Ok(CoreExpr::Var(s.clone())),
@@ -180,25 +180,25 @@ impl Desugarer {
             // Identifier (unified hygiene: marks-and-ribs + scope-sets)
             // If scopes is non-empty, use scope-based lookup (ScopedVar)
             // Otherwise use simple name lookup (Var) - marks handled at eval time
-            Value::Identifier { name, scopes, .. } => {
-                if scopes.is_empty() {
-                    Ok(CoreExpr::Var(name.clone()))
+            Value::Identifier(id) => {
+                if id.scopes.is_empty() {
+                    Ok(CoreExpr::Var(id.name.clone()))
                 } else {
                     Ok(CoreExpr::ScopedVar {
-                        name: name.clone(),
-                        scopes: scopes.clone(),
+                        name: id.name.clone(),
+                        scopes: id.scopes.clone(),
                     })
                 }
             }
 
             // Empty list (unusual in AST, but possible as literal)
-            Value::Null => Ok(CoreExpr::Literal(Value::Null)),
+            Value::Null => Ok(CoreExpr::Literal(Rc::new(Value::Null))),
 
             // Lists - special forms or application
             Value::Pair(_) => self.desugar_list(value),
 
             // Vectors - literal
-            Value::Vector(_) => Ok(CoreExpr::Literal(value.clone())),
+            Value::Vector(_) => Ok(CoreExpr::Literal(Rc::new(value.clone()))),
 
             // Runtime-only values should never appear in AST
             Value::Procedure(_)
@@ -280,7 +280,7 @@ impl Desugarer {
     /// Desugar quote: (quote datum) → Quote(datum)
     fn desugar_quote(&self, args: &Value) -> Result<CoreExpr> {
         let datum = utils::expect_one_arg(args, "quote")?;
-        Ok(CoreExpr::Quote(datum.clone()))
+        Ok(CoreExpr::Quote(Rc::new(datum.clone())))
     }
 
     /// Desugar quasiquote: (quasiquote template) → Quasiquote(template)
@@ -288,7 +288,7 @@ impl Desugarer {
     /// to handle unquote and unquote-splicing
     fn desugar_quasiquote(&self, args: &Value) -> Result<CoreExpr> {
         let template = utils::expect_one_arg(args, "quasiquote")?;
-        Ok(CoreExpr::Quasiquote(template.clone()))
+        Ok(CoreExpr::Quasiquote(Rc::new(template.clone())))
     }
 
     /// Desugar lambda: (lambda formals body ...) → Lambda { params, body }
@@ -328,17 +328,17 @@ impl Desugarer {
             [test, then] => {
                 // Two-arg if: (if test then) → (if test then #<unspecified>)
                 Ok(CoreExpr::If {
-                    test: Box::new(self.desugar(test)?),
-                    then: Box::new(self.desugar(then)?),
-                    else_: Box::new(CoreExpr::Literal(Value::Unspecified)),
+                    test: Rc::new(self.desugar(test)?),
+                    then: Rc::new(self.desugar(then)?),
+                    else_: Rc::new(CoreExpr::Literal(Rc::new(Value::Unspecified))),
                 })
             }
             [test, then, else_] => {
                 // Three-arg if: (if test then else)
                 Ok(CoreExpr::If {
-                    test: Box::new(self.desugar(test)?),
-                    then: Box::new(self.desugar(then)?),
-                    else_: Box::new(self.desugar(else_)?),
+                    test: Rc::new(self.desugar(test)?),
+                    then: Rc::new(self.desugar(then)?),
+                    else_: Rc::new(self.desugar(else_)?),
                 })
             }
             _ => Err(DesugarError::WrongArgCount {
@@ -356,7 +356,7 @@ impl Desugarer {
         let var_sym = match &var {
             Value::Symbol(s) => s.clone(),
             // Handle hygienic identifiers from macro expansion
-            Value::Identifier { name, .. } => name.clone(),
+            Value::Identifier(id) => id.name.clone(),
             _ => {
                 return Err(DesugarError::InvalidSyntax(
                     "set! requires a symbol as first argument".to_string(),
@@ -366,7 +366,7 @@ impl Desugarer {
 
         Ok(CoreExpr::Set {
             var: var_sym,
-            value: Box::new(self.desugar(&value)?),
+            value: Rc::new(self.desugar(&value)?),
         })
     }
 
@@ -381,13 +381,13 @@ impl Desugarer {
             // (define var value)
             [Value::Symbol(name), value] => Ok(CoreExpr::Define {
                 name: name.clone(),
-                value: Box::new(self.desugar(value)?),
+                value: Rc::new(self.desugar(value)?),
             }),
 
             // Handle hygienic identifiers for variable names
-            [Value::Identifier { name, .. }, value] => Ok(CoreExpr::Define {
-                name: name.clone(),
-                value: Box::new(self.desugar(value)?),
+            [Value::Identifier(id), value] => Ok(CoreExpr::Define {
+                name: id.name.clone(),
+                value: Rc::new(self.desugar(value)?),
             }),
 
             // (define () value) - empty variable list from define-values
@@ -396,7 +396,7 @@ impl Desugarer {
                 // Transform to: (begin value #<unspecified>)
                 Ok(CoreExpr::Begin(vec![
                     self.desugar(value)?,
-                    CoreExpr::Literal(Value::Unspecified),
+                    CoreExpr::Literal(Rc::new(Value::Unspecified)),
                 ]))
             }
 
@@ -430,7 +430,7 @@ impl Desugarer {
 
                 Ok(CoreExpr::Define {
                     name,
-                    value: Box::new(lambda),
+                    value: Rc::new(lambda),
                 })
             }
 
@@ -457,7 +457,7 @@ impl Desugarer {
             // (define-syntax name transformer)
             [Value::Symbol(name), transformer] => Ok(CoreExpr::DefineSyntax {
                 name: name.clone(),
-                transformer: transformer.clone(), // Keep as Value, don't desugar
+                transformer: Rc::new(transformer.clone()), // Keep as Value, don't desugar
                 definition_scopes: self.current_scopes.clone(), // Capture scopes for hygiene
             }),
 
@@ -540,7 +540,7 @@ impl Desugarer {
         // Special cases:
         // (begin) → #<unspecified> (R7RS allows this)
         if core_exprs.is_empty() {
-            return Ok(CoreExpr::Literal(Value::Unspecified));
+            return Ok(CoreExpr::Literal(Rc::new(Value::Unspecified)));
         }
 
         // Optimize: (begin expr) → expr
@@ -565,7 +565,7 @@ impl Desugarer {
         }
 
         // First argument is the procedure
-        let func = Box::new(self.desugar(&exprs[0])?);
+        let func = Rc::new(self.desugar(&exprs[0])?);
 
         // Remaining arguments (including the final list)
         let args_exprs: Vec<CoreExpr> = exprs[1..]
@@ -588,7 +588,7 @@ impl Desugarer {
         let expr = utils::expect_one_arg(args, "expand")?;
 
         Ok(CoreExpr::Expand {
-            expr: Box::new(self.desugar(&expr)?),
+            expr: Rc::new(self.desugar(&expr)?),
         })
     }
 
@@ -963,7 +963,7 @@ impl Desugarer {
             .collect::<Result<_>>()?;
 
         Ok(CoreExpr::App {
-            func: Box::new(func),
+            func: Rc::new(func),
             args,
         })
     }
@@ -991,7 +991,11 @@ mod tests {
         let desugarer = Desugarer::new();
         let value = Value::Integer(42);
         let result = desugarer.desugar(&value).unwrap();
-        assert!(matches!(result, CoreExpr::Literal(Value::Integer(42))));
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Integer(42)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
     }
 
     #[test]
@@ -999,7 +1003,11 @@ mod tests {
         let desugarer = Desugarer::new();
         let value = Value::Boolean(true);
         let result = desugarer.desugar(&value).unwrap();
-        assert!(matches!(result, CoreExpr::Literal(Value::Boolean(true))));
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Boolean(true)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
     }
 
     #[test]
@@ -1007,7 +1015,11 @@ mod tests {
         let desugarer = Desugarer::new();
         let value = Value::String(Rc::new(RefCell::new("hello".to_string())));
         let result = desugarer.desugar(&value).unwrap();
-        assert!(matches!(result, CoreExpr::Literal(Value::String(_))));
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::String(_)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
     }
 
     #[test]
@@ -1015,7 +1027,11 @@ mod tests {
         let desugarer = Desugarer::new();
         let value = Value::Character('a');
         let result = desugarer.desugar(&value).unwrap();
-        assert!(matches!(result, CoreExpr::Literal(Value::Character('a'))));
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Character('a')));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
     }
 
     // =========================================================================
@@ -1025,7 +1041,7 @@ mod tests {
     #[test]
     fn test_desugar_variable() {
         let desugarer = Desugarer::new();
-        let value = Value::Symbol(Rc::from("x"));
+        let value = Value::symbol("x");
         let result = desugarer.desugar(&value).unwrap();
 
         if let CoreExpr::Var(name) = result {
@@ -1043,14 +1059,11 @@ mod tests {
     fn test_desugar_quote_symbol() {
         let desugarer = Desugarer::new();
         // (quote x)
-        let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("quote")),
-            Value::Symbol(Rc::from("x")),
-        ]);
+        let list = utils::vec_to_list(&[Value::symbol("quote"), Value::symbol("x")]);
 
         let result = desugarer.desugar(&list).unwrap();
         if let CoreExpr::Quote(val) = result {
-            assert!(matches!(val, Value::Symbol(_)));
+            assert!(matches!(val.as_ref(), Value::Symbol(_)));
         } else {
             panic!("Expected Quote, got {:?}", result);
         }
@@ -1061,7 +1074,7 @@ mod tests {
         let desugarer = Desugarer::new();
         // (quote (1 2 3))
         let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("quote")),
+            Value::symbol("quote"),
             utils::vec_to_list(&[Value::Integer(1), Value::Integer(2), Value::Integer(3)]),
         ]);
 
@@ -1078,13 +1091,9 @@ mod tests {
         let desugarer = Desugarer::new();
         // (lambda (x y) (+ x y))
         let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("lambda")),
-            utils::vec_to_list(&[Value::Symbol(Rc::from("x")), Value::Symbol(Rc::from("y"))]),
-            utils::vec_to_list(&[
-                Value::Symbol(Rc::from("+")),
-                Value::Symbol(Rc::from("x")),
-                Value::Symbol(Rc::from("y")),
-            ]),
+            Value::symbol("lambda"),
+            utils::vec_to_list(&[Value::symbol("x"), Value::symbol("y")]),
+            utils::vec_to_list(&[Value::symbol("+"), Value::symbol("x"), Value::symbol("y")]),
         ]);
 
         let result = desugarer.desugar(&list).unwrap();
@@ -1101,12 +1110,9 @@ mod tests {
         let desugarer = Desugarer::new();
         // (lambda args (car args))
         let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("lambda")),
-            Value::Symbol(Rc::from("args")),
-            utils::vec_to_list(&[
-                Value::Symbol(Rc::from("car")),
-                Value::Symbol(Rc::from("args")),
-            ]),
+            Value::symbol("lambda"),
+            Value::symbol("args"),
+            utils::vec_to_list(&[Value::symbol("car"), Value::symbol("args")]),
         ]);
 
         let result = desugarer.desugar(&list).unwrap();
@@ -1123,18 +1129,14 @@ mod tests {
         let desugarer = Desugarer::new();
         // (lambda (x y . rest) x)
         let formals = Value::Pair(Rc::new(RefCell::new((
-            Value::Symbol(Rc::from("x")),
+            Value::symbol("x"),
             Value::Pair(Rc::new(RefCell::new((
-                Value::Symbol(Rc::from("y")),
-                Value::Symbol(Rc::from("rest")), // Dotted pair
+                Value::symbol("y"),
+                Value::symbol("rest"), // Dotted pair
             )))),
         ))));
 
-        let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("lambda")),
-            formals,
-            Value::Symbol(Rc::from("x")),
-        ]);
+        let list = utils::vec_to_list(&[Value::symbol("lambda"), formals, Value::symbol("x")]);
 
         let result = desugarer.desugar(&list).unwrap();
         if let CoreExpr::Lambda { params, .. } = result {
@@ -1153,7 +1155,7 @@ mod tests {
         let desugarer = Desugarer::new();
         // (if #t 1 2)
         let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("if")),
+            Value::symbol("if"),
             Value::Boolean(true),
             Value::Integer(1),
             Value::Integer(2),
@@ -1161,9 +1163,21 @@ mod tests {
 
         let result = desugarer.desugar(&list).unwrap();
         if let CoreExpr::If { test, then, else_ } = result {
-            assert!(matches!(*test, CoreExpr::Literal(Value::Boolean(true))));
-            assert!(matches!(*then, CoreExpr::Literal(Value::Integer(1))));
-            assert!(matches!(*else_, CoreExpr::Literal(Value::Integer(2))));
+            if let CoreExpr::Literal(v) = &*test {
+                assert!(matches!(v.as_ref(), Value::Boolean(true)));
+            } else {
+                panic!("Expected Literal test");
+            }
+            if let CoreExpr::Literal(v) = &*then {
+                assert!(matches!(v.as_ref(), Value::Integer(1)));
+            } else {
+                panic!("Expected Literal then");
+            }
+            if let CoreExpr::Literal(v) = &*else_ {
+                assert!(matches!(v.as_ref(), Value::Integer(2)));
+            } else {
+                panic!("Expected Literal else");
+            }
         } else {
             panic!("Expected If, got {:?}", result);
         }
@@ -1173,17 +1187,26 @@ mod tests {
     fn test_desugar_if_two_args() {
         let desugarer = Desugarer::new();
         // (if #t 1)
-        let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("if")),
-            Value::Boolean(true),
-            Value::Integer(1),
-        ]);
+        let list =
+            utils::vec_to_list(&[Value::symbol("if"), Value::Boolean(true), Value::Integer(1)]);
 
         let result = desugarer.desugar(&list).unwrap();
         if let CoreExpr::If { test, then, else_ } = result {
-            assert!(matches!(*test, CoreExpr::Literal(Value::Boolean(true))));
-            assert!(matches!(*then, CoreExpr::Literal(Value::Integer(1))));
-            assert!(matches!(*else_, CoreExpr::Literal(Value::Unspecified)));
+            if let CoreExpr::Literal(v) = &*test {
+                assert!(matches!(v.as_ref(), Value::Boolean(true)));
+            } else {
+                panic!("Expected Literal test");
+            }
+            if let CoreExpr::Literal(v) = &*then {
+                assert!(matches!(v.as_ref(), Value::Integer(1)));
+            } else {
+                panic!("Expected Literal then");
+            }
+            if let CoreExpr::Literal(v) = &*else_ {
+                assert!(matches!(v.as_ref(), Value::Unspecified));
+            } else {
+                panic!("Expected Literal else");
+            }
         } else {
             panic!("Expected If, got {:?}", result);
         }
@@ -1198,15 +1221,19 @@ mod tests {
         let desugarer = Desugarer::new();
         // (set! x 42)
         let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("set!")),
-            Value::Symbol(Rc::from("x")),
+            Value::symbol("set!"),
+            Value::symbol("x"),
             Value::Integer(42),
         ]);
 
         let result = desugarer.desugar(&list).unwrap();
         if let CoreExpr::Set { var, value } = result {
             assert_eq!(var.as_ref(), "x");
-            assert!(matches!(*value, CoreExpr::Literal(Value::Integer(42))));
+            if let CoreExpr::Literal(v) = &*value {
+                assert!(matches!(v.as_ref(), Value::Integer(42)));
+            } else {
+                panic!("Expected Literal value");
+            }
         } else {
             panic!("Expected Set, got {:?}", result);
         }
@@ -1217,7 +1244,7 @@ mod tests {
         let desugarer = Desugarer::new();
         // (set! 123 42) - invalid
         let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("set!")),
+            Value::symbol("set!"),
             Value::Integer(123),
             Value::Integer(42),
         ]);
@@ -1235,15 +1262,19 @@ mod tests {
         let desugarer = Desugarer::new();
         // (define x 42)
         let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("define")),
-            Value::Symbol(Rc::from("x")),
+            Value::symbol("define"),
+            Value::symbol("x"),
             Value::Integer(42),
         ]);
 
         let result = desugarer.desugar(&list).unwrap();
         if let CoreExpr::Define { name, value } = result {
             assert_eq!(name.as_ref(), "x");
-            assert!(matches!(*value, CoreExpr::Literal(Value::Integer(42))));
+            if let CoreExpr::Literal(v) = &*value {
+                assert!(matches!(v.as_ref(), Value::Integer(42)));
+            } else {
+                panic!("Expected Literal value");
+            }
         } else {
             panic!("Expected Define, got {:?}", result);
         }
@@ -1254,17 +1285,9 @@ mod tests {
         let desugarer = Desugarer::new();
         // (define (add x y) (+ x y))
         let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("define")),
-            utils::vec_to_list(&[
-                Value::Symbol(Rc::from("add")),
-                Value::Symbol(Rc::from("x")),
-                Value::Symbol(Rc::from("y")),
-            ]),
-            utils::vec_to_list(&[
-                Value::Symbol(Rc::from("+")),
-                Value::Symbol(Rc::from("x")),
-                Value::Symbol(Rc::from("y")),
-            ]),
+            Value::symbol("define"),
+            utils::vec_to_list(&[Value::symbol("add"), Value::symbol("x"), Value::symbol("y")]),
+            utils::vec_to_list(&[Value::symbol("+"), Value::symbol("x"), Value::symbol("y")]),
         ]);
 
         let result = desugarer.desugar(&list).unwrap();
@@ -1284,11 +1307,15 @@ mod tests {
     fn test_desugar_begin_single_expr() {
         let desugarer = Desugarer::new();
         // (begin 42)
-        let list = utils::vec_to_list(&[Value::Symbol(Rc::from("begin")), Value::Integer(42)]);
+        let list = utils::vec_to_list(&[Value::symbol("begin"), Value::Integer(42)]);
 
         let result = desugarer.desugar(&list).unwrap();
         // Single expression should be optimized away
-        assert!(matches!(result, CoreExpr::Literal(Value::Integer(42))));
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Integer(42)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
     }
 
     #[test]
@@ -1296,7 +1323,7 @@ mod tests {
         let desugarer = Desugarer::new();
         // (begin 1 2 3)
         let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("begin")),
+            Value::symbol("begin"),
             Value::Integer(1),
             Value::Integer(2),
             Value::Integer(3),
@@ -1314,10 +1341,14 @@ mod tests {
     fn test_desugar_begin_empty() {
         let desugarer = Desugarer::new();
         // (begin) → #<unspecified> (R7RS allows this)
-        let list = utils::vec_to_list(&[Value::Symbol(Rc::from("begin"))]);
+        let list = utils::vec_to_list(&[Value::symbol("begin")]);
 
         let result = desugarer.desugar(&list).unwrap();
-        assert!(matches!(result, CoreExpr::Literal(Value::Unspecified)));
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Unspecified));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
     }
 
     // =========================================================================
@@ -1328,11 +1359,7 @@ mod tests {
     fn test_desugar_application() {
         let desugarer = Desugarer::new();
         // (+ 1 2)
-        let list = utils::vec_to_list(&[
-            Value::Symbol(Rc::from("+")),
-            Value::Integer(1),
-            Value::Integer(2),
-        ]);
+        let list = utils::vec_to_list(&[Value::symbol("+"), Value::Integer(1), Value::Integer(2)]);
 
         let result = desugarer.desugar(&list).unwrap();
         if let CoreExpr::App { func, args } = result {
@@ -1349,9 +1376,9 @@ mod tests {
         // ((lambda (x) x) 42)
         let list = utils::vec_to_list(&[
             utils::vec_to_list(&[
-                Value::Symbol(Rc::from("lambda")),
-                utils::vec_to_list(&[Value::Symbol(Rc::from("x"))]),
-                Value::Symbol(Rc::from("x")),
+                Value::symbol("lambda"),
+                utils::vec_to_list(&[Value::symbol("x")]),
+                Value::symbol("x"),
             ]),
             Value::Integer(42),
         ]);

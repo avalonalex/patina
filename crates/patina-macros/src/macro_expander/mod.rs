@@ -205,10 +205,10 @@ fn flip_scope_on_value(
 
     match value {
         // Identifiers: flip the scope
-        Value::Identifier { name, scopes } => Value::Identifier {
-            name: name.clone(),
-            scopes: scopes.flip_scope(scope),
-        },
+        Value::Identifier(id) => Value::Identifier(Box::new(patina_runtime::IdentifierData {
+            name: id.name.clone(),
+            scopes: id.scopes.flip_scope(scope),
+        })),
 
         // Symbols stay as Symbols - they don't participate in hygiene flip
         // This preserves special forms like `if`, `define`, `lambda`, etc.
