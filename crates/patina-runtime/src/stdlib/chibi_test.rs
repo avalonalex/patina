@@ -20,6 +20,7 @@ struct TestState {
     tests_run: usize,
     tests_passed: usize,
     tests_failed: usize,
+    tests_errors: usize,
 }
 
 thread_local! {
@@ -89,6 +90,7 @@ pub fn test_begin(name: &str) {
         state.tests_run = 0;
         state.tests_passed = 0;
         state.tests_failed = 0;
+        state.tests_errors = 0;
 
         println!("Running test suite: {}", name);
     });
@@ -98,10 +100,17 @@ pub fn test_begin(name: &str) {
 pub fn test_end() {
     TEST_STATE.with(|state| {
         let state = state.borrow();
-        println!(
-            "Tests run: {}, Passed: {}, Failed: {}",
-            state.tests_run, state.tests_passed, state.tests_failed
-        );
+        if state.tests_errors > 0 {
+            println!(
+                "Tests run: {}, Passed: {}, Failed: {}, Errors: {}",
+                state.tests_run, state.tests_passed, state.tests_failed, state.tests_errors
+            );
+        } else {
+            println!(
+                "Tests run: {}, Passed: {}, Failed: {}",
+                state.tests_run, state.tests_passed, state.tests_failed
+            );
+        }
         println!();
     });
 }
@@ -121,6 +130,15 @@ pub fn test_increment_failed() {
         let mut state = state.borrow_mut();
         state.tests_run += 1;
         state.tests_failed += 1;
+    });
+}
+
+/// Increment error count (for tests that crash before completing)
+pub fn test_increment_error() {
+    TEST_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.tests_run += 1;
+        state.tests_errors += 1;
     });
 }
 

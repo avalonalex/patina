@@ -1,18 +1,18 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-25 20:43:25
+**Generated:** 2025-11-26 11:11:46
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 704 | 63.5% |
-| ❌ Failed | 35 | 3.2% |
-| ⚠️ Error (crashed) | 369 | 33.3% |
-| **Total** | **1108** | **100%** |
+| ✅ Passed | 704 | 60.2% |
+| ❌ Failed | 35 | 3.0% |
+| ⚠️ Error (crashed) | 431 | 36.8% |
+| **Total** | **1170** | **100%** |
 
-**Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
+**Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
 
 ## Failed Tests
 

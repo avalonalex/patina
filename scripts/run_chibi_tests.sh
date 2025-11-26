@@ -50,19 +50,32 @@ echo ""
 echo -e "${GREEN}Generating compatibility report...${NC}"
 
 # Count test results from output
-# Parse lines like "Tests run: 10, Passed: 8, Failed: 2"
-PASS_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Passed: ' '{sum += $2} END {print sum+0}')
-FAIL_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Failed: ' '{sum += $2} END {print sum+0}')
-TOTAL_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Tests run: ' '{sum += $2} END {print sum+0}')
+# Parse lines like "Tests run: 10, Passed: 8, Failed: 2" or "Tests run: 10, Passed: 8, Failed: 2, Errors: 3"
+# The awk commands extract numbers, handling both old and new formats
+PASS_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Passed: ' '{split($2, a, ","); sum += a[1]} END {print sum+0}')
+FAIL_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Failed: ' '{split($2, a, ","); sum += a[1]} END {print sum+0}')
+TOTAL_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Tests run: ' '{split($2, a, ","); sum += a[1]} END {print sum+0}')
 
-# Count lines that start with "FAIL:" for additional failures
+# Count errors from the per-section test output (new format: "Errors: X")
+# This is the count of errors tracked by the test framework
+ERROR_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Errors: ' '{sum += $2} END {print sum+0}')
+
+# For compatibility, also count standalone "Error:" lines not tracked by framework
+# (shouldn't happen with new code, but kept for safety)
+STANDALONE_ERRORS=$(grep -c "^Error:" "$RESULTS_FILE" || echo "0")
+
+# Use the framework's error count, but fall back to standalone count if no framework errors
+if [ "$ERROR_COUNT" -eq 0 ] && [ "$STANDALONE_ERRORS" -gt 0 ]; then
+    ERROR_COUNT=$STANDALONE_ERRORS
+    # Adjust total since standalone errors weren't counted in Tests run
+    TOTAL_COUNT=$((TOTAL_COUNT + ERROR_COUNT))
+fi
+
+# TRUE_TOTAL is now just TOTAL_COUNT since errors are included
+TRUE_TOTAL=$TOTAL_COUNT
+
+# Count lines that start with "FAIL:" for detailed failure reporting
 ADDITIONAL_FAILS=$(grep -c "^FAIL:" "$RESULTS_FILE" || echo "0")
-
-# Count errors from error messages (these are tests that crashed)
-ERROR_COUNT=$(grep -c "^Error:" "$RESULTS_FILE" || echo "0")
-
-# Calculate true total: tests that ran + tests that crashed
-TRUE_TOTAL=$((TOTAL_COUNT + ERROR_COUNT))
 
 # Generate markdown report
 cat > "$COMPAT_REPORT" << EOF
@@ -80,7 +93,7 @@ cat > "$COMPAT_REPORT" << EOF
 | ⚠️ Error (crashed) | $ERROR_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($ERROR_COUNT/$TRUE_TOTAL)*100}") |
 | **Total** | **$TRUE_TOTAL** | **100%** |
 
-**Note:** "Error" means the test crashed before assertions could run. These count as failures in the overall percentage.
+**Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
 
 ## Failed Tests
 

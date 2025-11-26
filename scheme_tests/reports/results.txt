@@ -389,7 +389,7 @@ Testing:
 Error: Not a procedure: #<macro:foo399>
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro name must be a symbol
 Error: Invalid syntax: syntax-rules literals must be a proper list
-Tests run: 16, Passed: 15, Failed: 1
+Tests run: 26, Passed: 15, Failed: 1, Errors: 10
 
 Running test suite: 5 Program structure
 Testing: 
@@ -444,7 +444,7 @@ Testing:
 (let ((k (kons 1 2))) (set-kar! k 3) (kar k))
 
 Error: Undefined variable: kons
-Tests run: 9, Passed: 9, Failed: 0
+Tests run: 16, Passed: 9, Failed: 0, Errors: 7
 
 Running test suite: 6.1 Equivalence Predicates
 Testing: 
@@ -1379,7 +1379,7 @@ Testing:
 Testing: 
 (string->number "1 2")
 
-Tests run: 193, Passed: 175, Failed: 18
+Tests run: 211, Passed: 175, Failed: 18, Errors: 18
 
 Running test suite: 6.3 Booleans
 Testing: 
@@ -1656,7 +1656,7 @@ Testing:
 Testing: 
 (eq? (cddr l1) (cddr l2))
 
-Tests run: 63, Passed: 61, Failed: 2
+Tests run: 65, Passed: 61, Failed: 2, Errors: 2
 
 Running test suite: 6.5 Symbols
 Testing: 
@@ -1721,7 +1721,7 @@ Testing:
 (string=? "K. Harper, M.D." (symbol->string (string->symbol "K. Harper, M.D.")))
 
 Error: Undefined variable: symbol->string
-Tests run: 6, Passed: 6, Failed: 0
+Tests run: 17, Passed: 6, Failed: 0, Errors: 11
 
 Running test suite: 6.6 Characters
 Testing: 
@@ -2685,7 +2685,7 @@ Testing:
 (string->utf8 "λ")
 
 Error: Undefined variable: string->utf8
-Tests run: 31, Passed: 31, Failed: 0
+Tests run: 39, Passed: 31, Failed: 0, Errors: 8
 
 Running test suite: 6.10 Control Features
 Testing: 
@@ -2791,7 +2791,7 @@ Testing:
 (let ((path '()) (c #f)) (let ((add (lambda (s) (set! path (cons s path))))) (dynamic-wind (lambda () (add 'connect)) (lambda () (add (call-with-current-continuation (lambda (c0) (set! c c0) 'talk1)))) (lambda () (add 'disconnect))) (if (< (length path) 4) (c 'talk2) (reverse path))))
 
 Error: Undefined variable: dynamic-wind
-Tests run: 21, Passed: 21, Failed: 0
+Tests run: 34, Passed: 21, Failed: 0, Errors: 13
 
 Running test suite: 6.11 Exceptions
 Testing: 
@@ -2895,7 +2895,7 @@ Testing:
 (guard (condition ((assq 'c condition) 'caught-c) ((assq 'd condition) 'caught-d)) (list (sqrt 8) (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'd 24))))))
 
 Error: Undefined variable: guard
-Tests run: 4, Passed: 2, Failed: 2
+Tests run: 25, Passed: 2, Failed: 2, Errors: 21
 
 Running test suite: 6.12 Environments and evaluation
 Testing: 
@@ -2914,7 +2914,7 @@ Testing:
 (eval '(+ (expt 2 10) (inexact (sin 0))) (environment '(scheme base) '(scheme inexact)))
 
 Error: Undefined variable: eval
-Tests run: 0, Passed: 0, Failed: 0
+Tests run: 4, Passed: 0, Failed: 0, Errors: 4
 
 Running test suite: 6.13 Input and output
 Testing: 
@@ -3477,7 +3477,7 @@ Error: Undefined variable: open-output-string
 Error: Undefined variable: open-output-string
 Error: Undefined variable: open-output-string
 Error: Undefined variable: open-output-string
-Tests run: 0, Passed: 0, Failed: 0
+Tests run: 93, Passed: 0, Failed: 0, Errors: 93
 
 Running test suite: Numeric syntax
 Error: Undefined variable: read
@@ -3590,9 +3590,9 @@ Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
-Tests run: 0, Passed: 0, Failed: 0
+Tests run: 110, Passed: 0, Failed: 0, Errors: 110
 
-Tests run: 0, Passed: 0, Failed: 0
+Tests run: 110, Passed: 0, Failed: 0, Errors: 110
 
 Running test suite: 6.14 System interface
 Testing: 
@@ -3640,7 +3640,7 @@ Testing:
 (file-error? (guard (exn (else exn)) (delete-file " no such file ")))
 
 Error: Undefined variable: file-error?
-Tests run: 0, Passed: 0, Failed: 0
+Tests run: 12, Passed: 0, Failed: 0, Errors: 12
 
-Tests run: 0, Passed: 0, Failed: 0
+Tests run: 12, Passed: 0, Failed: 0, Errors: 12
 

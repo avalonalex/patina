@@ -23,7 +23,8 @@ mod scheme_lazy;
 mod scheme_stubs;
 
 pub use chibi_test::{
-    build_chibi_test, test_begin, test_end, test_increment_failed, test_increment_passed,
+    build_chibi_test, test_begin, test_end, test_increment_error, test_increment_failed,
+    test_increment_passed,
 };
 pub use patina_debug::build_patina_debug;
 pub use scheme_base::build_scheme_base;

@@ -58,7 +58,9 @@ pub use simple::SimpleInterpreter;
 pub use patina_frontend::{DesugarError, Desugarer, LexError, Lexer, ParseError, Parser};
 pub use patina_ir::CoreExpr;
 pub use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
-pub use patina_runtime::{Arity, Backend, Environment, Procedure, Value};
+pub use patina_runtime::{
+    Arity, Backend, Environment, Procedure, Value, stdlib::test_increment_error,
+};
 pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker, eval_core};
 
 /// High-level interpreter interface that combines parsing and evaluation
@@ -164,6 +166,7 @@ impl<B: Backend> Interpreter<B> {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("Error: {}", e);
+                test_increment_error();
                 return result;
             }
         };
@@ -176,12 +179,15 @@ impl<B: Backend> Interpreter<B> {
                     Err(e) => {
                         // Print error and continue
                         eprintln!("Error: {}", e);
+                        // Track this error in the test framework
+                        test_increment_error();
                     }
                 },
                 Err(ParseError::UnexpectedEof) => break,
                 Err(e) => {
                     // Print parse error and continue
                     eprintln!("Error: {}", e);
+                    test_increment_error();
                     // Try to recover by skipping to the next expression
                     // (for now, we just stop on parse errors)
                     break;
