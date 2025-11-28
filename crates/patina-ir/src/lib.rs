@@ -12,7 +12,7 @@ pub mod visitor;
 
 // Re-export core IR types from patina-core
 pub use patina_core::core_expr::CaseLambdaClause;
-pub use patina_core::{CoreExpr, Formals, Primitive, Symbol};
+pub use patina_core::{CoreExpr, Formals, Primitive, ScopedParam, Symbol};
 
 // Local types
 pub use surface_syntax::SurfaceSyntax;

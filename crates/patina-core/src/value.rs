@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::compiled_macro::CompiledMacro;
-use crate::core_expr::CoreExpr;
+use crate::core_expr::{CoreExpr, ScopedParam};
 use crate::environment::Environment;
 use crate::library::Library;
 use crate::scope::{ScopeId, ScopeSet};
@@ -166,8 +166,8 @@ pub enum LambdaBody {
 /// A clause in a case-lambda: (params, variadic, body, binding_scope)
 #[derive(Debug, Clone)]
 pub struct CaseLambdaClause {
-    pub params: Vec<String>,
-    pub variadic: Option<String>,
+    pub params: Vec<ScopedParam>,
+    pub variadic: Option<ScopedParam>,
     pub body: LambdaBody,
     pub binding_scope: Option<ScopeId>,
 }
@@ -184,12 +184,17 @@ pub enum Procedure {
 
     /// User-defined procedure (lambda)
     Lambda {
-        params: Vec<String>,
-        variadic: Option<String>, // For rest parameters
-        body: LambdaBody,         // Type-safe body representation
-        env: Rc<Environment>,     // Captured environment for closures
+        /// Fixed parameters, each with optional scopes for hygiene
+        params: Vec<ScopedParam>,
+        /// Optional variadic parameter (rest parameter)
+        variadic: Option<ScopedParam>,
+        /// Procedure body
+        body: LambdaBody,
+        /// Captured environment for closures
+        env: Rc<Environment>,
         /// Optional scope for parameter bindings (for scope-based hygiene)
-        /// If Some, parameters are bound with this scope in their scope set.
+        /// If Some AND parameters have no scopes, parameters are bound with this scope.
+        /// If None, parameters' own scopes are used (from macro expansion).
         /// This enables hygienic macro expansion: free variables with matching
         /// scopes can see these bindings, while others cannot.
         binding_scope: Option<ScopeId>,

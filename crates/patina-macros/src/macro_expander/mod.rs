@@ -44,19 +44,26 @@ pub fn expand_macro(
     expansion_env: &std::rc::Rc<patina_runtime::Environment>,
 ) -> Result<patina_runtime::Value, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
+    use patina_runtime::debug_format::format_with_scopes;
 
     // Enter macro expansion (for depth tracking)
     MacroTracer::enter_expansion();
 
     // Check if this macro should be traced
     let should_trace = MacroTracer::should_trace(&compiled_macro.name);
+    let debug_enabled = patina_runtime::macro_debug::is_enabled();
 
     // Create a fresh macro scope for this expansion (Racket-style hygiene)
     let macro_scope = patina_runtime::ScopeId::fresh();
 
-    if patina_runtime::macro_debug::is_enabled() || should_trace {
+    if debug_enabled || should_trace {
+        println!("[MACRO] ========================================");
         println!("[MACRO] Expanding macro: {}", compiled_macro.name);
-        println!("[MACRO]   Macro scope: {}", macro_scope);
+        println!("[MACRO]   Fresh macro scope: {}", macro_scope);
+        println!(
+            "[MACRO]   Definition scopes: {}",
+            compiled_macro.definition_scopes
+        );
 
         // Print macro definition (pattern -> template for each rule)
         if !compiled_macro.rules.is_empty() {
@@ -74,7 +81,12 @@ pub fn expand_macro(
             println!("[MACRO]   ");
         }
 
-        println!("[MACRO]   Input: {}", args);
+        // Show input with scopes (this is the key improvement!)
+        println!("[MACRO]   Input (normal):      {}", args);
+        println!(
+            "[MACRO]   Input (with scopes): {}",
+            format_with_scopes(args)
+        );
         println!("[MACRO]   Trying {} rule(s):", compiled_macro.rules.len());
     }
 
@@ -82,8 +94,13 @@ pub fn expand_macro(
     // This is the first half of Racket's hygiene algorithm
     let flipped_args = flip_scope_on_value(args, macro_scope);
 
-    if patina_runtime::macro_debug::is_enabled() {
-        println!("[MACRO]   After input flip: {}", flipped_args);
+    if debug_enabled {
+        println!("[MACRO]   ");
+        println!(
+            "[MACRO]   After input flip (scope {} toggled):",
+            macro_scope
+        );
+        println!("[MACRO]     {}", format_with_scopes(&flipped_args));
     }
 
     // Create expander with expansion-time environment and macro scope
@@ -91,7 +108,7 @@ pub fn expand_macro(
 
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
-        if patina_runtime::macro_debug::is_enabled() {
+        if debug_enabled {
             println!("[MACRO]   ");
             println!("[MACRO]   === Trying rule {} ===", rule_idx + 1);
             println!(
@@ -109,8 +126,18 @@ pub fn expand_macro(
         match matcher.match_pattern(&rule.pattern, &flipped_args) {
             Ok(match_env) => {
                 // Pattern matched! Expand the template
-                if patina_runtime::macro_debug::is_enabled() {
+                if debug_enabled {
                     println!("[MACRO]   ✓ Match successful!");
+                    println!("[MACRO]   ");
+
+                    // Show pattern variable bindings with scopes
+                    println!("[MACRO]   === Pattern variable bindings ===");
+                    for (pvref, name) in &rule.pvar_names {
+                        if let Some(value) = match_env.get(*pvref, &[]) {
+                            println!("[MACRO]     {} = {}", name, format_with_scopes(&value));
+                        }
+                    }
+
                     println!("[MACRO]   ");
                     println!("[MACRO]   === Expanding template ===");
                     println!(
@@ -123,8 +150,10 @@ pub fn expand_macro(
                     .expand(&rule.template, &match_env)
                     .map_err(|e| crate::error::MacroError::InvalidSyntax(e.to_string()))?;
 
-                if patina_runtime::macro_debug::is_enabled() {
-                    println!("[MACRO]   Before output flip: {}", expanded);
+                if debug_enabled {
+                    println!("[MACRO]   ");
+                    println!("[MACRO]   Before output flip:");
+                    println!("[MACRO]     {}", format_with_scopes(&expanded));
                 }
 
                 // Step 2: Flip macro_scope on OUTPUT (Racket-style hygiene)
@@ -132,11 +161,18 @@ pub fn expand_macro(
                 // - Introduced identifiers (from template): macro_scope gets added
                 let result = flip_scope_on_value(&expanded, macro_scope);
 
-                if patina_runtime::macro_debug::is_enabled() || should_trace {
-                    println!("[MACRO]   After output flip (final): {}", result);
+                if debug_enabled || should_trace {
+                    println!("[MACRO]   ");
+                    println!(
+                        "[MACRO]   After output flip (scope {} toggled):",
+                        macro_scope
+                    );
+                    println!("[MACRO]     (with scopes) {}", format_with_scopes(&result));
                     println!("[MACRO] ");
                     println!("[MACRO] ========================================");
-                    println!("[MACRO] Expansion complete!");
+                    println!("[MACRO] Expansion of '{}' complete!", compiled_macro.name);
+                    println!("[MACRO] Result: {}", result);
+                    println!("[MACRO] ========================================");
                     println!("[MACRO] ");
                 }
 
@@ -159,7 +195,7 @@ pub fn expand_macro(
             }
             Err(e) => {
                 // This rule didn't match, try next one
-                if patina_runtime::macro_debug::is_enabled() {
+                if debug_enabled {
                     println!("[MACRO]   ✗ Match failed: {}", e);
                     println!("[MACRO]   ");
                 }
@@ -169,7 +205,7 @@ pub fn expand_macro(
     }
 
     // No rule matched
-    if patina_runtime::macro_debug::is_enabled() || should_trace {
+    if debug_enabled || should_trace {
         println!("[MACRO]   No rules matched!");
         println!("[MACRO] ");
     }

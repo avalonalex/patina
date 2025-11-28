@@ -27,11 +27,18 @@
 //! Result: correctly finds outer x, achieving hygiene.
 
 use smallvec::SmallVec;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Global counter for generating unique scope IDs
 static SCOPE_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+// Thread-local storage for scope origins (for debugging)
+thread_local! {
+    static SCOPE_ORIGINS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::new());
+}
 
 /// A unique identifier for a lexical scope (binding form)
 ///
@@ -44,6 +51,29 @@ impl ScopeId {
     /// Create a fresh, unique scope ID
     pub fn fresh() -> Self {
         ScopeId(SCOPE_COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Create a fresh scope ID with origin tracking (for debugging)
+    ///
+    /// The origin string describes where/why this scope was created.
+    /// Examples: "lambda", "let-syntax", "macro:my-or"
+    pub fn fresh_with_origin(origin: &'static str) -> Self {
+        let id = Self::fresh();
+        SCOPE_ORIGINS.with(|origins| {
+            origins.borrow_mut().insert(id.0, origin);
+        });
+
+        // Print if macro debug is enabled
+        if crate::macro_debug::is_enabled() {
+            println!("[SCOPE] Created {} for '{}'", id, origin);
+        }
+
+        id
+    }
+
+    /// Get the origin of a scope (if it was created with origin tracking)
+    pub fn origin(&self) -> Option<&'static str> {
+        SCOPE_ORIGINS.with(|origins| origins.borrow().get(&self.0).copied())
     }
 
     /// The empty/top-level scope (scope 0)
@@ -226,6 +256,26 @@ impl ScopeSet {
     /// Note: already sorted internally, so this is just a copy
     pub fn to_sorted_vec(&self) -> Vec<ScopeId> {
         self.scopes.to_vec()
+    }
+
+    /// Format the scope set with origin information for debugging
+    ///
+    /// Example output: `{S1(lambda), S2(let-syntax), S3(macro:my-or)}`
+    pub fn format_with_origins(&self) -> String {
+        use std::fmt::Write;
+        let mut buf = String::new();
+        buf.push('{');
+        for (i, scope) in self.scopes.iter().enumerate() {
+            if i > 0 {
+                buf.push_str(", ");
+            }
+            write!(buf, "{}", scope).unwrap();
+            if let Some(origin) = scope.origin() {
+                write!(buf, "({})", origin).unwrap();
+            }
+        }
+        buf.push('}');
+        buf
     }
 }
 

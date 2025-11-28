@@ -1012,12 +1012,14 @@ impl Evaluator {
     /// Returns a new environment with all parameters bound to their arguments.
     /// Handles both fixed-arity and variadic lambdas.
     ///
-    /// If `binding_scope` is Some, uses scope-based hygiene by binding parameters
-    /// with a scope set containing that scope. This enables hygienic macro expansion.
+    /// Hygiene handling:
+    /// - If parameter has scopes (from macro expansion), use those for binding
+    /// - If binding_scope is provided and parameter has no scopes, use that
+    /// - Always create an unscoped binding for backward compatibility
     pub(crate) fn prepare_lambda_env(
         &self,
-        params: &[String],
-        variadic: &Option<String>,
+        params: &[patina_runtime::ScopedParam],
+        variadic: &Option<patina_runtime::ScopedParam>,
         args: Vec<Value>,
         parent_env: &Rc<Environment>,
         binding_scope: Option<patina_runtime::ScopeId>,
@@ -1046,23 +1048,41 @@ impl Evaluator {
         // Create new environment with lambda's captured environment as parent
         let new_env = Rc::new(Environment::with_parent(parent_env.clone()));
 
-        // Helper to define bindings
-        // We ALWAYS use regular define for marks-based hygiene compatibility
-        // We ALSO use scoped define when binding_scope is present for scope-based hygiene
-        let define = |name: String, value: Value| {
-            // Regular binding for marks-based lookup (get, get_with_marks)
-            new_env.define(name.clone(), value.clone());
+        // Helper to define bindings with proper hygiene
+        let define = |param: &patina_runtime::ScopedParam, value: Value| {
+            let name = param.name.to_string();
 
-            // Additional scoped binding for scope-based lookup (get_with_scopes)
-            if let Some(scope_id) = binding_scope {
-                let scopes = ScopeSet::singleton(scope_id);
-                new_env.define_with_scopes(name, scopes, value);
+            // Scoped binding for hygienic lookup (get_with_scopes)
+            // Priority: use parameter's own scopes (from macro), else use binding_scope
+            let scopes = if !param.scopes.is_empty() {
+                // Parameter has scopes from macro expansion - use them!
+                Some(param.scopes.clone())
+            } else {
+                // No macro scopes, use lambda's binding scope if available
+                binding_scope.map(ScopeSet::singleton)
+            };
+
+            // KEY HYGIENE FIX: Only create simple bindings for non-macro parameters
+            // If a parameter has scopes (macro-introduced), it should ONLY be visible
+            // via scoped lookup, not simple lookup. This prevents macro-introduced
+            // bindings from shadowing use-site variables with the same name.
+            if !param.scopes.is_empty() {
+                // Macro-introduced parameter: ONLY scoped binding
+                if let Some(scope_set) = scopes {
+                    new_env.define_with_scopes(name, scope_set, value);
+                }
+            } else {
+                // Non-macro parameter: simple binding + optional scoped binding
+                new_env.define(name.clone(), value.clone());
+                if let Some(scope_set) = scopes {
+                    new_env.define_with_scopes(name, scope_set, value);
+                }
             }
         };
 
         // Bind fixed parameters
         for (param, arg) in params.iter().zip(args.iter()) {
-            define(param.clone(), arg.clone());
+            define(param, arg.clone());
         }
 
         // Bind rest parameter if variadic
@@ -1070,7 +1090,7 @@ impl Evaluator {
             // Collect remaining args into a list
             let rest_args: Vec<Value> = args.into_iter().skip(params.len()).collect();
             let rest_list = self.list_from_vec(rest_args);
-            define(rest_param.clone(), rest_list);
+            define(rest_param, rest_list);
         }
 
         Ok(new_env)

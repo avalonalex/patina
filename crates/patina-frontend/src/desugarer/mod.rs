@@ -174,22 +174,17 @@ impl Desugarer {
             | Value::Bytevector(_)
             | Value::Unspecified => Ok(CoreExpr::Literal(Rc::new(value.clone()))),
 
-            // Variable reference
-            Value::Symbol(s) => Ok(CoreExpr::Var(s.clone())),
+            // Variable reference (no scopes for plain symbols)
+            Value::Symbol(s) => Ok(CoreExpr::Var {
+                name: s.clone(),
+                scopes: ScopeSet::new(),
+            }),
 
-            // Identifier (unified hygiene: marks-and-ribs + scope-sets)
-            // If scopes is non-empty, use scope-based lookup (ScopedVar)
-            // Otherwise use simple name lookup (Var) - marks handled at eval time
-            Value::Identifier(id) => {
-                if id.scopes.is_empty() {
-                    Ok(CoreExpr::Var(id.name.clone()))
-                } else {
-                    Ok(CoreExpr::ScopedVar {
-                        name: id.name.clone(),
-                        scopes: id.scopes.clone(),
-                    })
-                }
-            }
+            // Identifier with potential hygiene scopes
+            Value::Identifier(id) => Ok(CoreExpr::Var {
+                name: id.name.clone(),
+                scopes: id.scopes.clone(),
+            }),
 
             // Empty list (unusual in AST, but possible as literal)
             Value::Null => Ok(CoreExpr::Literal(Rc::new(Value::Null))),
@@ -292,12 +287,35 @@ impl Desugarer {
     }
 
     /// Desugar lambda: (lambda formals body ...) → Lambda { params, body }
+    ///
+    /// ## Hygiene Handling
+    ///
+    /// When parameters come from macro expansion, they carry scope information
+    /// (as `Value::Identifier` with scopes). These scopes are preserved in the
+    /// `ScopedParam` and used at runtime for hygienic binding.
+    ///
+    /// The `binding_scope` field is only used when parameters DON'T have scopes
+    /// (i.e., when they're plain `Symbol`s from non-macro code). For macro-introduced
+    /// parameters, the parameter's own scopes are used instead.
     fn desugar_lambda(&self, args: &Value) -> Result<CoreExpr> {
         let (formals, body) = utils::parse_lambda_syntax(args)?;
 
+        // Convert formals first to check if they have scopes from macro expansion
+        let params = utils::convert_formals(&formals)?;
+
+        // Check if any parameter has scopes from macro expansion
+        let has_macro_scopes = match &params {
+            patina_ir::Formals::Fixed(ps) => ps.iter().any(|p| !p.scopes.is_empty()),
+            patina_ir::Formals::Variadic(p) => !p.scopes.is_empty(),
+            patina_ir::Formals::Mixed { fixed, rest } => {
+                fixed.iter().any(|p| !p.scopes.is_empty()) || !rest.scopes.is_empty()
+            }
+        };
+
         // Create a fresh scope for this lambda's bindings
-        // Every lambda gets a scope so that let-syntax inside can properly capture
-        // the lexical context.
+        // This is used for:
+        // 1. Non-macro parameters (they have no scopes, need fresh scope)
+        // 2. let-syntax inside the lambda (to capture lexical context)
         let binding_scope = ScopeId::fresh();
         let body_scopes = self.current_scopes.with_scope(binding_scope);
 
@@ -313,10 +331,19 @@ impl Desugarer {
             .map(|e| body_desugarer.desugar(e))
             .collect::<Result<_>>()?;
 
+        // If parameters have macro scopes, set binding_scope to None
+        // since we'll use the parameter-specific scopes at runtime.
+        // Otherwise, use the fresh scope for all parameters.
+        let binding_scope = if has_macro_scopes {
+            None // Parameters carry their own scopes
+        } else {
+            Some(binding_scope) // Use fresh scope for all
+        };
+
         Ok(CoreExpr::Lambda {
-            params: utils::convert_formals(&formals)?,
+            params,
             body: body_exprs,
-            binding_scope: Some(binding_scope),
+            binding_scope,
         })
     }
 
@@ -349,25 +376,28 @@ impl Desugarer {
         }
     }
 
-    /// Desugar set!: (set! var value) → Set { var, value }
+    /// Desugar set!: (set! var value) → Set { var, scopes, value }
     fn desugar_set(&self, args: &Value) -> Result<CoreExpr> {
         let (var, value) = utils::expect_two_args(args, "set!")?;
 
-        let var_sym = match &var {
-            Value::Symbol(s) => s.clone(),
-            // Handle hygienic identifiers from macro expansion
-            Value::Identifier(id) => id.name.clone(),
-            _ => {
-                return Err(DesugarError::InvalidSyntax(
-                    "set! requires a symbol as first argument".to_string(),
-                ));
-            }
-        };
+        let desugared_value = Rc::new(self.desugar(&value)?);
 
-        Ok(CoreExpr::Set {
-            var: var_sym,
-            value: Rc::new(self.desugar(&value)?),
-        })
+        match &var {
+            Value::Symbol(s) => Ok(CoreExpr::Set {
+                var: s.clone(),
+                scopes: ScopeSet::new(),
+                value: desugared_value,
+            }),
+            // Handle hygienic identifiers from macro expansion
+            Value::Identifier(id) => Ok(CoreExpr::Set {
+                var: id.name.clone(),
+                scopes: id.scopes.clone(),
+                value: desugared_value,
+            }),
+            _ => Err(DesugarError::InvalidSyntax(
+                "set! requires a symbol as first argument".to_string(),
+            )),
+        }
     }
 
     /// Desugar define: (define var value) or (define (name params...) body...)
@@ -1044,8 +1074,9 @@ mod tests {
         let value = Value::symbol("x");
         let result = desugarer.desugar(&value).unwrap();
 
-        if let CoreExpr::Var(name) = result {
+        if let CoreExpr::Var { name, scopes } = result {
             assert_eq!(name.as_ref(), "x");
+            assert!(scopes.is_empty());
         } else {
             panic!("Expected Var, got {:?}", result);
         }
@@ -1227,8 +1258,9 @@ mod tests {
         ]);
 
         let result = desugarer.desugar(&list).unwrap();
-        if let CoreExpr::Set { var, value } = result {
+        if let CoreExpr::Set { var, scopes, value } = result {
             assert_eq!(var.as_ref(), "x");
+            assert!(scopes.is_empty());
             if let CoreExpr::Literal(v) = &*value {
                 assert!(matches!(v.as_ref(), Value::Integer(42)));
             } else {
@@ -1363,7 +1395,7 @@ mod tests {
 
         let result = desugarer.desugar(&list).unwrap();
         if let CoreExpr::App { func, args } = result {
-            assert!(matches!(*func, CoreExpr::Var(_)));
+            assert!(matches!(*func, CoreExpr::Var { .. }));
             assert_eq!(args.len(), 2);
         } else {
             panic!("Expected App, got {:?}", result);

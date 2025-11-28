@@ -163,17 +163,26 @@ pub(crate) fn eval_core_step(
         // Literals evaluate to themselves (dereference the Rc)
         CoreExpr::Literal(v) => Ok(CoreEvalResult::Value(v.as_ref().clone())),
 
-        // Variables: look up in environment
-        CoreExpr::Var(name) => env
-            .get(name)
-            .map(CoreEvalResult::Value)
-            .ok_or_else(|| EvalError::UndefinedVariable(name.to_string())),
-
-        // Scoped variables: look up using scope-based hygiene
-        CoreExpr::ScopedVar { name, scopes } => env
-            .get_with_scopes(name, scopes)
-            .map(CoreEvalResult::Value)
-            .ok_or_else(|| EvalError::UndefinedVariable(name.to_string())),
+        // Variables: look up in environment (with optional hygiene scopes)
+        CoreExpr::Var { name, scopes } => {
+            if scopes.is_empty() {
+                // Simple lookup for non-macro code
+                if patina_runtime::macro_debug::is_enabled() {
+                    println!("[EVAL] Looking up Var '{}' (simple lookup)", name);
+                }
+                env.get(name)
+                    .map(CoreEvalResult::Value)
+                    .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
+            } else {
+                // Scope-based lookup for hygienic macros
+                if patina_runtime::macro_debug::is_enabled() {
+                    println!("[EVAL] Looking up Var '{}' with scopes {}", name, scopes);
+                }
+                env.get_with_scopes(name, scopes)
+                    .map(CoreEvalResult::Value)
+                    .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
+            }
+        }
 
         // Quote: return the quoted value as-is (dereference the Rc)
         CoreExpr::Quote(v) => Ok(CoreEvalResult::Value(v.as_ref().clone())),
@@ -193,13 +202,13 @@ pub(crate) fn eval_core_step(
             body,
             binding_scope,
         } => {
-            // Convert Formals to (params, variadic) format
-            let (param_names, variadic) = formals_to_params(params)?;
+            // Convert Formals to (params, variadic) format, preserving scopes!
+            let (scoped_params, variadic) = formals_to_scoped_params(params)?;
 
             // Store CoreExpr body directly - this preserves scope IDs for hygiene
             Ok(CoreEvalResult::Value(Value::Procedure(Box::new(
                 Procedure::Lambda {
-                    params: param_names,
+                    params: scoped_params,
                     variadic,
                     body: LambdaBody::Core(body.clone()),
                     env: env.clone(),
@@ -234,12 +243,25 @@ pub(crate) fn eval_core_step(
             })
         }
 
-        // Set!: mutate existing binding
+        // Set!: mutate existing binding (with optional hygiene scopes)
         // Value is NOT in tail position
-        CoreExpr::Set { var, value } => {
+        CoreExpr::Set { var, scopes, value } => {
             let val = eval_non_tail(value, env.clone(), evaluator)?;
-            env.set(var.as_ref(), val)
-                .map_err(|_| EvalError::UndefinedVariable(var.to_string()))?;
+            if scopes.is_empty() {
+                // Simple lookup for non-macro code
+                if patina_runtime::macro_debug::is_enabled() {
+                    println!("[EVAL] Set! '{}' (simple lookup)", var);
+                }
+                env.set(var.as_ref(), val)
+                    .map_err(|_| EvalError::UndefinedVariable(var.to_string()))?;
+            } else {
+                // Scope-based lookup for hygienic macros
+                if patina_runtime::macro_debug::is_enabled() {
+                    println!("[EVAL] Set! '{}' with scopes {}", var, scopes);
+                }
+                env.set_with_scopes(var.as_ref(), scopes, val)
+                    .map_err(|_| EvalError::UndefinedVariable(var.to_string()))?;
+            }
             Ok(CoreEvalResult::Value(Value::Unspecified))
         }
 
@@ -471,12 +493,12 @@ pub(crate) fn eval_core_step(
             let runtime_clauses: Vec<patina_runtime::value::CaseLambdaClause> = clauses
                 .iter()
                 .map(|clause| {
-                    // Convert Formals to (params, variadic) format
-                    let (param_names, variadic) = formals_to_params(&clause.params)?;
+                    // Convert Formals to (params, variadic) format, preserving scopes!
+                    let (scoped_params, variadic) = formals_to_scoped_params(&clause.params)?;
 
                     // Store CoreExpr body directly - preserves scope IDs for hygiene
                     Ok(patina_runtime::value::CaseLambdaClause {
-                        params: param_names,
+                        params: scoped_params,
                         variadic,
                         body: LambdaBody::Core(clause.body.clone()),
                         binding_scope: None,
@@ -527,14 +549,20 @@ fn apply_procedure(
                 // Create new environment extending closure environment
                 let call_env = Rc::new(Environment::with_parent(closure_env.clone()));
 
-                // Bind parameters (with scope if available for hygiene)
-                bind_params(params, variadic.as_ref(), args, &call_env, *binding_scope)?;
+                // Bind parameters with proper hygiene (use parameter scopes if available)
+                bind_scoped_params(params, variadic.as_ref(), args, &call_env, *binding_scope)?;
 
                 match body {
                     // Optimized path: CoreExpr body (preserves scope IDs for hygiene)
                     // This is critical: re-desugaring would create fresh scope IDs that
                     // don't match definition_scopes captured at macro definition time.
                     LambdaBody::Core(core_body) => {
+                        if patina_runtime::macro_debug::is_enabled() {
+                            println!(
+                                "[APPLY] Lambda with CoreExpr body ({} exprs)",
+                                core_body.len()
+                            );
+                        }
                         if core_body.is_empty() {
                             return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
                         }
@@ -553,6 +581,12 @@ fn apply_procedure(
 
                     // Legacy path: Value body (for lambdas from legacy code paths)
                     LambdaBody::Values(body_values) => {
+                        if patina_runtime::macro_debug::is_enabled() {
+                            println!(
+                                "[APPLY] Lambda with Values body ({} exprs)",
+                                body_values.len()
+                            );
+                        }
                         if body_values.is_empty() {
                             return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
                         }
@@ -621,7 +655,7 @@ fn apply_procedure(
                     if matches {
                         // Found a matching clause - create new environment and evaluate
                         let call_env = Rc::new(Environment::with_parent(case_env.clone()));
-                        bind_params(
+                        bind_scoped_params(
                             &clause.params,
                             clause.variadic.as_ref(),
                             args,
@@ -710,14 +744,15 @@ fn apply_procedure(
     }
 }
 
-/// Bind parameters to arguments
+/// Bind parameters to arguments with proper hygiene support
 ///
-/// If `binding_scope` is Some, uses scope-based hygiene by binding parameters
-/// with a scope set containing that scope. This enables hygienic macro expansion
-/// where free variables in macro templates can't see bindings from the expansion site.
-fn bind_params(
-    params: &[String],
-    variadic: Option<&String>,
+/// For each parameter:
+/// - If the parameter has scopes (from macro expansion), use those scopes for binding
+/// - If binding_scope is provided and parameter has no scopes, use that scope
+/// - Always also create an unscoped binding for simple lookup compatibility
+fn bind_scoped_params(
+    params: &[patina_runtime::ScopedParam],
+    variadic: Option<&patina_runtime::ScopedParam>,
     args: &[Value],
     env: &Environment,
     binding_scope: Option<patina_runtime::ScopeId>,
@@ -725,18 +760,57 @@ fn bind_params(
     use patina_runtime::ScopeSet;
 
     let required = params.len();
+    let debug = patina_runtime::macro_debug::is_enabled();
 
-    // Helper to define bindings
-    // We use regular define for simple lookup (built-ins, top-level)
-    // We ALSO use scoped define when binding_scope is present for hygienic lookup
-    let define = |name: String, value: Value| {
-        // Regular binding for simple lookup (get)
-        env.define(name.clone(), value.clone());
+    // Helper to define bindings with proper scopes
+    let define = |param: &patina_runtime::ScopedParam, value: Value| {
+        let name = param.name.to_string();
 
-        // Additional scoped binding for hygienic lookup (get_with_scopes)
-        if let Some(scope_id) = binding_scope {
-            let scopes = ScopeSet::singleton(scope_id);
-            env.define_with_scopes(name, scopes, value);
+        if debug {
+            println!(
+                "[BIND] Binding param '{}' with scopes {} (binding_scope: {:?})",
+                name, param.scopes, binding_scope
+            );
+        }
+
+        // Determine the scopes for this binding
+        // Priority: use parameter's own scopes (from macro), else use binding_scope
+        let scopes = if !param.scopes.is_empty() {
+            // Parameter has scopes from macro expansion - use them!
+            Some(param.scopes.clone())
+        } else {
+            // No macro scopes, use lambda's binding scope if available
+            binding_scope.map(ScopeSet::singleton)
+        };
+
+        // IMPORTANT: For hygiene to work correctly:
+        // - If parameter has scopes (macro-introduced), ONLY create scoped binding
+        //   This ensures use-site references (no scopes) don't see it
+        // - If parameter has no scopes, create simple binding for backward compatibility
+        //   AND scoped binding if binding_scope is set
+        if !param.scopes.is_empty() {
+            // Macro-introduced parameter: ONLY scoped binding
+            // This prevents it from shadowing use-site variables in simple lookup
+            if debug {
+                println!(
+                    "[BIND]   -> Scoped-only binding for '{}' with scopes {}",
+                    name,
+                    scopes.as_ref().unwrap()
+                );
+            }
+            env.define_with_scopes(name, scopes.unwrap(), value);
+        } else {
+            // Non-macro parameter: simple binding + optional scoped binding
+            if debug {
+                println!(
+                    "[BIND]   -> Simple binding for '{}' + optional scoped",
+                    name
+                );
+            }
+            env.define(name.clone(), value.clone());
+            if let Some(scope_set) = scopes {
+                env.define_with_scopes(name, scope_set, value);
+            }
         }
     };
 
@@ -750,7 +824,7 @@ fn bind_params(
                 });
             }
             for (param, arg) in params.iter().zip(args.iter()) {
-                define(param.clone(), arg.clone());
+                define(param, arg.clone());
             }
         }
         Some(rest_param) => {
@@ -763,30 +837,32 @@ fn bind_params(
             }
             // Bind required parameters
             for (param, arg) in params.iter().zip(args.iter()) {
-                define(param.clone(), arg.clone());
+                define(param, arg.clone());
             }
             // Bind rest parameters as list
             let rest_args = &args[required..];
             let rest_list = args_to_list(rest_args);
-            define(rest_param.clone(), rest_list);
+            define(rest_param, rest_list);
         }
     }
 
     Ok(())
 }
 
-/// Convert Formals to (params, variadic) format for runtime
-fn formals_to_params(formals: &Formals) -> Result<(Vec<String>, Option<String>), EvalError> {
+/// Convert Formals to (params, variadic) format for runtime, preserving scopes
+fn formals_to_scoped_params(
+    formals: &Formals,
+) -> Result<
+    (
+        Vec<patina_runtime::ScopedParam>,
+        Option<patina_runtime::ScopedParam>,
+    ),
+    EvalError,
+> {
     match formals {
-        Formals::Fixed(params) => {
-            let names = params.iter().map(|p| p.to_string()).collect();
-            Ok((names, None))
-        }
-        Formals::Variadic(param) => Ok((vec![], Some(param.to_string()))),
-        Formals::Mixed { fixed, rest } => {
-            let names = fixed.iter().map(|p| p.to_string()).collect();
-            Ok((names, Some(rest.to_string())))
-        }
+        Formals::Fixed(params) => Ok((params.clone(), None)),
+        Formals::Variadic(param) => Ok((vec![], Some(param.clone()))),
+        Formals::Mixed { fixed, rest } => Ok((fixed.clone(), Some(rest.clone()))),
     }
 }
 
@@ -808,13 +884,18 @@ fn args_to_list(args: &[Value]) -> Value {
 pub(crate) fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
     match expr {
         CoreExpr::Literal(v) => Ok(v.as_ref().clone()),
-        CoreExpr::Var(name) => Ok(Value::Symbol(name.clone())),
-        CoreExpr::ScopedVar { name, scopes } => Ok(Value::Identifier(Box::new(
-            patina_runtime::IdentifierData {
-                name: name.clone(),
-                scopes: scopes.clone(),
-            },
-        ))),
+        CoreExpr::Var { name, scopes } => {
+            if scopes.is_empty() {
+                Ok(Value::Symbol(name.clone()))
+            } else {
+                Ok(Value::Identifier(Box::new(
+                    patina_runtime::IdentifierData {
+                        name: name.clone(),
+                        scopes: scopes.clone(),
+                    },
+                )))
+            }
+        }
         CoreExpr::Quote(v) => {
             // (quote datum)
             Ok(cons(
@@ -849,12 +930,20 @@ pub(crate) fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
                 cons(test_val, cons(then_val, cons(else_val, Value::Null))),
             ))
         }
-        CoreExpr::Set { var, value } => {
-            // (set! var value)
+        CoreExpr::Set { var, scopes, value } => {
+            // (set! var value) or (set! var{scopes} value)
             let value_val = core_expr_to_value(value)?;
+            let var_val = if scopes.is_empty() {
+                Value::Symbol(var.clone())
+            } else {
+                Value::Identifier(Box::new(patina_runtime::IdentifierData {
+                    name: var.clone(),
+                    scopes: scopes.clone(),
+                }))
+            };
             Ok(cons(
                 Value::symbol("set!"),
-                cons(Value::Symbol(var.clone()), cons(value_val, Value::Null)),
+                cons(var_val, cons(value_val, Value::Null)),
             ))
         }
         CoreExpr::Define { name, value } => {
@@ -961,15 +1050,18 @@ pub(crate) fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
 fn formals_to_value_list(formals: &Formals) -> Value {
     match formals {
         Formals::Fixed(params) => {
-            let symbols: Vec<Value> = params.iter().map(|p| Value::Symbol(p.clone())).collect();
+            let symbols: Vec<Value> = params
+                .iter()
+                .map(|p| Value::Symbol(p.name.clone()))
+                .collect();
             vec_to_list(&symbols)
         }
-        Formals::Variadic(param) => Value::Symbol(param.clone()),
+        Formals::Variadic(param) => Value::Symbol(param.name.clone()),
         Formals::Mixed { fixed, rest } => {
             // Create dotted list: (x y . rest)
-            let mut result = Value::Symbol(rest.clone());
+            let mut result = Value::Symbol(rest.name.clone());
             for param in fixed.iter().rev() {
-                result = cons(Value::Symbol(param.clone()), result);
+                result = cons(Value::Symbol(param.name.clone()), result);
             }
             result
         }
@@ -1331,6 +1423,8 @@ fn list_from_vec(vec: Vec<Value>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patina_ir::ScopedParam;
+    use patina_runtime::ScopeSet;
 
     #[test]
     fn test_eval_literal() {
@@ -1358,7 +1452,10 @@ mod tests {
         let env = Rc::new(Environment::new());
         env.define("x".to_string(), Value::Integer(42));
 
-        let expr = CoreExpr::Var(Rc::from("x"));
+        let expr = CoreExpr::Var {
+            name: Rc::from("x"),
+            scopes: ScopeSet::new(),
+        };
         let result = eval_core(&expr, env, &evaluator).unwrap();
         assert!(matches!(result, Value::Integer(42)));
     }
@@ -1367,7 +1464,10 @@ mod tests {
     fn test_eval_variable_unbound() {
         let evaluator = super::super::Evaluator::new();
         let env = Rc::new(Environment::new());
-        let expr = CoreExpr::Var(Rc::from("undefined"));
+        let expr = CoreExpr::Var {
+            name: Rc::from("undefined"),
+            scopes: ScopeSet::new(),
+        };
 
         let result = eval_core(&expr, env, &evaluator);
         assert!(result.is_err());
@@ -1426,6 +1526,7 @@ mod tests {
 
         let expr = CoreExpr::Set {
             var: Rc::from("x"),
+            scopes: ScopeSet::new(),
             value: Rc::new(CoreExpr::Literal(Rc::new(Value::Integer(42)))),
         };
 
@@ -1457,8 +1558,11 @@ mod tests {
         let evaluator = super::super::Evaluator::new();
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::Lambda {
-            params: Formals::Fixed(vec![Rc::from("x")]),
-            body: vec![CoreExpr::Var(Rc::from("x"))],
+            params: Formals::Fixed(vec![ScopedParam::simple(Rc::from("x"))]),
+            body: vec![CoreExpr::Var {
+                name: Rc::from("x"),
+                scopes: ScopeSet::new(),
+            }],
             binding_scope: None,
         };
 

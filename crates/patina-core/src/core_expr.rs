@@ -5,17 +5,59 @@ use std::rc::Rc;
 /// Symbol type (interned string)
 pub type Symbol = Rc<str>;
 
+/// A parameter with optional scope set for hygiene
+///
+/// When a macro introduces a binding, the parameter carries scopes from the
+/// macro expansion context. These scopes are used during binding to ensure
+/// that references with matching scopes can find the binding, while references
+/// with different scopes (from different macro expansions) cannot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScopedParam {
+    /// The parameter name
+    pub name: Symbol,
+    /// Scopes from macro expansion (empty for non-macro-introduced params)
+    pub scopes: ScopeSet,
+}
+
+impl ScopedParam {
+    /// Create a parameter with no scopes (for non-macro code)
+    pub fn simple(name: Symbol) -> Self {
+        Self {
+            name,
+            scopes: ScopeSet::new(),
+        }
+    }
+
+    /// Create a parameter with scopes (for macro-introduced bindings)
+    pub fn with_scopes(name: Symbol, scopes: ScopeSet) -> Self {
+        Self { name, scopes }
+    }
+}
+
+impl std::fmt::Display for ScopedParam {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.scopes.is_empty() {
+            write!(f, "{}", self.name)
+        } else {
+            write!(f, "{}{{{}}}", self.name, self.scopes)
+        }
+    }
+}
+
 /// Lambda parameter forms (fixed, variadic, or mixed)
 #[derive(Debug, Clone, PartialEq)]
 pub enum Formals {
     /// Fixed arity: (lambda (x y z) ...)
-    Fixed(Vec<Symbol>),
+    Fixed(Vec<ScopedParam>),
 
     /// Variadic: (lambda args ...)
-    Variadic(Symbol),
+    Variadic(ScopedParam),
 
     /// Mixed: (lambda (x y . rest) ...)
-    Mixed { fixed: Vec<Symbol>, rest: Symbol },
+    Mixed {
+        fixed: Vec<ScopedParam>,
+        rest: ScopedParam,
+    },
 }
 
 /// Case-lambda clause: (params body...)
@@ -38,16 +80,13 @@ pub enum CoreExpr {
     /// Uses Rc<Value> to reduce CoreExpr size (pointer vs inline 64 bytes)
     Literal(Rc<Value>),
 
-    /// Variable reference
+    /// Variable reference (with optional hygiene scopes)
     /// Example: x, my-function
-    Var(Symbol),
-
-    /// Variable reference with scope set (for hygienic macros)
-    /// Used when an identifier carries scope information from macro expansion.
-    /// The evaluator uses scope-based lookup: finds binding where
-    /// binding.scopes ⊆ reference.scopes.
-    /// Example: x with scopes {S1, S2}
-    ScopedVar { name: Symbol, scopes: ScopeSet },
+    /// For hygienic macros, scopes carries scope information from macro expansion.
+    /// The evaluator uses scope-based lookup when scopes is non-empty:
+    /// finds binding where binding.scopes ⊆ reference.scopes.
+    /// Empty scopes means simple name lookup (non-macro code).
+    Var { name: Symbol, scopes: ScopeSet },
 
     /// Quote: literal data
     /// Example: 'x, '(1 2 3)
@@ -82,9 +121,17 @@ pub enum CoreExpr {
         else_: Rc<CoreExpr>,
     },
 
-    /// Assignment
+    /// Assignment (with optional hygiene scopes)
     /// Example: (set! x 42)
-    Set { var: Symbol, value: Rc<CoreExpr> },
+    /// For hygienic macros, scopes carries scope information from macro expansion.
+    /// The evaluator uses scope-based lookup when scopes is non-empty to find
+    /// and update the correct binding.
+    /// Empty scopes means simple name lookup (non-macro code).
+    Set {
+        var: Symbol,
+        scopes: ScopeSet,
+        value: Rc<CoreExpr>,
+    },
 
     /// Sequencing
     /// Example: (begin expr1 expr2 expr3)
@@ -204,8 +251,7 @@ impl CoreExpr {
     pub fn kind(&self) -> &'static str {
         match self {
             CoreExpr::Literal(_) => "literal",
-            CoreExpr::Var(_) => "variable",
-            CoreExpr::ScopedVar { .. } => "scoped-variable",
+            CoreExpr::Var { .. } => "variable",
             CoreExpr::Quote(_) => "quote",
             CoreExpr::Quasiquote(_) => "quasiquote",
             CoreExpr::Lambda { .. } => "lambda",
@@ -234,8 +280,7 @@ impl CoreExpr {
     {
         match self {
             CoreExpr::Literal(_)
-            | CoreExpr::Var(_)
-            | CoreExpr::ScopedVar { .. }
+            | CoreExpr::Var { .. }
             | CoreExpr::Quote(_)
             | CoreExpr::Quasiquote(_) => self.clone(),
 
@@ -255,8 +300,9 @@ impl CoreExpr {
                 else_: Rc::new(f(else_)),
             },
 
-            CoreExpr::Set { var, value } => CoreExpr::Set {
+            CoreExpr::Set { var, scopes, value } => CoreExpr::Set {
                 var: var.clone(),
+                scopes: scopes.clone(),
                 value: Rc::new(f(value)),
             },
 
@@ -333,10 +379,12 @@ impl std::fmt::Display for CoreExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CoreExpr::Literal(v) => write!(f, "{}", v),
-            CoreExpr::Var(s) => write!(f, "{}", s),
-            CoreExpr::ScopedVar { name, scopes } => {
-                // Display scoped var with debug info showing scopes
-                write!(f, "{}@{}", name, scopes)
+            CoreExpr::Var { name, scopes } => {
+                if scopes.is_empty() {
+                    write!(f, "{}", name)
+                } else {
+                    write!(f, "{}@{}", name, scopes)
+                }
             }
             CoreExpr::Quote(v) => write!(f, "'{}", v),
             CoreExpr::Quasiquote(v) => write!(f, "`{}", v),
@@ -370,8 +418,12 @@ impl std::fmt::Display for CoreExpr {
             CoreExpr::If { test, then, else_ } => {
                 write!(f, "(if {} {} {})", test, then, else_)
             }
-            CoreExpr::Set { var, value } => {
-                write!(f, "(set! {} {})", var, value)
+            CoreExpr::Set { var, scopes, value } => {
+                if scopes.is_empty() {
+                    write!(f, "(set! {} {})", var, value)
+                } else {
+                    write!(f, "(set! {}@{} {})", var, scopes, value)
+                }
             }
             CoreExpr::Begin(exprs) => {
                 write!(f, "(begin")?;

@@ -97,6 +97,15 @@ impl Environment {
     /// Use this when creating bindings from binding forms (lambda, let, etc.)
     /// where you want to track the lexical scope for hygiene.
     pub fn define_with_scopes(&self, name: String, scopes: ScopeSet, value: Value) {
+        use crate::macro_debug;
+
+        if macro_debug::is_enabled() {
+            println!(
+                "[ENV] Defining '{}' with scopes {} = {}",
+                name, scopes, value
+            );
+        }
+
         if scopes.is_empty() {
             // Empty scopes = treat as unmarked binding
             self.bindings.borrow_mut().insert(name, value);
@@ -156,9 +165,27 @@ impl Environment {
     /// The "most specific" rule ensures that inner bindings shadow outer ones
     /// when their scopes are a subset of the reference's scopes.
     pub fn get_with_scopes(&self, name: &str, scopes: &ScopeSet) -> Option<Value> {
+        use crate::macro_debug;
+
+        let debug = macro_debug::is_enabled();
+
+        if debug {
+            println!("[ENV] Looking up '{}' with scopes {}", name, scopes);
+        }
+
         if scopes.is_empty() {
             // Empty scopes = simple lookup (top-level identifiers)
-            return self.get(name);
+            if debug {
+                println!("[ENV]   Empty scopes -> simple lookup");
+            }
+            let result = self.get(name);
+            if debug {
+                match &result {
+                    Some(v) => println!("[ENV]   Result: {}", v),
+                    None => println!("[ENV]   Result: NOT FOUND"),
+                }
+            }
+            return result;
         }
 
         // Collect all matching bindings from this environment and parents
@@ -170,13 +197,23 @@ impl Environment {
             name: &str,
             ref_scopes: &ScopeSet,
             candidates: &mut Vec<(ScopeSet, Value)>,
+            debug: bool,
         ) {
             // Check scoped bindings in this environment
             let scoped = env.scoped_bindings.borrow();
             if let Some(bindings) = scoped.get(name) {
                 for binding in bindings {
                     // binding.scopes ⊆ reference.scopes
-                    if binding.scopes.is_subset_of(ref_scopes) {
+                    let is_subset = binding.scopes.is_subset_of(ref_scopes);
+                    if debug {
+                        println!(
+                            "[ENV]   Checking binding {} ⊆ {} : {}",
+                            binding.scopes,
+                            ref_scopes,
+                            if is_subset { "YES" } else { "NO" }
+                        );
+                    }
+                    if is_subset {
                         candidates.push((binding.scopes.clone(), binding.value.clone()));
                     }
                 }
@@ -185,24 +222,51 @@ impl Environment {
 
             // Recurse to parent
             if let Some(parent) = &env.parent {
-                collect_matches(parent, name, ref_scopes, candidates);
+                collect_matches(parent, name, ref_scopes, candidates, debug);
             }
         }
 
-        collect_matches(self, name, scopes, &mut candidates);
+        collect_matches(self, name, scopes, &mut candidates, debug);
 
         if candidates.is_empty() {
             // No scoped binding found, fall back to unmarked bindings
-            return self.get(name);
+            if debug {
+                println!("[ENV]   No scoped candidates, falling back to simple lookup");
+            }
+            let result = self.get(name);
+            if debug {
+                match &result {
+                    Some(v) => println!("[ENV]   Fallback result: {}", v),
+                    None => println!("[ENV]   Fallback result: NOT FOUND"),
+                }
+            }
+            return result;
+        }
+
+        if debug {
+            println!("[ENV]   Found {} candidate(s):", candidates.len());
+            for (ss, val) in &candidates {
+                println!("[ENV]     {} -> {}", ss, val);
+            }
         }
 
         // Find the most specific binding (largest scope set)
         let best = candidates
             .into_iter()
-            .max_by_key(|(scope_set, _)| scope_set.len())
-            .map(|(_, value)| value);
+            .max_by_key(|(scope_set, _)| scope_set.len());
 
-        best.or_else(|| self.get(name))
+        if debug {
+            match &best {
+                Some((ss, val)) => {
+                    println!("[ENV]   Best match (most specific): {} -> {}", ss, val);
+                }
+                None => {
+                    println!("[ENV]   No best match found");
+                }
+            }
+        }
+
+        best.map(|(_, value)| value).or_else(|| self.get(name))
     }
 
     /// Check if a binding exists

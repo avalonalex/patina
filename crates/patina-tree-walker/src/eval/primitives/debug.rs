@@ -51,12 +51,12 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         |eval, args, _| debug_mode(eval, args).map(EvalResult::Value),
     ));
 
-    // Macro expansion debugging
+    // Macro expansion debugging (includes hygiene tracing)
     registry.register(PrimitiveFn::new(
         "patina.debug",
         "macro-debug-mode",
         Arity::Exact(1),
-        "Control macro expansion debugging ('on, 'off, 'status)",
+        "Control macro expansion and hygiene debugging ('on, 'off, 'status)",
         |eval, args, _| macro_debug_mode(eval, args).map(EvalResult::Value),
     ));
 }
@@ -181,11 +181,11 @@ pub(super) fn macro_debug_mode(
 
     match &args[0] {
         Value::Symbol(s) if s.as_ref() == "on" => {
-            patina_runtime::macro_debug::enable();
+            patina_runtime::macro_debug::enable(); // Also enables hygiene_debug
             Ok(Value::Symbol("macro-debug-enabled".into()))
         }
         Value::Symbol(s) if s.as_ref() == "off" => {
-            patina_runtime::macro_debug::disable();
+            patina_runtime::macro_debug::disable(); // Also disables hygiene_debug
             Ok(Value::Symbol("macro-debug-disabled".into()))
         }
         Value::Symbol(s) if s.as_ref() == "status" => {

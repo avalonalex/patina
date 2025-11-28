@@ -5,7 +5,7 @@
 //! Utility functions for desugaring
 
 use super::error::{DesugarError, Result};
-use patina_ir::{Formals, Symbol};
+use patina_ir::{Formals, ScopedParam, Symbol};
 use patina_runtime::Value;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -87,7 +87,8 @@ pub fn parse_lambda_syntax(args: &Value) -> Result<(Value, Vec<Value>)> {
     Ok((formals, body))
 }
 
-/// Convert Scheme formals to Formals enum
+/// Convert Scheme formals to Formals enum, preserving scope information
+/// from identifiers for macro hygiene.
 pub fn convert_formals(formals: &Value) -> Result<Formals> {
     match formals {
         // Fixed arity: (x y z)
@@ -95,14 +96,14 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
 
         Value::Pair(_) => {
             // Either proper list (fixed) or improper list (mixed)
-            let mut params = Vec::new();
+            let mut params: Vec<ScopedParam> = Vec::new();
             let mut current = formals.clone();
 
             loop {
                 match current {
                     Value::Null => {
                         // Proper list - fixed arity
-                        check_no_duplicates(&params, "lambda")?;
+                        check_no_duplicates_scoped(&params, "lambda")?;
                         return Ok(Formals::Fixed(params));
                     }
                     Value::Pair(pair) => {
@@ -111,9 +112,18 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
                         let cdr = borrowed.1.clone();
 
                         // Car must be a symbol or identifier
+                        // IMPORTANT: Preserve scopes from identifiers for macro hygiene!
                         match car {
-                            Value::Symbol(s) => params.push(s.clone()),
-                            Value::Identifier(id) => params.push(id.name.clone()),
+                            Value::Symbol(s) => {
+                                params.push(ScopedParam::simple(s.clone()));
+                            }
+                            Value::Identifier(id) => {
+                                // Preserve the identifier's scopes for hygiene
+                                params.push(ScopedParam::with_scopes(
+                                    id.name.clone(),
+                                    id.scopes.clone(),
+                                ));
+                            }
                             _ => {
                                 return Err(DesugarError::InvalidFormals(format!(
                                     "Parameter must be a symbol, got {:?}",
@@ -126,8 +136,9 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
                     }
                     Value::Symbol(rest) => {
                         // Improper list - mixed arity: (x y . rest)
-                        check_no_duplicates(&params, "lambda")?;
-                        if params.contains(&rest) {
+                        check_no_duplicates_scoped(&params, "lambda")?;
+                        let rest_param = ScopedParam::simple(rest.clone());
+                        if params.iter().any(|p| p.name == rest) {
                             return Err(DesugarError::DuplicateParameter {
                                 name: rest.to_string(),
                                 context: "lambda".to_string(),
@@ -135,22 +146,24 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
                         }
                         return Ok(Formals::Mixed {
                             fixed: params,
-                            rest,
+                            rest: rest_param,
                         });
                     }
                     Value::Identifier(id) => {
                         // Improper list with identifier - mixed arity: (x y . rest)
-                        let rest = id.name.clone();
-                        check_no_duplicates(&params, "lambda")?;
-                        if params.contains(&rest) {
+                        // Preserve scopes for hygiene
+                        check_no_duplicates_scoped(&params, "lambda")?;
+                        if params.iter().any(|p| p.name == id.name) {
                             return Err(DesugarError::DuplicateParameter {
-                                name: rest.to_string(),
+                                name: id.name.to_string(),
                                 context: "lambda".to_string(),
                             });
                         }
+                        let rest_param =
+                            ScopedParam::with_scopes(id.name.clone(), id.scopes.clone());
                         return Ok(Formals::Mixed {
                             fixed: params,
-                            rest,
+                            rest: rest_param,
                         });
                     }
                     _ => {
@@ -164,10 +177,13 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
         }
 
         // Variadic: args
-        Value::Symbol(s) => Ok(Formals::Variadic(s.clone())),
+        Value::Symbol(s) => Ok(Formals::Variadic(ScopedParam::simple(s.clone()))),
 
-        // Variadic with identifier
-        Value::Identifier(id) => Ok(Formals::Variadic(id.name.clone())),
+        // Variadic with identifier - preserve scopes
+        Value::Identifier(id) => Ok(Formals::Variadic(ScopedParam::with_scopes(
+            id.name.clone(),
+            id.scopes.clone(),
+        ))),
 
         _ => Err(DesugarError::InvalidFormals(format!(
             "Invalid formal parameters: {:?}",
@@ -176,7 +192,22 @@ pub fn convert_formals(formals: &Value) -> Result<Formals> {
     }
 }
 
-/// Check for duplicate parameters
+/// Check for duplicate parameters (by name only, for scoped params)
+pub fn check_no_duplicates_scoped(params: &[ScopedParam], context: &str) -> Result<()> {
+    let mut seen = HashSet::new();
+    for param in params {
+        if !seen.insert(param.name.as_ref()) {
+            return Err(DesugarError::DuplicateParameter {
+                name: param.name.to_string(),
+                context: context.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Check for duplicate parameters (legacy, for symbol-only params)
+#[allow(dead_code)]
 pub fn check_no_duplicates(params: &[Symbol], context: &str) -> Result<()> {
     let mut seen = HashSet::new();
     for param in params {

@@ -14,8 +14,10 @@
 
 pub mod compiled_macro;
 pub mod core_expr;
+pub mod debug_format;
 pub mod environment;
 pub mod library;
+pub mod macro_debug;
 pub mod pvref;
 pub mod scope;
 pub mod value;
@@ -24,7 +26,7 @@ pub mod value;
 // Note: CaseLambdaClause exists in both core_expr (IR) and value (runtime).
 // Use explicit paths: core_expr::CaseLambdaClause or value::CaseLambdaClause
 pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, Pattern, Template};
-pub use core_expr::{CoreExpr, Formals, Primitive, Symbol};
+pub use core_expr::{CoreExpr, Formals, Primitive, ScopedParam, Symbol};
 pub use environment::{Environment, ScopedBinding};
 pub use library::Library;
 pub use pvref::{MatchEnv, MatchValue, PVRef};
