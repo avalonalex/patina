@@ -541,3 +541,345 @@ fn test_nested_macro_listify() {
     assert!(result.is_ok());
     assert_eq!(result.unwrap().to_string(), "(1 2 3 4 5)");
 }
+
+// =============================================================================
+// Literal Shadowing Tests
+// =============================================================================
+//
+// R7RS Section 4.3.2: When a literal identifier in a macro pattern is shadowed
+// by a local binding at the macro use site, it should NOT match as a literal.
+// This allows user code to override literal keywords.
+
+/// Test that shadowed literal `=>` in cond doesn't match the arrow clause
+///
+/// This is the classic R7RS hygiene test where `=>` is shadowed by a local
+/// binding. The cond macro should NOT recognize the shadowed `=>` as its
+/// literal arrow syntax.
+#[test]
+fn test_shadowed_literal_cond_arrow() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ((=> #f))
+          (cond (#t => 'ok)))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // Since => is shadowed, cond should treat it as a regular expression,
+    // falling through to the (test result1 result2 ...) pattern.
+    // The result should be 'ok, not an error from trying to call 'ok as a procedure.
+    assert_eq!(result.unwrap().to_string(), "ok");
+}
+
+/// Test shadowed literal with else in cond
+///
+/// Similar to above, but testing the `else` literal.
+#[test]
+fn test_shadowed_literal_cond_else() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ((else #f))
+          (cond (else 'matched-else)
+                (#t 'fallback)))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // With `else` shadowed, the first clause should be (test result...) form
+    // where test=#f, so it should fall through to the second clause
+    assert_eq!(result.unwrap().to_string(), "fallback");
+}
+
+/// Test that non-shadowed literal still works normally
+#[test]
+fn test_non_shadowed_literal_cond_arrow() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (cond (#t => (lambda (x) 'got-true)))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // Normal => behavior: call the procedure with the test result
+    assert_eq!(result.unwrap().to_string(), "got-true");
+}
+
+/// Test shadowed literal in nested scope
+#[test]
+fn test_shadowed_literal_nested_scope() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define (test-shadow)
+          (let ((=> #f))
+            (cond (#t => 'shadowed-ok))))
+        (test-shadow)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().to_string(), "shadowed-ok");
+}
+
+// =============================================================================
+// Internal Define Scoping in let-syntax Tests
+// =============================================================================
+//
+// R7RS: Internal defines in a let-syntax body should create local bindings
+// that don't escape to the outer scope.
+
+/// Test that define inside let-syntax creates a local binding
+///
+/// This is the chibi test case where (define x 2) inside let-syntax
+/// should NOT modify the outer x.
+#[test]
+fn test_let_syntax_internal_define_scoping() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define x 1)
+          (let-syntax ()
+            (define x 2)
+            #f)
+          x)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // The outer x should still be 1, not 2
+    assert_eq!(result.unwrap().to_string(), "1");
+}
+
+/// Test multiple internal defines in let-syntax body
+#[test]
+fn test_let_syntax_multiple_internal_defines() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define a 1)
+          (define b 2)
+          (let-syntax ()
+            (define a 10)
+            (define b 20)
+            (+ a b))  ; Should use local a=10, b=20
+          (+ a b))    ; Should use outer a=1, b=2
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // Outer a + b = 1 + 2 = 3
+    assert_eq!(result.unwrap().to_string(), "3");
+}
+
+/// Test that define inside let-syntax can access outer variables
+#[test]
+fn test_let_syntax_internal_define_can_read_outer() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define x 10)
+          (let-syntax ()
+            (define y (+ x 5))  ; y = 10 + 5 = 15
+            y))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().to_string(), "15");
+}
+
+/// Test let-syntax with both macros and internal defines
+#[test]
+fn test_let_syntax_macro_and_internal_define() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define x 1)
+          (let-syntax ((double (syntax-rules ()
+                                 ((double e) (+ e e)))))
+            (define x 5)
+            (double x)))  ; Should use local x=5, result = 10
+        "#,
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().to_string(), "10");
+}
+
+/// Test letrec-syntax also has proper internal define scoping
+#[test]
+fn test_letrec_syntax_internal_define_scoping() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define x 1)
+          (letrec-syntax ()
+            (define x 2)
+            #f)
+          x)
+        "#,
+    );
+
+    assert!(result.is_ok());
+    // The outer x should still be 1
+    assert_eq!(result.unwrap().to_string(), "1");
+}
+
+/// Test define-syntax inside let-syntax body still works
+#[test]
+fn test_let_syntax_with_internal_define_syntax() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (let-syntax ()
+            (define-syntax triple
+              (syntax-rules ()
+                ((triple e) (+ e e e))))
+            (triple 4)))
+        "#,
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().to_string(), "12");
+}
+
+/// Test macro-generating macros: a macro that expands to define-syntax
+///
+/// This tests that when a macro call expands to a `define-syntax` form,
+/// the resulting macro is properly compiled and added to the environment
+/// for subsequent expressions.
+///
+/// This test uses non-conflicting names (my-bar, hello) so it should work.
+#[test]
+fn test_macro_generating_macro_simple() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define-syntax foo
+            (syntax-rules ()
+              ((foo bar y)
+               (define-syntax bar
+                 (syntax-rules ()
+                   ((bar x) 'y))))))
+          (foo my-bar hello)
+          (my-bar 1))
+        "#,
+    );
+
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "hello");
+}
+
+/// Test macro-generating macros with conflicting names (R7RS requirement)
+///
+/// This is the chibi r7rs-tests.scm test case that requires correct hygiene
+/// for macro-generating macros. When (foo bar x) is called:
+/// - Pattern variable `bar` gets bound to symbol `bar`
+/// - Pattern variable `y` gets bound to symbol `x`
+/// - The inner macro is: (define-syntax bar (syntax-rules () ((bar x) 'x)))
+/// - The `x` in `'x` should be the value from `y` (symbol `x`), NOT the inner
+///   pattern variable `x` (which would be bound to `1` when (bar 1) is called)
+///
+/// This test is currently IGNORED because Patina doesn't correctly handle the
+/// case where a substituted symbol happens to have the same name as a pattern
+/// variable in a nested syntax-rules. Symbols from pattern variable substitution
+/// need to carry scope information to distinguish them from new pattern variables.
+///
+/// See PRD/phase1/MACRO_GENERATING_MACRO_HYGIENE.md for detailed analysis and
+/// implementation roadmap. This should be fixed AFTER DEFINE_SYNTAX_ELIMINATION.md
+/// is complete.
+#[test]
+#[ignore] // Known limitation: conflicting names in macro-generating macros
+fn test_macro_generating_macro_conflicting_names() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    // This is the exact test from chibi r7rs-tests.scm
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define-syntax foo
+            (syntax-rules ()
+              ((foo bar y)
+               (define-syntax bar
+                 (syntax-rules ()
+                   ((bar x) 'y))))))
+          (foo bar x)
+          (bar 1))
+        "#,
+    );
+
+    // Expected: 'x (the symbol x from the outer macro call)
+    // Actual (broken): 1 (the inner pattern variable x bound to the argument)
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "x");
+}
+
+/// Test macro-generating macros with multiple generated macros
+#[test]
+fn test_macro_generating_macro_multiple() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define-syntax make-const
+            (syntax-rules ()
+              ((make-const name value)
+               (define-syntax name
+                 (syntax-rules ()
+                   ((name) value))))))
+          (make-const ten 10)
+          (make-const twenty 20)
+          (+ (ten) (twenty)))
+        "#,
+    );
+
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "30");
+}
+
+/// Test macro-generating macros where generated macro uses the enclosing environment
+#[test]
+fn test_macro_generating_macro_captures_env() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define base 100)
+          (define-syntax make-adder
+            (syntax-rules ()
+              ((make-adder name offset)
+               (define-syntax name
+                 (syntax-rules ()
+                   ((name x) (+ base offset x)))))))
+          (make-adder add10 10)
+          (add10 5))
+        "#,
+    );
+
+    // base=100, offset=10, x=5 => 100 + 10 + 5 = 115
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "115");
+}

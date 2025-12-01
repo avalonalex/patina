@@ -1692,16 +1692,46 @@ impl Evaluator {
             ));
         }
 
+        // R7RS syntax-rules has two forms:
+        // (syntax-rules (<literal> ...) <rule> ...)
+        // (syntax-rules <ellipsis> (<literal> ...) <rule> ...)
+        //
+        // Detect which form by checking if the first element after syntax-rules
+        // is a list (literals) or symbol (custom ellipsis)
+        let (first_after_keyword, rest_after_first) = self.extract_pair(&rest)?;
+
+        let (custom_ellipsis, literals_expr, rules_expr) = match &first_after_keyword {
+            // If it's a list or null, it's the literals list (standard form)
+            Value::Pair(_) | Value::Null => (None, first_after_keyword, rest_after_first),
+            // If it's a symbol or identifier, it's a custom ellipsis
+            Value::Symbol(s) => {
+                let (lits, rules) = self.extract_pair(&rest_after_first)?;
+                (Some(s.clone()), lits, rules)
+            }
+            Value::Identifier(id) => {
+                let (lits, rules) = self.extract_pair(&rest_after_first)?;
+                (Some(id.name.clone()), lits, rules)
+            }
+            _ => {
+                return Err(EvalError::InvalidSyntax(
+                    "syntax-rules: expected literals list or ellipsis identifier".to_string(),
+                ));
+            }
+        };
+
         // Parse literals list
-        let (literals_expr, rules_expr) = self.extract_pair(&rest)?;
         let literals = self.parse_literals_list(&literals_expr)?;
 
         // Parse rules as (pattern, template) pairs
         let rules = self.parse_macro_rules(&rules_expr)?;
 
         // Compile using Compiler with environment and scope capture for hygiene
-        let mut compiler =
-            Compiler::with_env_and_scopes(literals, None, env.clone(), definition_scopes.clone());
+        let mut compiler = Compiler::with_env_and_scopes(
+            literals,
+            custom_ellipsis,
+            env.clone(),
+            definition_scopes.clone(),
+        );
         compiler
             .compile_macro(name, rules)
             .map_err(|e| EvalError::InvalidSyntax(format!("Failed to compile macro: {}", e)))

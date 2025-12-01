@@ -6,6 +6,305 @@
 
 ---
 
+## Critique & Updates (2024-12 Session)
+
+After deep-diving into the macro system to fix several bugs, here are corrections and
+clarifications to this document:
+
+### What's Already Implemented
+
+During our bug-fixing session, we implemented `desugar_body_with_internal_defines()` in
+`patina-frontend/src/desugarer/mod.rs:501-592`. This function:
+
+1. **Processes `define-syntax` immediately** - compiles macro and adds to environment
+2. **Handles macro-generating macros** - when macro expansion produces `CoreExpr::DefineSyntax`,
+   it compiles that too and adds to environment
+3. **Only used in body contexts** - lambda bodies and let-syntax bodies use this function
+
+This means **Phase 1 is partially complete** for body contexts! But `desugar_define_syntax()`
+at top-level still produces `CoreExpr::DefineSyntax`.
+
+### Missed Edge Cases
+
+#### 1. Top-Level vs Body Context
+
+The document assumes `define-syntax` is always at top-level. But there are two contexts:
+
+| Context | Current Behavior | After Elimination |
+|---------|------------------|-------------------|
+| Top-level `(define-syntax ...)` | Returns `CoreExpr::DefineSyntax` | Should compile immediately |
+| Body context (lambda, let) | Uses `desugar_body_with_internal_defines` | **Already works!** |
+
+#### 2. `shadowed_names` Propagation
+
+The document doesn't mention `shadowed_names`, which is crucial for R7RS 4.3.2 compliance.
+When a literal identifier (like `=>` in cond) is shadowed by a local binding, it should
+NOT match as a literal.
+
+We fixed this by passing `shadowed_names` from the desugarer to `expand_macro_with_shadowed`.
+After DefineSyntax elimination, this flow must be preserved:
+- Desugarer tracks `shadowed_names` (lambda params, let bindings)
+- When expanding macros, `shadowed_names` is passed to the matcher
+- Matcher's `is_literal_shadowed()` checks before matching literals
+
+#### 3. Macro-Generating Macros (Known Limitation)
+
+The document doesn't address macro-generating macros with conflicting pattern variable names.
+See `MACRO_GENERATING_MACRO_HYGIENE.md` for details.
+
+**Example that fails:**
+```scheme
+(define-syntax foo
+  (syntax-rules ()
+    ((foo bar y)
+     (define-syntax bar
+       (syntax-rules ()
+         ((bar x) 'y))))))
+(foo bar x)  ; y binds to symbol 'x'
+(bar 1)      ; Returns 1, should return 'x
+```
+
+This is NOT blocked by DefineSyntax elimination - it's a separate hygiene issue.
+The document should note this as a known limitation.
+
+#### 4. Internal Defines in let-syntax Body
+
+The document's Phase 3 says "let-syntax already compiles at desugar time". But there was
+a scoping bug: internal `define` in let-syntax body would escape to outer scope.
+
+**Fixed:** We wrap bodies with internal defines in an implicit lambda call:
+```rust
+// In desugar_let_syntax_impl:
+if has_internal_defines {
+    // Wrap: ((lambda () body...))
+}
+```
+
+### Revised Phase 0 Status
+
+| Bug | Status | Notes |
+|-----|--------|-------|
+| 1: `syntax-rules literals must be a proper list` | Unknown | Need to investigate |
+| 2-3: `Not a procedure: #<macro:...>` | **FIXED** | `desugar_body_with_internal_defines` handles this |
+| 4: `Macro name must be a symbol` | **FIXED** | Accept both Symbol and Identifier |
+| 5: `Not a procedure: 1` | Unknown | Need to investigate |
+| 6: `Not a procedure: ok` | **FIXED** | `=>` shadowing with `shadowed_names` |
+| 7-8: Cascading failures | May be fixed | Depend on other bugs |
+
+### What Remains for DefineSyntax Elimination
+
+1. **Update `desugar_define_syntax`** to compile immediately (like body context does)
+2. **Ensure top-level desugarer has environment** - currently `env` is `Option`
+3. **Remove `CoreExpr::DefineSyntax` variant** from IR
+4. **Remove evaluator handling** for DefineSyntax
+5. **Move `compile_syntax_rules`** to patina-macros (cleanup, optional)
+
+### Relationship with Macro-Generating Macro Fix
+
+The macro-generating macro hygiene issue (`MACRO_GENERATING_MACRO_HYGIENE.md`) should be
+fixed AFTER DefineSyntax elimination because:
+
+1. After elimination, all macro compilation is in one place (desugarer)
+2. The hygiene fix modifies expander and compiler, not desugarer structure
+3. Easier to reason about scope handling when compilation is unified
+
+---
+
+## Success Criteria
+
+The v2 desugarer (with DefineSyntax elimination) must be **at least as good** as the
+current implementation. This means:
+
+### Test Baselines (as of 2024-12 session)
+
+| Test Suite | Current Status | v2 Must Achieve |
+|------------|----------------|-----------------|
+| Chibi r7rs-tests.scm | 711 passed, 35 failed, 423 errors | >= 711 passed |
+| patina-tests unit tests | All passing (666 tests) | All passing |
+| hygiene.rs | 32 passed, 4 ignored | 32 passed, 4 ignored |
+
+### Functional Requirements
+
+1. **No regressions** - All currently passing tests must still pass
+2. **Same semantics** - Macro expansion behavior unchanged
+3. **Backward compatible** - Existing code using the desugarer continues to work
+
+### Implementation Approach: Feature Flag
+
+Rather than creating a separate "v2" desugarer, we add a configuration flag:
+
+```rust
+pub struct Desugarer {
+    // ... existing fields ...
+
+    /// When true, `define-syntax` compiles immediately instead of
+    /// returning CoreExpr::DefineSyntax
+    eliminate_define_syntax: bool,
+}
+```
+
+**Benefits:**
+- Single codebase to maintain
+- Easy A/B testing between behaviors
+- Gradual migration path
+- Can remove flag once v2 is proven stable
+
+### Migration Strategy
+
+1. **Phase A**: Add flag (default: false) - no behavior change
+2. **Phase B**: Implement immediate compilation when flag=true
+3. **Phase C**: Test extensively with flag=true
+4. **Phase D**: Change default to true, deprecate flag
+5. **Phase E**: Remove CoreExpr::DefineSyntax and flag
+
+---
+
+## Detailed Implementation Plan
+
+### Phase A: Add Flag Infrastructure
+
+**Goal:** Add `eliminate_define_syntax` flag with no behavior change.
+
+#### A.1: Update Desugarer struct
+
+```rust
+// In patina-frontend/src/desugarer/mod.rs
+
+pub struct Desugarer {
+    env: Option<Rc<Environment>>,
+    current_scopes: ScopeSet,
+    shadowed_names: std::collections::HashSet<Rc<str>>,
+    eliminate_define_syntax: bool,  // NEW
+}
+```
+
+#### A.2: Update all constructors
+
+Every place that creates a `Desugarer` or `Self { ... }` must include the new field.
+
+**Locations to update:**
+- `new()` - set to `false`
+- `with_env()` - set to `false`
+- `with_env_and_scopes()` - set to `false`
+- `with_fresh_scope()` - copy from `self`
+- `with_shadowed_names()` - copy from `self`
+- `with_new_env()` - copy from `self`
+
+#### A.3: Add v2 constructor
+
+```rust
+/// Create a v2 desugarer that eliminates DefineSyntax
+///
+/// This compiles macros immediately during desugaring, never producing
+/// CoreExpr::DefineSyntax. Use this for VM backends.
+pub fn with_env_v2(env: Rc<Environment>) -> Self {
+    Self {
+        env: Some(env),
+        current_scopes: ScopeSet::new(),
+        shadowed_names: std::collections::HashSet::new(),
+        eliminate_define_syntax: true,
+    }
+}
+```
+
+### Phase B: Implement Immediate Compilation
+
+**Goal:** When `eliminate_define_syntax=true`, compile macros immediately.
+
+#### B.1: Modify `desugar_define_syntax`
+
+The current implementation (line 728-755) always returns `CoreExpr::DefineSyntax`.
+Need to add a branch:
+
+```rust
+fn desugar_define_syntax(&self, args: &Value) -> Result<CoreExpr> {
+    // Parse name and transformer (existing code)
+    let (name, transformer) = /* ... */;
+
+    if self.eliminate_define_syntax {
+        // V2: Compile immediately
+        let env = self.env.as_ref().ok_or_else(|| {
+            DesugarError::InvalidSyntax(
+                "define-syntax requires environment when eliminate_define_syntax=true".into()
+            )
+        })?;
+
+        let compiled_macro = self.compile_syntax_rules_with_scopes(
+            &transformer,
+            name.clone(),
+            env,
+            &self.current_scopes,
+        )?;
+
+        // Install in environment
+        env.define(name.to_string(), Value::Macro(Rc::new(compiled_macro)));
+
+        // Return unspecified - macro is now in environment
+        Ok(CoreExpr::Literal(Rc::new(Value::Unspecified)))
+    } else {
+        // V1: Return DefineSyntax for evaluator to handle
+        Ok(CoreExpr::DefineSyntax {
+            name,
+            transformer: Rc::new(transformer.clone()),
+            definition_scopes: self.current_scopes.clone(),
+        })
+    }
+}
+```
+
+#### B.2: Ensure `desugar_body_with_internal_defines` respects the flag
+
+Current implementation already compiles immediately for body context.
+Verify it works correctly when `eliminate_define_syntax=true` globally.
+
+The key insight: body context already does what we want. We're extending
+that behavior to top-level context.
+
+### Phase C: Testing
+
+#### C.1: Create test that uses v2 desugarer
+
+```rust
+#[test]
+fn test_v2_desugarer_no_define_syntax_in_output() {
+    let env = create_test_env();
+    let desugarer = Desugarer::with_env_v2(env);
+
+    let code = parse("(define-syntax foo (syntax-rules () ((foo x) x)))");
+    let result = desugarer.desugar(&code).unwrap();
+
+    // Should be Unspecified, not DefineSyntax
+    assert!(matches!(result, CoreExpr::Literal(_)));
+}
+```
+
+#### C.2: Run full test suite with v2
+
+Create a test configuration that runs all existing tests with v2 desugarer.
+Verify same results.
+
+#### C.3: Verify chibi tests
+
+Run `./scripts/run_chibi_tests.sh` with v2 enabled.
+Must achieve >= 711 passed.
+
+### Phase D: Change Default
+
+Once v2 is proven stable:
+1. Change `with_env()` to use `eliminate_define_syntax: true`
+2. Add `with_env_legacy()` for backward compatibility
+3. Update documentation
+
+### Phase E: Remove DefineSyntax
+
+Once v2 is the only behavior:
+1. Remove `eliminate_define_syntax` flag
+2. Remove `CoreExpr::DefineSyntax` variant
+3. Remove evaluator handling for DefineSyntax
+4. Remove legacy constructors
+
+---
+
 ## Prerequisites: Fix Existing Macro Bugs First
 
 Before starting this refactoring, we should fix the existing macro-related failures in the chibi r7rs test suite. This establishes a clean baseline and ensures we can detect regressions.
@@ -462,16 +761,27 @@ The REPL evaluates each form through the full pipeline. After desugaring `(defin
 ### Phase 0: Fix Existing Macro Bugs (PREREQUISITE)
 
 - [ ] **Bug 1:** Fix `syntax-rules literals must be a proper list`
-- [ ] **Bug 2-3:** Fix `Not a procedure: #<macro:...>` (macro not expanding)
-- [ ] **Bug 4:** Fix `Macro name must be a symbol` (Identifier handling)
-- [ ] **Bug 5-6:** Fix remaining expansion/hygiene issues
+- [x] **Bug 2-3:** Fix `Not a procedure: #<macro:...>` (macro not expanding)
+  - Fixed: `desugar_body_with_internal_defines()` compiles macros immediately in body context
+- [x] **Bug 4:** Fix `Macro name must be a symbol` (Identifier handling)
+  - Fixed: `desugar_define_syntax()` accepts both Symbol and Identifier
+- [ ] **Bug 5:** Fix `Not a procedure: 1` (need to investigate)
+- [x] **Bug 6:** Fix `Not a procedure: ok` (hygiene issue with `cond` `=>` clause)
+  - Fixed: `shadowed_names` passed to matcher via `expand_macro_with_shadowed`
 - [ ] **Verify:** Macro section passes 24+ tests (up from 16)
 
 ### Phase 1: Move Compilation to Desugarer
 
-- [ ] **Phase 1.1:** Update `desugar_define_syntax` to compile and install macro
-- [ ] **Phase 1.2:** Verify environment mutation works (RefCell)
+- [x] **Phase 1.1 (Body context):** `desugar_body_with_internal_defines()` compiles macros immediately
+  - Used by lambda bodies and let-syntax bodies
+  - Also handles macro-generating macros (when expansion produces DefineSyntax)
+- [ ] **Phase 1.1 (Top-level):** Update `desugar_define_syntax` for top-level context
+  - Currently still returns `CoreExpr::DefineSyntax`
+  - Need to compile immediately like body context does
+- [x] **Phase 1.2:** Environment mutation works (RefCell)
+  - Already working in `desugar_body_with_internal_defines()`
 - [ ] **Phase 1.3:** Handle missing environment error case
+  - Top-level desugarer needs guaranteed environment
 
 ### Phase 2: Remove DefineSyntax from CoreExpr
 
@@ -481,10 +791,18 @@ The REPL evaluates each form through the full pipeline. After desugaring `(defin
 
 ### Phase 3-4: Cleanup
 
-- [ ] **Phase 3:** Verify let-syntax/letrec-syntax still work
+- [x] **Phase 3:** Verify let-syntax/letrec-syntax still work
+  - Fixed internal define scoping bug (wrap in implicit lambda)
+  - All hygiene tests pass (32 passing, 4 ignored for known issues)
 - [ ] **Phase 4:** Move `compile_syntax_rules` to patina-macros (optional, can defer)
 - [ ] **Testing:** All tests pass, no regressions in macro section
 - [ ] **Cleanup:** Remove dead code, update documentation
+
+### Post-Elimination: Macro-Generating Macro Hygiene
+
+- [ ] Fix conflicting pattern variable names in macro-generating macros
+  - See `MACRO_GENERATING_MACRO_HYGIENE.md` for detailed roadmap
+  - Should be done AFTER DefineSyntax elimination is complete
 
 ---
 

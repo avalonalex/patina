@@ -276,6 +276,23 @@ impl Value {
         })
     }
 
+    /// Create an identifier value with empty scopes (for hygiene)
+    ///
+    /// Identifiers are like symbols but carry scope sets for macro hygiene.
+    /// This convenience constructor creates an identifier with no scopes.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let id = Value::identifier("if");
+    /// // Creates Identifier with name "if" and empty scope set
+    /// ```
+    pub fn identifier(name: &str) -> Value {
+        Value::Identifier(Box::new(IdentifierData {
+            name: Rc::from(name),
+            scopes: ScopeSet::new(),
+        }))
+    }
+
     /// Create an integer value, using cache for small integers
     ///
     /// Integers in the range -128..128 are cached and reused, avoiding

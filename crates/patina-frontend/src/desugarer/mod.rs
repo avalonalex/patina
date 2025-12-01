@@ -191,6 +191,45 @@ impl Desugarer {
         self.shadowed_names.contains(name)
     }
 
+    /// Check if a value is a `define-syntax` form
+    /// Returns Some((name, transformer)) if it is, None otherwise
+    fn try_parse_define_syntax(&self, value: &Value) -> Option<(Rc<str>, Value)> {
+        // Must be a list
+        let (car, cdr) = match value {
+            Value::Pair(pair) => {
+                let borrowed = pair.borrow();
+                (borrowed.0.clone(), borrowed.1.clone())
+            }
+            _ => return None,
+        };
+
+        // First element must be 'define-syntax' symbol/identifier
+        let name_str = match &car {
+            Value::Symbol(s) => s.clone(),
+            Value::Identifier(id) => id.name.clone(),
+            _ => return None,
+        };
+
+        if name_str.as_ref() != "define-syntax" {
+            return None;
+        }
+
+        // Parse arguments: (name transformer)
+        let args_vec = utils::list_to_vec(&cdr).ok()?;
+        if args_vec.len() != 2 {
+            return None;
+        }
+
+        // Extract macro name
+        let macro_name = match &args_vec[0] {
+            Value::Symbol(s) => s.clone(),
+            Value::Identifier(id) => id.name.clone(),
+            _ => return None,
+        };
+
+        Some((macro_name, args_vec[1].clone()))
+    }
+
     /// Create a child desugarer with a new environment (for let-syntax bodies)
     ///
     /// This inherits the current shadowed_names and uses the new environment and scopes.
@@ -302,10 +341,15 @@ impl Desugarer {
             && let Some(Value::Macro(compiled_macro)) = env.get(sym)
         {
             // This is a macro! Expand it and recursively desugar the result
-            let expanded =
-                patina_macros::expand_macro(&compiled_macro, value, env).map_err(|e| {
-                    DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e))
-                })?;
+            // Pass shadowed_names for literal shadowing check (R7RS 4.3.2)
+            // TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
+            let expanded = patina_macros::expand_macro_with_shadowed(
+                &compiled_macro,
+                value,
+                env,
+                &self.shadowed_names,
+            )
+            .map_err(|e| DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e)))?;
 
             // Recursively desugar the expanded result
             return self.desugar(&expanded);
@@ -411,12 +455,13 @@ impl Desugarer {
         // Desugar body with:
         // 1. The new scope set (for hygiene)
         // 2. Parameter names added to shadowed_names (so they don't trigger macro expansion)
-        let body_desugarer = self.with_shadowed_names(param_names, body_scopes);
+        let body_desugarer = self.with_shadowed_names(param_names, body_scopes.clone());
 
-        let body_exprs: Vec<CoreExpr> = body
-            .iter()
-            .map(|e| body_desugarer.desugar(e))
-            .collect::<Result<_>>()?;
+        // Process body expressions sequentially to handle define-syntax
+        // When we encounter define-syntax, we compile the macro immediately
+        // and update the environment for subsequent expressions
+        let body_exprs =
+            self.desugar_body_with_internal_defines(&body_desugarer, &body, &body_scopes)?;
 
         // If parameters have macro scopes, set binding_scope to None
         // since we'll use the parameter-specific scopes at runtime.
@@ -432,6 +477,118 @@ impl Desugarer {
             body: body_exprs,
             binding_scope,
         })
+    }
+
+    /// Desugar a body that may contain internal define-syntax forms
+    ///
+    /// This processes body expressions sequentially. When encountering `define-syntax`,
+    /// it compiles the macro immediately and adds it to the environment so subsequent
+    /// expressions can use it. This is required for code like:
+    ///
+    /// ```scheme
+    /// (let ()
+    ///   (define-syntax my-macro ...)
+    ///   (my-macro ...))  ; Must see my-macro as a macro, not a variable
+    /// ```
+    ///
+    /// This also handles macro-generating macros: when a macro expands to `define-syntax`,
+    /// the resulting macro definition is compiled and added to the environment.
+    ///
+    /// Returns the desugared body expressions (excluding define-syntax forms,
+    /// which are processed but not emitted to CoreExpr).
+    ///
+    /// TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
+    fn desugar_body_with_internal_defines(
+        &self,
+        initial_desugarer: &Desugarer,
+        body: &[Value],
+        body_scopes: &ScopeSet,
+    ) -> Result<Vec<CoreExpr>> {
+        // If we don't have an environment, fall back to simple desugaring
+        // (define-syntax will produce CoreExpr::DefineSyntax which is handled at runtime)
+        let env = match &initial_desugarer.env {
+            Some(e) => e.clone(),
+            None => {
+                return body.iter().map(|e| initial_desugarer.desugar(e)).collect();
+            }
+        };
+
+        let mut body_exprs = Vec::new();
+        let mut current_env = env.clone();
+        // Create initial desugarer with the environment - with_new_env handles cloning shadowed_names
+        let mut current_desugarer = initial_desugarer.with_new_env(env, body_scopes.clone());
+
+        for expr in body {
+            // Check if this is a define-syntax form BEFORE desugaring
+            if let Some((macro_name, transformer)) = self.try_parse_define_syntax(expr) {
+                // Compile the macro immediately
+                let compiled_macro = self.compile_syntax_rules_with_scopes(
+                    &transformer,
+                    macro_name.clone(),
+                    &current_env,
+                    body_scopes,
+                )?;
+
+                // Create a new environment with the macro binding
+                let new_env = Rc::new(Environment::with_parent(current_env.clone()));
+                new_env.define(
+                    macro_name.to_string(),
+                    Value::Macro(Rc::new(compiled_macro)),
+                );
+
+                // Update the current desugarer to use the new environment
+                // with_new_env creates a new Desugarer, no Clone trait needed
+                current_env = new_env.clone();
+                current_desugarer = current_desugarer.with_new_env(new_env, body_scopes.clone());
+
+                // Don't emit CoreExpr::DefineSyntax - the macro is now in the environment
+                // and will be expanded during desugaring of subsequent expressions
+            } else {
+                // Regular expression - desugar with current environment
+                let desugared = current_desugarer.desugar(expr)?;
+
+                // Check if the desugared result is CoreExpr::DefineSyntax
+                // This handles macro-generating macros: when (foo bar x) expands to (define-syntax bar ...)
+                // the desugar() call returns CoreExpr::DefineSyntax which we need to handle here
+                // TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
+                if let CoreExpr::DefineSyntax {
+                    name,
+                    transformer,
+                    definition_scopes,
+                } = desugared
+                {
+                    // Compile the macro from the transformer Value
+                    let compiled_macro = self.compile_syntax_rules_with_scopes(
+                        &transformer,
+                        name.clone(),
+                        &current_env,
+                        &definition_scopes,
+                    )?;
+
+                    // Create a new environment with the macro binding
+                    let new_env = Rc::new(Environment::with_parent(current_env.clone()));
+                    new_env.define(name.to_string(), Value::Macro(Rc::new(compiled_macro)));
+
+                    // Update the current desugarer to use the new environment
+                    current_env = new_env.clone();
+                    current_desugarer =
+                        current_desugarer.with_new_env(new_env, body_scopes.clone());
+
+                    // Don't emit to body_exprs - macro is compile-time only
+                } else {
+                    body_exprs.push(desugared);
+                }
+            }
+        }
+
+        // Body must have at least one non-define-syntax expression
+        if body_exprs.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "Body must contain at least one expression (not just define-syntax)".to_string(),
+            ));
+        }
+
+        Ok(body_exprs)
     }
 
     /// Desugar if: (if test then [else]) → If { test, then, else_ }
@@ -876,22 +1033,66 @@ impl Desugarer {
         // Create desugarer with extended environment AND scope set
         // The body sees the let-syntax scope (for bindings introduced by macros)
         // We use with_new_env to inherit shadowed_names from the parent
-        let body_desugarer = self.with_new_env(body_env, definition_scopes);
+        let body_desugarer = self.with_new_env(body_env, definition_scopes.clone());
 
         // Desugar body expressions in extended environment
+        // Use desugar_body_with_internal_defines to handle:
+        // 1. define-syntax in body (compile macros immediately)
+        // 2. Regular define in body (will need wrapping in lambda for proper scoping)
         let body = &args_vec[1..];
-        let desugared_body: Vec<CoreExpr> = body
-            .iter()
-            .map(|e| body_desugarer.desugar(e))
-            .collect::<Result<_>>()?;
 
-        // Return body as Begin expression
-        // Optimize: single expression doesn't need Begin wrapper
-        if desugared_body.len() == 1 {
-            Ok(desugared_body.into_iter().next().unwrap())
+        // Check if body contains internal defines (not define-syntax)
+        // If so, wrap in lambda for proper R7RS scoping
+        let has_internal_defines = body.iter().any(|e| self.is_regular_define(e));
+
+        if has_internal_defines {
+            // Wrap body in implicit lambda for proper internal define scoping
+            // (let-syntax () (define x 1) body...) => (let-syntax () ((lambda () (define x 1) body...)))
+            // This ensures internal defines create local bindings, not modify outer scope
+            let desugared_body =
+                self.desugar_body_with_internal_defines(&body_desugarer, body, &definition_scopes)?;
+
+            // Wrap in a lambda call: ((lambda () body...))
+            Ok(CoreExpr::App {
+                func: Rc::new(CoreExpr::Lambda {
+                    params: patina_ir::Formals::Fixed(vec![]),
+                    body: desugared_body,
+                    binding_scope: Some(ScopeId::fresh()),
+                }),
+                args: vec![],
+            })
         } else {
-            Ok(CoreExpr::Begin(desugared_body))
+            // No internal defines - just desugar body with define-syntax handling
+            let desugared_body =
+                self.desugar_body_with_internal_defines(&body_desugarer, body, &definition_scopes)?;
+
+            // Return body as Begin expression
+            // Optimize: single expression doesn't need Begin wrapper
+            if desugared_body.len() == 1 {
+                Ok(desugared_body.into_iter().next().unwrap())
+            } else {
+                Ok(CoreExpr::Begin(desugared_body))
+            }
         }
+    }
+
+    /// Check if a value is a regular `define` form (not `define-syntax`)
+    fn is_regular_define(&self, value: &Value) -> bool {
+        let (car, _cdr) = match value {
+            Value::Pair(pair) => {
+                let borrowed = pair.borrow();
+                (borrowed.0.clone(), borrowed.1.clone())
+            }
+            _ => return false,
+        };
+
+        let name = match &car {
+            Value::Symbol(s) => s.clone(),
+            Value::Identifier(id) => id.name.clone(),
+            _ => return false,
+        };
+
+        name.as_ref() == "define"
     }
 
     /// Compile a syntax-rules transformer into a CompiledMacro
@@ -935,14 +1136,40 @@ impl Desugarer {
             ));
         }
 
+        // R7RS syntax-rules has two forms:
+        // (syntax-rules (<literal> ...) <rule> ...)
+        // (syntax-rules <ellipsis> (<literal> ...) <rule> ...)
+        //
+        // Detect which form by checking if list[1] is a list (literals) or symbol (custom ellipsis)
+        let (custom_ellipsis, literals_index) = match &list[1] {
+            // If it's a list or null, it's the literals list (standard form)
+            Value::Pair(_) | Value::Null => (None, 1),
+            // If it's a symbol or identifier, it's a custom ellipsis
+            Value::Symbol(s) => (Some(s.clone()), 2),
+            Value::Identifier(id) => (Some(id.name.clone()), 2),
+            _ => {
+                return Err(DesugarError::InvalidSyntax(
+                    "syntax-rules: expected literals list or ellipsis identifier".to_string(),
+                ));
+            }
+        };
+
+        // Validate we have enough elements for custom ellipsis form
+        if custom_ellipsis.is_some() && list.len() < 3 {
+            return Err(DesugarError::InvalidSyntax(
+                "syntax-rules with custom ellipsis requires literals and rules".to_string(),
+            ));
+        }
+
         // Parse literals: (symbol ...)
-        let literals_value = &list[1];
+        let literals_value = &list[literals_index];
         let literals = self.parse_literals_list(literals_value)?;
 
         // Parse rules as (pattern, template) pairs
-        let rules_list = if list.len() > 2 {
+        let rules_start = literals_index + 1;
+        let rules_list = if list.len() > rules_start {
             // Convert rules Vec back to list Value for parsing
-            utils::vec_to_list(&list[2..])
+            utils::vec_to_list(&list[rules_start..])
         } else {
             Value::Null
         };
@@ -950,7 +1177,7 @@ impl Desugarer {
         let rules = self.parse_macro_rules(&rules_list)?;
 
         // Compile using Compiler with environment capture for hygiene
-        let mut compiler = Compiler::with_env(literals, None, env.clone());
+        let mut compiler = Compiler::with_env(literals, custom_ellipsis, env.clone());
         compiler
             .compile_macro(name, rules)
             .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
@@ -997,14 +1224,40 @@ impl Desugarer {
             ));
         }
 
+        // R7RS syntax-rules has two forms:
+        // (syntax-rules (<literal> ...) <rule> ...)
+        // (syntax-rules <ellipsis> (<literal> ...) <rule> ...)
+        //
+        // Detect which form by checking if list[1] is a list (literals) or symbol (custom ellipsis)
+        let (custom_ellipsis, literals_index) = match &list[1] {
+            // If it's a list or null, it's the literals list (standard form)
+            Value::Pair(_) | Value::Null => (None, 1),
+            // If it's a symbol or identifier, it's a custom ellipsis
+            Value::Symbol(s) => (Some(s.clone()), 2),
+            Value::Identifier(id) => (Some(id.name.clone()), 2),
+            _ => {
+                return Err(DesugarError::InvalidSyntax(
+                    "syntax-rules: expected literals list or ellipsis identifier".to_string(),
+                ));
+            }
+        };
+
+        // Validate we have enough elements for custom ellipsis form
+        if custom_ellipsis.is_some() && list.len() < 3 {
+            return Err(DesugarError::InvalidSyntax(
+                "syntax-rules with custom ellipsis requires literals and rules".to_string(),
+            ));
+        }
+
         // Parse literals: (symbol ...)
-        let literals_value = &list[1];
+        let literals_value = &list[literals_index];
         let literals = self.parse_literals_list(literals_value)?;
 
         // Parse rules as (pattern, template) pairs
-        let rules_list = if list.len() > 2 {
+        let rules_start = literals_index + 1;
+        let rules_list = if list.len() > rules_start {
             // Convert rules Vec back to list Value for parsing
-            utils::vec_to_list(&list[2..])
+            utils::vec_to_list(&list[rules_start..])
         } else {
             Value::Null
         };
@@ -1013,7 +1266,7 @@ impl Desugarer {
 
         // Compile using Compiler with environment AND scope set for scope-based hygiene
         let mut compiler =
-            Compiler::with_env_and_scopes(literals, None, env.clone(), scopes.clone());
+            Compiler::with_env_and_scopes(literals, custom_ellipsis, env.clone(), scopes.clone());
         compiler
             .compile_macro(name, rules)
             .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))

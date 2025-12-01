@@ -746,10 +746,11 @@ mod tests {
 
         let result = expander.expand(&template, &env);
         assert!(result.is_ok());
-        if let Value::Symbol(s) = result.unwrap() {
-            assert_eq!(&*s, "if");
+        // After hygiene implementation, symbols become Identifiers with scope sets
+        if let Value::Identifier(id) = result.unwrap() {
+            assert_eq!(&*id.name, "if");
         } else {
-            panic!("Expected symbol");
+            panic!("Expected Identifier (hygiene-wrapped symbol)");
         }
     }
 
@@ -790,9 +791,9 @@ mod tests {
         let result = expander.expand(&template, &env);
         assert!(result.is_ok());
 
-        // Should produce (if 1 2)
+        // Should produce (if 1 2) where 'if' is an Identifier (for hygiene)
         let expected = make_list(vec![
-            Value::symbol("if"),
+            Value::identifier("if"),
             Value::Integer(1),
             Value::Integer(2),
         ]);
@@ -914,9 +915,9 @@ mod tests {
         let result = expander.expand(&template, &env);
         assert!(result.is_ok());
 
-        // Should produce (begin 1 2 99)
+        // Should produce (begin 1 2 99) where 'begin' is an Identifier (for hygiene)
         let expected = make_list(vec![
-            Value::symbol("begin"),
+            Value::identifier("begin"),
             Value::Integer(1),
             Value::Integer(2),
             Value::Integer(99),

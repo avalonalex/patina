@@ -22,6 +22,6 @@ pub use error::{ExpansionStep, MacroError};
 pub use macro_expander::{
     CompiledMacro, CompiledMacroExpander, CompiledRule, Compiler, ExpandError, Expander,
     ExpansionResult, Identifier, MacroExpander, MatchError, Matcher, Pattern, Template,
-    TestExpander, expand_macro,
+    TestExpander, expand_macro, expand_macro_with_shadowed,
 };
 pub use tracer::MacroTracer;

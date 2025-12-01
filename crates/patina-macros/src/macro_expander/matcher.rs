@@ -129,12 +129,28 @@ impl std::error::Error for MatchError {}
 /// a MatchEnv with all pattern variables bound.
 ///
 /// Based on Gauche's pattern matching approach (macro.c:600+).
+///
+/// TODO: This will be refactored as part of PRD/phase1/DEFINE_SYNTAX_ELIMINATION.md
+/// The current literal shadowing check is a temporary solution.
 pub struct Matcher {
     /// Number of pattern variables (determines MatchEnv size)
     num_pvars: usize,
 
     /// Optional mapping from PVREF to variable names (for debug output)
     pvar_names: Option<std::collections::HashMap<PVRef, std::rc::Rc<str>>>,
+
+    /// Names that are shadowed by local bindings at the macro use site.
+    /// When a literal identifier (like `=>` in cond) is in this set,
+    /// it should NOT match as a literal (R7RS 4.3.2).
+    ///
+    /// This is compile-time shadowing info from the desugarer's `shadowed_names`.
+    ///
+    /// TODO: This temporary approach will be cleaned up in DEFINE_SYNTAX_ELIMINATION.md
+    shadowed_names: std::collections::HashSet<std::rc::Rc<str>>,
+
+    /// Literal identifiers from the macro definition (e.g., ["else", "=>"] for cond)
+    /// Used with shadowed_names to check if literals are shadowed.
+    literals: Vec<std::rc::Rc<str>>,
 }
 
 impl Matcher {
@@ -146,6 +162,8 @@ impl Matcher {
         Self {
             num_pvars,
             pvar_names: None,
+            shadowed_names: std::collections::HashSet::new(),
+            literals: Vec::new(),
         }
     }
 
@@ -161,6 +179,31 @@ impl Matcher {
         Self {
             num_pvars,
             pvar_names: Some(pvar_names),
+            shadowed_names: std::collections::HashSet::new(),
+            literals: Vec::new(),
+        }
+    }
+
+    /// Create a new matcher with hygiene support for literal shadowing
+    ///
+    /// # Arguments
+    /// * `num_pvars` - Total number of pattern variables in the pattern
+    /// * `pvar_names` - Mapping from PVREF to variable names
+    /// * `shadowed_names` - Names shadowed by local bindings at macro use site
+    /// * `literals` - Literal identifiers from the macro definition
+    ///
+    /// TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
+    pub fn new_with_hygiene(
+        num_pvars: usize,
+        pvar_names: std::collections::HashMap<PVRef, std::rc::Rc<str>>,
+        shadowed_names: std::collections::HashSet<std::rc::Rc<str>>,
+        literals: Vec<std::rc::Rc<str>>,
+    ) -> Self {
+        Self {
+            num_pvars,
+            pvar_names: Some(pvar_names),
+            shadowed_names,
+            literals,
         }
     }
 
@@ -225,7 +268,22 @@ impl Matcher {
             }
 
             Pattern::Literal(lit) => {
-                // Literal must match exactly (using Debug format for precise comparison)
+                // Literal must match exactly, BUT we also need to check hygiene:
+                // If the literal is an identifier that's shadowed at the use site,
+                // it should NOT match (R7RS 4.3.2).
+                //
+                // Example: (let ((=> #f)) (cond (#t => 'ok)))
+                // Here `=>` is shadowed, so it shouldn't match cond's `=>` literal.
+                //
+                // TODO: This check will be refactored in DEFINE_SYNTAX_ELIMINATION.md
+                if self.is_literal_shadowed(lit, input) {
+                    return Err(MatchError::LiteralMismatch {
+                        expected: format!("{:?}", lit),
+                        actual: format!("{:?} (shadowed)", input),
+                    });
+                }
+
+                // Check for exact match (using Debug format for precise comparison)
                 if format!("{:?}", lit) == format!("{:?}", input) {
                     Ok(())
                 } else {
@@ -641,6 +699,54 @@ impl Matcher {
     }
 
     /// Convert a pattern to a readable string for debugging
+    /// Check if a literal identifier is shadowed at the macro use site.
+    ///
+    /// R7RS 4.3.2: A literal identifier matches an input identifier if both have
+    /// the same binding, or both are unbound and have the same name.
+    ///
+    /// If the literal is shadowed by a local binding at the use site, it should
+    /// NOT match, allowing the clause to fall through to other patterns.
+    ///
+    /// TODO: This will be refactored in DEFINE_SYNTAX_ELIMINATION.md
+    fn is_literal_shadowed(&self, lit: &Value, input: &Value) -> bool {
+        // If no shadowed names, nothing can be shadowed
+        if self.shadowed_names.is_empty() {
+            return false;
+        }
+
+        // Extract the literal name from the pattern
+        let lit_name = match lit {
+            Value::Symbol(s) => s.clone(),
+            Value::Identifier(id) => id.name.clone(),
+            _ => return false, // Non-identifier literals can't be shadowed
+        };
+
+        // Only check literals that are in the macro's literals list
+        if !self
+            .literals
+            .iter()
+            .any(|l| l.as_ref() == lit_name.as_ref())
+        {
+            return false;
+        }
+
+        // Extract the input name
+        let input_name = match input {
+            Value::Symbol(s) => s.clone(),
+            Value::Identifier(id) => id.name.clone(),
+            _ => return false, // Input is not an identifier
+        };
+
+        // Names must match for shadowing to be relevant
+        if lit_name.as_ref() != input_name.as_ref() {
+            return false;
+        }
+
+        // Check if the input name is in the shadowed_names set
+        // This is compile-time shadowing from lambda parameters, let bindings, etc.
+        self.shadowed_names.contains(&input_name)
+    }
+
     fn pattern_to_string_with_names(
         pattern: &Pattern,
         names: &std::collections::HashMap<PVRef, std::rc::Rc<str>>,

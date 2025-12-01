@@ -43,6 +43,29 @@ pub fn expand_macro(
     args: &patina_runtime::Value,
     expansion_env: &std::rc::Rc<patina_runtime::Environment>,
 ) -> Result<patina_runtime::Value, crate::error::MacroError> {
+    // No shadowed names - use default behavior
+    expand_macro_with_shadowed(
+        compiled_macro,
+        args,
+        expansion_env,
+        &std::collections::HashSet::new(),
+    )
+}
+
+/// Expand a macro with compile-time shadowing information
+///
+/// This variant accepts `shadowed_names` which contains identifiers that are
+/// shadowed by local bindings at the macro use site (e.g., lambda parameters).
+/// When a literal identifier (like `=>` in cond) is shadowed, it should NOT
+/// match as a literal (R7RS 4.3.2).
+///
+/// TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
+pub fn expand_macro_with_shadowed(
+    compiled_macro: &CompiledMacro,
+    args: &patina_runtime::Value,
+    expansion_env: &std::rc::Rc<patina_runtime::Environment>,
+    shadowed_names: &std::collections::HashSet<std::rc::Rc<str>>,
+) -> Result<patina_runtime::Value, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
     use patina_runtime::debug_format::format_with_scopes;
 
@@ -117,9 +140,15 @@ pub fn expand_macro(
             );
         }
 
-        // Create matcher for this rule
-        // Pass pvar_names for better debug output
-        let matcher = Matcher::new_with_names(rule.num_pvars, rule.pvar_names.clone());
+        // Create matcher for this rule with hygiene support
+        // Pass shadowed_names and literals for checking shadowed literals (R7RS 4.3.2)
+        // TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
+        let matcher = Matcher::new_with_hygiene(
+            rule.num_pvars,
+            rule.pvar_names.clone(),
+            shadowed_names.clone(),
+            compiled_macro.literals.clone(),
+        );
 
         // Try to match the pattern against the FLIPPED arguments
         // The flipped_args have macro_scope added to all identifiers

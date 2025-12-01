@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-30 17:06:13
+**Generated:** 2025-12-01 18:32:09
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 705 | 60.3% |
+| ✅ Passed | 711 | 60.8% |
 | ❌ Failed | 35 | 3.0% |
-| ⚠️ Error (crashed) | 430 | 36.8% |
-| **Total** | **1170** | **100%** |
+| ⚠️ Error (crashed) | 423 | 36.2% |
+| **Total** | **1169** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
 
@@ -59,16 +59,9 @@ FAIL:
 ### Errors
 
 ```
-Error: Invalid syntax: syntax-rules literals must be a proper list
-Error: Undefined variable: sequence3
-Error: Not a procedure: 1
-Error: Not a procedure: ok
-Error: Undefined variable: bar
 Error: Undefined variable: ff
-Error: Not a procedure: #<macro:foo399>
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro name must be a symbol
-Error: Invalid syntax: syntax-rules literals must be a proper list
-Error: Not a procedure: #<macro:swap!>
+Error: Internal error: Failed to desugar expression: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
 Error: Undefined variable: define-record-type
 Error: Undefined variable: pare?
 Error: Undefined variable: pare?
