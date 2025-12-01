@@ -1678,15 +1678,18 @@ impl Evaluator {
         use patina_macros::Compiler;
 
         // Must be a list starting with 'syntax-rules
+        // Can be either Symbol or Identifier (from macro expansion)
         let (keyword, rest) = self.extract_pair(expr)?;
 
-        match keyword {
-            Value::Symbol(s) if s.as_ref() == "syntax-rules" => {}
-            _ => {
-                return Err(EvalError::InvalidSyntax(
-                    "Expected syntax-rules".to_string(),
-                ));
-            }
+        let is_syntax_rules = match &keyword {
+            Value::Symbol(s) => s.as_ref() == "syntax-rules",
+            Value::Identifier(id) => id.name.as_ref() == "syntax-rules",
+            _ => false,
+        };
+        if !is_syntax_rules {
+            return Err(EvalError::InvalidSyntax(
+                "Expected syntax-rules".to_string(),
+            ));
         }
 
         // Parse literals list

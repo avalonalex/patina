@@ -315,7 +315,9 @@ Testing:
 Testing: 
 (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
 
-Error: Internal error: Failed to desugar expression: if expects 2 or 3 arguments, got 1
+Testing: 
+(letrec-syntax ((my-or (syntax-rules () ((my-or) #f) ((my-or e) e) ((my-or e1 e2 ...) (let ((temp e1)) (if temp temp (my-or e2 ...))))))) (let ((x #f) (y 7) (temp 8) (let odd?) (if even?)) (my-or x (let temp) (if y) y)))
+
 Testing: 
 (sequence1 0 1 2 3)
 
@@ -389,7 +391,7 @@ Testing:
 Error: Not a procedure: #<macro:foo399>
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro name must be a symbol
 Error: Invalid syntax: syntax-rules literals must be a proper list
-Tests run: 26, Passed: 15, Failed: 1, Errors: 10
+Tests run: 26, Passed: 16, Failed: 1, Errors: 9
 
 Running test suite: 5 Program structure
 Testing: 

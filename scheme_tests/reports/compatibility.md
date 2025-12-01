@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-11-28 09:34:24
+**Generated:** 2025-11-30 17:06:13
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 704 | 60.2% |
+| ✅ Passed | 705 | 60.3% |
 | ❌ Failed | 35 | 3.0% |
-| ⚠️ Error (crashed) | 431 | 36.8% |
+| ⚠️ Error (crashed) | 430 | 36.8% |
 | **Total** | **1170** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
@@ -59,7 +59,6 @@ FAIL:
 ### Errors
 
 ```
-Error: Internal error: Failed to desugar expression: if expects 2 or 3 arguments, got 1
 Error: Invalid syntax: syntax-rules literals must be a proper list
 Error: Undefined variable: sequence3
 Error: Not a procedure: 1

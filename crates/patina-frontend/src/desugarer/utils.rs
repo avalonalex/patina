@@ -206,6 +206,22 @@ pub fn check_no_duplicates_scoped(params: &[ScopedParam], context: &str) -> Resu
     Ok(())
 }
 
+/// Extract all parameter names from a Formals structure
+///
+/// Used for tracking which names are shadowed by lambda parameters,
+/// so they are not treated as macro calls.
+pub fn formals_to_names(formals: &Formals) -> Vec<Rc<str>> {
+    match formals {
+        Formals::Fixed(params) => params.iter().map(|p| p.name.clone()).collect(),
+        Formals::Variadic(p) => vec![p.name.clone()],
+        Formals::Mixed { fixed, rest } => {
+            let mut names: Vec<Rc<str>> = fixed.iter().map(|p| p.name.clone()).collect();
+            names.push(rest.name.clone());
+            names
+        }
+    }
+}
+
 /// Check for duplicate parameters (legacy, for symbol-only params)
 #[allow(dead_code)]
 pub fn check_no_duplicates(params: &[Symbol], context: &str) -> Result<()> {

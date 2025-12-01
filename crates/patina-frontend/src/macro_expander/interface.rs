@@ -46,15 +46,16 @@ impl TestExpander {
             ));
         };
         let b1 = p1.borrow();
-        let Value::Symbol(kw) = &b1.0 else {
-            return Err(FrontendError::InvalidSyntax(
-                "Expected syntax-rules keyword".to_string(),
-            ));
+        // Check for syntax-rules keyword - can be Symbol or Identifier (from macro expansion)
+        let is_syntax_rules = match &b1.0 {
+            Value::Symbol(s) => s.as_ref() == "syntax-rules",
+            Value::Identifier(id) => id.name.as_ref() == "syntax-rules",
+            _ => false,
         };
-        if kw.as_ref() != "syntax-rules" {
+        if !is_syntax_rules {
             return Err(FrontendError::InvalidSyntax(format!(
                 "Expected syntax-rules, got {}",
-                kw
+                b1.0
             )));
         }
 

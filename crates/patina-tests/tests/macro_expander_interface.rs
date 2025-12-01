@@ -213,7 +213,8 @@ fn test_literal_matching() {
         .expect("Should expand");
     assert!(result.contains("if"));
     assert!(result.contains("x"));
-    assert!(result.contains("'foo"));
+    // quote can be Symbol or Identifier with scopes, check for either form
+    assert!(result.contains("'foo") || result.contains("(quote foo)"));
     assert!(result.contains("42"));
 }
 
@@ -307,7 +308,8 @@ fn test_dotted_tail_pattern() {
         .expand_to_string("(cons-onto 1 2 3)")
         .expect("Should expand");
     assert!(result.contains("1"));
-    assert!(result.contains("'(2 3)"));
+    // quote can be Symbol or Identifier with scopes, check for either form
+    assert!(result.contains("'(2 3)") || result.contains("(quote (2 3))"));
 }
 
 // NOTE: The following tests were removed as they test non-R7RS patterns:

@@ -92,6 +92,12 @@ use std::rc::Rc;
 /// **Scope-Based Hygiene**: The desugarer tracks a current scope set that
 /// accumulates as we enter binding forms (lambda, let-syntax, etc.). This
 /// enables scope-based hygiene lookup where identifiers carry scope information.
+///
+/// **Name Shadowing**: The desugarer also tracks which names are shadowed by
+/// local bindings (lambda parameters). These names should not be treated as
+/// macro calls, even if a macro with that name exists in the environment.
+/// This handles cases like `(let ((let odd?)) (let 8))` where the inner `let`
+/// should call the variable, not expand the macro.
 pub struct Desugarer {
     /// Optional environment for macro lookup
     /// If None, macros cannot be expanded (will cause desugar errors)
@@ -100,6 +106,10 @@ pub struct Desugarer {
     /// Current scope set for scope-based hygiene
     /// Accumulates scopes as we enter binding forms
     current_scopes: ScopeSet,
+
+    /// Names that are shadowed by local bindings (lambda parameters)
+    /// These should not be treated as macro calls
+    shadowed_names: std::collections::HashSet<Rc<str>>,
 }
 
 impl Desugarer {
@@ -110,6 +120,7 @@ impl Desugarer {
         Self {
             env: None,
             current_scopes: ScopeSet::new(),
+            shadowed_names: std::collections::HashSet::new(),
         }
     }
 
@@ -121,6 +132,7 @@ impl Desugarer {
         Self {
             env: Some(env),
             current_scopes: ScopeSet::new(),
+            shadowed_names: std::collections::HashSet::new(),
         }
     }
 
@@ -131,6 +143,7 @@ impl Desugarer {
         Self {
             env: Some(env),
             current_scopes: scopes,
+            shadowed_names: std::collections::HashSet::new(),
         }
     }
 
@@ -149,8 +162,44 @@ impl Desugarer {
         let desugarer = Self {
             env: self.env.clone(),
             current_scopes: new_scopes,
+            shadowed_names: self.shadowed_names.clone(),
         };
         (desugarer, scope)
+    }
+
+    /// Create a child desugarer with additional shadowed names
+    ///
+    /// Used when entering a lambda body where parameters shadow outer bindings.
+    /// Names in `new_shadows` will not be treated as macro calls even if a
+    /// macro with that name exists in the environment.
+    fn with_shadowed_names(
+        &self,
+        new_shadows: impl IntoIterator<Item = Rc<str>>,
+        new_scopes: ScopeSet,
+    ) -> Self {
+        let mut shadowed = self.shadowed_names.clone();
+        shadowed.extend(new_shadows);
+        Self {
+            env: self.env.clone(),
+            current_scopes: new_scopes,
+            shadowed_names: shadowed,
+        }
+    }
+
+    /// Check if a name is shadowed by a local binding
+    fn is_shadowed(&self, name: &str) -> bool {
+        self.shadowed_names.contains(name)
+    }
+
+    /// Create a child desugarer with a new environment (for let-syntax bodies)
+    ///
+    /// This inherits the current shadowed_names and uses the new environment and scopes.
+    fn with_new_env(&self, env: Rc<Environment>, scopes: ScopeSet) -> Self {
+        Self {
+            env: Some(env),
+            current_scopes: scopes,
+            shadowed_names: self.shadowed_names.clone(),
+        }
     }
 
     /// Desugar a Value (surface syntax) to CoreExpr (core IR)
@@ -222,54 +271,82 @@ impl Desugarer {
             _ => return Err(DesugarError::InvalidSyntax("Expected pair".to_string())),
         };
 
-        // MACRO-AWARE DESUGARING: Check if this is a macro call FIRST
-        // If we have an environment, check for macros before special forms
-        if let (Some(env), Value::Symbol(sym)) = (&self.env, &car)
+        // Extract the operator name and check if it's a macro-introduced keyword
+        // Identifiers with non-empty scopes come from macro templates
+        // Symbols without scopes come from user code
+        let (name, is_macro_introduced) = match &car {
+            Value::Symbol(s) => (Some(s.clone()), false),
+            Value::Identifier(id) => (Some(id.name.clone()), !id.scopes.is_empty()),
+            _ => (None, false),
+        };
+
+        // Determine if this name is shadowed by a local binding
+        // Only user code (Symbol) can be shadowed - macro-introduced identifiers
+        // always refer to their original binding
+        let is_shadowed = name
+            .as_ref()
+            .map(|n| !is_macro_introduced && self.is_shadowed(n))
+            .unwrap_or(false);
+
+        // MACRO-AWARE DESUGARING: Check if this is a macro call
+        // Rules for when to expand as a macro:
+        // 1. Must have an environment for macro lookup
+        // 2. Must NOT be shadowed by local binding (only applies to user code)
+        // 3. Must actually be bound to a macro in the environment
+        //
+        // Note: Macro-introduced identifiers (is_macro_introduced=true) should
+        // STILL be checked for macros. The macro template's `let` should expand
+        // to the `let` macro, not be treated as a variable.
+        if let (Some(env), Some(sym)) = (&self.env, &name)
+            && !is_shadowed
             && let Some(Value::Macro(compiled_macro)) = env.get(sym)
         {
             // This is a macro! Expand it and recursively desugar the result
-            // Expand the macro
             let expanded =
                 patina_macros::expand_macro(&compiled_macro, value, env).map_err(|e| {
                     DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e))
                 })?;
 
             // Recursively desugar the expanded result
-            // This handles the case where macros expand to other macros
             return self.desugar(&expanded);
         }
 
         // Check if it's a core special form
-        if let Value::Symbol(sym) = &car {
-            match sym.as_ref() {
-                // The core forms
-                "quote" => self.desugar_quote(&cdr),
-                "quasiquote" => self.desugar_quasiquote(&cdr),
-                "lambda" => self.desugar_lambda(&cdr),
-                "if" => self.desugar_if(&cdr),
-                "set!" => self.desugar_set(&cdr),
-                "define" => self.desugar_define(&cdr),
-                "define-syntax" => self.desugar_define_syntax(&cdr),
-                "import" => self.desugar_import(&cdr),
-                "parameterize" => self.desugar_parameterize(&cdr),
-                "begin" => self.desugar_begin(&cdr),
-                "apply" => self.desugar_apply(&cdr),
-                "expand" => self.desugar_expand(&cdr),
-                "case-lambda" => self.desugar_case_lambda(&cdr),
+        // This handles both:
+        // - Symbol("if") from user code (not shadowed)
+        // - Identifier("if", {scopes}) from macro templates
+        if let Some(sym) = &name {
+            // If NOT shadowed, treat as special form
+            // If shadowed (user code with local binding), treat as application
+            if !is_shadowed {
+                match sym.as_ref() {
+                    // The core forms (true special forms, NOT macros)
+                    "quote" => return self.desugar_quote(&cdr),
+                    "quasiquote" => return self.desugar_quasiquote(&cdr),
+                    "lambda" => return self.desugar_lambda(&cdr),
+                    "if" => return self.desugar_if(&cdr),
+                    "set!" => return self.desugar_set(&cdr),
+                    "define" => return self.desugar_define(&cdr),
+                    "define-syntax" => return self.desugar_define_syntax(&cdr),
+                    "import" => return self.desugar_import(&cdr),
+                    "parameterize" => return self.desugar_parameterize(&cdr),
+                    "begin" => return self.desugar_begin(&cdr),
+                    "apply" => return self.desugar_apply(&cdr),
+                    "expand" => return self.desugar_expand(&cdr),
+                    "case-lambda" => return self.desugar_case_lambda(&cdr),
 
-                // Let-syntax forms: compile macros and desugar body
-                "let-syntax" => self.desugar_let_syntax(&cdr),
-                "letrec-syntax" => self.desugar_letrec_syntax(&cdr),
+                    // Let-syntax forms: compile macros and desugar body
+                    "let-syntax" => return self.desugar_let_syntax(&cdr),
+                    "letrec-syntax" => return self.desugar_letrec_syntax(&cdr),
 
-                // Everything else is either:
-                // - A derived form that was already expanded by macros
-                // - A procedure application
-                _ => self.desugar_app(value),
+                    // Not a special form - fall through to application
+                    _ => {}
+                }
             }
-        } else {
-            // ((lambda ...) args) or other complex operator
-            self.desugar_app(value)
         }
+
+        // Everything else is a procedure application
+        self.desugar_app(value)
     }
 
     /// Desugar quote: (quote datum) → Quote(datum)
@@ -297,6 +374,14 @@ impl Desugarer {
     /// The `binding_scope` field is only used when parameters DON'T have scopes
     /// (i.e., when they're plain `Symbol`s from non-macro code). For macro-introduced
     /// parameters, the parameter's own scopes are used instead.
+    ///
+    /// ## Variable Shadowing
+    ///
+    /// Lambda parameters shadow any outer bindings, including macros. When
+    /// desugaring the body, parameter names are added to `shadowed_names` so
+    /// that uses of those names are not treated as macro calls. This enables
+    /// code like `(let ((let odd?)) (let 8))` where the inner `let` should
+    /// call the variable, not expand the `let` macro.
     fn desugar_lambda(&self, args: &Value) -> Result<CoreExpr> {
         let (formals, body) = utils::parse_lambda_syntax(args)?;
 
@@ -319,12 +404,14 @@ impl Desugarer {
         let binding_scope = ScopeId::fresh();
         let body_scopes = self.current_scopes.with_scope(binding_scope);
 
-        // Desugar body with the new scope set
-        // This ensures any let-syntax inside the lambda will capture the lambda's scope
-        let body_desugarer = Desugarer {
-            env: self.env.clone(),
-            current_scopes: body_scopes,
-        };
+        // Extract parameter names for shadowing
+        // These names will not be treated as macro calls in the body
+        let param_names = utils::formals_to_names(&params);
+
+        // Desugar body with:
+        // 1. The new scope set (for hygiene)
+        // 2. Parameter names added to shadowed_names (so they don't trigger macro expansion)
+        let body_desugarer = self.with_shadowed_names(param_names, body_scopes);
 
         let body_exprs: Vec<CoreExpr> = body
             .iter()
@@ -443,14 +530,15 @@ impl Desugarer {
                 let binding_scope = ScopeId::fresh();
                 let body_scopes = self.current_scopes.with_scope(binding_scope);
 
-                // Desugar body with the new scope set
-                let body_desugarer = Desugarer {
-                    env: self.env.clone(),
-                    current_scopes: body_scopes,
-                };
+                // Convert and extract parameter names for shadowing
+                let converted_params = utils::convert_formals(&params)?;
+                let param_names = utils::formals_to_names(&converted_params);
+
+                // Desugar body with the new scope set and shadowed names
+                let body_desugarer = self.with_shadowed_names(param_names, body_scopes);
 
                 let lambda = CoreExpr::Lambda {
-                    params: utils::convert_formals(&params)?,
+                    params: converted_params,
                     body: body
                         .iter()
                         .map(|e| body_desugarer.desugar(e))
@@ -483,18 +571,30 @@ impl Desugarer {
     fn desugar_define_syntax(&self, args: &Value) -> Result<CoreExpr> {
         let args_vec = utils::list_to_vec(args)?;
 
-        match args_vec.as_slice() {
-            // (define-syntax name transformer)
-            [Value::Symbol(name), transformer] => Ok(CoreExpr::DefineSyntax {
-                name: name.clone(),
-                transformer: Rc::new(transformer.clone()), // Keep as Value, don't desugar
-                definition_scopes: self.current_scopes.clone(), // Capture scopes for hygiene
-            }),
-
-            _ => Err(DesugarError::InvalidSyntax(
+        if args_vec.len() != 2 {
+            return Err(DesugarError::InvalidSyntax(
                 "define-syntax requires (define-syntax name transformer)".to_string(),
-            )),
+            ));
         }
+
+        // Extract name - can be Symbol or Identifier (from macro expansion)
+        let name = match &args_vec[0] {
+            Value::Symbol(s) => s.clone(),
+            Value::Identifier(id) => id.name.clone(),
+            _ => {
+                return Err(DesugarError::InvalidSyntax(
+                    "define-syntax requires (define-syntax name transformer)".to_string(),
+                ));
+            }
+        };
+
+        let transformer = &args_vec[1];
+
+        Ok(CoreExpr::DefineSyntax {
+            name,
+            transformer: Rc::new(transformer.clone()), // Keep as Value, don't desugar
+            definition_scopes: self.current_scopes.clone(), // Capture scopes for hygiene
+        })
     }
 
     /// Desugar import: (import import-set ...) → Import { import_sets }
@@ -775,7 +875,8 @@ impl Desugarer {
 
         // Create desugarer with extended environment AND scope set
         // The body sees the let-syntax scope (for bindings introduced by macros)
-        let body_desugarer = Desugarer::with_env_and_scopes(body_env, definition_scopes);
+        // We use with_new_env to inherit shadowed_names from the parent
+        let body_desugarer = self.with_new_env(body_env, definition_scopes);
 
         // Desugar body expressions in extended environment
         let body = &args_vec[1..];
@@ -816,13 +917,16 @@ impl Desugarer {
         }
 
         // Check first element is 'syntax-rules
-        match &list[0] {
-            Value::Symbol(s) if s.as_ref() == "syntax-rules" => {}
-            _ => {
-                return Err(DesugarError::InvalidSyntax(
-                    "Expected syntax-rules".to_string(),
-                ));
-            }
+        // Can be either Symbol or Identifier (from macro expansion)
+        let is_syntax_rules = match &list[0] {
+            Value::Symbol(s) => s.as_ref() == "syntax-rules",
+            Value::Identifier(id) => id.name.as_ref() == "syntax-rules",
+            _ => false,
+        };
+        if !is_syntax_rules {
+            return Err(DesugarError::InvalidSyntax(
+                "Expected syntax-rules".to_string(),
+            ));
         }
 
         if list.len() < 2 {
@@ -875,13 +979,16 @@ impl Desugarer {
         }
 
         // Check first element is 'syntax-rules
-        match &list[0] {
-            Value::Symbol(s) if s.as_ref() == "syntax-rules" => {}
-            _ => {
-                return Err(DesugarError::InvalidSyntax(
-                    "Expected syntax-rules".to_string(),
-                ));
-            }
+        // Can be either Symbol or Identifier (from macro expansion)
+        let is_syntax_rules = match &list[0] {
+            Value::Symbol(s) => s.as_ref() == "syntax-rules",
+            Value::Identifier(id) => id.name.as_ref() == "syntax-rules",
+            _ => false,
+        };
+        if !is_syntax_rules {
+            return Err(DesugarError::InvalidSyntax(
+                "Expected syntax-rules".to_string(),
+            ));
         }
 
         if list.len() < 2 {

@@ -571,6 +571,7 @@ impl Expander {
     /// All identifiers become `Identifier` with appropriate scopes:
     /// - Free variables: use definition scopes (for binding resolution)
     /// - Introduced identifiers: empty scopes (macro_scope will be added by flip on output)
+    /// - Special forms/keywords: also get empty scopes (macro_scope added by flip)
     ///
     /// The actual hygiene discrimination happens via flip-scope:
     /// 1. Before expansion: flip macro_scope on INPUT (adds to use-site identifiers)
@@ -578,15 +579,19 @@ impl Expander {
     /// 3. After expansion: flip macro_scope on OUTPUT
     ///    - Use-site (from pattern vars): macro_scope removed (was added, then flipped off)
     ///    - Introduced (from template): macro_scope added (wasn't there, then flipped on)
+    ///
+    /// NOTE: Special forms like `let`, `if` are NOT special-cased anymore.
+    /// They are treated like introduced identifiers and will get the macro_scope.
+    /// This allows the desugarer to distinguish macro-introduced keywords from
+    /// user variables with the same name. For example, in:
+    ///   (let ((let odd?)) (my-or (let 8)))
+    /// The macro's `let` (from template) will have macro_scope, while the user's
+    /// `(let 8)` (from input) will NOT have macro_scope, so they can be distinguished.
     fn rename_identifier(&self, id: &Identifier) -> Value {
         let name = id.name();
 
-        // Special forms and macros are never renamed
-        if is_special_form(name.as_ref()) || self.is_macro(name) {
-            return Value::Symbol(name.clone());
-        }
-
         // Get scopes for the identifier
+        // NOTE: Special forms are NOT special-cased here - they get scopes like any other identifier
         let scopes = if let Some(def_scopes) = id.definition_scopes() {
             // FREE VARIABLE - use definition-time scopes
             if patina_runtime::macro_debug::is_enabled() {
@@ -597,8 +602,8 @@ impl Expander {
             }
             def_scopes.clone()
         } else {
-            // INTRODUCED IDENTIFIER - empty scopes for now
-            // The macro_scope will be added when we flip on the output
+            // INTRODUCED IDENTIFIER (including keywords like `let`, `if`)
+            // Empty scopes for now - the macro_scope will be added when we flip on the output
             if patina_runtime::macro_debug::is_enabled() {
                 println!(
                     "[SCOPE-SETS] Introduced '{}' (will get macro scope {} on output flip)",
@@ -616,6 +621,7 @@ impl Expander {
     }
 
     /// Check if a name is bound to a macro in the expansion environment
+    #[allow(dead_code)]
     fn is_macro(&self, name: &Rc<str>) -> bool {
         use patina_runtime::Value;
         matches!(self.expansion_env.get(name), Some(Value::Macro(_)))
@@ -668,7 +674,10 @@ impl Default for Expander {
 
 /// Check if a symbol is a special form keyword
 ///
-/// Special forms are part of the language syntax and should not be renamed.
+/// NOTE: This function is no longer used by rename_identifier. It's kept for
+/// reference and potential future use. Special forms are now treated like
+/// introduced identifiers and get macro scopes for proper hygiene.
+#[allow(dead_code)]
 fn is_special_form(name: &str) -> bool {
     matches!(
         name,
