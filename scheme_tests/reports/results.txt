@@ -1483,48 +1483,37 @@ Testing:
 Testing: 
 (symbol=? 'a 'a)
 
-Error: Undefined variable: symbol=?
 Testing: 
 (symbol=? 'a 'A)
 
-Error: Undefined variable: symbol=?
 Testing: 
 (symbol=? 'a 'a 'a)
 
-Error: Undefined variable: symbol=?
 Testing: 
 (symbol=? 'a 'a 'A)
 
-Error: Undefined variable: symbol=?
 Testing: 
 (symbol->string 'flying-fish)
 
-Error: Undefined variable: symbol->string
 Testing: 
 (symbol->string 'Martin)
 
-Error: Undefined variable: symbol->string
 Testing: 
 (symbol->string (string->symbol "Malvina"))
 
-Error: Undefined variable: symbol->string
 Testing: 
 (string->symbol "mISSISSIppi")
 
-Error: Undefined variable: string->symbol
 Testing: 
 (eq? 'bitBlt (string->symbol "bitBlt"))
 
-Error: Undefined variable: string->symbol
 Testing: 
 (eq? 'LollyPop (string->symbol (symbol->string 'LollyPop)))
 
-Error: Undefined variable: string->symbol
 Testing: 
 (string=? "K. Harper, M.D." (symbol->string (string->symbol "K. Harper, M.D.")))
 
-Error: Undefined variable: symbol->string
-Tests run: 17, Passed: 6, Failed: 0, Errors: 11
+Tests run: 17, Passed: 17, Failed: 0
 
 Running test suite: 6.6 Characters
 Testing: 

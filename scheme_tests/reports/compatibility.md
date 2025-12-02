@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-01 21:42:47
+**Generated:** 2025-12-01 22:07:37
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 741 | 63.4% |
+| ✅ Passed | 752 | 64.3% |
 | ❌ Failed | 16 | 1.4% |
-| ⚠️ Error (crashed) | 412 | 35.2% |
+| ⚠️ Error (crashed) | 401 | 34.3% |
 | **Total** | **1169** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
@@ -58,17 +58,6 @@ Error: Undefined variable: test-values
 Error: Undefined variable: test-values
 Error: Undefined variable: .3
 Error: Undefined variable: .3
-Error: Undefined variable: symbol=?
-Error: Undefined variable: symbol=?
-Error: Undefined variable: symbol=?
-Error: Undefined variable: symbol=?
-Error: Undefined variable: symbol->string
-Error: Undefined variable: symbol->string
-Error: Undefined variable: symbol->string
-Error: Undefined variable: string->symbol
-Error: Undefined variable: string->symbol
-Error: Undefined variable: string->symbol
-Error: Undefined variable: symbol->string
 Error: Undefined variable: utf8->string
 Error: Undefined variable: utf8->string
 Error: Undefined variable: utf8->string

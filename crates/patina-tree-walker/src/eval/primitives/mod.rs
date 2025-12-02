@@ -29,6 +29,7 @@ mod lists;
 mod parameters;
 mod predicates;
 mod strings;
+mod symbols;
 mod test;
 mod values;
 mod vectors;
@@ -97,6 +98,7 @@ impl Evaluator {
         predicates::register(registry);
         equality::register(registry);
         strings::register(registry);
+        symbols::register(registry);
         vectors::register(registry);
         values::register(registry);
         io::register(registry);
