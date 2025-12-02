@@ -995,9 +995,10 @@ impl Desugarer {
                 ));
             }
 
-            // Extract name as symbol
+            // Extract name - can be Symbol or Identifier (from macro expansion)
             let name = match &binding_vec[0] {
                 Value::Symbol(s) => s.clone(),
+                Value::Identifier(id) => id.name.clone(),
                 _ => {
                     return Err(DesugarError::InvalidSyntax(
                         "Macro name must be a symbol".to_string(),
@@ -1273,8 +1274,10 @@ impl Desugarer {
 
         while let Value::Pair(pair) = current {
             let pair_ref = pair.borrow();
+            // Accept both Symbol and Identifier (from macro expansion)
             match &pair_ref.0 {
                 Value::Symbol(s) => literals.push(s.clone()),
+                Value::Identifier(id) => literals.push(id.name.clone()),
                 _ => {
                     return Err(DesugarError::InvalidSyntax(
                         "syntax-rules literals must be symbols".to_string(),

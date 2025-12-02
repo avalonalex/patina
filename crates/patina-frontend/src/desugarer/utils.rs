@@ -248,8 +248,10 @@ pub fn parse_define_function(pattern: &Value) -> Result<(Symbol, Value)> {
         ));
     }
 
+    // Accept both Symbol and Identifier (from macro expansion)
     let name = match &pattern_list[0] {
         Value::Symbol(s) => s.clone(),
+        Value::Identifier(id) => id.name.clone(),
         _ => {
             return Err(DesugarError::InvalidSyntax(
                 "define function name must be a symbol".to_string(),
