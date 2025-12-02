@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-01 18:32:09
+**Generated:** 2025-12-01 19:15:58
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
@@ -59,7 +59,7 @@ FAIL:
 ### Errors
 
 ```
-Error: Undefined variable: ff
+Error: Internal error: Failed to desugar expression: Invalid syntax: define function name must be a symbol
 Error: Internal error: Failed to desugar expression: Invalid syntax: Macro name must be a symbol
 Error: Internal error: Failed to desugar expression: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
 Error: Undefined variable: define-record-type

@@ -1,8 +1,28 @@
 # DefineSyntax Elimination from CoreExpr
 
-**Status:** Research Complete, Blocked on Prerequisite Work
+**Status:** ✅ COMPLETE (2025-12-01)
 **Goal:** Remove `DefineSyntax` from CoreExpr to enable clean VM compilation
 **Impact:** Cleaner separation between compile-time (macros) and runtime (evaluation)
+
+## Completion Summary
+
+The `CoreExpr::DefineSyntax` variant has been completely eliminated. All macro definitions
+(`define-syntax`) are now compiled immediately during desugaring:
+
+- **Before**: `define-syntax` → `CoreExpr::DefineSyntax` → Evaluator compiles macro
+- **After**: `define-syntax` → Desugarer compiles macro → Install in env → `CoreExpr::Literal(Unspecified)`
+
+### Files Modified:
+- `patina-core/src/core_expr.rs` - Removed `DefineSyntax` variant
+- `patina-frontend/src/desugarer/mod.rs` - Simplified to always compile immediately
+- `patina-tree-walker/src/eval/core_eval.rs` - Removed evaluator handling
+- `patina-frontend/tests/desugarer_macro_tests.rs` - Updated tests
+
+### Verification:
+- All unit tests pass
+- Chibi r7rs tests: 711 passed (matches baseline)
+
+---
 
 ---
 

@@ -273,30 +273,6 @@ pub(crate) fn eval_core_step(
             Ok(CoreEvalResult::Value(Value::Unspecified))
         }
 
-        // DefineSyntax: compile transformer and install macro
-        // The transformer is typically (syntax-rules ...) which needs special handling
-        CoreExpr::DefineSyntax {
-            name,
-            transformer,
-            definition_scopes,
-        } => {
-            // Transformer is already a Value (stored as data, not desugared code)
-            // Compile the syntax-rules transformer with definition scopes for hygiene
-            let compiled_macro = evaluator.compile_syntax_rules(
-                transformer,
-                name.clone(),
-                &env,
-                definition_scopes,
-            )?;
-
-            // Store the compiled macro
-            let macro_value = Value::Macro(Rc::new(compiled_macro));
-
-            // Bind the macro in the environment
-            env.define(name.to_string(), macro_value);
-            Ok(CoreEvalResult::Value(Value::Unspecified))
-        }
-
         // Import: load library bindings into environment
         CoreExpr::Import { import_sets } => {
             // Process each import set
@@ -952,19 +928,6 @@ pub(crate) fn core_expr_to_value(expr: &CoreExpr) -> Result<Value, EvalError> {
             Ok(cons(
                 Value::symbol("define"),
                 cons(Value::Symbol(name.clone()), cons(value_val, Value::Null)),
-            ))
-        }
-        CoreExpr::DefineSyntax {
-            name, transformer, ..
-        } => {
-            // (define-syntax name transformer)
-            // Transformer is already a Value (template data, wrapped in Rc)
-            Ok(cons(
-                Value::symbol("define-syntax"),
-                cons(
-                    Value::Symbol(name.clone()),
-                    cons(transformer.as_ref().clone(), Value::Null),
-                ),
             ))
         }
         CoreExpr::Import { import_sets } => {

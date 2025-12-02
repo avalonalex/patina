@@ -2,6 +2,42 @@
 
 Major accomplishments and project milestones.
 
+## 2025-12-01: DefineSyntax Elimination Complete
+
+**IR Simplification Achievement**
+
+Completely removed `CoreExpr::DefineSyntax` from the intermediate representation. All macro
+definitions (`define-syntax`) are now compiled immediately during desugaring.
+
+**Before:**
+```
+define-syntax → CoreExpr::DefineSyntax → Evaluator compiles macro at runtime
+```
+
+**After:**
+```
+define-syntax → Desugarer compiles macro → Install in env → CoreExpr::Literal(Unspecified)
+```
+
+**What Changed:**
+- ✅ Removed `CoreExpr::DefineSyntax` variant from `patina-core/src/core_expr.rs`
+- ✅ Simplified `desugar_define_syntax()` to always compile immediately
+- ✅ Removed evaluator handling in `patina-tree-walker/src/eval/core_eval.rs`
+- ✅ Removed `eliminate_define_syntax` flag (no longer needed)
+- ✅ Removed deprecated `with_env_legacy()` and `with_env_v2()` constructors
+
+**Why This Matters:**
+- **Simpler IR**: One less variant for backends to handle
+- **Cleaner separation**: All macro compilation happens at desugar time, not runtime
+- **VM-ready**: Future VM/JIT backends won't need compile-time macro handling
+- **Maintainability**: Single code path instead of flag-based switching
+
+**Verification:**
+- All unit tests pass (668 tests)
+- Chibi r7rs tests: 711 passed (matches baseline)
+
+---
+
 ## 2025-11-25: Complete `dyn Any` Elimination - Zero `dyn Any` in Codebase
 
 **Major Type Safety Achievement**

@@ -379,7 +379,7 @@ x
 1
 
 
-Error: Undefined variable: ff
+Error: Internal error: Failed to desugar expression: Invalid syntax: define function name must be a symbol
 Testing: 
 (vector-lit)
 

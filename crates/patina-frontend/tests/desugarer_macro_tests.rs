@@ -214,3 +214,60 @@ fn test_desugar_application() {
         result.err()
     );
 }
+
+// =========================================================================
+// Desugarer Macro Tests - define-syntax compiles immediately
+// =========================================================================
+
+use patina_ir::CoreExpr;
+use patina_runtime::Environment;
+use std::rc::Rc;
+
+/// Test that desugarer returns Literal(Unspecified) for define-syntax
+/// (macro is compiled immediately and installed in environment)
+#[test]
+fn test_desugarer_returns_unspecified_for_define_syntax() {
+    let code = "(define-syntax foo (syntax-rules () ((foo x) x)))";
+    let value = parse(code);
+
+    // Create environment for desugarer
+    let env = Rc::new(Environment::new());
+    let desugarer = Desugarer::with_env(env);
+
+    let result = desugarer
+        .desugar(&value)
+        .expect("Should desugar successfully");
+
+    // Should be Literal(Unspecified) - macro is compiled at desugar time
+    assert!(
+        matches!(&result, CoreExpr::Literal(val) if matches!(val.as_ref(), Value::Unspecified)),
+        "Expected Literal(Unspecified), got {:?}",
+        result
+    );
+}
+
+/// Test that desugarer installs macro in environment
+#[test]
+fn test_desugarer_installs_macro_in_environment() {
+    let code = "(define-syntax foo (syntax-rules () ((foo x) x)))";
+    let value = parse(code);
+
+    // Create environment for desugarer
+    let env = Rc::new(Environment::new());
+    let desugarer = Desugarer::with_env(env.clone());
+
+    let _ = desugarer
+        .desugar(&value)
+        .expect("Should desugar successfully");
+
+    // Macro should now be in the environment
+    let macro_value = env.get("foo");
+    assert!(
+        macro_value.is_some(),
+        "Macro 'foo' should be installed in environment"
+    );
+    assert!(
+        matches!(macro_value.unwrap(), Value::Macro(_)),
+        "foo should be a Macro value"
+    );
+}

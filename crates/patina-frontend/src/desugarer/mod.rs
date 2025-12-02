@@ -128,6 +128,9 @@ impl Desugarer {
     ///
     /// This allows the desugarer to expand macros as it encounters them.
     /// The environment is used to look up macro definitions.
+    ///
+    /// The desugarer compiles `define-syntax` immediately during desugaring
+    /// and installs macros in the environment, returning `CoreExpr::Literal(Unspecified)`.
     pub fn with_env(env: Rc<Environment>) -> Self {
         Self {
             env: Some(env),
@@ -497,7 +500,10 @@ impl Desugarer {
     /// Returns the desugared body expressions (excluding define-syntax forms,
     /// which are processed but not emitted to CoreExpr).
     ///
-    /// TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
+    /// Note: define-syntax is now compiled immediately by desugar_define_syntax()
+    /// and returns Literal(Unspecified). The macro is installed in the environment
+    /// during desugaring. This function filters out the Unspecified results from
+    /// define-syntax forms to avoid spurious expressions in the body.
     fn desugar_body_with_internal_defines(
         &self,
         initial_desugarer: &Desugarer,
@@ -505,7 +511,6 @@ impl Desugarer {
         body_scopes: &ScopeSet,
     ) -> Result<Vec<CoreExpr>> {
         // If we don't have an environment, fall back to simple desugaring
-        // (define-syntax will produce CoreExpr::DefineSyntax which is handled at runtime)
         let env = match &initial_desugarer.env {
             Some(e) => e.clone(),
             None => {
@@ -541,41 +546,15 @@ impl Desugarer {
                 current_env = new_env.clone();
                 current_desugarer = current_desugarer.with_new_env(new_env, body_scopes.clone());
 
-                // Don't emit CoreExpr::DefineSyntax - the macro is now in the environment
-                // and will be expanded during desugaring of subsequent expressions
+                // Don't emit anything - macro definition is compile-time only
             } else {
                 // Regular expression - desugar with current environment
                 let desugared = current_desugarer.desugar(expr)?;
 
-                // Check if the desugared result is CoreExpr::DefineSyntax
-                // This handles macro-generating macros: when (foo bar x) expands to (define-syntax bar ...)
-                // the desugar() call returns CoreExpr::DefineSyntax which we need to handle here
-                // TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
-                if let CoreExpr::DefineSyntax {
-                    name,
-                    transformer,
-                    definition_scopes,
-                } = desugared
+                // Filter out Literal(Unspecified) from macro definitions
+                // (macro-generating macros also install immediately and return Unspecified)
+                if !matches!(&desugared, CoreExpr::Literal(v) if matches!(v.as_ref(), Value::Unspecified))
                 {
-                    // Compile the macro from the transformer Value
-                    let compiled_macro = self.compile_syntax_rules_with_scopes(
-                        &transformer,
-                        name.clone(),
-                        &current_env,
-                        &definition_scopes,
-                    )?;
-
-                    // Create a new environment with the macro binding
-                    let new_env = Rc::new(Environment::with_parent(current_env.clone()));
-                    new_env.define(name.to_string(), Value::Macro(Rc::new(compiled_macro)));
-
-                    // Update the current desugarer to use the new environment
-                    current_env = new_env.clone();
-                    current_desugarer =
-                        current_desugarer.with_new_env(new_env, body_scopes.clone());
-
-                    // Don't emit to body_exprs - macro is compile-time only
-                } else {
                     body_exprs.push(desugared);
                 }
             }
@@ -723,8 +702,9 @@ impl Desugarer {
 
     /// Desugar define-syntax: (define-syntax name transformer)
     ///
-    /// The transformer is kept as a Value (not desugared) because it's template data,
-    /// not code to be evaluated. Similar to how quote keeps its datum as a Value.
+    /// The macro is compiled immediately during desugaring and installed in the
+    /// environment. Returns `CoreExpr::Literal(Unspecified)` since the macro
+    /// definition is a compile-time operation with no runtime effect.
     fn desugar_define_syntax(&self, args: &Value) -> Result<CoreExpr> {
         let args_vec = utils::list_to_vec(args)?;
 
@@ -747,11 +727,25 @@ impl Desugarer {
 
         let transformer = &args_vec[1];
 
-        Ok(CoreExpr::DefineSyntax {
-            name,
-            transformer: Rc::new(transformer.clone()), // Keep as Value, don't desugar
-            definition_scopes: self.current_scopes.clone(), // Capture scopes for hygiene
-        })
+        // Compile macro immediately and install in environment
+        let env = self.env.as_ref().ok_or_else(|| {
+            DesugarError::InvalidSyntax(
+                "define-syntax requires environment (use Desugarer::with_env)".into(),
+            )
+        })?;
+
+        let compiled_macro = self.compile_syntax_rules_with_scopes(
+            transformer,
+            name.clone(),
+            env,
+            &self.current_scopes,
+        )?;
+
+        // Install in environment
+        env.define(name.to_string(), Value::Macro(Rc::new(compiled_macro)));
+
+        // Return unspecified - macro is now in environment
+        Ok(CoreExpr::Literal(Rc::new(Value::Unspecified)))
     }
 
     /// Desugar import: (import import-set ...) → Import { import_sets }

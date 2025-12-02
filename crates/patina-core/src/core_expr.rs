@@ -141,17 +141,6 @@ pub enum CoreExpr {
     /// Example: (define x 42), (define (f x) x)
     Define { name: Symbol, value: Rc<CoreExpr> },
 
-    /// Macro definition
-    /// Example: (define-syntax when (syntax-rules () ...))
-    /// The transformer is typically (syntax-rules ...) and is stored as-is (not desugared)
-    /// It will be compiled to a Macro value by the evaluator
-    /// Uses Rc<Value> to reduce CoreExpr size
-    DefineSyntax {
-        name: Symbol,
-        transformer: Rc<Value>, // Template data, not code - similar to Quote
-        definition_scopes: ScopeSet, // Scopes at macro definition time for hygiene
-    },
-
     /// Import: load library bindings
     /// Example: (import (scheme base))
     /// Import sets are kept as Values (declarative data, not code)
@@ -259,7 +248,6 @@ impl CoreExpr {
             CoreExpr::Set { .. } => "set!",
             CoreExpr::Begin(_) => "begin",
             CoreExpr::Define { .. } => "define",
-            CoreExpr::DefineSyntax { .. } => "define-syntax",
             CoreExpr::Import { .. } => "import",
             CoreExpr::Parameterize { .. } => "parameterize",
             CoreExpr::Expand { .. } => "expand",
@@ -311,16 +299,6 @@ impl CoreExpr {
             CoreExpr::Define { name, value } => CoreExpr::Define {
                 name: name.clone(),
                 value: Rc::new(f(value)),
-            },
-
-            CoreExpr::DefineSyntax {
-                name,
-                transformer,
-                definition_scopes,
-            } => CoreExpr::DefineSyntax {
-                name: name.clone(),
-                transformer: transformer.clone(),
-                definition_scopes: definition_scopes.clone(),
             },
 
             CoreExpr::Import { import_sets } => CoreExpr::Import {
@@ -434,11 +412,6 @@ impl std::fmt::Display for CoreExpr {
             }
             CoreExpr::Define { name, value } => {
                 write!(f, "(define {} {})", name, value)
-            }
-            CoreExpr::DefineSyntax {
-                name, transformer, ..
-            } => {
-                write!(f, "(define-syntax {} {})", name, transformer)
             }
             CoreExpr::Import { import_sets } => {
                 write!(f, "(import")?;
