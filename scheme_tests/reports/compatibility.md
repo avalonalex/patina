@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-01 22:07:37
+**Generated:** 2025-12-01 23:07:01
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 752 | 64.3% |
+| ✅ Passed | 761 | 65.1% |
 | ❌ Failed | 16 | 1.4% |
-| ⚠️ Error (crashed) | 401 | 34.3% |
+| ⚠️ Error (crashed) | 392 | 33.5% |
 | **Total** | **1169** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
@@ -47,15 +47,6 @@ Error: Undefined variable: pare?
 Error: Undefined variable: kar
 Error: Undefined variable: kdr
 Error: Undefined variable: kons
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
 Error: Undefined variable: .3
 Error: Undefined variable: .3
 Error: Undefined variable: utf8->string

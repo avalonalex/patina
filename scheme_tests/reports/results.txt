@@ -900,15 +900,33 @@ Testing:
 Testing: 
 (abs 7)
 
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
-Error: Undefined variable: test-values
+Testing: 
+(call-with-values (lambda () (floor/ 5 2)) (lambda results results))
+
+Testing: 
+(call-with-values (lambda () (floor/ -5 2)) (lambda results results))
+
+Testing: 
+(call-with-values (lambda () (floor/ 5 -2)) (lambda results results))
+
+Testing: 
+(call-with-values (lambda () (floor/ -5 -2)) (lambda results results))
+
+Testing: 
+(call-with-values (lambda () (truncate/ 5 2)) (lambda results results))
+
+Testing: 
+(call-with-values (lambda () (truncate/ -5 2)) (lambda results results))
+
+Testing: 
+(call-with-values (lambda () (truncate/ 5 -2)) (lambda results results))
+
+Testing: 
+(call-with-values (lambda () (truncate/ -5 -2)) (lambda results results))
+
+Testing: 
+(call-with-values (lambda () (truncate/ -5.0 -2)) (lambda results results))
+
 Testing: 
 (modulo 13 4)
 
@@ -1204,7 +1222,7 @@ Testing:
 Testing: 
 (string->number "1 2")
 
-Tests run: 211, Passed: 195, Failed: 5, Errors: 11
+Tests run: 211, Passed: 204, Failed: 5, Errors: 2
 
 Running test suite: 6.3 Booleans
 Testing: 

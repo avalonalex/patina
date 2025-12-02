@@ -897,6 +897,312 @@ pub(super) fn modulo(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
     )
 }
 
+// ============================================================================
+// R7RS floor/ and truncate/ division procedures (Section 6.2.6)
+// ============================================================================
+
+/// Helper for binary division operations returning two values (quotient and remainder).
+/// Uses the same pattern as binary_int_op: exact integers first, then inexact.
+fn binary_div_op<FInt, FBig>(
+    a: &Value,
+    b: &Value,
+    op_name: &str,
+    int_op: FInt,
+    big_op: FBig,
+) -> Result<Value, EvalError>
+where
+    FInt: Fn(i64, i64) -> (i64, i64),
+    FBig: Fn(&BigInt, &BigInt) -> (BigInt, BigInt),
+{
+    // Handle exact integers first (fast path)
+    match (a, b) {
+        (Value::Integer(a_val), Value::Integer(b_val)) => {
+            if *b_val == 0 {
+                return Err(EvalError::DivisionByZero);
+            }
+            let (q, r) = int_op(*a_val, *b_val);
+            return Ok(Value::Values(vec![Value::Integer(q), Value::Integer(r)]));
+        }
+        (Value::BigInteger(a_val), Value::BigInteger(b_val)) => {
+            if b_val.is_zero() {
+                return Err(EvalError::DivisionByZero);
+            }
+            let (q, r) = big_op(a_val, b_val);
+            return Ok(Value::Values(vec![
+                bigint_to_value(q),
+                bigint_to_value(r),
+            ]));
+        }
+        (Value::Integer(a_val), Value::BigInteger(b_val)) => {
+            if b_val.is_zero() {
+                return Err(EvalError::DivisionByZero);
+            }
+            let (q, r) = big_op(&NumericValue::to_bigint(*a_val), b_val);
+            return Ok(Value::Values(vec![
+                bigint_to_value(q),
+                bigint_to_value(r),
+            ]));
+        }
+        (Value::BigInteger(a_val), Value::Integer(b_val)) => {
+            if *b_val == 0 {
+                return Err(EvalError::DivisionByZero);
+            }
+            let (q, r) = big_op(a_val, &NumericValue::to_bigint(*b_val));
+            return Ok(Value::Values(vec![
+                bigint_to_value(q),
+                bigint_to_value(r),
+            ]));
+        }
+        _ => {}
+    }
+
+    // Handle inexact integers (like -5.0)
+    let (a_int, a_inexact) = extract_integer(a, op_name)?;
+    let (b_int, b_inexact) = extract_integer(b, op_name)?;
+
+    if b_int == 0 {
+        return Err(EvalError::DivisionByZero);
+    }
+
+    let (q, r) = int_op(a_int, b_int);
+
+    // If either operand was inexact, result is inexact
+    if a_inexact || b_inexact {
+        Ok(Value::Values(vec![
+            Value::Real(q as f64),
+            Value::Real(r as f64),
+        ]))
+    } else {
+        Ok(Value::Values(vec![Value::Integer(q), Value::Integer(r)]))
+    }
+}
+
+/// Helper for single-value division operations (quotient or remainder only).
+fn binary_div_single_op<FInt, FBig>(
+    a: &Value,
+    b: &Value,
+    op_name: &str,
+    int_op: FInt,
+    big_op: FBig,
+) -> Result<Value, EvalError>
+where
+    FInt: Fn(i64, i64) -> i64,
+    FBig: Fn(&BigInt, &BigInt) -> BigInt,
+{
+    // Handle exact integers first (fast path)
+    match (a, b) {
+        (Value::Integer(a_val), Value::Integer(b_val)) => {
+            if *b_val == 0 {
+                return Err(EvalError::DivisionByZero);
+            }
+            return Ok(Value::Integer(int_op(*a_val, *b_val)));
+        }
+        (Value::BigInteger(a_val), Value::BigInteger(b_val)) => {
+            if b_val.is_zero() {
+                return Err(EvalError::DivisionByZero);
+            }
+            return Ok(bigint_to_value(big_op(a_val, b_val)));
+        }
+        (Value::Integer(a_val), Value::BigInteger(b_val)) => {
+            if b_val.is_zero() {
+                return Err(EvalError::DivisionByZero);
+            }
+            return Ok(bigint_to_value(big_op(
+                &NumericValue::to_bigint(*a_val),
+                b_val,
+            )));
+        }
+        (Value::BigInteger(a_val), Value::Integer(b_val)) => {
+            if *b_val == 0 {
+                return Err(EvalError::DivisionByZero);
+            }
+            return Ok(bigint_to_value(big_op(
+                a_val,
+                &NumericValue::to_bigint(*b_val),
+            )));
+        }
+        _ => {}
+    }
+
+    // Handle inexact integers (like -5.0)
+    let (a_int, a_inexact) = extract_integer(a, op_name)?;
+    let (b_int, b_inexact) = extract_integer(b, op_name)?;
+
+    if b_int == 0 {
+        return Err(EvalError::DivisionByZero);
+    }
+
+    let result = int_op(a_int, b_int);
+
+    // If either operand was inexact, result is inexact
+    if a_inexact || b_inexact {
+        Ok(Value::Real(result as f64))
+    } else {
+        Ok(Value::Integer(result))
+    }
+}
+
+/// Convert BigInt to appropriate Value (Integer if fits, otherwise BigInteger)
+fn bigint_to_value(n: BigInt) -> Value {
+    match n.to_i64() {
+        Some(i) => Value::Integer(i),
+        None => Value::BigInteger(n),
+    }
+}
+
+// Floor division helpers for i64
+fn floor_div_i64(a: i64, b: i64) -> (i64, i64) {
+    // floor_quotient = floor(a/b)
+    // Rust's / truncates toward zero, so we need to adjust for floor semantics
+    // when the signs differ and there's a non-zero remainder
+    let q = if (a < 0) != (b < 0) && a % b != 0 {
+        a / b - 1
+    } else {
+        a / b
+    };
+    let r = a - b * q;
+    (q, r)
+}
+
+fn floor_div_bigint(a: &BigInt, b: &BigInt) -> (BigInt, BigInt) {
+    let q = a / b;
+    let r = a % b;
+    // Adjust quotient for floor semantics if signs differ and there's a remainder
+    if (a.sign() != b.sign()) && !r.is_zero() {
+        let q = q - 1;
+        let r = a - b * &q;
+        (q, r)
+    } else {
+        (q, r)
+    }
+}
+
+fn floor_quotient_i64(a: i64, b: i64) -> i64 {
+    floor_div_i64(a, b).0
+}
+
+fn floor_quotient_bigint(a: &BigInt, b: &BigInt) -> BigInt {
+    floor_div_bigint(a, b).0
+}
+
+fn floor_remainder_i64(a: i64, b: i64) -> i64 {
+    floor_div_i64(a, b).1
+}
+
+fn floor_remainder_bigint(a: &BigInt, b: &BigInt) -> BigInt {
+    floor_div_bigint(a, b).1
+}
+
+// Truncate division helpers for i64
+fn truncate_div_i64(a: i64, b: i64) -> (i64, i64) {
+    let q = a / b; // Rust's / truncates toward zero
+    let r = a % b;
+    (q, r)
+}
+
+fn truncate_div_bigint(a: &BigInt, b: &BigInt) -> (BigInt, BigInt) {
+    let q = a / b;
+    let r = a % b;
+    (q, r)
+}
+
+fn truncate_quotient_i64(a: i64, b: i64) -> i64 {
+    a / b
+}
+
+fn truncate_quotient_bigint(a: &BigInt, b: &BigInt) -> BigInt {
+    a / b
+}
+
+fn truncate_remainder_i64(a: i64, b: i64) -> i64 {
+    a % b
+}
+
+fn truncate_remainder_bigint(a: &BigInt, b: &BigInt) -> BigInt {
+    a % b
+}
+
+/// (floor/ n1 n2) -> quotient remainder
+/// Returns two values: floor-quotient and floor-remainder
+pub(super) fn floor_div(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 2, "floor/")?;
+    binary_div_op(&args[0], &args[1], "floor/", floor_div_i64, floor_div_bigint)
+}
+
+/// (floor-quotient n1 n2) -> quotient
+/// Returns floor(n1/n2)
+pub(super) fn floor_quotient(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 2, "floor-quotient")?;
+    binary_div_single_op(
+        &args[0],
+        &args[1],
+        "floor-quotient",
+        floor_quotient_i64,
+        floor_quotient_bigint,
+    )
+}
+
+/// (floor-remainder n1 n2) -> remainder
+/// Returns n1 - n2 * floor(n1/n2)
+pub(super) fn floor_remainder(
+    evaluator: &Evaluator,
+    args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 2, "floor-remainder")?;
+    binary_div_single_op(
+        &args[0],
+        &args[1],
+        "floor-remainder",
+        floor_remainder_i64,
+        floor_remainder_bigint,
+    )
+}
+
+/// (truncate/ n1 n2) -> quotient remainder
+/// Returns two values: truncate-quotient and truncate-remainder
+pub(super) fn truncate_div(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 2, "truncate/")?;
+    binary_div_op(
+        &args[0],
+        &args[1],
+        "truncate/",
+        truncate_div_i64,
+        truncate_div_bigint,
+    )
+}
+
+/// (truncate-quotient n1 n2) -> quotient
+/// Returns truncate(n1/n2)
+pub(super) fn truncate_quotient(
+    evaluator: &Evaluator,
+    args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 2, "truncate-quotient")?;
+    binary_div_single_op(
+        &args[0],
+        &args[1],
+        "truncate-quotient",
+        truncate_quotient_i64,
+        truncate_quotient_bigint,
+    )
+}
+
+/// (truncate-remainder n1 n2) -> remainder
+/// Returns n1 - n2 * truncate(n1/n2)
+pub(super) fn truncate_remainder(
+    evaluator: &Evaluator,
+    args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    evaluator.check_arity_exact(&args, 2, "truncate-remainder")?;
+    binary_div_single_op(
+        &args[0],
+        &args[1],
+        "truncate-remainder",
+        truncate_remainder_i64,
+        truncate_remainder_bigint,
+    )
+}
+
 pub(super) fn abs(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "abs")?;
 
@@ -2006,6 +2312,56 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         |eval, args, _tail| modulo(eval, args).map(EvalResult::Value),
     ));
 
+    // Floor division (floor/, floor-quotient, floor-remainder)
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "floor/",
+        Arity::Exact(2),
+        "Returns two values: floor-quotient and floor-remainder.",
+        |eval, args, _tail| floor_div(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "floor-quotient",
+        Arity::Exact(2),
+        "Returns floor(n1/n2).",
+        |eval, args, _tail| floor_quotient(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "floor-remainder",
+        Arity::Exact(2),
+        "Returns n1 - n2 * floor(n1/n2).",
+        |eval, args, _tail| floor_remainder(eval, args).map(EvalResult::Value),
+    ));
+
+    // Truncate division (truncate/, truncate-quotient, truncate-remainder)
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "truncate/",
+        Arity::Exact(2),
+        "Returns two values: truncate-quotient and truncate-remainder.",
+        |eval, args, _tail| truncate_div(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "truncate-quotient",
+        Arity::Exact(2),
+        "Returns truncate(n1/n2).",
+        |eval, args, _tail| truncate_quotient(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "truncate-remainder",
+        Arity::Exact(2),
+        "Returns n1 - n2 * truncate(n1/n2).",
+        |eval, args, _tail| truncate_remainder(eval, args).map(EvalResult::Value),
+    ));
+
     // Absolute value
     registry.register(PrimitiveFn::new(
         "scheme.base",
@@ -2334,4 +2690,185 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "Returns the simplest rational number differing from x by no more than y.",
         |eval, args, _tail| rationalize(eval, args).map(EvalResult::Value),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to extract two values from Value::Values
+    fn extract_two_values(v: Value) -> (Value, Value) {
+        match v {
+            Value::Values(vals) if vals.len() == 2 => (vals[0].clone(), vals[1].clone()),
+            _ => panic!("Expected two values, got {:?}", v),
+        }
+    }
+
+    // =========================================================================
+    // floor/ tests - R7RS examples from spec
+    // =========================================================================
+
+    #[test]
+    fn test_floor_div_positive_positive() {
+        // (floor/ 5 2) => 2 1
+        let (q, r) = floor_div_i64(5, 2);
+        assert_eq!(q, 2);
+        assert_eq!(r, 1);
+    }
+
+    #[test]
+    fn test_floor_div_negative_positive() {
+        // (floor/ -5 2) => -3 1
+        let (q, r) = floor_div_i64(-5, 2);
+        assert_eq!(q, -3);
+        assert_eq!(r, 1);
+    }
+
+    #[test]
+    fn test_floor_div_positive_negative() {
+        // (floor/ 5 -2) => -3 -1
+        let (q, r) = floor_div_i64(5, -2);
+        assert_eq!(q, -3);
+        assert_eq!(r, -1);
+    }
+
+    #[test]
+    fn test_floor_div_negative_negative() {
+        // (floor/ -5 -2) => 2 -1
+        let (q, r) = floor_div_i64(-5, -2);
+        assert_eq!(q, 2);
+        assert_eq!(r, -1);
+    }
+
+    // =========================================================================
+    // truncate/ tests - R7RS examples from spec
+    // =========================================================================
+
+    #[test]
+    fn test_truncate_div_positive_positive() {
+        // (truncate/ 5 2) => 2 1
+        let (q, r) = truncate_div_i64(5, 2);
+        assert_eq!(q, 2);
+        assert_eq!(r, 1);
+    }
+
+    #[test]
+    fn test_truncate_div_negative_positive() {
+        // (truncate/ -5 2) => -2 -1
+        let (q, r) = truncate_div_i64(-5, 2);
+        assert_eq!(q, -2);
+        assert_eq!(r, -1);
+    }
+
+    #[test]
+    fn test_truncate_div_positive_negative() {
+        // (truncate/ 5 -2) => -2 1
+        let (q, r) = truncate_div_i64(5, -2);
+        assert_eq!(q, -2);
+        assert_eq!(r, 1);
+    }
+
+    #[test]
+    fn test_truncate_div_negative_negative() {
+        // (truncate/ -5 -2) => 2 -1
+        let (q, r) = truncate_div_i64(-5, -2);
+        assert_eq!(q, 2);
+        assert_eq!(r, -1);
+    }
+
+    // =========================================================================
+    // Invariant tests: n1 = n2 * quotient + remainder
+    // =========================================================================
+
+    #[test]
+    fn test_floor_div_invariant() {
+        for a in [-10, -5, -1, 0, 1, 5, 10] {
+            for b in [-3, -2, -1, 1, 2, 3] {
+                let (q, r) = floor_div_i64(a, b);
+                assert_eq!(a, b * q + r, "floor/ invariant failed for ({}, {})", a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn test_truncate_div_invariant() {
+        for a in [-10, -5, -1, 0, 1, 5, 10] {
+            for b in [-3, -2, -1, 1, 2, 3] {
+                let (q, r) = truncate_div_i64(a, b);
+                assert_eq!(
+                    a,
+                    b * q + r,
+                    "truncate/ invariant failed for ({}, {})",
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    // =========================================================================
+    // Inexact integer tests (e.g., 5.0, -5.0)
+    // =========================================================================
+
+    #[test]
+    fn test_floor_div_inexact() {
+        let eval = Evaluator::new();
+        // (floor/ 5.0 2) => 2.0 1.0
+        let result = floor_div(&eval, vec![Value::Real(5.0), Value::Integer(2)]).unwrap();
+        let (q, r) = extract_two_values(result);
+        assert!(matches!(q, Value::Real(v) if v == 2.0), "Expected 2.0, got {:?}", q);
+        assert!(matches!(r, Value::Real(v) if v == 1.0), "Expected 1.0, got {:?}", r);
+    }
+
+    #[test]
+    fn test_truncate_div_inexact() {
+        let eval = Evaluator::new();
+        // (truncate/ -5.0 -2) => 2.0 -1.0
+        let result = truncate_div(&eval, vec![Value::Real(-5.0), Value::Integer(-2)]).unwrap();
+        let (q, r) = extract_two_values(result);
+        assert!(matches!(q, Value::Real(v) if v == 2.0), "Expected 2.0, got {:?}", q);
+        assert!(matches!(r, Value::Real(v) if v == -1.0), "Expected -1.0, got {:?}", r);
+    }
+
+    #[test]
+    fn test_floor_div_exact() {
+        let eval = Evaluator::new();
+        // (floor/ 5 2) => 2 1 (exact integers)
+        let result = floor_div(&eval, vec![Value::Integer(5), Value::Integer(2)]).unwrap();
+        let (q, r) = extract_two_values(result);
+        assert!(matches!(q, Value::Integer(2)), "Expected Integer(2), got {:?}", q);
+        assert!(matches!(r, Value::Integer(1)), "Expected Integer(1), got {:?}", r);
+    }
+
+    #[test]
+    fn test_truncate_div_exact() {
+        let eval = Evaluator::new();
+        // (truncate/ -5 2) => -2 -1 (exact integers)
+        let result = truncate_div(&eval, vec![Value::Integer(-5), Value::Integer(2)]).unwrap();
+        let (q, r) = extract_two_values(result);
+        assert!(matches!(q, Value::Integer(-2)), "Expected Integer(-2), got {:?}", q);
+        assert!(matches!(r, Value::Integer(-1)), "Expected Integer(-1), got {:?}", r);
+    }
+
+    // =========================================================================
+    // BigInteger tests
+    // =========================================================================
+
+    #[test]
+    fn test_floor_div_bigint() {
+        let a = BigInt::from(1000000000000i64);
+        let b = BigInt::from(7);
+        let (q, r) = floor_div_bigint(&a, &b);
+        // Verify invariant
+        assert_eq!(&a, &(&b * &q + &r));
+    }
+
+    #[test]
+    fn test_truncate_div_bigint() {
+        let a = BigInt::from(-1000000000000i64);
+        let b = BigInt::from(7);
+        let (q, r) = truncate_div_bigint(&a, &b);
+        // Verify invariant
+        assert_eq!(&a, &(&b * &q + &r));
+    }
 }

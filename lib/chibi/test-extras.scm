@@ -44,6 +44,19 @@
   (approx-equal? expected actual))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Test macro for multiple values
+;;
+;; (test-values expect expr) - Tests that expr produces the same multiple values as expect
+;; Both expect and expr are evaluated with call-with-values and their results compared.
+(define-syntax test-values
+  (syntax-rules ()
+    ((test-values expect expr)
+     (test-values #f expect expr))
+    ((test-values name expect expr)
+     (test (call-with-values (lambda () expect) (lambda results results))
+           (call-with-values (lambda () expr) (lambda results results))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Test macro
 (define-syntax test
   (syntax-rules ()
