@@ -67,18 +67,19 @@ impl Evaluator {
 
         // Build qualified name using the procedure's library namespace
         let qualified_name = format!("{}/{}", library.join("."), name);
-        if let Ok(result) =
-            self.primitive_registry
-                .apply(&qualified_name, args.clone(), self, in_tail_position)
-        {
-            return Ok(result);
-        }
 
-        // If we reach here, the primitive was not found in the registry
-        Err(EvalError::InvalidSyntax(format!(
-            "Unknown primitive: {}",
-            name
-        )))
+        // Apply the primitive and propagate any errors
+        // (Don't swallow errors - if the primitive fails, return that error)
+        self.primitive_registry
+            .apply(&qualified_name, args, self, in_tail_position)
+            .map_err(|e| {
+                // If the error is "primitive not found", give a clearer message
+                if e.to_string().contains("not found") {
+                    EvalError::InvalidSyntax(format!("Unknown primitive: {}", name))
+                } else {
+                    e
+                }
+            })
     }
 
     /// Register all primitive procedures in the registry

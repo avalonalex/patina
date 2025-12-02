@@ -486,31 +486,11 @@ Testing:
 Testing: 
 (let ((g (gen-counter))) (eqv? g g))
 
-FAIL: 
-(let ((g (gen-counter))) (eqv? g g))
-
-  expected: 
-#t
-
-  but got:  
-#f
-
-
 Testing: 
 (eqv? (gen-counter) (gen-counter))
 
 Testing: 
 (let ((g (gen-loser))) (eqv? g g))
-
-FAIL: 
-(let ((g (gen-loser))) (eqv? g g))
-
-  expected: 
-#t
-
-  but got:  
-#f
-
 
 Testing: 
 (letrec ((f (lambda () (if (eqv? f g) 'f 'both))) (g (lambda () (if (eqv? f g) 'g 'both)))) (eqv? f g))
@@ -530,41 +510,11 @@ Testing:
 Testing: 
 (let ((x '(a))) (eq? x x))
 
-FAIL: 
-(let ((x '(a))) (eq? x x))
-
-  expected: 
-#t
-
-  but got:  
-#f
-
-
 Testing: 
 (let ((x '#())) (eq? x x))
 
-FAIL: 
-(let ((x '#())) (eq? x x))
-
-  expected: 
-#t
-
-  but got:  
-#f
-
-
 Testing: 
 (let ((p (lambda (x) x))) (eq? p p))
-
-FAIL: 
-(let ((p (lambda (x) x))) (eq? p p))
-
-  expected: 
-#t
-
-  but got:  
-#f
-
 
 Testing: 
 (equal? 'a 'a)
@@ -584,7 +534,7 @@ Testing:
 Testing: 
 (equal? (make-vector 5 'a) (make-vector 5 'a))
 
-Tests run: 25, Passed: 20, Failed: 5
+Tests run: 25, Passed: 25, Failed: 0
 
 Running test suite: 6.2 Numbers
 Testing: 
@@ -599,18 +549,18 @@ Testing:
 Testing: 
 (real? -2.5)
 
+Testing: 
+(real? -2.5)
+
 FAIL: 
 (real? -2.5)
 
   expected: 
-#t
-
-  but got:  
 #f
 
+  but got:  
+#t
 
-Testing: 
-(real? -2.5)
 
 Testing: 
 (real? 10000000000)
@@ -627,41 +577,11 @@ Testing:
 Testing: 
 (rational? 9007199254740991.0)
 
-FAIL: 
-(rational? 9007199254740991.0)
-
-  expected: 
-#t
-
-  but got:  
-#f
-
-
 Testing: 
 (rational? 9007199254740992.0)
 
-FAIL: 
-(rational? 9007199254740992.0)
-
-  expected: 
-#t
-
-  but got:  
-#f
-
-
 Testing: 
 (rational? 179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.0)
-
-FAIL: 
-(rational? 179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.0)
-
-  expected: 
-#t
-
-  but got:  
-#f
-
 
 Testing: 
 (rational? 3/5)
@@ -672,28 +592,8 @@ Testing:
 Testing: 
 (integer? 3)
 
-FAIL: 
-(integer? 3)
-
-  expected: 
-#t
-
-  but got:  
-#f
-
-
 Testing: 
 (integer? 3.0)
-
-FAIL: 
-(integer? 3.0)
-
-  expected: 
-#t
-
-  but got:  
-#f
-
 
 Testing: 
 (integer? 2)
@@ -878,16 +778,6 @@ Testing:
 Testing: 
 (odd? -1)
 
-FAIL: 
-(odd? -1)
-
-  expected: 
-#t
-
-  but got:  
-#f
-
-
 Testing: 
 (odd? 102)
 
@@ -1034,31 +924,11 @@ Testing:
 Testing: 
 (modulo 13 -4)
 
-FAIL: 
-(modulo 13 -4)
-
-  expected: 
--3
-
-  but got:  
-1
-
-
 Testing: 
 (remainder 13 -4)
 
 Testing: 
 (modulo -13 -4)
-
-FAIL: 
-(modulo -13 -4)
-
-  expected: 
--1
-
-  but got:  
-3
-
 
 Testing: 
 (remainder -13 -4)
@@ -1066,7 +936,6 @@ Testing:
 Testing: 
 (remainder -13 -4.0)
 
-Error: Invalid syntax: Unknown primitive: remainder
 Testing: 
 (gcd 32 -36)
 
@@ -1079,7 +948,6 @@ Testing:
 Testing: 
 (lcm 32.0 -36)
 
-Error: Invalid syntax: Unknown primitive: lcm
 Testing: 
 (lcm)
 
@@ -1092,23 +960,18 @@ Testing:
 Testing: 
 (denominator (inexact (/ 6 4)))
 
-Error: Invalid syntax: Unknown primitive: denominator
 Testing: 
 (numerator 5.5)
 
-Error: Invalid syntax: Unknown primitive: numerator
 Testing: 
 (denominator 5.5)
 
-Error: Invalid syntax: Unknown primitive: denominator
 Testing: 
 (numerator 5.0)
 
-Error: Invalid syntax: Unknown primitive: numerator
 Testing: 
 (denominator 5.0)
 
-Error: Invalid syntax: Unknown primitive: denominator
 Testing: 
 (floor -4.3)
 
@@ -1136,60 +999,20 @@ Testing:
 Testing: 
 (round 7/2)
 
-FAIL: 
-(round 7/2)
-
-  expected: 
-4
-
-  but got:  
-4
-
-
 Testing: 
 (round 7)
 
 Testing: 
 (round 7/10)
 
-FAIL: 
-(round 7/10)
-
-  expected: 
-1
-
-  but got:  
-1
-
-
 Testing: 
 (round -7/2)
-
-FAIL: 
-(round -7/2)
-
-  expected: 
--4
-
-  but got:  
--4
-
 
 Testing: 
 (round -7)
 
 Testing: 
 (round -7/10)
-
-FAIL: 
-(round -7/10)
-
-  expected: 
--1
-
-  but got:  
--1
-
 
 Testing: 
 (rationalize (exact .3) 1/10)
@@ -1316,16 +1139,6 @@ Testing:
 Testing: 
 (expt 0.0 0)
 
-FAIL: 
-(expt 0.0 0)
-
-  expected: 
-1.0
-
-  but got:  
-1
-
-
 Testing: 
 (expt 0 1.0)
 
@@ -1391,7 +1204,7 @@ Testing:
 Testing: 
 (string->number "1 2")
 
-Tests run: 211, Passed: 175, Failed: 18, Errors: 18
+Tests run: 211, Passed: 195, Failed: 5, Errors: 11
 
 Running test suite: 6.3 Booleans
 Testing: 
@@ -1592,7 +1405,6 @@ Testing:
 Testing: 
 (member "B" '("a" "b" "c") string-ci=?)
 
-Error: Invalid syntax: Unknown primitive: member
 Testing: 
 (memv 101 '(100 101 102))
 
@@ -1614,7 +1426,6 @@ Testing:
 Testing: 
 (assoc 2.0 '((1 1) (2 4) (3 9)) =)
 
-Error: Invalid syntax: Unknown primitive: assoc
 Testing: 
 (assv 5 '((2 3) (5 7) (11 13)))
 
@@ -1639,28 +1450,8 @@ Testing:
 Testing: 
 (eq? (car l1) (car l2))
 
-FAIL: 
-(eq? (car l1) (car l2))
-
-  expected: 
-#t
-
-  but got:  
-#f
-
-
 Testing: 
 (eq? (cadr l1) (cadr l2))
-
-FAIL: 
-(eq? (cadr l1) (cadr l2))
-
-  expected: 
-#t
-
-  but got:  
-#f
-
 
 Testing: 
 (eq? (cdr l1) (cdr l2))
@@ -1668,7 +1459,7 @@ Testing:
 Testing: 
 (eq? (cddr l1) (cddr l2))
 
-Tests run: 65, Passed: 61, Failed: 2, Errors: 2
+Tests run: 65, Passed: 65, Failed: 0
 
 Running test suite: 6.5 Symbols
 Testing: 

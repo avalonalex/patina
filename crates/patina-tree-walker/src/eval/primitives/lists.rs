@@ -599,12 +599,12 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         |eval, args, _tail| memv(eval, args).map(EvalResult::Value),
     ));
 
-    // Member - member using equal?
+    // Member - member using equal? (or custom comparator)
     registry.register(PrimitiveFn::new(
         "scheme.base",
         "member",
-        Arity::Exact(2),
-        "Returns the first sublist of list whose car is obj (compared using equal?), or #f if not found.",
+        Arity::Range(2, 3),
+        "Returns the first sublist of list whose car is obj. Uses equal? or optional comparator.",
         |eval, args, _tail| member(eval, args).map(EvalResult::Value),
     ));
 
@@ -626,12 +626,12 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         |eval, args, _tail| assv(eval, args).map(EvalResult::Value),
     ));
 
-    // Assoc - association list lookup using equal?
+    // Assoc - association list lookup using equal? (or custom comparator)
     registry.register(PrimitiveFn::new(
         "scheme.base",
         "assoc",
-        Arity::Exact(2),
-        "Returns the first pair in alist whose car is obj (compared using equal?), or #f if not found.",
+        Arity::Range(2, 3),
+        "Returns the first pair in alist whose car is obj. Uses equal? or optional comparator.",
         |eval, args, _tail| assoc(eval, args).map(EvalResult::Value),
     ));
 

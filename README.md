@@ -3,7 +3,7 @@
 **An understandable, well-tested Scheme R7RS-small interpreter written in Rust**
 
 [![Tests](https://img.shields.io/badge/tests-772%20passing-brightgreen)]()
-[![R7RS Compliance](https://img.shields.io/badge/R7RS-60%25-yellow)]()
+[![R7RS Compliance](https://img.shields.io/badge/R7RS-63%25-yellow)]()
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)]()
 
 ---

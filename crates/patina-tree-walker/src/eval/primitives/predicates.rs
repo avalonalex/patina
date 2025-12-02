@@ -36,26 +36,33 @@ pub(super) fn number_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value,
 }
 
 pub(super) fn integer_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| {
-        matches!(v, Value::Integer(_) | Value::BigInteger(_))
+    evaluator.make_type_predicate(args, |v| match v {
+        Value::Integer(_) | Value::BigInteger(_) => true,
+        // R7RS: inexact integers like 4.0 are also integers
+        Value::Real(r) => r.is_finite() && r.trunc() == *r,
+        // R7RS: Complex with zero imaginary and integer real part is an integer
+        Value::Complex(real, imag) => *imag == 0.0 && real.is_finite() && real.trunc() == *real,
+        _ => false,
     })
 }
 
 pub(super) fn rational_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| {
-        matches!(
-            v,
-            Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_)
-        )
+    evaluator.make_type_predicate(args, |v| match v {
+        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => true,
+        // R7RS: finite inexact reals are also rationals
+        Value::Real(r) => r.is_finite(),
+        // R7RS: Complex with zero imaginary and finite real part is rational
+        Value::Complex(real, imag) => *imag == 0.0 && real.is_finite(),
+        _ => false,
     })
 }
 
 pub(super) fn real_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| {
-        matches!(
-            v,
-            Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) | Value::Real(_)
-        )
+    evaluator.make_type_predicate(args, |v| match v {
+        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) | Value::Real(_) => true,
+        // R7RS: Complex numbers with zero imaginary part are real
+        Value::Complex(_, imag) => *imag == 0.0,
+        _ => false,
     })
 }
 

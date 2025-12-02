@@ -96,8 +96,9 @@ pub enum Value {
     // Uses RefCell to allow mutation through shared references
     Bytevector(Rc<RefCell<Vec<u8>>>),
 
-    // Procedures (boxed to reduce enum size: 104 bytes -> 8 bytes)
-    Procedure(Box<Procedure>),
+    // Procedures (Rc to preserve identity for eq?/eqv?)
+    // Using Rc instead of Box so that cloning preserves identity
+    Procedure(Rc<Procedure>),
 
     // Parameters (R7RS dynamic parameters)
     // Parameters are special procedures that maintain dynamic state

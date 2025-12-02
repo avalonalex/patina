@@ -35,34 +35,64 @@ pub(super) fn equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
 // Helper functions (used by eq/eqv/equal and other modules)
 
 pub(in crate::eval) fn values_eq(a: &Value, b: &Value) -> bool {
+    use std::rc::Rc;
+
     match (a, b) {
+        // Immediate values - compare by value
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Null, Value::Null) => true,
+        (Value::Character(a), Value::Character(b)) => a == b,
+        // Symbols are interned - compare strings
         (Value::Symbol(a), Value::Symbol(b)) => a.as_ref() == b.as_ref(),
+        // R7RS: eq? on objects uses pointer equality
+        (Value::Pair(a), Value::Pair(b)) => Rc::ptr_eq(a, b),
+        (Value::Vector(a), Value::Vector(b)) => Rc::ptr_eq(a, b),
+        (Value::String(a), Value::String(b)) => Rc::ptr_eq(a, b),
+        (Value::Bytevector(a), Value::Bytevector(b)) => Rc::ptr_eq(a, b),
+        // R7RS: eq? on procedures - use Rc pointer equality
+        (Value::Procedure(a), Value::Procedure(b)) => Rc::ptr_eq(a, b),
         _ => false,
     }
 }
 
 pub(in crate::eval) fn values_eqv(a: &Value, b: &Value) -> bool {
+    use num_bigint::BigInt;
     use std::rc::Rc;
 
     match (a, b) {
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Null, Value::Null) => true,
         (Value::Symbol(a), Value::Symbol(b)) => a.as_ref() == b.as_ref(),
+        // R7RS: eqv? for exact numbers compares mathematical values
         (Value::Integer(a), Value::Integer(b)) => a == b,
+        (Value::Integer(a), Value::BigInteger(b)) => BigInt::from(*a) == *b,
+        (Value::BigInteger(a), Value::Integer(b)) => *a == BigInt::from(*b),
+        (Value::BigInteger(a), Value::BigInteger(b)) => a == b,
+        (Value::Rational(a), Value::Rational(b)) => a == b,
+        // R7RS: eqv? for inexact numbers - same exactness required
         (Value::Real(a), Value::Real(b)) => a == b,
+        (Value::Complex(r1, i1), Value::Complex(r2, i2)) => r1 == r2 && i1 == i2,
         (Value::Character(a), Value::Character(b)) => a == b,
-        // Pairs are eqv? only if they are the same object (pointer equality)
+        // R7RS: eqv? on objects uses pointer equality
         (Value::Pair(a), Value::Pair(b)) => Rc::ptr_eq(a, b),
+        (Value::Vector(a), Value::Vector(b)) => Rc::ptr_eq(a, b),
+        (Value::String(a), Value::String(b)) => Rc::ptr_eq(a, b),
+        (Value::Bytevector(a), Value::Bytevector(b)) => Rc::ptr_eq(a, b),
+        // R7RS: eqv? on procedures - use Rc pointer equality
+        (Value::Procedure(a), Value::Procedure(b)) => Rc::ptr_eq(a, b),
         _ => false,
     }
 }
 
 pub(in crate::eval) fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalError> {
+    use num_bigint::BigInt;
+
     Ok(match (a, b) {
         (Value::Boolean(x), Value::Boolean(y)) => x == y,
+        // R7RS: equal? uses eqv? for numbers, which compares mathematical values for exact numbers
         (Value::Integer(x), Value::Integer(y)) => x == y,
+        (Value::Integer(x), Value::BigInteger(y)) => BigInt::from(*x) == *y,
+        (Value::BigInteger(x), Value::Integer(y)) => *x == BigInt::from(*y),
         (Value::BigInteger(x), Value::BigInteger(y)) => x == y,
         (Value::Rational(x), Value::Rational(y)) => x == y,
         (Value::Real(x), Value::Real(y)) => x == y, // IEEE 754 exact equality

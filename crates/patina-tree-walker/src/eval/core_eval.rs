@@ -206,7 +206,7 @@ pub(crate) fn eval_core_step(
             let (scoped_params, variadic) = formals_to_scoped_params(params)?;
 
             // Store CoreExpr body directly - this preserves scope IDs for hygiene
-            Ok(CoreEvalResult::Value(Value::Procedure(Box::new(
+            Ok(CoreEvalResult::Value(Value::Procedure(Rc::new(
                 Procedure::Lambda {
                     params: scoped_params,
                     variadic,
@@ -482,7 +482,7 @@ pub(crate) fn eval_core_step(
                 })
                 .collect::<Result<Vec<_>, EvalError>>()?;
 
-            Ok(CoreEvalResult::Value(Value::Procedure(Box::new(
+            Ok(CoreEvalResult::Value(Value::Procedure(Rc::new(
                 Procedure::CaseLambda {
                     clauses: runtime_clauses,
                     env: env.clone(),

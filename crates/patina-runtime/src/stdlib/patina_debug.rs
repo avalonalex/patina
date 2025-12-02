@@ -14,7 +14,7 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
     // Evaluation debugging primitives
     env.define(
         "debug-enable".to_string(),
-        Value::Procedure(Box::new(Procedure::Primitive {
+        Value::Procedure(Rc::new(Procedure::Primitive {
             name: "debug-enable",
             arity: Arity::Min(1),
             library: library_name.clone(),
@@ -23,7 +23,7 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
 
     env.define(
         "debug-disable".to_string(),
-        Value::Procedure(Box::new(Procedure::Primitive {
+        Value::Procedure(Rc::new(Procedure::Primitive {
             name: "debug-disable",
             arity: Arity::Min(1),
             library: library_name.clone(),
@@ -32,7 +32,7 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
 
     env.define(
         "debug-clear".to_string(),
-        Value::Procedure(Box::new(Procedure::Primitive {
+        Value::Procedure(Rc::new(Procedure::Primitive {
             name: "debug-clear",
             arity: Arity::Exact(0),
             library: library_name.clone(),
@@ -41,7 +41,7 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
 
     env.define(
         "debug-status".to_string(),
-        Value::Procedure(Box::new(Procedure::Primitive {
+        Value::Procedure(Rc::new(Procedure::Primitive {
             name: "debug-status",
             arity: Arity::Exact(0),
             library: library_name.clone(),
@@ -50,7 +50,7 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
 
     env.define(
         "debug-mode".to_string(),
-        Value::Procedure(Box::new(Procedure::Primitive {
+        Value::Procedure(Rc::new(Procedure::Primitive {
             name: "debug-mode",
             arity: Arity::Exact(1),
             library: library_name.clone(),
@@ -60,7 +60,7 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
     // Macro expansion debugging
     env.define(
         "macro-debug-mode".to_string(),
-        Value::Procedure(Box::new(Procedure::Primitive {
+        Value::Procedure(Rc::new(Procedure::Primitive {
             name: "macro-debug-mode",
             arity: Arity::Exact(1),
             library: library_name,

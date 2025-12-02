@@ -883,3 +883,76 @@ fn test_macro_generating_macro_captures_env() {
     assert!(result.is_ok(), "Failed: {:?}", result);
     assert_eq!(result.unwrap().to_string(), "115");
 }
+
+// ===== Issue 1 Fix Tests: Identifier vs Symbol in Definition Names =====
+// These tests verify the fixes for macro-generated definitions where names
+// come from pattern variable substitution (producing Identifier, not Symbol)
+
+/// Test macro that generates a define with function name from pattern variable
+/// This was failing with "define function name must be a symbol" before the fix
+#[test]
+fn test_macro_generated_function_definition() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let ()
+          (define-syntax def-square
+            (syntax-rules ()
+              ((def-square name)
+               (define (name x) (* x x)))))
+          (def-square my-square)
+          (my-square 5))
+        "#,
+    );
+
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "25");
+}
+
+/// Test macro generating syntax-rules with literals from pattern variable
+/// This exercises the fix for parse_literals_list accepting Identifier
+#[test]
+fn test_macro_with_pattern_var_in_literals() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    // The literal 'k' comes from a pattern variable in the outer macro
+    let result = interp.eval_program(
+        r#"
+        (let-syntax
+            ((m (syntax-rules ()
+                  ((m x) (let-syntax
+                             ((n (syntax-rules (k)
+                                   ((n x) 'bound)
+                                   ((n y) 'free))))
+                           (n z))))))
+          (m k))
+        "#,
+    );
+
+    // Note: This tests that 'k' in the literals list works even when it
+    // comes from a pattern variable substitution (producing Identifier)
+    // The actual result depends on hygiene semantics (bound vs free identifier)
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+/// Test macro generating let-syntax with macro name from pattern variable
+#[test]
+fn test_macro_generated_let_syntax() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (define-syntax make-local-const
+          (syntax-rules ()
+            ((make-local-const name val body)
+             (let-syntax ((name (syntax-rules () ((name) val))))
+               body))))
+
+        (make-local-const answer 42 (+ (answer) 1))
+        "#,
+    );
+
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "43");
+}

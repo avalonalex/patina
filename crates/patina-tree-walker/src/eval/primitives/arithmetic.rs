@@ -720,12 +720,64 @@ pub(super) fn greater_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
     evaluator.primitive_numeric_compare(args, |a, b| a >= b, ">=")
 }
 
-// ========== Binary Integer Operation Helper ==========
+// ========== Integer Extraction Helpers ==========
 
-/// Generic helper for binary integer operations with optional division-by-zero checking
-///
-/// Handles all 4 type combinations (Int×Int, Big×Big, Int×Big, Big×Int) with automatic
-/// type promotion and zero checking for division operations.
+/// Extract BigInt from a Value, including inexact integers like -4.0
+/// Returns (bigint_value, is_inexact)
+fn extract_bigint(v: &Value, op_name: &str) -> Result<(BigInt, bool), EvalError> {
+    match v {
+        Value::Integer(n) => Ok((BigInt::from(*n), false)),
+        Value::BigInteger(n) => Ok((n.clone(), false)),
+        Value::Real(r) => {
+            // Check if it's an integer-valued real (like 32.0)
+            if r.is_finite() && r.trunc() == *r {
+                // Convert to BigInt via i64 (sufficient for most cases)
+                Ok((BigInt::from(r.trunc() as i64), true))
+            } else {
+                Err(EvalError::TypeError(format!(
+                    "{} requires integers, got non-integer real {}",
+                    op_name, r
+                )))
+            }
+        }
+        _ => Err(EvalError::TypeError(format!(
+            "{} requires integers, got {}",
+            op_name,
+            v.type_name()
+        ))),
+    }
+}
+
+/// Extract i64 from a Value, including inexact integers like -4.0
+/// Returns (integer_value, is_inexact)
+fn extract_integer(v: &Value, op_name: &str) -> Result<(i64, bool), EvalError> {
+    match v {
+        Value::Integer(n) => Ok((*n, false)),
+        Value::BigInteger(n) => {
+            // Try to convert to i64, fail if too large
+            n.to_i64().map(|i| (i, false)).ok_or_else(|| {
+                EvalError::TypeError(format!("{}: integer too large for operation", op_name))
+            })
+        }
+        Value::Real(r) => {
+            // Check if it's an integer-valued real (like -4.0)
+            if r.is_finite() && r.trunc() == *r {
+                Ok((r.trunc() as i64, true))
+            } else {
+                Err(EvalError::TypeError(format!(
+                    "{} requires integers, got non-integer real {}",
+                    op_name, r
+                )))
+            }
+        }
+        _ => Err(EvalError::TypeError(format!(
+            "{} requires integers, got {}",
+            op_name,
+            v.type_name()
+        ))),
+    }
+}
+
 fn binary_int_op<FInt, FBig>(
     a: &Value,
     b: &Value,
@@ -738,30 +790,56 @@ where
     FInt: Fn(i64, i64) -> i64,
     FBig: Fn(&BigInt, &BigInt) -> BigInt,
 {
-    // Division by zero check if requested
-    if check_zero {
-        match b {
-            Value::Integer(n) if *n == 0 => return Err(EvalError::DivisionByZero),
-            Value::BigInteger(n) if n.is_zero() => return Err(EvalError::DivisionByZero),
-            _ => {}
+    // Handle exact integers first (fast path)
+    match (a, b) {
+        (Value::Integer(a_val), Value::Integer(b_val)) => {
+            if check_zero && *b_val == 0 {
+                return Err(EvalError::DivisionByZero);
+            }
+            return Ok(Value::Integer(int_op(*a_val, *b_val)));
         }
+        (Value::BigInteger(a_val), Value::BigInteger(b_val)) => {
+            if check_zero && b_val.is_zero() {
+                return Err(EvalError::DivisionByZero);
+            }
+            return Ok(Value::BigInteger(big_op(a_val, b_val)));
+        }
+        (Value::Integer(a_val), Value::BigInteger(b_val)) => {
+            if check_zero && b_val.is_zero() {
+                return Err(EvalError::DivisionByZero);
+            }
+            return Ok(Value::BigInteger(big_op(
+                &NumericValue::to_bigint(*a_val),
+                b_val,
+            )));
+        }
+        (Value::BigInteger(a_val), Value::Integer(b_val)) => {
+            if check_zero && *b_val == 0 {
+                return Err(EvalError::DivisionByZero);
+            }
+            return Ok(Value::BigInteger(big_op(
+                a_val,
+                &NumericValue::to_bigint(*b_val),
+            )));
+        }
+        _ => {}
     }
 
-    match (a, b) {
-        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(int_op(*a, *b))),
-        (Value::BigInteger(a), Value::BigInteger(b)) => Ok(Value::BigInteger(big_op(a, b))),
-        (Value::Integer(a), Value::BigInteger(b)) => {
-            Ok(Value::BigInteger(big_op(&NumericValue::to_bigint(*a), b)))
-        }
-        (Value::BigInteger(a), Value::Integer(b)) => {
-            Ok(Value::BigInteger(big_op(a, &NumericValue::to_bigint(*b))))
-        }
-        _ => Err(EvalError::TypeError(format!(
-            "{} requires integers, got {} and {}",
-            op_name,
-            a.type_name(),
-            b.type_name()
-        ))),
+    // Handle inexact integers (like -4.0)
+    let (a_int, a_inexact) = extract_integer(a, op_name)?;
+    let (b_int, b_inexact) = extract_integer(b, op_name)?;
+
+    if check_zero && b_int == 0 {
+        return Err(EvalError::DivisionByZero);
+    }
+
+    let result = int_op(a_int, b_int);
+
+    // If either operand was inexact, result is inexact
+    if a_inexact || b_inexact {
+        Ok(Value::Real(result as f64))
+    } else {
+        Ok(Value::Integer(result))
     }
 }
 
@@ -790,14 +868,31 @@ pub(super) fn remainder(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
 }
 
 pub(super) fn modulo(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    use num_traits::Euclid;
     evaluator.check_arity_exact(&args, 2, "modulo")?;
+    // R7RS modulo: result has the same sign as the divisor
+    // This is different from Rust's rem_euclid which always returns non-negative
+    fn r7rs_modulo_i64(a: i64, b: i64) -> i64 {
+        let rem = a % b;
+        if rem == 0 || (rem > 0) == (b > 0) {
+            rem
+        } else {
+            rem + b
+        }
+    }
+    fn r7rs_modulo_bigint(a: &BigInt, b: &BigInt) -> BigInt {
+        let rem = a % b;
+        if rem.is_zero() || (rem > BigInt::from(0)) == (b > &BigInt::from(0)) {
+            rem
+        } else {
+            rem + b
+        }
+    }
     binary_int_op(
         &args[0],
         &args[1],
         "modulo",
-        |a, b| a.rem_euclid(b),
-        |a, b| a.rem_euclid(b),
+        r7rs_modulo_i64,
+        r7rs_modulo_bigint,
         true, // check for division by zero
     )
 }
@@ -1083,8 +1178,13 @@ pub(super) fn expt(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErr
     let power_num = NumericValue::from_value(args[1].clone())?;
 
     // Handle special case: 0^0 = 1 by convention
+    // R7RS: If either operand is inexact, result is inexact
     if base_num.is_zero() && power_num.is_zero() {
-        return Ok(Value::Integer(1));
+        return if !base_num.is_exact() || !power_num.is_exact() {
+            Ok(Value::Real(1.0))
+        } else {
+            Ok(Value::Integer(1))
+        };
     }
 
     // Simple case: base^inexact or inexact^power -> always inexact
@@ -1321,29 +1421,25 @@ pub(super) fn gcd(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErro
     }
 
     // Convert all arguments to BigInt for uniform handling
+    // Track if any argument is inexact (result should be inexact)
     let mut result = BigInt::from(0);
+    let mut any_inexact = false;
 
-    for arg in args {
-        match arg {
-            Value::Integer(n) => {
-                result = bigint_gcd(&result, &BigInt::from(n));
-            }
-            Value::BigInteger(n) => {
-                result = bigint_gcd(&result, &n);
-            }
-            other => {
-                return Err(EvalError::TypeError(format!(
-                    "gcd expects exact integers, got {}",
-                    other.type_name()
-                )));
-            }
-        }
+    for arg in &args {
+        let (n, is_inexact) = extract_bigint(arg, "gcd")?;
+        any_inexact = any_inexact || is_inexact;
+        result = bigint_gcd(&result, &n);
     }
 
-    // Try to fit in i64
-    match result.to_i64() {
-        Some(n) => Ok(Value::Integer(n)),
-        None => Ok(Value::BigInteger(result)),
+    // Return inexact if any argument was inexact
+    if any_inexact {
+        Ok(Value::Real(result.to_f64().unwrap_or(f64::INFINITY)))
+    } else {
+        // Try to fit in i64
+        match result.to_i64() {
+            Some(n) => Ok(Value::Integer(n)),
+            None => Ok(Value::BigInteger(result)),
+        }
     }
 }
 
@@ -1355,40 +1451,44 @@ pub(super) fn lcm(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErro
     }
 
     // Convert all arguments to BigInt
+    // Track if any argument is inexact (result should be inexact)
     let mut result = BigInt::from(1);
+    let mut any_inexact = false;
 
-    for arg in args {
-        let n = match arg {
-            Value::Integer(n) => BigInt::from(n),
-            Value::BigInteger(n) => n,
-            other => {
-                return Err(EvalError::TypeError(format!(
-                    "lcm expects exact integers, got {}",
-                    other.type_name()
-                )));
-            }
-        };
+    for arg in &args {
+        let (n, is_inexact) = extract_bigint(arg, "lcm")?;
+        any_inexact = any_inexact || is_inexact;
 
         // LCM(a, b) = |a * b| / GCD(a, b)
         // But we need to handle zero specially
         if n.is_zero() {
-            return Ok(Value::Integer(0));
+            return if any_inexact {
+                Ok(Value::Real(0.0))
+            } else {
+                Ok(Value::Integer(0))
+            };
         }
 
         let gcd_val = bigint_gcd(&result, &n);
         result = (result * n).abs() / gcd_val;
     }
 
-    // Try to fit in i64
-    match result.to_i64() {
-        Some(n) => Ok(Value::Integer(n)),
-        None => Ok(Value::BigInteger(result)),
+    // Return inexact if any argument was inexact
+    if any_inexact {
+        Ok(Value::Real(result.to_f64().unwrap_or(f64::INFINITY)))
+    } else {
+        // Try to fit in i64
+        match result.to_i64() {
+            Some(n) => Ok(Value::Integer(n)),
+            None => Ok(Value::BigInteger(result)),
+        }
     }
 }
 
 // ========== Rational Number Accessors ==========
 
 /// (numerator q) - Returns the numerator of rational q
+/// R7RS: If the argument is inexact, the result is also inexact.
 pub(super) fn numerator(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "numerator")?;
 
@@ -1402,6 +1502,28 @@ pub(super) fn numerator(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
                 None => Ok(Value::BigInteger(r.numer().clone())),
             }
         }
+        Value::Real(f) => {
+            // R7RS: inexact rationals return inexact results
+            use num_traits::FromPrimitive;
+
+            if f.is_nan() || f.is_infinite() {
+                return Err(EvalError::TypeError(
+                    "numerator: cannot compute numerator of NaN or infinity".to_string(),
+                ));
+            }
+
+            // Convert to rational to get numerator
+            match BigRational::from_f64(*f) {
+                Some(ratio) => {
+                    // Return as inexact (Real)
+                    let numer = ratio.numer();
+                    Ok(Value::Real(numer.to_f64().unwrap_or(f64::INFINITY)))
+                }
+                None => Err(EvalError::TypeError(
+                    "numerator: cannot compute numerator of this real number".to_string(),
+                )),
+            }
+        }
         other => Err(EvalError::TypeError(format!(
             "numerator expects a rational number, got {}",
             other.type_name()
@@ -1410,6 +1532,7 @@ pub(super) fn numerator(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
 }
 
 /// (denominator q) - Returns the denominator of rational q
+/// R7RS: If the argument is inexact, the result is also inexact.
 pub(super) fn denominator(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     _eval.check_arity_exact(&args, 1, "denominator")?;
 
@@ -1420,6 +1543,28 @@ pub(super) fn denominator(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, 
             match r.denom().to_i64() {
                 Some(n) => Ok(Value::Integer(n)),
                 None => Ok(Value::BigInteger(r.denom().clone())),
+            }
+        }
+        Value::Real(f) => {
+            // R7RS: inexact rationals return inexact results
+            use num_traits::FromPrimitive;
+
+            if f.is_nan() || f.is_infinite() {
+                return Err(EvalError::TypeError(
+                    "denominator: cannot compute denominator of NaN or infinity".to_string(),
+                ));
+            }
+
+            // Convert to rational to get denominator
+            match BigRational::from_f64(*f) {
+                Some(ratio) => {
+                    // Return as inexact (Real)
+                    let denom = ratio.denom();
+                    Ok(Value::Real(denom.to_f64().unwrap_or(f64::INFINITY)))
+                }
+                None => Err(EvalError::TypeError(
+                    "denominator: cannot compute denominator of this real number".to_string(),
+                )),
             }
         }
         other => Err(EvalError::TypeError(format!(

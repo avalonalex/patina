@@ -139,6 +139,15 @@ fn test_member() {
     assert_eval_to("(member 'a '(b c d))", "#f");
 }
 
+#[test]
+fn test_member_with_comparator() {
+    // R7RS: member with optional comparison procedure
+    assert_eval_to("(member 2 '(1 2 3) =)", "(2 3)");
+    assert_eval_to("(member 5 '(1 2 3) =)", "#f");
+    // Custom comparator using string-ci=?
+    assert_eval_to(r#"(member "B" '("a" "b" "c") string-ci=?)"#, r#"("b" "c")"#);
+}
+
 // 6.4 Pairs and lists - Association lists
 #[test]
 fn test_assq() {
@@ -158,6 +167,18 @@ fn test_assoc() {
     assert_eval_to("(assoc (list 'a) '(((a)) ((b)) ((c))))", "((a))");
     assert_eval_to("(assoc 'b '((a) (b) (c)))", "(b)");
     assert_eval_to("(assoc 'd '((a) (b) (c)))", "#f");
+}
+
+#[test]
+fn test_assoc_with_comparator() {
+    // R7RS: assoc with optional comparison procedure
+    assert_eval_to("(assoc 2 '((1 a) (2 b) (3 c)) =)", "(2 b)");
+    assert_eval_to("(assoc 5 '((1 a) (2 b) (3 c)) =)", "#f");
+    // Custom comparator using string-ci=?
+    assert_eval_to(
+        r#"(assoc "B" '(("a" 1) ("b" 2) ("c" 3)) string-ci=?)"#,
+        r#"("b" 2)"#,
+    );
 }
 
 // 6.4 Higher-order list operations

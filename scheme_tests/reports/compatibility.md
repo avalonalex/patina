@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-01 19:49:14
+**Generated:** 2025-12-01 21:42:47
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 712 | 60.9% |
-| ❌ Failed | 36 | 3.1% |
-| ⚠️ Error (crashed) | 421 | 36.0% |
+| ✅ Passed | 741 | 63.4% |
+| ❌ Failed | 16 | 1.4% |
+| ⚠️ Error (crashed) | 412 | 35.2% |
 | **Total** | **1169** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
@@ -19,26 +19,6 @@
 ### Test Failures
 
 ```
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
-FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -76,17 +56,8 @@ Error: Undefined variable: test-values
 Error: Undefined variable: test-values
 Error: Undefined variable: test-values
 Error: Undefined variable: test-values
-Error: Invalid syntax: Unknown primitive: remainder
-Error: Invalid syntax: Unknown primitive: lcm
-Error: Invalid syntax: Unknown primitive: denominator
-Error: Invalid syntax: Unknown primitive: numerator
-Error: Invalid syntax: Unknown primitive: denominator
-Error: Invalid syntax: Unknown primitive: numerator
-Error: Invalid syntax: Unknown primitive: denominator
 Error: Undefined variable: .3
 Error: Undefined variable: .3
-Error: Invalid syntax: Unknown primitive: member
-Error: Invalid syntax: Unknown primitive: assoc
 Error: Undefined variable: symbol=?
 Error: Undefined variable: symbol=?
 Error: Undefined variable: symbol=?

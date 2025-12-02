@@ -24,7 +24,7 @@
   (< x 0))
 
 (define (odd? x)
-  (= (remainder x 2) 1))
+  (not (= (remainder x 2) 0)))
 
 (define (even? x)
   (= (remainder x 2) 0))

@@ -22,7 +22,7 @@ pub fn build_scheme_complex(_name: Vec<String>, env: Rc<Environment>) -> Vec<Str
     for (name, arity) in &primitives {
         env.define(
             name.to_string(),
-            Value::Procedure(Box::new(Procedure::Primitive {
+            Value::Procedure(Rc::new(Procedure::Primitive {
                 name,
                 arity: arity.clone(),
                 library: library_name.clone(),
