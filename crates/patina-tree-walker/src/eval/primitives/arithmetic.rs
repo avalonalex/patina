@@ -928,30 +928,21 @@ where
                 return Err(EvalError::DivisionByZero);
             }
             let (q, r) = big_op(a_val, b_val);
-            return Ok(Value::Values(vec![
-                bigint_to_value(q),
-                bigint_to_value(r),
-            ]));
+            return Ok(Value::Values(vec![bigint_to_value(q), bigint_to_value(r)]));
         }
         (Value::Integer(a_val), Value::BigInteger(b_val)) => {
             if b_val.is_zero() {
                 return Err(EvalError::DivisionByZero);
             }
             let (q, r) = big_op(&NumericValue::to_bigint(*a_val), b_val);
-            return Ok(Value::Values(vec![
-                bigint_to_value(q),
-                bigint_to_value(r),
-            ]));
+            return Ok(Value::Values(vec![bigint_to_value(q), bigint_to_value(r)]));
         }
         (Value::BigInteger(a_val), Value::Integer(b_val)) => {
             if *b_val == 0 {
                 return Err(EvalError::DivisionByZero);
             }
             let (q, r) = big_op(a_val, &NumericValue::to_bigint(*b_val));
-            return Ok(Value::Values(vec![
-                bigint_to_value(q),
-                bigint_to_value(r),
-            ]));
+            return Ok(Value::Values(vec![bigint_to_value(q), bigint_to_value(r)]));
         }
         _ => {}
     }
@@ -1126,7 +1117,13 @@ fn truncate_remainder_bigint(a: &BigInt, b: &BigInt) -> BigInt {
 /// Returns two values: floor-quotient and floor-remainder
 pub(super) fn floor_div(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 2, "floor/")?;
-    binary_div_op(&args[0], &args[1], "floor/", floor_div_i64, floor_div_bigint)
+    binary_div_op(
+        &args[0],
+        &args[1],
+        "floor/",
+        floor_div_i64,
+        floor_div_bigint,
+    )
 }
 
 /// (floor-quotient n1 n2) -> quotient
@@ -1144,10 +1141,7 @@ pub(super) fn floor_quotient(evaluator: &Evaluator, args: Vec<Value>) -> Result<
 
 /// (floor-remainder n1 n2) -> remainder
 /// Returns n1 - n2 * floor(n1/n2)
-pub(super) fn floor_remainder(
-    evaluator: &Evaluator,
-    args: Vec<Value>,
-) -> Result<Value, EvalError> {
+pub(super) fn floor_remainder(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 2, "floor-remainder")?;
     binary_div_single_op(
         &args[0],
@@ -2816,8 +2810,16 @@ mod tests {
         // (floor/ 5.0 2) => 2.0 1.0
         let result = floor_div(&eval, vec![Value::Real(5.0), Value::Integer(2)]).unwrap();
         let (q, r) = extract_two_values(result);
-        assert!(matches!(q, Value::Real(v) if v == 2.0), "Expected 2.0, got {:?}", q);
-        assert!(matches!(r, Value::Real(v) if v == 1.0), "Expected 1.0, got {:?}", r);
+        assert!(
+            matches!(q, Value::Real(v) if v == 2.0),
+            "Expected 2.0, got {:?}",
+            q
+        );
+        assert!(
+            matches!(r, Value::Real(v) if v == 1.0),
+            "Expected 1.0, got {:?}",
+            r
+        );
     }
 
     #[test]
@@ -2826,8 +2828,16 @@ mod tests {
         // (truncate/ -5.0 -2) => 2.0 -1.0
         let result = truncate_div(&eval, vec![Value::Real(-5.0), Value::Integer(-2)]).unwrap();
         let (q, r) = extract_two_values(result);
-        assert!(matches!(q, Value::Real(v) if v == 2.0), "Expected 2.0, got {:?}", q);
-        assert!(matches!(r, Value::Real(v) if v == -1.0), "Expected -1.0, got {:?}", r);
+        assert!(
+            matches!(q, Value::Real(v) if v == 2.0),
+            "Expected 2.0, got {:?}",
+            q
+        );
+        assert!(
+            matches!(r, Value::Real(v) if v == -1.0),
+            "Expected -1.0, got {:?}",
+            r
+        );
     }
 
     #[test]
@@ -2836,8 +2846,16 @@ mod tests {
         // (floor/ 5 2) => 2 1 (exact integers)
         let result = floor_div(&eval, vec![Value::Integer(5), Value::Integer(2)]).unwrap();
         let (q, r) = extract_two_values(result);
-        assert!(matches!(q, Value::Integer(2)), "Expected Integer(2), got {:?}", q);
-        assert!(matches!(r, Value::Integer(1)), "Expected Integer(1), got {:?}", r);
+        assert!(
+            matches!(q, Value::Integer(2)),
+            "Expected Integer(2), got {:?}",
+            q
+        );
+        assert!(
+            matches!(r, Value::Integer(1)),
+            "Expected Integer(1), got {:?}",
+            r
+        );
     }
 
     #[test]
@@ -2846,8 +2864,16 @@ mod tests {
         // (truncate/ -5 2) => -2 -1 (exact integers)
         let result = truncate_div(&eval, vec![Value::Integer(-5), Value::Integer(2)]).unwrap();
         let (q, r) = extract_two_values(result);
-        assert!(matches!(q, Value::Integer(-2)), "Expected Integer(-2), got {:?}", q);
-        assert!(matches!(r, Value::Integer(-1)), "Expected Integer(-1), got {:?}", r);
+        assert!(
+            matches!(q, Value::Integer(-2)),
+            "Expected Integer(-2), got {:?}",
+            q
+        );
+        assert!(
+            matches!(r, Value::Integer(-1)),
+            "Expected Integer(-1), got {:?}",
+            r
+        );
     }
 
     // =========================================================================

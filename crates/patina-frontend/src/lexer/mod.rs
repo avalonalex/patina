@@ -110,6 +110,8 @@ impl Lexer {
                 self.advance();
                 Ok(Token::Dot)
             }
+            // R7RS: Numbers can start with a decimal point (e.g., .3 is 0.3)
+            '.' if self.peek_is_numeric() => self.read_number(),
             '"' => self.read_string(),
             '|' => self.read_vertical_bar_identifier(),
             '#' => self.read_hash_syntax(),
@@ -700,5 +702,40 @@ mod tests {
             lexer.next_token(),
             Err(LexError::UnterminatedBlockComment)
         ));
+    }
+
+    #[test]
+    fn test_decimal_point_number() {
+        // R7RS: Numbers can start with a decimal point (e.g., .3 is 0.3)
+        let mut lexer = Lexer::new(".3");
+        let token = lexer.next_token().unwrap();
+        assert!(
+            matches!(token, Token::Number(ref s) if s == ".3"),
+            "Expected Number('.3'), got {:?}",
+            token
+        );
+    }
+
+    #[test]
+    fn test_decimal_point_number_in_expression() {
+        // Test that .1, .2, .3 are all parsed as numbers in an expression
+        let mut lexer = Lexer::new("(+ .1 .2 .3)");
+        assert!(matches!(lexer.next_token().unwrap(), Token::LeftParen));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Identifier(s) if s == "+"));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == ".1"));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == ".2"));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == ".3"));
+        assert!(matches!(lexer.next_token().unwrap(), Token::RightParen));
+    }
+
+    #[test]
+    fn test_dot_vs_decimal_number() {
+        // A lone dot followed by whitespace/delimiter is Token::Dot
+        let mut lexer = Lexer::new("(a . b)");
+        assert!(matches!(lexer.next_token().unwrap(), Token::LeftParen));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Identifier(s) if s == "a"));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Dot));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Identifier(s) if s == "b"));
+        assert!(matches!(lexer.next_token().unwrap(), Token::RightParen));
     }
 }

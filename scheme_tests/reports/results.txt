@@ -1033,13 +1033,21 @@ Testing:
 (round -7/10)
 
 Testing: 
-(rationalize (exact .3) 1/10)
+(rationalize (exact 0.3) 1/10)
 
-Error: Undefined variable: .3
 Testing: 
-(rationalize .3 1/10)
+(rationalize 0.3 1/10)
 
-Error: Undefined variable: .3
+FAIL: 
+(rationalize 0.3 1/10)
+
+  expected: 
+0.3333333333333333
+
+  but got:  
+1/3
+
+
 Testing: 
 (inexact (exp 0))
 
@@ -1222,7 +1230,7 @@ Testing:
 Testing: 
 (string->number "1 2")
 
-Tests run: 211, Passed: 204, Failed: 5, Errors: 2
+Tests run: 211, Passed: 205, Failed: 6
 
 Running test suite: 6.3 Booleans
 Testing: 
