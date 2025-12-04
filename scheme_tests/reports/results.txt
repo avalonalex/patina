@@ -2023,44 +2023,14 @@ Testing:
 Testing: 
 (string-foldcase "Maß")
 
-FAIL: 
-(string-foldcase "Maß")
-
-  expected: 
-"mass"
-
-  but got:  
-"maß"
-
-
 Testing: 
 (string-upcase "İ")
 
 Testing: 
 (string-downcase "İ")
 
-FAIL: 
-(string-downcase "İ")
-
-  expected: 
-"ix0307;"
-
-  but got:  
-"i̇"
-
-
 Testing: 
 (string-foldcase "İ")
-
-FAIL: 
-(string-foldcase "İ")
-
-  expected: 
-"ix0307;"
-
-  but got:  
-"i̇"
-
 
 Testing: 
 (string-upcase "ǰ")
@@ -2070,16 +2040,6 @@ Testing:
 
 Testing: 
 (string-foldcase "ſ")
-
-FAIL: 
-(string-foldcase "ſ")
-
-  expected: 
-"s"
-
-  but got:  
-"ſ"
-
 
 Testing: 
 (string-upcase "γλώσσα")
@@ -2098,16 +2058,6 @@ Testing:
 
 Testing: 
 (string-foldcase "ΜΈΛΟΣ")
-
-FAIL: 
-(string-foldcase "ΜΈΛΟΣ")
-
-  expected: 
-"μέλοσ"
-
-  but got:  
-"μέλος"
-
 
 Testing: 
 (and (member (string-downcase "ΜΈΛΟΣ ΕΝΌΣ") '("μέλος ενός" "μέλοσ ενόσ")) #t)
@@ -2223,7 +2173,7 @@ Testing:
 Testing: 
 (let ((str (string-copy "abcde"))) (string-copy! str 3 str 0 2) str)
 
-Tests run: 130, Passed: 125, Failed: 5
+Tests run: 130, Passed: 130, Failed: 0
 
 Running test suite: 6.8 Vectors
 Testing: 

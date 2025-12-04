@@ -240,14 +240,22 @@ pub(super) fn char_downcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
 }
 
 /// (char-foldcase char) - Case-folding (for case-insensitive comparison)
+///
+/// R7RS: Returns the case-folded character. Note that full case folding
+/// can map one character to multiple (e.g., ß → ss), but char-foldcase
+/// must return a single character. We use simple case folding here.
 pub(super) fn char_foldcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "char-foldcase")?;
     let c = get_char(&args[0], "char-foldcase")?;
 
-    // R7RS: Case folding is used for case-insensitive string comparison
-    // In Rust, we can approximate this with to_lowercase() which handles most cases
-    let folded: Vec<char> = c.to_lowercase().collect();
-    Ok(Value::Character(folded[0]))
+    use unicode_casefold::UnicodeCaseFold;
+
+    // For char-foldcase, we need to return a single character.
+    // Full case folding can expand (ß → ss), so we take the first character.
+    // This matches R7RS which says char-foldcase returns "a" character.
+    let folded: String = c.case_fold().collect();
+    let first_char = folded.chars().next().unwrap_or(c);
+    Ok(Value::Character(first_char))
 }
 
 // ========== Character/Integer Conversion ==========

@@ -519,13 +519,19 @@ pub(super) fn string_downcase(evaluator: &Evaluator, args: Vec<Value>) -> Result
 }
 
 /// (string-foldcase string) - Case-fold string for case-insensitive comparison
+///
+/// R7RS requires full Unicode case folding, which differs from simple lowercasing:
+/// - ß (sharp s) folds to "ss"
+/// - ſ (long s) folds to "s"
+/// - All forms of sigma (Σ, σ, ς) fold to σ
 pub(super) fn string_foldcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "string-foldcase")?;
 
+    use unicode_casefold::UnicodeCaseFold;
+
     match &args[0] {
         Value::String(s) => {
-            // R7RS: Case folding is the same as lowercasing for most purposes
-            let folded = s.borrow().to_lowercase();
+            let folded: String = s.borrow().case_fold().collect();
             Ok(Value::String(Rc::new(RefCell::new(folded))))
         }
         _ => Err(EvalError::TypeError(
@@ -1069,11 +1075,7 @@ mod tests {
         let eval = make_evaluator();
         let first = make_lambda(&eval, "(lambda (a b) a)");
 
-        let result = string_map(
-            &eval,
-            vec![first, make_string("abc"), make_string("xy")],
-        )
-        .unwrap();
+        let result = string_map(&eval, vec![first, make_string("abc"), make_string("xy")]).unwrap();
         // Should only process 2 characters (length of "xy")
         assert_eq!(result.to_string(), "\"ab\"");
     }
@@ -1121,11 +1123,8 @@ mod tests {
         let eval = make_evaluator();
         let proc = make_lambda(&eval, "(lambda (a b) a)");
 
-        let result = string_for_each(
-            &eval,
-            vec![proc, make_string("abc"), make_string("xyz")],
-        )
-        .unwrap();
+        let result =
+            string_for_each(&eval, vec![proc, make_string("abc"), make_string("xyz")]).unwrap();
         assert!(matches!(result, Value::Unspecified));
     }
 

@@ -48,6 +48,9 @@ pub enum LexError {
     #[error("Invalid escape sequence in identifier: \\{0}")]
     InvalidEscapeInIdentifier(String),
 
+    #[error("Invalid escape sequence in string: {0}")]
+    InvalidEscapeInString(String),
+
     #[error("Unterminated block comment")]
     UnterminatedBlockComment,
 
@@ -238,12 +241,93 @@ impl Lexer {
                     return Err(LexError::UnterminatedString);
                 }
                 let escaped = match self.current_char() {
-                    'n' => '\n',
-                    't' => '\t',
-                    'r' => '\r',
-                    '\\' => '\\',
-                    '"' => '"',
-                    c => c, // For simplicity, just accept the character
+                    // R7RS mnemonic escapes
+                    'a' => '\u{0007}', // alarm
+                    'b' => '\u{0008}', // backspace
+                    't' => '\t',       // tab
+                    'n' => '\n',       // newline
+                    'r' => '\r',       // carriage return
+                    '\\' => '\\',      // backslash
+                    '"' => '"',        // double quote
+                    '|' => '|',        // vertical bar
+                    // R7RS inline hex escape: \x<hex>;
+                    'x' => {
+                        self.advance();
+                        let mut hex_str = String::new();
+                        while !self.is_at_end() && self.current_char() != ';' {
+                            hex_str.push(self.current_char());
+                            self.advance();
+                        }
+                        if self.is_at_end() || self.current_char() != ';' {
+                            return Err(LexError::InvalidEscapeInString(format!(
+                                "\\x{} (missing semicolon)",
+                                hex_str
+                            )));
+                        }
+                        // Don't advance past ';' here - done at end of loop
+                        match u32::from_str_radix(&hex_str, 16) {
+                            Ok(code) => match char::from_u32(code) {
+                                Some(ch) => ch,
+                                None => {
+                                    return Err(LexError::InvalidEscapeInString(format!(
+                                        "\\x{}; (invalid Unicode code point)",
+                                        hex_str
+                                    )));
+                                }
+                            },
+                            Err(_) => {
+                                return Err(LexError::InvalidEscapeInString(format!(
+                                    "\\x{}; (invalid hex)",
+                                    hex_str
+                                )));
+                            }
+                        }
+                    }
+                    // R7RS: Line ending escape - backslash followed by intraline whitespace
+                    // and line ending is ignored along with any leading intraline whitespace
+                    // on the next line
+                    '\n' | '\r' => {
+                        // Skip the line ending
+                        if self.current_char() == '\r' && self.peek_char() == Some('\n') {
+                            self.advance();
+                        }
+                        self.advance();
+                        // Skip leading whitespace on next line
+                        while !self.is_at_end()
+                            && (self.current_char() == ' ' || self.current_char() == '\t')
+                        {
+                            self.advance();
+                        }
+                        continue; // Don't push anything, don't advance again
+                    }
+                    ' ' | '\t' => {
+                        // Skip intraline whitespace before line ending
+                        while !self.is_at_end()
+                            && (self.current_char() == ' ' || self.current_char() == '\t')
+                        {
+                            self.advance();
+                        }
+                        if self.current_char() == '\n' || self.current_char() == '\r' {
+                            if self.current_char() == '\r' && self.peek_char() == Some('\n') {
+                                self.advance();
+                            }
+                            self.advance();
+                            // Skip leading whitespace on next line
+                            while !self.is_at_end()
+                                && (self.current_char() == ' ' || self.current_char() == '\t')
+                            {
+                                self.advance();
+                            }
+                            continue; // Don't push anything
+                        } else {
+                            return Err(LexError::InvalidEscapeInString(
+                                "backslash-space not followed by line ending".to_string(),
+                            ));
+                        }
+                    }
+                    c => {
+                        return Err(LexError::InvalidEscapeInString(format!("\\{}", c)));
+                    }
                 };
                 result.push(escaped);
             } else {
@@ -737,5 +821,119 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap(), Token::Dot));
         assert!(matches!(lexer.next_token().unwrap(), Token::Identifier(s) if s == "b"));
         assert!(matches!(lexer.next_token().unwrap(), Token::RightParen));
+    }
+
+    // ========== String Escape Sequence Tests ==========
+
+    #[test]
+    fn test_string_basic_escapes() {
+        let mut lexer = Lexer::new(r#""hello\nworld""#);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::String("hello\nworld".to_string())
+        );
+    }
+
+    #[test]
+    fn test_string_all_mnemonic_escapes() {
+        // R7RS mnemonic escapes: \a \b \t \n \r \\ \" \|
+        let mut lexer = Lexer::new(r#""\a\b\t\n\r\\\""|""#);
+        let token = lexer.next_token().unwrap();
+        match token {
+            Token::String(s) => {
+                assert_eq!(s, "\u{0007}\u{0008}\t\n\r\\\"");
+            }
+            _ => panic!("Expected String token"),
+        }
+    }
+
+    #[test]
+    fn test_string_hex_escape_basic() {
+        // \x41; is 'A' (ASCII 65)
+        let mut lexer = Lexer::new(r#""\x41;""#);
+        assert_eq!(lexer.next_token().unwrap(), Token::String("A".to_string()));
+    }
+
+    #[test]
+    fn test_string_hex_escape_in_context() {
+        // "a\x41;b" should be "aAb"
+        let mut lexer = Lexer::new(r#""a\x41;b""#);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::String("aAb".to_string())
+        );
+    }
+
+    #[test]
+    fn test_string_hex_escape_unicode() {
+        // \x3BB; is Greek lowercase lambda (λ)
+        let mut lexer = Lexer::new(r#""\x3BB;""#);
+        assert_eq!(lexer.next_token().unwrap(), Token::String("λ".to_string()));
+    }
+
+    #[test]
+    fn test_string_hex_escape_combining_char() {
+        // \x0307; is combining dot above - used in İ case folding
+        let mut lexer = Lexer::new(r#""i\x0307;""#);
+        let token = lexer.next_token().unwrap();
+        match token {
+            Token::String(s) => {
+                assert_eq!(s.len(), 3); // 'i' (1 byte) + combining dot (2 bytes in UTF-8)
+                assert_eq!(s.chars().count(), 2); // 2 Unicode characters
+                let chars: Vec<char> = s.chars().collect();
+                assert_eq!(chars[0], 'i');
+                assert_eq!(chars[1], '\u{0307}');
+            }
+            _ => panic!("Expected String token"),
+        }
+    }
+
+    #[test]
+    fn test_string_hex_escape_missing_semicolon() {
+        let mut lexer = Lexer::new(r#""\x41""#);
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::InvalidEscapeInString(_))
+        ));
+    }
+
+    #[test]
+    fn test_string_hex_escape_invalid_hex() {
+        let mut lexer = Lexer::new(r#""\xGG;""#);
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::InvalidEscapeInString(_))
+        ));
+    }
+
+    #[test]
+    fn test_string_hex_escape_invalid_codepoint() {
+        // U+D800 is a surrogate, not a valid Unicode scalar value
+        let mut lexer = Lexer::new(r#""\xD800;""#);
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::InvalidEscapeInString(_))
+        ));
+    }
+
+    #[test]
+    fn test_string_line_continuation() {
+        // R7RS: backslash-newline and any leading whitespace on next line is ignored
+        let input = "\"hello\\\n    world\"";
+        let mut lexer = Lexer::new(input);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::String("helloworld".to_string())
+        );
+    }
+
+    #[test]
+    fn test_string_invalid_escape() {
+        // \q is not a valid escape sequence
+        let mut lexer = Lexer::new(r#""\q""#);
+        assert!(matches!(
+            lexer.next_token(),
+            Err(LexError::InvalidEscapeInString(_))
+        ));
     }
 }
