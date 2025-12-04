@@ -173,6 +173,8 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("bytevector-copy", Arity::Range(1, 3)),
         ("bytevector-copy!", Arity::Range(3, 5)),
         ("bytevector-append", Arity::Min(0)),
+        ("utf8->string", Arity::Range(1, 3)),
+        ("string->utf8", Arity::Range(1, 3)),
         // Conversion operations
         ("number->string", Arity::Range(1, 2)),
         ("string->number", Arity::Range(1, 2)),

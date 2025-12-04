@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-02 22:21:29
+**Generated:** 2025-12-03 18:29:22
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 762 | 65.2% |
+| ✅ Passed | 770 | 65.9% |
 | ❌ Failed | 17 | 1.5% |
-| ⚠️ Error (crashed) | 390 | 33.4% |
+| ⚠️ Error (crashed) | 382 | 32.7% |
 | **Total** | **1169** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
@@ -48,14 +48,6 @@ Error: Undefined variable: pare?
 Error: Undefined variable: kar
 Error: Undefined variable: kdr
 Error: Undefined variable: kons
-Error: Undefined variable: utf8->string
-Error: Undefined variable: utf8->string
-Error: Undefined variable: utf8->string
-Error: Undefined variable: utf8->string
-Error: Undefined variable: string->utf8
-Error: Undefined variable: string->utf8
-Error: Undefined variable: string->utf8
-Error: Undefined variable: string->utf8
 Error: Undefined variable: call-with-current-continuation
 Error: Internal error: Failed to desugar expression: Invalid syntax: apply requires at least 2 arguments (procedure and list)
 Error: Undefined variable: test-error

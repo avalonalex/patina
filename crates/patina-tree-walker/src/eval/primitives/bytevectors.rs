@@ -408,6 +408,141 @@ pub(super) fn bytevector_append(
     Ok(Value::Bytevector(Rc::new(RefCell::new(result))))
 }
 
+/// (utf8->string bytevector [start [end]]) - Decode UTF-8 bytevector to string
+pub(super) fn utf8_to_string(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(EvalError::WrongArity {
+            expected: "1 to 3".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let bv = match &args[0] {
+        Value::Bytevector(bv) => bv,
+        _ => {
+            return Err(EvalError::TypeError(
+                "utf8->string: first argument must be a bytevector".to_string(),
+            ));
+        }
+    };
+
+    let bv_borrowed = bv.borrow();
+    let start = if args.len() >= 2 {
+        match &args[1] {
+            Value::Integer(n) if *n >= 0 && (*n as usize) <= bv_borrowed.len() => *n as usize,
+            Value::Integer(n) => {
+                return Err(EvalError::TypeError(format!(
+                    "utf8->string: start index out of bounds: {}",
+                    n
+                )));
+            }
+            _ => {
+                return Err(EvalError::TypeError(
+                    "utf8->string: start must be an integer".to_string(),
+                ));
+            }
+        }
+    } else {
+        0
+    };
+
+    let end = if args.len() >= 3 {
+        match &args[2] {
+            Value::Integer(n) if *n >= start as i64 && (*n as usize) <= bv_borrowed.len() => {
+                *n as usize
+            }
+            Value::Integer(n) => {
+                return Err(EvalError::TypeError(format!(
+                    "utf8->string: end index out of bounds or less than start: {}",
+                    n
+                )));
+            }
+            _ => {
+                return Err(EvalError::TypeError(
+                    "utf8->string: end must be an integer".to_string(),
+                ));
+            }
+        }
+    } else {
+        bv_borrowed.len()
+    };
+
+    let bytes = &bv_borrowed[start..end];
+    match std::str::from_utf8(bytes) {
+        Ok(s) => Ok(Value::String(Rc::new(RefCell::new(s.to_string())))),
+        Err(e) => Err(EvalError::TypeError(format!(
+            "utf8->string: invalid UTF-8 sequence at byte {}",
+            e.valid_up_to()
+        ))),
+    }
+}
+
+/// (string->utf8 string [start [end]]) - Encode string as UTF-8 bytevector
+pub(super) fn string_to_utf8(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(EvalError::WrongArity {
+            expected: "1 to 3".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let s = match &args[0] {
+        Value::String(s) => s,
+        _ => {
+            return Err(EvalError::TypeError(
+                "string->utf8: first argument must be a string".to_string(),
+            ));
+        }
+    };
+
+    let s_borrowed = s.borrow();
+    let char_count = s_borrowed.chars().count();
+
+    let start = if args.len() >= 2 {
+        match &args[1] {
+            Value::Integer(n) if *n >= 0 && (*n as usize) <= char_count => *n as usize,
+            Value::Integer(n) => {
+                return Err(EvalError::TypeError(format!(
+                    "string->utf8: start index out of bounds: {}",
+                    n
+                )));
+            }
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string->utf8: start must be an integer".to_string(),
+                ));
+            }
+        }
+    } else {
+        0
+    };
+
+    let end = if args.len() >= 3 {
+        match &args[2] {
+            Value::Integer(n) if *n >= start as i64 && (*n as usize) <= char_count => *n as usize,
+            Value::Integer(n) => {
+                return Err(EvalError::TypeError(format!(
+                    "string->utf8: end index out of bounds or less than start: {}",
+                    n
+                )));
+            }
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string->utf8: end must be an integer".to_string(),
+                ));
+            }
+        }
+    } else {
+        char_count
+    };
+
+    // Extract the substring by character indices and encode to UTF-8
+    let substring: String = s_borrowed.chars().skip(start).take(end - start).collect();
+    let bytes = substring.into_bytes();
+
+    Ok(Value::Bytevector(Rc::new(RefCell::new(bytes))))
+}
+
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use super::super::EvalResult;
     use super::registry::PrimitiveFn;
@@ -493,4 +628,228 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "Returns a newly allocated bytevector whose bytes are the concatenation of the bytes in the given bytevectors.",
         |eval, args, _tail| bytevector_append(eval, args).map(EvalResult::Value),
     ));
+
+    // utf8->string - Decode UTF-8 bytevector to string
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "utf8->string",
+        Arity::Range(1, 3),
+        "Decodes the bytes of a bytevector between start and end as UTF-8 and returns the corresponding string.",
+        |eval, args, _tail| utf8_to_string(eval, args).map(EvalResult::Value),
+    ));
+
+    // string->utf8 - Encode string as UTF-8 bytevector
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string->utf8",
+        Arity::Range(1, 3),
+        "Encodes the characters of a string between start and end as UTF-8 and returns the corresponding bytevector.",
+        |eval, args, _tail| string_to_utf8(eval, args).map(EvalResult::Value),
+    ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::Evaluator;
+
+    fn make_evaluator() -> Evaluator {
+        Evaluator::new()
+    }
+
+    fn make_bytevector(bytes: Vec<u8>) -> Value {
+        Value::Bytevector(Rc::new(RefCell::new(bytes)))
+    }
+
+    fn make_string(s: &str) -> Value {
+        Value::String(Rc::new(RefCell::new(s.to_string())))
+    }
+
+    // utf8->string tests
+
+    #[test]
+    fn test_utf8_to_string_basic() {
+        let eval = make_evaluator();
+        let bv = make_bytevector(vec![65, 66, 67]); // "ABC"
+        let result = utf8_to_string(&eval, vec![bv]).unwrap();
+        assert_eq!(result.to_string(), "\"ABC\"");
+    }
+
+    #[test]
+    fn test_utf8_to_string_with_start() {
+        let eval = make_evaluator();
+        let bv = make_bytevector(vec![0, 65, 66, 67]); // skip first byte
+        let result = utf8_to_string(&eval, vec![bv, Value::Integer(1)]).unwrap();
+        assert_eq!(result.to_string(), "\"ABC\"");
+    }
+
+    #[test]
+    fn test_utf8_to_string_with_start_and_end() {
+        let eval = make_evaluator();
+        let bv = make_bytevector(vec![0, 65, 66, 67, 0]); // extract middle
+        let result = utf8_to_string(&eval, vec![bv, Value::Integer(1), Value::Integer(4)]).unwrap();
+        assert_eq!(result.to_string(), "\"ABC\"");
+    }
+
+    #[test]
+    fn test_utf8_to_string_unicode() {
+        let eval = make_evaluator();
+        // Greek lambda: U+03BB = 206 187 in UTF-8
+        let bv = make_bytevector(vec![206, 187]);
+        let result = utf8_to_string(&eval, vec![bv]).unwrap();
+        assert_eq!(result.to_string(), "\"λ\"");
+    }
+
+    #[test]
+    fn test_utf8_to_string_unicode_with_range() {
+        let eval = make_evaluator();
+        // Extract lambda from middle: 0 206 187 0
+        let bv = make_bytevector(vec![0, 206, 187, 0]);
+        let result = utf8_to_string(&eval, vec![bv, Value::Integer(1), Value::Integer(3)]).unwrap();
+        assert_eq!(result.to_string(), "\"λ\"");
+    }
+
+    #[test]
+    fn test_utf8_to_string_empty() {
+        let eval = make_evaluator();
+        let bv = make_bytevector(vec![]);
+        let result = utf8_to_string(&eval, vec![bv]).unwrap();
+        assert_eq!(result.to_string(), "\"\"");
+    }
+
+    #[test]
+    fn test_utf8_to_string_invalid_utf8() {
+        let eval = make_evaluator();
+        // Invalid UTF-8 sequence: 0xFF is not valid
+        let bv = make_bytevector(vec![0xFF, 0xFE]);
+        let result = utf8_to_string(&eval, vec![bv]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_utf8_to_string_start_out_of_bounds() {
+        let eval = make_evaluator();
+        let bv = make_bytevector(vec![65, 66, 67]);
+        let result = utf8_to_string(&eval, vec![bv, Value::Integer(10)]);
+        assert!(result.is_err());
+    }
+
+    // string->utf8 tests
+
+    #[test]
+    fn test_string_to_utf8_basic() {
+        let eval = make_evaluator();
+        let s = make_string("ABC");
+        let result = string_to_utf8(&eval, vec![s]).unwrap();
+        match result {
+            Value::Bytevector(bv) => {
+                assert_eq!(*bv.borrow(), vec![65, 66, 67]);
+            }
+            _ => panic!("Expected bytevector"),
+        }
+    }
+
+    #[test]
+    fn test_string_to_utf8_with_start() {
+        let eval = make_evaluator();
+        let s = make_string("ABC");
+        let result = string_to_utf8(&eval, vec![s, Value::Integer(1)]).unwrap();
+        match result {
+            Value::Bytevector(bv) => {
+                assert_eq!(*bv.borrow(), vec![66, 67]); // "BC"
+            }
+            _ => panic!("Expected bytevector"),
+        }
+    }
+
+    #[test]
+    fn test_string_to_utf8_with_start_and_end() {
+        let eval = make_evaluator();
+        let s = make_string("ABC");
+        let result = string_to_utf8(&eval, vec![s, Value::Integer(1), Value::Integer(2)]).unwrap();
+        match result {
+            Value::Bytevector(bv) => {
+                assert_eq!(*bv.borrow(), vec![66]); // "B"
+            }
+            _ => panic!("Expected bytevector"),
+        }
+    }
+
+    #[test]
+    fn test_string_to_utf8_unicode() {
+        let eval = make_evaluator();
+        let s = make_string("λ");
+        let result = string_to_utf8(&eval, vec![s]).unwrap();
+        match result {
+            Value::Bytevector(bv) => {
+                assert_eq!(*bv.borrow(), vec![206, 187]); // UTF-8 encoding of λ
+            }
+            _ => panic!("Expected bytevector"),
+        }
+    }
+
+    #[test]
+    fn test_string_to_utf8_unicode_substring() {
+        let eval = make_evaluator();
+        // "aλb" - extract just λ (character index 1)
+        let s = make_string("aλb");
+        let result = string_to_utf8(&eval, vec![s, Value::Integer(1), Value::Integer(2)]).unwrap();
+        match result {
+            Value::Bytevector(bv) => {
+                assert_eq!(*bv.borrow(), vec![206, 187]); // Just λ
+            }
+            _ => panic!("Expected bytevector"),
+        }
+    }
+
+    #[test]
+    fn test_string_to_utf8_empty() {
+        let eval = make_evaluator();
+        let s = make_string("");
+        let result = string_to_utf8(&eval, vec![s]).unwrap();
+        match result {
+            Value::Bytevector(bv) => {
+                assert_eq!(*bv.borrow(), vec![]);
+            }
+            _ => panic!("Expected bytevector"),
+        }
+    }
+
+    #[test]
+    fn test_string_to_utf8_start_out_of_bounds() {
+        let eval = make_evaluator();
+        let s = make_string("ABC");
+        let result = string_to_utf8(&eval, vec![s, Value::Integer(10)]);
+        assert!(result.is_err());
+    }
+
+    // Round-trip tests
+
+    #[test]
+    fn test_utf8_roundtrip_ascii() {
+        let eval = make_evaluator();
+        let original = "Hello, World!";
+        let s = make_string(original);
+
+        // string->utf8
+        let bv = string_to_utf8(&eval, vec![s]).unwrap();
+
+        // utf8->string
+        let result = utf8_to_string(&eval, vec![bv]).unwrap();
+        assert_eq!(result.to_string(), format!("\"{}\"", original));
+    }
+
+    #[test]
+    fn test_utf8_roundtrip_unicode() {
+        let eval = make_evaluator();
+        let original = "Hello, 世界! λ ∀x∈ℕ";
+        let s = make_string(original);
+
+        // string->utf8
+        let bv = string_to_utf8(&eval, vec![s]).unwrap();
+
+        // utf8->string
+        let result = utf8_to_string(&eval, vec![bv]).unwrap();
+        assert_eq!(result.to_string(), format!("\"{}\"", original));
+    }
 }
