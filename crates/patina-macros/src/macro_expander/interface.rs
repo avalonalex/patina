@@ -325,8 +325,11 @@ impl TestExpander {
             (BigInteger(bi1), BigInteger(bi2)) => bi1 == bi2,
             (Rational(r1), Rational(r2)) => r1 == r2,
             (Real(f1), Real(f2)) => (f1 - f2).abs() < f64::EPSILON,
-            (Complex(r1, i1), Complex(r2, i2)) => {
-                (r1 - r2).abs() < f64::EPSILON && (i1 - i2).abs() < f64::EPSILON
+            (Complex(parts1), Complex(parts2)) => {
+                let (ref r1, ref i1) = **parts1;
+                let (ref r2, ref i2) = **parts2;
+                Self::forms_equal_ignoring_gensym(r1, r2)
+                    && Self::forms_equal_ignoring_gensym(i1, i2)
             }
             (String(s1), String(s2)) => s1.borrow().as_str() == s2.borrow().as_str(),
             (Character(c1), Character(c2)) => c1 == c2,

@@ -37,7 +37,8 @@ fn test_parse_complex_with_floats() {
 
     // Inexact complex numbers
     assert_eq!(interp.eval_str("3.5+2.7i").unwrap().to_string(), "3.5+2.7i");
-    assert_eq!(interp.eval_str("1.0-0.5i").unwrap().to_string(), "1-0.5i");
+    // 1.0-0.5i preserves exactness: real part is inexact 1.0, imag is inexact -0.5
+    assert_eq!(interp.eval_str("1.0-0.5i").unwrap().to_string(), "1.0-0.5i");
 }
 
 #[test]

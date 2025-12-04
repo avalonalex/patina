@@ -16,6 +16,14 @@
 (define (test-equal? expected actual)
   (define epsilon 1e-6)
 
+  ;; Helper predicates that don't require (scheme inexact)
+  ;; TODO: When the library system supports it, import (scheme inexact) and use
+  ;; nan? and infinite? directly instead of these workarounds.
+  ;; NaN is the only value not equal to itself
+  (define (is-nan? x) (and (real? x) (inexact? x) (not (= x x))))
+  ;; Infinity is larger than any finite number
+  (define (is-infinite? x) (and (real? x) (inexact? x) (not (is-nan? x)) (= x (* 2 x))))
+
   (define (approx-equal? x y)
     (cond
       ;; For inexact complex numbers (non-real), compare real and imaginary parts separately
@@ -26,8 +34,20 @@
        (and (approx-equal? (real-part x) (real-part y))
             (approx-equal? (imag-part x) (imag-part y))))
       ;; For real numbers (but not exact rationals), use epsilon-based comparison
+      ;; Handle special cases: NaN, infinity
       ((and (real? x) (real? y) (inexact? x) (inexact? y))
-       (< (abs (- x y)) epsilon))
+       (cond
+         ;; Both NaN: NaN = NaN for testing purposes
+         ((and (is-nan? x) (is-nan? y)) #t)
+         ;; One NaN: not equal
+         ((or (is-nan? x) (is-nan? y)) #f)
+         ;; Both infinite with same sign
+         ((and (is-infinite? x) (is-infinite? y))
+          (eqv? x y))
+         ;; One infinite: not equal
+         ((or (is-infinite? x) (is-infinite? y)) #f)
+         ;; Normal case: epsilon comparison
+         (else (< (abs (- x y)) epsilon))))
       ;; For pairs, recurse on both parts
       ((and (pair? x) (pair? y))
        (and (approx-equal? (car x) (car y))

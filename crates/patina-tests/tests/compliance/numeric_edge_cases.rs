@@ -54,11 +54,12 @@ fn test_complex_ordering_returns_false() {
 
 #[test]
 fn test_max_with_nan() {
-    // NaN handling in max: skip NaN and find max among non-NaN values
-    // Result is inexact due to NaN being inexact (inexact contagion)
-    assert_eval_to("(max +nan.0 5)", "5.0");
-    assert_eval_to("(max 1 +nan.0 3)", "3.0");
-    assert_eval_to("(max 5 +nan.0)", "5.0");
+    // NaN propagation: if any argument is NaN, result is NaN (like Chez Scheme)
+    assert_eval_to("(max +nan.0 5)", "+nan.0");
+    assert_eval_to("(max 1 +nan.0 3)", "+nan.0");
+    assert_eval_to("(max 5 +nan.0)", "+nan.0");
+    assert_eval_to("(max 1 2 3 +nan.0)", "+nan.0");
+    assert_eval_to("(max +nan.0)", "+nan.0");
 }
 
 #[test]
@@ -78,10 +79,12 @@ fn test_max_mixed_exact_inexact() {
 
 #[test]
 fn test_min_with_nan() {
-    // NaN handling in min: if NaN is present, keep looking for non-NaN
-    // Result should be inexact (due to NaN being inexact)
-    assert_eval_to("(min +nan.0 5)", "5.0");
-    assert_eval_to("(min 1 +nan.0 3)", "1.0");
+    // NaN propagation: if any argument is NaN, result is NaN (like Chez Scheme)
+    assert_eval_to("(min +nan.0 5)", "+nan.0");
+    assert_eval_to("(min 1 +nan.0 3)", "+nan.0");
+    assert_eval_to("(min 5 +nan.0)", "+nan.0");
+    assert_eval_to("(min 1 2 3 +nan.0)", "+nan.0");
+    assert_eval_to("(min +nan.0)", "+nan.0");
 }
 
 #[test]

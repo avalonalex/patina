@@ -413,16 +413,23 @@ impl Parser {
         }
     }
 
+    /// Helper to create a Complex value from two real components
+    fn make_complex(real: Value, imag: Value) -> Value {
+        Value::Complex(Box::new((real, imag)))
+    }
+
     fn parse_rectangular(&self, s: &str) -> Result<Value, ParseError> {
         // Remove the trailing 'i' or 'I'
         let s_no_i = &s[..s.len() - 1];
 
         // Handle special cases: +i, -i
         if s_no_i == "+" || s_no_i.is_empty() {
-            return Ok(Value::Complex(0.0, 1.0));
+            // +i means 0+1i (both exact integers)
+            return Ok(Self::make_complex(Value::Integer(0), Value::Integer(1)));
         }
         if s_no_i == "-" {
-            return Ok(Value::Complex(0.0, -1.0));
+            // -i means 0-1i (both exact integers)
+            return Ok(Self::make_complex(Value::Integer(0), Value::Integer(-1)));
         }
 
         // Find the position of + or - that separates real and imaginary parts
@@ -436,29 +443,29 @@ impl Parser {
         // Find the separator (+ or -) after the start position
         if let Some(sep_pos) = s_no_i[start_pos..].find(['+', '-']) {
             let real_sep_pos = start_pos + sep_pos;
-            let real_part = &s_no_i[..real_sep_pos];
-            let imag_part = &s_no_i[real_sep_pos..];
+            let real_part_str = &s_no_i[..real_sep_pos];
+            let imag_part_str = &s_no_i[real_sep_pos..];
 
             // Handle empty imaginary part (like "3+i" or "3-i")
-            let imag_str = if imag_part == "+" || imag_part == "-" {
-                format!("{}1", imag_part)
+            let imag_str = if imag_part_str == "+" || imag_part_str == "-" {
+                format!("{}1", imag_part_str)
             } else {
-                imag_part.to_string()
+                imag_part_str.to_string()
             };
 
-            // Parse both parts as real numbers (could be int or float)
-            let real_val = if real_part.is_empty() {
-                0.0
+            // Parse both parts as Values (preserving exactness)
+            let real_val = if real_part_str.is_empty() {
+                Value::Integer(0)
             } else {
-                self.parse_real_component(real_part)?
+                self.parse_real_component_as_value(real_part_str)?
             };
-            let imag_val = self.parse_real_component(&imag_str)?;
+            let imag_val = self.parse_real_component_as_value(&imag_str)?;
 
-            Ok(Value::Complex(real_val, imag_val))
+            Ok(Self::make_complex(real_val, imag_val))
         } else {
             // No separator found - this is pure imaginary like "+5i" or "-3i"
-            let imag_val = self.parse_real_component(s_no_i)?;
-            Ok(Value::Complex(0.0, imag_val))
+            let imag_val = self.parse_real_component_as_value(s_no_i)?;
+            Ok(Self::make_complex(Value::Integer(0), imag_val))
         }
     }
 
@@ -475,13 +482,83 @@ impl Parser {
         let angle = self.parse_real_component(parts[1])?;
 
         // Convert polar to rectangular: r@θ = r*cos(θ) + r*sin(θ)i
+        // Polar coordinates always produce inexact results
         let real = magnitude * angle.cos();
         let imag = magnitude * angle.sin();
 
-        Ok(Value::Complex(real, imag))
+        Ok(Self::make_complex(Value::Real(real), Value::Real(imag)))
+    }
+
+    /// Parse a component as a Value, preserving exactness
+    /// This is key for R7RS complex number semantics: `1+0i` has exact 0 imaginary,
+    /// while `1+0.0i` has inexact 0.0 imaginary.
+    fn parse_real_component_as_value(&self, s: &str) -> Result<Value, ParseError> {
+        // Check for special R7RS floating-point literals (always inexact)
+        match s {
+            "+inf.0" => return Ok(Value::Real(f64::INFINITY)),
+            "-inf.0" => return Ok(Value::Real(f64::NEG_INFINITY)),
+            "+nan.0" => return Ok(Value::Real(f64::NAN)),
+            _ => {}
+        }
+
+        // Check if it's a float (has decimal point or exponent) -> inexact
+        let is_float = s.contains('.') || s.contains('e') || s.contains('E');
+
+        // Handle sign prefix for parsing
+        let (sign, num_str) = if let Some(stripped) = s.strip_prefix('+') {
+            (1i64, stripped)
+        } else if let Some(stripped) = s.strip_prefix('-') {
+            (-1i64, stripped)
+        } else {
+            (1i64, s)
+        };
+
+        if is_float {
+            // Parse as inexact (Real)
+            let val = s
+                .parse::<f64>()
+                .map_err(|_| ParseError::InvalidSyntax(format!("Invalid real number: {}", s)))?;
+            return Ok(Value::Real(val));
+        }
+
+        // Try rational (exact)
+        if num_str.contains('/') {
+            let parts: Vec<&str> = num_str.split('/').collect();
+            if parts.len() == 2 {
+                let numer = BigInt::from_str(parts[0]).map_err(|_| {
+                    ParseError::InvalidSyntax(format!("Invalid numerator: {}", parts[0]))
+                })?;
+                let denom = BigInt::from_str(parts[1]).map_err(|_| {
+                    ParseError::InvalidSyntax(format!("Invalid denominator: {}", parts[1]))
+                })?;
+                let ratio = if sign < 0 {
+                    BigRational::new(-numer, denom)
+                } else {
+                    BigRational::new(numer, denom)
+                };
+                return Ok(Value::Rational(ratio));
+            }
+        }
+
+        // Try i64 first (exact)
+        if let Ok(n) = num_str.parse::<i64>() {
+            return Ok(Value::Integer(sign * n));
+        }
+
+        // Try BigInt (exact)
+        if let Ok(n) = BigInt::from_str(num_str) {
+            let n = if sign < 0 { -n } else { n };
+            return Ok(Value::BigInteger(n));
+        }
+
+        Err(ParseError::InvalidSyntax(format!(
+            "Invalid real number: {}",
+            s
+        )))
     }
 
     /// Parse a component that should be a real number (int, bigint, rational, or float)
+    /// Returns f64 (for polar coordinates where we always need inexact)
     fn parse_real_component(&self, s: &str) -> Result<f64, ParseError> {
         // Check for special R7RS floating-point literals
         match s {

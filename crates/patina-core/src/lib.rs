@@ -18,6 +18,7 @@ pub mod debug_format;
 pub mod environment;
 pub mod library;
 pub mod macro_debug;
+pub mod numeric;
 pub mod pvref;
 pub mod scope;
 pub mod value;

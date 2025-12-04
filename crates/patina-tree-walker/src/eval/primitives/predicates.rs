@@ -22,6 +22,43 @@ use super::super::Evaluator;
 use super::super::error::EvalError;
 use patina_runtime::value::Value;
 
+/// Helper to check if an imaginary part is exact zero (not inexact 0.0)
+fn is_exact_zero(v: &Value) -> bool {
+    match v {
+        Value::Integer(n) => *n == 0,
+        Value::BigInteger(n) => n.sign() == num_bigint::Sign::NoSign,
+        Value::Rational(r) => {
+            use num_traits::Zero;
+            r.is_zero()
+        }
+        // Inexact 0.0 is NOT exact zero
+        Value::Real(_) => false,
+        _ => false,
+    }
+}
+
+/// Helper to check if real part is finite
+fn is_finite(v: &Value) -> bool {
+    match v {
+        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => true,
+        Value::Real(f) => f.is_finite(),
+        _ => false,
+    }
+}
+
+/// Helper to check if value is an integer (exact or inexact)
+fn is_integer_value(v: &Value) -> bool {
+    match v {
+        Value::Integer(_) | Value::BigInteger(_) => true,
+        Value::Rational(r) => {
+            use num_traits::One;
+            r.denom() == &num_bigint::BigInt::one()
+        }
+        Value::Real(f) => f.is_finite() && f.trunc() == *f,
+        _ => false,
+    }
+}
+
 pub(super) fn number_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.make_type_predicate(args, |v| {
         matches!(
@@ -30,7 +67,7 @@ pub(super) fn number_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value,
                 | Value::BigInteger(_)
                 | Value::Rational(_)
                 | Value::Real(_)
-                | Value::Complex(_, _)
+                | Value::Complex(_)
         )
     })
 }
@@ -40,8 +77,11 @@ pub(super) fn integer_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
         Value::Integer(_) | Value::BigInteger(_) => true,
         // R7RS: inexact integers like 4.0 are also integers
         Value::Real(r) => r.is_finite() && r.trunc() == *r,
-        // R7RS: Complex with zero imaginary and integer real part is an integer
-        Value::Complex(real, imag) => *imag == 0.0 && real.is_finite() && real.trunc() == *real,
+        // R7RS: Complex with exact zero imaginary and integer real part is an integer
+        Value::Complex(parts) => {
+            let (ref real, ref imag) = **parts;
+            is_exact_zero(imag) && is_integer_value(real)
+        }
         _ => false,
     })
 }
@@ -51,8 +91,11 @@ pub(super) fn rational_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
         Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => true,
         // R7RS: finite inexact reals are also rationals
         Value::Real(r) => r.is_finite(),
-        // R7RS: Complex with zero imaginary and finite real part is rational
-        Value::Complex(real, imag) => *imag == 0.0 && real.is_finite(),
+        // R7RS: Complex with exact zero imaginary and finite real part is rational
+        Value::Complex(parts) => {
+            let (ref real, ref imag) = **parts;
+            is_exact_zero(imag) && is_finite(real)
+        }
         _ => false,
     })
 }
@@ -60,8 +103,13 @@ pub(super) fn rational_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
 pub(super) fn real_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.make_type_predicate(args, |v| match v {
         Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) | Value::Real(_) => true,
-        // R7RS: Complex numbers with zero imaginary part are real
-        Value::Complex(_, imag) => *imag == 0.0,
+        // R7RS: Complex numbers with EXACT zero imaginary part are real
+        // -2.5+0i (exact zero imag) -> real
+        // -2.5+0.0i (inexact zero imag) -> NOT real
+        Value::Complex(parts) => {
+            let (_, ref imag) = **parts;
+            is_exact_zero(imag)
+        }
         _ => false,
     })
 }
@@ -74,7 +122,7 @@ pub(super) fn complex_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
                 | Value::BigInteger(_)
                 | Value::Rational(_)
                 | Value::Real(_)
-                | Value::Complex(_, _)
+                | Value::Complex(_)
         )
     })
 }
@@ -144,7 +192,15 @@ pub(super) fn exact_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, 
 }
 
 pub(super) fn inexact_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Real(_) | Value::Complex(_, _)))
+    evaluator.make_type_predicate(args, |v| match v {
+        Value::Real(_) => true,
+        Value::Complex(parts) => {
+            // Complex is inexact if either part is inexact
+            let (ref r, ref i) = **parts;
+            matches!(r, Value::Real(_)) || matches!(i, Value::Real(_))
+        }
+        _ => false,
+    })
 }
 
 pub(super) fn boolean_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {

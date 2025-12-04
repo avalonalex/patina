@@ -91,13 +91,14 @@ impl Evaluator {
                 }
                 self.real_to_string(*f)
             }
-            Value::Complex(r, i) => {
+            Value::Complex(parts) => {
                 if radix != 10 {
                     return Err(EvalError::InvalidSyntax(
                         "complex numbers can only be converted with radix 10".to_string(),
                     ));
                 }
-                self.complex_to_string(*r, *i)
+                let (ref r, ref i) = **parts;
+                self.complex_to_string_values(r, i)
             }
             _ => {
                 return Err(EvalError::TypeError(format!(
@@ -166,7 +167,8 @@ impl Evaluator {
         }
     }
 
-    /// Convert a complex number to string
+    /// Convert a complex number to string (old f64 interface)
+    #[allow(dead_code)]
     fn complex_to_string(&self, r: f64, i: f64) -> String {
         if i == 0.0 {
             self.real_to_string(r)
@@ -192,6 +194,79 @@ impl Evaluator {
                     self.real_to_string(i)
                 )
             }
+        }
+    }
+
+    /// Convert complex number from Value parts (preserves exactness in display)
+    fn complex_to_string_values(&self, r: &Value, i: &Value) -> String {
+        use num_traits::Zero;
+
+        // Helper to check if a value is zero
+        fn is_zero(v: &Value) -> bool {
+            match v {
+                Value::Integer(n) => *n == 0,
+                Value::BigInteger(n) => n.sign() == num_bigint::Sign::NoSign,
+                Value::Rational(r) => r.is_zero(),
+                Value::Real(f) => *f == 0.0,
+                _ => false,
+            }
+        }
+
+        // Helper to check if a value is one
+        fn is_one(v: &Value) -> bool {
+            match v {
+                Value::Integer(n) => *n == 1,
+                Value::Real(f) => *f == 1.0,
+                _ => false,
+            }
+        }
+
+        // Helper to check if a value is negative one
+        fn is_neg_one(v: &Value) -> bool {
+            match v {
+                Value::Integer(n) => *n == -1,
+                Value::Real(f) => *f == -1.0,
+                _ => false,
+            }
+        }
+
+        // Helper to check if value is negative
+        fn is_negative(v: &Value) -> bool {
+            match v {
+                Value::Integer(n) => *n < 0,
+                Value::BigInteger(n) => n.sign() == num_bigint::Sign::Minus,
+                Value::Rational(r) => {
+                    use num_traits::Zero;
+                    r < &BigRational::zero()
+                }
+                Value::Real(f) => *f < 0.0,
+                _ => false,
+            }
+        }
+
+        // Helper to convert Value to string (for parts)
+        fn value_str(v: &Value) -> String {
+            format!("{}", v)
+        }
+
+        if is_zero(i) {
+            value_str(r)
+        } else if is_zero(r) {
+            if is_one(i) {
+                "+i".to_string()
+            } else if is_neg_one(i) {
+                "-i".to_string()
+            } else {
+                format!("{}i", value_str(i))
+            }
+        } else if is_one(i) {
+            format!("{}+i", value_str(r))
+        } else if is_neg_one(i) {
+            format!("{}-i", value_str(r))
+        } else if is_negative(i) {
+            format!("{}{}i", value_str(r), value_str(i))
+        } else {
+            format!("{}+{}i", value_str(r), value_str(i))
         }
     }
 

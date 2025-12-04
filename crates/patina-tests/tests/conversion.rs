@@ -77,10 +77,14 @@ fn test_number_to_string_rational_with_radix() {
 
 #[test]
 fn test_number_to_string_complex() {
-    assert_eval_to("(number->string 3+4i)", "\"3.0+4.0i\"");
+    // Complex numbers now preserve exactness: 3+4i has exact integer parts
+    assert_eval_to("(number->string 3+4i)", "\"3+4i\"");
+    // Inexact complex: use 3.0+4.0i
+    assert_eval_to("(number->string 3.0+4.0i)", "\"3.0+4.0i\"");
     assert_eval_to("(number->string 0+1i)", "\"+i\"");
     assert_eval_to("(number->string 0-1i)", "\"-i\"");
-    assert_eval_to("(number->string 5+0i)", "\"5.0\"");
+    // 5+0i displays as 5 (exact zero imaginary)
+    assert_eval_to("(number->string 5+0i)", "\"5\"");
 }
 
 #[test]

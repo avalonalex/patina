@@ -50,7 +50,11 @@ pub enum Value {
     BigInteger(BigInt),
     Rational(BigRational),
     Real(f64),
-    Complex(f64, f64), // real, imaginary
+    /// Complex numbers store their real and imaginary parts as boxed Values.
+    /// This preserves exactness: `1+2i` has exact parts, `1.0+2.0i` has inexact parts.
+    /// R7RS requires distinguishing `x+0i` (exact zero imag, is real) from
+    /// `x+0.0i` (inexact zero imag, is NOT real).
+    Complex(Box<(Value, Value)>), // (real_part, imag_part)
 
     // Characters (Unicode support)
     Character(char),
@@ -231,7 +235,7 @@ impl Value {
             Value::Integer(_) | Value::BigInteger(_) => "integer",
             Value::Rational(_) => "rational",
             Value::Real(_) => "real",
-            Value::Complex(_, _) => "complex",
+            Value::Complex(_) => "complex",
             Value::Character(_) => "character",
             Value::String(_) => "string",
             Value::Symbol(_) => "symbol",
@@ -359,37 +363,104 @@ impl std::fmt::Display for Value {
                     write!(f, "{}", r)
                 }
             }
-            Value::Complex(r, i) => {
-                // Format complex numbers properly
-                if *r == 0.0 && *i == 0.0 {
-                    write!(f, "0")
-                } else if *r == 0.0 {
-                    // Pure imaginary
-                    if *i == 1.0 {
-                        write!(f, "+i")
-                    } else if *i == -1.0 {
-                        write!(f, "-i")
-                    } else if *i < 0.0 {
-                        write!(f, "{}i", i)
-                    } else {
-                        write!(f, "+{}i", i)
+            Value::Complex(parts) => {
+                let (ref real_part, ref imag_part) = **parts;
+
+                // Helper to check if a value is zero
+                fn is_zero(v: &Value) -> bool {
+                    match v {
+                        Value::Integer(n) => *n == 0,
+                        Value::BigInteger(n) => n.sign() == num_bigint::Sign::NoSign,
+                        Value::Rational(r) => {
+                            use num_traits::Zero;
+                            r.is_zero()
+                        }
+                        Value::Real(r) => *r == 0.0,
+                        _ => false,
                     }
-                } else if *i == 0.0 {
-                    // Pure real
-                    write!(f, "{}", r)
-                } else if *i < 0.0 {
-                    // Negative imaginary: use - instead of +-
-                    if *i == -1.0 {
-                        write!(f, "{}-i", r)
+                }
+
+                // Helper to check if value is one
+                fn is_one(v: &Value) -> bool {
+                    match v {
+                        Value::Integer(n) => *n == 1,
+                        Value::BigInteger(n) => {
+                            use num_traits::One;
+                            n == &BigInt::one()
+                        }
+                        Value::Rational(r) => {
+                            use num_traits::One;
+                            r.is_one()
+                        }
+                        Value::Real(r) => *r == 1.0,
+                        _ => false,
+                    }
+                }
+
+                // Helper to check if value is negative one
+                fn is_neg_one(v: &Value) -> bool {
+                    match v {
+                        Value::Integer(n) => *n == -1,
+                        Value::BigInteger(n) => {
+                            use num_traits::One;
+                            n == &(-BigInt::one())
+                        }
+                        Value::Rational(r) => {
+                            use num_traits::One;
+                            r == &(-BigRational::one())
+                        }
+                        Value::Real(r) => *r == -1.0,
+                        _ => false,
+                    }
+                }
+
+                // Helper to check if value is negative
+                fn is_negative(v: &Value) -> bool {
+                    match v {
+                        Value::Integer(n) => *n < 0,
+                        Value::BigInteger(n) => n.sign() == num_bigint::Sign::Minus,
+                        Value::Rational(r) => {
+                            use num_traits::Zero;
+                            r < &BigRational::zero()
+                        }
+                        Value::Real(r) => *r < 0.0,
+                        _ => false,
+                    }
+                }
+
+                let real_is_zero = is_zero(real_part);
+                let imag_is_zero = is_zero(imag_part);
+
+                // Format complex numbers properly
+                if real_is_zero && imag_is_zero {
+                    write!(f, "0")
+                } else if real_is_zero {
+                    // Pure imaginary
+                    if is_one(imag_part) {
+                        write!(f, "+i")
+                    } else if is_neg_one(imag_part) {
+                        write!(f, "-i")
+                    } else if is_negative(imag_part) {
+                        write!(f, "{}i", imag_part)
                     } else {
-                        write!(f, "{}{}i", r, i)
+                        write!(f, "+{}i", imag_part)
+                    }
+                } else if imag_is_zero {
+                    // Pure real - display with exactness info
+                    write!(f, "{}", real_part)
+                } else if is_negative(imag_part) {
+                    // Negative imaginary: use - instead of +-
+                    if is_neg_one(imag_part) {
+                        write!(f, "{}-i", real_part)
+                    } else {
+                        write!(f, "{}{}i", real_part, imag_part)
                     }
                 } else {
                     // Positive imaginary
-                    if *i == 1.0 {
-                        write!(f, "{}+i", r)
+                    if is_one(imag_part) {
+                        write!(f, "{}+i", real_part)
                     } else {
-                        write!(f, "{}+{}i", r, i)
+                        write!(f, "{}+{}i", real_part, imag_part)
                     }
                 }
             }

@@ -259,7 +259,7 @@ impl Desugarer {
             | Value::BigInteger(_)
             | Value::Rational(_)
             | Value::Real(_)
-            | Value::Complex(_, _)
+            | Value::Complex(_)
             | Value::Character(_)
             | Value::String(_)
             | Value::Bytevector(_)

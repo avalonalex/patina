@@ -181,10 +181,17 @@ fn test_exact_integer_sqrt() {
 
 #[test]
 fn test_rationalize() {
-    // Find simplest rational within tolerance
-    assert_eval_to("(rationalize 3.14159 0.01)", "22/7"); // Pi approximation
-    assert_eval_to("(rationalize 1.5 0.1)", "3/2");
-    assert_eval_to("(rationalize 0.333 0.01)", "1/3");
+    // R7RS: If x is inexact, result is inexact; if x is exact, result is exact
+    // Inexact inputs return inexact results (the simplest rational converted to float)
+    // The algorithm finds 22/7 but converts it to inexact 3.142857...
+    assert_eval_to("(rationalize 3.14159 0.01)", "3.142857142857143");
+    assert_eval_to("(rationalize 1.5 0.1)", "1.5"); // 3/2 as inexact
+    assert_eval_to("(rationalize 0.333 0.01)", "0.3333333333333333"); // 1/3 as inexact
+
+    // Exact inputs return exact results
+    assert_eval_to("(rationalize 314159/100000 1/100)", "22/7"); // Pi approximation
+    assert_eval_to("(rationalize 3/2 1/10)", "3/2");
+    assert_eval_to("(rationalize 333/1000 1/100)", "1/3");
 }
 
 // ===== Float Predicates =====
@@ -230,18 +237,20 @@ fn test_exact_integer_predicate() {
 
 #[test]
 fn test_real_part() {
-    assert_eval_to("(real-part 3+4i)", "3.0");
+    assert_eval_to("(real-part 3+4i)", "3"); // Exact integer parts preserved
+    assert_eval_to("(real-part 3.0+4.0i)", "3.0"); // Inexact parts preserved
     assert_eval_to("(real-part 5)", "5"); // Real number
-    assert_eval_to("(real-part +i)", "0.0");
-    assert_eval_to("(real-part -2-3i)", "-2.0");
+    assert_eval_to("(real-part +i)", "0"); // Pure imaginary has exact zero real part
+    assert_eval_to("(real-part -2-3i)", "-2"); // Exact integer parts preserved
 }
 
 #[test]
 fn test_imag_part() {
-    assert_eval_to("(imag-part 3+4i)", "4.0");
+    assert_eval_to("(imag-part 3+4i)", "4"); // Exact integer parts preserved
+    assert_eval_to("(imag-part 3.0+4.0i)", "4.0"); // Inexact parts preserved
     assert_eval_to("(imag-part 5)", "0"); // Real number has imag=0
-    assert_eval_to("(imag-part +i)", "1.0");
-    assert_eval_to("(imag-part -2-3i)", "-3.0");
+    assert_eval_to("(imag-part +i)", "1"); // Exact 1
+    assert_eval_to("(imag-part -2-3i)", "-3"); // Exact integer parts preserved
 }
 
 #[test]

@@ -71,7 +71,11 @@ pub(in crate::eval) fn values_eqv(a: &Value, b: &Value) -> bool {
         (Value::Rational(a), Value::Rational(b)) => a == b,
         // R7RS: eqv? for inexact numbers - same exactness required
         (Value::Real(a), Value::Real(b)) => a == b,
-        (Value::Complex(r1, i1), Value::Complex(r2, i2)) => r1 == r2 && i1 == i2,
+        (Value::Complex(parts1), Value::Complex(parts2)) => {
+            let (ref r1, ref i1) = **parts1;
+            let (ref r2, ref i2) = **parts2;
+            values_eqv(r1, r2) && values_eqv(i1, i2)
+        }
         (Value::Character(a), Value::Character(b)) => a == b,
         // R7RS: eqv? on objects uses pointer equality
         (Value::Pair(a), Value::Pair(b)) => Rc::ptr_eq(a, b),
@@ -96,7 +100,11 @@ pub(in crate::eval) fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalEr
         (Value::BigInteger(x), Value::BigInteger(y)) => x == y,
         (Value::Rational(x), Value::Rational(y)) => x == y,
         (Value::Real(x), Value::Real(y)) => x == y, // IEEE 754 exact equality
-        (Value::Complex(r1, i1), Value::Complex(r2, i2)) => r1 == r2 && i1 == i2, // IEEE 754 exact equality
+        (Value::Complex(parts1), Value::Complex(parts2)) => {
+            let (ref r1, ref i1) = **parts1;
+            let (ref r2, ref i2) = **parts2;
+            values_equal(r1, r2)? && values_equal(i1, i2)?
+        }
         (Value::Character(x), Value::Character(y)) => x == y,
         (Value::Null, Value::Null) => true,
         (Value::String(x), Value::String(y)) => *x.borrow() == *y.borrow(),

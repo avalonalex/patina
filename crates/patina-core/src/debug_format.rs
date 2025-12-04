@@ -75,12 +75,9 @@ fn format_value_with_scopes(value: &Value, buf: &mut String) {
         Value::Real(r) => {
             write!(buf, "{}", r).unwrap();
         }
-        Value::Complex(re, im) => {
-            if *im >= 0.0 {
-                write!(buf, "{}+{}i", re, im).unwrap();
-            } else {
-                write!(buf, "{}{}i", re, im).unwrap();
-            }
+        Value::Complex(_) => {
+            // Use the Display impl which handles the new boxed format
+            write!(buf, "{}", value).unwrap();
         }
         Value::Character(c) => {
             write!(buf, "#\\{}", c).unwrap();
