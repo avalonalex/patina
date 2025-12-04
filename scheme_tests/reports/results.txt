@@ -1729,28 +1729,8 @@ Testing:
 Testing: 
 (digit-value #\٤)
 
-FAIL: 
-(digit-value #\٤)
-
-  expected: 
-4
-
-  but got:  
-#f
-
-
 Testing: 
 (digit-value #\૦)
-
-FAIL: 
-(digit-value #\૦)
-
-  expected: 
-0
-
-  but got:  
-#f
-
 
 Testing: 
 (digit-value #\.)
@@ -1800,7 +1780,7 @@ Testing:
 Testing: 
 (char-foldcase #\Λ)
 
-Tests run: 79, Passed: 77, Failed: 2
+Tests run: 79, Passed: 79, Failed: 0
 
 Running test suite: 6.7 Strings
 Testing: 
@@ -2545,15 +2525,12 @@ Testing:
 Testing: 
 (string-map char-foldcase "AbdEgH")
 
-Error: Undefined variable: string-map
 Testing: 
 (string-map (lambda (c) (integer->char (+ 1 (char->integer c)))) "HAL")
 
-Error: Undefined variable: string-map
 Testing: 
 (string-map (lambda (c k) (if (eqv? k #\u) (char-upcase c) (char-downcase c))) "studlycaps xxx" "ululululul")
 
-Error: Undefined variable: string-map
 Testing: 
 (vector-map cadr '#((a b) (d e) (g h)))
 
@@ -2575,7 +2552,6 @@ Testing:
 Testing: 
 (let ((v '())) (string-for-each (lambda (c) (set! v (cons (char->integer c) v))) "abcde") v)
 
-Error: Undefined variable: string-for-each
 Testing: 
 (let ((v (make-list 5))) (vector-for-each (lambda (i) (list-set! v i (* i i))) '#(0 1 2 3 4)) v)
 
@@ -2601,7 +2577,7 @@ Testing:
 (let ((path '()) (c #f)) (let ((add (lambda (s) (set! path (cons s path))))) (dynamic-wind (lambda () (add 'connect)) (lambda () (add (call-with-current-continuation (lambda (c0) (set! c c0) 'talk1)))) (lambda () (add 'disconnect))) (if (< (length path) 4) (c 'talk2) (reverse path))))
 
 Error: Undefined variable: dynamic-wind
-Tests run: 34, Passed: 21, Failed: 0, Errors: 13
+Tests run: 34, Passed: 25, Failed: 0, Errors: 9
 
 Running test suite: 6.11 Exceptions
 Testing: 

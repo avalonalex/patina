@@ -292,15 +292,126 @@ pub(super) fn integer_to_char(evaluator: &Evaluator, args: Vec<Value>) -> Result
 
 /// (digit-value char) - Returns the numeric value of a digit character
 /// Returns #f if the character is not a digit
+///
+/// R7RS requires this to work for all Unicode decimal digits (Nd category),
+/// not just ASCII 0-9. Unicode decimal digits are organized in blocks where
+/// each block contains 10 consecutive code points for 0-9.
 pub(super) fn digit_value(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "digit-value")?;
     let c = get_char(&args[0], "digit-value")?;
 
     // R7RS: Returns the numeric value 0-9 for digit characters, #f otherwise
-    match c.to_digit(10) {
+    // Must handle all Unicode decimal digits, not just ASCII
+    match unicode_digit_value(c) {
         Some(d) => Ok(Value::Integer(d as i64)),
         None => Ok(Value::Boolean(false)),
     }
+}
+
+/// Returns the numeric value (0-9) of a Unicode decimal digit character,
+/// or None if the character is not a decimal digit.
+///
+/// Unicode decimal digits (category Nd) are organized in blocks where
+/// each script's digits 0-9 are consecutive code points. We can calculate
+/// the digit value by finding the offset from the block's zero character.
+///
+/// TODO: Consider using the `unicode-general-category` or `unic-ucd-category`
+/// crate for more maintainable Unicode property handling. The table below
+/// covers Unicode 15.0 Nd ranges but may need updates for future Unicode versions.
+fn unicode_digit_value(c: char) -> Option<u32> {
+    // First try ASCII (fast path)
+    if let Some(d) = c.to_digit(10) {
+        return Some(d);
+    }
+
+    // For non-ASCII, check if it's a decimal digit using Unicode properties
+    // A character is a decimal digit if char::is_numeric() returns true AND
+    // it's in the Nd (Decimal Number) category.
+    //
+    // Unicode decimal digit blocks all have 10 consecutive code points.
+    // We can find the digit value by checking known decimal digit ranges.
+    let cp = c as u32;
+
+    // List of Unicode decimal digit zero code points (Nd category)
+    // Each entry is the code point for digit '0' in that script
+    const DECIMAL_DIGIT_ZEROS: &[u32] = &[
+        0x0030, // ASCII: 0-9
+        0x0660, // Arabic-Indic: ٠-٩
+        0x06F0, // Extended Arabic-Indic: ۰-۹
+        0x07C0, // NKo: ߀-߉
+        0x0966, // Devanagari: ०-९
+        0x09E6, // Bengali: ০-৯
+        0x0A66, // Gurmukhi: ੦-੯
+        0x0AE6, // Gujarati: ૦-૯
+        0x0B66, // Oriya: ୦-୯
+        0x0BE6, // Tamil: ௦-௯
+        0x0C66, // Telugu: ౦-౯
+        0x0CE6, // Kannada: ೦-೯
+        0x0D66, // Malayalam: ൦-൯
+        0x0DE6, // Sinhala Lith: ෦-෯
+        0x0E50, // Thai: ๐-๙
+        0x0ED0, // Lao: ໐-໙
+        0x0F20, // Tibetan: ༠-༩
+        0x1040, // Myanmar: ၀-၉
+        0x1090, // Myanmar Shan: ႐-႙
+        0x17E0, // Khmer: ០-៩
+        0x1810, // Mongolian: ᠐-᠙
+        0x1946, // Limbu: ᥆-᥏
+        0x19D0, // New Tai Lue: ᧐-᧙
+        0x1A80, // Tai Tham Hora: ᪀-᪉
+        0x1A90, // Tai Tham Tham: ᪐-᪙
+        0x1B50, // Balinese: ᭐-᭙
+        0x1BB0, // Sundanese: ᮰-᮹
+        0x1C40, // Lepcha: ᱀-᱉
+        0x1C50, // Ol Chiki: ᱐-᱙
+        0xA620, // Vai: ꘠-꘩
+        0xA8D0, // Saurashtra: ꣐-꣙
+        0xA900, // Kayah Li: ꤀-꤉
+        0xA9D0, // Javanese: ꧐-꧙
+        0xA9F0, // Myanmar Tai Laing: ꧰-꧹
+        0xAA50, // Cham: ꩐-꩙
+        0xABF0, // Meetei Mayek: ꯰-꯹
+        0xFF10, // Fullwidth: ０-９
+        // Supplementary planes
+        0x104A0, // Osmanya: 𐒠-𐒩
+        0x10D30, // Hanifi Rohingya: 𐴰-𐴹
+        0x11066, // Brahmi: 𑁦-𑁯
+        0x110F0, // Sora Sompeng: 𑃰-𑃹
+        0x11136, // Chakma: 𑄶-𑄿
+        0x111D0, // Sharada: 𑇐-𑇙
+        0x112F0, // Khudawadi: 𑋰-𑋹
+        0x11450, // Newa: 𑑐-𑑙
+        0x114D0, // Tirhuta: 𑓐-𑓙
+        0x11650, // Modi: 𑙐-𑙙
+        0x116C0, // Takri: 𑛀-𑛉
+        0x11730, // Ahom: 𑜰-𑜹
+        0x118E0, // Warang Citi: 𑣠-𑣩
+        0x11950, // Dives Akuru: 𑥐-𑥙
+        0x11C50, // Bhaiksuki: 𑱐-𑱙
+        0x11D50, // Masaram Gondi: 𑵐-𑵙
+        0x11DA0, // Gunjala Gondi: 𑶠-𑶩
+        0x16A60, // Mro: 𖩠-𖩩
+        0x16AC0, // Tangsa: 𖫰-𖫹
+        0x16B50, // Pahawh Hmong: 𖭐-𖭙
+        0x1D7CE, // Mathematical Bold: 𝟎-𝟗
+        0x1D7D8, // Mathematical Double-Struck: 𝟘-𝟡
+        0x1D7E2, // Mathematical Sans-Serif: 𝟢-𝟫
+        0x1D7EC, // Mathematical Sans-Serif Bold: 𝟬-𝟵
+        0x1D7F6, // Mathematical Monospace: 𝟶-𝟿
+        0x1E140, // Nyiakeng Puachue Hmong: 𞅀-𞅉
+        0x1E2F0, // Wancho: 𞋰-𞋹
+        0x1E4F0, // Nag Mundari: 𞓰-𞓹
+        0x1E950, // Adlam: 𞥐-𞥙
+        0x1FBF0, // Segmented Display: 🯰-🯹
+    ];
+
+    for &zero in DECIMAL_DIGIT_ZEROS {
+        if cp >= zero && cp < zero + 10 {
+            return Some(cp - zero);
+        }
+    }
+
+    None
 }
 
 // ========== Helper Functions ==========
@@ -498,4 +609,66 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "Returns the numeric value of a digit character, or #f.",
         |eval, args, _tail| digit_value(eval, args).map(EvalResult::Value),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unicode_digit_value_ascii() {
+        assert_eq!(unicode_digit_value('0'), Some(0));
+        assert_eq!(unicode_digit_value('5'), Some(5));
+        assert_eq!(unicode_digit_value('9'), Some(9));
+    }
+
+    #[test]
+    fn test_unicode_digit_value_arabic_indic() {
+        // Arabic-Indic digits ٠-٩ (U+0660-U+0669)
+        assert_eq!(unicode_digit_value('٠'), Some(0)); // U+0660
+        assert_eq!(unicode_digit_value('٤'), Some(4)); // U+0664
+        assert_eq!(unicode_digit_value('٩'), Some(9)); // U+0669
+    }
+
+    #[test]
+    fn test_unicode_digit_value_gujarati() {
+        // Gujarati digits ૦-૯ (U+0AE6-U+0AEF)
+        assert_eq!(unicode_digit_value('૦'), Some(0)); // U+0AE6
+        assert_eq!(unicode_digit_value('૫'), Some(5)); // U+0AEB
+        assert_eq!(unicode_digit_value('૯'), Some(9)); // U+0AEF
+    }
+
+    #[test]
+    fn test_unicode_digit_value_devanagari() {
+        // Devanagari digits ०-९ (U+0966-U+096F)
+        assert_eq!(unicode_digit_value('०'), Some(0)); // U+0966
+        assert_eq!(unicode_digit_value('५'), Some(5)); // U+096B
+        assert_eq!(unicode_digit_value('९'), Some(9)); // U+096F
+    }
+
+    #[test]
+    fn test_unicode_digit_value_thai() {
+        // Thai digits ๐-๙ (U+0E50-U+0E59)
+        assert_eq!(unicode_digit_value('๐'), Some(0)); // U+0E50
+        assert_eq!(unicode_digit_value('๕'), Some(5)); // U+0E55
+        assert_eq!(unicode_digit_value('๙'), Some(9)); // U+0E59
+    }
+
+    #[test]
+    fn test_unicode_digit_value_fullwidth() {
+        // Fullwidth digits ０-９ (U+FF10-U+FF19)
+        assert_eq!(unicode_digit_value('０'), Some(0)); // U+FF10
+        assert_eq!(unicode_digit_value('５'), Some(5)); // U+FF15
+        assert_eq!(unicode_digit_value('９'), Some(9)); // U+FF19
+    }
+
+    #[test]
+    fn test_unicode_digit_value_non_digits() {
+        assert_eq!(unicode_digit_value('a'), None);
+        assert_eq!(unicode_digit_value('.'), None);
+        assert_eq!(unicode_digit_value('-'), None);
+        assert_eq!(unicode_digit_value(' '), None);
+        // Roman numerals are NOT decimal digits
+        assert_eq!(unicode_digit_value('Ⅳ'), None); // U+2163 Roman numeral four
+    }
 }

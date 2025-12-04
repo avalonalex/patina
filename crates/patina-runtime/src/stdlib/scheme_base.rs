@@ -148,6 +148,8 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("string-copy", Arity::Range(1, 3)),
         ("string-fill!", Arity::Range(2, 4)),
         ("string-copy!", Arity::Range(3, 5)),
+        ("string-map", Arity::Min(2)),
+        ("string-for-each", Arity::Min(2)),
         // Vector operations
         ("make-vector", Arity::Range(1, 2)),
         ("vector", Arity::Min(0)),

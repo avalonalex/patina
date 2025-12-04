@@ -604,6 +604,92 @@ pub(super) fn string_fill(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
     Ok(Value::Unspecified)
 }
 
+// ========== String Higher-Order Functions ==========
+
+/// (string-map proc string1 string2 ...) - Apply proc to each character
+pub(super) fn string_map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_min(&args, 2, "string-map")?;
+
+    let proc = &args[0];
+    let strings: Vec<Vec<char>> = args[1..]
+        .iter()
+        .map(|v| match v {
+            Value::String(s) => Ok(s.borrow().chars().collect()),
+            _ => Err(EvalError::TypeError(
+                "string-map expects strings".to_string(),
+            )),
+        })
+        .collect::<Result<_, _>>()?;
+
+    if strings.is_empty() {
+        return Ok(Value::String(Rc::new(RefCell::new(String::new()))));
+    }
+
+    let min_len = strings.iter().map(|s| s.len()).min().unwrap_or(0);
+    let mut result = String::with_capacity(min_len);
+
+    for i in 0..min_len {
+        let proc_args: Vec<Value> = strings.iter().map(|s| Value::Character(s[i])).collect();
+        // Procedure calls within string-map are not in tail position
+        let val = match evaluator.apply(proc.clone(), proc_args, false)? {
+            super::super::EvalResult::Value(v) => v,
+            _ => {
+                return Err(EvalError::InternalError(
+                    "Unexpected tail call in string-map".to_string(),
+                ));
+            }
+        };
+        match val {
+            Value::Character(c) => result.push(c),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "string-map: procedure must return a character".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(Value::String(Rc::new(RefCell::new(result))))
+}
+
+/// (string-for-each proc string1 string2 ...) - Apply proc for side effects
+pub(super) fn string_for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.check_arity_min(&args, 2, "string-for-each")?;
+
+    let proc = &args[0];
+    let strings: Vec<Vec<char>> = args[1..]
+        .iter()
+        .map(|v| match v {
+            Value::String(s) => Ok(s.borrow().chars().collect()),
+            _ => Err(EvalError::TypeError(
+                "string-for-each expects strings".to_string(),
+            )),
+        })
+        .collect::<Result<_, _>>()?;
+
+    if strings.is_empty() {
+        return Ok(Value::Unspecified);
+    }
+
+    let min_len = strings.iter().map(|s| s.len()).min().unwrap_or(0);
+
+    // string-for-each is guaranteed to call proc in order
+    for i in 0..min_len {
+        let proc_args: Vec<Value> = strings.iter().map(|s| Value::Character(s[i])).collect();
+        // Procedure calls within string-for-each are not in tail position
+        match evaluator.apply(proc.clone(), proc_args, false)? {
+            super::super::EvalResult::Value(_) => {}
+            _ => {
+                return Err(EvalError::InternalError(
+                    "Unexpected tail call in string-for-each".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(Value::Unspecified)
+}
+
 /// (string-copy! to at from [start [end]]) - Copy characters from one string to another
 pub(super) fn string_copy_mutate(
     evaluator: &Evaluator,
@@ -917,4 +1003,139 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "Copies characters from source string to destination string.",
         |eval, args, _tail| string_copy_mutate(eval, args).map(EvalResult::Value),
     ));
+
+    // String higher-order functions (scheme.base)
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-map",
+        Arity::Min(2),
+        "Applies proc element-wise to strings and returns a string of the results.",
+        |eval, args, _tail| string_map(eval, args).map(EvalResult::Value),
+    ));
+
+    registry.register(PrimitiveFn::new(
+        "scheme.base",
+        "string-for-each",
+        Arity::Min(2),
+        "Applies proc to each element of the strings for its side effects.",
+        |eval, args, _tail| string_for_each(eval, args).map(EvalResult::Value),
+    ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::Evaluator;
+    use patina_frontend::Parser;
+
+    fn make_evaluator() -> Evaluator {
+        Evaluator::new()
+    }
+
+    fn make_string(s: &str) -> Value {
+        Value::String(Rc::new(RefCell::new(s.to_string())))
+    }
+
+    /// Helper to parse and evaluate a lambda expression
+    fn make_lambda(eval: &Evaluator, code: &str) -> Value {
+        let mut parser = Parser::new(code).expect("Failed to create parser");
+        let expr = parser.parse().expect("Failed to parse");
+        eval.eval_in_env(&expr, &eval.global_env)
+            .expect("Failed to evaluate lambda")
+    }
+
+    // string-map tests
+
+    #[test]
+    fn test_string_map_identity() {
+        let eval = make_evaluator();
+        let identity = make_lambda(&eval, "(lambda (c) c)");
+
+        let result = string_map(&eval, vec![identity, make_string("hello")]).unwrap();
+        assert_eq!(result.to_string(), "\"hello\"");
+    }
+
+    #[test]
+    fn test_string_map_empty_string() {
+        let eval = make_evaluator();
+        let identity = make_lambda(&eval, "(lambda (c) c)");
+
+        let result = string_map(&eval, vec![identity, make_string("")]).unwrap();
+        assert_eq!(result.to_string(), "\"\"");
+    }
+
+    #[test]
+    fn test_string_map_multiple_strings_shortest_wins() {
+        let eval = make_evaluator();
+        let first = make_lambda(&eval, "(lambda (a b) a)");
+
+        let result = string_map(
+            &eval,
+            vec![first, make_string("abc"), make_string("xy")],
+        )
+        .unwrap();
+        // Should only process 2 characters (length of "xy")
+        assert_eq!(result.to_string(), "\"ab\"");
+    }
+
+    #[test]
+    fn test_string_map_unicode() {
+        let eval = make_evaluator();
+        let identity = make_lambda(&eval, "(lambda (c) c)");
+
+        let result = string_map(&eval, vec![identity, make_string("λαβ")]).unwrap();
+        assert_eq!(result.to_string(), "\"λαβ\"");
+    }
+
+    #[test]
+    fn test_string_map_wrong_return_type() {
+        let eval = make_evaluator();
+        let bad_proc = make_lambda(&eval, "(lambda (c) 42)");
+
+        let result = string_map(&eval, vec![bad_proc, make_string("abc")]);
+        assert!(result.is_err());
+    }
+
+    // string-for-each tests
+
+    #[test]
+    fn test_string_for_each_basic() {
+        let eval = make_evaluator();
+        let proc = make_lambda(&eval, "(lambda (c) c)");
+
+        let result = string_for_each(&eval, vec![proc, make_string("hello")]).unwrap();
+        assert!(matches!(result, Value::Unspecified));
+    }
+
+    #[test]
+    fn test_string_for_each_empty_string() {
+        let eval = make_evaluator();
+        let proc = make_lambda(&eval, "(lambda (c) c)");
+
+        let result = string_for_each(&eval, vec![proc, make_string("")]).unwrap();
+        assert!(matches!(result, Value::Unspecified));
+    }
+
+    #[test]
+    fn test_string_for_each_multiple_strings() {
+        let eval = make_evaluator();
+        let proc = make_lambda(&eval, "(lambda (a b) a)");
+
+        let result = string_for_each(
+            &eval,
+            vec![proc, make_string("abc"), make_string("xyz")],
+        )
+        .unwrap();
+        assert!(matches!(result, Value::Unspecified));
+    }
+
+    #[test]
+    fn test_string_for_each_type_error() {
+        let eval = make_evaluator();
+        let proc = make_lambda(&eval, "(lambda (c) c)");
+
+        // Pass a number instead of string
+        let result = string_for_each(&eval, vec![proc, Value::Integer(42)]);
+        assert!(result.is_err());
+    }
 }

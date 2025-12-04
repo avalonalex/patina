@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-03 18:29:22
+**Generated:** 2025-12-03 18:50:10
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 770 | 65.9% |
-| ❌ Failed | 17 | 1.5% |
-| ⚠️ Error (crashed) | 382 | 32.7% |
+| ✅ Passed | 776 | 66.4% |
+| ❌ Failed | 15 | 1.3% |
+| ⚠️ Error (crashed) | 378 | 32.3% |
 | **Total** | **1169** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
@@ -19,8 +19,6 @@
 ### Test Failures
 
 ```
-FAIL: 
-FAIL: 
 FAIL: 
 FAIL: 
 FAIL: 
@@ -53,10 +51,6 @@ Error: Internal error: Failed to desugar expression: Invalid syntax: apply requi
 Error: Undefined variable: test-error
 Error: Undefined variable: test-error
 Error: Undefined variable: test-error
-Error: Undefined variable: string-map
-Error: Undefined variable: string-map
-Error: Undefined variable: string-map
-Error: Undefined variable: string-for-each
 Error: Undefined variable: call-with-current-continuation
 Error: Undefined variable: call-with-current-continuation
 Error: Undefined variable: call-with-current-continuation
