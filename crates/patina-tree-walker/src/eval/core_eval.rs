@@ -61,7 +61,7 @@
 use super::error::EvalError;
 use patina_ir::{CoreExpr, Formals};
 use patina_runtime::environment::Environment;
-use patina_runtime::value::{LambdaBody, Procedure, Value};
+use patina_runtime::value::{Procedure, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -226,7 +226,7 @@ pub(crate) fn eval_core_step(
                 Procedure::Lambda {
                     params: scoped_params,
                     variadic,
-                    body: LambdaBody::Core(body.clone()),
+                    body: body.clone(),
                     env: env.clone(),
                     binding_scope: *binding_scope,
                 },
@@ -492,7 +492,7 @@ pub(crate) fn eval_core_step(
                     Ok(patina_runtime::value::CaseLambdaClause {
                         params: scoped_params,
                         variadic,
-                        body: LambdaBody::Core(clause.body.clone()),
+                        body: clause.body.clone(),
                         binding_scope: None,
                     })
                 })
@@ -544,64 +544,24 @@ fn apply_procedure(
                 // Bind parameters with proper hygiene (use parameter scopes if available)
                 bind_scoped_params(params, variadic.as_ref(), args, &call_env, *binding_scope)?;
 
-                match body {
-                    // Optimized path: CoreExpr body (preserves scope IDs for hygiene)
-                    // This is critical: re-desugaring would create fresh scope IDs that
-                    // don't match definition_scopes captured at macro definition time.
-                    LambdaBody::Core(core_body) => {
-                        if patina_runtime::macro_debug::is_enabled() {
-                            println!(
-                                "[APPLY] Lambda with CoreExpr body ({} exprs)",
-                                core_body.len()
-                            );
-                        }
-                        if core_body.is_empty() {
-                            return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
-                        }
-
-                        // Evaluate all but last for side effects
-                        for expr in &core_body[..core_body.len() - 1] {
-                            eval_non_tail(expr, call_env.clone(), evaluator)?;
-                        }
-
-                        // Last expression is in tail position
-                        Ok(CoreEvalResult::TailCall {
-                            expr: Rc::new(core_body[core_body.len() - 1].clone()),
-                            env: call_env,
-                        })
-                    }
-
-                    // Legacy path: Value body (for lambdas from legacy code paths)
-                    LambdaBody::Values(body_values) => {
-                        if patina_runtime::macro_debug::is_enabled() {
-                            println!(
-                                "[APPLY] Lambda with Values body ({} exprs)",
-                                body_values.len()
-                            );
-                        }
-                        if body_values.is_empty() {
-                            return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
-                        }
-
-                        // Evaluate all but last for side effects
-                        for expr in &body_values[..body_values.len() - 1] {
-                            eval_value_simple(expr, call_env.clone(), evaluator)?;
-                        }
-
-                        // Last expression - need to desugar (creates fresh scopes, but this
-                        // path is only used for lambdas without CoreExpr body)
-                        let last_expr_value = &body_values[body_values.len() - 1];
-                        let desugarer = patina_frontend::Desugarer::with_env(call_env.clone());
-                        let last_expr_core = desugarer.desugar(last_expr_value).map_err(|e| {
-                            EvalError::InvalidSyntax(format!("Desugaring failed: {}", e))
-                        })?;
-
-                        Ok(CoreEvalResult::TailCall {
-                            expr: Rc::new(last_expr_core),
-                            env: call_env,
-                        })
-                    }
+                // Evaluate CoreExpr body (preserves scope IDs for hygiene)
+                if patina_runtime::macro_debug::is_enabled() {
+                    println!("[APPLY] Lambda with CoreExpr body ({} exprs)", body.len());
                 }
+                if body.is_empty() {
+                    return Err(EvalError::InvalidSyntax("Empty lambda body".to_string()));
+                }
+
+                // Evaluate all but last for side effects
+                for expr in &body[..body.len() - 1] {
+                    eval_non_tail(expr, call_env.clone(), evaluator)?;
+                }
+
+                // Last expression is in tail position
+                Ok(CoreEvalResult::TailCall {
+                    expr: Rc::new(body[body.len() - 1].clone()),
+                    env: call_env,
+                })
             }
 
             Procedure::Primitive { .. } => {
@@ -655,56 +615,24 @@ fn apply_procedure(
                             clause.binding_scope,
                         )?;
 
-                        // Evaluate body based on LambdaBody type
-                        match &clause.body {
-                            LambdaBody::Core(core_body) => {
-                                if core_body.is_empty() {
-                                    return Err(EvalError::InvalidSyntax(
-                                        "Empty case-lambda body".to_string(),
-                                    ));
-                                }
-
-                                // Evaluate all but last for side effects
-                                for expr in &core_body[..core_body.len() - 1] {
-                                    eval_non_tail(expr, call_env.clone(), evaluator)?;
-                                }
-
-                                // Last expression is in tail position
-                                return Ok(CoreEvalResult::TailCall {
-                                    expr: Rc::new(core_body[core_body.len() - 1].clone()),
-                                    env: call_env,
-                                });
-                            }
-                            LambdaBody::Values(body_values) => {
-                                if body_values.is_empty() {
-                                    return Err(EvalError::InvalidSyntax(
-                                        "Empty case-lambda body".to_string(),
-                                    ));
-                                }
-
-                                // Evaluate all but last for side effects
-                                for expr in &body_values[..body_values.len() - 1] {
-                                    eval_value_simple(expr, call_env.clone(), evaluator)?;
-                                }
-
-                                // Last expression is in tail position - need to desugar
-                                let last_expr_value = &body_values[body_values.len() - 1];
-                                let desugarer =
-                                    patina_frontend::Desugarer::with_env(call_env.clone());
-                                let last_expr_core =
-                                    desugarer.desugar(last_expr_value).map_err(|e| {
-                                        EvalError::InvalidSyntax(format!(
-                                            "Desugaring failed: {}",
-                                            e
-                                        ))
-                                    })?;
-
-                                return Ok(CoreEvalResult::TailCall {
-                                    expr: Rc::new(last_expr_core),
-                                    env: call_env,
-                                });
-                            }
+                        // Evaluate CoreExpr body
+                        let body = &clause.body;
+                        if body.is_empty() {
+                            return Err(EvalError::InvalidSyntax(
+                                "Empty case-lambda body".to_string(),
+                            ));
                         }
+
+                        // Evaluate all but last for side effects
+                        for expr in &body[..body.len() - 1] {
+                            eval_non_tail(expr, call_env.clone(), evaluator)?;
+                        }
+
+                        // Last expression is in tail position
+                        return Ok(CoreEvalResult::TailCall {
+                            expr: Rc::new(body[body.len() - 1].clone()),
+                            env: call_env,
+                        });
                     }
                 }
 
@@ -1054,24 +982,6 @@ fn vec_to_list(items: &[Value]) -> Value {
         result = cons(item.clone(), result);
     }
     result
-}
-
-/// Minimal Value evaluator (temporary bridge)
-///
-/// This is a simplified evaluator for Value expressions that appear in lambda bodies.
-/// It's a temporary bridge until we migrate to storing CoreExpr bodies in closures.
-///
-/// For now, this just converts Value → CoreExpr → evaluate via eval_core.
-/// This is inefficient but correct, and isolated to this one place.
-fn eval_value_simple(
-    value: &Value,
-    env: Rc<Environment>,
-    evaluator: &super::Evaluator,
-) -> Result<Value, EvalError> {
-    // Use the Value evaluator directly instead of converting to CoreExpr
-    // This is important because lambda bodies may contain special forms
-    // like quasiquote that aren't in CoreExpr
-    evaluator.eval_in_env(value, &env)
 }
 
 /// Strip Identifiers to Symbols in quoted data.

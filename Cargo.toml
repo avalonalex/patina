@@ -31,4 +31,7 @@ once_cell = "1.19"
 # Small vector optimization
 smallvec = "1.13"
 
+# Logging/tracing
+tracing = "0.1"
+
 # No main package anymore - workspace only

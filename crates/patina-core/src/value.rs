@@ -157,16 +157,11 @@ pub struct IdentifierData {
 
 /// Lambda body representation - type-safe replacement for `dyn Any`
 ///
-/// This enum allows storing lambda bodies in either:
-/// - `Values`: Legacy format as syntax Values (requires desugaring on each call)
-/// - `Core`: Optimized format as CoreExpr (preserves scope IDs for hygiene)
-#[derive(Debug, Clone)]
-pub enum LambdaBody {
-    /// Legacy: body as syntax Values (requires desugaring on each call)
-    Values(Vec<Value>),
-    /// Optimized: body as CoreExpr (preserves scope IDs for hygiene)
-    Core(Vec<CoreExpr>),
-}
+/// Lambda body stored as CoreExpr (preserves scope IDs for hygiene)
+///
+/// Previously this was an enum with `Values(Vec<Value>)` and `Core(Vec<CoreExpr>)`,
+/// but the Values variant was never used. All lambdas are now created with CoreExpr bodies.
+pub type LambdaBody = Vec<CoreExpr>;
 
 /// A clause in a case-lambda: (params, variadic, body, binding_scope)
 #[derive(Debug, Clone)]

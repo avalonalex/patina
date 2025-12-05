@@ -7,9 +7,61 @@
 //! - Procedure application
 //! - Environment operations
 //! - Macro expansion (future)
+//!
+//! Uses the `tracing` crate for structured logging. Enable with:
+//! - `RUST_LOG=patina_tree_walker=debug` for debug-level traces
+//! - `RUST_LOG=patina_tree_walker=trace` for trace-level (verbose) output
 
 use std::cell::RefCell;
 use std::collections::HashSet;
+
+/// Log an evaluation entry point
+#[macro_export]
+macro_rules! trace_eval {
+    ($debug:expr, $($arg:tt)*) => {
+        if $debug.is_enabled($crate::eval::debug::DebugStage::Eval) {
+            tracing::debug!(target: "patina_tree_walker::eval", $($arg)*);
+        }
+    };
+}
+
+/// Log an evaluation result
+#[macro_export]
+macro_rules! trace_eval_result {
+    ($debug:expr, $($arg:tt)*) => {
+        if $debug.is_enabled($crate::eval::debug::DebugStage::Eval) {
+            tracing::debug!(target: "patina_tree_walker::eval", $($arg)*);
+        }
+    };
+}
+
+/// Log a procedure application
+#[macro_export]
+macro_rules! trace_apply {
+    ($debug:expr, $($arg:tt)*) => {
+        if $debug.is_enabled($crate::eval::debug::DebugStage::Apply) {
+            tracing::debug!(target: "patina_tree_walker::apply", $($arg)*);
+        }
+    };
+}
+
+/// Log an environment lookup
+#[macro_export]
+macro_rules! trace_env {
+    ($debug:expr, $($arg:tt)*) => {
+        if $debug.is_enabled($crate::eval::debug::DebugStage::Env) {
+            tracing::trace!(target: "patina_tree_walker::env", $($arg)*);
+        }
+    };
+}
+
+/// Log a warning (always emitted, not controlled by debug stages)
+#[macro_export]
+macro_rules! trace_warn {
+    ($($arg:tt)*) => {
+        tracing::warn!(target: "patina_tree_walker", $($arg)*);
+    };
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DebugStage {

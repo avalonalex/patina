@@ -133,9 +133,6 @@ impl std::error::Error for MatchError {}
 /// a MatchEnv with all pattern variables bound.
 ///
 /// Based on Gauche's pattern matching approach (macro.c:600+).
-///
-/// TODO: This will be refactored as part of PRD/phase1/DEFINE_SYNTAX_ELIMINATION.md
-/// The current literal shadowing check is a temporary solution.
 pub struct Matcher {
     /// Number of pattern variables (determines MatchEnv size)
     num_pvars: usize,
@@ -148,8 +145,6 @@ pub struct Matcher {
     /// it should NOT match as a literal (R7RS 4.3.2).
     ///
     /// This is compile-time shadowing info from the desugarer's `shadowed_names`.
-    ///
-    /// TODO: This temporary approach will be cleaned up in DEFINE_SYNTAX_ELIMINATION.md
     shadowed_names: std::collections::HashSet<std::rc::Rc<str>>,
 
     /// Literal identifiers from the macro definition (e.g., ["else", "=>"] for cond)
@@ -195,8 +190,6 @@ impl Matcher {
     /// * `pvar_names` - Mapping from PVREF to variable names
     /// * `shadowed_names` - Names shadowed by local bindings at macro use site
     /// * `literals` - Literal identifiers from the macro definition
-    ///
-    /// TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
     pub fn new_with_hygiene(
         num_pvars: usize,
         pvar_names: std::collections::HashMap<PVRef, std::rc::Rc<str>>,
@@ -278,8 +271,6 @@ impl Matcher {
                 //
                 // Example: (let ((=> #f)) (cond (#t => 'ok)))
                 // Here `=>` is shadowed, so it shouldn't match cond's `=>` literal.
-                //
-                // TODO: This check will be refactored in DEFINE_SYNTAX_ELIMINATION.md
                 if self.is_literal_shadowed(lit, input) {
                     return Err(MatchError::LiteralMismatch {
                         expected: format!("{:?}", lit),
@@ -443,7 +434,7 @@ impl Matcher {
                         // This is the key fix for nested ellipsis
                         for &pvref in &all_vars {
                             if let Some(match_value) = temp_env.get_raw(pvref) {
-                                branches.get_mut(&pvref).unwrap().push(match_value.clone());
+                                branches.entry(pvref).or_default().push(match_value.clone());
                             }
                         }
                     }
@@ -588,7 +579,10 @@ impl Matcher {
                         // Extract matched values for ALL variables
                         for pvref in &all_vars {
                             if let Some(match_value) = temp_env.get_raw(*pvref) {
-                                branches.get_mut(pvref).unwrap().push(match_value.clone());
+                                branches
+                                    .entry(*pvref)
+                                    .or_default()
+                                    .push(match_value.clone());
                             }
                         }
                     }
@@ -688,8 +682,6 @@ impl Matcher {
     ///
     /// If the literal is shadowed by a local binding at the use site, it should
     /// NOT match, allowing the clause to fall through to other patterns.
-    ///
-    /// TODO: This will be refactored in DEFINE_SYNTAX_ELIMINATION.md
     fn is_literal_shadowed(&self, lit: &Value, input: &Value) -> bool {
         // If no shadowed names, nothing can be shadowed
         if self.shadowed_names.is_empty() {

@@ -2,7 +2,6 @@
 //!
 //! This module handles the application of procedures to arguments, including:
 //! - `apply()` - Apply a procedure to evaluated arguments
-//! - `eval_arguments()` - Evaluate a list of argument expressions
 //! - `check_arity()` - Verify argument count matches procedure arity
 
 use patina_runtime::environment::Environment;
@@ -13,28 +12,9 @@ use super::Evaluator;
 use super::error::EvalError;
 
 impl Evaluator {
-    /// Evaluate a list of argument expressions
-    pub(super) fn eval_arguments(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Vec<Value>, EvalError> {
-        let mut result = Vec::new();
-        let mut current = args.clone();
-
-        while let Value::Pair(pair) = current {
-            let borrowed = pair.borrow();
-            result.push(self.eval_in_env(&borrowed.0, env)?);
-            current = borrowed.1.clone();
-        }
-
-        Ok(result)
-    }
-
     /// Evaluate a list of already macro-expanded argument expressions
     ///
-    /// Like `eval_arguments()`, but assumes macros have already been expanded.
-    /// Uses `eval_expanded()` instead of `eval_in_env()` to avoid re-expansion.
+    /// Uses `eval_expanded()` to avoid re-expansion.
     pub(super) fn eval_arguments_expanded(
         &self,
         args: &Value,
@@ -70,11 +50,12 @@ impl Evaluator {
                 .map(|v| format!("{}", v))
                 .collect::<Vec<_>>()
                 .join(" ");
-            eprintln!(
-                "[APPLY]{} Applying: {} to ({})",
-                self.debug.current_indent(),
-                proc,
-                args_str
+            tracing::debug!(
+                target: "patina_tree_walker::apply",
+                indent = %self.debug.current_indent(),
+                proc = %proc,
+                args = %args_str,
+                "Applying"
             );
             self.debug.indent();
         }
@@ -194,14 +175,20 @@ impl Evaluator {
             self.debug.dedent();
             match &result {
                 Ok(super::EvalResult::Value(val)) => {
-                    eprintln!("[APPLY]{} => {}", self.debug.current_indent(), val)
+                    tracing::debug!(
+                        target: "patina_tree_walker::apply",
+                        indent = %self.debug.current_indent(),
+                        result = %val,
+                        "=> value"
+                    );
                 }
                 Ok(super::EvalResult::TailCall { expr, .. }) => {
-                    eprintln!(
-                        "[APPLY]{} => TAIL CALL: {}",
-                        self.debug.current_indent(),
-                        expr
-                    )
+                    tracing::debug!(
+                        target: "patina_tree_walker::apply",
+                        indent = %self.debug.current_indent(),
+                        expr = %expr,
+                        "=> tail call"
+                    );
                 }
                 Ok(super::EvalResult::TailCallPrimitive { proc, args }) => {
                     let args_str = args
@@ -209,14 +196,22 @@ impl Evaluator {
                         .map(|v| format!("{}", v))
                         .collect::<Vec<_>>()
                         .join(" ");
-                    eprintln!(
-                        "[APPLY]{} => TAIL CALL PRIMITIVE: {} ({})",
-                        self.debug.current_indent(),
-                        proc,
-                        args_str
-                    )
+                    tracing::debug!(
+                        target: "patina_tree_walker::apply",
+                        indent = %self.debug.current_indent(),
+                        proc = %proc,
+                        args = %args_str,
+                        "=> tail call primitive"
+                    );
                 }
-                Err(e) => eprintln!("[APPLY]{} => ERROR: {}", self.debug.current_indent(), e),
+                Err(e) => {
+                    tracing::debug!(
+                        target: "patina_tree_walker::apply",
+                        indent = %self.debug.current_indent(),
+                        error = %e,
+                        "=> error"
+                    );
+                }
             }
         }
 

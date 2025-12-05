@@ -825,15 +825,6 @@ fn test_macro_generating_macro_simple() {
 /// - The inner macro is: (define-syntax bar (syntax-rules () ((bar x) 'x)))
 /// - The `x` in `'x` should be the value from `y` (symbol `x`), NOT the inner
 ///   pattern variable `x` (which would be bound to `1` when (bar 1) is called)
-///
-/// This test is currently IGNORED because Patina doesn't correctly handle the
-/// case where a substituted symbol happens to have the same name as a pattern
-/// variable in a nested syntax-rules. Symbols from pattern variable substitution
-/// need to carry scope information to distinguish them from new pattern variables.
-///
-/// See PRD/phase1/MACRO_GENERATING_MACRO_HYGIENE.md for detailed analysis and
-/// implementation roadmap. This should be fixed AFTER DEFINE_SYNTAX_ELIMINATION.md
-/// is complete.
 #[test]
 fn test_macro_generating_macro_conflicting_names() {
     let interp = TreeWalkInterpreter::new_tree_walker();
@@ -853,8 +844,7 @@ fn test_macro_generating_macro_conflicting_names() {
         "#,
     );
 
-    // Expected: 'x (the symbol x from the outer macro call)
-    // Actual (broken): 1 (the inner pattern variable x bound to the argument)
+    // Returns 'x (the symbol x from the outer macro call)
     assert!(result.is_ok(), "Failed: {:?}", result);
     assert_eq!(result.unwrap().to_string(), "x");
 }

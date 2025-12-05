@@ -345,7 +345,6 @@ impl Desugarer {
         {
             // This is a macro! Expand it and recursively desugar the result
             // Pass shadowed_names for literal shadowing check (R7RS 4.3.2)
-            // TODO: This will be simplified in DEFINE_SYNTAX_ELIMINATION.md
             let expanded = patina_macros::expand_macro_with_shadowed(
                 &compiled_macro,
                 value,
@@ -1088,94 +1087,6 @@ impl Desugarer {
         };
 
         name.as_ref() == "define"
-    }
-
-    /// Compile a syntax-rules transformer into a CompiledMacro
-    ///
-    /// This is a helper method that mirrors what the evaluator does,
-    /// but is accessible during desugaring.
-    #[allow(dead_code)]
-    fn compile_syntax_rules(
-        &self,
-        expr: &Value,
-        name: Rc<str>,
-        env: &Rc<Environment>,
-    ) -> Result<patina_macros::CompiledMacro> {
-        use patina_macros::Compiler;
-
-        // Must be a list starting with 'syntax-rules
-        let list = utils::list_to_vec(expr)?;
-
-        if list.is_empty() {
-            return Err(DesugarError::InvalidSyntax(
-                "Expected syntax-rules".to_string(),
-            ));
-        }
-
-        // Check first element is 'syntax-rules
-        // Can be either Symbol or Identifier (from macro expansion)
-        let is_syntax_rules = match &list[0] {
-            Value::Symbol(s) => s.as_ref() == "syntax-rules",
-            Value::Identifier(id) => id.name.as_ref() == "syntax-rules",
-            _ => false,
-        };
-        if !is_syntax_rules {
-            return Err(DesugarError::InvalidSyntax(
-                "Expected syntax-rules".to_string(),
-            ));
-        }
-
-        if list.len() < 2 {
-            return Err(DesugarError::InvalidSyntax(
-                "syntax-rules requires literals and rules".to_string(),
-            ));
-        }
-
-        // R7RS syntax-rules has two forms:
-        // (syntax-rules (<literal> ...) <rule> ...)
-        // (syntax-rules <ellipsis> (<literal> ...) <rule> ...)
-        //
-        // Detect which form by checking if list[1] is a list (literals) or symbol (custom ellipsis)
-        let (custom_ellipsis, literals_index) = match &list[1] {
-            // If it's a list or null, it's the literals list (standard form)
-            Value::Pair(_) | Value::Null => (None, 1),
-            // If it's a symbol or identifier, it's a custom ellipsis
-            Value::Symbol(s) => (Some(s.clone()), 2),
-            Value::Identifier(id) => (Some(id.name.clone()), 2),
-            _ => {
-                return Err(DesugarError::InvalidSyntax(
-                    "syntax-rules: expected literals list or ellipsis identifier".to_string(),
-                ));
-            }
-        };
-
-        // Validate we have enough elements for custom ellipsis form
-        if custom_ellipsis.is_some() && list.len() < 3 {
-            return Err(DesugarError::InvalidSyntax(
-                "syntax-rules with custom ellipsis requires literals and rules".to_string(),
-            ));
-        }
-
-        // Parse literals: (symbol ...)
-        let literals_value = &list[literals_index];
-        let literals = self.parse_literals_list(literals_value)?;
-
-        // Parse rules as (pattern, template) pairs
-        let rules_start = literals_index + 1;
-        let rules_list = if list.len() > rules_start {
-            // Convert rules Vec back to list Value for parsing
-            utils::vec_to_list(&list[rules_start..])
-        } else {
-            Value::Null
-        };
-
-        let rules = self.parse_macro_rules(&rules_list)?;
-
-        // Compile using Compiler with environment capture for hygiene
-        let mut compiler = Compiler::with_env(literals, custom_ellipsis, env.clone());
-        compiler
-            .compile_macro(name, rules)
-            .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
     }
 
     /// Compile a syntax-rules transformer with scope set for scope-based hygiene

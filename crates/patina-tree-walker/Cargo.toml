@@ -27,6 +27,14 @@ once_cell = { workspace = true }
 # Unicode case folding
 unicode-casefold = "0.2"
 
+# Logging/tracing
+tracing = { workspace = true }
+
+[features]
+default = []
+# Enable verbose debug tracing output
+verbose-tracing = []
+
 [lib]
 name = "patina_tree_walker"
 path = "src/lib.rs"

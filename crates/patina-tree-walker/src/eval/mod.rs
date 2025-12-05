@@ -20,34 +20,6 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-/// Check if an expression is one of the special forms not yet in CoreExpr
-///
-/// These forms must use the Value evaluator as a fallback:
-/// - let-syntax / letrec-syntax: Deferred to future work (GitHub issue)
-/// - case-lambda: Not yet implemented in CoreExpr
-/// - expand: Debugging extension, not in CoreExpr
-fn is_value_evaluator_only_form(expr: &Value) -> bool {
-    if let Value::Pair(pair) = expr {
-        let car = &pair.borrow().0;
-        let name_str = match car {
-            Value::Symbol(name) => Some(name.as_ref()),
-            Value::Identifier(id) => Some(id.name.as_ref()),
-            _ => None,
-        };
-
-        if let Some(name) = name_str {
-            matches!(
-                name,
-                "let-syntax" | "letrec-syntax" | "case-lambda" | "expand"
-            )
-        } else {
-            false
-        }
-    } else {
-        false
-    }
-}
-
 /// Result of evaluation step in the trampoline
 ///
 /// The trampoline pattern enables tail call optimization by converting
@@ -302,10 +274,10 @@ impl Evaluator {
             match registry.get(name) {
                 Some(lib) => lib.env.clone(),
                 None => {
-                    eprintln!(
-                        "Warning: Library {:?} not loaded, cannot load extras from {}",
-                        name,
-                        extras_path.display()
+                    tracing::warn!(
+                        library = ?name,
+                        path = %extras_path.display(),
+                        "Library not loaded, cannot load extras"
                     );
                     return;
                 }
@@ -343,10 +315,10 @@ impl Evaluator {
         let mut parser = match patina_frontend::Parser::new(&extras_content) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!(
-                    "Warning: Failed to parse {}: {:?}",
-                    extras_path.display(),
-                    e
+                tracing::warn!(
+                    path = %extras_path.display(),
+                    error = ?e,
+                    "Failed to parse extras file"
                 );
                 return;
             }
@@ -362,10 +334,10 @@ impl Evaluator {
                     let core_expr = match desugarer.desugar(&expr) {
                         Ok(ce) => ce,
                         Err(e) => {
-                            eprintln!(
-                                "Warning: Failed to desugar expression in {}: {}",
-                                extras_path.display(),
-                                e
+                            tracing::warn!(
+                                path = %extras_path.display(),
+                                error = %e,
+                                "Failed to desugar expression in extras file"
                             );
                             continue;
                         }
@@ -373,16 +345,20 @@ impl Evaluator {
 
                     // Evaluate using CoreExpr evaluator
                     if let Err(e) = eval_core(&core_expr, eval_env.clone(), self) {
-                        eprintln!(
-                            "Warning: Failed to evaluate expression in {}: {}",
-                            extras_path.display(),
-                            e
+                        tracing::warn!(
+                            path = %extras_path.display(),
+                            error = %e,
+                            "Failed to evaluate expression in extras file"
                         );
                     }
                 }
                 Err(patina_frontend::ParseError::UnexpectedEof) => break,
                 Err(e) => {
-                    eprintln!("Warning: Parse error in {}: {:?}", extras_path.display(), e);
+                    tracing::warn!(
+                        path = %extras_path.display(),
+                        error = ?e,
+                        "Parse error in extras file"
+                    );
                     break;
                 }
             }
@@ -433,11 +409,12 @@ impl Evaluator {
     ) -> Result<EvalResult, EvalError> {
         // Debug trace entry
         if self.debug.is_enabled(debug::DebugStage::Eval) {
-            eprintln!(
-                "[EVAL]{} Evaluating: {} (tail={})",
-                self.debug.current_indent(),
-                expr,
-                in_tail_position
+            tracing::debug!(
+                target: "patina_tree_walker::eval",
+                indent = %self.debug.current_indent(),
+                expr = %expr,
+                tail = in_tail_position,
+                "Evaluating"
             );
             self.debug.indent();
         }
@@ -458,7 +435,12 @@ impl Evaluator {
             // Variable lookup
             Value::Symbol(name) => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
-                    eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
+                    tracing::trace!(
+                        target: "patina_tree_walker::env",
+                        indent = %self.debug.current_indent(),
+                        name = %name,
+                        "Symbol lookup"
+                    );
                 }
 
                 // Look up in current environment
@@ -473,11 +455,12 @@ impl Evaluator {
             // Uses scope-based lookup for hygienic binding resolution
             Value::Identifier(id) => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
-                    eprintln!(
-                        "[ENV]{} Identifier lookup: '{}' (scopes: {})",
-                        self.debug.current_indent(),
-                        id.name,
-                        id.scopes
+                    tracing::trace!(
+                        target: "patina_tree_walker::env",
+                        indent = %self.debug.current_indent(),
+                        name = %id.name,
+                        scopes = %id.scopes,
+                        "Identifier lookup"
                     );
                 }
 
@@ -514,27 +497,43 @@ impl Evaluator {
             self.debug.dedent();
             match &result {
                 Ok(EvalResult::Value(val)) => {
-                    eprintln!("[EVAL]{} => {}", self.debug.current_indent(), val)
+                    tracing::debug!(
+                        target: "patina_tree_walker::eval",
+                        indent = %self.debug.current_indent(),
+                        result = %val,
+                        "=> value"
+                    );
                 }
-                Ok(EvalResult::TailCall { expr, .. }) => eprintln!(
-                    "[EVAL]{} => TAIL CALL: {}",
-                    self.debug.current_indent(),
-                    expr
-                ),
+                Ok(EvalResult::TailCall { expr, .. }) => {
+                    tracing::debug!(
+                        target: "patina_tree_walker::eval",
+                        indent = %self.debug.current_indent(),
+                        expr = %expr,
+                        "=> tail call"
+                    );
+                }
                 Ok(EvalResult::TailCallPrimitive { proc, args }) => {
                     let args_str = args
                         .iter()
                         .map(|v| format!("{}", v))
                         .collect::<Vec<_>>()
                         .join(" ");
-                    eprintln!(
-                        "[EVAL]{} => TAIL CALL PRIMITIVE: {} ({})",
-                        self.debug.current_indent(),
-                        proc,
-                        args_str
-                    )
+                    tracing::debug!(
+                        target: "patina_tree_walker::eval",
+                        indent = %self.debug.current_indent(),
+                        proc = %proc,
+                        args = %args_str,
+                        "=> tail call primitive"
+                    );
                 }
-                Err(e) => eprintln!("[EVAL]{} => ERROR: {}", self.debug.current_indent(), e),
+                Err(e) => {
+                    tracing::debug!(
+                        target: "patina_tree_walker::eval",
+                        indent = %self.debug.current_indent(),
+                        error = %e,
+                        "=> error"
+                    );
+                }
             }
         }
 
@@ -542,144 +541,27 @@ impl Evaluator {
     }
 
     /// Evaluate a list (procedure call or special form) with tail position tracking
+    ///
+    /// All forms are routed through the CoreExpr pipeline. The desugarer handles:
+    /// - Special forms (quote, if, lambda, define, set!, begin, etc.)
+    /// - Macro expansion (macros are expanded during desugaring)
+    /// - Procedure applications
     fn eval_list_impl(
         &self,
         expr: &Value,
         env: &Rc<Environment>,
-        in_tail_position: bool,
+        _in_tail_position: bool,
     ) -> Result<EvalResult, EvalError> {
-        let (car, cdr) = self.extract_pair(expr)?;
+        use patina_frontend::Desugarer;
 
-        // First, try to route through CoreExpr for all forms (except fallback-only forms)
-        // This ensures that core special forms like define, set!, if, etc. use CoreExpr
-        if !is_value_evaluator_only_form(expr) {
-            use patina_frontend::Desugarer;
-            let desugarer = Desugarer::with_env(env.clone());
-            match desugarer.desugar(expr) {
-                Ok(core_expr) => {
-                    // Successfully desugared to CoreExpr - evaluate it
-                    let value = eval_core(&core_expr, env.clone(), self)?;
-                    return Ok(EvalResult::Value(value));
-                }
-                Err(e) => {
-                    use patina_frontend::DesugarError;
-                    // If desugaring fails with FallbackFormNeeded, fall through to Value evaluator
-                    // Note: This can happen when a CoreExpr form (like define) contains a nested
-                    // fallback form (like let-syntax). Until all forms are migrated to CoreExpr,
-                    // some tests with nested let-syntax will fail.
-                    if matches!(e, DesugarError::FallbackFormNeeded { .. }) {
-                        eprintln!(
-                            "⚠️  FALLBACK: CoreExpr desugaring failed due to nested fallback form"
-                        );
-                        eprintln!("   Expression: {}", expr);
-                        eprintln!("   Reason: {}", e);
-                        eprintln!(
-                            "   → Falling through to Value evaluator (may fail if form not in registry)"
-                        );
-                    }
-                    // For other errors, fall through to Value evaluator (might be a procedure call)
-                    // Don't fail here - let the Value evaluator try
-                }
-            }
-        }
+        // Route ALL forms through CoreExpr - unified evaluation path
+        let desugarer = Desugarer::with_env(env.clone());
+        let core_expr = desugarer.desugar(expr).map_err(|e| {
+            EvalError::InternalError(format!("Failed to desugar expression: {}", e))
+        })?;
 
-        // Fallback to Value evaluator for forms not in CoreExpr
-        // Note: All special forms now in CoreExpr - no registry lookup needed!
-
-        // Check if this symbol is bound to a macro
-        // Handle both Symbol and Identifier (scope-sets hygiene)
-        let macro_binding = match &car {
-            Value::Symbol(sym) => env.get(sym),
-            Value::Identifier(id) => {
-                // Use scope-based lookup if scopes are present
-                if !id.scopes.is_empty() {
-                    env.get_with_scopes(&id.name, &id.scopes)
-                } else {
-                    env.get(&id.name)
-                }
-            }
-            _ => None,
-        };
-
-        if let Some(Value::Macro(compiled_macro)) = macro_binding {
-            let name = match &car {
-                Value::Symbol(s) => s.as_ref(),
-                Value::Identifier(id) => id.name.as_ref(),
-                _ => unreachable!(),
-            };
-
-            if self.debug.is_enabled(debug::DebugStage::Expand) {
-                eprintln!(
-                    "[MACRO]{} Expanding macro '{}': {}",
-                    self.debug.current_indent(),
-                    name,
-                    expr
-                );
-                self.debug.indent();
-            }
-
-            let expanded = self.expand_macro(&compiled_macro, expr, env)?;
-
-            if self.debug.is_enabled(debug::DebugStage::Expand) {
-                eprintln!(
-                    "[MACRO]{} Expanded to: {}",
-                    self.debug.current_indent(),
-                    expanded
-                );
-                self.debug.dedent();
-            }
-
-            // Route expanded code through CoreExpr pipeline
-            // This ensures macro-expanded code uses the primary evaluation path
-            use patina_frontend::Desugarer;
-            let desugarer = Desugarer::with_env(env.clone());
-            match desugarer.desugar(&expanded) {
-                Ok(core_expr) => {
-                    // Successfully desugared to CoreExpr - evaluate it
-                    let value = eval_core(&core_expr, env.clone(), self)?;
-                    return Ok(EvalResult::Value(value));
-                }
-                Err(e) => {
-                    use patina_frontend::DesugarError;
-                    if matches!(e, DesugarError::FallbackFormNeeded { .. })
-                        || is_value_evaluator_only_form(&expanded)
-                    {
-                        // Fallback to Value evaluator for forms not in CoreExpr
-                        return self.eval_step_impl(&expanded, env, in_tail_position);
-                    } else {
-                        return Err(EvalError::InternalError(format!(
-                            "Failed to desugar macro expansion: {}",
-                            e
-                        )));
-                    }
-                }
-            }
-        }
-
-        // Regular procedure call - this can be a tail call if in tail position
-        let proc = self.eval_in_env(&car, env)?;
-        let args = self.eval_arguments(&cdr, env)?;
-
-        // Check if this is a lambda in tail position
-        if in_tail_position
-            && let Value::Procedure(proc_box) = &proc
-            && let Procedure::Lambda {
-                params,
-                variadic,
-                body,
-                env: lambda_env,
-                binding_scope,
-            } = proc_box.as_ref()
-        {
-            // Tail call to lambda - use shared helper methods
-            // This is the key to tail recursion!
-            let new_env =
-                self.prepare_lambda_env(params, variadic, args, lambda_env, *binding_scope)?;
-            return self.eval_lambda_body(body, &new_env, true);
-        }
-
-        // Not in tail position, or not a lambda - just apply normally
-        self.apply(proc, args, in_tail_position)
+        let value = eval_core(&core_expr, env.clone(), self)?;
+        Ok(EvalResult::Value(value))
     }
 
     /// Implementation of eval_step for already macro-expanded code
@@ -694,11 +576,12 @@ impl Evaluator {
     ) -> Result<EvalResult, EvalError> {
         // Debug trace entry
         if self.debug.is_enabled(debug::DebugStage::Eval) {
-            eprintln!(
-                "[EVAL]{} Evaluating (expanded): {} (tail={})",
-                self.debug.current_indent(),
-                expr,
-                in_tail_position
+            tracing::debug!(
+                target: "patina_tree_walker::eval",
+                indent = %self.debug.current_indent(),
+                expr = %expr,
+                tail = in_tail_position,
+                "Evaluating (expanded)"
             );
             self.debug.indent();
         }
@@ -719,7 +602,12 @@ impl Evaluator {
             // Variable lookup
             Value::Symbol(name) => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
-                    eprintln!("[ENV]{} Lookup: '{}'", self.debug.current_indent(), name);
+                    tracing::trace!(
+                        target: "patina_tree_walker::env",
+                        indent = %self.debug.current_indent(),
+                        name = %name,
+                        "Symbol lookup"
+                    );
                 }
 
                 // Look up in current environment
@@ -733,11 +621,12 @@ impl Evaluator {
             // Identifier lookup (Racket-style scope sets)
             Value::Identifier(id) => {
                 if self.debug.is_enabled(debug::DebugStage::Env) {
-                    eprintln!(
-                        "[ENV]{} Identifier lookup: '{}' (scopes: {})",
-                        self.debug.current_indent(),
-                        id.name,
-                        id.scopes
+                    tracing::trace!(
+                        target: "patina_tree_walker::env",
+                        indent = %self.debug.current_indent(),
+                        name = %id.name,
+                        scopes = %id.scopes,
+                        "Identifier lookup"
                     );
                 }
 
@@ -774,27 +663,43 @@ impl Evaluator {
             self.debug.dedent();
             match &result {
                 Ok(EvalResult::Value(val)) => {
-                    eprintln!("[EVAL]{} => {}", self.debug.current_indent(), val)
+                    tracing::debug!(
+                        target: "patina_tree_walker::eval",
+                        indent = %self.debug.current_indent(),
+                        result = %val,
+                        "=> value"
+                    );
                 }
-                Ok(EvalResult::TailCall { expr, .. }) => eprintln!(
-                    "[EVAL]{} => TAIL CALL: {}",
-                    self.debug.current_indent(),
-                    expr
-                ),
+                Ok(EvalResult::TailCall { expr, .. }) => {
+                    tracing::debug!(
+                        target: "patina_tree_walker::eval",
+                        indent = %self.debug.current_indent(),
+                        expr = %expr,
+                        "=> tail call"
+                    );
+                }
                 Ok(EvalResult::TailCallPrimitive { proc, args }) => {
                     let args_str = args
                         .iter()
                         .map(|v| format!("{}", v))
                         .collect::<Vec<_>>()
                         .join(" ");
-                    eprintln!(
-                        "[EVAL]{} => TAIL CALL PRIMITIVE: {} ({})",
-                        self.debug.current_indent(),
-                        proc,
-                        args_str
-                    )
+                    tracing::debug!(
+                        target: "patina_tree_walker::eval",
+                        indent = %self.debug.current_indent(),
+                        proc = %proc,
+                        args = %args_str,
+                        "=> tail call primitive"
+                    );
                 }
-                Err(e) => eprintln!("[EVAL]{} => ERROR: {}", self.debug.current_indent(), e),
+                Err(e) => {
+                    tracing::debug!(
+                        target: "patina_tree_walker::eval",
+                        indent = %self.debug.current_indent(),
+                        error = %e,
+                        "=> error"
+                    );
+                }
             }
         }
 
@@ -1096,96 +1001,10 @@ impl Evaluator {
         Ok(new_env)
     }
 
-    /// Evaluate lambda body expressions, handling tail position correctly
-    ///
-    /// If in_tail_position is true and body is non-empty, returns TailCall for the last expression.
-    /// Otherwise evaluates all expressions and returns the final result.
-    /// Evaluate an expression with CoreExpr routing (with fallback to Value evaluator)
-    ///
-    /// This is similar to the Backend::eval implementation but returns Result<Value, EvalError>
-    /// instead of going through the trampoline.
-    pub(crate) fn eval_with_core_routing(
-        &self,
-        expr: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Value, EvalError> {
-        use patina_frontend::Desugarer;
-        let desugarer = Desugarer::with_env(env.clone());
-
-        match desugarer.desugar(expr) {
-            Ok(core_expr) => {
-                // Successfully desugared to CoreExpr - evaluate it
-                eval_core(&core_expr, env.clone(), self)
-            }
-            Err(e) => {
-                use patina_frontend::DesugarError;
-                if matches!(e, DesugarError::FallbackFormNeeded { .. })
-                    || is_value_evaluator_only_form(expr)
-                {
-                    // Fallback to Value evaluator for forms not in CoreExpr
-                    self.eval_in_env(expr, env)
-                } else {
-                    // All other desugar errors indicate a real problem
-                    Err(EvalError::InternalError(format!(
-                        "Failed to desugar expression: {}",
-                        e
-                    )))
-                }
-            }
-        }
-    }
-
+    /// Evaluate lambda body (Vec<CoreExpr>)
     pub(crate) fn eval_lambda_body(
         &self,
         body: &LambdaBody,
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<EvalResult, EvalError> {
-        match body {
-            LambdaBody::Values(body_values) => {
-                self.eval_lambda_body_values(body_values, env, in_tail_position)
-            }
-            LambdaBody::Core(body_core) => {
-                self.eval_lambda_body_core(body_core, env, in_tail_position)
-            }
-        }
-    }
-
-    /// Evaluate lambda body stored as Values (legacy path)
-    fn eval_lambda_body_values(
-        &self,
-        body: &[Value],
-        env: &Rc<Environment>,
-        in_tail_position: bool,
-    ) -> Result<EvalResult, EvalError> {
-        if body.is_empty() {
-            return Ok(EvalResult::Value(Value::Unspecified));
-        }
-
-        if in_tail_position {
-            // Evaluate all but the last expression using CoreExpr routing
-            for expr in &body[..body.len() - 1] {
-                self.eval_with_core_routing(expr, env)?;
-            }
-            // Last expression is in tail position
-            Ok(EvalResult::TailCall {
-                expr: body.last().unwrap().clone(),
-                env: env.clone(),
-            })
-        } else {
-            // Not in tail position - evaluate all expressions using CoreExpr routing
-            let mut result = Value::Unspecified;
-            for expr in body {
-                result = self.eval_with_core_routing(expr, env)?;
-            }
-            Ok(EvalResult::Value(result))
-        }
-    }
-
-    /// Evaluate lambda body stored as CoreExpr (optimized path)
-    fn eval_lambda_body_core(
-        &self,
-        body: &[CoreExpr],
         env: &Rc<Environment>,
         in_tail_position: bool,
     ) -> Result<EvalResult, EvalError> {
