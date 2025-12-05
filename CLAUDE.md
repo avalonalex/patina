@@ -62,7 +62,9 @@ patina/ (workspace root)
 - Racket-style scope sets hygiene (based on "Binding as Sets of Scopes", Flatt 2016)
 - Flip-scope algorithm for distinguishing use-site vs introduced identifiers
 - Pattern matching and template expansion
+- Full ellipsis support including nested (`... ...`) and escaping (`(... template)`)
 - Separated into own crate for modularity
+- **See `docs/MACRO_SYSTEM.md` for comprehensive architecture documentation**
 
 **patina-pipeline** (`crates/patina-pipeline/src/`)
 - Pipeline orchestration with pluggable evaluation strategies
@@ -132,8 +134,13 @@ patina-tests → patina-interpreter
   - `STRING_OPTIMIZATION.md` - Future optimization plans (deferred)
   - `HELP_SYSTEM.md` - Future help system design (deferred)
 
+- **`PRD/phase2/`** - Future enhancements
+  - **`SYNTAX_CASE_DESIGN.md`** - ⭐ syntax-case implementation design (future macro system)
+
 - **`docs/`** - User-facing documentation and developer guides
   - **`FEATURE_STATUS.md`** - ⭐ **CANONICAL** detailed test-by-test R7RS compliance matrix
+  - **`MACRO_SYSTEM.md`** - ⭐ Comprehensive macro system architecture (syntax-case roadmap)
+  - **`R7RS_LARGE_STATUS.md`** - R7RS-large editions tracking (Red, Tangerine, etc.)
   - **`TEST_ORGANIZATION.md`** - ⭐ Test structure and running tests
   - `API.md` - Public API reference
   - `GETTING_STARTED.md` - User guide for getting started

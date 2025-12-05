@@ -30,12 +30,16 @@ Final macro hygiene fixes and analysis:
 - `MACRO_IGNORED_TESTS.md` - Tracking doc for ignored macro tests (all 5 fixed)
 - `MACRO_HYGIENE_ANALYSIS.md` - Comprehensive hygiene system analysis with debug infrastructure
 - `MACRO_GENERATING_MACRO_HYGIENE.md` - Macro-generating macro hygiene research
+- `MACRO_MISSING_FEATURES.md` - Analysis of underscore literals, ellipsis escaping, macro-generating macros (all now working)
 
 **Outcome:**
 - All previously ignored macro tests now pass
 - Fixed: `test_macro_introduced_temp_variable`, `test_nested_ellipsis_macro`, `test_recursive_macro_hygiene`, `test_let_syntax_nested_lexical_scoping`, `test_nested_macro_literal_matching_same_symbol`
 - Fixed scope-set tie-breaking in environment lookup
 - Fixed literal matching to use subset semantics (bound-identifier=?)
+- Underscore literal handling now correct
+- Ellipsis escaping (`(... template)`) working
+- Macro-generating macros working
 - Debug infrastructure complete with scope tracking
 - Verified against chibi-scheme and Gauche
 
@@ -67,7 +71,7 @@ Research and analysis that led to the complete hygienic macro system implementat
 - Full hygiene with pattern variable preservation
 - Better than Steel (correct quote handling)
 - Successfully migrated 6+ special forms to macros
-- Only nested ellipsis remaining (documented in `internal/NESTED_ELLIPSIS_LIMITATION.md`)
+- Nested ellipsis now working (see `internal/MACRO_SYSTEM_KNOWN_LIMITATIONS.md`)
 
 ---
 
