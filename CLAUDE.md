@@ -143,7 +143,7 @@ patina-tests → patina-interpreter
 
 - **`internal/`** - Implementation notes and progress tracking
   - **`MILESTONES.md`** - Historical achievements and progress milestones (keep updated)
-  - `NESTED_ELLIPSIS_LIMITATION.md` - Future enhancement documentation
+  - `MACRO_SYSTEM_KNOWN_LIMITATIONS.md` - Macro system limitations (nested ellipsis now works!)
   - `reference_impls/` - Reference implementation notes (Chibi, Chez)
 
 ### 🗄️ Archived Documentation (Read-Only Reference)

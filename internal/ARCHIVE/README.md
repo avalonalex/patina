@@ -8,6 +8,21 @@ This directory contains completed research, analysis, and implementation documen
 
 ## Directory Structure
 
+### 📁 `parameter_fix_2025_11/`
+**Status:** ✅ COMPLETE - Parameter bug fixed (2025-11-19)
+
+Analysis and fix documentation for the parameter/parameterize bug:
+- `PARAMETER_BUG.md` - Bug analysis, root cause (tail call optimization interaction), and fix
+- `CHIBI_PARAMETERIZE_ANALYSIS.md` - How chibi-scheme handles parameterize via dynamic-wind
+
+**Outcome:**
+- All 12 parameter tests passing
+- Fixed tail call optimization interaction with parameter stack
+- Implemented Option 2 (parameter stack approach)
+- Documented future work for dynamic-wind implementation
+
+---
+
 ### 📁 `macro_hygiene_2025_12/`
 **Status:** ✅ COMPLETE - All macro hygiene issues resolved (2025-12-04)
 

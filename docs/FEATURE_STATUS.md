@@ -146,7 +146,7 @@ This document provides a **detailed test-by-test status matrix** for R7RS compli
 | Hygiene (lexical scoping) | 🚧 | - | **Known limitation** - see below |
 | Ellipsis (...) | ✅ | 25+ tests | macros_advanced.rs |
 | Ellipsis escape (...) | ❌ | - | Not implemented |
-| Nested ellipsis (... ...) | ❌ | - | See internal/NESTED_ELLIPSIS_LIMITATION.md |
+| Nested ellipsis (... ...) | ✅ | test_nested_ellipsis | macros_advanced.rs (2025-12-04) |
 | Pattern matching | ✅ | 50+ tests | macros_advanced.rs |
 | Literal identifiers | ✅ | test_macro_with_literals | macros_advanced.rs |
 | Underscore wildcard in literals | ❌ | - | Not implemented |
