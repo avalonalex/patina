@@ -8,11 +8,13 @@
 //! Based on Steel-scheme's native Rust approach.
 
 pub mod compiler;
+mod debug;
 pub mod expander;
 pub mod interface;
 pub mod matcher;
 pub mod pattern;
 pub mod template;
+pub mod utils;
 pub mod validator;
 
 #[cfg(test)]
@@ -28,6 +30,12 @@ pub use template::{Identifier, Template};
 
 // Re-export test helpers
 pub use interface::TestExpander;
+
+// Re-export utility functions and constants
+pub use utils::{
+    ELLIPSIS, MACRO_DEFINITION_FORMS, WILDCARD, pattern_to_string, pattern_to_string_with_names,
+    template_to_string_with_names,
+};
 
 /// Expand a macro using the V2 PVREF-based system
 ///
@@ -67,78 +75,40 @@ pub fn expand_macro_with_shadowed(
     shadowed_names: &std::collections::HashSet<std::rc::Rc<str>>,
 ) -> Result<patina_runtime::Value, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
-    use patina_runtime::debug_format::format_with_scopes;
+    use debug::{DebugContext, record_expansion_step};
 
     // Enter macro expansion (for depth tracking)
     MacroTracer::enter_expansion();
 
-    // Check if this macro should be traced
-    let should_trace = MacroTracer::should_trace(&compiled_macro.name);
-    let debug_enabled = patina_runtime::macro_debug::is_enabled();
+    // Set up debug context
+    let dbg = DebugContext::new(
+        patina_runtime::macro_debug::is_enabled(),
+        MacroTracer::should_trace(&compiled_macro.name),
+    );
 
     // Create a fresh macro scope for this expansion (Racket-style hygiene)
     let macro_scope = patina_runtime::ScopeId::fresh();
 
-    if debug_enabled || should_trace {
-        println!("[MACRO] ========================================");
-        println!("[MACRO] Expanding macro: {}", compiled_macro.name);
-        println!("[MACRO]   Fresh macro scope: {}", macro_scope);
-        println!(
-            "[MACRO]   Definition scopes: {}",
-            compiled_macro.definition_scopes
-        );
-
-        // Print macro definition (pattern -> template for each rule)
-        if !compiled_macro.rules.is_empty() {
-            println!(
-                "[MACRO]   Definition ({} rule(s)):",
-                compiled_macro.rules.len()
-            );
-            for (idx, rule) in compiled_macro.rules.iter().enumerate() {
-                println!(
-                    "[MACRO]     Rule {}: {} -> <template>",
-                    idx + 1,
-                    pattern_to_string_with_names(&rule.pattern, &rule.pvar_names)
-                );
-            }
-            println!("[MACRO]   ");
-        }
-
-        // Show input with scopes (this is the key improvement!)
-        println!("[MACRO]   Input (normal):      {}", args);
-        println!(
-            "[MACRO]   Input (with scopes): {}",
-            format_with_scopes(args)
-        );
-        println!("[MACRO]   Trying {} rule(s):", compiled_macro.rules.len());
-    }
+    // Log expansion start
+    dbg.log_expansion_start(
+        &compiled_macro.name,
+        macro_scope,
+        &compiled_macro.definition_scopes,
+        &compiled_macro.rules,
+        args,
+    );
 
     // Step 1: Flip macro_scope on INPUT (adds scope to all use-site identifiers)
     // This is the first half of Racket's hygiene algorithm
     let flipped_args = flip_scope_on_value(args, macro_scope);
-
-    if debug_enabled {
-        println!("[MACRO]   ");
-        println!(
-            "[MACRO]   After input flip (scope {} toggled):",
-            macro_scope
-        );
-        println!("[MACRO]     {}", format_with_scopes(&flipped_args));
-    }
+    dbg.log_input_flip(macro_scope, &flipped_args);
 
     // Create expander with expansion-time environment and macro scope
     let expander = Expander::new(expansion_env.clone(), macro_scope);
 
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
-        if debug_enabled {
-            println!("[MACRO]   ");
-            println!("[MACRO]   === Trying rule {} ===", rule_idx + 1);
-            println!(
-                "[MACRO]   Pattern: {}",
-                pattern_to_string_with_names(&rule.pattern, &rule.pvar_names)
-            );
-        }
+        dbg.log_trying_rule(rule_idx, rule);
 
         // Create matcher for this rule with hygiene support
         // Pass shadowed_names and literals for checking shadowed literals (R7RS 4.3.2)
@@ -155,67 +125,29 @@ pub fn expand_macro_with_shadowed(
         match matcher.match_pattern(&rule.pattern, &flipped_args) {
             Ok(match_env) => {
                 // Pattern matched! Expand the template
-                if debug_enabled {
-                    println!("[MACRO]   ✓ Match successful!");
-                    println!("[MACRO]   ");
-
-                    // Show pattern variable bindings with scopes
-                    println!("[MACRO]   === Pattern variable bindings ===");
-                    for (pvref, name) in &rule.pvar_names {
-                        if let Some(value) = match_env.get(*pvref, &[]) {
-                            println!("[MACRO]     {} = {}", name, format_with_scopes(&value));
-                        }
-                    }
-
-                    println!("[MACRO]   ");
-                    println!("[MACRO]   === Expanding template ===");
-                    println!(
-                        "[MACRO]   Template: {}",
-                        template_to_string(&rule.template, &rule.pvar_names)
-                    );
-                }
+                dbg.log_match_success(&match_env, &rule.pvar_names, &rule.template);
 
                 let expanded = expander
                     .expand(&rule.template, &match_env)
                     .map_err(|e| crate::error::MacroError::InvalidSyntax(e.to_string()))?;
 
-                if debug_enabled {
-                    println!("[MACRO]   ");
-                    println!("[MACRO]   Before output flip:");
-                    println!("[MACRO]     {}", format_with_scopes(&expanded));
-                }
+                dbg.log_before_output_flip(&expanded);
 
                 // Step 2: Flip macro_scope on OUTPUT (Racket-style hygiene)
                 // - Use-site identifiers (from pattern vars): macro_scope gets removed
                 // - Introduced identifiers (from template): macro_scope gets added
                 let result = flip_scope_on_value(&expanded, macro_scope);
 
-                if debug_enabled || should_trace {
-                    println!("[MACRO]   ");
-                    println!(
-                        "[MACRO]   After output flip (scope {} toggled):",
-                        macro_scope
-                    );
-                    println!("[MACRO]     (with scopes) {}", format_with_scopes(&result));
-                    println!("[MACRO] ");
-                    println!("[MACRO] ========================================");
-                    println!("[MACRO] Expansion of '{}' complete!", compiled_macro.name);
-                    println!("[MACRO] Result: {}", result);
-                    println!("[MACRO] ========================================");
-                    println!("[MACRO] ");
-                }
+                dbg.log_expansion_complete(&compiled_macro.name, macro_scope, &result);
 
                 // Record expansion step for tracing
-                if should_trace {
-                    use crate::error::ExpansionStep;
-                    let step = ExpansionStep::new(
-                        compiled_macro.name.clone(),
-                        rule_idx,
-                        compiled_macro.rules.len(),
-                        format!("{}", args),
-                    );
-                    MacroTracer::record_step(step);
-                }
+                record_expansion_step(
+                    dbg.should_trace,
+                    &compiled_macro.name,
+                    rule_idx,
+                    compiled_macro.rules.len(),
+                    args,
+                );
 
                 // Exit expansion (decrement depth)
                 MacroTracer::exit_expansion();
@@ -224,20 +156,14 @@ pub fn expand_macro_with_shadowed(
             }
             Err(e) => {
                 // This rule didn't match, try next one
-                if debug_enabled {
-                    println!("[MACRO]   ✗ Match failed: {}", e);
-                    println!("[MACRO]   ");
-                }
+                dbg.log_match_failure(&e);
                 continue;
             }
         }
     }
 
     // No rule matched
-    if debug_enabled || should_trace {
-        println!("[MACRO]   No rules matched!");
-        println!("[MACRO] ");
-    }
+    dbg.log_no_rules_matched();
 
     // Exit expansion (decrement depth)
     MacroTracer::exit_expansion();
@@ -302,99 +228,5 @@ fn flip_scope_on_value(
     }
 }
 
-/// Convert a pattern to a readable string with variable names for debug output
-fn pattern_to_string_with_names(
-    pattern: &Pattern,
-    names: &std::collections::HashMap<patina_runtime::PVRef, std::rc::Rc<str>>,
-) -> String {
-    match pattern {
-        Pattern::Wildcard => "_".to_string(),
-        Pattern::Literal(v) => format!("{}", v),
-        Pattern::Var(pv) => {
-            // Look up the actual variable name
-            names
-                .get(pv)
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "var".to_string())
-        }
-        Pattern::List(patterns) => {
-            let inner = patterns
-                .iter()
-                .map(|p| pattern_to_string_with_names(p, names))
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("({})", inner)
-        }
-        Pattern::DottedList { patterns, tail } => {
-            let mut parts: Vec<String> = patterns
-                .iter()
-                .map(|p| pattern_to_string_with_names(p, names))
-                .collect();
-            parts.push(".".to_string());
-            parts.push(pattern_to_string_with_names(tail, names));
-            format!("({})", parts.join(" "))
-        }
-        Pattern::Vector(patterns) => {
-            let inner = patterns
-                .iter()
-                .map(|p| pattern_to_string_with_names(p, names))
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("#({})", inner)
-        }
-        Pattern::Ellipsis { subpattern, .. } => {
-            format!("({} ...)", pattern_to_string_with_names(subpattern, names))
-        }
-    }
-}
-
-/// Convert a template to a readable string with variable names for debug output
-fn template_to_string(
-    template: &Template,
-    names: &std::collections::HashMap<patina_runtime::PVRef, std::rc::Rc<str>>,
-) -> String {
-    match template {
-        Template::Literal(v) => format!("{}", v),
-        Template::Symbol(id) => id.name().to_string(),
-        Template::Var(pv) => {
-            // Look up the actual variable name
-            names
-                .get(pv)
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "var".to_string())
-        }
-        Template::List(templates) => {
-            let inner = templates
-                .iter()
-                .map(|t| template_to_string(t, names))
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("({})", inner)
-        }
-        Template::DottedList { templates, tail } => {
-            let mut parts: Vec<String> = templates
-                .iter()
-                .map(|t| template_to_string(t, names))
-                .collect();
-            parts.push(".".to_string());
-            parts.push(template_to_string(tail, names));
-            format!("({})", parts.join(" "))
-        }
-        Template::Vector(templates) => {
-            let inner = templates
-                .iter()
-                .map(|t| template_to_string(t, names))
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("#({})", inner)
-        }
-        Template::Ellipsis {
-            subtemplate,
-            nesting,
-            ..
-        } => {
-            let dots = (0..*nesting).map(|_| "...").collect::<Vec<_>>().join(" ");
-            format!("({} {})", template_to_string(subtemplate, names), dots)
-        }
-    }
-}
+// Note: pattern_to_string_with_names and template_to_string_with_names
+// are now in utils.rs and re-exported above

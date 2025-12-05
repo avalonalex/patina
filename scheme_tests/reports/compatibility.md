@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-03 23:03:32
+**Generated:** 2025-12-04 16:26:13
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 787 | 67.3% |
-| ❌ Failed | 4 | 0.3% |
-| ⚠️ Error (crashed) | 378 | 32.3% |
+| ✅ Passed | 790 | 67.6% |
+| ❌ Failed | 2 | 0.2% |
+| ⚠️ Error (crashed) | 377 | 32.2% |
 | **Total** | **1169** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
@@ -21,14 +21,11 @@
 ```
 FAIL: 
 FAIL: 
-FAIL: 
-FAIL: 
 ```
 
 ### Errors
 
 ```
-Error: Internal error: Failed to desugar expression: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
 Error: Undefined variable: define-record-type
 Error: Undefined variable: pare?
 Error: Undefined variable: pare?

@@ -369,16 +369,6 @@ x
 Testing: 
 (bar 1)
 
-FAIL: 
-(bar 1)
-
-  expected: 
-x
-
-  but got:  
-1
-
-
 Testing: 
 (ff 10)
 
@@ -391,18 +381,10 @@ Testing:
 Testing: 
 (m k)
 
-FAIL: 
-(m k)
+Testing: 
+(elli-lit-1 100)
 
-  expected: 
-bound-identifier=?
-
-  but got:  
-free-identifier=?
-
-
-Error: Internal error: Failed to desugar expression: Invalid syntax: Failed to compile macro: Invalid syntax: Ellipsis in template contains no pattern variables
-Tests run: 25, Passed: 22, Failed: 2, Errors: 1
+Tests run: 25, Passed: 25, Failed: 0
 
 Running test suite: 5 Program structure
 Testing: 

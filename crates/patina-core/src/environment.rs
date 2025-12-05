@@ -251,9 +251,22 @@ impl Environment {
         }
 
         // Find the most specific binding (largest scope set)
-        let best = candidates
-            .into_iter()
-            .max_by_key(|(scope_set, _)| scope_set.len());
+        // When scope sets have the same size, prefer the earlier candidate (closer binding)
+        // since collect_matches adds child environment bindings before parent environment bindings.
+        // We use a stable comparison that prefers earlier elements on ties.
+        let mut best: Option<(ScopeSet, Value)> = None;
+        for (scope_set, value) in candidates {
+            match &best {
+                None => best = Some((scope_set, value)),
+                Some((best_scopes, _)) => {
+                    // Prefer strictly larger scope set, or keep existing on tie
+                    if scope_set.len() > best_scopes.len() {
+                        best = Some((scope_set, value));
+                    }
+                    // On tie (same length), keep the earlier candidate (child binding)
+                }
+            }
+        }
 
         if debug {
             match &best {

@@ -526,6 +526,101 @@ fn test_trace_macro() {
 }
 
 // ============================================================================
+// Vector Handling in Macros (Regression Test)
+// ============================================================================
+
+#[test]
+fn test_vector_literal_in_macro_pattern_variable() {
+    // This tests that literal vectors passed through macro pattern variables
+    // are properly handled and compare equal to quoted vectors.
+    // Regression test: Previously, vectors from pattern variables would have
+    // their symbols marked with scopes, causing comparison failures.
+    assert_program_eval_to(
+        r#"
+        (define-syntax test-vector
+          (syntax-rules ()
+            ((test-vector expected actual)
+             (equal? expected actual))))
+
+        (test-vector #(a b c) '#(a b c))
+        "#,
+        "#t",
+    );
+
+    // Also test with the test macro pattern (actual chibi test case)
+    assert_program_eval_to(
+        r#"
+        (define-syntax my-test
+          (syntax-rules ()
+            ((my-test expected expr)
+             (equal? expected expr))))
+
+        (my-test #(a b c) (quote #(a b c)))
+        "#,
+        "#t",
+    );
+}
+
+#[test]
+fn test_nested_macro_with_quoted_symbols() {
+    // This tests that when a macro defines another macro,
+    // pattern variable substitution produces symbols that don't
+    // get re-interpreted as pattern variables in the inner macro.
+    // This is the fix for the chibi test case:
+    //   (define-syntax foo (syntax-rules () ((foo bar y) (define-syntax bar ...))))
+    assert_program_eval_to(
+        r#"
+        (let ()
+          (define-syntax foo
+            (syntax-rules ()
+              ((foo bar y)
+               (define-syntax bar
+                 (syntax-rules ()
+                   ((bar x) 'y))))))
+          (foo bar x)
+          (bar 1))
+        "#,
+        "x",
+    );
+}
+
+#[test]
+fn test_quasiquote_in_macro_with_unquote_splicing() {
+    // Test that quasiquote with unquote-splicing works correctly inside macros.
+    // Regression test: After macro expansion, unquote-splicing becomes an Identifier
+    // rather than a Symbol, and the quasiquote evaluator must handle both.
+    assert_program_eval_to(
+        r#"
+        (define-syntax test-qq
+          (syntax-rules ()
+            ((test-qq expected expr)
+             (equal? expected expr))))
+
+        (test-qq '(a 3 4 5 6 b) `(a ,(+ 1 2) ,@(map abs '(4 -5 6)) b))
+        "#,
+        "#t",
+    );
+}
+
+#[test]
+fn test_quasiquote_in_macro_with_list_comparison() {
+    // Test that quoted lists from pattern variables compare equal to quasiquote results.
+    // Regression test: Symbols in quoted data from pattern variables were becoming
+    // Identifiers with empty scopes, failing comparison with quasiquote results.
+    assert_program_eval_to(
+        r#"
+        (define-syntax test-list
+          (syntax-rules ()
+            ((test-list expected expr)
+             (equal? expected expr))))
+
+        (test-list '(list 3 4) `(list ,(+ 1 2) 4))
+        "#,
+        "#t",
+    );
+}
+
+// ============================================================================
 // Edge Cases and Complex Patterns
 // ============================================================================
 
@@ -580,5 +675,207 @@ fn test_pattern_with_nested_structure() {
           (+ x y))
         "#,
         "30",
+    );
+}
+
+// ============================================================================
+// SRFI-46 and R7RS Ellipsis Extensions
+// ============================================================================
+
+#[test]
+fn test_srfi46_ellipsis_as_literal() {
+    // SRFI-46 / R7RS 4.3.2: "Literals have priority over ellipsis"
+    // When ... is both the ellipsis AND in the literals list,
+    // it should be treated as a literal pattern element.
+    assert_program_eval_to(
+        r#"
+        (let ()
+          (define-syntax elli-lit-1
+            (syntax-rules ... (...)
+              ((_ x)
+               '(x ...))))
+          (elli-lit-1 100))
+        "#,
+        "(100 ...)",
+    );
+}
+
+#[test]
+fn test_srfi46_custom_ellipsis() {
+    // SRFI-46: Custom ellipsis identifier
+    // Using ::: instead of ... as the ellipsis
+    assert_program_eval_to(
+        r#"
+        (let ()
+          (define-syntax my-list
+            (syntax-rules ::: ()
+              ((_ x :::)
+               '(x :::))))
+          (my-list 1 2 3))
+        "#,
+        "(1 2 3)",
+    );
+}
+
+#[test]
+fn test_srfi46_ellipsis_as_literal_with_custom_ellipsis() {
+    // SRFI-46: Custom ellipsis with ... as literal
+    // Using ::: as ellipsis allows ... to be used as a literal
+    assert_program_eval_to(
+        r#"
+        (let ()
+          (define-syntax with-dots
+            (syntax-rules ::: (...)
+              ((_ x ... y)
+               '(x y))))
+          (with-dots a ... b))
+        "#,
+        "(a b)",
+    );
+}
+
+// ============================================================================
+// Bound-identifier=? Hygiene Tests (Nested Macro Definitions)
+// ============================================================================
+
+#[test]
+fn test_bound_identifier_equality_in_nested_macros() {
+    // R7RS hygiene test: When an outer macro substitutes a pattern variable
+    // into a nested syntax-rules literals list, the substituted identifier
+    // should match inputs that have the same binding (bound-identifier=?).
+    //
+    // In this test:
+    // - Outer macro `m` has pattern variable `x` which gets bound to `k`
+    // - Inner macro `n` has `(k)` in its literals list (via substitution)
+    // - When (n z) is called, z should match the substituted k because
+    //   the substituted k has empty scopes (from outer pattern variable)
+    //   which means it acts as a "super-literal" matching any identifier
+    //
+    // This is the chibi/Gauche behavior for bound-identifier=? semantics.
+    assert_program_eval_to(
+        r#"
+        (let-syntax ((m (syntax-rules ()
+                          ((m x)
+                           (let-syntax ((n (syntax-rules (k)
+                                             ((n x) 'bound-identifier=?)
+                                             ((n y) 'free-identifier=?))))
+                             (n z))))))
+          (m k))
+        "#,
+        "bound-identifier=?",
+    );
+}
+
+#[test]
+fn test_bound_identifier_with_different_input() {
+    // Variant of the above test: when the outer macro binds x to something
+    // other than k, the behavior should be the same - the substituted
+    // identifier in the literals list matches the input.
+    assert_program_eval_to(
+        r#"
+        (let-syntax ((m (syntax-rules ()
+                          ((m x)
+                           (let-syntax ((n (syntax-rules (foo)
+                                             ((n x) 'bound-identifier=?)
+                                             ((n y) 'free-identifier=?))))
+                             (n z))))))
+          (m foo))
+        "#,
+        "bound-identifier=?",
+    );
+}
+
+#[test]
+fn test_nested_macro_literal_not_matching_different_symbol() {
+    // When the literal in the inner macro's pattern is NOT substituted
+    // (i.e., it's a fresh symbol with scopes), it should only match
+    // identifiers with the same name AND scopes.
+    //
+    // In this case, the literal 'k' in the inner macro's (syntax-rules (k) ...)
+    // is a fresh symbol, not substituted from outer. So (n z) should NOT
+    // match the first rule and should fall through to the second.
+    assert_program_eval_to(
+        r#"
+        (let-syntax ((m (syntax-rules ()
+                          ((m ignored)
+                           (let-syntax ((n (syntax-rules (k)
+                                             ((n k) 'matched-k)
+                                             ((n y) 'no-match))))
+                             (n z))))))
+          (m anything))
+        "#,
+        "no-match",
+    );
+}
+
+#[test]
+fn test_nested_macro_literal_matching_same_symbol() {
+    // When the input to the inner macro IS the literal symbol,
+    // it should match (according to chibi/Gauche).
+    //
+    // This tests R7RS bound-identifier=? semantics for literal matching:
+    // - The literal `k` in (syntax-rules (k) ...) gets definition scopes {S1, S2}
+    // - The input `k` in (n k) has scopes {S1, S2, S3} (after flip)
+    // - Since {S1, S2} ⊆ {S1, S2, S3}, they match as the same identifier
+    //
+    // This matches chibi-scheme and Gauche behavior.
+    assert_program_eval_to(
+        r#"
+        (let-syntax ((m (syntax-rules ()
+                          ((m ignored)
+                           (let-syntax ((n (syntax-rules (k)
+                                             ((n k) 'matched-k)
+                                             ((n y) 'no-match))))
+                             (n k))))))
+          (m anything))
+        "#,
+        "matched-k",
+    );
+}
+
+// ============================================================================
+// Ellipsis Escape in Nested Macro Definitions
+// ============================================================================
+
+#[test]
+fn test_nested_macro_with_ellipsis_escape() {
+    // Test that (... template) properly escapes ellipsis in nested macro definitions.
+    // The inner macro should be able to use ellipsis normally after escaping.
+    // This test case is from the chibi r7rs test suite (listify example).
+    assert_program_eval_to(
+        r#"
+        (let ()
+          (define-syntax listify
+            (syntax-rules ()
+              ((listify e)
+               (define-syntax apply-to-list
+                 (syntax-rules ()
+                   ((apply-to-list arg (... ...))
+                    (e (list arg (... ...)))))))))
+          (listify car)
+          (apply-to-list 1 2 3))
+        "#,
+        "1",
+    );
+}
+
+#[test]
+fn test_nested_macro_ellipsis_escape_with_pattern_var() {
+    // Test ellipsis escape where the outer macro substitutes a value
+    // into the inner macro's template.
+    assert_program_eval_to(
+        r#"
+        (let ()
+          (define-syntax make-wrapper
+            (syntax-rules ()
+              ((make-wrapper wrapper-name tag)
+               (define-syntax wrapper-name
+                 (syntax-rules ()
+                   ((wrapper-name item (... ...))
+                    '(tag item (... ...))))))))
+          (make-wrapper wrap-with-x x)
+          (wrap-with-x 1 2 3))
+        "#,
+        "(x 1 2 3)",
     );
 }

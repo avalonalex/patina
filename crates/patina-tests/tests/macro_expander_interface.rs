@@ -141,7 +141,6 @@ fn test_cond_macro() {
 }
 
 #[test]
-#[ignore] // TODO: Re-enable when nested ellipsis with no pattern variables is supported
 fn test_nested_ellipsis_macro() {
     let expander = TestExpander::from_definition(
         "multi-list",

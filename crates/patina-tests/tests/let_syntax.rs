@@ -66,7 +66,6 @@ fn test_let_syntax_multiple_macros() {
 }
 
 #[test]
-#[ignore = "Temporarily disabled: let-syntax with nested CoreExpr forms (define/lambda) not supported until let-syntax migrated to CoreExpr. See GitHub issue #15"]
 fn test_let_syntax_scope() {
     // Macros defined in let-syntax should not be visible outside
     let code = r#"
@@ -182,7 +181,6 @@ fn test_let_syntax_non_symbol_name_error() {
 }
 
 #[test]
-#[ignore = "Temporarily disabled: let-syntax with nested CoreExpr forms (define/lambda) not supported until let-syntax migrated to CoreExpr. See GitHub issue #15"]
 fn test_let_syntax_lexical_scoping() {
     // Test case from chibi-scheme r7rs-tests.scm
     // This tests that free variables in macro templates capture the
@@ -201,7 +199,6 @@ fn test_let_syntax_lexical_scoping() {
 }
 
 #[test]
-#[ignore = "Temporarily disabled: let-syntax with nested CoreExpr forms (define/lambda) not supported until let-syntax migrated to CoreExpr. See GitHub issue #15"]
 fn test_let_syntax_lexical_scoping_multiple_vars() {
     // Similar test but with multiple free variables
     let code = r#"
@@ -217,7 +214,6 @@ fn test_let_syntax_lexical_scoping_multiple_vars() {
 }
 
 #[test]
-#[ignore = "Temporarily disabled: let-syntax with nested CoreExpr forms (define/lambda) not supported until let-syntax migrated to CoreExpr. See GitHub issue #15"]
 fn test_let_syntax_nested_lexical_scoping() {
     // Nested let-syntax with lexical scoping
     let code = r#"

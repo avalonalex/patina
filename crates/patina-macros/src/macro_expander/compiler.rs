@@ -15,6 +15,7 @@
 
 use super::pattern::Pattern;
 use super::template::{Identifier, Template};
+use super::utils::{ELLIPSIS, WILDCARD};
 use crate::error::MacroError;
 use patina_runtime::{Environment, PVRef, ScopeSet, Value};
 use std::collections::HashMap;
@@ -68,7 +69,7 @@ impl Compiler {
     pub fn new(literals: Vec<Rc<str>>, ellipsis: Option<Rc<str>>) -> Self {
         Self {
             literals,
-            ellipsis: ellipsis.or_else(|| Some("...".into())),
+            ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: None,
             definition_scopes: ScopeSet::new(),
             pvars: HashMap::new(),
@@ -90,7 +91,7 @@ impl Compiler {
     ) -> Self {
         Self {
             literals,
-            ellipsis: ellipsis.or_else(|| Some("...".into())),
+            ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes: ScopeSet::new(),
             pvars: HashMap::new(),
@@ -117,7 +118,7 @@ impl Compiler {
     ) -> Self {
         Self {
             literals,
-            ellipsis: ellipsis.or_else(|| Some("...".into())),
+            ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes: scopes,
             pvars: HashMap::new(),
@@ -290,11 +291,29 @@ impl Compiler {
         // This is needed for nested macro definitions where identifiers may be wrapped.
         if let Some(s) = Self::extract_symbol_name(form) {
             // R7RS: Check literals FIRST (including _ if it's in the literals list)
+            // This check is done by NAME only - an identifier is a literal if its name
+            // appears in the literals list, regardless of scopes.
             if self.is_literal(s) {
                 // Literal identifier (including _ if explicitly listed)
                 // Use the original form to preserve identifier type
-                Ok(Pattern::Literal(form.clone()))
-            } else if s.as_ref() == "_" {
+                return Ok(Pattern::Literal(form.clone()));
+            }
+
+            // Check if this is a SUBSTITUTED identifier (empty scopes) from outer expansion.
+            // These should be treated as literals even if not in the explicit literals list.
+            // This enables nested macro hygiene: when an outer macro generates a define-syntax,
+            // substituted symbols shouldn't become pattern variables in the inner macro.
+            //
+            // Example: (define-syntax foo (syntax-rules () ((foo bar y)
+            //            (define-syntax bar (syntax-rules () ((bar x) 'y))))))
+            // When (foo mybar x) is called, 'y' substitutes to 'x'. The 'x' in the inner
+            // pattern `'x` should be a literal (returns symbol 'x), not a pattern variable.
+            if Self::is_substituted_from_outer_macro(form) {
+                // Identifier with empty scopes = substituted from outer expansion = literal
+                return Ok(Pattern::Literal(form.clone()));
+            }
+
+            if s.as_ref() == WILDCARD {
                 // Underscore is wildcard only if NOT in literals
                 Ok(Pattern::Wildcard)
             } else {
@@ -343,49 +362,7 @@ impl Compiler {
         items: &[Value],
         level: usize,
     ) -> Result<Pattern, MacroError> {
-        let mut patterns = Vec::new();
-        let mut i = 0;
-
-        while i < items.len() {
-            // Check for ellipsis
-            if i + 1 < items.len() && self.is_ellipsis(&items[i + 1]) {
-                // Found ellipsis pattern: (item ...)
-
-                // Count trailing items - Gauche's num_following optimization!
-                // (macro.c:138-145)
-                let num_following = items.len() - i - 2;
-
-                // Track which pattern variables are introduced in subpattern
-                let start_pvars = self.pvar_count;
-
-                // Compile the subpattern at increased level
-                let subpattern = self.compile_pattern(&items[i], level + 1)?;
-
-                let end_pvars = self.pvar_count;
-
-                // Collect PVREFs for variables introduced in this subpattern
-                let mut vars = Vec::new();
-                for idx in start_pvars..end_pvars {
-                    vars.push(PVRef::new((level + 1) as u8, idx as u8));
-                }
-
-                // Update max level
-                self.max_level = self.max_level.max(level + 1);
-
-                patterns.push(Pattern::Ellipsis {
-                    subpattern: Box::new(subpattern),
-                    level: (level + 1) as u8,
-                    num_following,
-                    vars,
-                });
-
-                i += 2; // Skip pattern and ellipsis
-            } else {
-                patterns.push(self.compile_pattern(&items[i], level)?);
-                i += 1;
-            }
-        }
-
+        let patterns = self.compile_pattern_items(items, level)?;
         Ok(Pattern::List(patterns))
     }
 
@@ -397,42 +374,34 @@ impl Compiler {
         tail: &Value,
         level: usize,
     ) -> Result<Pattern, MacroError> {
+        let patterns = self.compile_pattern_items(items, level)?;
+        let tail_pattern = Box::new(self.compile_pattern(tail, level)?);
+
+        Ok(Pattern::DottedList {
+            patterns,
+            tail: tail_pattern,
+        })
+    }
+
+    /// Compile a sequence of pattern items, handling ellipsis patterns
+    ///
+    /// This is shared between list and dotted list pattern compilation.
+    /// It handles the detection of ellipsis patterns and the num_following optimization.
+    fn compile_pattern_items(
+        &mut self,
+        items: &[Value],
+        level: usize,
+    ) -> Result<Vec<Pattern>, MacroError> {
         let mut patterns = Vec::new();
         let mut i = 0;
 
-        // Process items before the dot, checking for ellipsis
         while i < items.len() {
-            // Check for ellipsis
-            if i + 1 < items.len() && self.is_ellipsis(&items[i + 1]) {
+            if self.is_followed_by_ellipsis(items, i) {
                 // Found ellipsis pattern: (item ...)
-
-                // Count trailing items before the dot
                 let num_following = items.len() - i - 2;
-
-                // Track which pattern variables are introduced in subpattern
-                let start_pvars = self.pvar_count;
-
-                // Compile the subpattern at increased level
-                let subpattern = self.compile_pattern(&items[i], level + 1)?;
-
-                let end_pvars = self.pvar_count;
-
-                // Collect PVREFs for variables introduced in this subpattern
-                let mut vars = Vec::new();
-                for idx in start_pvars..end_pvars {
-                    vars.push(PVRef::new((level + 1) as u8, idx as u8));
-                }
-
-                // Update max level
-                self.max_level = self.max_level.max(level + 1);
-
-                patterns.push(Pattern::Ellipsis {
-                    subpattern: Box::new(subpattern),
-                    level: (level + 1) as u8,
-                    num_following,
-                    vars,
-                });
-
+                let ellipsis_pattern =
+                    self.compile_ellipsis_pattern(&items[i], level, num_following)?;
+                patterns.push(ellipsis_pattern);
                 i += 2; // Skip pattern and ellipsis
             } else {
                 patterns.push(self.compile_pattern(&items[i], level)?);
@@ -440,12 +409,49 @@ impl Compiler {
             }
         }
 
-        let tail_pattern = Box::new(self.compile_pattern(tail, level)?);
+        Ok(patterns)
+    }
 
-        Ok(Pattern::DottedList {
-            patterns,
-            tail: tail_pattern,
+    /// Check if the item at the given index is followed by an ellipsis
+    fn is_followed_by_ellipsis(&self, items: &[Value], index: usize) -> bool {
+        index + 1 < items.len() && self.is_ellipsis(&items[index + 1])
+    }
+
+    /// Compile an ellipsis pattern (item ...)
+    ///
+    /// This compiles the subpattern at an increased level and tracks which
+    /// pattern variables are introduced. Uses Gauche's num_following optimization.
+    fn compile_ellipsis_pattern(
+        &mut self,
+        item: &Value,
+        level: usize,
+        num_following: usize,
+    ) -> Result<Pattern, MacroError> {
+        // Track which pattern variables are introduced in subpattern
+        let start_pvars = self.pvar_count;
+
+        // Compile the subpattern at increased level
+        let subpattern = self.compile_pattern(item, level + 1)?;
+
+        // Collect PVREFs for variables introduced in this subpattern
+        let vars = self.collect_new_pvars(start_pvars, level + 1);
+
+        // Update max level
+        self.max_level = self.max_level.max(level + 1);
+
+        Ok(Pattern::Ellipsis {
+            subpattern: Box::new(subpattern),
+            level: (level + 1) as u8,
+            num_following,
+            vars,
         })
+    }
+
+    /// Collect PVREFs for pattern variables introduced since start_pvars
+    fn collect_new_pvars(&self, start_pvars: usize, level: usize) -> Vec<PVRef> {
+        (start_pvars..self.pvar_count)
+            .map(|idx| PVRef::new(level as u8, idx as u8))
+            .collect()
     }
 
     /// Compile a template at the given ellipsis level
@@ -455,7 +461,17 @@ impl Compiler {
         // Handle all identifier types (Symbol, ScopedIdentifier, WrappedIdentifier)
         // This is needed for nested macro definitions where identifiers may be wrapped.
         if let Some(s) = Self::extract_symbol_name(form) {
-            // Check if it's a pattern variable
+            // IMPORTANT: Check for scopes BEFORE checking pattern variables.
+            // Identifiers with non-empty scopes came from outer macro expansion
+            // and should be treated as literals, not as pattern variables.
+            // This is the template-side counterpart to the pattern check in compile_pattern.
+            if Self::is_substituted_from_outer_macro(form) {
+                // Identifier with scopes = came from outer expansion = literal value
+                // Keep it as a literal so it's inserted verbatim into the output
+                return Ok(Template::Literal(form.clone()));
+            }
+
+            // Check if it's a pattern variable (only for identifiers WITHOUT scopes)
             if let Some(pvref) = self.pvars.get(s) {
                 // Verify level is valid
                 if pvref.level() > level {
@@ -591,51 +607,7 @@ impl Compiler {
         items: &[Value],
         level: usize,
     ) -> Result<Template, MacroError> {
-        let mut templates = Vec::new();
-        let mut i = 0;
-
-        while i < items.len() {
-            // Check for ellipsis
-            if i + 1 < items.len() && self.is_ellipsis(&items[i + 1]) {
-                // Found ellipsis in template
-
-                // Count consecutive ellipses for double ellipsis support (SRFI-149)
-                let mut nesting = 0u8;
-                let mut j = i + 1;
-                while j < items.len() && self.is_ellipsis(&items[j]) {
-                    nesting += 1;
-                    j += 1;
-                }
-
-                // Compile the base template at deepest level
-                let subtemplate = self.compile_template(&items[i], level + nesting as usize)?;
-
-                // Collect variables that should iterate
-                let vars = self.collect_template_vars(&subtemplate, level + 1);
-
-                if vars.is_empty() {
-                    return Err(MacroError::InvalidSyntax(
-                        "Ellipsis in template contains no pattern variables".to_string(),
-                    ));
-                }
-
-                // Verify variables are at appropriate levels for nesting
-                self.verify_ellipsis_nesting(&vars, level, nesting as usize)?;
-
-                templates.push(Template::Ellipsis {
-                    subtemplate: Box::new(subtemplate),
-                    level: (level + 1) as u8,
-                    nesting,
-                    vars,
-                });
-
-                i = j; // Skip past all ellipses
-            } else {
-                templates.push(self.compile_template(&items[i], level)?);
-                i += 1;
-            }
-        }
-
+        let templates = self.compile_template_items(items, level)?;
         Ok(Template::List(templates))
     }
 
@@ -646,6 +618,8 @@ impl Compiler {
         tail: &Value,
         level: usize,
     ) -> Result<Template, MacroError> {
+        // Dotted templates don't support ellipsis in the items before the dot
+        // (that would be unusual syntax), so we compile each item directly
         let mut templates = Vec::new();
         for item in items {
             templates.push(self.compile_template(item, level)?);
@@ -657,6 +631,85 @@ impl Compiler {
             templates,
             tail: tail_template,
         })
+    }
+
+    /// Compile a sequence of template items, handling ellipsis and double ellipsis
+    ///
+    /// This handles the SRFI-149 double ellipsis extension where `x ... ...`
+    /// means nested iteration.
+    fn compile_template_items(
+        &mut self,
+        items: &[Value],
+        level: usize,
+    ) -> Result<Vec<Template>, MacroError> {
+        let mut templates = Vec::new();
+        let mut i = 0;
+
+        while i < items.len() {
+            if self.is_followed_by_ellipsis(items, i) {
+                // Found ellipsis in template - check for consecutive ellipses
+                let (ellipsis_template, skip_count) =
+                    self.compile_ellipsis_template(&items[i], &items[i + 1..], level)?;
+                templates.push(ellipsis_template);
+                i += 1 + skip_count; // Skip item and ellipses
+            } else {
+                templates.push(self.compile_template(&items[i], level)?);
+                i += 1;
+            }
+        }
+
+        Ok(templates)
+    }
+
+    /// Compile an ellipsis template (item ... or item ... ...)
+    ///
+    /// Returns the compiled template and the number of ellipses consumed.
+    /// Supports SRFI-149 double ellipsis for nested iteration.
+    fn compile_ellipsis_template(
+        &mut self,
+        item: &Value,
+        rest: &[Value],
+        level: usize,
+    ) -> Result<(Template, usize), MacroError> {
+        // Count consecutive ellipses for double ellipsis support (SRFI-149)
+        let nesting = self.count_consecutive_ellipses(rest);
+
+        // Compile the base template at deepest level
+        let subtemplate = self.compile_template(item, level + nesting as usize)?;
+
+        // Collect variables that should iterate
+        let vars = self.collect_template_vars(&subtemplate, level + 1);
+
+        if vars.is_empty() {
+            return Err(MacroError::InvalidSyntax(
+                "Ellipsis in template contains no pattern variables".to_string(),
+            ));
+        }
+
+        // Verify variables are at appropriate levels for nesting
+        self.verify_ellipsis_nesting(&vars, level, nesting as usize)?;
+
+        let template = Template::Ellipsis {
+            subtemplate: Box::new(subtemplate),
+            level: (level + 1) as u8,
+            nesting,
+            vars,
+        };
+
+        Ok((template, nesting as usize))
+    }
+
+    /// Count consecutive ellipses starting from the beginning of items
+    fn count_consecutive_ellipses(&self, items: &[Value]) -> u8 {
+        let mut count = 0u8;
+        for item in items {
+            if self.is_ellipsis(item) {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        count
     }
 
     /// Compile template with ellipsis temporarily disabled
@@ -720,26 +773,11 @@ impl Compiler {
                     }
                     Ok(Template::Var(*pvref))
                 } else {
-                    // Non-ellipsis, non-pvar symbol - use normal hygiene handling
-                    if !self.definition_scopes.is_empty() {
-                        Ok(Template::Symbol(Identifier::with_scopes(
-                            s.clone(),
-                            self.definition_scopes.clone(),
-                        )))
-                    } else {
-                        // Fall back to marks-and-ribs hygiene
-                        let should_capture =
-                            self.env.as_ref().is_some_and(|env| env.get(s).is_some());
-
-                        if should_capture {
-                            Ok(Template::Symbol(Identifier::with_scopes(
-                                s.clone(),
-                                ScopeSet::new(),
-                            )))
-                        } else {
-                            Ok(Template::Symbol(Identifier::new(s.clone())))
-                        }
-                    }
+                    // In ellipsis escape context: produce plain Symbol values.
+                    // The escaped template is meant to be compiled fresh as a new macro,
+                    // so introduced identifiers should NOT carry definition scopes.
+                    // They will become pattern variables in the inner macro when compiled.
+                    Ok(Template::Literal(form.clone()))
                 }
             }
 
@@ -902,14 +940,24 @@ impl Compiler {
     ///
     /// Recognizes both plain Symbol and Identifier (with marks/scopes)
     /// to support nested macro definitions where ellipsis may be wrapped.
+    ///
+    /// R7RS 4.3.2: "Literals have priority over ellipsis."
+    /// If the ellipsis symbol is also in the literals list, return false.
     fn is_ellipsis(&self, form: &Value) -> bool {
         match &self.ellipsis {
             None => false, // Ellipsis disabled
-            Some(elli) => match form {
-                Value::Symbol(s) => s == elli,
-                Value::Identifier(id) => &id.name == elli,
-                _ => false,
-            },
+            Some(elli) => {
+                let is_elli = match form {
+                    Value::Symbol(s) => s == elli,
+                    Value::Identifier(id) => &id.name == elli,
+                    _ => false,
+                };
+                // Literals have priority over ellipsis (SRFI-46, R7RS 4.3.2)
+                if is_elli && self.literals.contains(elli) {
+                    return false;
+                }
+                is_elli
+            }
         }
     }
 
@@ -922,6 +970,33 @@ impl Compiler {
             Value::Symbol(s) => Some(s),
             Value::Identifier(id) => Some(&id.name),
             _ => None,
+        }
+    }
+
+    /// Check if a value is a SUBSTITUTED identifier from outer macro expansion.
+    ///
+    /// After the flip-scope algorithm in macro expansion:
+    /// - Substituted values (from pattern variables): end up with EMPTY scopes
+    ///   (they had the macro_scope before flip, which got removed)
+    /// - Introduced identifiers (from template): end up with NON-EMPTY scopes
+    ///   (they had empty scopes before flip, macro_scope got added)
+    ///
+    /// For nested macro hygiene, we need to distinguish:
+    /// 1. Substituted values (EMPTY scopes): Should be treated as literals in inner patterns
+    ///    to prevent the substituted symbol from being reinterpreted as a pattern variable.
+    ///    This is the key for proper nested macro definitions.
+    /// 2. Introduced identifiers (NON-EMPTY scopes): Should become pattern variables
+    ///    in inner patterns. They're new identifiers introduced by the outer template.
+    ///
+    /// This function returns true ONLY for substituted values (Identifier with empty scopes).
+    fn is_substituted_from_outer_macro(form: &Value) -> bool {
+        match form {
+            // Identifier with EMPTY scopes = substituted from outer pattern variable
+            // Should be treated as literal in inner patterns
+            Value::Identifier(id) => id.scopes.is_empty(),
+            // Symbols are fresh - they should become pattern variables
+            // Identifiers with non-empty scopes are introduced - should also become pattern variables
+            _ => false,
         }
     }
 
@@ -984,25 +1059,31 @@ impl Compiler {
     }
 
     /// Verify that template variables are at valid levels for ellipsis nesting
+    ///
+    /// For an ellipsis at a given level, we need at least one variable that will
+    /// provide iteration. This can be:
+    /// 1. A variable at exactly the right level (standard case)
+    /// 2. A variable at a DEEPER level (pass-through case for nested ellipsis)
+    ///
+    /// For example, with pattern `((item ...) ...)` and template `(list (list item ...) ...)`:
+    /// - The outer `...` is at level 1
+    /// - `item` is at level 2
+    /// - This is valid: the outer ellipsis iterates over the groups, and `item` provides
+    ///   the iteration count indirectly through its nested structure
     fn verify_ellipsis_nesting(
         &self,
         vars: &[PVRef],
         base_level: usize,
-        nesting: usize,
+        _nesting: usize,
     ) -> Result<(), MacroError> {
-        let innermost_level = base_level + nesting;
-
-        // At least one variable must be at the right level for innermost ellipsis
-        let has_valid_var = vars
-            .iter()
-            .any(|pv| pv.level() > base_level && pv.level() <= innermost_level);
+        // At least one variable must be at a level higher than base_level.
+        // This includes variables at deeper levels (pass-through for nested ellipsis).
+        let has_valid_var = vars.iter().any(|pv| pv.level() > base_level);
 
         if !has_valid_var {
             return Err(MacroError::InvalidSyntax(format!(
-                "Invalid ellipsis nesting: no variables at levels {}-{} (nesting={})",
-                base_level + 1,
-                innermost_level,
-                nesting
+                "Invalid ellipsis nesting: no variables above level {} to drive iteration",
+                base_level
             )));
         }
 
@@ -1014,6 +1095,11 @@ impl Compiler {
     fn contains_pattern_vars(&self, value: &Value) -> bool {
         // Handle all identifier types (Symbol, ScopedIdentifier, WrappedIdentifier)
         if let Some(s) = Self::extract_symbol_name(value) {
+            // Skip identifiers with scopes - they came from outer expansion
+            // and shouldn't be treated as pattern variables
+            if Self::is_substituted_from_outer_macro(value) {
+                return false;
+            }
             return self.pvars.contains_key(s);
         }
 
@@ -1290,7 +1376,7 @@ mod tests {
         // When _ is NOT in literals, it should be Wildcard
         let mut compiler = Compiler::new(vec![], Some("...".into()));
 
-        let pattern_form = list(vec![sym("foo"), sym("_"), sym("bar")]);
+        let pattern_form = list(vec![sym("foo"), sym(WILDCARD), sym("bar")]);
         let pattern = compiler.compile_pattern(&pattern_form, 0).unwrap();
 
         match pattern {
@@ -1310,9 +1396,9 @@ mod tests {
     #[test]
     fn test_underscore_as_literal() {
         // When _ IS in literals, it should be Literal, not Wildcard
-        let mut compiler = Compiler::new(vec!["_".into()], Some("...".into()));
+        let mut compiler = Compiler::new(vec![WILDCARD.into()], Some("...".into()));
 
-        let pattern_form = list(vec![sym("foo"), sym("_"), sym("bar")]);
+        let pattern_form = list(vec![sym("foo"), sym(WILDCARD), sym("bar")]);
         let pattern = compiler.compile_pattern(&pattern_form, 0).unwrap();
 
         match pattern {
@@ -1322,7 +1408,7 @@ mod tests {
                 assert!(matches!(&patterns[0], Pattern::Var(_)));
                 // "_" is a LITERAL (not wildcard!)
                 assert!(
-                    matches!(&patterns[1], Pattern::Literal(Value::Symbol(s)) if s.as_ref() == "_"),
+                    matches!(&patterns[1], Pattern::Literal(Value::Symbol(s)) if s.as_ref() == WILDCARD),
                     "Expected Literal(_), got {:?}",
                     patterns[1]
                 );

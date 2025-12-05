@@ -11,8 +11,13 @@ use patina_interpreter::TreeWalkInterpreter;
 /// Test that macro-introduced identifiers don't capture user bindings
 ///
 /// Issue #12: https://github.com/avalonalex/patina/issues/12
+///
+/// This is the classic hygiene test: when a pattern variable (body) contains
+/// an identifier (temp), that identifier should refer to its binding at the
+/// USE-SITE, not to any macro-introduced binding with the same name.
+///
+/// Verified against chibi-scheme which also returns 5.
 #[test]
-#[ignore] // TODO: Still has issues with some cases - needs more work
 fn test_macro_introduced_temp_variable() {
     let interp = TreeWalkInterpreter::new_tree_walker();
 
@@ -29,10 +34,16 @@ fn test_macro_introduced_temp_variable() {
         "#,
     );
 
-    // Should return 10 (the value of the macro argument)
-    // NOT 5 (the value of the user's temp binding)
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "10");
+    // Should return 5 (the user's temp binding from use-site)
+    // NOT 10 (the macro-introduced temp binding)
+    // The 'temp' in body came from the use-site where temp=5.
+    // The macro's (let ((temp 10)) ...) creates a DIFFERENT temp due to hygiene.
+    assert!(
+        result.is_ok(),
+        "Macro should expand correctly: {:?}",
+        result
+    );
+    assert_eq!(result.unwrap().to_string(), "5");
 }
 
 /// Test hygiene with nested lets
@@ -156,7 +167,6 @@ fn test_lambda_hygiene() {
 
 /// Test that quoted symbols in templates are not renamed
 #[test]
-#[ignore] // TODO: Quoted symbols are being renamed incorrectly
 fn test_quoted_symbols_not_renamed() {
     let interp = TreeWalkInterpreter::new_tree_walker();
 
@@ -177,28 +187,43 @@ fn test_quoted_symbols_not_renamed() {
 }
 
 /// Test hygiene doesn't break recursive macros
+///
+/// This tests that recursive macro expansion properly maintains hygiene
+/// by generating multiple nested `let` bindings with the same `temp` name.
+/// Each expansion should create a distinct `temp` that doesn't shadow
+/// the others due to hygiene.
+///
+/// Note: The original test tried to match runtime values against compile-time
+/// patterns (e.g., `(countdown 0)` matching `(countdown (- temp 1))`), which
+/// is impossible - macros expand at compile-time before evaluation.
 #[test]
-#[ignore = "Stack overflow - needs investigation"]
 fn test_recursive_macro_hygiene() {
     let interp = TreeWalkInterpreter::new_tree_walker();
 
+    // Test recursive macro that creates nested let bindings
+    // Each expansion introduces a fresh `temp` variable that should be hygienic
     let result = interp.eval_program(
         r#"
-        (define-syntax countdown
+        (define-syntax nested-let
           (syntax-rules ()
-            ((countdown 0) 0)
-            ((countdown n)
-             (let ((temp n))
-               (if (> temp 0)
-                   (countdown (- temp 1))
-                   temp)))))
+            ((nested-let () body) body)
+            ((nested-let (val) body)
+             (let ((temp val)) (+ temp body)))
+            ((nested-let (val . rest) body)
+             (let ((temp val)) (nested-let rest (+ temp body))))))
 
-        (countdown 3)
+        (nested-let (1 2 3) 0)
         "#,
     );
 
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "0");
+    // Expands to: (let ((temp 1)) (let ((temp 2)) (let ((temp 3)) (+ temp (+ temp (+ temp 0))))))
+    // With hygiene, each temp is distinct, so result = 1 + (2 + (3 + 0)) = 6
+    assert!(
+        result.is_ok(),
+        "Recursive macro should evaluate: {:?}",
+        result
+    );
+    assert_eq!(result.unwrap().to_string(), "6");
 }
 
 /// Test scope-based hygiene: macro captures binding from definition site
@@ -810,7 +835,6 @@ fn test_macro_generating_macro_simple() {
 /// implementation roadmap. This should be fixed AFTER DEFINE_SYNTAX_ELIMINATION.md
 /// is complete.
 #[test]
-#[ignore] // Known limitation: conflicting names in macro-generating macros
 fn test_macro_generating_macro_conflicting_names() {
     let interp = TreeWalkInterpreter::new_tree_walker();
 
@@ -955,4 +979,97 @@ fn test_macro_generated_let_syntax() {
 
     assert!(result.is_ok(), "Failed: {:?}", result);
     assert_eq!(result.unwrap().to_string(), "43");
+}
+
+// ============================================================================
+// Literal Identifier Matching Tests (bound-identifier=? semantics)
+// ============================================================================
+//
+// These tests verify R7RS 4.3.2 literal matching semantics:
+// "An element in the input matches a literal identifier if and only if
+//  it is an identifier and either both its occurrence in the macro
+//  expression and its occurrence in the macro definition have the same
+//  lexical binding, or the two identifiers are the same and both have
+//  no lexical binding."
+
+/// Test: Literal in nested macro matches same literal in template
+///
+/// When a macro generates another macro with a literal, and the template
+/// uses that same literal, they should match (both refer to the same binding).
+///
+/// Verified against chibi-scheme and Gauche.
+#[test]
+fn test_nested_macro_literal_matching() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let-syntax ((m (syntax-rules ()
+                          ((m ignored)
+                           (let-syntax ((n (syntax-rules (k)
+                                             ((n k) 'matched-k)
+                                             ((n y) 'no-match))))
+                             (n k))))))
+          (m anything))
+        "#,
+    );
+
+    // The literal `k` in (syntax-rules (k)...) matches the `k` in (n k)
+    // because both come from the outer macro's template (same binding context).
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "matched-k");
+}
+
+/// Test: Literal shadowed by let AFTER macro definition should NOT match
+///
+/// When the input identifier is bound by a let AFTER the macro is defined,
+/// it refers to a different binding than the pattern literal, so it should
+/// not match.
+///
+/// Verified against chibi-scheme and Gauche.
+#[test]
+fn test_literal_shadowed_in_macro_body() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let-syntax ((n (syntax-rules (k)
+                          ((n k) 'matched)
+                          ((n y) 'no-match))))
+          (let ((k 42))
+            (n k)))
+        "#,
+    );
+
+    // The `k` in (n k) is shadowed by the let binding, so it doesn't
+    // refer to the same binding as the literal `k` in the macro pattern.
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "no-match");
+}
+
+/// Test: Literal shadowed by let in nested macro template should NOT match
+///
+/// Same as above, but with the shadowing happening inside a macro template.
+///
+/// Verified against chibi-scheme and Gauche.
+#[test]
+fn test_literal_shadowed_in_nested_macro_template() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        (let-syntax ((m (syntax-rules ()
+                          ((m ignored)
+                           (let-syntax ((n (syntax-rules (k)
+                                             ((n k) 'matched-k)
+                                             ((n y) 'no-match))))
+                             (let ((k 99))
+                               (n k)))))))
+          (m anything))
+        "#,
+    );
+
+    // The `k` in (n k) is shadowed by the let inside the template.
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "no-match");
 }

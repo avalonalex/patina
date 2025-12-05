@@ -5,10 +5,6 @@
 //! 2. Ellipsis with improper list patterns
 //! 3. Vector patterns with ellipsis
 //! 4. Zero-element ellipsis matching in complex contexts
-//!
-//! NOTE: Tests temporarily disabled after macro crate extraction.
-//! Parser is no longer available in this crate. These tests should be
-//! moved to patina-frontend or patina-tests once the architecture is finalized.
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
@@ -17,21 +13,20 @@ use patina_runtime::Value;
 
 /// Helper to test that a macro definition can be parsed
 /// (Doesn't test expansion, just that the syntax is valid)
-///
-/// NOTE: Disabled - requires Parser from patina-frontend
-fn test_macro_parses(_macro_def: &str) -> Result<(), String> {
-    // let mut parser = Parser::new(macro_def).map_err(|e| format!("{}", e))?;
-    // let _ast = parser.parse().map_err(|e| format!("{}", e))?;
+#[cfg(test)]
+fn test_macro_parses(macro_def: &str) -> Result<(), String> {
+    use patina_frontend::parser::Parser;
+    let mut parser = Parser::new(macro_def).map_err(|e| format!("{}", e))?;
+    let _ast = parser.parse().map_err(|e| format!("{}", e))?;
     Ok(())
 }
 
 /// Helper to parse Scheme code
-///
-/// NOTE: Disabled - requires Parser from patina-frontend
-fn parse(_code: &str) -> Result<Value, String> {
-    // let mut parser = Parser::new(code).map_err(|e| format!("{}", e))?;
-    // parser.parse().map_err(|e| format!("{}", e))
-    Err("Parser not available in this crate".to_string())
+#[cfg(test)]
+fn parse(code: &str) -> Result<Value, String> {
+    use patina_frontend::parser::Parser;
+    let mut parser = Parser::new(code).map_err(|e| format!("{}", e))?;
+    parser.parse().map_err(|e| format!("{}", e))
 }
 
 // ============================================================================
@@ -59,7 +54,6 @@ fn test_ellipsis_in_middle_simple() {
 }
 
 #[test]
-#[ignore = "Requires Parser from patina-frontend - disabled after macro crate extraction"]
 fn test_part_2x_from_chibi() {
     // Exact pattern from chibi-scheme r7rs-tests.scm
     let macro_def = r#"

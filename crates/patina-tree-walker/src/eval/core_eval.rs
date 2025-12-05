@@ -161,7 +161,18 @@ pub(crate) fn eval_core_step(
 ) -> Result<CoreEvalResult, EvalError> {
     match expr {
         // Literals evaluate to themselves (dereference the Rc)
-        CoreExpr::Literal(v) => Ok(CoreEvalResult::Value(v.as_ref().clone())),
+        // For compound data (pairs, vectors) that may contain Identifiers from macro expansion
+        // (pattern variable substitution marks symbols with scopes), strip them to plain Symbols
+        // for proper comparison with eq?, eqv?, equal?, etc.
+        CoreExpr::Literal(v) => {
+            let value = v.as_ref().clone();
+            // Strip Identifiers from compound data structures (lists and vectors)
+            let result = match &value {
+                Value::Pair(_) | Value::Vector(_) => strip_identifiers_to_symbols(&value),
+                _ => value,
+            };
+            Ok(CoreEvalResult::Value(result))
+        }
 
         // Variables: look up in environment (with optional hygiene scopes)
         CoreExpr::Var { name, scopes } => {
@@ -184,8 +195,13 @@ pub(crate) fn eval_core_step(
             }
         }
 
-        // Quote: return the quoted value as-is (dereference the Rc)
-        CoreExpr::Quote(v) => Ok(CoreEvalResult::Value(v.as_ref().clone())),
+        // Quote: return the quoted value, converting Identifiers to Symbols
+        // After macro expansion, quoted data may contain Identifiers with scopes.
+        // These should be converted to plain Symbols for proper comparison (eq?, eqv?, memq, etc.)
+        CoreExpr::Quote(v) => {
+            let stripped = strip_identifiers_to_symbols(v.as_ref());
+            Ok(CoreEvalResult::Value(stripped))
+        }
 
         // Quasiquote: template with selective evaluation
         CoreExpr::Quasiquote(template) => {
@@ -1058,6 +1074,47 @@ fn eval_value_simple(
     evaluator.eval_in_env(value, &env)
 }
 
+/// Strip Identifiers to Symbols in quoted data.
+///
+/// After macro expansion, quoted data may contain Identifier values (which have
+/// hygiene scopes). For proper comparison with eq?, eqv?, memq, etc., these
+/// should be converted back to plain Symbols.
+///
+/// This is necessary because:
+/// 1. User writes '(a b c) expecting plain symbols
+/// 2. Macro expansion may wrap these in Identifier with scopes
+/// 3. When comparing with other symbols, Identifier != Symbol
+fn strip_identifiers_to_symbols(value: &Value) -> Value {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    match value {
+        // Convert Identifier to Symbol
+        Value::Identifier(id) => Value::Symbol(id.name.clone()),
+
+        // Recursively process pairs (lists)
+        Value::Pair(pair) => {
+            let borrowed = pair.borrow();
+            let new_car = strip_identifiers_to_symbols(&borrowed.0);
+            let new_cdr = strip_identifiers_to_symbols(&borrowed.1);
+            Value::Pair(Rc::new(RefCell::new((new_car, new_cdr))))
+        }
+
+        // Recursively process vectors
+        Value::Vector(vec) => {
+            let new_elements: Vec<_> = vec
+                .borrow()
+                .iter()
+                .map(strip_identifiers_to_symbols)
+                .collect();
+            Value::Vector(Rc::new(RefCell::new(new_elements)))
+        }
+
+        // All other values pass through unchanged
+        _ => value.clone(),
+    }
+}
+
 /// Minimal Value → CoreExpr converter (temporary bridge)
 /// Implementation of quasiquote with depth tracking
 ///
@@ -1084,7 +1141,9 @@ fn eval_quasiquote_impl(
         | Value::Unspecified => Ok(expr.clone()),
 
         // Symbols and null: quote them (return as-is)
+        // Identifiers (from macro expansion) are converted to Symbols for consistency
         Value::Symbol(_) | Value::Null => Ok(expr.clone()),
+        Value::Identifier(id) => Ok(Value::Symbol(id.name.clone())),
 
         // Vectors: convert to list, process, convert back
         Value::Vector(vec) => {
@@ -1099,9 +1158,17 @@ fn eval_quasiquote_impl(
             let car = &borrowed.0;
             let cdr = &borrowed.1;
 
-            // Check if car is a symbol that requires special handling
-            if let Value::Symbol(sym) = car {
-                match sym.as_ref() {
+            // Extract symbol name from either Symbol or Identifier
+            // After macro expansion, special forms may be Identifiers with scopes
+            let sym_name = match car {
+                Value::Symbol(s) => Some(s.as_ref()),
+                Value::Identifier(id) => Some(id.name.as_ref()),
+                _ => None,
+            };
+
+            // Check if car is a symbol/identifier that requires special handling
+            if let Some(name) = sym_name {
+                match name {
                     // Nested quasiquote: increment depth
                     "quasiquote" => {
                         let (inner, rest) = extract_pair(cdr)?;
@@ -1205,9 +1272,7 @@ fn process_quasiquote_pair(
                         let b = inner_pair.borrow();
                         (b.0.clone(), b.1.clone())
                     };
-                    if let Value::Symbol(ref sym) = inner_car
-                        && sym.as_ref() == "unquote-splicing"
-                    {
+                    if is_named(&inner_car, "unquote-splicing") {
                         // Evaluate the splicing expression
                         let (splice_expr, rest) = extract_pair(&inner_cdr)?;
                         if !matches!(rest, Value::Null) {
@@ -1242,9 +1307,7 @@ fn process_quasiquote_pair(
                                 let b = cdr_pair.borrow();
                                 (b.0.clone(), b.1.clone())
                             };
-                            if let Value::Symbol(ref sym) = cdr_car
-                                && sym.as_ref() == "unquote"
-                            {
+                            if is_named(&cdr_car, "unquote") {
                                 // Evaluate the unquote expression as the tail
                                 let (unquote_expr, rest) = extract_pair(&cdr_cdr)?;
                                 if !matches!(rest, Value::Null) {
@@ -1270,9 +1333,7 @@ fn process_quasiquote_pair(
                         let b = cdr_pair.borrow();
                         (b.0.clone(), b.1.clone())
                     };
-                    if let Value::Symbol(ref sym) = cdr_car
-                        && sym.as_ref() == "unquote"
-                    {
+                    if is_named(&cdr_car, "unquote") {
                         // This is an improper list: (... car . ,expr)
                         // Process car normally, then evaluate the unquote as tail
                         let processed_car = eval_quasiquote_impl(evaluator, &car, env, depth)?;
@@ -1324,6 +1385,16 @@ fn extract_pair(value: &Value) -> Result<(Value, Value), EvalError> {
             Ok((borrowed.0.clone(), borrowed.1.clone()))
         }
         _ => Err(EvalError::InvalidSyntax("Expected pair".to_string())),
+    }
+}
+
+/// Helper: check if a value is a symbol/identifier with a given name
+/// After macro expansion, symbols may become Identifiers with scopes
+fn is_named(value: &Value, name: &str) -> bool {
+    match value {
+        Value::Symbol(s) => s.as_ref() == name,
+        Value::Identifier(id) => id.name.as_ref() == name,
+        _ => false,
     }
 }
 
