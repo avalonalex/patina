@@ -2,6 +2,54 @@
 
 Major accomplishments and project milestones.
 
+## 2025-12-04: Macro Hygiene Complete & 75% R7RS Compliance
+
+**All Macro Tests Passing**
+
+Fixed the last macro hygiene issue and achieved comprehensive R7RS compliance:
+
+**Macro System Achievements:**
+- ✅ Fixed literal matching to use subset semantics (`bound-identifier=?`)
+- ✅ All 5 previously ignored macro tests now pass
+- ✅ Nested ellipsis (`... ...`) confirmed working
+- ✅ Macro-generating macros work correctly
+
+**R7RS Compliance Status (Chibi Test Suite):**
+
+| Category | Status |
+|----------|--------|
+| Core Language (4.1-6.9) | **99.5%** (791/795 tests) |
+| Full R7RS | **75.6%** (791/1046 tests) |
+
+**100% Complete Sections:**
+- 4.1 Primitive expressions (27/27)
+- 4.2 Derived expressions (74/74)
+- 4.3 Macros (25/25)
+- 6.1 Equivalence (25/25)
+- 6.2 Numbers (211/211)
+- 6.3 Booleans (18/18)
+- 6.4 Lists (65/65)
+- 6.5 Symbols (17/17)
+- 6.6 Characters (79/79)
+- 6.7 Strings (130/130)
+- 6.8 Vectors (43/43)
+- 6.9 Bytevectors (39/39)
+
+**Remaining Work:**
+- I/O System (~265 tests blocked)
+- Exception handling (~23 tests blocked)
+- Records (6 tests blocked)
+- System interface (12 tests blocked)
+- call/cc and dynamic-wind
+
+**Documentation Updates:**
+- Archived macro hygiene research to `internal/ARCHIVE/macro_hygiene_2025_12/`
+- Archived parameter bug docs to `internal/ARCHIVE/parameter_fix_2025_11/`
+- Renamed and updated `internal/MACRO_SYSTEM_KNOWN_LIMITATIONS.md`
+- Updated `docs/FEATURE_STATUS.md` with comprehensive status
+
+---
+
 ## 2025-12-01: DefineSyntax Elimination Complete
 
 **IR Simplification Achievement**
