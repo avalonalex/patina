@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Patina is a Scheme R7RS-small interpreter written in Rust. This is an educational project with ambitious goals: implementing a full R7RS-compliant Scheme interpreter, then extending it with gradual typing, reactive concurrency, and logic programming. Currently in Phase 1 (basic R7RS compliance).
+Patina is a Scheme R7RS-small interpreter written in Rust. This is an educational project with ambitious goals: implementing a full R7RS-compliant Scheme interpreter, then building a bytecode VM for performance, adding syntax-case for procedural macros, and ultimately extending with gradual typing, reactive concurrency, and logic programming. Currently in Phase 1 (basic R7RS compliance).
 
 **Architecture:** Modular workspace with 9 crates supporting multiple backends (tree-walker implemented, VM and JIT planned). Features a sophisticated dual-loader library system and CoreExpr IR-based evaluation pipeline.
 
@@ -129,6 +129,7 @@ patina-tests → patina-interpreter
 
 - **`PRD/phase1/`** - Strategic planning and high-level design (current phase only)
   - **`IMPLEMENTATION_STATUS.md`** - ⭐ **CANONICAL** overall roadmap, priorities, and remaining work
+  - **`TECH_DEBT_CLEANUP.md`** - ⭐ Tech debt to address before Phase 2 (VM backend)
   - **`NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
   - **`VALUE_SIZE_OPTIMIZATION.md`** - ⭐ Value/CoreExpr size analysis and optimization roadmap
   - `STRING_OPTIMIZATION.md` - Future optimization plans (deferred)
@@ -790,9 +791,25 @@ See `docs/FEATURE_STATUS.md` for detailed test-by-test compliance matrix (canoni
 
 ## Future Phases
 
-**Phase 2**: Gradual typing (Typed Racket-style)
-**Phase 3**: Reactive streams (Project Reactor-style)
-**Phase 4**: miniKanren logic programming
+**Phase 2**: Bytecode VM backend
+- Compile CoreExpr to bytecode for 5-10x speedup over tree-walking
+- Essential foundation for performant type checking and macro expansion
+- New crate: `patina-vm/` implementing the `Backend` trait
+- Leverage existing CoreExpr IR as compilation source
+
+**Phase 3**: syntax-case (procedural macros)
+- Full syntax-case with `syntax->datum`, `datum->syntax`
+- Builds on existing scope-set hygiene infrastructure
+- Enables compile-time type annotation processing
+- See `PRD/phase2/SYNTAX_CASE_DESIGN.md` for design
+
+**Phase 4**: Gradual typing (Typed Racket-style)
+- Type inference and checking at compile time
+- Contracts at typed/untyped boundaries
+- Requires VM (performance) and syntax-case (annotations)
+
+**Phase 5**: Reactive streams (Project Reactor-style)
+**Phase 6**: miniKanren logic programming
 
 The workspace structure supports this evolution:
 - Multiple backends: Add `patina-vm/`, `patina-jit/` alongside `patina-tree-walker/`
