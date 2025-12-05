@@ -15,7 +15,7 @@
 
 use super::pattern::Pattern;
 use super::template::{Identifier, Template};
-use super::utils::{ELLIPSIS, WILDCARD};
+use super::utils::{ELLIPSIS, WILDCARD, collect_template_vars_at_level};
 use crate::error::MacroError;
 use patina_runtime::{Environment, PVRef, ScopeSet, Value};
 use std::collections::HashMap;
@@ -678,7 +678,7 @@ impl Compiler {
         let subtemplate = self.compile_template(item, level + nesting as usize)?;
 
         // Collect variables that should iterate
-        let vars = self.collect_template_vars(&subtemplate, level + 1);
+        let vars = collect_template_vars_at_level(&subtemplate, level + 1);
 
         if vars.is_empty() {
             return Err(MacroError::InvalidSyntax(
@@ -1020,41 +1020,6 @@ impl Compiler {
                     return Ok((items, Some(current)));
                 }
             }
-        }
-    }
-
-    /// Collect all pattern variables from a template
-    ///
-    /// Used to determine which variables need to be iterated during ellipsis expansion.
-    fn collect_template_vars(&self, tmpl: &Template, min_level: usize) -> Vec<PVRef> {
-        let mut vars = Vec::new();
-        Self::collect_vars_rec(tmpl, min_level, &mut vars);
-        vars.sort_by_key(|pv| (pv.level(), pv.index()));
-        vars.dedup();
-        vars
-    }
-
-    /// Recursively collect variables from template
-    fn collect_vars_rec(tmpl: &Template, min_level: usize, acc: &mut Vec<PVRef>) {
-        match tmpl {
-            Template::Var(pvref) if pvref.level() >= min_level => {
-                acc.push(*pvref);
-            }
-            Template::List(items) | Template::Vector(items) => {
-                for item in items {
-                    Self::collect_vars_rec(item, min_level, acc);
-                }
-            }
-            Template::Ellipsis { subtemplate, .. } => {
-                Self::collect_vars_rec(subtemplate, min_level, acc);
-            }
-            Template::DottedList { templates, tail } => {
-                for t in templates {
-                    Self::collect_vars_rec(t, min_level, acc);
-                }
-                Self::collect_vars_rec(tail, min_level, acc);
-            }
-            _ => {}
         }
     }
 

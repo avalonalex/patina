@@ -315,8 +315,31 @@ impl Expander {
     /// Expand an ellipsis template
     ///
     /// This is the most complex case, handling iteration over pattern variable bindings.
+    /// Based on Gauche's ellipsis expansion (macro.c:850+).
     ///
-    /// Based on Gauche's ellipsis expansion (macro.c:850+)
+    /// # Parameters
+    ///
+    /// - `subtemplate`: The template to expand repeatedly
+    /// - `level`: The ellipsis nesting level (1 for single `...`, 2 for inner of `... ...`)
+    /// - `nesting`: How many consecutive ellipses (1 for `x ...`, 2 for `x ... ...`)
+    /// - `vars`: Pattern variables in the subtemplate that drive iteration
+    /// - `env`: The match environment containing bound values
+    /// - `indices`: Current indices into nested branches for outer ellipsis levels
+    ///
+    /// # How Iteration Works
+    ///
+    /// The `indices` array tracks our position in nested branch structures. For example,
+    /// with pattern `((x ...) ...)` matching `((1 2) (3 4 5))`:
+    ///
+    /// - `x` is bound to `Branch([Branch([1, 2]), Branch([3, 4, 5])])`
+    /// - When expanding the outer `...` at iteration 0, `indices = [0]`
+    /// - When expanding the inner `...` at iteration 1, `indices = [0, 1]` → gets `2`
+    ///
+    /// # Nesting Levels
+    ///
+    /// - `nesting = 1`: Standard ellipsis - iterate over branch and collect results
+    /// - `nesting = 2`: Double ellipsis (SRFI-149) - expand and flatten one level
+    /// - `nesting >= 3`: Not supported
     fn expand_ellipsis(
         &self,
         subtemplate: &Template,
@@ -845,56 +868,15 @@ impl Default for Expander {
     }
 }
 
-/// Check if a symbol is a special form keyword
-///
-/// NOTE: This function is no longer used by rename_identifier. It's kept for
-/// reference and potential future use. Special forms are now treated like
-/// introduced identifiers and get macro scopes for proper hygiene.
-#[allow(dead_code)]
-fn is_special_form(name: &str) -> bool {
-    matches!(
-        name,
-        // Core special forms
-        "quote"
-            | "if"
-            | "define"
-            | "set!"
-            | "lambda"
-            | "begin"
-            | "apply"
-            | "call-with-values"
-            // Macro-related special forms
-            | "define-syntax"
-            | "let-syntax"
-            | "letrec-syntax"
-            | "syntax-rules"
-            // Parameter-related special forms
-            | "parameterize"
-            // Derived special forms (could be macros but are special forms for now)
-            | "cond"
-            | "case"
-            | "let"
-            | "let*"
-            | "letrec"
-            | "letrec*"
-            | "and"
-            | "or"
-            | "do"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::macro_expander::template::Identifier;
+    use crate::macro_expander::utils::vec_to_list;
 
-    // Helper to create a list from values
+    // Use vec_to_list from utils as make_list alias for test readability
     fn make_list(values: Vec<Value>) -> Value {
-        let mut result = Value::Null;
-        for value in values.into_iter().rev() {
-            result = Value::Pair(Rc::new(RefCell::new((value, result))));
-        }
-        result
+        vec_to_list(values)
     }
 
     #[test]

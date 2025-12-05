@@ -7,6 +7,9 @@
 //! - Invalid pattern/template structure
 //! - Ellipsis level mismatches
 
+use crate::macro_expander::utils::{
+    collect_pattern_vars_with_levels, collect_template_vars_with_levels,
+};
 use crate::macro_expander::{Pattern, Template};
 use patina_runtime::PVRef;
 use std::collections::HashMap;
@@ -108,10 +111,10 @@ pub fn validate_rule(
     pvar_names: &HashMap<PVRef, std::rc::Rc<str>>,
 ) -> Result<(), ValidationError> {
     // Collect all variables from pattern with their levels
-    let pattern_vars = collect_pattern_vars(pattern);
+    let pattern_vars = collect_pattern_vars_with_levels(pattern);
 
     // Collect all variables from template with their levels
-    let template_vars = collect_template_vars(template);
+    let template_vars = collect_template_vars_with_levels(template);
 
     // Check that all template variables exist in pattern
     for (pvref, template_level) in &template_vars {
@@ -154,86 +157,6 @@ pub fn validate_rule(
     validate_template_structure(template)?;
 
     Ok(())
-}
-
-/// Collect all pattern variables with their ellipsis levels
-fn collect_pattern_vars(pattern: &Pattern) -> HashMap<PVRef, usize> {
-    let mut vars = HashMap::new();
-    collect_pattern_vars_impl(pattern, &mut vars);
-    vars
-}
-
-fn collect_pattern_vars_impl(pattern: &Pattern, vars: &mut HashMap<PVRef, usize>) {
-    match pattern {
-        Pattern::Var(pvref) => {
-            vars.insert(*pvref, pvref.level());
-        }
-        Pattern::List(patterns) => {
-            for p in patterns {
-                collect_pattern_vars_impl(p, vars);
-            }
-        }
-        Pattern::Vector(patterns) => {
-            for p in patterns {
-                collect_pattern_vars_impl(p, vars);
-            }
-        }
-        Pattern::DottedList { patterns, tail } => {
-            for p in patterns {
-                collect_pattern_vars_impl(p, vars);
-            }
-            collect_pattern_vars_impl(tail, vars);
-        }
-        Pattern::Ellipsis { subpattern, .. } => {
-            collect_pattern_vars_impl(subpattern, vars);
-        }
-        Pattern::Wildcard | Pattern::Literal(_) => {}
-    }
-}
-
-/// Collect all template variables with their ellipsis levels
-fn collect_template_vars(template: &Template) -> HashMap<PVRef, usize> {
-    let mut vars = HashMap::new();
-    collect_template_vars_impl(template, 0, &mut vars);
-    vars
-}
-
-fn collect_template_vars_impl(
-    template: &Template,
-    current_level: usize,
-    vars: &mut HashMap<PVRef, usize>,
-) {
-    match template {
-        Template::Var(pvref) => {
-            vars.insert(*pvref, current_level);
-        }
-        Template::List(templates) => {
-            for t in templates {
-                collect_template_vars_impl(t, current_level, vars);
-            }
-        }
-        Template::Vector(templates) => {
-            for t in templates {
-                collect_template_vars_impl(t, current_level, vars);
-            }
-        }
-        Template::DottedList { templates, tail } => {
-            for t in templates {
-                collect_template_vars_impl(t, current_level, vars);
-            }
-            collect_template_vars_impl(tail, current_level, vars);
-        }
-        Template::Ellipsis {
-            subtemplate,
-            nesting,
-            ..
-        } => {
-            // For ellipsis, the variables inside are at a higher level
-            let inner_level = current_level + (*nesting as usize);
-            collect_template_vars_impl(subtemplate, inner_level, vars);
-        }
-        Template::Literal(_) | Template::Symbol(_) => {}
-    }
 }
 
 /// Validate pattern structure for common errors

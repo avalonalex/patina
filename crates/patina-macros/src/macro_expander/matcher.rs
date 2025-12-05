@@ -14,7 +14,9 @@
 //! Reference: https://github.com/shirok/Gauche/blob/master/src/macro.c
 
 use crate::macro_expander::pattern::Pattern;
-use crate::macro_expander::utils::{list_to_vec, pattern_to_string, pattern_to_string_with_names};
+use crate::macro_expander::utils::{
+    collect_pattern_pvars, list_to_vec, pattern_to_string, pattern_to_string_with_names,
+};
 use patina_runtime::{MatchEnv, MatchValue, PVRef, Value};
 use std::collections::HashSet;
 
@@ -338,6 +340,39 @@ impl Matcher {
     /// Match a list pattern against a list value
     ///
     /// Handles both proper lists and lists with ellipsis patterns.
+    ///
+    /// # Ellipsis Pattern Matching Algorithm
+    ///
+    /// This implements Gauche's `num_following` optimization (macro.c:138-145) to avoid
+    /// backtracking. The key insight is:
+    ///
+    /// 1. **Pre-computation**: During pattern compilation, each ellipsis pattern stores
+    ///    `num_following` - the count of non-ellipsis patterns that follow it
+    ///
+    /// 2. **Greedy consumption**: The ellipsis consumes `remaining_input - num_following`
+    ///    elements, leaving exactly enough for the trailing patterns
+    ///
+    /// 3. **Branch collection**: For nested ellipsis support, we collect ALL pattern
+    ///    variables from the subpattern tree (not just direct children), creating a
+    ///    "branch" for each variable that stores values from each iteration
+    ///
+    /// # Example
+    ///
+    /// Pattern: `(a b ... c)` with `num_following = 1`
+    /// Input: `(1 2 3 4 5)`
+    ///
+    /// - `a` matches `1` (non-ellipsis, consumes 1)
+    /// - `b ...` consumes `4 - 1 = 3` elements: `(2 3 4)` → `b` bound to branch `[2, 3, 4]`
+    /// - `c` matches `5` (trailing element)
+    ///
+    /// # MatchEnv Branches
+    ///
+    /// A "branch" in `MatchEnv` represents multiple values bound to a pattern variable
+    /// during ellipsis iteration. For pattern `(x ...)` matching `(1 2 3)`:
+    /// - `x` gets branch `[Leaf(1), Leaf(2), Leaf(3)]`
+    ///
+    /// For nested ellipsis `((x ...) ...)` matching `((1 2) (3))`:
+    /// - `x` gets branch `[Branch([1, 2]), Branch([3])]`
     fn match_list(
         &self,
         patterns: &[Pattern],
@@ -390,8 +425,11 @@ impl Matcher {
                     let all_vars = self.collect_all_pvars(subpattern);
 
                     // Initialize branches for ALL variables
-                    let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue>> =
-                        all_vars.iter().map(|pvref| (*pvref, Vec::new())).collect();
+                    let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue>> = all_vars
+                        .iter()
+                        .copied()
+                        .map(|pvref| (pvref, Vec::new()))
+                        .collect();
 
                     // Match subpattern against each consumed element
                     for i in 0..to_consume {
@@ -403,9 +441,9 @@ impl Matcher {
 
                         // Extract matched values for ALL variables (not just direct ones)
                         // This is the key fix for nested ellipsis
-                        for pvref in &all_vars {
-                            if let Some(match_value) = temp_env.get_raw(*pvref) {
-                                branches.get_mut(pvref).unwrap().push(match_value.clone());
+                        for &pvref in &all_vars {
+                            if let Some(match_value) = temp_env.get_raw(pvref) {
+                                branches.get_mut(&pvref).unwrap().push(match_value.clone());
                             }
                         }
                     }
@@ -451,49 +489,8 @@ impl Matcher {
     /// direct children of the ellipsis.
     ///
     /// Inspired by Gauche's enter_subpattern (macro.c:766+)
-    fn collect_all_pvars(&self, pattern: &Pattern) -> Vec<PVRef> {
-        let mut seen = HashSet::new();
-        Self::collect_pvars_impl(pattern, &mut seen);
-        seen.into_iter().collect()
-    }
-
-    /// Internal implementation of collect_all_pvars
-    /// Uses HashSet for O(1) deduplication instead of O(n) Vec::contains
-    fn collect_pvars_impl(pattern: &Pattern, seen: &mut HashSet<PVRef>) {
-        match pattern {
-            Pattern::Var(pvref) => {
-                seen.insert(*pvref);
-            }
-            Pattern::List(patterns) => {
-                for p in patterns {
-                    Self::collect_pvars_impl(p, seen);
-                }
-            }
-            Pattern::Vector(patterns) => {
-                for p in patterns {
-                    Self::collect_pvars_impl(p, seen);
-                }
-            }
-            Pattern::DottedList { patterns, tail } => {
-                for p in patterns {
-                    Self::collect_pvars_impl(p, seen);
-                }
-                Self::collect_pvars_impl(tail, seen);
-            }
-            Pattern::Ellipsis {
-                subpattern, vars, ..
-            } => {
-                // Include the direct vars from this ellipsis
-                for pvref in vars {
-                    seen.insert(*pvref);
-                }
-                // Recursively collect from subpattern
-                Self::collect_pvars_impl(subpattern, seen);
-            }
-            Pattern::Wildcard | Pattern::Literal(_) => {
-                // No variables
-            }
-        }
+    fn collect_all_pvars(&self, pattern: &Pattern) -> HashSet<PVRef> {
+        collect_pattern_pvars(pattern)
     }
 
     /// Match a vector pattern against a vector value
@@ -865,16 +862,12 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use crate::macro_expander::utils::vec_to_list;
     use std::rc::Rc;
 
-    // Helper to create a list from values
+    // Use vec_to_list from utils as make_list alias for test readability
     fn make_list(values: Vec<Value>) -> Value {
-        let mut result = Value::Null;
-        for value in values.into_iter().rev() {
-            result = Value::Pair(Rc::new(RefCell::new((value, result))));
-        }
-        result
+        vec_to_list(values)
     }
 
     #[test]

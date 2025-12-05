@@ -263,6 +263,170 @@ pub fn template_to_string_with_names(
 }
 
 // ============================================================================
+// Pattern/Template Variable Collection Utilities
+// ============================================================================
+
+use std::collections::HashSet;
+
+/// Collect all pattern variables (PVRefs) from a pattern into a HashSet
+///
+/// This is used by the matcher to know which variables to extract after matching.
+/// Returns a set of unique PVRefs found in the pattern.
+pub fn collect_pattern_pvars(pattern: &Pattern) -> HashSet<PVRef> {
+    let mut result = HashSet::new();
+    collect_pattern_pvars_impl(pattern, &mut result);
+    result
+}
+
+fn collect_pattern_pvars_impl(pattern: &Pattern, acc: &mut HashSet<PVRef>) {
+    match pattern {
+        Pattern::Var(pvref) => {
+            acc.insert(*pvref);
+        }
+        Pattern::List(patterns) | Pattern::Vector(patterns) => {
+            for p in patterns {
+                collect_pattern_pvars_impl(p, acc);
+            }
+        }
+        Pattern::DottedList { patterns, tail } => {
+            for p in patterns {
+                collect_pattern_pvars_impl(p, acc);
+            }
+            collect_pattern_pvars_impl(tail, acc);
+        }
+        Pattern::Ellipsis {
+            subpattern, vars, ..
+        } => {
+            // Include the direct vars from this ellipsis
+            for pvref in vars {
+                acc.insert(*pvref);
+            }
+            // Recursively collect from subpattern
+            collect_pattern_pvars_impl(subpattern, acc);
+        }
+        Pattern::Wildcard | Pattern::Literal(_) => {
+            // No variables
+        }
+    }
+}
+
+/// Collect all pattern variables with their ellipsis levels
+///
+/// This is used by the validator to check level consistency between pattern and template.
+/// Returns a map from PVRef to its ellipsis nesting level.
+pub fn collect_pattern_vars_with_levels(pattern: &Pattern) -> HashMap<PVRef, usize> {
+    let mut result = HashMap::new();
+    collect_pattern_vars_with_levels_impl(pattern, &mut result);
+    result
+}
+
+fn collect_pattern_vars_with_levels_impl(pattern: &Pattern, acc: &mut HashMap<PVRef, usize>) {
+    match pattern {
+        Pattern::Var(pvref) => {
+            acc.insert(*pvref, pvref.level());
+        }
+        Pattern::List(patterns) | Pattern::Vector(patterns) => {
+            for p in patterns {
+                collect_pattern_vars_with_levels_impl(p, acc);
+            }
+        }
+        Pattern::DottedList { patterns, tail } => {
+            for p in patterns {
+                collect_pattern_vars_with_levels_impl(p, acc);
+            }
+            collect_pattern_vars_with_levels_impl(tail, acc);
+        }
+        Pattern::Ellipsis { subpattern, .. } => {
+            collect_pattern_vars_with_levels_impl(subpattern, acc);
+        }
+        Pattern::Wildcard | Pattern::Literal(_) => {}
+    }
+}
+
+/// Collect all template variables with their usage levels
+///
+/// This is used by the validator to check that template variables are used at
+/// appropriate ellipsis nesting levels.
+/// Returns a map from PVRef to its usage level in the template.
+pub fn collect_template_vars_with_levels(template: &Template) -> HashMap<PVRef, usize> {
+    let mut result = HashMap::new();
+    collect_template_vars_with_levels_impl(template, 0, &mut result);
+    result
+}
+
+fn collect_template_vars_with_levels_impl(
+    template: &Template,
+    current_level: usize,
+    acc: &mut HashMap<PVRef, usize>,
+) {
+    match template {
+        Template::Var(pvref) => {
+            acc.insert(*pvref, current_level);
+        }
+        Template::List(templates) | Template::Vector(templates) => {
+            for t in templates {
+                collect_template_vars_with_levels_impl(t, current_level, acc);
+            }
+        }
+        Template::DottedList { templates, tail } => {
+            for t in templates {
+                collect_template_vars_with_levels_impl(t, current_level, acc);
+            }
+            collect_template_vars_with_levels_impl(tail, current_level, acc);
+        }
+        Template::Ellipsis {
+            subtemplate,
+            nesting,
+            ..
+        } => {
+            // Variables inside ellipsis are at a higher level
+            let inner_level = current_level + (*nesting as usize);
+            collect_template_vars_with_levels_impl(subtemplate, inner_level, acc);
+        }
+        Template::Literal(_) | Template::Symbol(_) => {}
+    }
+}
+
+/// Collect template variables at or above a minimum level
+///
+/// This is used by the compiler to determine which variables drive ellipsis iteration.
+/// Returns a sorted, deduplicated list of PVRefs at or above the specified level.
+pub fn collect_template_vars_at_level(template: &Template, min_level: usize) -> Vec<PVRef> {
+    let mut result = Vec::new();
+    collect_template_vars_at_level_impl(template, min_level, &mut result);
+    result.sort_by_key(|pv| (pv.level(), pv.index()));
+    result.dedup();
+    result
+}
+
+fn collect_template_vars_at_level_impl(
+    template: &Template,
+    min_level: usize,
+    acc: &mut Vec<PVRef>,
+) {
+    match template {
+        Template::Var(pvref) if pvref.level() >= min_level => {
+            acc.push(*pvref);
+        }
+        Template::List(items) | Template::Vector(items) => {
+            for item in items {
+                collect_template_vars_at_level_impl(item, min_level, acc);
+            }
+        }
+        Template::DottedList { templates, tail } => {
+            for t in templates {
+                collect_template_vars_at_level_impl(t, min_level, acc);
+            }
+            collect_template_vars_at_level_impl(tail, min_level, acc);
+        }
+        Template::Ellipsis { subtemplate, .. } => {
+            collect_template_vars_at_level_impl(subtemplate, min_level, acc);
+        }
+        _ => {}
+    }
+}
+
+// ============================================================================
 // Macro Form Detection
 // ============================================================================
 
