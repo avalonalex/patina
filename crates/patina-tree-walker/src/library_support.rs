@@ -6,11 +6,13 @@
 //! The loader is stateless and only handles parsing. The evaluator handles
 //! import resolution and evaluation, eliminating the need for circular references.
 
-use patina_frontend::LibraryDefinition;
+use patina_frontend::{BodyElement, LibraryDefinition};
+use patina_runtime::Value;
 use patina_runtime::library_loader::{EvaluatingLibraryLoader, ParsedLibrary};
 use patina_runtime::library_registry::LibraryError;
+use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Loader for libraries defined in .sld files
 ///
@@ -76,7 +78,7 @@ impl SchemeLibraryLoader {
 
     /// Parse a .sld file into a ParsedLibrary
     ///
-    /// This method only parses the file structure without evaluation.
+    /// This method parses the file structure and resolves all includes.
     /// The evaluator will handle import resolution and body evaluation.
     fn parse_sld_file(
         &self,
@@ -119,13 +121,123 @@ impl SchemeLibraryLoader {
             });
         }
 
+        // Get the directory containing the .sld file for resolving includes
+        let sld_dir = path.parent().unwrap_or(Path::new("."));
+
+        // Resolve body elements (expand includes)
+        let mut included_files = HashSet::new();
+        // Add the .sld file itself to prevent self-inclusion
+        if let Ok(canonical) = path.canonicalize() {
+            included_files.insert(canonical);
+        }
+
+        let body = self.resolve_body_elements(
+            &lib_def.body_elements,
+            sld_dir,
+            &mut included_files,
+            &path,
+        )?;
+
         // Return parsed library for the evaluator to process
         Ok(ParsedLibrary {
             name: lib_def.name,
             imports: lib_def.imports,
-            body: lib_def.body,
+            body,
             exports: lib_def.exports,
             source: Some(path),
+        })
+    }
+
+    /// Resolve body elements by expanding includes into actual expressions.
+    ///
+    /// R7RS §5.6.1: The expressions from all `begin`, `include` and `include-ci`
+    /// library declarations are expanded in that environment in the order in which
+    /// they occur in the library.
+    fn resolve_body_elements(
+        &self,
+        elements: &[BodyElement],
+        sld_dir: &Path,
+        included_files: &mut HashSet<PathBuf>,
+        source_file: &Path,
+    ) -> Result<Vec<Value>, LibraryError> {
+        let mut body = Vec::new();
+
+        for element in elements {
+            match element {
+                BodyElement::Begin(exprs) => {
+                    body.extend(exprs.clone());
+                }
+                BodyElement::Include {
+                    paths,
+                    case_insensitive,
+                } => {
+                    for include_path in paths {
+                        let file_path = sld_dir.join(include_path);
+
+                        // Check file exists
+                        if !file_path.exists() {
+                            return Err(LibraryError::IoError(format!(
+                                "Include file not found: {} (from {})",
+                                file_path.display(),
+                                source_file.display()
+                            )));
+                        }
+
+                        // Cycle detection using canonical paths
+                        let canonical = file_path.canonicalize().map_err(|e| {
+                            LibraryError::IoError(format!(
+                                "Failed to resolve path {}: {}",
+                                file_path.display(),
+                                e
+                            ))
+                        })?;
+
+                        if !included_files.insert(canonical.clone()) {
+                            return Err(LibraryError::IoError(format!(
+                                "Circular include detected: {} already included",
+                                file_path.display()
+                            )));
+                        }
+
+                        // Read and parse the included file
+                        let exprs =
+                            self.parse_included_file(&file_path, *case_insensitive, source_file)?;
+                        body.extend(exprs);
+                    }
+                }
+            }
+        }
+
+        Ok(body)
+    }
+
+    /// Parse an included file and return its expressions.
+    fn parse_included_file(
+        &self,
+        path: &Path,
+        _case_insensitive: bool,
+        source_file: &Path,
+    ) -> Result<Vec<Value>, LibraryError> {
+        let content = fs::read_to_string(path).map_err(|e| {
+            LibraryError::IoError(format!(
+                "Failed to read include file {}: {} (from {})",
+                path.display(),
+                e,
+                source_file.display()
+            ))
+        })?;
+
+        // TODO: For include-ci, we need a case-insensitive parser mode.
+        // For now, we parse normally. Case-insensitive reading is rare in practice.
+        let mut parser =
+            patina_frontend::Parser::new(&content).map_err(|e| LibraryError::ParseError {
+                file: path.display().to_string(),
+                message: format!("{:?}", e),
+            })?;
+
+        parser.parse_all().map_err(|e| LibraryError::ParseError {
+            file: path.display().to_string(),
+            message: format!("{:?}", e),
         })
     }
 }

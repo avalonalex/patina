@@ -186,6 +186,8 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("newline", Arity::Exact(0)),
         // Parameter operations
         ("make-parameter", Arity::Range(1, 2)),
+        // System introspection (R7RS §6.13)
+        ("features", Arity::Exact(0)),
     ];
 
     // Install all primitives into the environment

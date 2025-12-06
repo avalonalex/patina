@@ -385,6 +385,9 @@ impl Desugarer {
                     "let-syntax" => return self.desugar_let_syntax(&cdr),
                     "letrec-syntax" => return self.desugar_letrec_syntax(&cdr),
 
+                    // Conditional expansion (compile-time)
+                    "cond-expand" => return self.desugar_cond_expand(&cdr),
+
                     // Not a special form - fall through to application
                     _ => {}
                 }
@@ -1089,6 +1092,108 @@ impl Desugarer {
         name.as_ref() == "define"
     }
 
+    /// Desugar cond-expand: (cond-expand clause ...)
+    ///
+    /// R7RS §4.2.1: Conditional expansion based on feature requirements.
+    /// This is a compile-time construct - the first matching clause's body
+    /// is expanded and returned; other clauses are discarded.
+    ///
+    /// Each clause is: (<feature-requirement> <expression> ...)
+    /// Special clause: (else <expression> ...) - must be last
+    fn desugar_cond_expand(&self, args: &Value) -> Result<CoreExpr> {
+        use crate::cond_expand::evaluate_feature_requirement;
+        use patina_runtime::features::FeatureRegistry;
+
+        let clauses = utils::list_to_vec(args)?;
+
+        if clauses.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "cond-expand requires at least one clause".to_string(),
+            ));
+        }
+
+        // Get feature registry for evaluating requirements
+        let features = FeatureRegistry::new();
+
+        // Callback for checking if a library can be loaded
+        // In expression context, we don't have access to the library loader,
+        // so we use the environment to check if a library is available
+        let can_load_library = |_lib_name: &[String]| {
+            // For now, we can't check library availability in the desugarer
+            // This would require access to the library loader registry
+            // Return false for all library checks
+            false
+        };
+
+        for (i, clause) in clauses.iter().enumerate() {
+            let clause_list = utils::list_to_vec(clause)?;
+
+            if clause_list.is_empty() {
+                return Err(DesugarError::InvalidSyntax(
+                    "cond-expand clause cannot be empty".to_string(),
+                ));
+            }
+
+            let requirement = &clause_list[0];
+            let body = &clause_list[1..];
+
+            // Check for 'else' clause (must be last)
+            let is_else = matches!(requirement, Value::Symbol(s) if s.as_ref() == "else")
+                || matches!(requirement, Value::Identifier(id) if id.name.as_ref() == "else");
+
+            if is_else {
+                if i != clauses.len() - 1 {
+                    return Err(DesugarError::InvalidSyntax(
+                        "cond-expand: else clause must be last".to_string(),
+                    ));
+                }
+
+                // else always matches - desugar the body
+                return self.desugar_cond_expand_body(body);
+            }
+
+            // Evaluate the feature requirement
+            let matches = evaluate_feature_requirement(requirement, &features, &can_load_library)
+                .map_err(|e| {
+                DesugarError::InvalidSyntax(format!(
+                    "cond-expand: invalid feature requirement: {}",
+                    e
+                ))
+            })?;
+
+            if matches {
+                // This clause matches - desugar the body
+                return self.desugar_cond_expand_body(body);
+            }
+        }
+
+        // No clause matched - this is an error per R7RS
+        Err(DesugarError::InvalidSyntax(
+            "cond-expand: no matching clause".to_string(),
+        ))
+    }
+
+    /// Desugar the body of a cond-expand clause
+    fn desugar_cond_expand_body(&self, body: &[Value]) -> Result<CoreExpr> {
+        if body.is_empty() {
+            // Empty body returns unspecified
+            return Ok(CoreExpr::Literal(Rc::new(Value::Unspecified)));
+        }
+
+        // Desugar all body expressions
+        let desugared: Vec<CoreExpr> = body
+            .iter()
+            .map(|e| self.desugar(e))
+            .collect::<Result<_>>()?;
+
+        // Optimize: single expression doesn't need Begin wrapper
+        if desugared.len() == 1 {
+            Ok(desugared.into_iter().next().unwrap())
+        } else {
+            Ok(CoreExpr::Begin(desugared))
+        }
+    }
+
     /// Compile a syntax-rules transformer with scope set for scope-based hygiene
     ///
     /// This version passes the definition scopes to the compiler so that
@@ -1712,5 +1817,219 @@ mod tests {
         let value = Value::Eof;
         let result = desugarer.desugar(&value);
         assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // cond-expand
+    // =========================================================================
+
+    #[test]
+    fn test_cond_expand_r7rs_feature() {
+        let desugarer = Desugarer::new();
+        // (cond-expand (r7rs 42))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[Value::symbol("r7rs"), Value::Integer(42)]),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Integer(42)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_cond_expand_patina_feature() {
+        let desugarer = Desugarer::new();
+        // (cond-expand (patina 'patina-impl))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[
+                Value::symbol("patina"),
+                utils::vec_to_list(&[Value::symbol("quote"), Value::symbol("patina-impl")]),
+            ]),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        // Should be Quote expression
+        assert!(matches!(result, CoreExpr::Quote(_)));
+    }
+
+    #[test]
+    fn test_cond_expand_else_clause() {
+        let desugarer = Desugarer::new();
+        // (cond-expand (nonexistent 1) (else 99))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[Value::symbol("nonexistent"), Value::Integer(1)]),
+            utils::vec_to_list(&[Value::symbol("else"), Value::Integer(99)]),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Integer(99)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_cond_expand_no_match_error() {
+        let desugarer = Desugarer::new();
+        // (cond-expand (nonexistent 1))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[Value::symbol("nonexistent"), Value::Integer(1)]),
+        ]);
+
+        let result = desugarer.desugar(&list);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("no matching clause"));
+    }
+
+    #[test]
+    fn test_cond_expand_and_requirement() {
+        let desugarer = Desugarer::new();
+        // (cond-expand ((and r7rs patina) 100))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[
+                utils::vec_to_list(&[
+                    Value::symbol("and"),
+                    Value::symbol("r7rs"),
+                    Value::symbol("patina"),
+                ]),
+                Value::Integer(100),
+            ]),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Integer(100)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_cond_expand_or_requirement() {
+        let desugarer = Desugarer::new();
+        // (cond-expand ((or nonexistent r7rs) 200))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[
+                utils::vec_to_list(&[
+                    Value::symbol("or"),
+                    Value::symbol("nonexistent"),
+                    Value::symbol("r7rs"),
+                ]),
+                Value::Integer(200),
+            ]),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Integer(200)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_cond_expand_not_requirement() {
+        let desugarer = Desugarer::new();
+        // (cond-expand ((not nonexistent) 300))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[
+                utils::vec_to_list(&[Value::symbol("not"), Value::symbol("nonexistent")]),
+                Value::Integer(300),
+            ]),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Integer(300)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_cond_expand_multiple_expressions() {
+        let desugarer = Desugarer::new();
+        // (cond-expand (r7rs 1 2 3))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[
+                Value::symbol("r7rs"),
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ]),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Begin(exprs) = result {
+            assert_eq!(exprs.len(), 3);
+        } else {
+            panic!("Expected Begin, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_cond_expand_first_match_wins() {
+        let desugarer = Desugarer::new();
+        // (cond-expand (r7rs 1) (patina 2) (else 3))
+        // r7rs should match first
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[Value::symbol("r7rs"), Value::Integer(1)]),
+            utils::vec_to_list(&[Value::symbol("patina"), Value::Integer(2)]),
+            utils::vec_to_list(&[Value::symbol("else"), Value::Integer(3)]),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Integer(1)));
+        } else {
+            panic!("Expected Literal, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_cond_expand_else_not_last_error() {
+        let desugarer = Desugarer::new();
+        // (cond-expand (else 1) (r7rs 2))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[Value::symbol("else"), Value::Integer(1)]),
+            utils::vec_to_list(&[Value::symbol("r7rs"), Value::Integer(2)]),
+        ]);
+
+        let result = desugarer.desugar(&list);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(err_msg.contains("else clause must be last"));
+    }
+
+    #[test]
+    fn test_cond_expand_empty_body() {
+        let desugarer = Desugarer::new();
+        // (cond-expand (r7rs))
+        let list = utils::vec_to_list(&[
+            Value::symbol("cond-expand"),
+            utils::vec_to_list(&[Value::symbol("r7rs")]),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Literal(v) = result {
+            assert!(matches!(v.as_ref(), Value::Unspecified));
+        } else {
+            panic!("Expected Literal(Unspecified), got {:?}", result);
+        }
     }
 }

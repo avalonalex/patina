@@ -19,6 +19,7 @@
 // Runtime-specific modules
 pub mod backend;
 pub mod error;
+pub mod features;
 pub mod library_loader;
 pub mod library_registry;
 pub mod macro_debug;
@@ -32,6 +33,7 @@ pub use patina_core::*;
 // Re-export runtime-specific types
 pub use backend::Backend;
 pub use error::RuntimeError;
+pub use features::{FeatureRegistry, default_features};
 pub use library_loader::{LibraryLoader, LibraryLoaderRegistry, RustLibraryBuilder};
 pub use library_registry::{LibraryError, LibraryRegistry};
 pub use rust_library_loader::RustLibraryLoader;

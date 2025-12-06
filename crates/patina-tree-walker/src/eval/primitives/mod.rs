@@ -30,6 +30,7 @@ mod parameters;
 mod predicates;
 mod strings;
 mod symbols;
+mod system;
 mod test;
 mod values;
 mod vectors;
@@ -106,6 +107,7 @@ impl Evaluator {
         test::register(registry);
         lazy::register(registry);
         parameters::register(registry);
+        system::register(registry);
 
         // All core primitives are now in the registry!
     }

@@ -8,7 +8,8 @@
 //!   (export identifier ...)
 //!   (import (scheme base) ...)
 //!   (begin
-//!     definitions and expressions))
+//!     definitions and expressions)
+//!   (include "file1.scm" "file2.scm"))
 //! ```
 
 use crate::ParseError;
@@ -16,6 +17,26 @@ use patina_runtime::Value;
 
 // Re-export library types from runtime (they moved there to fix dependency issues)
 pub use patina_runtime::library_loader::{ExportSpec, ImportSet};
+
+/// Represents a body element in a library definition.
+///
+/// R7RS §5.6.1: The expressions from all `begin`, `include` and `include-ci`
+/// library declarations are expanded in that environment in the order in which
+/// they occur in the library.
+#[derive(Debug, Clone)]
+pub enum BodyElement {
+    /// Inline code from `(begin expr1 expr2 ...)`
+    Begin(Vec<Value>),
+
+    /// Files to include: `(include "file1.scm" "file2.scm" ...)`
+    /// The bool indicates case-insensitive mode (include-ci)
+    Include {
+        /// File paths relative to the .sld file
+        paths: Vec<String>,
+        /// If true, parse with case-insensitive reader (include-ci)
+        case_insensitive: bool,
+    },
+}
 
 /// A parsed library definition
 #[derive(Debug, Clone)]
@@ -29,8 +50,9 @@ pub struct LibraryDefinition {
     /// Import sets
     pub imports: Vec<ImportSet>,
 
-    /// Library body (code to evaluate)
-    pub body: Vec<Value>,
+    /// Library body elements in declaration order.
+    /// Must be resolved by the loader to produce actual body expressions.
+    pub body_elements: Vec<BodyElement>,
 }
 
 impl LibraryDefinition {
@@ -62,21 +84,24 @@ impl LibraryDefinition {
         // Rest are declarations
         let mut exports = Vec::new();
         let mut imports = Vec::new();
-        let mut body = Vec::new();
+        let mut body_elements = Vec::new();
 
         for decl in &list[2..] {
-            Self::parse_declaration(decl, &mut exports, &mut imports, &mut body)?;
+            Self::parse_declaration(decl, &mut exports, &mut imports, &mut body_elements)?;
         }
 
         Ok(LibraryDefinition {
             name,
             exports,
             imports,
-            body,
+            body_elements,
         })
     }
 
     /// Parse a library name: (scheme base) → ["scheme", "base"]
+    ///
+    /// R7RS §5.6: Library names are lists of identifiers and exact non-negative integers.
+    /// Examples: (scheme base), (srfi 1), (srfi 1 lists)
     fn parse_library_name(value: &Value) -> Result<Vec<String>, ParseError> {
         let list = Self::expect_list(value)?;
 
@@ -88,13 +113,15 @@ impl LibraryDefinition {
 
         let mut name = Vec::new();
         for part in list {
-            if let Value::Symbol(s) = part {
-                name.push(s.to_string());
-            } else {
-                return Err(ParseError::InvalidSyntax(format!(
-                    "Library name parts must be symbols, got: {}",
-                    part
-                )));
+            match &part {
+                Value::Symbol(s) => name.push(s.to_string()),
+                Value::Integer(n) if *n >= 0 => name.push(n.to_string()),
+                _ => {
+                    return Err(ParseError::InvalidSyntax(format!(
+                        "Library name parts must be identifiers or non-negative integers, got: {}",
+                        part
+                    )));
+                }
             }
         }
 
@@ -106,7 +133,7 @@ impl LibraryDefinition {
         value: &Value,
         exports: &mut Vec<ExportSpec>,
         imports: &mut Vec<ImportSet>,
-        body: &mut Vec<Value>,
+        body_elements: &mut Vec<BodyElement>,
     ) -> Result<(), ParseError> {
         let list = Self::expect_list(value)?;
 
@@ -135,11 +162,35 @@ impl LibraryDefinition {
                 }
                 "begin" => {
                     // (begin expr1 expr2 ...)
-                    body.extend_from_slice(&list[1..]);
+                    body_elements.push(BodyElement::Begin(list[1..].to_vec()));
                     Ok(())
                 }
-                "include" | "include-ci" | "include-library-declarations" | "cond-expand" => {
-                    // TODO: Implement these
+                "include" => {
+                    // (include "file1.scm" "file2.scm" ...)
+                    let paths = Self::parse_include_paths(&list[1..])?;
+                    body_elements.push(BodyElement::Include {
+                        paths,
+                        case_insensitive: false,
+                    });
+                    Ok(())
+                }
+                "include-ci" => {
+                    // (include-ci "file1.scm" "file2.scm" ...)
+                    let paths = Self::parse_include_paths(&list[1..])?;
+                    body_elements.push(BodyElement::Include {
+                        paths,
+                        case_insensitive: true,
+                    });
+                    Ok(())
+                }
+                "cond-expand" => {
+                    // (cond-expand clause1 clause2 ...)
+                    // Each clause is (<feature-requirement> <declaration>*)
+                    // or (else <declaration>*)
+                    Self::parse_cond_expand(&list[1..], exports, imports, body_elements)
+                }
+                "include-library-declarations" => {
+                    // TODO: Implement this
                     Err(ParseError::InvalidSyntax(format!(
                         "{} not yet implemented",
                         keyword
@@ -155,6 +206,94 @@ impl LibraryDefinition {
                 "Library declaration must start with a symbol".to_string(),
             ))
         }
+    }
+
+    /// Parse include file paths from a list of string values
+    fn parse_include_paths(values: &[Value]) -> Result<Vec<String>, ParseError> {
+        if values.is_empty() {
+            return Err(ParseError::InvalidSyntax(
+                "include requires at least one filename".to_string(),
+            ));
+        }
+
+        let mut paths = Vec::new();
+        for value in values {
+            match value {
+                Value::String(s) => {
+                    paths.push(s.borrow().clone());
+                }
+                _ => {
+                    return Err(ParseError::InvalidSyntax(format!(
+                        "include filename must be a string, got: {}",
+                        value
+                    )));
+                }
+            }
+        }
+        Ok(paths)
+    }
+
+    /// Parse cond-expand declaration in library context
+    ///
+    /// R7RS §5.6.1: The cond-expand library declaration provides for
+    /// conditionally including library declarations.
+    ///
+    /// Syntax: (cond-expand <clause>+)
+    /// where <clause> is (<feature-requirement> <declaration>*)
+    ///                or (else <declaration>*)
+    fn parse_cond_expand(
+        clauses: &[Value],
+        exports: &mut Vec<ExportSpec>,
+        imports: &mut Vec<ImportSet>,
+        body_elements: &mut Vec<BodyElement>,
+    ) -> Result<(), ParseError> {
+        use crate::cond_expand::evaluate_feature_requirement;
+        use patina_runtime::default_features;
+
+        if clauses.is_empty() {
+            return Err(ParseError::InvalidSyntax(
+                "cond-expand requires at least one clause".to_string(),
+            ));
+        }
+
+        let features = default_features();
+
+        // For library cond-expand, we don't have access to the library registry
+        // So we can't check (library ...) requirements. Just return false for those.
+        // This is a limitation - full support would require passing in a library checker.
+        let can_load_library = |_: &[String]| false;
+
+        for clause in clauses {
+            let clause_list = Self::expect_list(clause)?;
+
+            if clause_list.is_empty() {
+                return Err(ParseError::InvalidSyntax(
+                    "Empty cond-expand clause".to_string(),
+                ));
+            }
+
+            // Check for else clause
+            let is_else = matches!(&clause_list[0], Value::Symbol(s) if s.as_ref() == "else");
+
+            let matches = if is_else {
+                true
+            } else {
+                // Evaluate the feature requirement
+                evaluate_feature_requirement(&clause_list[0], &features, &can_load_library)?
+            };
+
+            if matches {
+                // Splice in the matching declarations
+                for decl in &clause_list[1..] {
+                    Self::parse_declaration(decl, exports, imports, body_elements)?;
+                }
+                return Ok(()); // Stop after first match
+            }
+        }
+
+        // No clause matched - R7RS says this is an error if no else clause
+        // But many implementations just continue silently. We'll do the same.
+        Ok(())
     }
 
     /// Parse an export spec
@@ -484,5 +623,596 @@ mod tests {
             }
             _ => panic!("Expected Prefix variant"),
         }
+    }
+
+    // =========================================================================
+    // Integer Library Names (R7RS §5.6)
+    // =========================================================================
+
+    fn integer(n: i64) -> Value {
+        Value::Integer(n)
+    }
+
+    #[test]
+    fn test_parse_library_name_with_integer() {
+        // (srfi 1) - standard SRFI naming
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("srfi"), integer(1)]),
+            list(vec![symbol("export"), symbol("foo")]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.name, vec!["srfi", "1"]);
+    }
+
+    #[test]
+    fn test_parse_library_name_integer_in_middle() {
+        // (srfi 1 lists) - integer in the middle
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("srfi"), integer(1), symbol("lists")]),
+            list(vec![symbol("export"), symbol("foo")]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.name, vec!["srfi", "1", "lists"]);
+    }
+
+    #[test]
+    fn test_parse_library_name_multiple_integers() {
+        // (lib 1 2 3) - multiple integers
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("lib"), integer(1), integer(2), integer(3)]),
+            list(vec![symbol("export"), symbol("foo")]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.name, vec!["lib", "1", "2", "3"]);
+    }
+
+    #[test]
+    fn test_parse_library_name_zero() {
+        // (lib 0) - zero is valid non-negative integer
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("lib"), integer(0)]),
+            list(vec![symbol("export"), symbol("foo")]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.name, vec!["lib", "0"]);
+    }
+
+    #[test]
+    fn test_parse_library_name_large_integer() {
+        // (srfi 125) - common SRFI numbers
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("srfi"), integer(125)]),
+            list(vec![symbol("export"), symbol("foo")]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.name, vec!["srfi", "125"]);
+    }
+
+    #[test]
+    fn test_parse_library_name_negative_integer_rejected() {
+        // (test -1) - negative integers should be rejected per R7RS
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), integer(-1)]),
+            list(vec![symbol("export"), symbol("foo")]),
+        ]);
+
+        let result = LibraryDefinition::from_value(&lib_def);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("non-negative"),
+            "Error should mention non-negative: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_parse_import_set_with_integer() {
+        // (import (srfi 1)) - integer in import
+        let import_set = list(vec![symbol("srfi"), integer(1)]);
+
+        let parsed = LibraryDefinition::parse_import_set(&import_set).unwrap();
+
+        match parsed {
+            ImportSet::Library(name) => {
+                assert_eq!(name, vec!["srfi", "1"]);
+            }
+            _ => panic!("Expected Library variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_import_only_with_integer_library() {
+        // (only (srfi 1) xcons) - integer library with only modifier
+        let import_set = list(vec![
+            symbol("only"),
+            list(vec![symbol("srfi"), integer(1)]),
+            symbol("xcons"),
+        ]);
+
+        let parsed = LibraryDefinition::parse_import_set(&import_set).unwrap();
+
+        match parsed {
+            ImportSet::Only {
+                import_set,
+                identifiers,
+            } => {
+                match *import_set {
+                    ImportSet::Library(name) => {
+                        assert_eq!(name, vec!["srfi", "1"]);
+                    }
+                    _ => panic!("Expected Library variant in Only"),
+                }
+                assert_eq!(identifiers, vec!["xcons"]);
+            }
+            _ => panic!("Expected Only variant"),
+        }
+    }
+
+    // =========================================================================
+    // Include Declaration (R7RS §5.6.1)
+    // =========================================================================
+
+    fn string(s: &str) -> Value {
+        Value::String(Rc::new(RefCell::new(s.to_string())))
+    }
+
+    #[test]
+    fn test_parse_include_single_file() {
+        // (include "impl.scm")
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![symbol("export"), symbol("foo")]),
+            list(vec![symbol("include"), string("impl.scm")]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.name, vec!["test", "lib"]);
+        assert_eq!(parsed.body_elements.len(), 1);
+
+        match &parsed.body_elements[0] {
+            BodyElement::Include {
+                paths,
+                case_insensitive,
+            } => {
+                assert_eq!(paths, &vec!["impl.scm".to_string()]);
+                assert!(!case_insensitive);
+            }
+            _ => panic!("Expected Include variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_include_multiple_files() {
+        // (include "a.scm" "b.scm" "c.scm")
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("include"),
+                string("a.scm"),
+                string("b.scm"),
+                string("c.scm"),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+
+        match &parsed.body_elements[0] {
+            BodyElement::Include { paths, .. } => {
+                assert_eq!(
+                    paths,
+                    &vec![
+                        "a.scm".to_string(),
+                        "b.scm".to_string(),
+                        "c.scm".to_string()
+                    ]
+                );
+            }
+            _ => panic!("Expected Include variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_include_with_subdirectory() {
+        // (include "1/predicates.scm") - SRFI-1 pattern
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("srfi"), integer(1)]),
+            list(vec![symbol("include"), string("1/predicates.scm")]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+
+        match &parsed.body_elements[0] {
+            BodyElement::Include { paths, .. } => {
+                assert_eq!(paths, &vec!["1/predicates.scm".to_string()]);
+            }
+            _ => panic!("Expected Include variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_include_ci() {
+        // (include-ci "legacy.scm")
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![symbol("include-ci"), string("legacy.scm")]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+
+        match &parsed.body_elements[0] {
+            BodyElement::Include {
+                paths,
+                case_insensitive,
+            } => {
+                assert_eq!(paths, &vec!["legacy.scm".to_string()]);
+                assert!(case_insensitive);
+            }
+            _ => panic!("Expected Include variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_include_empty_rejected() {
+        // (include) - no files specified
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![symbol("include")]),
+        ]);
+
+        let result = LibraryDefinition::from_value(&lib_def);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("at least one filename")
+        );
+    }
+
+    #[test]
+    fn test_parse_include_non_string_rejected() {
+        // (include foo) - symbol instead of string
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![symbol("include"), symbol("foo")]),
+        ]);
+
+        let result = LibraryDefinition::from_value(&lib_def);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must be a string"));
+    }
+
+    #[test]
+    fn test_parse_mixed_begin_and_include() {
+        // Library with both begin and include declarations
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![symbol("export"), symbol("foo")]),
+            list(vec![symbol("begin"), symbol("expr1")]),
+            list(vec![symbol("include"), string("impl.scm")]),
+            list(vec![symbol("begin"), symbol("expr2")]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.body_elements.len(), 3);
+
+        // First: begin
+        assert!(matches!(&parsed.body_elements[0], BodyElement::Begin(_)));
+        // Second: include
+        assert!(matches!(
+            &parsed.body_elements[1],
+            BodyElement::Include { .. }
+        ));
+        // Third: begin
+        assert!(matches!(&parsed.body_elements[2], BodyElement::Begin(_)));
+    }
+
+    #[test]
+    fn test_parse_body_elements_order_preserved() {
+        // R7RS: expressions from begin/include are processed in order
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("order")]),
+            list(vec![symbol("begin"), symbol("first")]),
+            list(vec![symbol("include"), string("second.scm")]),
+            list(vec![symbol("begin"), symbol("third")]),
+            list(vec![
+                symbol("include"),
+                string("fourth.scm"),
+                string("fifth.scm"),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.body_elements.len(), 4);
+
+        // Verify order is preserved
+        match &parsed.body_elements[0] {
+            BodyElement::Begin(exprs) => {
+                assert!(matches!(&exprs[0], Value::Symbol(s) if s.as_ref() == "first"));
+            }
+            _ => panic!("Expected Begin"),
+        }
+
+        match &parsed.body_elements[1] {
+            BodyElement::Include { paths, .. } => {
+                assert_eq!(paths[0], "second.scm");
+            }
+            _ => panic!("Expected Include"),
+        }
+
+        match &parsed.body_elements[2] {
+            BodyElement::Begin(exprs) => {
+                assert!(matches!(&exprs[0], Value::Symbol(s) if s.as_ref() == "third"));
+            }
+            _ => panic!("Expected Begin"),
+        }
+
+        match &parsed.body_elements[3] {
+            BodyElement::Include { paths, .. } => {
+                assert_eq!(paths.len(), 2);
+                assert_eq!(paths[0], "fourth.scm");
+                assert_eq!(paths[1], "fifth.scm");
+            }
+            _ => panic!("Expected Include"),
+        }
+    }
+
+    // =========================================================================
+    // cond-expand Declaration (R7RS §5.6.1)
+    // =========================================================================
+
+    #[test]
+    fn test_cond_expand_simple_feature() {
+        // (cond-expand (r7rs (export foo)))
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    symbol("r7rs"),
+                    list(vec![symbol("export"), symbol("foo")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.exports.len(), 1);
+        assert!(matches!(&parsed.exports[0], ExportSpec::Identifier(s) if s == "foo"));
+    }
+
+    #[test]
+    fn test_cond_expand_patina_feature() {
+        // (cond-expand (patina (export bar)))
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    symbol("patina"),
+                    list(vec![symbol("export"), symbol("bar")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.exports.len(), 1);
+        assert!(matches!(&parsed.exports[0], ExportSpec::Identifier(s) if s == "bar"));
+    }
+
+    #[test]
+    fn test_cond_expand_else_clause() {
+        // (cond-expand (nonexistent (export bad)) (else (export good)))
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    symbol("nonexistent"),
+                    list(vec![symbol("export"), symbol("bad")]),
+                ]),
+                list(vec![
+                    symbol("else"),
+                    list(vec![symbol("export"), symbol("good")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.exports.len(), 1);
+        assert!(matches!(&parsed.exports[0], ExportSpec::Identifier(s) if s == "good"));
+    }
+
+    #[test]
+    fn test_cond_expand_no_match() {
+        // (cond-expand (nonexistent (export foo))) - no match, no else
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    symbol("nonexistent"),
+                    list(vec![symbol("export"), symbol("foo")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.exports.len(), 0); // No exports since clause didn't match
+    }
+
+    #[test]
+    fn test_cond_expand_multiple_declarations() {
+        // (cond-expand (r7rs (export foo) (export bar)))
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    symbol("r7rs"),
+                    list(vec![symbol("export"), symbol("foo")]),
+                    list(vec![symbol("export"), symbol("bar")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.exports.len(), 2);
+    }
+
+    #[test]
+    fn test_cond_expand_and_requirement() {
+        // (cond-expand ((and r7rs patina) (export foo)))
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    list(vec![symbol("and"), symbol("r7rs"), symbol("patina")]),
+                    list(vec![symbol("export"), symbol("foo")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.exports.len(), 1);
+    }
+
+    #[test]
+    fn test_cond_expand_or_requirement() {
+        // (cond-expand ((or nonexistent r7rs) (export foo)))
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    list(vec![symbol("or"), symbol("nonexistent"), symbol("r7rs")]),
+                    list(vec![symbol("export"), symbol("foo")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.exports.len(), 1);
+    }
+
+    #[test]
+    fn test_cond_expand_not_requirement() {
+        // (cond-expand ((not nonexistent) (export foo)))
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    list(vec![symbol("not"), symbol("nonexistent")]),
+                    list(vec![symbol("export"), symbol("foo")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.exports.len(), 1);
+    }
+
+    #[test]
+    fn test_cond_expand_with_begin() {
+        // (cond-expand (r7rs (begin (define x 1))))
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![symbol("export"), symbol("x")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    symbol("r7rs"),
+                    list(vec![
+                        symbol("begin"),
+                        list(vec![symbol("define"), symbol("x"), integer(1)]),
+                    ]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.body_elements.len(), 1);
+        assert!(matches!(&parsed.body_elements[0], BodyElement::Begin(_)));
+    }
+
+    #[test]
+    fn test_cond_expand_with_include() {
+        // (cond-expand (r7rs (include "impl.scm")))
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![symbol("export"), symbol("foo")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    symbol("r7rs"),
+                    list(vec![symbol("include"), string("impl.scm")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.body_elements.len(), 1);
+        match &parsed.body_elements[0] {
+            BodyElement::Include { paths, .. } => {
+                assert_eq!(paths[0], "impl.scm");
+            }
+            _ => panic!("Expected Include"),
+        }
+    }
+
+    #[test]
+    fn test_cond_expand_first_match_wins() {
+        // (cond-expand (r7rs (export first)) (patina (export second)))
+        // Both match, but first should win
+        let lib_def = list(vec![
+            symbol("define-library"),
+            list(vec![symbol("test"), symbol("lib")]),
+            list(vec![
+                symbol("cond-expand"),
+                list(vec![
+                    symbol("r7rs"),
+                    list(vec![symbol("export"), symbol("first")]),
+                ]),
+                list(vec![
+                    symbol("patina"),
+                    list(vec![symbol("export"), symbol("second")]),
+                ]),
+            ]),
+        ]);
+
+        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        assert_eq!(parsed.exports.len(), 1);
+        assert!(matches!(&parsed.exports[0], ExportSpec::Identifier(s) if s == "first"));
     }
 }

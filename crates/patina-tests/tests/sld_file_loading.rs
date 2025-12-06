@@ -149,3 +149,103 @@ fn test_import_modifiers() {
     // TODO: Create a library that uses only, except, prefix, rename
     // and verify they work correctly
 }
+
+// ============================================================================
+// Include Declaration Tests (R7RS §5.6.1)
+// ============================================================================
+
+#[test]
+fn test_library_with_include() {
+    let eval = test_evaluator();
+
+    // Load library that uses include
+    let lib = eval
+        .load_library(&["test".to_string(), "with-include".to_string()])
+        .expect("Failed to load (test with-include) library");
+
+    // Verify library was loaded
+    assert_eq!(lib.name, vec!["test", "with-include"]);
+
+    // Verify exports from included file
+    assert!(lib.exports_identifier("double-it"));
+    assert!(lib.exports_identifier("triple-it"));
+    assert_eq!(lib.export_names().len(), 2);
+}
+
+#[test]
+fn test_library_with_multiple_includes() {
+    let eval = test_evaluator();
+
+    // Load library with multiple includes (SRFI-1 pattern)
+    let lib = eval
+        .load_library(&["test".to_string(), "multi-include".to_string()])
+        .expect("Failed to load (test multi-include) library");
+
+    // Verify exports from both included files
+    assert!(lib.exports_identifier("add"));
+    assert!(lib.exports_identifier("sub"));
+    assert!(lib.exports_identifier("mul"));
+    assert!(lib.exports_identifier("proper-list?"));
+    assert_eq!(lib.export_names().len(), 4);
+}
+
+#[test]
+fn test_include_order_matters() {
+    let eval = test_evaluator();
+
+    // Load library that tests declaration order
+    // begin defines x=1, include sets x=42, begin captures result
+    let lib = eval
+        .load_library(&["test".to_string(), "include-order".to_string()])
+        .expect("Failed to load (test include-order) library");
+
+    // Verify the export exists
+    assert!(lib.exports_identifier("result"));
+
+    // Get the value of result from the library environment
+    let result_value = lib
+        .env
+        .get("result")
+        .expect("result should be defined in library");
+
+    // result should be 42 (set by included file)
+    match result_value {
+        patina_runtime::Value::Integer(n) => {
+            assert_eq!(n, 42, "result should be 42, set by included file");
+        }
+        _ => panic!("result should be an integer"),
+    }
+}
+
+#[test]
+fn test_include_file_not_found() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create library that includes non-existent file
+    fs::write(
+        lib_dir.join("bad-include.sld"),
+        r#"
+        (define-library (test bad-include)
+          (export foo)
+          (include "nonexistent.scm"))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let result = eval.load_library(&["test".to_string(), "bad-include".to_string()]);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("not found") || err.contains("No such file"),
+        "Error should mention file not found: {}",
+        err
+    );
+}

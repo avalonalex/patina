@@ -47,6 +47,18 @@ impl Parser {
         self.parse_expr()
     }
 
+    /// Parse all expressions from the input until EOF.
+    ///
+    /// Returns a vector of all parsed expressions. Useful for parsing
+    /// files that contain multiple top-level expressions (like included files).
+    pub fn parse_all(&mut self) -> Result<Vec<Value>, ParseError> {
+        let mut exprs = Vec::new();
+        while self.current_token != Token::Eof {
+            exprs.push(self.parse_expr()?);
+        }
+        Ok(exprs)
+    }
+
     fn parse_expr(&mut self) -> Result<Value, ParseError> {
         match &self.current_token.clone() {
             Token::Boolean(b) => {
