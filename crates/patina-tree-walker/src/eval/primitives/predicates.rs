@@ -260,9 +260,6 @@ pub(super) fn exact_integer_p(evaluator: &Evaluator, args: Vec<Value>) -> Result
     })
 }
 
-pub(super) fn library_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Library(_)))
-}
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use super::super::EvalResult;
     use super::registry::PrimitiveFn;
@@ -414,14 +411,5 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         Arity::Min(2),
         "Returns #t if all arguments are booleans and are all equal.",
         |eval, args, _tail| boolean_equal(eval, args).map(EvalResult::Value),
-    ));
-
-    // Library predicate (Patina extension)
-    registry.register(PrimitiveFn::new(
-        "scheme.base",
-        "library?",
-        Arity::Exact(1),
-        "Returns #t if obj is a library.",
-        |eval, args, _tail| library_p(eval, args).map(EvalResult::Value),
     ));
 }

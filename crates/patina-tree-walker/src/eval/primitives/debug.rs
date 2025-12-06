@@ -59,6 +59,19 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         "Control macro expansion and hygiene debugging ('on, 'off, 'status)",
         |eval, args, _| macro_debug_mode(eval, args).map(EvalResult::Value),
     ));
+
+    // Type introspection (Patina extension)
+    registry.register(PrimitiveFn::new(
+        "patina.debug",
+        "library?",
+        Arity::Exact(1),
+        "Returns #t if obj is a library.",
+        |eval, args, _| library_p(eval, args).map(EvalResult::Value),
+    ));
+}
+
+pub(super) fn library_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+    evaluator.make_type_predicate(args, |v| matches!(v, Value::Library(_)))
 }
 
 pub(super) fn debug_enable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {

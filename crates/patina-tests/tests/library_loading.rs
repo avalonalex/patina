@@ -121,6 +121,9 @@ fn test_circular_dependency_error() {
 fn test_library_value_type() {
     let interp = TreeWalkInterpreter::new_tree_walker();
 
+    // library? is a Patina extension in (patina debug), not R7RS
+    interp.eval_str("(import (patina debug))").unwrap();
+
     // library? predicate should work
     let result = interp.eval_str("(library? 42)").unwrap();
     assert_eq!(result.to_string(), "#f");

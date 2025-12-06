@@ -52,9 +52,6 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("ceiling", Arity::Exact(1)),
         ("truncate", Arity::Exact(1)),
         ("round", Arity::Exact(1)),
-        // TODO: Research if sqrt should be here - R7RS spec lists it only in (scheme inexact)
-        // but it may need to be in both for exact square roots (e.g., sqrt(4) = 2)
-        ("sqrt", Arity::Exact(1)),
         ("square", Arity::Exact(1)),
         ("expt", Arity::Exact(2)),
         ("gcd", Arity::Min(0)),
@@ -65,9 +62,6 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("inexact", Arity::Exact(1)),
         ("exact-integer-sqrt", Arity::Exact(1)),
         ("rationalize", Arity::Exact(2)),
-        // TODO: Move to (scheme complex) library when implemented
-        ("real-part", Arity::Exact(1)),
-        ("imag-part", Arity::Exact(1)),
         // List operations
         ("cons", Arity::Exact(2)),
         ("car", Arity::Exact(1)),
@@ -115,9 +109,6 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("vector?", Arity::Exact(1)),
         ("bytevector?", Arity::Exact(1)),
         ("exact-integer?", Arity::Exact(1)),
-        // TODO: library? is a Patina extension, not part of R7RS.
-        // Consider moving to a (patina core) or similar library in the future.
-        ("library?", Arity::Exact(1)),
         // Equality operations
         ("eq?", Arity::Exact(2)),
         ("eqv?", Arity::Exact(2)),

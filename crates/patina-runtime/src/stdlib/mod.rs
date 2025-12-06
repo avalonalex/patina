@@ -19,11 +19,13 @@ mod scheme_char;
 mod scheme_complex;
 mod scheme_inexact;
 mod scheme_lazy;
+mod scheme_process_context;
 mod scheme_stubs;
+mod scheme_time;
 
 pub use chibi_test::{
-    build_chibi_test, test_begin, test_end, test_increment_error, test_increment_failed,
-    test_increment_passed,
+    build_chibi_test_primitives, test_begin, test_end, test_increment_error,
+    test_increment_failed, test_increment_passed,
 };
 pub use patina_debug::build_patina_debug;
 pub use scheme_base::build_scheme_base;
@@ -31,7 +33,8 @@ pub use scheme_char::build_scheme_char;
 pub use scheme_complex::build_scheme_complex;
 pub use scheme_inexact::build_scheme_inexact;
 pub use scheme_lazy::build_scheme_lazy;
+pub use scheme_process_context::build_scheme_process_context;
 pub use scheme_stubs::{
-    build_scheme_eval, build_scheme_file, build_scheme_process_context, build_scheme_r5rs,
-    build_scheme_read, build_scheme_time, build_scheme_write,
+    build_scheme_eval, build_scheme_file, build_scheme_r5rs, build_scheme_read, build_scheme_write,
 };
+pub use scheme_time::build_scheme_time;

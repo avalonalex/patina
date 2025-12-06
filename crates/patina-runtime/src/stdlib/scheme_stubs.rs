@@ -6,12 +6,6 @@
 use crate::environment::Environment;
 use std::rc::Rc;
 
-/// (scheme time) - Time operations
-pub fn build_scheme_time(_name: Vec<String>, _env: Rc<Environment>) -> Vec<String> {
-    // TODO: Implement current-second, current-jiffy, jiffies-per-second
-    vec![]
-}
-
 /// (scheme file) - File operations
 pub fn build_scheme_file(_name: Vec<String>, _env: Rc<Environment>) -> Vec<String> {
     // TODO: Implement file operations
@@ -38,12 +32,6 @@ pub fn build_scheme_write(_name: Vec<String>, _env: Rc<Environment>) -> Vec<Stri
 /// (scheme eval) - Evaluation
 pub fn build_scheme_eval(_name: Vec<String>, _env: Rc<Environment>) -> Vec<String> {
     // TODO: Implement eval, environment, scheme-report-environment, null-environment
-    vec![]
-}
-
-/// (scheme process-context) - Process context
-pub fn build_scheme_process_context(_name: Vec<String>, _env: Rc<Environment>) -> Vec<String> {
-    // TODO: Implement command-line, exit, get-environment-variable, get-environment-variables
     vec![]
 }
 

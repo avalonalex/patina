@@ -27,9 +27,17 @@ thread_local! {
     static TEST_STATE: RefCell<TestState> = RefCell::new(TestState::default());
 }
 
-/// Build the (chibi test) library
-pub fn build_chibi_test(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
-    let library_name = vec!["chibi".to_string(), "test".to_string()];
+/// Build the (chibi test primitives) library
+///
+/// Provides the primitive procedures for the test framework.
+/// The full (chibi test) library is defined in lib/chibi/test.sld
+/// which imports these primitives and adds the test macro.
+pub fn build_chibi_test_primitives(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+    let library_name = vec![
+        "chibi".to_string(),
+        "test".to_string(),
+        "primitives".to_string(),
+    ];
 
     // test-begin: Start a test suite
     env.define(

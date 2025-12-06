@@ -149,10 +149,15 @@ impl Evaluator {
             stdlib::build_scheme_r5rs,
         );
 
-        // Register test frameworks
+        // Register test framework primitives
+        // The full (chibi test) library is in lib/chibi/test.sld
         rust_loader.register(
-            vec!["chibi".to_string(), "test".to_string()],
-            stdlib::build_chibi_test,
+            vec![
+                "chibi".to_string(),
+                "test".to_string(),
+                "primitives".to_string(),
+            ],
+            stdlib::build_chibi_test_primitives,
         );
 
         // Register Patina extensions
@@ -225,7 +230,10 @@ impl Evaluator {
     /// Convention:
     /// - (scheme base) → lib/scheme/base-extras.scm
     /// - (scheme lazy) → lib/scheme/lazy-extras.scm
-    /// - (chibi test) → lib/chibi/test-extras.scm
+    ///
+    /// Note: Some libraries are fully defined as .sld files:
+    /// - (scheme case-lambda) → lib/scheme/case-lambda.sld
+    /// - (chibi test) → lib/chibi/test.sld
     ///
     /// This allows any library to have:
     /// - Rust primitives (performance-critical operations)

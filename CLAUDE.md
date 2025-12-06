@@ -238,6 +238,7 @@ Patina features a sophisticated **dual-loader library system** that balances per
 - `(scheme inexact)` - Inexact arithmetic operations
 - `(scheme lazy)` - Lazy evaluation (delay, force)
 - `(scheme write)` - Output operations
+- `(scheme time)` - Time operations (current-second, current-jiffy, jiffies-per-second)
 
 **Partially Implemented**:
 - `(scheme file)` - File I/O (basic support)
@@ -248,7 +249,6 @@ Patina features a sophisticated **dual-loader library system** that balances per
 - `(scheme eval)` - Runtime evaluation
 - `(scheme load)` - File loading
 - `(scheme process-context)` - Process info
-- `(scheme time)` - Time operations
 - `(scheme r5rs)` - R5RS compatibility
 
 ## Architecture Deep Dive

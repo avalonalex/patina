@@ -1,4 +1,8 @@
-//! Test framework primitives (chibi test)
+//! Test framework primitives (chibi test primitives)
+//!
+//! These primitives are registered under (chibi test primitives).
+//! The full (chibi test) library is in lib/chibi/test.sld which
+//! imports these primitives and adds the test macro.
 
 use super::super::Evaluator;
 use super::super::error::EvalError;
@@ -12,7 +16,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     use patina_runtime::value::Arity;
 
     registry.register(PrimitiveFn::new(
-        "chibi.test",
+        "chibi.test.primitives",
         "test-begin",
         Arity::Exact(1),
         "Start a test suite with the given name",
@@ -20,7 +24,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     registry.register(PrimitiveFn::new(
-        "chibi.test",
+        "chibi.test.primitives",
         "test-end",
         Arity::Min(0),
         "End the current test suite and display results",
@@ -28,7 +32,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     registry.register(PrimitiveFn::new(
-        "chibi.test",
+        "chibi.test.primitives",
         "test-increment-passed",
         Arity::Exact(0),
         "Increment the passed test count (internal use)",
@@ -36,7 +40,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     registry.register(PrimitiveFn::new(
-        "chibi.test",
+        "chibi.test.primitives",
         "test-increment-failed",
         Arity::Exact(0),
         "Increment the failed test count (internal use)",

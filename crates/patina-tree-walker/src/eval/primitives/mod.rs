@@ -28,10 +28,12 @@ mod lazy;
 mod lists;
 mod parameters;
 mod predicates;
+mod process_context;
 mod strings;
 mod symbols;
 mod system;
 mod test;
+mod time;
 mod values;
 mod vectors;
 
@@ -108,6 +110,8 @@ impl Evaluator {
         lazy::register(registry);
         parameters::register(registry);
         system::register(registry);
+        time::register(registry);
+        process_context::register(registry);
 
         // All core primitives are now in the registry!
     }

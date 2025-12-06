@@ -63,6 +63,16 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
         Value::Procedure(Rc::new(Procedure::Primitive {
             name: "macro-debug-mode",
             arity: Arity::Exact(1),
+            library: library_name.clone(),
+        })),
+    );
+
+    // Type introspection (Patina extension)
+    env.define(
+        "library?".to_string(),
+        Value::Procedure(Rc::new(Procedure::Primitive {
+            name: "library?",
+            arity: Arity::Exact(1),
             library: library_name,
         })),
     );
@@ -75,5 +85,6 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
         "debug-status".to_string(),
         "debug-mode".to_string(),
         "macro-debug-mode".to_string(),
+        "library?".to_string(),
     ]
 }

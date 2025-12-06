@@ -135,48 +135,50 @@ Plus a fallback mechanism (lines 553-583 in mod.rs) that switches between paths 
 
 ### 6. Implement Stub Libraries
 
-**Status**: ⏸️ BLOCKED by `LIBRARY_R7RS_COMPLIANCE.md`
+**Status**: 🔄 IN PROGRESS - 2/7 libraries implemented
 
 **Crate**: patina-runtime
 **File**: `src/stdlib/scheme_stubs.rs`
 
-**Problem**: 7 libraries return empty exports, causing silent failures:
-- `(scheme time)` - current-second, current-jiffy, jiffies-per-second
-- `(scheme file)` - file I/O operations
-- `(scheme read)` - read procedure
-- `(scheme write)` - write-shared, write-simple (display/write in base)
-- `(scheme eval)` - eval, environment
-- `(scheme process-context)` - command-line, exit, get-environment-variable
-- `(scheme r5rs)` - R5RS compatibility
+**Problem**: Originally 7 libraries returned empty exports, causing silent failures.
 
-**Solution**: Implement or explicitly error on import attempt.
+**Progress**:
+- ✅ `(scheme time)` - DONE 2025-12: current-second, current-jiffy, jiffies-per-second
+- ✅ `(scheme process-context)` - DONE 2025-12: command-line, exit, emergency-exit, get-environment-variable, get-environment-variables
+- ⬜ `(scheme write)` - write-shared, write-simple (display/write in base)
+- ⬜ `(scheme read)` - read procedure
+- ⬜ `(scheme file)` - file I/O operations
+- ⬜ `(scheme eval)` - eval, environment
+- ⬜ `(scheme r5rs)` - R5RS compatibility
 
-**Blocker**: Library system needs `cond-expand` and feature detection first (see `LIBRARY_R7RS_COMPLIANCE.md`). Many stub libraries need conditional implementation based on platform features. Should be addressed as part of overall library compliance work.
+**Recommended priority for remaining**:
+1. `(scheme write)` - display/write already exist, add write-shared/write-simple
+2. `(scheme read)` - Important for full Scheme programs
+3. `(scheme file)` - More complex, file operations
+4. `(scheme eval)` - Complex, runtime evaluation
+5. `(scheme r5rs)` - Low priority, re-exports
 
 **Effort**: High (1-2 weeks for full implementation)
 
 ---
 
-### 7. Fix Primitive Library Organization
+### 7. ✅ Fix Primitive Library Organization (COMPLETED 2025-12)
 
-**Status**: ⏸️ BLOCKED by `LIBRARY_R7RS_COMPLIANCE.md`
-
-**Crate**: patina-runtime
-**File**: `src/stdlib/scheme_base.rs`
+**Crate**: patina-runtime, patina-tree-walker
+**Files**: `src/stdlib/scheme_base.rs`, `src/eval/primitives/predicates.rs`, `src/eval/primitives/debug.rs`
 
 **Problem**: Spec non-compliance in library organization:
 - `sqrt` duplicated in (scheme base) and (scheme inexact) - should only be in inexact
 - `real-part`, `imag-part` duplicated in (scheme base) and (scheme complex) - should only be in complex
 - `library?` is Patina extension mixed with standard library
 
-**Solution**:
-1. Remove sqrt from (scheme base), keep only in (scheme inexact)
-2. Remove real-part/imag-part from (scheme base), keep only in (scheme complex)
-3. Move `library?` to new `(patina debug)` or `(patina core)` library
+**Resolution**:
+1. Removed `sqrt` from `(scheme base)` - now only in `(scheme inexact)`
+2. Removed `real-part`, `imag-part` from `(scheme base)` - now only in `(scheme complex)`
+3. Moved `library?` from `(scheme base)` to `(patina debug)` library
+4. Updated test to import `(patina debug)` before using `library?`
 
-**Blocker**: The `(patina debug)` or `(patina core)` library would benefit from integer library name support (e.g., `(patina 0 debug)` for versioning). Should be coordinated with overall library compliance work in `LIBRARY_R7RS_COMPLIANCE.md`.
-
-**Effort**: Low (0.5 day)
+**Status**: ✅ COMPLETE
 
 ---
 
@@ -356,8 +358,8 @@ pub enum Value {
 | 3. Route debug through logging | HIGH | ✅ DONE | Completed 2024-12: using tracing crate |
 | 4. Fix interpreter documentation | HIGH | ✅ DONE | Completed 2024-12: removed stale USE_CORE_EXPR docs |
 | 5. DEFINE_SYNTAX_ELIMINATION | HIGH | ✅ DONE | Completed 2024-12: DefineSyntax removed from CoreExpr |
-| 6. Implement stub libraries | MEDIUM | ⏸️ BLOCKED | Blocked by LIBRARY_R7RS_COMPLIANCE.md |
-| 7. Fix primitive organization | MEDIUM | ⏸️ BLOCKED | Blocked by LIBRARY_R7RS_COMPLIANCE.md |
+| 6. Implement stub libraries | MEDIUM | 🔄 IN PROGRESS | 2/7 done: (scheme time), (scheme process-context) completed 2025-12 |
+| 7. Fix primitive organization | MEDIUM | ✅ DONE | Completed 2025-12: sqrt, real-part, imag-part, library? moved |
 | 8. Eliminate duplicated code | MEDIUM | ✅ DONE | Completed 2024-12: removed dead compile_syntax_rules |
 | 9. Fix unsafe unwrap | MEDIUM | ✅ DONE | Completed 2024-12: using entry().or_default() |
 | 10. Split large files | MEDIUM | Not Started | |
@@ -379,6 +381,6 @@ Phase 1 tech debt cleanup is complete when:
 3. ✅ Lambda closures store CoreExpr bodies directly (DONE 2024-12)
 4. ✅ Debug output uses proper logging infrastructure (DONE 2024-12)
 5. ✅ Interpreter documentation accurately reflects implementation (DONE 2024-12)
-6. At least 50% of MEDIUM priority items addressed (4/7: 2 blocked, 2 done, 3 not started)
+6. At least 50% of MEDIUM priority items addressed (5/7: 1 in progress, 4 done, 2 not started)
 
 This positions the codebase for clean VM backend implementation in Phase 2.
