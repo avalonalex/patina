@@ -1,9 +1,9 @@
 # R7RS Exception Handling Implementation Guide
 
 **Status:** Not yet started (0%)
-**Priority:** MEDIUM-HIGH (needed for I/O and error reporting)
+**Priority:** MEDIUM-HIGH (needed for error predicates in I/O)
 **Estimated Effort:** 3-5 days
-**Last Updated:** 2025-11-09
+**Last Updated:** 2025-12-06
 
 ---
 
@@ -13,13 +13,16 @@ R7RS requires a comprehensive exception handling system. We currently have **NON
 
 R7RS exception handling is based on **dynamic exception handlers** similar to try/catch but more flexible.
 
+**Dependent Features:**
+- `file-error?`, `read-error?` predicates in [IO_IMPLEMENTATION.md](./IO_IMPLEMENTATION.md)
+
 ---
 
 ## Current Status
 
 ### What We Have ✅
 ```rust
-// src/eval/error.rs
+// crates/patina-tree-walker/src/eval/error.rs
 pub enum EvalError {
     UndefinedVariable(String),
     NotAProcedure(String),
@@ -28,6 +31,8 @@ pub enum EvalError {
     TypeError(String),
     DivisionByZero,
     IndexOutOfBounds(String),
+    IOError(String),           // Added for I/O operations
+    InternalError(String),     // For unexpected errors
 }
 ```
 
@@ -180,11 +185,11 @@ Handler decides what to do:
 
 **Step 1: Add Exception Value Types**
 ```rust
-// src/value/mod.rs
+// crates/patina-runtime/src/value/mod.rs
 pub enum Value {
-    // ... existing variants ...
+    // ... existing 26 variants ...
 
-    // Exception object
+    // Exception object (NEW)
     Exception(Rc<ExceptionObject>),
 }
 
@@ -196,18 +201,22 @@ pub struct ExceptionObject {
 
 pub enum ExceptionKind {
     Error,           // Created by (error ...)
-    FileError,       // File I/O errors
-    ReadError,       // Parse/read errors
+    FileError,       // File I/O errors (maps from EvalError::IOError)
+    ReadError,       // Parse/read errors (maps from FrontendError)
     Custom(String),  // User-defined
 }
 ```
 
 **Step 2: Add Dynamic Exception Handler**
 ```rust
-// src/eval/mod.rs
+// crates/patina-tree-walker/src/eval/mod.rs
 pub struct Evaluator {
-    global_env: Rc<Environment>,
-    debug: Rc<DebugConfig>,
+    pub global_env: Rc<Environment>,
+    pub library_registry: Rc<RefCell<LibraryRegistry>>,
+    pub loader_registry: Rc<RefCell<LibraryLoaderRegistry>>,
+    pub primitive_registry: Rc<RefCell<PrimitiveRegistry>>,
+    pub special_form_registry: Rc<RefCell<SpecialFormRegistry>>,
+    pub debug: Rc<DebugConfig>,
     exception_handler_stack: Rc<RefCell<Vec<Value>>>, // NEW!
 }
 
@@ -236,7 +245,7 @@ fn default_exception_handler() -> Value {
 
 **Step 3: Implement `with-exception-handler`**
 ```rust
-// src/eval/special_forms.rs
+// crates/patina-tree-walker/src/eval/special_forms/exception_handler.rs (NEW)
 pub(super) fn eval_with_exception_handler(
     &self,
     args: &Value,
@@ -267,7 +276,7 @@ pub(super) fn eval_with_exception_handler(
 
 **Step 4: Implement `raise`**
 ```rust
-// src/eval/primitives/exceptions.rs (NEW FILE)
+// crates/patina-tree-walker/src/eval/primitives/exceptions.rs (NEW FILE)
 pub fn raise(evaluator: &Evaluator, args: &[Value]) -> Result<Value, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity { ... });
@@ -317,7 +326,7 @@ pub fn raise(evaluator: &Evaluator, args: &[Value]) -> Result<Value, EvalError> 
 
 **Implementation:**
 ```rust
-// src/eval/special_forms.rs
+// crates/patina-tree-walker/src/eval/special_forms/guard.rs (NEW)
 pub(super) fn eval_guard(
     &self,
     args: &Value,
@@ -357,7 +366,7 @@ pub(super) fn eval_guard(
 **Goal:** User-friendly error signaling
 
 ```rust
-// src/eval/primitives/exceptions.rs
+// crates/patina-tree-walker/src/eval/primitives/exceptions.rs
 pub fn error(args: &[Value]) -> Result<Value, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity { ... });
@@ -409,15 +418,17 @@ pub fn error_object_irritants(args: &[Value]) -> Result<Value, EvalError> {
 
 ### Convert Rust Errors to Scheme Exceptions
 
+The codebase already has `EvalError::IOError` which is used throughout the I/O system
+(in `crates/patina-tree-walker/src/eval/primitives/io.rs`). When exceptions are implemented,
+these should be converted to Scheme exceptions:
+
 ```rust
-// src/eval/mod.rs
+// crates/patina-tree-walker/src/eval/core_eval.rs or mod.rs
 impl Evaluator {
-    pub fn eval_in_env(&self, expr: &Value, env: &Rc<Environment>)
-        -> Result<Value, EvalError>
-    {
+    fn eval_with_exception_handling(&self, ...) -> Result<Value, EvalError> {
         // Existing evaluation code...
 
-        // But now, certain errors should create Scheme exceptions:
+        // Convert certain EvalErrors to Scheme exceptions:
         match result {
             Err(EvalError::DivisionByZero) => {
                 // Create error object
@@ -426,8 +437,15 @@ impl Evaluator {
                     message: "division by zero".to_string(),
                     irritants: vec![],
                 }));
-
-                // Call current exception handler
+                self.raise_scheme_exception(error_obj)
+            }
+            Err(EvalError::IOError(msg)) => {
+                // Create file-error object
+                let error_obj = Value::Exception(Rc::new(ExceptionObject {
+                    kind: ExceptionKind::FileError,
+                    message: msg,
+                    irritants: vec![],
+                }));
                 self.raise_scheme_exception(error_obj)
             }
             other => other
@@ -557,8 +575,8 @@ fn test_file_error() {
 
 ### Enhanced (Optional)
 - ❌ `call-with-current-continuation` - For full `guard` R7RS compliance
-- ❌ I/O system - For `file-error?`
-- ❌ `read` - For `read-error?`
+- ✅ I/O system - For `file-error?` (COMPLETE - see [IO_IMPLEMENTATION.md](./IO_IMPLEMENTATION.md))
+- ✅ `read` - For `read-error?` (COMPLETE - `read` is in `(scheme read)` library)
 
 ---
 
@@ -617,41 +635,40 @@ fn test_file_error() {
 ## Summary
 
 ### What We Have Now ❌
-- Rust-level errors only
+- Rust-level `EvalError` with IOError, TypeError, etc.
 - No Scheme-level exception handling
-- Errors terminate program
+- Errors propagate to Rust and terminate the Scheme program
 
 ### What We Need ✅
 
 **Minimum (3 days):**
-1. Exception value type
+1. Exception value type (`Value::Exception`)
 2. `error` procedure
-3. Error predicates
+3. Error predicates (`error-object?`, `error-object-message`, `error-object-irritants`)
 4. Simple `guard` (without call/cc)
-5. Convert some EvalErrors to exceptions
+5. Convert `EvalError::IOError` to `file-error?`-compatible exceptions
+6. Convert `FrontendError` parse errors to `read-error?`-compatible exceptions
 
 **Complete (5 days):**
-6. `with-exception-handler`
-7. `raise` / `raise-continuable`
-8. Full `guard` with call/cc
-9. `file-error?` / `read-error?`
+7. `with-exception-handler`
+8. `raise` / `raise-continuable`
+9. Full `guard` with call/cc
+10. `file-error?` / `read-error?` predicates
 
-### Priority Decision
+### Current Codebase State (as of 2025-12-06)
 
-**Recommended:** Implement Phase 1-2 (basic error raising + handlers) **after I/O Phase 1**
+**I/O is COMPLETE** - See [IO_IMPLEMENTATION.md](./IO_IMPLEMENTATION.md):
+- All 6 phases of I/O implemented
+- `EvalError::IOError` is already used throughout
+- `read` procedure exists in `(scheme read)` library
+- Only missing: `file-error?`, `read-error?` predicates (blocked on this document)
 
-**Rationale:**
-1. I/O needs error handling (file-error?)
-2. But I/O Phase 1 (string ports) doesn't need files yet
-3. Can implement basic I/O first, then add exceptions, then file I/O
+### Next Steps
 
-**Timeline:**
-1. I/O Phase 1 (string ports, display/write) - 2-3 days
-2. Exception Phases 1-2 (error + handlers) - 2-3 days
-3. I/O Phase 2 (files + file-error?) - 2-3 days
-4. Exception Phase 3 (full guard) - 1-2 days
-
-**Total: ~10 days for I/O + Exceptions**
+1. **Phase 1**: Add `Value::Exception` type, `error` procedure, basic predicates
+2. **Phase 2**: Add `with-exception-handler`, `raise`
+3. **Phase 3**: Add `guard` (simple version without call/cc)
+4. **Phase 4**: Add `file-error?`, `read-error?` (connects to I/O system)
 
 ---
 

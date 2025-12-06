@@ -594,6 +594,16 @@ pub fn get_current_error_port() -> Rc<Port> {
     CURRENT_ERROR_PORT.with(|p| p.borrow().clone())
 }
 
+/// Set the current input port (for dynamic rebinding)
+pub fn set_current_input_port(port: Rc<Port>) {
+    CURRENT_INPUT_PORT.with(|p| *p.borrow_mut() = port);
+}
+
+/// Set the current output port (for dynamic rebinding)
+pub fn set_current_output_port(port: Rc<Port>) {
+    CURRENT_OUTPUT_PORT.with(|p| *p.borrow_mut() = port);
+}
+
 /// (current-input-port) - Returns the current input port
 fn current_input_port(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     if !args.is_empty() {
@@ -956,8 +966,7 @@ fn call_with_output_file(
 }
 
 /// (with-input-from-file filename thunk) - Opens file, sets current-input-port, calls thunk
-/// Note: This requires dynamically setting current-input-port, which we don't fully support yet.
-/// For now, this is a stub that calls the thunk without changing current-input-port.
+/// Dynamically rebinds current-input-port for the duration of the thunk call.
 fn with_input_from_file(
     eval: &Evaluator,
     args: Vec<Value>,
@@ -981,18 +990,30 @@ fn with_input_from_file(
 
     let thunk = &args[1];
 
-    // Open the file (just to verify it exists and is readable)
-    let _port = Port::open_input_file(&filename)
+    // Open the file
+    let port = Port::open_input_file(&filename)
         .map_err(|e| EvalError::IOError(format!("Cannot open '{}': {}", filename, e)))?;
 
-    // TODO: Dynamically set current-input-port for the duration of the call
-    // For now, just call the thunk
-    eval.apply(thunk.clone(), vec![], false)
+    // Save the old current-input-port
+    let old_port = get_current_input_port();
+
+    // Set the new current-input-port
+    set_current_input_port(port.clone());
+
+    // Call the thunk and capture the result
+    let result = eval.apply(thunk.clone(), vec![], false);
+
+    // Restore the old current-input-port (even on error)
+    set_current_input_port(old_port);
+
+    // Close the file port
+    port.close();
+
+    result
 }
 
 /// (with-output-to-file filename thunk) - Opens file, sets current-output-port, calls thunk
-/// Note: This requires dynamically setting current-output-port, which we don't fully support yet.
-/// For now, this is a stub that calls the thunk without changing current-output-port.
+/// Dynamically rebinds current-output-port for the duration of the thunk call.
 fn with_output_to_file(
     eval: &Evaluator,
     args: Vec<Value>,
@@ -1016,13 +1037,27 @@ fn with_output_to_file(
 
     let thunk = &args[1];
 
-    // Open the file (just to verify it can be created/written)
-    let _port = Port::open_output_file(&filename)
+    // Open the file
+    let port = Port::open_output_file(&filename)
         .map_err(|e| EvalError::IOError(format!("Cannot open '{}': {}", filename, e)))?;
 
-    // TODO: Dynamically set current-output-port for the duration of the call
-    // For now, just call the thunk
-    eval.apply(thunk.clone(), vec![], false)
+    // Save the old current-output-port
+    let old_port = get_current_output_port();
+
+    // Set the new current-output-port
+    set_current_output_port(port.clone());
+
+    // Call the thunk and capture the result
+    let result = eval.apply(thunk.clone(), vec![], false);
+
+    // Restore the old current-output-port (even on error)
+    set_current_output_port(old_port);
+
+    // Flush and close the file port
+    port.flush().ok(); // Best effort flush
+    port.close();
+
+    result
 }
 
 // =============================================================================

@@ -145,8 +145,8 @@ Implementation uses existing `patina-frontend` Parser with character source adap
 ```scheme
 (call-with-input-file filename proc)  ; ✅ Open, call proc with port, close
 (call-with-output-file filename proc) ; ✅ Open, call proc with port, close
-(with-input-from-file filename thunk) ; ⚠️ Stub (needs dynamic current-input-port)
-(with-output-to-file filename thunk)  ; ⚠️ Stub (needs dynamic current-output-port)
+(with-input-from-file filename thunk) ; ✅ Dynamic rebinding of current-input-port
+(with-output-to-file filename thunk)  ; ✅ Dynamic rebinding of current-output-port
 ```
 
 #### Library Organization
@@ -305,8 +305,8 @@ Note: `with-input-from-file` and `with-output-to-file` require proper dynamic pa
 
 ## Remaining Work for Full R7RS I/O Compliance
 
-1. **Dynamic current-port rebinding** - For `with-input-from-file`/`with-output-to-file`
-2. **Error predicates** - `file-error?`, `read-error?` for exception handling
+1. ~~**Dynamic current-port rebinding** - For `with-input-from-file`/`with-output-to-file`~~ ✅ COMPLETE
+2. **Error predicates** - `file-error?`, `read-error?` - Depends on [EXCEPTION_HANDLING.md](./EXCEPTION_HANDLING.md)
 
 ---
 

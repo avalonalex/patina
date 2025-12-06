@@ -50,32 +50,76 @@ echo ""
 echo -e "${GREEN}Generating compatibility report...${NC}"
 
 # Count test results from output
-# Parse lines like "Tests run: 10, Passed: 8, Failed: 2" or "Tests run: 10, Passed: 8, Failed: 2, Errors: 3"
-# The awk commands extract numbers, handling both old and new formats
-PASS_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Passed: ' '{split($2, a, ","); sum += a[1]} END {print sum+0}')
-FAIL_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Failed: ' '{split($2, a, ","); sum += a[1]} END {print sum+0}')
-TOTAL_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Tests run: ' '{split($2, a, ","); sum += a[1]} END {print sum+0}')
+# Only count "Tests run:" lines that immediately follow "Running test suite:" lines
+# This avoids double-counting from nested test sections (parent sections print cumulative totals)
+COUNTS=$(awk '
+    /^Running test suite:/ {
+        saw_suite = 1
+    }
+    /^Tests run:/ && saw_suite == 1 {
+        line = $0
+        gsub(/,/, "", line)
+        split(line, parts)
+        for (i = 1; i <= length(parts); i++) {
+            if (parts[i] == "run:") total += parts[i+1]
+            if (parts[i] == "Passed:") passed += parts[i+1]
+            if (parts[i] == "Failed:") failed += parts[i+1]
+            if (parts[i] == "Errors:") errors += parts[i+1]
+        }
+        saw_suite = 0
+    }
+    END {
+        print passed+0, failed+0, total+0, errors+0
+    }
+' "$RESULTS_FILE")
 
-# Count errors from the per-section test output (new format: "Errors: X")
-# This is the count of errors tracked by the test framework
-ERROR_COUNT=$(grep "Tests run:" "$RESULTS_FILE" | awk -F'Errors: ' '{sum += $2} END {print sum+0}')
+PASS_COUNT=$(echo "$COUNTS" | awk '{print $1}')
+FAIL_COUNT=$(echo "$COUNTS" | awk '{print $2}')
+TOTAL_COUNT=$(echo "$COUNTS" | awk '{print $3}')
+ERROR_COUNT=$(echo "$COUNTS" | awk '{print $4}')
 
-# For compatibility, also count standalone "Error:" lines not tracked by framework
-# (shouldn't happen with new code, but kept for safety)
-STANDALONE_ERRORS=$(grep -c "^Error:" "$RESULTS_FILE" || echo "0")
-
-# Use the framework's error count, but fall back to standalone count if no framework errors
-if [ "$ERROR_COUNT" -eq 0 ] && [ "$STANDALONE_ERRORS" -gt 0 ]; then
-    ERROR_COUNT=$STANDALONE_ERRORS
-    # Adjust total since standalone errors weren't counted in Tests run
-    TOTAL_COUNT=$((TOTAL_COUNT + ERROR_COUNT))
-fi
-
-# TRUE_TOTAL is now just TOTAL_COUNT since errors are included
+# TRUE_TOTAL is the total from the framework
 TRUE_TOTAL=$TOTAL_COUNT
 
 # Count lines that start with "FAIL:" for detailed failure reporting
 ADDITIONAL_FAILS=$(grep -c "^FAIL:" "$RESULTS_FILE" || echo "0")
+
+# Generate section breakdown
+# Parse "Running test suite: X" followed immediately by "Tests run: ..." lines
+# Skip cumulative totals from parent sections
+SECTION_BREAKDOWN=$(awk '
+    /^Running test suite:/ {
+        section = $0
+        sub(/^Running test suite: /, "", section)
+        saw_suite = 1
+    }
+    /^Tests run:/ && saw_suite == 1 {
+        if (section != "" && section != "R7RS") {
+            # Parse: Tests run: X, Passed: Y, Failed: Z[, Errors: W]
+            line = $0
+            gsub(/,/, "", line)
+            split(line, parts)
+            total = 0; passed = 0; failed = 0; errors = 0
+            for (i = 1; i <= length(parts); i++) {
+                if (parts[i] == "run:") total = parts[i+1]
+                if (parts[i] == "Passed:") passed = parts[i+1]
+                if (parts[i] == "Failed:") failed = parts[i+1]
+                if (parts[i] == "Errors:") errors = parts[i+1]
+            }
+            # Determine status emoji
+            if (errors > 0 || failed > 0) {
+                if (passed == total) status = "✅"
+                else if (passed > 0) status = "⚠️"
+                else status = "❌"
+            } else {
+                status = "✅"
+            }
+            printf "| %s | %s | %d | %d | %d | %d |\n", status, section, total, passed, failed, errors
+        }
+        section = ""
+        saw_suite = 0
+    }
+' "$RESULTS_FILE")
 
 # Generate markdown report
 cat > "$COMPAT_REPORT" << EOF
@@ -93,7 +137,15 @@ cat > "$COMPAT_REPORT" << EOF
 | ⚠️ Error (crashed) | $ERROR_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($ERROR_COUNT/$TRUE_TOTAL)*100}") |
 | **Total** | **$TRUE_TOTAL** | **100%** |
 
-**Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
+**Note:** "Error" means the test crashed before assertions could run (usually missing features like call/cc, guard).
+
+## Section Breakdown
+
+| Status | Section | Total | Passed | Failed | Errors |
+|--------|---------|-------|--------|--------|--------|
+$SECTION_BREAKDOWN
+
+**Legend:** ✅ = All passing, ⚠️ = Partial, ❌ = None passing
 
 ## Failed Tests
 
@@ -134,10 +186,10 @@ with all R7RS-small features.
 
 ### Known Limitations
 
-- Some R7RS libraries are not yet fully implemented (see \`IMPORT_AND_LIBRARIES.md\`)
-- I/O and ports functionality is incomplete
 - Exception handling (guard, raise) not yet implemented
 - Continuations (call/cc) not yet implemented
+- Some R7RS libraries not yet implemented: (scheme eval), (scheme r5rs), (scheme process-context)
+- See \`PRD/phase1/EXCEPTION_HANDLING.md\` for exception handling roadmap
 
 ### Next Steps
 
@@ -147,8 +199,38 @@ EOF
 
 echo -e "${GREEN}Report generated: $COMPAT_REPORT${NC}"
 echo ""
-echo "Summary:"
-echo -e "  Passed: ${GREEN}$PASS_COUNT${NC}"
-echo -e "  Failed: ${RED}$FAIL_COUNT${NC}"
-echo -e "  Errors: ${YELLOW}$ERROR_COUNT${NC}"
+echo "=== Summary ==="
+PASS_PCT=$(awk -v p="$PASS_COUNT" -v t="$TRUE_TOTAL" 'BEGIN {printf "%.1f", (p/t)*100}')
+FAIL_PCT=$(awk -v f="$FAIL_COUNT" -v t="$TRUE_TOTAL" 'BEGIN {printf "%.1f", (f/t)*100}')
+ERROR_PCT=$(awk -v e="$ERROR_COUNT" -v t="$TRUE_TOTAL" 'BEGIN {printf "%.1f", (e/t)*100}')
+echo -e "  Passed: ${GREEN}$PASS_COUNT${NC} ($PASS_PCT%)"
+echo -e "  Failed: ${RED}$FAIL_COUNT${NC} ($FAIL_PCT%)"
+echo -e "  Errors: ${YELLOW}$ERROR_COUNT${NC} ($ERROR_PCT%)"
 echo -e "  Total:  $TRUE_TOTAL"
+echo ""
+echo "=== Section Breakdown ==="
+printf "%-40s %6s %6s %6s %6s\n" "Section" "Total" "Pass" "Fail" "Error"
+printf "%-40s %6s %6s %6s %6s\n" "----------------------------------------" "------" "------" "------" "------"
+echo "$SECTION_BREAKDOWN" | while IFS='|' read -r _ status section total passed failed errors _; do
+    # Skip empty lines
+    [ -z "$section" ] && continue
+    # Trim whitespace
+    section=$(echo "$section" | xargs)
+    total=$(echo "$total" | xargs)
+    passed=$(echo "$passed" | xargs)
+    failed=$(echo "$failed" | xargs)
+    errors=$(echo "$errors" | xargs)
+    # Color based on status
+    if [ "$errors" -gt 0 ] || [ "$failed" -gt 0 ]; then
+        if [ "$passed" -eq "$total" ]; then
+            color=$GREEN
+        elif [ "$passed" -gt 0 ]; then
+            color=$YELLOW
+        else
+            color=$RED
+        fi
+    else
+        color=$GREEN
+    fi
+    printf "${color}%-40s %6s %6s %6s %6s${NC}\n" "$section" "$total" "$passed" "$failed" "$errors"
+done
