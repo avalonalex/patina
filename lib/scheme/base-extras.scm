@@ -253,79 +253,29 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Iteration construct (R7RS Section 4.2.4)
-
-;; NOTE: The standard R7RS definition of 'do' requires nested ellipsis:
-;;
-;; (define-syntax do
-;;   (syntax-rules ()
-;;     ((do ((var init step ...) ...)
-;;          (test result ...)
-;;        command ...)
-;;      (let loop ((var init) ...)
-;;        (if test
-;;            (begin result ...)
-;;            (begin
-;;              command ...
-;;              (loop step ... ...)))))))  ; Nested ellipsis!
-;;
-;; The nested ellipsis pattern (step ... ...) means "for each binding,
-;; expand its step expression, then expand all bindings." This allows
-;; optional steps: (var init) or (var init step).
-;;
-;; Since Patina doesn't yet support nested ellipsis, we use an auxiliary
-;; helper macro to normalize bindings first, then expand with single-level
-;; ellipsis. This approach has zero runtime overhead compared to the
-;; standard definition.
-
-;; R7RS-Compliant do macro with auxiliary helper
-;; Handles optional step expressions: (var init) or (var init step)
-;; When step is omitted, the variable doesn't change (uses itself as step)
+;; Official R7RS definition using auxiliary pattern with literal "step" marker
 (define-syntax do
   (syntax-rules ()
-    ((do (binding ...)
-         (test result ...)
-       command ...)
-     (do-helper (binding ...)
-                (test result ...)
-                (command ...)
-                ()))))  ; empty accumulator for normalized bindings
-
-;; Helper macro to normalize bindings
-;; Transforms (var init) -> (var init var) and (var init step) -> (var init step)
-(define-syntax do-helper
-  (syntax-rules ()
-    ;; Base case: all bindings processed, generate letrec
-    ((do-helper ()
-                (test result ...)
-                (command ...)
-                ((var init step) ...))
-     (letrec ((loop (lambda (var ...)
-                      (if test
-                          (begin result ...)
-                          (begin
-                            command ...
-                            (loop step ...))))))
+    ((do ((var init step ...) ...)
+         (test expr ...)
+         command ...)
+     (letrec
+       ((loop
+         (lambda (var ...)
+           (if test
+               (begin
+                 (if #f #f)
+                 expr ...)
+               (begin
+                 command
+                 ...
+                 (loop (do "step" var step ...)
+                       ...))))))
        (loop init ...)))
-
-    ;; Recursive case: binding with explicit step
-    ((do-helper ((var init step) rest ...)
-                test-clause
-                commands
-                (acc ...))
-     (do-helper (rest ...)
-                test-clause
-                commands
-                (acc ... (var init step))))
-
-    ;; Recursive case: binding without step - use var as step
-    ((do-helper ((var init) rest ...)
-                test-clause
-                commands
-                (acc ...))
-     (do-helper (rest ...)
-                test-clause
-                commands
-                (acc ... (var init var))))))
+    ((do "step" x)
+     x)
+    ((do "step" x y)
+     y)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Multiple value binding (R7RS Section 5.3.3)

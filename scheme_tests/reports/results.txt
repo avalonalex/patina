@@ -3281,11 +3281,9 @@ Error: Undefined variable: jiffies-per-second
 Testing: 
 (list? (features))
 
-Error: Undefined variable: features
 Testing: 
 (and (memq 'r7rs (features)) #t)
 
-Error: Undefined variable: features
 Testing: 
 (file-exists? ".")
 
@@ -3298,7 +3296,7 @@ Testing:
 (file-error? (guard (exn (else exn)) (delete-file " no such file ")))
 
 Error: Undefined variable: file-error?
-Tests run: 12, Passed: 0, Failed: 0, Errors: 12
+Tests run: 12, Passed: 2, Failed: 0, Errors: 10
 
-Tests run: 12, Passed: 0, Failed: 0, Errors: 12
+Tests run: 12, Passed: 2, Failed: 0, Errors: 10
 

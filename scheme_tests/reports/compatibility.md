@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-04 22:15:24
+**Generated:** 2025-12-06 08:24:36
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 790 | 67.6% |
+| ✅ Passed | 794 | 67.9% |
 | ❌ Failed | 2 | 0.2% |
-| ⚠️ Error (crashed) | 377 | 32.2% |
+| ⚠️ Error (crashed) | 373 | 31.9% |
 | **Total** | **1169** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
@@ -336,8 +336,6 @@ Error: Undefined variable: current-second
 Error: Undefined variable: current-second
 Error: Undefined variable: current-jiffy
 Error: Undefined variable: jiffies-per-second
-Error: Undefined variable: features
-Error: Undefined variable: features
 Error: Undefined variable: file-exists?
 Error: Undefined variable: file-exists?
 Error: Undefined variable: file-error?
