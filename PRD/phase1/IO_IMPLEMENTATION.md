@@ -1,648 +1,356 @@
 # R7RS I/O Implementation Guide
 
-**Status:** Not yet started
-**Priority:** MEDIUM-HIGH
-**Estimated Effort:** 1-2 weeks
-**Last Updated:** 2025-11-09
+**Status:** Phase 1-6 COMPLETE
+**Priority:** HIGH (Phases 1-4 done)
+**Last Updated:** 2025-12-06
 
 ---
 
 ## Overview
 
-R7RS requires comprehensive I/O support through the port abstraction. This document outlines what needs to be implemented for R7RS compliance.
+R7RS requires comprehensive I/O support through the port abstraction. This document tracks what has been implemented and what remains.
+
+**Current Test Results:**
+- 1192 tests passing (89.4%)
+- 24 tests failing
+- 117 errors (mostly missing features: call/cc, guard)
 
 ---
 
-## Port Model
+## Implementation Status
 
-### Core Concepts
+### Phase 1: Port Infrastructure & String Ports - COMPLETE
 
-**Ports** are Scheme objects that represent input/output devices:
-- **Input ports** - Deliver data upon command
-- **Output ports** - Accept data
-- **Textual ports** - Operate on characters (char-based)
-- **Binary ports** - Operate on bytes (u8-based)
+**Completed 2025-12-06**
 
-### Port Types Required
+#### Step 1.1: Port Infrastructure
+- Created `Port` struct in `patina-core/src/port.rs` with:
+  - `PortKind` (Textual/Binary)
+  - `PortDirection` (Input/Output)
+  - `PortData` enum (String/Bytevector/Stdio/File/Closed)
+- `Value::Port(Rc<Port>)` replaces old `InputPort`/`OutputPort` markers
 
-1. **File ports** - Read/write files on filesystem
-2. **String ports** - Read/write to strings (textual)
-3. **Bytevector ports** - Read/write to bytevectors (binary)
-4. **Standard ports** - stdin, stdout, stderr
-
----
-
-## R7RS Requirements by Category
-
-### 1. Port Type Predicates (6 procedures)
-
-**Status:** ❌ Not implemented
-**Difficulty:** Easy (5 minutes each)
-**Priority:** HIGH (needed for everything else)
-
+#### Step 1.2: Port Predicates
 ```scheme
-(port? obj)              ; Is obj any kind of port?
-(input-port? obj)        ; Is obj an input port?
-(output-port? obj)       ; Is obj an output port?
-(textual-port? obj)      ; Is obj a textual port?
-(binary-port? obj)       ; Is obj a binary port?
-(input-port-open? port)  ; Is input port still open?
-(output-port-open? port) ; Is output port still open?
+(port? obj)              ; ✅ Implemented
+(input-port? obj)        ; ✅ Implemented
+(output-port? obj)       ; ✅ Implemented
+(textual-port? obj)      ; ✅ Implemented
+(binary-port? obj)       ; ✅ Implemented
+(input-port-open? port)  ; ✅ Implemented
+(output-port-open? port) ; ✅ Implemented
 ```
 
-**Implementation:** Add new `Value::Port` variant, add primitive predicates
-
----
-
-### 2. Current Ports (3 procedures - Parameter Objects)
-
-**Status:** ❌ Not implemented
-**Difficulty:** Medium (need parameter object support)
-**Priority:** HIGH (needed for basic I/O)
-
+#### Step 1.3: String Ports
 ```scheme
-(current-input-port)   ; Default input (initially stdin)
-(current-output-port)  ; Default output (initially stdout)
-(current-error-port)   ; Error output (initially stderr)
+(open-input-string string)    ; ✅ Implemented
+(open-output-string)          ; ✅ Implemented
+(get-output-string port)      ; ✅ Implemented
 ```
 
-**Requirements:**
-- Must be parameter objects (can override with `parameterize`)
-- Initial bindings are implementation-defined textual ports
-- Need to implement `parameterize` special form
-
----
-
-### 3. String Ports (3 procedures)
-
-**Status:** ❌ Not implemented
-**Difficulty:** Easy-Medium
-**Priority:** HIGH (useful for testing, commonly used)
-
+#### Step 1.4: Current Ports
 ```scheme
-(open-input-string string)    ; Create input port from string
-(open-output-string)           ; Create output port accumulating to string
-(get-output-string port)       ; Get accumulated string from output port
+(current-input-port)   ; ✅ Implemented (returns stdin port)
+(current-output-port)  ; ✅ Implemented (returns stdout port)
+(current-error-port)   ; ✅ Implemented (returns stderr port)
 ```
 
-**Why important:** Essential for testing I/O without filesystem
+Note: These return actual port objects. Full parameterization for dynamic rebinding planned for later.
 
----
-
-### 4. Basic Text I/O (MUST HAVE)
-
-**Status:** ❌ Not implemented
-**Difficulty:** Easy-Medium
-**Priority:** CRITICAL (most commonly used)
-
-#### Writing (6 procedures)
+#### Step 1.5: EOF Handling
 ```scheme
-(display obj)              ; Human-readable output (no quotes)
-(display obj port)
-(write obj)                ; Machine-readable output (with quotes)
-(write obj port)
-(newline)                  ; Write newline character
-(newline port)
-(write-char char)          ; Write single character
-(write-char char port)
-(write-string string)      ; Write string
-(write-string string port)
+(eof-object? obj)    ; ✅ Implemented
+(eof-object)         ; ✅ Implemented
 ```
 
-**Start here!** These are the most commonly used I/O procedures.
-
-#### Reading (5 procedures)
+#### Step 1.6: Output Operations with Port Support
 ```scheme
-(read)                     ; Read S-expression
-(read port)
-(read-char)                ; Read single character
-(read-char port)
-(peek-char)                ; Peek at next character (don't consume)
-(peek-char port)
-(read-line)                ; Read line as string
-(read-line port)
-(char-ready?)              ; Is char available without blocking?
-(char-ready? port)
+(display obj)        ; ✅ Write to current-output-port
+(display obj port)   ; ✅ Write to specified port
+(write obj)          ; ✅ Write to current-output-port (machine-readable)
+(write obj port)     ; ✅ Write to specified port
+(newline)            ; ✅ Write to current-output-port
+(newline port)       ; ✅ Write to specified port
+(write-char char)    ; ✅ Write char to current-output-port
+(write-char char port) ; ✅ Write char to specified port
+(write-string string) ; ✅ Write string to port
+(write-string string port start end) ; ✅ With optional bounds
+```
+
+**Circular Structure Support:**
+- `write` and `display` now handle circular structures using datum labels (`#n=` and `#n#`)
+- DFS-based cycle detection distinguishes circular from merely shared structures
+- `write` only labels circular structures (not shared)
+
+#### Step 1.7: Read Operations
+```scheme
+(read-char)          ; ✅ Read from current-input-port
+(read-char port)     ; ✅ Read from specified port
+(peek-char)          ; ✅ Peek from current-input-port
+(peek-char port)     ; ✅ Peek from specified port
+(char-ready?)        ; ✅ Check current-input-port
+(char-ready? port)   ; ✅ Check specified port
+(read-line)          ; ✅ Read line from current-input-port
+(read-line port)     ; ✅ Read line from specified port
+```
+
+#### Step 1.8: The `read` Procedure
+```scheme
+(read)               ; ✅ Read from current-input-port
+(read port)          ; ✅ Read from specified port
+```
+
+Implementation uses existing `patina-frontend` Parser with character source adapter.
+
+#### Step 1.9: Port Operations
+```scheme
+(close-port port)         ; ✅ Close any port
+(close-input-port port)   ; ✅ Close input port (validates direction)
+(close-output-port port)  ; ✅ Close output port (validates direction)
+(flush-output-port)       ; ✅ Flush current-output-port
+(flush-output-port port)  ; ✅ Flush specified port
 ```
 
 ---
 
-### 5. EOF Handling (2 procedures)
+### Phase 2: File I/O - COMPLETE
 
-**Status:** ❌ Not implemented
-**Difficulty:** Easy
-**Priority:** HIGH (needed for reading)
+**Completed 2025-12-06**
 
+#### File Port Infrastructure
+- Added `PortData::File(FilePortData)` variant
+- `FilePortData` contains path and `FileHandle` (BufReader/BufWriter)
+- All port methods (`read_char`, `peek_char`, `write_string`, etc.) support file ports
+- Proper buffered I/O with `BufReader<File>` and `BufWriter<File>`
+
+#### Textual File Operations
 ```scheme
-(eof-object? obj)    ; Is obj the EOF object?
-(eof-object)         ; Return an EOF object
+(open-input-file filename)   ; ✅ Open file for reading (textual)
+(open-output-file filename)  ; ✅ Open file for writing (textual, creates/truncates)
 ```
 
-**Implementation:** Add `Value::Eof` variant
+#### Binary File Operations
+```scheme
+(open-binary-input-file filename)   ; ✅ Open file for binary reading
+(open-binary-output-file filename)  ; ✅ Open file for binary writing
+```
+
+#### File Utilities
+```scheme
+(file-exists? filename)      ; ✅ Returns #t if file exists
+(delete-file filename)       ; ✅ Deletes the file
+```
+
+#### Higher-Order File I/O
+```scheme
+(call-with-input-file filename proc)  ; ✅ Open, call proc with port, close
+(call-with-output-file filename proc) ; ✅ Open, call proc with port, close
+(with-input-from-file filename thunk) ; ⚠️ Stub (needs dynamic current-input-port)
+(with-output-to-file filename thunk)  ; ⚠️ Stub (needs dynamic current-output-port)
+```
+
+#### Library Organization
+- Created `patina-runtime/src/stdlib/scheme_file.rs` for `(scheme file)` library
+- All file operations properly registered with correct arities
 
 ---
 
-### 6. File I/O (8 procedures - FILE LIBRARY)
+### Phase 3: Extended Text I/O - COMPLETE
 
-**Status:** ❌ Not implemented
-**Difficulty:** Medium
-**Priority:** MEDIUM (can defer initially)
+**Completed 2025-12-06**
 
-#### Opening Files
 ```scheme
-(open-input-file string)       ; Open text file for reading
-(open-output-file string)      ; Open text file for writing
-(open-binary-input-file string)  ; Open binary file for reading
-(open-binary-output-file string) ; Open binary file for writing
+(read-string k)              ; ✅ Read k characters from current-input-port
+(read-string k port)         ; ✅ Read k characters from specified port
 ```
 
-#### Closing Ports
-```scheme
-(close-port port)              ; Close any port
-(close-input-port port)        ; Close input port
-(close-output-port port)       ; Close output port
-```
+**Implementation details:**
+- Returns string of up to k characters
+- Returns EOF if at end of file before reading any characters
+- Returns empty string for k=0
+- Returns partial string if fewer than k characters available
 
-**Note:** File operations require error handling (`file-error?`)
+**Unit tests added:**
+- `test_read_string_basic` - Reading k chars
+- `test_read_string_eof` - EOF handling
+- `test_read_string_partial` - Partial read when fewer chars available
+- `test_read_string_zero` - Edge case: k=0 returns empty string
+- `test_read_string_with_newline` - Newlines included in read
+
+Note: `read-line` and `write-string` were already implemented in Phase 1.
 
 ---
 
-### 7. Higher-Order File I/O (4 procedures)
+### Phase 4: Binary I/O - COMPLETE
 
-**Status:** ❌ Not implemented
-**Difficulty:** Medium
-**Priority:** LOW (syntactic sugar)
+**Completed 2025-12-06**
 
-```scheme
-(call-with-port port proc)         ; Call proc with port, auto-close
-(call-with-input-file string proc) ; Open file, call proc, close
-(call-with-output-file string proc)
-(with-input-from-file string thunk)  ; Rebind current-input-port
-(with-output-to-file string thunk)   ; Rebind current-output-port
-```
-
-**Note:** These are convenience wrappers around the basic operations
-
----
-
-### 8. Binary I/O (7 procedures)
-
-**Status:** ❌ Not implemented
-**Difficulty:** Medium
-**Priority:** LOW (less commonly used)
+#### Bytevector Port Infrastructure
+- Added `PortData::Bytevector(BytevectorPortData)` variant
+- `BytevectorPortData` contains `Vec<u8>` content and position
+- All binary operations supported on bytevector ports
+- Proper separation of textual/binary operations (errors when mixed)
 
 #### Bytevector Ports
 ```scheme
-(open-input-bytevector bytevector)
-(open-output-bytevector)
-(get-output-bytevector port)
+(open-input-bytevector bytevector)  ; ✅ Create input port from bytevector
+(open-output-bytevector)            ; ✅ Create output port accumulating to bytevector
+(get-output-bytevector port)        ; ✅ Get accumulated bytevector
 ```
 
-#### Binary Reading/Writing
+#### Byte Read/Write
 ```scheme
-(read-u8)                ; Read single byte
-(read-u8 port)
-(peek-u8)                ; Peek at next byte
-(peek-u8 port)
-(write-u8 byte)          ; Write single byte
-(write-u8 byte port)
-(u8-ready?)              ; Is byte available?
-(u8-ready? port)
+(read-u8)                           ; ✅ Read from binary input port
+(read-u8 port)                      ; ✅ Read from specified port
+(peek-u8)                           ; ✅ Peek from binary input port
+(peek-u8 port)                      ; ✅ Peek from specified port
+(write-u8 byte)                     ; ✅ Write to binary output port
+(write-u8 byte port)                ; ✅ Write to specified port
+(u8-ready?)                         ; ✅ Check binary input port
+(u8-ready? port)                    ; ✅ Check specified port
 ```
+
+#### Bulk Byte Operations
+```scheme
+(read-bytevector k)                              ; ✅ Read k bytes
+(read-bytevector k port)                         ; ✅ Read k bytes from port
+(read-bytevector! bytevector port start end)     ; ✅ Read into existing bytevector
+(write-bytevector bytevector)                    ; ✅ Write bytevector
+(write-bytevector bytevector port start end)     ; ✅ Write with optional bounds
+```
+
+**Unit tests added:**
+- `test_input_bytevector_port` - Basic input port operations
+- `test_output_bytevector_port` - Basic output port operations
+- `test_peek_u8` - Peek without consuming
+- `test_u8_ready` - Check for available data
+- `test_binary_port_display` - Port display formatting
+- `test_textual_operations_on_binary_port_fail` - Error handling
+- `test_binary_operations_on_textual_port_fail` - Error handling
+- `test_read_bytevector` - Bulk read operations
+- `test_write_bytevector` - Bulk write operations
+- `test_read_bytevector_into` - Read into existing buffer
 
 ---
 
-### 9. Bulk I/O (5 procedures)
+### Phase 5: Additional Higher-Order I/O - COMPLETE
 
-**Status:** ❌ Not implemented
-**Difficulty:** Medium
-**Priority:** MEDIUM
-
-```scheme
-(read-string k)              ; Read k characters
-(read-string k port)
-(read-bytevector k)          ; Read k bytes
-(read-bytevector k port)
-(read-bytevector! bytevector port start end)  ; Read into bytevector
-(write-bytevector bytevector)
-(write-bytevector bytevector port start end)
-```
-
----
-
-### 10. Advanced Write Procedures (4 procedures - WRITE LIBRARY)
-
-**Status:** ❌ Not implemented
-**Difficulty:** Medium
-**Priority:** LOW (less commonly used)
-
-```scheme
-(write-shared obj)         ; Write with shared structure notation
-(write-shared obj port)
-(write-simple obj)         ; Simple write (no shared structure)
-(write-simple obj port)
-```
-
----
-
-## Implementation Phases
-
-### Phase 1: Minimal I/O (Most Important - Start Here!)
-
-**Goal:** Basic display/write/read for debugging and REPL
-**Effort:** 2-3 days
-**Priority:** CRITICAL
+**Completed 2025-12-06**
 
 ```scheme
-; Port types
-(port? obj)
-(input-port? obj)
-(output-port? obj)
-(textual-port? obj)
-
-; Current ports (use stdout/stdin initially, no parameterize)
-(current-input-port)
-(current-output-port)
-(current-error-port)
-
-; String ports (for testing)
-(open-input-string str)
-(open-output-string)
-(get-output-string port)
-
-; Basic output (MOST IMPORTANT!)
-(display obj)
-(display obj port)
-(write obj)
-(write obj port)
-(newline)
-(newline port)
-(write-char char)
-(write-char char port)
-
-; Basic input
-(read)
-(read port)
-(read-char)
-(read-char port)
-(eof-object? obj)
-(eof-object)
+(call-with-port port proc)          ; ✅ Implemented
 ```
 
-**Test Plan:**
-```scheme
-; Should work after Phase 1
-(display "Hello, world!")
-(newline)
-(write '(1 2 3))
-(define out (open-output-string))
-(display "test" out)
-(get-output-string out)  ; => "test"
-```
+**Implementation details:**
+- Calls `proc` with `port` as argument
+- Closes the port after `proc` returns (whether normally or exceptionally)
+- Returns the value returned by `proc`
+
+Note: `with-input-from-file` and `with-output-to-file` require proper dynamic parameter support for current ports (planned for future).
 
 ---
 
-### Phase 2: File I/O
+### Phase 6: Advanced Write - COMPLETE
 
-**Goal:** Read/write files
-**Effort:** 2-3 days
-**Priority:** HIGH
+**Completed 2025-12-06**
 
 ```scheme
-(open-input-file filename)
-(open-output-file filename)
-(close-port port)
-(close-input-port port)
-(close-output-port port)
+(write-shared obj)         ; ✅ Implemented in (scheme write)
+(write-shared obj port)    ; ✅ Implemented
+(write-simple obj)         ; ✅ Implemented in (scheme write)
+(write-simple obj port)    ; ✅ Implemented
 ```
 
-**Requirements:**
-- Error handling (file not found, permissions, etc.)
-- `file-error?` predicate
-- Proper resource cleanup
+**Implementation details:**
+- `write-shared` labels all shared (multiply-referenced) structures with datum labels (`#n=` and `#n#`)
+- `write-simple` outputs without any datum labels (may loop on circular structures)
+- Both procedures support optional port argument (defaults to current-output-port)
+- Created new `(scheme write)` library with `display`, `write`, `write-shared`, `write-simple`
 
 ---
 
-### Phase 3: Parameter Objects & Dynamic Rebinding
+## File Organization
 
-**Goal:** Make current ports overridable
-**Effort:** 1-2 days
-**Priority:** MEDIUM
+### Port Infrastructure
+- `crates/patina-core/src/port.rs` - Port types and operations (17 unit tests)
 
-```scheme
-(parameterize ((current-output-port new-port))
-  (display "goes to new-port"))
+### Primitives
+- `crates/patina-tree-walker/src/eval/primitives/io.rs` - All I/O primitives
+  - Port predicates
+  - String port operations
+  - Bytevector port operations
+  - File port operations
+  - Read/write operations
+  - Circular structure handling (DatumLabelWriter)
 
-(with-output-to-file "output.txt"
-  (lambda () (display "to file")))
-```
-
-**Requirements:**
-- Implement `parameterize` special form
-- Make current-{input,output,error}-port parameter objects
-
----
-
-### Phase 4: Advanced I/O
-
-**Goal:** Complete R7RS compliance
-**Effort:** 3-4 days
-**Priority:** LOW-MEDIUM
-
-```scheme
-; Binary I/O
-(read-u8)
-(write-u8 byte)
-(open-input-bytevector bv)
-(open-output-bytevector)
-
-; Bulk operations
-(read-string k)
-(read-bytevector k)
-
-; Higher-order
-(call-with-port port proc)
-(call-with-input-file filename proc)
-```
+### Library Definitions
+- `crates/patina-runtime/src/stdlib/scheme_base.rs` - Base I/O exports
+- `crates/patina-runtime/src/stdlib/scheme_file.rs` - File I/O exports
+- `crates/patina-runtime/src/stdlib/scheme_write.rs` - Write library exports (write-shared, write-simple)
 
 ---
 
-## Implementation Strategy
+## Summary: Priority Order
 
-### Value Type Extension
-
-```rust
-// src/value/mod.rs
-pub enum Value {
-    // ... existing variants ...
-
-    Port(Rc<RefCell<Port>>),
-    Eof,
-}
-
-pub struct Port {
-    kind: PortKind,
-    direction: PortDirection,
-    open: bool,
-    // Implementation-specific data
-    data: PortData,
-}
-
-pub enum PortKind {
-    Textual,
-    Binary,
-}
-
-pub enum PortDirection {
-    Input,
-    Output,
-    InputOutput,  // For sockets, etc.
-}
-
-pub enum PortData {
-    String {
-        content: String,
-        position: usize,
-    },
-    File {
-        file: File,
-    },
-    Bytevector {
-        content: Vec<u8>,
-        position: usize,
-    },
-    Stdio {
-        handle: StdioHandle,
-    },
-}
-
-pub enum StdioHandle {
-    Stdin,
-    Stdout,
-    Stderr,
-}
-```
+| Phase | Features | Status | Impact |
+|-------|----------|--------|--------|
+| **1** | Port infrastructure, string ports, read | ✅ COMPLETE | ~200 tests |
+| **2** | File I/O | ✅ COMPLETE | +4 tests |
+| **3** | Extended text I/O (read-string) | ✅ COMPLETE | Minor |
+| **4** | Binary I/O | ✅ COMPLETE | ~20 tests |
+| **5** | Higher-order I/O (call-with-port) | ✅ COMPLETE | Minor |
+| **6** | Advanced write (write-shared, write-simple) | ✅ COMPLETE | Minor |
 
 ---
 
-### Primitive Implementation
+## Remaining Work for Full R7RS I/O Compliance
 
-```rust
-// src/eval/primitives/io.rs (NEW FILE)
-
-pub fn install_io_primitives(env: &Rc<Environment>) {
-    // Port predicates
-    env.define("port?", Value::Primitive(Primitive::new("port?", port_p)));
-    env.define("input-port?", Value::Primitive(Primitive::new("input-port?", input_port_p)));
-    // ...
-
-    // Current ports
-    env.define("current-output-port",
-               Value::Primitive(Primitive::new("current-output-port", current_output_port)));
-    // ...
-
-    // String ports
-    env.define("open-input-string",
-               Value::Primitive(Primitive::new("open-input-string", open_input_string)));
-    // ...
-
-    // Output
-    env.define("display", Value::Primitive(Primitive::new("display", display)));
-    env.define("write", Value::Primitive(Primitive::new("write", write)));
-    env.define("newline", Value::Primitive(Primitive::new("newline", newline)));
-    // ...
-
-    // Input
-    env.define("read", Value::Primitive(Primitive::new("read", read)));
-    env.define("read-char", Value::Primitive(Primitive::new("read-char", read_char)));
-    // ...
-}
-
-fn display(args: &[Value]) -> Result<Value, EvalError> {
-    match args {
-        [obj] => {
-            // Use current-output-port
-            print!("{}", obj.display_format());
-            Ok(Value::Unspecified)
-        }
-        [obj, Value::Port(port)] => {
-            // Write to specified port
-            write_to_port(port, &obj.display_format())?;
-            Ok(Value::Unspecified)
-        }
-        _ => Err(EvalError::WrongArity { ... })
-    }
-}
-
-fn write(args: &[Value]) -> Result<Value, EvalError> {
-    match args {
-        [obj] => {
-            print!("{}", obj);  // Uses Display trait (includes quotes)
-            Ok(Value::Unspecified)
-        }
-        [obj, Value::Port(port)] => {
-            write_to_port(port, &format!("{}", obj))?;
-            Ok(Value::Unspecified)
-        }
-        _ => Err(EvalError::WrongArity { ... })
-    }
-}
-```
+1. **Dynamic current-port rebinding** - For `with-input-from-file`/`with-output-to-file`
+2. **Error predicates** - `file-error?`, `read-error?` for exception handling
 
 ---
 
-### Display vs Write
+## R7RS I/O Library Organization
 
-**Critical distinction:**
+The I/O functionality is organized into R7RS-compliant libraries:
 
-```scheme
-(display "hello")    ; prints: hello
-(write "hello")      ; prints: "hello"
+### (scheme base)
+Core I/O in the base library:
+- Port predicates: `port?`, `input-port?`, `output-port?`, `textual-port?`, `binary-port?`, etc.
+- Current ports: `current-input-port`, `current-output-port`, `current-error-port`
+- String ports: `open-input-string`, `open-output-string`, `get-output-string`
+- Bytevector ports: `open-input-bytevector`, `open-output-bytevector`, `get-output-bytevector`
+- Text I/O: `read-char`, `peek-char`, `read-line`, `read-string`, `write-char`, `write-string`, `newline`
+- Binary I/O: `read-u8`, `peek-u8`, `write-u8`, `read-bytevector`, `write-bytevector`
+- Output: `display`, `write`
+- Input: `read`
+- Port ops: `close-port`, `close-input-port`, `close-output-port`, `flush-output-port`, `call-with-port`
+- EOF: `eof-object?`, `eof-object`
 
-(display 'foo)       ; prints: foo
-(write 'foo)         ; prints: foo
+### (scheme read)
+- `read` - Parse S-expressions (also in scheme base)
 
-(display '(a b c))   ; prints: (a b c)
-(write '(a b c))     ; prints: (a b c)
-```
+### (scheme write)
+- `display`, `write` - Also in scheme base
+- `write-shared` - Labels all shared structures
+- `write-simple` - No datum labels
 
-**Implementation:**
-- `display` - Use a "display format" (no quotes for strings)
-- `write` - Use standard `Display` trait (machine-readable)
-
----
-
-## Testing Strategy
-
-### Unit Tests
-
-```rust
-// tests/compliance/io.rs (NEW)
-
-#[test]
-fn test_display_string() {
-    // Should print without quotes
-    assert_output_is("(display \"hello\")", "hello");
-}
-
-#[test]
-fn test_write_string() {
-    // Should print with quotes
-    assert_output_is("(write \"hello\")", "\"hello\"");
-}
-
-#[test]
-fn test_string_ports() {
-    assert_program_eval_to(
-        r#"
-        (define out (open-output-string))
-        (display "hello" out)
-        (display " world" out)
-        (get-output-string out)
-        "#,
-        "\"hello world\"",
-    );
-}
-
-#[test]
-fn test_read_from_string() {
-    assert_eval_to(
-        r#"(read (open-input-string "(+ 1 2)"))"#,
-        "(+ 1 2)",
-    );
-}
-```
-
----
-
-## R7RS Test Suite Coverage
-
-From `chibi-scheme/tests/r7rs-tests.scm`, I/O is used extensively:
-
-```scheme
-; Common patterns in tests:
-(display "FAIL: ") (write 'expr) (newline)
-(read (open-input-string "..."))
-(get-output-string (open-output-string))
-```
-
-**Implication:** Once basic I/O works, we can use chibi's test suite directly!
-
----
-
-## Dependencies
-
-### Required First
-- ✅ Strings (already implemented)
-- ✅ Error handling (already have EvalError)
-- ❌ Parameter objects (`parameterize`) - for current ports
-
-### Nice to Have
-- Bytevectors (already implemented for binary I/O)
-- Exception system (`file-error?`)
-
----
-
-## Summary: What's Actually Needed?
-
-### Absolute Minimum (Phase 1 - 2-3 days)
-✅ Start here for immediate value:
-
-1. **Port type** (`Value::Port`)
-2. **String ports** (easy, no filesystem)
-3. **display/write/newline** (most used)
-4. **read** (parse S-expressions)
-5. **eof handling**
-
-### High Priority (Phase 2 - 2-3 days)
-📁 File operations:
-
-6. **open-input-file/open-output-file**
-7. **close-port**
-8. **Error handling**
-
-### Medium Priority (Phase 3+ - 1 week)
-🔧 Complete the system:
-
-9. **Parameter objects** (`parameterize`)
-10. **Binary I/O**
-11. **Bulk operations**
-12. **Higher-order wrappers**
-
----
-
-## Estimated Timeline
-
-**Week 1:**
-- Day 1-2: Port infrastructure, string ports
-- Day 3: display/write/newline
-- Day 4-5: read, read-char, eof
-
-**Week 2:**
-- Day 1-2: File I/O
-- Day 3: Parameter objects
-- Day 4-5: Binary I/O, polishing
-
-**Total: 10 days for full compliance**
+### (scheme file)
+- Textual: `open-input-file`, `open-output-file`
+- Binary: `open-binary-input-file`, `open-binary-output-file`
+- Higher-order: `call-with-input-file`, `call-with-output-file`, `with-input-from-file`, `with-output-to-file`
+- Utilities: `file-exists?`, `delete-file`
 
 ---
 
 ## References
 
 - **R7RS Spec:** Section 6.13 (Input and output)
-- **Chibi Tests:** `~/Project/reference/chibi-scheme/tests/r7rs-tests.scm`
-- **Chibi Implementation:** `lib/init-7.scm` for Scheme-level I/O wrappers
-
----
-
-## Decision
-
-**Recommended approach:** Implement in phases, starting with Phase 1 (minimal I/O).
-
-**Rationale:**
-1. Provides immediate value (debugging, REPL improvements)
-2. Enables running chibi test suite
-3. Can defer file I/O until after TCO
-4. String ports are easy and very useful
-
-**Next step:** After TCO and advanced math, implement Phase 1 I/O.
+- **Chibi Tests:** `scheme_tests/chibi/r7rs-tests.scm`
+- **Port Implementation:** `crates/patina-core/src/port.rs`
+- **I/O Primitives:** `crates/patina-tree-walker/src/eval/primitives/io.rs`
+- **Library Definitions:**
+  - `crates/patina-runtime/src/stdlib/scheme_base.rs` - Base I/O exports
+  - `crates/patina-runtime/src/stdlib/scheme_read.rs` - Read library
+  - `crates/patina-runtime/src/stdlib/scheme_write.rs` - Write library
+  - `crates/patina-runtime/src/stdlib/scheme_file.rs` - File library

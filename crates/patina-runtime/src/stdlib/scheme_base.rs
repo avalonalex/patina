@@ -171,10 +171,57 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         // Conversion operations
         ("number->string", Arity::Range(1, 2)),
         ("string->number", Arity::Range(1, 2)),
-        // I/O operations
-        ("display", Arity::Exact(1)),
-        ("write", Arity::Exact(1)),
-        ("newline", Arity::Exact(0)),
+        // I/O operations - Port predicates
+        ("port?", Arity::Exact(1)),
+        ("input-port?", Arity::Exact(1)),
+        ("output-port?", Arity::Exact(1)),
+        ("textual-port?", Arity::Exact(1)),
+        ("binary-port?", Arity::Exact(1)),
+        ("input-port-open?", Arity::Exact(1)),
+        ("output-port-open?", Arity::Exact(1)),
+        // I/O operations - String ports
+        ("open-input-string", Arity::Exact(1)),
+        ("open-output-string", Arity::Exact(0)),
+        ("get-output-string", Arity::Exact(1)),
+        // I/O operations - Bytevector ports
+        ("open-input-bytevector", Arity::Exact(1)),
+        ("open-output-bytevector", Arity::Exact(0)),
+        ("get-output-bytevector", Arity::Exact(1)),
+        // I/O operations - Current ports
+        ("current-input-port", Arity::Exact(0)),
+        ("current-output-port", Arity::Exact(0)),
+        ("current-error-port", Arity::Exact(0)),
+        // I/O operations - Port operations
+        ("close-port", Arity::Exact(1)),
+        ("close-input-port", Arity::Exact(1)),
+        ("close-output-port", Arity::Exact(1)),
+        // I/O operations - EOF handling
+        ("eof-object?", Arity::Exact(1)),
+        ("eof-object", Arity::Exact(0)),
+        // I/O operations - Text output
+        ("display", Arity::Range(1, 2)),
+        ("write", Arity::Range(1, 2)),
+        ("newline", Arity::Range(0, 1)),
+        ("write-char", Arity::Range(1, 2)),
+        ("write-string", Arity::Range(1, 4)),
+        // I/O operations - Text input
+        ("read-char", Arity::Range(0, 1)),
+        ("peek-char", Arity::Range(0, 1)),
+        ("char-ready?", Arity::Range(0, 1)),
+        ("read-line", Arity::Range(0, 1)),
+        ("read-string", Arity::Range(1, 2)),
+        // I/O operations - Binary I/O
+        ("read-u8", Arity::Range(0, 1)),
+        ("peek-u8", Arity::Range(0, 1)),
+        ("u8-ready?", Arity::Range(0, 1)),
+        ("write-u8", Arity::Range(1, 2)),
+        ("read-bytevector", Arity::Range(1, 2)),
+        ("read-bytevector!", Arity::Range(1, 4)),
+        ("write-bytevector", Arity::Range(1, 4)),
+        ("read", Arity::Range(0, 1)),
+        ("flush-output-port", Arity::Range(0, 1)),
+        // I/O operations - Higher-order
+        ("call-with-port", Arity::Exact(2)),
         // Parameter operations
         ("make-parameter", Arity::Range(1, 2)),
         // System introspection (R7RS §6.13)

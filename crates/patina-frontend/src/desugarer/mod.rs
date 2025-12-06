@@ -291,8 +291,7 @@ impl Desugarer {
             | Value::Parameter { .. }
             | Value::Macro(_)
             | Value::Library(_)
-            | Value::InputPort
-            | Value::OutputPort
+            | Value::Port(_)
             | Value::Promise(_)
             | Value::Eof
             | Value::Values(_) => Err(DesugarError::RuntimeValueInAST {

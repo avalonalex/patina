@@ -125,10 +125,7 @@ fn emergency_exit(_evaluator: &Evaluator, args: Vec<Value>) -> Result<EvalResult
 /// Get the value of an environment variable.
 ///
 /// Returns #f if the variable is not set.
-fn get_environment_variable(
-    evaluator: &Evaluator,
-    args: Vec<Value>,
-) -> Result<Value, EvalError> {
+fn get_environment_variable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "get-environment-variable")?;
 
     let name = match &args[0] {
@@ -149,10 +146,7 @@ fn get_environment_variable(
 /// Get all environment variables as an alist.
 ///
 /// Each entry is (name . value) where both are strings.
-fn get_environment_variables(
-    evaluator: &Evaluator,
-    args: Vec<Value>,
-) -> Result<Value, EvalError> {
+fn get_environment_variables(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 0, "get-environment-variables")?;
 
     let entries: Vec<Value> = std::env::vars()

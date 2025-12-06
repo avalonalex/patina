@@ -19,6 +19,7 @@ pub mod environment;
 pub mod library;
 pub mod macro_debug;
 pub mod numeric;
+pub mod port;
 pub mod pvref;
 pub mod scope;
 pub mod value;
@@ -28,6 +29,7 @@ pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, Pattern, Templ
 pub use core_expr::{CoreExpr, Formals, Primitive, ScopedParam, Symbol};
 pub use environment::{Environment, ScopedBinding};
 pub use library::Library;
+pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};
 pub use pvref::{MatchEnv, MatchValue, PVRef};
 pub use scope::{ScopeId, ScopeSet};
 pub use value::{Arity, IdentifierData, LambdaBody, Procedure, PromiseState, Value};

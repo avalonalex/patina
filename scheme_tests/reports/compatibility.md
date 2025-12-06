@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-06 12:06:24
+**Generated:** 2025-12-06 14:33:56
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 810 | 69.2% |
-| ❌ Failed | 2 | 0.2% |
-| ⚠️ Error (crashed) | 359 | 30.7% |
-| **Total** | **1171** | **100%** |
+| ✅ Passed | 1192 | 89.4% |
+| ❌ Failed | 24 | 1.8% |
+| ⚠️ Error (crashed) | 117 | 8.8% |
+| **Total** | **1333** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run. Errors are now properly tracked by the test framework and counted in the per-section totals.
 
@@ -19,8 +19,20 @@
 ### Test Failures
 
 ```
-FAIL: 
-FAIL: 
+FAIL: something-went-wrong
+FAIL: something-went-wrong
+FAIL: (get-output-string out)
+FAIL: (get-output-string out)
+FAIL: (values z)
+FAIL: (and (member z-str '("-.1" "-0.1" "-100.0e-3")) #t)
+FAIL: (values z)
+FAIL: (and (member z-str '("-.0" "-0." "-0.0" "0.0" "0." ".0")) #t)
+FAIL: (values z)
+FAIL: (and (member z-str '("+NAN.0" "+nan.0" "+NaN.0")) #t)
+FAIL: (and (member z-str '("1e2+1.0i" "100.0+1.0i" "100.+1.i")) #t)
+FAIL: (and (member z-str '("+inf.0+inf.0i" "+Inf.0+Inf.0i")) #t)
+FAIL: (and (member z-str '("-inf.0+inf.0i" "-Inf.0+Inf.0i")) #t)
+FAIL: (and (member z-str '("#d1.0+1.0i" "1.0+1.0i" "1.+1.i")) #t)
 ```
 
 ### Errors
@@ -54,11 +66,11 @@ Error: Undefined variable: call-with-current-continuation
 Error: Undefined variable: call-with-current-continuation
 Error: Undefined variable: guard
 Error: Undefined variable: guard
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
+Error: Undefined variable: with-exception-handler
+Error: Undefined variable: guard
+Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: call-with-current-continuation
 Error: Undefined variable: guard
 Error: Undefined variable: guard
 Error: Undefined variable: guard
@@ -66,258 +78,43 @@ Error: Undefined variable: eval
 Error: Undefined variable: eval
 Error: Undefined variable: eval
 Error: Undefined variable: eval
-Error: Undefined variable: port?
-Error: Undefined variable: input-port?
-Error: Undefined variable: output-port?
-Error: Undefined variable: output-port?
-Error: Undefined variable: input-port?
-Error: Undefined variable: output-port?
-Error: Undefined variable: textual-port?
-Error: Undefined variable: textual-port?
-Error: Undefined variable: binary-port?
-Error: Undefined variable: binary-port?
-Error: Undefined variable: input-port-open?
-Error: Undefined variable: output-port-open?
-Error: Undefined variable: open-input-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-input-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: eof-object?
-Error: Undefined variable: eof-object?
-Error: Undefined variable: char-ready?
-Error: Undefined variable: read
-Error: Undefined variable: eof-object?
-Error: Undefined variable: read-char
-Error: Undefined variable: eof-object?
-Error: Undefined variable: read-line
-Error: Undefined variable: read-line
-Error: Undefined variable: eof-object?
-Error: Undefined variable: read-string
-Error: Undefined variable: read-string
-Error: Undefined variable: open-input-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: eof-object?
-Error: Undefined variable: read-u8
-Error: Undefined variable: eof-object?
-Error: Undefined variable: u8-ready?
-Error: Undefined variable: read-bytevector
-Error: Undefined variable: read-bytevector
-Error: Undefined variable: read-bytevector
-Error: Undefined variable: read-bytevector
-Error: Undefined variable: eof-object?
-Error: Undefined variable: read-bytevector!
-Error: Undefined variable: read-bytevector!
-Error: Undefined variable: read-bytevector!
-Error: Undefined variable: open-output-bytevector
-Error: Undefined variable: open-output-bytevector
-Error: Undefined variable: open-output-bytevector
-Error: Undefined variable: open-output-bytevector
-Error: Undefined variable: open-output-bytevector
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: open-input-string
-Error: Undefined variable: open-input-string
-Error: Undefined variable: open-input-string
-Error: Undefined variable: open-input-string
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
+Error: Undefined variable: guard
+Error: Undefined variable: guard
+Error: Invalid syntax: read: Lexer error: Unexpected character: 0
+Error: Invalid syntax: read: Lexer error: Unexpected character: 0
+Error: Invalid syntax: read: Lexer error: Unexpected character: !
+Error: Invalid syntax: read: Lexer error: Unexpected character: !
+Error: Invalid syntax: read: Lexer error: Unexpected character: ;
+Error: Invalid syntax: read: Lexer error: Unexpected character: ;
+Error: Invalid syntax: read: Lexer error: Unexpected character: ;
+Error: Invalid syntax: read: Lexer error: Unexpected character: ;
+Error: Invalid syntax: read: Lexer error: Unexpected character: ;
+Error: Invalid syntax: read: Lexer error: Unexpected character: ;
+Error: Invalid syntax: read: Lexer error: Unexpected character: ;
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: open-output-string
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
-Error: Undefined variable: read
+Error: Invalid syntax: read: Invalid syntax: Invalid number: 1s2
+Error: Invalid syntax: read: Invalid syntax: Invalid number: 1S2
+Error: Invalid syntax: read: Invalid syntax: Invalid number: 1f2
+Error: Invalid syntax: read: Invalid syntax: Invalid number: 1F2
+Error: Invalid syntax: read: Invalid syntax: Invalid number: 1d2
+Error: Invalid syntax: read: Invalid syntax: Invalid number: 1D2
+Error: Invalid syntax: read: Invalid syntax: Invalid number: 1l2
+Error: Invalid syntax: read: Invalid syntax: Invalid number: 1L2
+Error: Invalid syntax: read: Invalid syntax: Invalid number: +InF.0
+Error: Invalid syntax: read: Invalid syntax: Invalid number: -iNF.0
+Error: Invalid syntax: read: Invalid syntax: Invalid real number: 1s2
+Error: Invalid syntax: read: Invalid syntax: Invalid real number: +1s2
+Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 1/10
+Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 1/10
+Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 10/2
+Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 11/2
+Error: Invalid syntax: read: Invalid syntax: Invalid octal number: 11/2
+Error: Invalid syntax: read: Invalid syntax: Invalid binary number: 11/10
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
@@ -329,8 +126,6 @@ Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
-Error: Undefined variable: file-exists?
-Error: Undefined variable: file-exists?
 Error: Undefined variable: file-error?
 ```
 

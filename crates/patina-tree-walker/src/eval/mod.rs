@@ -774,8 +774,7 @@ impl Evaluator {
             | Value::Bytevector(_)
             | Value::Procedure(_)
             | Value::Macro { .. }
-            | Value::InputPort
-            | Value::OutputPort
+            | Value::Port(_)
             | Value::Parameter { .. }
             | Value::Library(_)
             | Value::Values(_)

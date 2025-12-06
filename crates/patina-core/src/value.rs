@@ -8,6 +8,7 @@ use crate::compiled_macro::CompiledMacro;
 use crate::core_expr::{CoreExpr, ScopedParam};
 use crate::environment::Environment;
 use crate::library::Library;
+use crate::port::Port;
 use crate::scope::{ScopeId, ScopeSet};
 
 // =============================================================================
@@ -114,8 +115,8 @@ pub enum Value {
     },
 
     // Ports (for I/O)
-    InputPort,
-    OutputPort,
+    // Full port implementation with string ports, stdio, etc.
+    Port(Rc<Port>),
 
     // Macros (for syntax-rules)
     // Type-safe macro storage - no dyn Any needed
@@ -225,7 +226,7 @@ impl Value {
             Value::Bytevector(_) => "bytevector",
             Value::Procedure(_) => "procedure",
             Value::Parameter { .. } => "parameter",
-            Value::InputPort | Value::OutputPort => "port",
+            Value::Port(_) => "port",
             Value::Macro(_) => "macro",
             Value::Library(_) => "library",
             Value::Values(_) => "values",
@@ -494,8 +495,7 @@ impl std::fmt::Display for Value {
                 Procedure::Continuation => write!(f, "#<continuation>"),
             },
             Value::Parameter { .. } => write!(f, "#<parameter>"),
-            Value::InputPort => write!(f, "#<input-port>"),
-            Value::OutputPort => write!(f, "#<output-port>"),
+            Value::Port(port) => write!(f, "{}", port),
             Value::Macro(compiled) => write!(f, "#<macro:{}>", compiled.name),
             Value::Library(lib) => write!(f, "{}", lib),
             Value::Values(vals) => {

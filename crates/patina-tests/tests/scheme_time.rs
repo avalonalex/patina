@@ -32,9 +32,7 @@ fn test_current_second_is_after_2020() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     // 2020-01-01 00:00:00 UTC = 1577836800
-    let result = interp
-        .eval_str("(> (current-second) 1577836800)")
-        .unwrap();
+    let result = interp.eval_str("(> (current-second) 1577836800)").unwrap();
     assert_eq!(result.to_string(), "#t");
 }
 
