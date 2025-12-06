@@ -163,9 +163,6 @@ pub struct IdentifierData {
 /// but the Values variant was never used. All lambdas are now created with CoreExpr bodies.
 pub type LambdaBody = Vec<CoreExpr>;
 
-// NOTE: CaseLambdaClause removed - case-lambda is now implemented as a macro via SRFI-16
-// See lib/scheme/case-lambda-extras.scm
-
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum Procedure {
@@ -193,9 +190,6 @@ pub enum Procedure {
         /// scopes can see these bindings, while others cannot.
         binding_scope: Option<ScopeId>,
     },
-
-    // NOTE: CaseLambda variant removed - case-lambda is now a macro via SRFI-16
-    // See lib/scheme/case-lambda-extras.scm
 
     /// Continuation (for call/cc)
     Continuation,

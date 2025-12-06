@@ -875,10 +875,6 @@ impl Desugarer {
         })
     }
 
-    // NOTE: case-lambda is now implemented as a macro via SRFI-16
-    // See lib/scheme/case-lambda-extras.scm
-    // The CaseLambda special form and desugar_case_lambda method have been removed.
-
     /// Desugar let-syntax: (let-syntax ((name transformer) ...) body ...)
     ///
     /// Compiles macros in parent environment, creates extended environment,

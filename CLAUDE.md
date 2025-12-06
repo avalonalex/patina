@@ -82,7 +82,7 @@ patina/ (workspace root)
   - `primitive_registry`: Registry of primitive procedures
   - `special_form_registry`: Registry of special forms
 - `core_eval.rs`: CoreExpr evaluator (primary path)
-- `mod.rs`: Legacy Value evaluator (fallback for let-syntax, case-lambda)
+- `mod.rs`: Legacy Value evaluator (fallback for let-syntax)
 - `special_forms/`: All special form implementations
 - `application.rs`: Procedure application logic
 - `primitives/`: All built-in procedures organized by category
@@ -185,10 +185,12 @@ Patina features a sophisticated **dual-loader library system** that balances per
 
 **2. Scheme Libraries** - Derived functions and macros
 - **Location**: `lib/scheme/` directory
-- **Examples**:
+- **Extras files** (loaded alongside Rust libraries):
   - `base-extras.scm` - Derived functions (caar, cadr, not, zero?, etc.) and macros (let, cond, case, do, etc.)
   - `lazy-extras.scm` - Lazy evaluation support
-- **Loading**: Automatically loaded as part of library initialization
+- **Pure .sld libraries** (no Rust dependency):
+  - `case-lambda.sld` - SRFI-16 macro implementation (first .sld library!)
+- **Loading**: Extras automatically loaded; .sld files loaded via SchemeLibraryLoader
 - **Advantages**: Easy to modify, leverages Scheme's expressiveness
 
 ### Library Infrastructure
@@ -228,8 +230,9 @@ Patina features a sophisticated **dual-loader library system** that balances per
 
 ### Current Library Status
 
-**Implemented Libraries** (Rust):
+**Implemented Libraries** (Rust + Scheme macros):
 - `(scheme base)` - Core primitives + base-extras.scm macros
+- `(scheme case-lambda)` - Multi-arity procedures (pure .sld library, SRFI-16 macro)
 - `(scheme char)` - Character operations
 - `(scheme complex)` - Complex number support
 - `(scheme inexact)` - Inexact arithmetic operations
@@ -241,7 +244,6 @@ Patina features a sophisticated **dual-loader library system** that balances per
 - `(scheme read)` - Input operations (basic support)
 
 **Not Yet Implemented**:
-- `(scheme case-lambda)` - Multi-arity procedures
 - `(scheme cxr)` - Extended car/cdr
 - `(scheme eval)` - Runtime evaluation
 - `(scheme load)` - File loading
@@ -285,7 +287,7 @@ The desugarer receives an `Environment` and checks for macro bindings:
 - Macros are expanded at the right time (after parsing, during desugaring)
 - Clean separation: macro expander handles expansion, desugarer handles traversal
 
-**Fallback Path**: Forms not yet in CoreExpr (let-syntax, case-lambda, expand) use the legacy Value evaluator.
+**Fallback Path**: Forms not yet in CoreExpr (let-syntax, expand) use the legacy Value evaluator.
 
 ### CoreExpr IR
 
@@ -359,8 +361,8 @@ The `Value` enum represents all Scheme values (26 variants):
 - `Procedure(Procedure)` where Procedure is:
   - `Primitive { name, arity, library }` - Built-in procedures
   - `Lambda { params, variadic, body, env }` - User-defined closures
-  - `CaseLambda { clauses, env }` - Multi-arity dispatch
   - `Continuation(...)` - First-class continuations
+  - Note: `case-lambda` is now a macro (SRFI-16), not a special Procedure variant
 
 **Hygiene Support**:
 - `Symbol(Rc<str>)` - Regular symbols (special forms, built-ins)
@@ -441,7 +443,7 @@ Implements Backend trait with hybrid evaluation:
    - Evaluates CoreExpr with TCO support
 
 2. **Value Path** (fallback):
-   - For forms not yet in CoreExpr: let-syntax, letrec-syntax, case-lambda, expand
+   - For forms not yet in CoreExpr: let-syntax, letrec-syntax, expand
    - Uses legacy `Evaluator::eval_in_env()`
 
 **Evaluation Result** (for TCO):
@@ -472,10 +474,9 @@ pub trait SpecialForm {
 **Registered Special Forms**:
 - `quote`, `if`, `define`, `set!`, `lambda`, `begin`
 - `define-syntax`, `let-syntax`, `letrec-syntax`
-- `case-lambda` (R7RS scheme case-lambda)
 - `expand` (debugging extension)
 
-**Note**: Most "special forms" users think of (let, cond, case, do, and, or) are actually **macros** defined in base-extras.scm, not special forms.
+**Note**: Most "special forms" users think of (let, cond, case, do, and, or, case-lambda) are actually **macros** defined in Scheme (base-extras.scm, case-lambda-extras.scm), not special forms.
 
 ### Primitives Organization
 

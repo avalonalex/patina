@@ -60,10 +60,6 @@ pub enum Formals {
     },
 }
 
-// NOTE: CaseLambdaClause for CoreExpr is no longer needed.
-// case-lambda is now implemented as a macro via SRFI-16.
-// See lib/scheme/case-lambda-extras.scm
-
 /// Core Scheme expressions after macro expansion and desugaring
 ///
 /// This is the minimal IR that backends must handle.
@@ -153,9 +149,6 @@ pub enum CoreExpr {
     /// Example: (expand '(let ((x 1)) x)) => ((lambda (x) x) 1)
     /// This is a Patina debugging extension, not part of R7RS
     Expand { expr: Rc<CoreExpr> },
-
-    // NOTE: CaseLambda variant removed - now implemented as macro via SRFI-16
-    // See lib/scheme/case-lambda-extras.scm
 
     /// Function application
     /// Example: (f x y), (+ 1 2)

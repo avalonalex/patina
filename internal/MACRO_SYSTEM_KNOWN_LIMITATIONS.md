@@ -222,16 +222,19 @@ These patterns require ellipsis level tracking that allows accumulator patterns 
 
 ## Current Implementation
 
-`case-lambda` is now a **pure macro** via SRFI-16:
-- Implementation: `lib/scheme/case-lambda-extras.scm`
+`case-lambda` is now a **pure macro** via SRFI-16, loaded from a `.sld` file:
+- Implementation: `lib/scheme/case-lambda.sld` (R7RS library definition format)
 - 21 tests passing in `crates/patina-tests/tests/case_lambda.rs`
 - All clause types work: fixed arity, pure variadic, mixed variadic
+- **First library using .sld loading path** - exercises SchemeLibraryLoader
 
 **Code Removed:**
 - `CoreExpr::CaseLambda` variant removed from IR
 - `Procedure::CaseLambda` variant removed from runtime
 - `desugar_case_lambda()` removed from desugarer
 - Procedure dispatch code removed from `application.rs` and `core_eval.rs`
+- `crates/patina-runtime/src/stdlib/scheme_case_lambda.rs` deleted
+- Rust library builder registration removed from evaluator
 
 The special form infrastructure has been completely removed. `case-lambda` is now purely implemented as a macro that expands to a regular lambda with internal argument count dispatch.
 
@@ -249,4 +252,4 @@ All 21 case-lambda tests now pass:
 
 - SRFI-16: https://srfi.schemers.org/srfi-16/srfi-16.html
 - R7RS Section 4.2.9 - case-lambda specification
-- `lib/scheme/case-lambda-extras.scm` - Working implementation
+- `lib/scheme/case-lambda.sld` - Working .sld library implementation

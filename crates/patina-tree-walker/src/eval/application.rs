@@ -78,8 +78,6 @@ impl Evaluator {
                         self.prepare_lambda_env(params, variadic, args, env, *binding_scope)?;
                     self.eval_lambda_body(body, &new_env, in_tail_position)
                 }
-                // NOTE: Procedure::CaseLambda removed - case-lambda is now a macro via SRFI-16
-                // See lib/scheme/case-lambda-extras.scm
                 Procedure::Continuation => {
                     // Continuations handled in outer match fallback
                     Err(EvalError::NotAProcedure(format!("{}", proc)))
