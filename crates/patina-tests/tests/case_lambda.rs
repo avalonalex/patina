@@ -1,6 +1,6 @@
-//! Tests for case-lambda special form
+//! Tests for case-lambda macro
 //!
-//! Tests the (scheme case-lambda) library implementation.
+//! Tests the (scheme case-lambda) library implementation using SRFI-16.
 //!
 //! R7RS Reference: Section 4.2.9 - Case-lambda
 
@@ -12,7 +12,7 @@ use common::*;
 // ============================================================================
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_zero_args() {
     assert_program_eval_to(
         r#"
@@ -27,7 +27,7 @@ fn test_case_lambda_zero_args() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_one_arg() {
     assert_program_eval_to(
         r#"
@@ -42,7 +42,7 @@ fn test_case_lambda_one_arg() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_two_args() {
     assert_program_eval_to(
         r#"
@@ -57,7 +57,7 @@ fn test_case_lambda_two_args() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_multiple_clauses() {
     assert_program_eval_to(
         r#"
@@ -78,7 +78,7 @@ fn test_case_lambda_multiple_clauses() {
 // ============================================================================
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_variadic_only() {
     assert_program_eval_to(
         r#"
@@ -93,7 +93,7 @@ fn test_case_lambda_variadic_only() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_variadic_zero_args() {
     assert_program_eval_to(
         r#"
@@ -108,7 +108,7 @@ fn test_case_lambda_variadic_zero_args() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_mixed_fixed_and_variadic() {
     assert_program_eval_to(
         r#"
@@ -123,7 +123,7 @@ fn test_case_lambda_mixed_fixed_and_variadic() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_multiple_with_variadic() {
     assert_program_eval_to(
         r#"
@@ -145,7 +145,7 @@ fn test_case_lambda_multiple_with_variadic() {
 // ============================================================================
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_chibi_any_arity() {
     assert_program_eval_to(
         r#"
@@ -168,7 +168,7 @@ fn test_case_lambda_chibi_any_arity() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_chibi_rest_arity() {
     assert_program_eval_to(
         r#"
@@ -194,7 +194,7 @@ fn test_case_lambda_chibi_rest_arity() {
 // ============================================================================
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_captures_environment() {
     assert_program_eval_to(
         r#"
@@ -211,7 +211,7 @@ fn test_case_lambda_captures_environment() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_nested_closures() {
     assert_program_eval_to(
         r#"
@@ -233,7 +233,7 @@ fn test_case_lambda_nested_closures() {
 // ============================================================================
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_as_argument() {
     assert_program_eval_to(
         r#"
@@ -251,7 +251,7 @@ fn test_case_lambda_as_argument() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_returned_from_function() {
     assert_program_eval_to(
         r#"
@@ -273,7 +273,7 @@ fn test_case_lambda_returned_from_function() {
 // ============================================================================
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_no_matching_clause() {
     assert_program_eval_error(
         r#"
@@ -288,7 +288,7 @@ fn test_case_lambda_no_matching_clause() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_empty_clause_list() {
     assert_program_eval_error("(case-lambda)");
 }
@@ -298,7 +298,7 @@ fn test_case_lambda_empty_clause_list() {
 // ============================================================================
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_fibonacci() {
     assert_program_eval_to(
         r#"
@@ -316,7 +316,7 @@ fn test_case_lambda_fibonacci() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_list_operations() {
     assert_program_eval_to(
         r#"
@@ -341,7 +341,7 @@ fn test_case_lambda_list_operations() {
 // ============================================================================
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_library_import() {
     assert_program_eval_to(
         r#"
@@ -361,7 +361,7 @@ fn test_case_lambda_library_import() {
 // ============================================================================
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_tail_recursion() {
     assert_program_eval_to(
         r#"
@@ -379,7 +379,7 @@ fn test_case_lambda_tail_recursion() {
 }
 
 #[test]
-#[ignore = "need to properly support import"]
+
 fn test_case_lambda_tail_call_in_different_clauses() {
     assert_program_eval_to(
         r#"

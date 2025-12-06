@@ -159,3 +159,94 @@ The following tests document the current behavior:
 - R7RS Section 4.3.2 - Pattern Language, literal matching semantics
 - `crates/patina-macros/src/macro_expander/matcher.rs` - `literals_equal()` function
 - `crates/patina-tests/tests/hygiene.rs` - Test cases for literal matching
+
+---
+
+# 3. Complex Ellipsis Patterns in Variadic Formals
+
+## Status: ✅ RESOLVED (as of 2025-12-06)
+
+**Added:** 2025-12-06
+**Resolved:** 2025-12-06
+
+The official SRFI-16 reference implementation works in Patina! The key insight is that SRFI-16 uses a clever approach with literal markers (`"CLAUSE"` and `"IMPROPER"`) that avoids the problematic ellipsis patterns.
+
+## What Works
+
+The SRFI-16 reference implementation (https://srfi.schemers.org/srfi-16/srfi-16.html) is now implemented in `lib/scheme/case-lambda-extras.scm`:
+
+```scheme
+(define-syntax case-lambda
+  (syntax-rules ()
+    ;; Entry: dispatch to "CLAUSE" processing
+    ((case-lambda (?a1 ?e1 ...) ?clause1 ...)
+     (lambda args
+       (let ((l (length args)))
+         (case-lambda "CLAUSE" args l (?a1 ?e1 ...) ?clause1 ...))))
+
+    ;; Fixed arity: ((?a1 ...) ?e1 ...)
+    ((case-lambda "CLAUSE" ?args ?l ((?a1 ...) ?e1 ...) ?clause1 ...)
+     (if (= ?l (length '(?a1 ...)))
+         (apply (lambda (?a1 ...) ?e1 ...) ?args)
+         (case-lambda "CLAUSE" ?args ?l ?clause1 ...)))
+
+    ;; Variadic: ((?a1 . ?ar) ?e1 ...) - transition to "IMPROPER"
+    ((case-lambda "CLAUSE" ?args ?l ((?a1 . ?ar) ?e1 ...) ?clause1 ...)
+     (case-lambda "IMPROPER" ?args ?l 1 (?a1 . ?ar) (?ar ?e1 ...) ?clause1 ...))
+
+    ;; ... more clauses for IMPROPER handling
+    ))
+```
+
+The SRFI-16 approach:
+1. Uses literal string markers (`"CLAUSE"`, `"IMPROPER"`) instead of helper macros
+2. Recursively processes dotted pair patterns by peeling off one element at a time
+3. Counts fixed parameters with an accumulator `?k`
+4. Preserves the original formals pattern `?al` for use in the final `lambda`
+
+## What Still Doesn't Work
+
+The R7RS spec's more direct pattern and chibi's `%case` helper approach still fail:
+
+```scheme
+;; R7RS pattern - fails with "x2 at level 1 used at level 0"
+((case-lambda "clause" args n ((x1 x2 ... . r) body0 ...) clause ...)
+ ...)
+
+;; Chibi %case accumulator - fails with "p at level 1 used at level 0"
+((%case args len "variadic" n (p ...) (r . body) . rest)
+ (apply (lambda (p ... . r) . body) args))
+```
+
+These patterns require ellipsis level tracking that allows accumulator patterns `(p ... x)`.
+
+## Current Implementation
+
+`case-lambda` is now a **pure macro** via SRFI-16:
+- Implementation: `lib/scheme/case-lambda-extras.scm`
+- 21 tests passing in `crates/patina-tests/tests/case_lambda.rs`
+- All clause types work: fixed arity, pure variadic, mixed variadic
+
+**Code Removed:**
+- `CoreExpr::CaseLambda` variant removed from IR
+- `Procedure::CaseLambda` variant removed from runtime
+- `desugar_case_lambda()` removed from desugarer
+- Procedure dispatch code removed from `application.rs` and `core_eval.rs`
+
+The special form infrastructure has been completely removed. `case-lambda` is now purely implemented as a macro that expands to a regular lambda with internal argument count dispatch.
+
+## Tests
+
+All 21 case-lambda tests now pass:
+- Basic fixed arity clauses
+- Variadic (rest) parameters
+- Mixed fixed + variadic: `((x . rest) ...)`
+- Multiple clauses with dispatch
+- Closures capturing environment
+- Tail call optimization
+
+## References
+
+- SRFI-16: https://srfi.schemers.org/srfi-16/srfi-16.html
+- R7RS Section 4.2.9 - case-lambda specification
+- `lib/scheme/case-lambda-extras.scm` - Working implementation

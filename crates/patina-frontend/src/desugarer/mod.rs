@@ -379,7 +379,7 @@ impl Desugarer {
                     "begin" => return self.desugar_begin(&cdr),
                     "apply" => return self.desugar_apply(&cdr),
                     "expand" => return self.desugar_expand(&cdr),
-                    "case-lambda" => return self.desugar_case_lambda(&cdr),
+                    // case-lambda is now a macro via SRFI-16 (lib/scheme/case-lambda-extras.scm)
 
                     // Let-syntax forms: compile macros and desugar body
                     "let-syntax" => return self.desugar_let_syntax(&cdr),
@@ -875,51 +875,9 @@ impl Desugarer {
         })
     }
 
-    /// Desugar case-lambda: (case-lambda clause ...) → CaseLambda { clauses }
-    ///
-    /// Each clause has the form (params body...) where params follows lambda syntax.
-    fn desugar_case_lambda(&self, args: &Value) -> Result<CoreExpr> {
-        let clauses = utils::list_to_vec(args)?;
-
-        if clauses.is_empty() {
-            return Err(DesugarError::InvalidSyntax(
-                "case-lambda requires at least one clause".to_string(),
-            ));
-        }
-
-        let mut desugared_clauses = Vec::new();
-
-        for clause in clauses {
-            // Each clause should be (params body...)
-            let clause_list = utils::list_to_vec(&clause)?;
-
-            if clause_list.len() < 2 {
-                return Err(DesugarError::InvalidSyntax(
-                    "case-lambda clause must have params and at least one body expression"
-                        .to_string(),
-                ));
-            }
-
-            // First element is params
-            let params = &clause_list[0];
-            let formals = utils::convert_formals(params)?;
-
-            // Rest are body expressions
-            let body_exprs: Vec<CoreExpr> = clause_list[1..]
-                .iter()
-                .map(|e| self.desugar(e))
-                .collect::<Result<_>>()?;
-
-            desugared_clauses.push(patina_ir::CaseLambdaClause {
-                params: formals,
-                body: body_exprs,
-            });
-        }
-
-        Ok(CoreExpr::CaseLambda {
-            clauses: desugared_clauses,
-        })
-    }
+    // NOTE: case-lambda is now implemented as a macro via SRFI-16
+    // See lib/scheme/case-lambda-extras.scm
+    // The CaseLambda special form and desugar_case_lambda method have been removed.
 
     /// Desugar let-syntax: (let-syntax ((name transformer) ...) body ...)
     ///

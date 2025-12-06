@@ -11,7 +11,7 @@ pub mod surface_syntax;
 pub mod visitor;
 
 // Re-export core IR types from patina-core
-pub use patina_core::core_expr::CaseLambdaClause;
+// NOTE: CaseLambdaClause removed - case-lambda is now a macro via SRFI-16
 pub use patina_core::{CoreExpr, Formals, Primitive, ScopedParam, Symbol};
 
 // Local types

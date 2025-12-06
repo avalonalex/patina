@@ -24,8 +24,8 @@ pub mod scope;
 pub mod value;
 
 // Re-export main types for convenience
-// Note: CaseLambdaClause exists in both core_expr (IR) and value (runtime).
-// Use explicit paths: core_expr::CaseLambdaClause or value::CaseLambdaClause
+// Note: CaseLambdaClause for CoreExpr removed (case-lambda is now a macro via SRFI-16).
+// value::CaseLambdaClause still exists for runtime procedure representation.
 pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, Pattern, Template};
 pub use core_expr::{CoreExpr, Formals, Primitive, ScopedParam, Symbol};
 pub use environment::{Environment, ScopedBinding};

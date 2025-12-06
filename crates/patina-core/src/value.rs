@@ -163,14 +163,8 @@ pub struct IdentifierData {
 /// but the Values variant was never used. All lambdas are now created with CoreExpr bodies.
 pub type LambdaBody = Vec<CoreExpr>;
 
-/// A clause in a case-lambda: (params, variadic, body, binding_scope)
-#[derive(Debug, Clone)]
-pub struct CaseLambdaClause {
-    pub params: Vec<ScopedParam>,
-    pub variadic: Option<ScopedParam>,
-    pub body: LambdaBody,
-    pub binding_scope: Option<ScopeId>,
-}
+// NOTE: CaseLambdaClause removed - case-lambda is now implemented as a macro via SRFI-16
+// See lib/scheme/case-lambda-extras.scm
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -200,11 +194,8 @@ pub enum Procedure {
         binding_scope: Option<ScopeId>,
     },
 
-    /// Case-lambda procedure (dispatches on argument count)
-    CaseLambda {
-        clauses: Vec<CaseLambdaClause>,
-        env: Rc<Environment>, // Captured environment for closures
-    },
+    // NOTE: CaseLambda variant removed - case-lambda is now a macro via SRFI-16
+    // See lib/scheme/case-lambda-extras.scm
 
     /// Continuation (for call/cc)
     Continuation,
@@ -506,7 +497,6 @@ impl std::fmt::Display for Value {
                     write!(f, "#<procedure:{}:{}>", library.join("."), name)
                 }
                 Procedure::Lambda { .. } => write!(f, "#<procedure>"),
-                Procedure::CaseLambda { .. } => write!(f, "#<procedure:case-lambda>"),
                 Procedure::Continuation => write!(f, "#<continuation>"),
             },
             Value::Parameter { .. } => write!(f, "#<parameter>"),

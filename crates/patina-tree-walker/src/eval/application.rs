@@ -78,39 +78,8 @@ impl Evaluator {
                         self.prepare_lambda_env(params, variadic, args, env, *binding_scope)?;
                     self.eval_lambda_body(body, &new_env, in_tail_position)
                 }
-                Procedure::CaseLambda { clauses, env } => {
-                    // Try each clause in order to find one that matches the argument count
-                    for clause in clauses {
-                        let matches = if clause.variadic.is_some() {
-                            // Variadic clause: need at least as many args as fixed params
-                            args.len() >= clause.params.len()
-                        } else {
-                            // Fixed arity clause: need exact number of args
-                            args.len() == clause.params.len()
-                        };
-
-                        if matches {
-                            // Found a matching clause - use shared helper methods
-                            let new_env = self.prepare_lambda_env(
-                                &clause.params,
-                                &clause.variadic,
-                                args,
-                                env,
-                                clause.binding_scope,
-                            )?;
-                            return self.eval_lambda_body(&clause.body, &new_env, in_tail_position);
-                        }
-                    }
-
-                    // No matching clause found
-                    Err(EvalError::WrongArity {
-                        expected: format!(
-                            "case-lambda: no clause matches {} arguments",
-                            args.len()
-                        ),
-                        actual: args.len(),
-                    })
-                }
+                // NOTE: Procedure::CaseLambda removed - case-lambda is now a macro via SRFI-16
+                // See lib/scheme/case-lambda-extras.scm
                 Procedure::Continuation => {
                     // Continuations handled in outer match fallback
                     Err(EvalError::NotAProcedure(format!("{}", proc)))

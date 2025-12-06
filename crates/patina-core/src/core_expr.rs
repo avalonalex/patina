@@ -60,14 +60,9 @@ pub enum Formals {
     },
 }
 
-/// Case-lambda clause: (params body...)
-#[derive(Debug, Clone)]
-pub struct CaseLambdaClause {
-    /// Parameter specification
-    pub params: Formals,
-    /// Body expressions
-    pub body: Vec<CoreExpr>,
-}
+// NOTE: CaseLambdaClause for CoreExpr is no longer needed.
+// case-lambda is now implemented as a macro via SRFI-16.
+// See lib/scheme/case-lambda-extras.scm
 
 /// Core Scheme expressions after macro expansion and desugaring
 ///
@@ -159,10 +154,8 @@ pub enum CoreExpr {
     /// This is a Patina debugging extension, not part of R7RS
     Expand { expr: Rc<CoreExpr> },
 
-    /// Case-lambda: multi-arity procedure with dispatch
-    /// Example: (case-lambda (() 'zero) ((x) x) ((x y) (cons x y)))
-    /// From R7RS (scheme case-lambda)
-    CaseLambda { clauses: Vec<CaseLambdaClause> },
+    // NOTE: CaseLambda variant removed - now implemented as macro via SRFI-16
+    // See lib/scheme/case-lambda-extras.scm
 
     /// Function application
     /// Example: (f x y), (+ 1 2)
@@ -251,7 +244,6 @@ impl CoreExpr {
             CoreExpr::Import { .. } => "import",
             CoreExpr::Parameterize { .. } => "parameterize",
             CoreExpr::Expand { .. } => "expand",
-            CoreExpr::CaseLambda { .. } => "case-lambda",
             CoreExpr::App { .. } => "application",
             CoreExpr::Apply { .. } => "apply",
             CoreExpr::PrimCall { .. } => "primitive-call",
@@ -315,16 +307,6 @@ impl CoreExpr {
 
             CoreExpr::Expand { expr } => CoreExpr::Expand {
                 expr: Rc::new(f(expr)),
-            },
-
-            CoreExpr::CaseLambda { clauses } => CoreExpr::CaseLambda {
-                clauses: clauses
-                    .iter()
-                    .map(|clause| CaseLambdaClause {
-                        params: clause.params.clone(),
-                        body: clause.body.iter().map(&f).collect(),
-                    })
-                    .collect(),
             },
 
             CoreExpr::App { func, args } => CoreExpr::App {
@@ -436,40 +418,6 @@ impl std::fmt::Display for CoreExpr {
             }
             CoreExpr::Expand { expr } => {
                 write!(f, "(expand {})", expr)
-            }
-            CoreExpr::CaseLambda { clauses } => {
-                write!(f, "(case-lambda")?;
-                for clause in clauses {
-                    write!(f, " (")?;
-                    match &clause.params {
-                        Formals::Fixed(ps) => {
-                            write!(f, "(")?;
-                            for (i, p) in ps.iter().enumerate() {
-                                if i > 0 {
-                                    write!(f, " ")?;
-                                }
-                                write!(f, "{}", p)?;
-                            }
-                            write!(f, ")")?;
-                        }
-                        Formals::Variadic(p) => write!(f, "{}", p)?,
-                        Formals::Mixed { fixed, rest } => {
-                            write!(f, "(")?;
-                            for (i, p) in fixed.iter().enumerate() {
-                                if i > 0 {
-                                    write!(f, " ")?;
-                                }
-                                write!(f, "{}", p)?;
-                            }
-                            write!(f, " . {})", rest)?;
-                        }
-                    }
-                    for expr in &clause.body {
-                        write!(f, " {}", expr)?;
-                    }
-                    write!(f, ")")?;
-                }
-                write!(f, ")")
             }
             CoreExpr::App { func, args } => {
                 write!(f, "({}", func)?;
