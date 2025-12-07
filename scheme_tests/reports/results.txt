@@ -2847,15 +2847,12 @@ Testing:
 Testing: 
 (read (open-input-string "#!fold-case ABC"))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: !
 Testing: 
 (read (open-input-string "#!fold-case #!no-fold-case ABC"))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: !
 Testing: 
 (read (open-input-string "#; abc def"))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
 Testing: 
 (read (open-input-string "; abc 
 def"))
@@ -2870,27 +2867,21 @@ Testing:
 (read (open-input-string "#; ; abc
  def ghi"))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
 Testing: 
 (read (open-input-string "(#;sqrt abs -16)"))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
 Testing: 
 (read (open-input-string "(a #; #;b c d)"))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
 Testing: 
 (read (open-input-string "(a #;(b #;c d) e)"))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
 Testing: 
 (read (open-input-string "(a . #;b c)"))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
 Testing: 
 (read (open-input-string "(a . b #;c)"))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
@@ -3016,19 +3007,11 @@ Testing:
 Testing: 
 (get-output-string out)
 
-FAIL: (get-output-string out)
-  expected: "|\||"
-  but got:  "|||"
-
 Testing: 
 (get-output-string out)
 
 Testing: 
 (get-output-string out)
-
-FAIL: (get-output-string out)
-  expected: "|\\123|"
-  but got:  "|\123|"
 
 Testing: 
 (get-output-string out)
@@ -3063,7 +3046,7 @@ Testing:
 Testing: 
 (get-output-string out)
 
-Tests run: 93, Passed: 74, Failed: 2, Errors: 17
+Tests run: 93, Passed: 85, Failed: 0, Errors: 8
 
 Running test suite: Numeric syntax
 Testing: 
@@ -3123,30 +3106,14 @@ Testing:
 Testing: 
 (values z)
 
-FAIL: (values z)
-  expected: -0.1
-  but got:  |-.1|
-
 Testing: 
 (and (member z-str '("-.1" "-0.1" "-100.0e-3")) #t)
-
-FAIL: (and (member z-str '("-.1" "-0.1" "-100.0e-3")) #t)
-  expected: #t
-  but got:  #f
 
 Testing: 
 (values z)
 
-FAIL: (values z)
-  expected: -0.0
-  but got:  |-.0|
-
 Testing: 
 (and (member z-str '("-.0" "-0." "-0.0" "0.0" "0." ".0")) #t)
-
-FAIL: (and (member z-str '("-.0" "-0." "-0.0" "0.0" "0." ".0")) #t)
-  expected: #t
-  but got:  #f
 
 Testing: 
 (values z)
@@ -3190,14 +3157,54 @@ Testing:
 Testing: 
 (and (member z-str '("1E2" "100.0" "100.")) #t)
 
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1s2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1S2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1f2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1F2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1d2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1D2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1l2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1L2
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("1s2" "100.0" "100.")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("1S2" "100.0" "100.")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("1f2" "100.0" "100.")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("1F2" "100.0" "100.")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("1d2" "100.0" "100.")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("1D2" "100.0" "100.")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("1l2" "100.0" "100.")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("1L2" "100.0" "100.")) #t)
+
 Testing: 
 (values z)
 
@@ -3207,16 +3214,8 @@ Testing:
 Testing: 
 (values z)
 
-FAIL: (values z)
-  expected: +nan.0
-  but got:  |+NAN.0|
-
 Testing: 
 (and (member z-str '("+NAN.0" "+nan.0" "+NaN.0")) #t)
-
-FAIL: (and (member z-str '("+NAN.0" "+nan.0" "+NaN.0")) #t)
-  expected: #t
-  but got:  #f
 
 Testing: 
 (values z)
@@ -3224,14 +3223,24 @@ Testing:
 Testing: 
 (and (member z-str '("+inf.0" "+inf.0" "+Inf.0")) #t)
 
-Error: Invalid syntax: read: Invalid syntax: Invalid number: +InF.0
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("+InF.0" "+inf.0" "+Inf.0")) #t)
+
 Testing: 
 (values z)
 
 Testing: 
 (and (member z-str '("-inf.0" "-inf.0" "-Inf.0")) #t)
 
-Error: Invalid syntax: read: Invalid syntax: Invalid number: -iNF.0
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("-iNF.0" "-inf.0" "-Inf.0")) #t)
+
 Testing: 
 (values z)
 
@@ -3558,8 +3567,18 @@ Testing:
 Testing: 
 (and (member z-str '("#x#i10" "16.0" "16.")) #t)
 
-Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 1/10
-Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 1/10
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("#i#x1/10" "0.0625")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("#x#i1/10" "0.0625")) #t)
+
 Testing: 
 (values z)
 
@@ -3584,16 +3603,36 @@ Testing:
 Testing: 
 (and (member z-str '("#d1e2" "100.0" "100.")) #t)
 
-Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 10/2
-Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 11/2
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("#x10/2" "8")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("#x11/2" "17/2")) #t)
+
 Testing: 
 (values z)
 
 Testing: 
 (and (member z-str '("#d11/2" "11/2")) #t)
 
-Error: Invalid syntax: read: Invalid syntax: Invalid octal number: 11/2
-Error: Invalid syntax: read: Invalid syntax: Invalid binary number: 11/10
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("#o11/2" "9/2")) #t)
+
+Testing: 
+(values z)
+
+Testing: 
+(and (member z-str '("#b11/10" "3/2")) #t)
+
 Testing: 
 (values z)
 
@@ -3621,9 +3660,9 @@ Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
-Tests run: 191, Passed: 152, Failed: 10, Errors: 29
+Tests run: 207, Passed: 190, Failed: 4, Errors: 13
 
-Tests run: 191, Passed: 152, Failed: 10, Errors: 29
+Tests run: 207, Passed: 190, Failed: 4, Errors: 13
 
 Running test suite: 6.14 System interface
 Testing: 

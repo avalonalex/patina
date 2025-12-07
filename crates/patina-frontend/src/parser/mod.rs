@@ -60,6 +60,13 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Result<Value, ParseError> {
+        // Handle datum comments: #; skips the next datum
+        // Multiple #; in a row each skip one datum
+        while self.current_token == Token::DatumComment {
+            self.advance()?; // consume #;
+            self.skip_datum()?; // skip the commented datum
+        }
+
         match &self.current_token.clone() {
             Token::Boolean(b) => {
                 let val = Value::Boolean(*b);
@@ -114,6 +121,58 @@ impl Parser {
         }
     }
 
+    /// Skip a single datum (used for #; datum comments)
+    /// This parses the datum but discards the result
+    fn skip_datum(&mut self) -> Result<(), ParseError> {
+        // Handle nested datum comments within the skipped datum
+        while self.current_token == Token::DatumComment {
+            self.advance()?;
+            self.skip_datum()?;
+        }
+
+        match &self.current_token {
+            Token::Boolean(_)
+            | Token::Number(_)
+            | Token::Character(_)
+            | Token::String(_)
+            | Token::Identifier(_) => {
+                self.advance()?;
+                Ok(())
+            }
+            Token::Quote | Token::Quasiquote | Token::Unquote | Token::UnquoteSplicing => {
+                self.advance()?;
+                self.skip_datum()
+            }
+            Token::LeftParen => self.skip_list(),
+            Token::VectorOpen | Token::BytevectorOpen => self.skip_list(), // Same structure as list
+            Token::Eof => Err(ParseError::UnexpectedEof),
+            token => Err(ParseError::UnexpectedToken(token.clone())),
+        }
+    }
+
+    /// Skip a list structure (used by skip_datum)
+    fn skip_list(&mut self) -> Result<(), ParseError> {
+        self.advance()?; // consume ( or #( or #u8(
+
+        while self.current_token != Token::RightParen {
+            if self.current_token == Token::Eof {
+                return Err(ParseError::UnexpectedEof);
+            }
+            if self.current_token == Token::Dot {
+                self.advance()?; // consume .
+                self.skip_datum()?; // skip tail
+                break;
+            }
+            self.skip_datum()?;
+        }
+
+        if self.current_token != Token::RightParen {
+            return Err(ParseError::UnexpectedToken(self.current_token.clone()));
+        }
+        self.advance()?; // consume )
+        Ok(())
+    }
+
     fn parse_list(&mut self) -> Result<Value, ParseError> {
         self.advance()?; // consume (
 
@@ -128,6 +187,11 @@ impl Parser {
             if self.current_token == Token::Dot {
                 self.advance()?;
                 dotted_tail = Some(self.parse_expr()?);
+                // After the tail, skip any datum comments before )
+                while self.current_token == Token::DatumComment {
+                    self.advance()?;
+                    self.skip_datum()?;
+                }
                 break;
             }
 
@@ -212,11 +276,11 @@ impl Parser {
             return self.parse_number_with_prefix(s);
         }
 
-        // Check for special R7RS floating-point literals
-        match s {
+        // Check for special R7RS floating-point literals (case-insensitive)
+        match s.to_lowercase().as_str() {
             "+inf.0" => return Ok(Value::Real(f64::INFINITY)),
             "-inf.0" => return Ok(Value::Real(f64::NEG_INFINITY)),
-            "+nan.0" => return Ok(Value::Real(f64::NAN)),
+            "+nan.0" | "-nan.0" => return Ok(Value::Real(f64::NAN)),
             _ => {}
         }
 
@@ -276,12 +340,50 @@ impl Parser {
         }
 
         // If it's not an integer, try floating point
-        if let Ok(f) = s.parse::<f64>() {
+        // R7RS allows alternate exponent markers: s (short), f (single), d (double), l (long)
+        // Per R7RS 7.1.1: "implementations may accept" these markers - they're optional.
+        // The spec gives names but no specific precision requirements, only that s < f < d < l
+        // and "the default precision has at least as much precision as double".
+        // We normalize all to 'e' and parse as f64, which satisfies the spec since we only
+        // have one inexact type and it's double precision.
+        let normalized = Self::normalize_exponent_markers(s);
+        if let Ok(f) = normalized.parse::<f64>() {
             return Ok(Value::Real(f));
         }
 
         // Nothing worked - invalid number
         Err(ParseError::InvalidSyntax(format!("Invalid number: {}", s)))
+    }
+
+    /// Normalize R7RS alternate exponent markers to standard 'e'
+    ///
+    /// R7RS 7.1.1 allows optional precision-indicating exponent markers:
+    /// - s/S: short precision
+    /// - f/F: single precision
+    /// - d/D: double precision
+    /// - l/L: long precision
+    ///
+    /// The spec defines no specific precision requirements, only ordering (s < f < d < l)
+    /// and that default precision is at least double. Since we use f64 for all inexact
+    /// numbers, normalizing to 'e' is spec-compliant.
+    fn normalize_exponent_markers(s: &str) -> std::borrow::Cow<'_, str> {
+        // Quick check: if no alternate markers, return as-is
+        if !s
+            .chars()
+            .any(|c| matches!(c, 's' | 'S' | 'f' | 'F' | 'd' | 'D' | 'l' | 'L'))
+        {
+            return std::borrow::Cow::Borrowed(s);
+        }
+
+        // Replace alternate exponent markers with 'e'
+        let mut result = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                's' | 'S' | 'f' | 'F' | 'd' | 'D' | 'l' | 'L' => result.push('e'),
+                _ => result.push(c),
+            }
+        }
+        std::borrow::Cow::Owned(result)
     }
 
     fn parse_number_with_prefix(&self, s: &str) -> Result<Value, ParseError> {
@@ -357,6 +459,52 @@ impl Parser {
         let value = if radix == 10 {
             // For decimal, use the existing parse_number logic (handles floats, rationals, complex, etc.)
             self.parse_number(rest)?
+        } else if rest.contains('/') {
+            // Parse rational with given radix: e.g., #x1/10 -> 1/16
+            let parts: Vec<&str> = rest.split('/').collect();
+            if parts.len() != 2 {
+                return Err(ParseError::InvalidSyntax(format!(
+                    "Invalid rational: {}",
+                    rest
+                )));
+            }
+
+            let radix_name = match radix {
+                2 => "binary",
+                8 => "octal",
+                16 => "hexadecimal",
+                _ => "numeric",
+            };
+
+            let numer = BigInt::parse_bytes(parts[0].as_bytes(), radix).ok_or_else(|| {
+                ParseError::InvalidSyntax(format!("Invalid {} numerator: {}", radix_name, parts[0]))
+            })?;
+            let denom = BigInt::parse_bytes(parts[1].as_bytes(), radix).ok_or_else(|| {
+                ParseError::InvalidSyntax(format!(
+                    "Invalid {} denominator: {}",
+                    radix_name, parts[1]
+                ))
+            })?;
+
+            if denom.is_zero() {
+                return Err(ParseError::InvalidSyntax(
+                    "Rational denominator cannot be zero".to_string(),
+                ));
+            }
+
+            let ratio = BigRational::new(numer, denom);
+
+            // Simplify to integer if denominator is 1
+            if ratio.denom() == &BigInt::from(1) {
+                let numer = ratio.numer();
+                if let Some(n) = numer.to_i64() {
+                    Value::integer(n)
+                } else {
+                    Value::BigInteger(numer.clone())
+                }
+            } else {
+                Value::Rational(ratio)
+            }
         } else {
             // For non-decimal radix, parse as integer only
             match i64::from_str_radix(rest, radix) {
@@ -505,11 +653,11 @@ impl Parser {
     /// This is key for R7RS complex number semantics: `1+0i` has exact 0 imaginary,
     /// while `1+0.0i` has inexact 0.0 imaginary.
     fn parse_real_component_as_value(&self, s: &str) -> Result<Value, ParseError> {
-        // Check for special R7RS floating-point literals (always inexact)
-        match s {
+        // Check for special R7RS floating-point literals (case-insensitive, always inexact)
+        match s.to_lowercase().as_str() {
             "+inf.0" => return Ok(Value::Real(f64::INFINITY)),
             "-inf.0" => return Ok(Value::Real(f64::NEG_INFINITY)),
-            "+nan.0" => return Ok(Value::Real(f64::NAN)),
+            "+nan.0" | "-nan.0" => return Ok(Value::Real(f64::NAN)),
             _ => {}
         }
 
@@ -572,11 +720,11 @@ impl Parser {
     /// Parse a component that should be a real number (int, bigint, rational, or float)
     /// Returns f64 (for polar coordinates where we always need inexact)
     fn parse_real_component(&self, s: &str) -> Result<f64, ParseError> {
-        // Check for special R7RS floating-point literals
-        match s {
+        // Check for special R7RS floating-point literals (case-insensitive)
+        match s.to_lowercase().as_str() {
             "+inf.0" => return Ok(f64::INFINITY),
             "-inf.0" => return Ok(f64::NEG_INFINITY),
-            "+nan.0" => return Ok(f64::NAN),
+            "+nan.0" | "-nan.0" => return Ok(f64::NAN),
             _ => {}
         }
 
@@ -785,6 +933,56 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_special_floats_case_insensitive() {
+        // Test case-insensitive parsing of inf.0 and nan.0
+        let test_cases = [
+            ("+INF.0", f64::INFINITY),
+            ("+Inf.0", f64::INFINITY),
+            ("+iNf.0", f64::INFINITY),
+            ("-INF.0", f64::NEG_INFINITY),
+            ("-Inf.0", f64::NEG_INFINITY),
+        ];
+
+        for (input, expected) in test_cases {
+            let mut parser = Parser::new(input).unwrap();
+            let result = parser.parse().unwrap();
+            match result {
+                Value::Real(f) => {
+                    assert_eq!(
+                        f.is_infinite(),
+                        expected.is_infinite(),
+                        "For input '{}': expected infinite",
+                        input
+                    );
+                    assert_eq!(
+                        f.is_sign_positive(),
+                        expected.is_sign_positive(),
+                        "For input '{}': sign mismatch",
+                        input
+                    );
+                }
+                other => panic!("For input '{}': expected Real, got {:?}", input, other),
+            }
+        }
+
+        // Test NaN separately (can't use == for NaN)
+        let nan_cases = ["+NAN.0", "+Nan.0", "+nAn.0", "-NAN.0", "-nan.0"];
+        for input in nan_cases {
+            let mut parser = Parser::new(input).unwrap();
+            let result = parser.parse().unwrap();
+            match result {
+                Value::Real(f) => {
+                    assert!(f.is_nan(), "For input '{}': expected NaN, got {}", input, f);
+                }
+                other => panic!(
+                    "For input '{}': expected Real (NaN), got {:?}",
+                    input, other
+                ),
+            }
+        }
+    }
+
+    #[test]
     fn test_parse_infinity_in_expression() {
         let mut parser = Parser::new("(+ +inf.0 1)").unwrap();
         let result = parser.parse().unwrap();
@@ -809,5 +1007,267 @@ mod tests {
         } else {
             panic!("Expected list");
         }
+    }
+
+    // ========== Datum Comment Tests ==========
+
+    #[test]
+    fn test_datum_comment_simple() {
+        // #; abc def -> def
+        let mut parser = Parser::new("#; abc def").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Symbol(s) if &*s == "def"));
+    }
+
+    #[test]
+    fn test_datum_comment_in_list() {
+        // (#;sqrt abs -16) -> (abs -16)
+        let mut parser = Parser::new("(#;sqrt abs -16)").unwrap();
+        let result = parser.parse().unwrap();
+
+        // Should be a list with two elements: abs and -16
+        if let Value::Pair(pair) = result {
+            let borrowed = pair.borrow();
+            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "abs"));
+        } else {
+            panic!("Expected list");
+        }
+    }
+
+    #[test]
+    fn test_datum_comment_multiple() {
+        // (a #; #;b c d) -> (a d)
+        // First #; skips b, second #; skips c
+        let mut parser = Parser::new("(a #; #;b c d)").unwrap();
+        let result = parser.parse().unwrap();
+
+        // Should be a list (a d)
+        if let Value::Pair(pair) = result {
+            let borrowed = pair.borrow();
+            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "a"));
+
+            if let Value::Pair(pair2) = &borrowed.1 {
+                let borrowed2 = pair2.borrow();
+                assert!(matches!(&borrowed2.0, Value::Symbol(s) if &**s == "d"));
+                assert!(matches!(&borrowed2.1, Value::Null));
+            } else {
+                panic!("Expected second element");
+            }
+        } else {
+            panic!("Expected list");
+        }
+    }
+
+    #[test]
+    fn test_datum_comment_nested_list() {
+        // (a #;(b #;c d) e) -> (a e)
+        let mut parser = Parser::new("(a #;(b #;c d) e)").unwrap();
+        let result = parser.parse().unwrap();
+
+        if let Value::Pair(pair) = result {
+            let borrowed = pair.borrow();
+            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "a"));
+
+            if let Value::Pair(pair2) = &borrowed.1 {
+                let borrowed2 = pair2.borrow();
+                assert!(matches!(&borrowed2.0, Value::Symbol(s) if &**s == "e"));
+                assert!(matches!(&borrowed2.1, Value::Null));
+            } else {
+                panic!("Expected second element");
+            }
+        } else {
+            panic!("Expected list");
+        }
+    }
+
+    #[test]
+    fn test_datum_comment_dotted_list() {
+        // (a . #;b c) -> (a . c)
+        let mut parser = Parser::new("(a . #;b c)").unwrap();
+        let result = parser.parse().unwrap();
+
+        if let Value::Pair(pair) = result {
+            let borrowed = pair.borrow();
+            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "a"));
+            assert!(matches!(&borrowed.1, Value::Symbol(s) if &**s == "c"));
+        } else {
+            panic!("Expected pair");
+        }
+    }
+
+    #[test]
+    fn test_datum_comment_before_tail() {
+        // (a . b #;c) -> This should skip c after the dotted tail
+        // Actually R7RS says: (a . b #;c) means the #;c is skipped after b
+        // But b is already the tail... let's verify the chibi behavior
+        // According to tests: this should return (a . b) with c skipped
+        let mut parser = Parser::new("(a . b #;c)").unwrap();
+        let result = parser.parse().unwrap();
+
+        if let Value::Pair(pair) = result {
+            let borrowed = pair.borrow();
+            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "a"));
+            assert!(matches!(&borrowed.1, Value::Symbol(s) if &**s == "b"));
+        } else {
+            panic!("Expected pair");
+        }
+    }
+
+    #[test]
+    fn test_datum_comment_with_line_comment() {
+        // #; ; comment\n def ghi -> ghi
+        // The #; comments out the first datum after it, which is 'def'
+        // (the ; comment is just a line comment consumed as whitespace)
+        let mut parser = Parser::new("#; ; comment\n def ghi").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Symbol(s) if &*s == "ghi"));
+    }
+
+    #[test]
+    fn test_datum_comment_vector() {
+        // #;#(1 2 3) 42 -> 42
+        let mut parser = Parser::new("#;#(1 2 3) 42").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Integer(42)));
+    }
+
+    #[test]
+    fn test_datum_comment_quoted() {
+        // #;'foo bar -> bar
+        let mut parser = Parser::new("#;'foo bar").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Symbol(s) if &*s == "bar"));
+    }
+
+    // ========== Alternate Exponent Marker Tests ==========
+
+    #[test]
+    fn test_alternate_exponent_markers() {
+        // R7RS allows s, f, d, l as exponent markers (all treated as f64)
+        let test_cases = [
+            ("1s2", 100.0),
+            ("1S2", 100.0),
+            ("1f2", 100.0),
+            ("1F2", 100.0),
+            ("1d2", 100.0),
+            ("1D2", 100.0),
+            ("1l2", 100.0),
+            ("1L2", 100.0),
+            ("1.5s1", 15.0),
+            ("2.5f-1", 0.25),
+        ];
+
+        for (input, expected) in test_cases {
+            let mut parser = Parser::new(input).unwrap();
+            let result = parser.parse().unwrap();
+            match result {
+                Value::Real(f) => {
+                    assert!(
+                        (f - expected).abs() < 1e-10,
+                        "For input '{}': expected {}, got {}",
+                        input,
+                        expected,
+                        f
+                    );
+                }
+                other => panic!("For input '{}': expected Real, got {:?}", input, other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_standard_exponent_still_works() {
+        // Make sure we didn't break standard 'e' exponent
+        let mut parser = Parser::new("1e2").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Real(f) if (f - 100.0).abs() < 1e-10));
+    }
+
+    // ========== Non-Decimal Radix Rational Tests ==========
+
+    #[test]
+    fn test_hex_rational() {
+        // #x1/10 = 1/16 in decimal
+        let mut parser = Parser::new("#x1/10").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Rational(r) => {
+                assert_eq!(r.numer().to_i64(), Some(1));
+                assert_eq!(r.denom().to_i64(), Some(16));
+            }
+            other => panic!("Expected Rational, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_hex_rational_simplifies_to_integer() {
+        // #x10/2 = 16/2 = 8
+        let mut parser = Parser::new("#x10/2").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Integer(8)));
+    }
+
+    #[test]
+    fn test_hex_rational_simplifies() {
+        // #x11/2 = 17/2
+        let mut parser = Parser::new("#x11/2").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Rational(r) => {
+                assert_eq!(r.numer().to_i64(), Some(17));
+                assert_eq!(r.denom().to_i64(), Some(2));
+            }
+            other => panic!("Expected Rational, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_octal_rational() {
+        // #o11/2 = 9/2 in decimal
+        let mut parser = Parser::new("#o11/2").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Rational(r) => {
+                assert_eq!(r.numer().to_i64(), Some(9));
+                assert_eq!(r.denom().to_i64(), Some(2));
+            }
+            other => panic!("Expected Rational, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_binary_rational() {
+        // #b11/10 = 3/2 in decimal
+        let mut parser = Parser::new("#b11/10").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Rational(r) => {
+                assert_eq!(r.numer().to_i64(), Some(3));
+                assert_eq!(r.denom().to_i64(), Some(2));
+            }
+            other => panic!("Expected Rational, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_hex_rational_with_letters() {
+        // #xa/b = 10/11
+        let mut parser = Parser::new("#xa/b").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Rational(r) => {
+                assert_eq!(r.numer().to_i64(), Some(10));
+                assert_eq!(r.denom().to_i64(), Some(11));
+            }
+            other => panic!("Expected Rational, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_hex_rational_zero_denominator_error() {
+        // #x1/0 should error
+        let mut parser = Parser::new("#x1/0").unwrap();
+        let result = parser.parse();
+        assert!(result.is_err());
     }
 }

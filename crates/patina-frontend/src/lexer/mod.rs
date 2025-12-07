@@ -21,6 +21,7 @@ pub enum Token {
     Unquote,         // ,
     UnquoteSplicing, // ,@
     Dot,             // .
+    DatumComment,    // #; (parser should skip next datum)
 
     // End of input
     Eof,
@@ -62,6 +63,8 @@ pub enum LexError {
 pub struct Lexer {
     input: Vec<char>,
     position: usize,
+    /// Whether to fold identifiers to lowercase (R7RS #!fold-case directive)
+    fold_case: bool,
 }
 
 impl Lexer {
@@ -69,6 +72,7 @@ impl Lexer {
         Lexer {
             input: input.chars().collect(),
             position: 0,
+            fold_case: false,
         }
     }
 
@@ -121,6 +125,7 @@ impl Lexer {
             _ if ch.is_numeric()
                 || (ch == '-' || ch == '+')
                     && (self.peek_is_numeric()
+                        || self.peek_is_decimal_start()
                         || self.peek_is_imaginary()
                         || self.is_special_float_literal()) =>
             {
@@ -222,12 +227,25 @@ impl Lexer {
         next == 'i' || next == 'I'
     }
 
+    /// Check if the next character is a decimal point followed by a digit
+    /// This handles cases like `-.1` which should parse as `-0.1`
+    fn peek_is_decimal_start(&self) -> bool {
+        if self.position + 2 >= self.input.len() {
+            return false;
+        }
+        let next = self.input[self.position + 1];
+        let after = self.input[self.position + 2];
+        next == '.' && after.is_numeric()
+    }
+
     fn is_special_float_literal(&self) -> bool {
-        // Check if we're at the start of +inf.0, -inf.0, or +nan.0
+        // Check if we're at the start of +inf.0, -inf.0, +nan.0, or -nan.0 (case-insensitive)
         let remaining: String = self.input[self.position..].iter().collect();
-        remaining.starts_with("+inf.0")
-            || remaining.starts_with("-inf.0")
-            || remaining.starts_with("+nan.0")
+        let lower = remaining.to_lowercase();
+        lower.starts_with("+inf.0")
+            || lower.starts_with("-inf.0")
+            || lower.starts_with("+nan.0")
+            || lower.starts_with("-nan.0")
     }
 
     fn read_string(&mut self) -> Result<Token, LexError> {
@@ -450,7 +468,50 @@ impl Lexer {
             'e' | 'E' | 'i' | 'I' | 'b' | 'B' | 'o' | 'O' | 'd' | 'D' | 'x' | 'X' => {
                 self.read_number_with_prefix()
             }
+            // R7RS datum comment: #; comments out the next datum
+            ';' => {
+                self.advance(); // consume ;
+                Ok(Token::DatumComment)
+            }
+            // R7RS reader directives: #!fold-case, #!no-fold-case
+            '!' => {
+                self.advance(); // consume !
+                self.read_reader_directive()
+            }
             _ => Err(LexError::UnexpectedChar(self.current_char())),
+        }
+    }
+
+    /// Read a reader directive like #!fold-case or #!no-fold-case
+    /// These directives affect subsequent lexing but don't produce tokens themselves
+    fn read_reader_directive(&mut self) -> Result<Token, LexError> {
+        // Read the directive name (until whitespace or delimiter)
+        let start = self.position;
+        while !self.is_at_end()
+            && !self.current_char().is_whitespace()
+            && !matches!(self.current_char(), '(' | ')' | '"' | ';')
+        {
+            self.advance();
+        }
+
+        let directive: String = self.input[start..self.position].iter().collect();
+
+        match directive.to_lowercase().as_str() {
+            "fold-case" => {
+                self.fold_case = true;
+                // Directive consumed, get next token
+                self.next_token()
+            }
+            "no-fold-case" => {
+                self.fold_case = false;
+                // Directive consumed, get next token
+                self.next_token()
+            }
+            _ => {
+                // Unknown directive - R7RS says implementations may support others
+                // For now, just ignore unknown directives and continue
+                self.next_token()
+            }
         }
     }
 
@@ -567,6 +628,14 @@ impl Lexer {
         }
 
         let ident: String = self.input[start..self.position].iter().collect();
+
+        // Apply case folding if #!fold-case directive is active
+        let ident = if self.fold_case {
+            ident.to_lowercase()
+        } else {
+            ident
+        };
+
         Ok(Token::Identifier(ident))
     }
 }
@@ -823,6 +892,41 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap(), Token::RightParen));
     }
 
+    #[test]
+    fn test_negative_decimal_point_number() {
+        // R7RS: -.1 should parse as -0.1, not as a symbol
+        let mut lexer = Lexer::new("-.1");
+        let token = lexer.next_token().unwrap();
+        assert!(
+            matches!(token, Token::Number(ref s) if s == "-.1"),
+            "Expected Number('-.1'), got {:?}",
+            token
+        );
+    }
+
+    #[test]
+    fn test_positive_decimal_point_number() {
+        // +.5 should parse as +0.5
+        let mut lexer = Lexer::new("+.5");
+        let token = lexer.next_token().unwrap();
+        assert!(
+            matches!(token, Token::Number(ref s) if s == "+.5"),
+            "Expected Number('+.5'), got {:?}",
+            token
+        );
+    }
+
+    #[test]
+    fn test_negative_decimal_in_expression() {
+        // Test -.1 in an expression
+        let mut lexer = Lexer::new("(+ -.1 -.2)");
+        assert!(matches!(lexer.next_token().unwrap(), Token::LeftParen));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Identifier(s) if s == "+"));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == "-.1"));
+        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == "-.2"));
+        assert!(matches!(lexer.next_token().unwrap(), Token::RightParen));
+    }
+
     // ========== String Escape Sequence Tests ==========
 
     #[test]
@@ -935,5 +1039,74 @@ mod tests {
             lexer.next_token(),
             Err(LexError::InvalidEscapeInString(_))
         ));
+    }
+
+    // ========== Reader Directive Tests ==========
+
+    #[test]
+    fn test_fold_case_directive() {
+        // #!fold-case causes identifiers to be lowercased
+        let mut lexer = Lexer::new("#!fold-case ABC");
+        let token = lexer.next_token().unwrap();
+        assert_eq!(token, Token::Identifier("abc".to_string()));
+    }
+
+    #[test]
+    fn test_no_fold_case_directive() {
+        // #!no-fold-case preserves case (this is the default)
+        let mut lexer = Lexer::new("#!no-fold-case ABC");
+        let token = lexer.next_token().unwrap();
+        assert_eq!(token, Token::Identifier("ABC".to_string()));
+    }
+
+    #[test]
+    fn test_fold_case_then_no_fold_case() {
+        // #!fold-case followed by #!no-fold-case should preserve case
+        let mut lexer = Lexer::new("#!fold-case #!no-fold-case ABC");
+        let token = lexer.next_token().unwrap();
+        assert_eq!(token, Token::Identifier("ABC".to_string()));
+    }
+
+    #[test]
+    fn test_fold_case_multiple_identifiers() {
+        // #!fold-case affects all subsequent identifiers
+        let mut lexer = Lexer::new("#!fold-case ABC DEF");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("abc".to_string())
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("def".to_string())
+        );
+    }
+
+    #[test]
+    fn test_fold_case_in_list() {
+        // #!fold-case works inside lists
+        let mut lexer = Lexer::new("(#!fold-case ABC)");
+        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("abc".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_fold_case_preserves_numbers() {
+        // Numbers are not affected by fold-case (they're not identifiers)
+        let mut lexer = Lexer::new("#!fold-case 42");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number("42".to_string()));
+    }
+
+    #[test]
+    fn test_fold_case_preserves_strings() {
+        // Strings are not affected by fold-case
+        let mut lexer = Lexer::new("#!fold-case \"ABC\"");
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::String("ABC".to_string())
+        );
     }
 }

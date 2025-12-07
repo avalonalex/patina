@@ -13,6 +13,7 @@ impl SchemeValidator {
         let mut in_string = false;
         let mut escape_next = false;
         let mut in_comment = false;
+        let mut prev_char = '\0';
 
         for ch in input.chars() {
             if ch == '\n' {
@@ -20,24 +21,29 @@ impl SchemeValidator {
             }
 
             if in_comment {
+                prev_char = ch;
                 continue;
             }
 
             if escape_next {
                 escape_next = false;
+                prev_char = ch;
                 continue;
             }
 
             match ch {
                 '\\' if in_string => escape_next = true,
                 '"' => in_string = !in_string,
-                ';' if !in_string => in_comment = true,
+                // Only treat `;` as line comment if not preceded by `#` (datum comment)
+                ';' if !in_string && prev_char != '#' => in_comment = true,
                 '(' if !in_string => paren_balance += 1,
                 ')' if !in_string => paren_balance -= 1,
                 '[' if !in_string => bracket_balance += 1,
                 ']' if !in_string => bracket_balance -= 1,
                 _ => {}
             }
+
+            prev_char = ch;
         }
 
         (paren_balance, bracket_balance)

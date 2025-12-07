@@ -449,7 +449,7 @@ impl std::fmt::Display for Value {
             Value::String(s) => write!(f, "\"{}\"", s.borrow()),
             Value::Symbol(s) => {
                 if Self::symbol_needs_vertical_bars(s) {
-                    write!(f, "|{}|", s)
+                    write!(f, "|{}|", Self::escape_for_vertical_bar(s))
                 } else {
                     write!(f, "{}", s)
                 }
@@ -459,7 +459,7 @@ impl std::fmt::Display for Value {
                 // Marks and scopes are internal - they shouldn't appear in output
                 // They are used for lookup, not display
                 if Self::symbol_needs_vertical_bars(&id.name) {
-                    write!(f, "|{}|", id.name)
+                    write!(f, "|{}|", Self::escape_for_vertical_bar(&id.name))
                 } else {
                     write!(f, "{}", id.name)
                 }
@@ -637,6 +637,22 @@ impl Value {
         }
 
         false
+    }
+
+    /// Escape special characters for display inside vertical bar notation
+    ///
+    /// R7RS requires that `|` and `\` be escaped as `\|` and `\\` respectively
+    /// when appearing inside vertical bar identifiers.
+    fn escape_for_vertical_bar(name: &str) -> String {
+        let mut result = String::with_capacity(name.len());
+        for ch in name.chars() {
+            match ch {
+                '|' => result.push_str("\\|"),
+                '\\' => result.push_str("\\\\"),
+                _ => result.push(ch),
+            }
+        }
+        result
     }
 
     /// Check if this value is a special quote form that can be displayed with shorthand syntax

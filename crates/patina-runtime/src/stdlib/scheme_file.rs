@@ -6,7 +6,7 @@
 //! - Textual file ports: open-input-file, open-output-file
 //! - Binary file ports: open-binary-input-file, open-binary-output-file
 //! - Higher-order: call-with-input-file, call-with-output-file,
-//!                 with-input-from-file, with-output-to-file
+//!   with-input-from-file, with-output-to-file
 //! - Utilities: file-exists?, delete-file
 
 use crate::environment::Environment;

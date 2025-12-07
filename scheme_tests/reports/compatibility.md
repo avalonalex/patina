@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-06 15:28:39
+**Generated:** 2025-12-07 10:14:56
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1028 | 91.1% |
-| ❌ Failed | 14 | 1.2% |
-| ⚠️ Error (crashed) | 87 | 7.7% |
-| **Total** | **1129** | **100%** |
+| ✅ Passed | 1077 | 94.1% |
+| ❌ Failed | 6 | 0.5% |
+| ⚠️ Error (crashed) | 62 | 5.4% |
+| **Total** | **1145** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run (usually missing features like call/cc, guard).
 
@@ -34,8 +34,8 @@
 | ⚠️ | 6.10 Control Features | 34 | 25 | 0 | 9 |
 | ⚠️ | 6.11 Exceptions | 25 | 2 | 2 | 21 |
 | ❌ | 6.12 Environments and evaluation | 4 | 0 | 0 | 4 |
-| ⚠️ | Read syntax | 93 | 74 | 2 | 17 |
-| ⚠️ | Numeric syntax | 191 | 152 | 10 | 29 |
+| ⚠️ | Read syntax | 93 | 85 | 0 | 8 |
+| ⚠️ | Numeric syntax | 207 | 190 | 4 | 13 |
 | ⚠️ | 6.14 System interface | 13 | 12 | 0 | 1 |
 
 **Legend:** ✅ = All passing, ⚠️ = Partial, ❌ = None passing
@@ -47,14 +47,6 @@
 ```
 FAIL: something-went-wrong
 FAIL: something-went-wrong
-FAIL: (get-output-string out)
-FAIL: (get-output-string out)
-FAIL: (values z)
-FAIL: (and (member z-str '("-.1" "-0.1" "-100.0e-3")) #t)
-FAIL: (values z)
-FAIL: (and (member z-str '("-.0" "-0." "-0.0" "0.0" "0." ".0")) #t)
-FAIL: (values z)
-FAIL: (and (member z-str '("+NAN.0" "+nan.0" "+NaN.0")) #t)
 FAIL: (and (member z-str '("1e2+1.0i" "100.0+1.0i" "100.+1.i")) #t)
 FAIL: (and (member z-str '("+inf.0+inf.0i" "+Inf.0+Inf.0i")) #t)
 FAIL: (and (member z-str '("-inf.0+inf.0i" "-Inf.0+Inf.0i")) #t)
@@ -108,39 +100,14 @@ Error: Undefined variable: guard
 Error: Undefined variable: guard
 Error: Invalid syntax: read: Lexer error: Unexpected character: 0
 Error: Invalid syntax: read: Lexer error: Unexpected character: 0
-Error: Invalid syntax: read: Lexer error: Unexpected character: !
-Error: Invalid syntax: read: Lexer error: Unexpected character: !
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
-Error: Invalid syntax: read: Lexer error: Unexpected character: ;
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1s2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1S2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1f2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1F2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1d2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1D2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1l2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: 1L2
-Error: Invalid syntax: read: Invalid syntax: Invalid number: +InF.0
-Error: Invalid syntax: read: Invalid syntax: Invalid number: -iNF.0
 Error: Invalid syntax: read: Invalid syntax: Invalid real number: 1s2
 Error: Invalid syntax: read: Invalid syntax: Invalid real number: +1s2
-Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 1/10
-Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 1/10
-Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 10/2
-Error: Invalid syntax: read: Invalid syntax: Invalid hexadecimal number: 11/2
-Error: Invalid syntax: read: Invalid syntax: Invalid octal number: 11/2
-Error: Invalid syntax: read: Invalid syntax: Invalid binary number: 11/10
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
 Error: Undefined variable: test-assert
