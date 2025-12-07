@@ -149,6 +149,10 @@ impl Evaluator {
     }
 
     /// Convert a real number to string
+    ///
+    /// R7RS requires number->string to produce a result that, when read back,
+    /// produces an equivalent number. For extreme values, we use scientific
+    /// notation to ensure this property holds.
     fn real_to_string(&self, f: f64) -> String {
         if f.is_infinite() {
             if f.is_sign_positive() {
@@ -158,12 +162,65 @@ impl Evaluator {
             }
         } else if f.is_nan() {
             "+nan.0".to_string()
-        } else if f.fract() == 0.0 && f.abs() < 1e15 {
-            // For whole numbers, ensure .0 suffix to indicate inexactness
-            format!("{:.1}", f)
+        } else if f == 0.0 {
+            // Handle zero explicitly (including negative zero)
+            if f.is_sign_negative() {
+                "-0.0".to_string()
+            } else {
+                "0.0".to_string()
+            }
         } else {
-            // Use Rust's default formatting for other cases
-            format!("{}", f)
+            let abs_f = f.abs();
+
+            // Use scientific notation for:
+            // - Numbers >= 1e15 (too many digits for decimal notation)
+            // - Numbers < 1e-4 (too many leading zeros)
+            // This matches chibi-scheme behavior
+            if !(1e-4..1e15).contains(&abs_f) {
+                // Format with scientific notation and normalize
+                Self::format_scientific(f)
+            } else if f.fract() == 0.0 {
+                // For whole numbers, ensure .0 suffix to indicate inexactness
+                format!("{:.1}", f)
+            } else {
+                // Use Rust's default formatting for normal range floats
+                format!("{}", f)
+            }
+        }
+    }
+
+    /// Format a number in scientific notation with R7RS-compatible output
+    ///
+    /// Ensures:
+    /// - Explicit + sign on positive exponents (e.g., "1e+15" not "1e15")
+    /// - Decimal point in mantissa (e.g., "5.0e-324" not "5e-324")
+    fn format_scientific(f: f64) -> String {
+        // Use full precision scientific notation
+        let s = format!("{:e}", f);
+
+        // Parse the result to normalize it
+        if let Some(e_pos) = s.find('e') {
+            let (mantissa, exp_part) = s.split_at(e_pos);
+
+            // Ensure mantissa has a decimal point
+            let mantissa = if !mantissa.contains('.') {
+                format!("{}.0", mantissa)
+            } else {
+                mantissa.to_string()
+            };
+
+            // Ensure exponent has explicit sign
+            let exp_str = &exp_part[1..]; // skip the 'e'
+            let exp_with_sign = if !exp_str.starts_with('-') && !exp_str.starts_with('+') {
+                format!("+{}", exp_str)
+            } else {
+                exp_str.to_string()
+            };
+
+            format!("{}e{}", mantissa, exp_with_sign)
+        } else {
+            // Fallback (shouldn't happen with {:e})
+            s
         }
     }
 
@@ -501,5 +558,75 @@ mod tests {
             EvalResult::Value(Value::Boolean(false)) => {}
             _ => panic!("Expected #f, got {:?}", result),
         }
+    }
+
+    // Tests for scientific notation formatting (R7RS compliance)
+    #[test]
+    fn test_real_to_string_scientific_large() {
+        let eval = Evaluator::new();
+        // Very large numbers should use scientific notation
+        assert_eq!(eval.real_to_string(1.7976931348623157e308), "1.7976931348623157e+308");
+        assert_eq!(eval.real_to_string(-1.7976931348623157e308), "-1.7976931348623157e+308");
+        assert_eq!(eval.real_to_string(1e15), "1.0e+15");
+        assert_eq!(eval.real_to_string(1e100), "1.0e+100");
+    }
+
+    #[test]
+    fn test_real_to_string_scientific_small() {
+        let eval = Evaluator::new();
+        // Very small numbers should use scientific notation
+        // Note: subnormal numbers may round during formatting
+        let result = eval.real_to_string(4.940656458412465e-324);
+        assert!(result.contains("e-"), "Expected scientific notation for subnormal: {}", result);
+
+        assert_eq!(eval.real_to_string(1e-5), "1.0e-5");
+        assert_eq!(eval.real_to_string(1e-10), "1.0e-10");
+    }
+
+    #[test]
+    fn test_real_to_string_normal_range() {
+        let eval = Evaluator::new();
+        // Normal range should use decimal notation
+        assert_eq!(eval.real_to_string(123.456), "123.456");
+        assert_eq!(eval.real_to_string(0.0001), "0.0001");
+        assert_eq!(eval.real_to_string(1e14), "100000000000000.0");
+    }
+
+    #[test]
+    fn test_real_to_string_whole_numbers() {
+        let eval = Evaluator::new();
+        // Whole numbers should have .0 suffix to indicate inexactness
+        assert_eq!(eval.real_to_string(1.0), "1.0");
+        assert_eq!(eval.real_to_string(100.0), "100.0");
+        assert_eq!(eval.real_to_string(-42.0), "-42.0");
+    }
+
+    #[test]
+    fn test_real_to_string_special_values() {
+        let eval = Evaluator::new();
+        // Special float values
+        assert_eq!(eval.real_to_string(f64::INFINITY), "+inf.0");
+        assert_eq!(eval.real_to_string(f64::NEG_INFINITY), "-inf.0");
+        assert_eq!(eval.real_to_string(f64::NAN), "+nan.0");
+        assert_eq!(eval.real_to_string(0.0), "0.0");
+        assert_eq!(eval.real_to_string(-0.0), "-0.0");
+    }
+
+    #[test]
+    fn test_format_scientific_mantissa_decimal() {
+        // Ensure scientific notation always includes decimal point
+        // "5e-324" should become "5.0e-324"
+        let s = Evaluator::format_scientific(5.0e-324);
+        assert!(s.contains('.'), "Expected decimal point in mantissa: {}", s);
+    }
+
+    #[test]
+    fn test_format_scientific_exponent_sign() {
+        // Ensure exponent always has explicit sign
+        let positive_exp = Evaluator::format_scientific(1e15);
+        assert!(positive_exp.contains("e+"), "Expected explicit + in exponent: {}", positive_exp);
+
+        let negative_exp = Evaluator::format_scientific(1e-15);
+        assert!(negative_exp.contains("e-"), "Expected - in exponent: {}", negative_exp);
     }
 }

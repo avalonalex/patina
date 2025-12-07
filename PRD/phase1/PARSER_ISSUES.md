@@ -11,15 +11,13 @@ This document tracks parser-only issues identified from the R7RS test suite. The
 | Category | Errors | Failures | Total Issues | Fixed |
 |----------|--------|----------|--------------|-------|
 | Read Syntax | 8 | 0 | 8 | 3 (datum comments, fold-case, vertical bar escaping) |
-| Numeric Syntax | 4 | 0 | 4 | 4 (-.X numbers, exponent markers, case-insensitive inf/nan, radix rationals) |
-| **Total** | **12** | **0** | **12** | **7** |
+| Numeric Syntax | 0 | 9 | 9 | 8 (-.X numbers, exponent markers, case-insensitive inf/nan, radix rationals, complex exponent markers, complex inf display, decimal prefix complex, number->string precision) |
+| **Total** | **8** | **9** | **17** | **11** |
 
-Note: Some errors in the test report are due to missing `test-assert` macro (17 total), not parser issues.
-
-**Test Results After Fixes:**
-- Read Syntax: 85/93 passing (was 74/93) - **+11 tests, 0 failures**
-- Numeric Syntax: 190/207 passing (was 152/191) - **+38 tests**
-- Overall: 1077/1145 passing (94.1%)
+**Test Results (Latest):**
+- Read Syntax: 85/93 passing (91.4%)
+- Numeric Syntax: 220/220 passing (100%) ✅
+- Overall: 1111/1158 passing (95.9%)
 
 ---
 
@@ -169,6 +167,105 @@ spec-compliant.
 
 ---
 
+## Remaining Numeric Syntax Issues
+
+### 5. ~~Complex Numbers with Alternate Exponent Markers~~ - ✅ FIXED (2025-12-07)
+
+**Status:** COMPLETED - 6 more tests passing (2 errors fixed + 4 additional passing)
+
+**Implementation:**
+- Updated `parse_real_component_as_value()` to detect alternate exponent markers (`s`, `f`, `d`, `l`)
+- Added call to `normalize_exponent_markers()` before parsing floats
+- Also fixed `parse_real_component()` for polar notation
+- Fixed complex number display: inexact `1.0` now displays as `1.0i` not `i` (preserves exactness)
+
+**Examples now working:**
+```scheme
+(read (open-input-string "1s2+1.0i"))   ; => 100.0+1.0i
+(read (open-input-string "1.0+1s2i"))   ; => 1.0+100.0i
+(read (open-input-string "1d2+1.0i"))   ; => 100.0+1.0i (double marker)
+(read (open-input-string "1l2+1.0i"))   ; => 100.0+1.0i (long marker)
+```
+
+**Files changed:**
+- `crates/patina-frontend/src/parser/mod.rs` - Updated `parse_real_component_as_value()` and `parse_real_component()`
+- `crates/patina-core/src/value.rs` - Fixed complex display to preserve inexact `1.0` as `1.0i`
+
+---
+
+### 6. ~~Complex Number Display with `+inf.0`~~ - ✅ FIXED (2025-12-07)
+
+**Status:** COMPLETED - 2 more tests passing
+
+**Implementation:**
+- Updated Complex number Display impl to check if imaginary part already has a sign
+- When imaginary part displays with `+` or `-` prefix (like `+inf.0`, `+nan.0`), don't add another `+`
+- Fixed both the pure imaginary case (real=0) and the general case (real≠0)
+
+**Examples now working:**
+```scheme
+(make-rectangular +inf.0 +inf.0)  ; => +inf.0+inf.0i (was +inf.0++inf.0i)
+(make-rectangular -inf.0 +inf.0)  ; => -inf.0+inf.0i (was -inf.0++inf.0i)
+(make-rectangular 1.0 +inf.0)     ; => 1.0+inf.0i (was 1.0++inf.0i)
+(make-rectangular 0 +inf.0)       ; => +inf.0i (was ++inf.0i)
+```
+
+**Files changed:**
+- `crates/patina-core/src/value.rs` - Updated Complex Display impl to check for existing signs
+
+---
+
+### 7. ~~Decimal Prefix with Complex Numbers~~ - ✅ FIXED (2025-12-07)
+
+**Status:** COMPLETED - Issue was fixed by previous changes to `parse_real_component_as_value()`
+
+**Implementation:**
+- The fix for Issue #5 (Complex Numbers with Alternate Exponent Markers) also fixed this issue
+- `parse_real_component_as_value()` now properly preserves inexact `1.0` in the imaginary part
+- The `is_exact_one()` helper (renamed from `is_one()`) only matches exact integers, not inexact 1.0
+
+**Examples now working:**
+```scheme
+(read (open-input-string "#d1.0+1.0i"))  ; => 1.0+1.0i (was 1.0+i)
+(read (open-input-string "#d2.5+3.5i"))  ; => 2.5+3.5i
+```
+
+**Files changed:**
+- No additional changes needed - fix was part of Issue #5
+
+---
+
+### 8. ~~`number->string` Precision (Write Issues)~~ - ✅ FIXED (2025-12-07)
+
+**Status:** COMPLETED - 9 failures fixed, Numeric syntax now 220/220 (100%)
+
+**Implementation:**
+- Updated `real_to_string()` to use scientific notation for extreme values
+- Added `format_scientific()` helper for R7RS-compatible formatting
+- Uses scientific notation for:
+  - Numbers >= 1e15 (too many digits for decimal)
+  - Numbers < 1e-4 (too many leading zeros)
+- Ensures mantissa has decimal point (e.g., "5.0e-324" not "5e-324")
+- Ensures exponent has explicit sign (e.g., "1e+15" not "1e15")
+
+**R7RS Compliance:**
+- `number->string` must produce output that round-trips correctly via `string->number`
+- Uses minimum digits needed for round-trip (per R7RS 6.2.6)
+- Matches chibi-scheme behavior
+
+**Examples now working:**
+```scheme
+(number->string 1.7976931348623157e308)  ; => "1.7976931348623157e+308"
+(number->string 4.940656458412465e-324)  ; => "5.0e-324"
+(number->string 1e15)                    ; => "1.0e+15"
+(number->string 1e-5)                    ; => "1.0e-5"
+```
+
+**Files changed:**
+- `crates/patina-tree-walker/src/eval/primitives/conversion.rs` - Updated `real_to_string()`, added `format_scientific()`
+
+---
+
 ## Prioritized Implementation Plan
 
 ### Phase 1: Easy Wins (Small Changes)
@@ -226,13 +323,21 @@ These errors appeared in the report but are not parser issues:
 
 ## Success Metrics
 
-**Current Status (after 7 fixes):**
+**Current Status (after 11 parser fixes + test-assert):**
 - Read Syntax: 85/93 passing (91.4%)
-- Numeric Syntax: 190/207 passing (91.8%)
-- Overall: 1077/1145 passing (94.1%)
+- Numeric Syntax: 220/220 passing (100%) ✅
+- Overall: 1111/1158 passing (95.9%)
 
-**Remaining issues:**
-- Datum labels (`#n=`/`#n#`) - 2 errors (complex, requires parser state for cycles)
-- Various non-parser errors (missing exceptions, eval, etc.)
+**Remaining Parser Issues (1 total):**
 
-Total parser-related improvements: **+49 tests** from initial state
+| Issue | Type | Count | Effort | Category |
+|-------|------|-------|--------|----------|
+| Datum labels `#n=`/`#n#` | Error | 2 | Large | Parser |
+
+**Non-Parser Issues (not tracked here):**
+- Exception handling tests (guard, raise) - ~23 errors
+- Environments and evaluation (scheme eval) - 4 errors
+- System interface (file-error?) - 1 error
+- Read syntax datum labels (#0=, #0#) - 2 errors
+
+Total parser-related improvements: **+74 tests** from initial state (1037 → 1111)

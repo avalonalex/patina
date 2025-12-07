@@ -661,8 +661,13 @@ impl Parser {
             _ => {}
         }
 
-        // Check if it's a float (has decimal point or exponent) -> inexact
-        let is_float = s.contains('.') || s.contains('e') || s.contains('E');
+        // Check if it's a float (has decimal point or exponent marker) -> inexact
+        // Include alternate exponent markers: s, f, d, l (R7RS 7.1.1)
+        let is_float = s.contains('.')
+            || s.contains('e')
+            || s.contains('E')
+            || s.chars()
+                .any(|c| matches!(c, 's' | 'S' | 'f' | 'F' | 'd' | 'D' | 'l' | 'L'));
 
         // Handle sign prefix for parsing
         let (sign, num_str) = if let Some(stripped) = s.strip_prefix('+') {
@@ -674,8 +679,9 @@ impl Parser {
         };
 
         if is_float {
-            // Parse as inexact (Real)
-            let val = s
+            // Normalize alternate exponent markers before parsing
+            let normalized = Self::normalize_exponent_markers(s);
+            let val = normalized
                 .parse::<f64>()
                 .map_err(|_| ParseError::InvalidSyntax(format!("Invalid real number: {}", s)))?;
             return Ok(Value::Real(val));
@@ -753,8 +759,10 @@ impl Parser {
             }
         }
 
-        // Try float
-        s.parse::<f64>()
+        // Try float (normalize alternate exponent markers first)
+        let normalized = Self::normalize_exponent_markers(s);
+        normalized
+            .parse::<f64>()
             .map_err(|_| ParseError::InvalidSyntax(format!("Invalid real number: {}", s)))
     }
 
@@ -1269,5 +1277,122 @@ mod tests {
         let mut parser = Parser::new("#x1/0").unwrap();
         let result = parser.parse();
         assert!(result.is_err());
+    }
+
+    // ========== Complex Numbers with Alternate Exponent Markers ==========
+
+    #[test]
+    fn test_complex_with_short_exponent_marker() {
+        // 1s2+1.0i = 100.0+1.0i
+        let mut parser = Parser::new("1s2+1.0i").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Complex(parts) => {
+                let (ref real, ref imag) = *parts;
+                assert!(
+                    matches!(real, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
+                    "Expected real part 100.0, got {:?}",
+                    real
+                );
+                assert!(
+                    matches!(imag, Value::Real(r) if (*r - 1.0).abs() < 1e-10),
+                    "Expected imag part 1.0, got {:?}",
+                    imag
+                );
+            }
+            other => panic!("Expected Complex, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_complex_with_exponent_in_imag() {
+        // 1.0+1s2i = 1.0+100.0i
+        let mut parser = Parser::new("1.0+1s2i").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Complex(parts) => {
+                let (ref real, ref imag) = *parts;
+                assert!(
+                    matches!(real, Value::Real(r) if (*r - 1.0).abs() < 1e-10),
+                    "Expected real part 1.0, got {:?}",
+                    real
+                );
+                assert!(
+                    matches!(imag, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
+                    "Expected imag part 100.0, got {:?}",
+                    imag
+                );
+            }
+            other => panic!("Expected Complex, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_complex_with_double_exponent_marker() {
+        // 1d2+1.0i = 100.0+1.0i (double precision marker)
+        let mut parser = Parser::new("1d2+1.0i").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Complex(parts) => {
+                let (ref real, ref imag) = *parts;
+                assert!(
+                    matches!(real, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
+                    "Expected real part 100.0, got {:?}",
+                    real
+                );
+                assert!(
+                    matches!(imag, Value::Real(r) if (*r - 1.0).abs() < 1e-10),
+                    "Expected imag part 1.0, got {:?}",
+                    imag
+                );
+            }
+            other => panic!("Expected Complex, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_complex_with_long_exponent_marker() {
+        // 1l2+3.0i = 100.0+3.0i (long precision marker)
+        let mut parser = Parser::new("1l2+3.0i").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Complex(parts) => {
+                let (ref real, ref imag) = *parts;
+                assert!(
+                    matches!(real, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
+                    "Expected real part 100.0, got {:?}",
+                    real
+                );
+                assert!(
+                    matches!(imag, Value::Real(r) if (*r - 3.0).abs() < 1e-10),
+                    "Expected imag part 3.0, got {:?}",
+                    imag
+                );
+            }
+            other => panic!("Expected Complex, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_polar_with_exponent_marker() {
+        // 1s2@0 = 100.0+0.0i (polar notation with exponent marker)
+        let mut parser = Parser::new("1s2@0").unwrap();
+        let result = parser.parse().unwrap();
+        match result {
+            Value::Complex(parts) => {
+                let (ref real, ref imag) = *parts;
+                assert!(
+                    matches!(real, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
+                    "Expected real part 100.0, got {:?}",
+                    real
+                );
+                assert!(
+                    matches!(imag, Value::Real(r) if r.abs() < 1e-10),
+                    "Expected imag part ~0, got {:?}",
+                    imag
+                );
+            }
+            other => panic!("Expected Complex, got {:?}", other),
+        }
     }
 }

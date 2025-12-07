@@ -358,16 +358,17 @@ fn test_log() {
 
 #[test]
 fn test_complex_sqrt() {
-    // Basic complex sqrt
-    assert_eval_to("(sqrt -1)", "+i");
-    assert_eval_to("(sqrt -1.0)", "+i");
+    // Basic complex sqrt - sqrt always returns inexact results
+    // So imaginary coefficient 1.0 displays as "1.0i" not "i"
+    assert_eval_to("(sqrt -1)", "+1.0i");
+    assert_eval_to("(sqrt -1.0)", "+1.0i");
 
     // R7RS branch cut tests: sqrt of negative real axis
-    assert_eval_to("(sqrt -1.0-0.0i)", "+i"); // Approaching from below
-    assert_eval_to("(sqrt -1.0+0.0i)", "+i"); // Approaching from above
+    assert_eval_to("(sqrt -1.0-0.0i)", "+1.0i"); // Approaching from below
+    assert_eval_to("(sqrt -1.0+0.0i)", "+1.0i"); // Approaching from above
 
     // Inexact conversion
-    assert_eval_to("(inexact (sqrt -1))", "+i");
+    assert_eval_to("(inexact (sqrt -1))", "+1.0i");
 
     // Complex input
     assert_eval_to("(sqrt 2+2i)", "1.5537739740300374+0.6435942529055827i");

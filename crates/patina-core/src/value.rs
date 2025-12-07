@@ -361,8 +361,9 @@ impl std::fmt::Display for Value {
                     }
                 }
 
-                // Helper to check if value is one
-                fn is_one(v: &Value) -> bool {
+                // Helper to check if value is exact one (not inexact 1.0)
+                // R7RS requires preserving exactness: 1+i is different from 1.0+1.0i
+                fn is_exact_one(v: &Value) -> bool {
                     match v {
                         Value::Integer(n) => *n == 1,
                         Value::BigInteger(n) => {
@@ -373,13 +374,14 @@ impl std::fmt::Display for Value {
                             use num_traits::One;
                             r.is_one()
                         }
-                        Value::Real(r) => *r == 1.0,
+                        // Inexact 1.0 should NOT be treated as "one" for display purposes
+                        Value::Real(_) => false,
                         _ => false,
                     }
                 }
 
-                // Helper to check if value is negative one
-                fn is_neg_one(v: &Value) -> bool {
+                // Helper to check if value is exact negative one (not inexact -1.0)
+                fn is_exact_neg_one(v: &Value) -> bool {
                     match v {
                         Value::Integer(n) => *n == -1,
                         Value::BigInteger(n) => {
@@ -390,7 +392,8 @@ impl std::fmt::Display for Value {
                             use num_traits::One;
                             r == &(-BigRational::one())
                         }
-                        Value::Real(r) => *r == -1.0,
+                        // Inexact -1.0 should NOT be treated as "negative one" for display purposes
+                        Value::Real(_) => false,
                         _ => false,
                     }
                 }
@@ -417,31 +420,43 @@ impl std::fmt::Display for Value {
                     write!(f, "0")
                 } else if real_is_zero {
                     // Pure imaginary
-                    if is_one(imag_part) {
+                    if is_exact_one(imag_part) {
                         write!(f, "+i")
-                    } else if is_neg_one(imag_part) {
+                    } else if is_exact_neg_one(imag_part) {
                         write!(f, "-i")
                     } else if is_negative(imag_part) {
                         write!(f, "{}i", imag_part)
                     } else {
-                        write!(f, "+{}i", imag_part)
+                        // Check if imag_part already has a sign (e.g., +inf.0, +nan.0)
+                        let imag_str = imag_part.to_string();
+                        if imag_str.starts_with('+') || imag_str.starts_with('-') {
+                            write!(f, "{}i", imag_part)
+                        } else {
+                            write!(f, "+{}i", imag_part)
+                        }
                     }
                 } else if imag_is_zero {
                     // Pure real - display with exactness info
                     write!(f, "{}", real_part)
                 } else if is_negative(imag_part) {
                     // Negative imaginary: use - instead of +-
-                    if is_neg_one(imag_part) {
+                    if is_exact_neg_one(imag_part) {
                         write!(f, "{}-i", real_part)
                     } else {
                         write!(f, "{}{}i", real_part, imag_part)
                     }
                 } else {
                     // Positive imaginary
-                    if is_one(imag_part) {
+                    if is_exact_one(imag_part) {
                         write!(f, "{}+i", real_part)
                     } else {
-                        write!(f, "{}+{}i", real_part, imag_part)
+                        // Check if imag_part already has a sign (e.g., +inf.0, +nan.0)
+                        let imag_str = imag_part.to_string();
+                        if imag_str.starts_with('+') || imag_str.starts_with('-') {
+                            write!(f, "{}{}i", real_part, imag_part)
+                        } else {
+                            write!(f, "{}+{}i", real_part, imag_part)
+                        }
                     }
                 }
             }
@@ -709,5 +724,108 @@ impl Value {
             }
             _ => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========== Complex Number Display Tests ==========
+
+    #[test]
+    fn test_complex_display_exact_one() {
+        // Exact 1+i should display as "1+i"
+        let c = Value::Complex(Box::new((Value::Integer(1), Value::Integer(1))));
+        assert_eq!(c.to_string(), "1+i");
+    }
+
+    #[test]
+    fn test_complex_display_exact_neg_one() {
+        // Exact 1-i should display as "1-i"
+        let c = Value::Complex(Box::new((Value::Integer(1), Value::Integer(-1))));
+        assert_eq!(c.to_string(), "1-i");
+    }
+
+    #[test]
+    fn test_complex_display_inexact_one() {
+        // Inexact 1.0+1.0i should display as "1.0+1.0i" (preserves exactness)
+        let c = Value::Complex(Box::new((Value::Real(1.0), Value::Real(1.0))));
+        assert_eq!(c.to_string(), "1.0+1.0i");
+    }
+
+    #[test]
+    fn test_complex_display_inexact_neg_one() {
+        // Inexact 1.0-1.0i should display as "1.0-1.0i" (preserves exactness)
+        let c = Value::Complex(Box::new((Value::Real(1.0), Value::Real(-1.0))));
+        assert_eq!(c.to_string(), "1.0-1.0i");
+    }
+
+    #[test]
+    fn test_complex_display_positive_infinity() {
+        // +inf.0+inf.0i should NOT have double + sign
+        let c = Value::Complex(Box::new((
+            Value::Real(f64::INFINITY),
+            Value::Real(f64::INFINITY),
+        )));
+        assert_eq!(c.to_string(), "+inf.0+inf.0i");
+    }
+
+    #[test]
+    fn test_complex_display_negative_real_positive_inf_imag() {
+        // -inf.0+inf.0i
+        let c = Value::Complex(Box::new((
+            Value::Real(f64::NEG_INFINITY),
+            Value::Real(f64::INFINITY),
+        )));
+        assert_eq!(c.to_string(), "-inf.0+inf.0i");
+    }
+
+    #[test]
+    fn test_complex_display_real_with_positive_inf_imag() {
+        // 1.0+inf.0i should NOT have double + sign
+        let c = Value::Complex(Box::new((Value::Real(1.0), Value::Real(f64::INFINITY))));
+        assert_eq!(c.to_string(), "1.0+inf.0i");
+    }
+
+    #[test]
+    fn test_complex_display_pure_positive_inf_imag() {
+        // Pure imaginary +inf.0i (real is zero)
+        let c = Value::Complex(Box::new((Value::Integer(0), Value::Real(f64::INFINITY))));
+        assert_eq!(c.to_string(), "+inf.0i");
+    }
+
+    #[test]
+    fn test_complex_display_pure_negative_inf_imag() {
+        // Pure imaginary -inf.0i (real is zero)
+        let c = Value::Complex(Box::new((
+            Value::Integer(0),
+            Value::Real(f64::NEG_INFINITY),
+        )));
+        assert_eq!(c.to_string(), "-inf.0i");
+    }
+
+    #[test]
+    fn test_complex_display_nan_imag() {
+        // 1.0+nan.0i - NaN displays with + prefix
+        let c = Value::Complex(Box::new((Value::Real(1.0), Value::Real(f64::NAN))));
+        let s = c.to_string();
+        // NaN can display as +nan.0 or nan.0, just ensure no double +
+        assert!(!s.contains("++"), "Should not have double + sign: {}", s);
+        assert!(s.ends_with("i"), "Should end with i: {}", s);
+    }
+
+    #[test]
+    fn test_complex_display_normal_positive_imag() {
+        // Normal case: 3.0+4.0i
+        let c = Value::Complex(Box::new((Value::Real(3.0), Value::Real(4.0))));
+        assert_eq!(c.to_string(), "3.0+4.0i");
+    }
+
+    #[test]
+    fn test_complex_display_normal_negative_imag() {
+        // Normal case: 3.0-4.0i
+        let c = Value::Complex(Box::new((Value::Real(3.0), Value::Real(-4.0))));
+        assert_eq!(c.to_string(), "3.0-4.0i");
     }
 }
