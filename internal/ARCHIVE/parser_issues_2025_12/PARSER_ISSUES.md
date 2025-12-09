@@ -67,13 +67,233 @@ This document tracks parser-only issues identified from the R7RS test suite. The
 
 **Current behavior:** Lexer returns `UnexpectedChar('0')` when it sees `#0`.
 
-**Fix location:** Lexer + Parser coordination needed
+---
 
-**Fix approach:**
-1. Lexer: Add token types `DatumLabel(usize)` for `#n=` and `DatumRef(usize)` for `#n#`
-2. Parser: Track labels in a HashMap during parsing, resolve references
+## Datum Labels Research
 
-**Effort:** Large - requires parser state and post-processing for cycles
+### R7RS Specification (Section 2.4)
+
+The R7RS spec defines datum labels as follows:
+
+**Syntax:**
+- `#<n>=<datum>` - Labels `<datum>` with label `<n>` (where `<n>` is a sequence of digits)
+- `#<n>#` - References the object labelled by `#<n>=`
+
+**Semantics:**
+- `#<n>=<datum>` reads the same as `<datum>`, but also labels it with `<n>`
+- `#<n>#` evaluates to the **same object** (in the `eqv?` sense) as the labelled datum
+- Enables notation of **shared** and **circular** structures
+
+**Scope Rules:**
+- Label scope is the portion of the **outermost datum** to the **right** of the label
+- References can only appear **after** the label definition (no forward references)
+- Self-reference `#n= #n#` is an error (object not well-defined)
+
+**Example from spec:**
+```scheme
+(let ((x (list 'a 'b 'c)))
+  (set-cdr! (cddr x) x)
+  x)                       ⇒ #0=(a b c . #0#)
+```
+
+### Reference Implementation Analysis (chibi-scheme)
+
+chibi-scheme implements datum labels using a **two-phase approach**:
+
+**Phase 1: Parsing with Placeholder Labels**
+
+During parsing (`sexp_read_raw`):
+1. When `#<n>=` is encountered:
+   - Create a placeholder `reader_label(n)` object
+   - Store it in a `shares` vector at index `n`
+   - Continue reading the datum
+   - Replace the placeholder with the actual parsed value
+
+2. When `#<n>#` is encountered:
+   - Look up label `n` in the `shares` vector
+   - Return either:
+     - The actual value (if already resolved)
+     - The placeholder (if inside the labelled datum - creates cycles)
+
+**Phase 2: Post-Processing (`sexp_fill_reader_labels`)**
+
+After parsing completes:
+1. Walk the entire parsed structure
+2. Replace any remaining placeholder labels with actual values
+3. Use mark bits to handle cycles (avoid infinite loops)
+4. Run twice with different mark states to handle all cases
+
+**Key Data Structures:**
+```c
+// Placeholder for unresolved labels
+sexp_make_reader_label(n)  // Creates placeholder for label n
+sexp_reader_labelp(x)      // Checks if x is a placeholder
+sexp_unbox_reader_label(x) // Gets label number from placeholder
+
+// Storage for labels
+shares: Vector[Value]      // Index = label number, Value = labelled datum
+```
+
+### Implementation Plan for Patina
+
+#### Phase 1: Lexer Changes
+
+Add two new token types:
+```rust
+pub enum Token {
+    // ... existing tokens ...
+    DatumLabel(usize),  // #n=
+    DatumRef(usize),    // #n#
+}
+```
+
+In `read_hash_dispatch()`:
+```rust
+// After '#', check if next char is a digit
+if ch.is_ascii_digit() {
+    let n = self.read_label_number(ch);
+    match self.peek_char() {
+        Some('=') => { self.advance(); Ok(Token::DatumLabel(n)) }
+        Some('#') => { self.advance(); Ok(Token::DatumRef(n)) }
+        _ => Err(LexError::InvalidSyntax("expected = or # after #<n>"))
+    }
+}
+```
+
+#### Phase 2: Parser Changes
+
+Add parser state for tracking labels:
+```rust
+pub struct Parser<'a> {
+    lexer: Lexer<'a>,
+    labels: HashMap<usize, Value>,           // Resolved labels
+    pending_refs: Vec<(usize, *mut Value)>,  // References to fix up
+}
+```
+
+Parsing `#n=<datum>`:
+```rust
+Token::DatumLabel(n) => {
+    // Check for forward reference / duplicate
+    if self.labels.contains_key(&n) {
+        return Err(ParseError::DuplicateLabel(n));
+    }
+    // Parse the datum
+    let datum = self.parse_expr()?;
+    // Store in labels map
+    self.labels.insert(n, datum.clone());
+    Ok(datum)
+}
+```
+
+Parsing `#n#`:
+```rust
+Token::DatumRef(n) => {
+    match self.labels.get(&n) {
+        Some(value) => Ok(value.clone()),
+        None => Err(ParseError::UndefinedLabel(n)),
+    }
+}
+```
+
+#### Phase 3: Cycle Handling (The Hard Part)
+
+For cyclic structures like `#0=(1 . #0#)`:
+
+**Option A: Placeholder + Post-Processing (chibi-style)**
+1. Create a special `Value::LabelPlaceholder(usize)` variant
+2. During parsing, insert placeholder for forward refs within same datum
+3. After parsing, walk structure and replace placeholders with actual values
+4. Use `Rc<RefCell<...>>` to enable mutation for cycles
+
+**Option B: Lazy Resolution**
+1. Store references as `Value::LabelRef(usize)` permanently
+2. Resolve lazily when the value is accessed
+3. Requires changes throughout the evaluator
+
+**Option C: Immediate Resolution with Mutation**
+1. Parse `#0=` but don't know the full value yet
+2. Create an empty placeholder Pair
+3. Parse the contained datum, which may reference `#0#`
+4. Fill in the placeholder using `Rc<RefCell<...>>` mutation
+
+**Recommended: Option A (Placeholder + Post-Processing)**
+
+This matches chibi-scheme's approach and is cleanest:
+
+```rust
+// New Value variant (temporary, only during parsing)
+enum Value {
+    // ... existing variants ...
+    LabelPlaceholder(usize),  // Only exists during read
+}
+
+// Post-processing function
+fn resolve_labels(value: Value, labels: &HashMap<usize, Value>) -> Value {
+    match value {
+        Value::LabelPlaceholder(n) => labels[&n].clone(),
+        Value::Pair(cell) => {
+            let (car, cdr) = &*cell.borrow();
+            let new_car = resolve_labels(car.clone(), labels);
+            let new_cdr = resolve_labels(cdr.clone(), labels);
+            // Mutate in place to preserve identity for cycles
+            let mut inner = cell.borrow_mut();
+            inner.0 = new_car;
+            inner.1 = new_cdr;
+            Value::Pair(cell.clone())
+        }
+        Value::Vector(vec) => { /* similar */ }
+        other => other,
+    }
+}
+```
+
+#### Challenges and Edge Cases
+
+1. **Cycle Detection**: Need to track visited nodes to avoid infinite loops
+2. **Identity Preservation**: `#0#` must return the **same object** as `#0=`, not a copy
+3. **Nested Labels**: `#0=(#1=(a b) #1#)` - multiple labels in same datum
+4. **Error Handling**:
+   - Forward references: `#0# ... #0=...` is an error
+   - Self-reference: `#0= #0#` is an error
+   - Undefined label: `#0#` without `#0=` is an error
+   - Duplicate label: Two `#0=` in same datum
+
+#### Testing
+
+Test cases needed:
+```scheme
+;; Basic shared structure
+(let ((x (read (open-input-string "(#0=(1 2 3) #0#)"))))
+  (eq? (car x) (cadr x)))  ; => #t (same object)
+
+;; Cyclic list
+(let ((x (read (open-input-string "#0=(a b c . #0#)"))))
+  (eq? x (cdddr x)))  ; => #t
+
+;; Nested labels
+(read (open-input-string "#0=(#1=(a) #1# #0#)"))
+
+;; Error cases
+(read (open-input-string "#0#"))         ; Error: undefined label
+(read (open-input-string "#0= #0#"))     ; Error: self-reference
+(read (open-input-string "(#0# #0=x)"))  ; Error: forward reference
+```
+
+#### Effort Estimate
+
+- **Lexer changes**: Small (add two token types, digit parsing)
+- **Parser changes**: Medium (label tracking, placeholder handling)
+- **Post-processing**: Medium-Large (cycle handling, identity preservation)
+- **Testing**: Medium (many edge cases)
+
+**Total: Large effort** - Estimated 4-6 hours for full implementation
+
+#### Dependencies
+
+- Requires `Rc<RefCell<...>>` for pairs/vectors (already in place)
+- May need changes to `write` procedure to output `#n=` / `#n#` notation
+- May need `Value::LabelPlaceholder` or similar temporary variant
 
 ---
 

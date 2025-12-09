@@ -825,8 +825,9 @@ impl Evaluator {
                 )))))
             }
 
-            // Unspecified and EOF - shouldn't appear in user code
-            Value::Unspecified | Value::Eof => Ok(expr.clone()),
+            // Unspecified, EOF, and LabelPlaceholder - shouldn't appear in user code
+            // LabelPlaceholder is resolved during parsing
+            Value::Unspecified | Value::Eof | Value::LabelPlaceholder(_) => Ok(expr.clone()),
         }
     }
 

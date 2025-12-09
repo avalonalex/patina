@@ -294,7 +294,8 @@ impl Desugarer {
             | Value::Port(_)
             | Value::Promise(_)
             | Value::Eof
-            | Value::Values(_) => Err(DesugarError::RuntimeValueInAST {
+            | Value::Values(_)
+            | Value::LabelPlaceholder(_) => Err(DesugarError::RuntimeValueInAST {
                 value: value.clone(),
                 context: "Cannot desugar runtime-only value".to_string(),
             }),

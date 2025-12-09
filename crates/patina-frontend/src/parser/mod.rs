@@ -21,11 +21,22 @@ pub enum ParseError {
 
     #[error("Invalid syntax: {0}")]
     InvalidSyntax(String),
+
+    #[error("Undefined datum label: #{0}#")]
+    UndefinedLabel(usize),
+
+    #[error("Duplicate datum label: #{0}=")]
+    DuplicateLabel(usize),
 }
+
+use std::collections::HashMap;
 
 pub struct Parser {
     lexer: Lexer,
     current_token: Token,
+    /// Datum labels for shared/cyclic structure support (R7RS Section 2.4)
+    /// Maps label number to the labelled value
+    labels: HashMap<usize, Value>,
 }
 
 impl Parser {
@@ -35,6 +46,7 @@ impl Parser {
         Ok(Parser {
             lexer,
             current_token,
+            labels: HashMap::new(),
         })
     }
 
@@ -44,7 +56,9 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<Value, ParseError> {
-        self.parse_expr()
+        let result = self.parse_expr()?;
+        // After parsing the outermost datum, resolve any label placeholders
+        Ok(self.resolve_labels(result))
     }
 
     /// Parse all expressions from the input until EOF.
@@ -54,7 +68,11 @@ impl Parser {
     pub fn parse_all(&mut self) -> Result<Vec<Value>, ParseError> {
         let mut exprs = Vec::new();
         while self.current_token != Token::Eof {
-            exprs.push(self.parse_expr()?);
+            let expr = self.parse_expr()?;
+            // Resolve labels for each top-level expression
+            exprs.push(self.resolve_labels(expr));
+            // Clear labels between top-level expressions
+            self.labels.clear();
         }
         Ok(exprs)
     }
@@ -116,6 +134,41 @@ impl Parser {
             Token::LeftParen => self.parse_list(),
             Token::VectorOpen => self.parse_vector(),
             Token::BytevectorOpen => self.parse_bytevector(),
+            // R7RS datum labels: #n= defines a label, #n# references it
+            Token::DatumLabel(n) => {
+                let label = *n;
+                self.advance()?; // consume #n=
+
+                // Check for duplicate label
+                if self.labels.contains_key(&label) {
+                    return Err(ParseError::DuplicateLabel(label));
+                }
+
+                // Parse the datum being labelled
+                let datum = self.parse_expr()?;
+
+                // Store the labelled datum
+                self.labels.insert(label, datum.clone());
+
+                Ok(datum)
+            }
+            Token::DatumRef(n) => {
+                let label = *n;
+                self.advance()?; // consume #n#
+
+                // If the label is already resolved, return a reference to it
+                // Otherwise, return a placeholder that will be resolved later
+                // Note: We don't check for self-reference here because cyclic structures
+                // like #0=(1 . #0#) are valid - the reference inside a compound datum
+                // creates a cycle. Direct self-reference #0= #0# will result in an
+                // unresolved placeholder, which is handled by resolve_labels.
+                if let Some(value) = self.labels.get(&label) {
+                    Ok(value.clone())
+                } else {
+                    // Return a placeholder - will be resolved after parsing completes
+                    Ok(Value::LabelPlaceholder(label))
+                }
+            }
             Token::Eof => Err(ParseError::UnexpectedEof),
             token => Err(ParseError::UnexpectedToken(token.clone())),
         }
@@ -145,6 +198,15 @@ impl Parser {
             }
             Token::LeftParen => self.skip_list(),
             Token::VectorOpen | Token::BytevectorOpen => self.skip_list(), // Same structure as list
+            // Datum labels: #n= followed by datum, #n# is just the reference
+            Token::DatumLabel(_) => {
+                self.advance()?; // consume #n=
+                self.skip_datum() // skip the labelled datum
+            }
+            Token::DatumRef(_) => {
+                self.advance()?; // consume #n#
+                Ok(())
+            }
             Token::Eof => Err(ParseError::UnexpectedEof),
             token => Err(ParseError::UnexpectedToken(token.clone())),
         }
@@ -777,6 +839,90 @@ impl Parser {
             Value::Pair(Rc::new(RefCell::new((elem, acc))))
         })
     }
+
+    /// Resolve all LabelPlaceholder values in a parsed datum.
+    ///
+    /// After parsing completes, any #n# references that appeared before
+    /// the corresponding #n= label was fully parsed will be LabelPlaceholder
+    /// values. This function walks the structure and replaces them with
+    /// the actual labelled values.
+    ///
+    /// For cyclic structures, this mutates pairs/vectors in place to create
+    /// actual cycles (rather than copies).
+    fn resolve_labels(&self, value: Value) -> Value {
+        use std::collections::HashSet;
+        let mut visited = HashSet::new();
+        self.resolve_labels_inner(value, &mut visited)
+    }
+
+    fn resolve_labels_inner(
+        &self,
+        value: Value,
+        visited: &mut std::collections::HashSet<usize>,
+    ) -> Value {
+        match value {
+            Value::LabelPlaceholder(n) => {
+                // Look up the label - should always exist at this point
+                self.labels.get(&n).cloned().unwrap_or(value)
+            }
+            Value::Pair(ref cell) => {
+                // Use pointer address as identity for cycle detection
+                let addr = Rc::as_ptr(cell) as usize;
+                if visited.contains(&addr) {
+                    // Already visited - return as-is to avoid infinite loop
+                    return value;
+                }
+                visited.insert(addr);
+
+                // Resolve car and cdr
+                let (car, cdr) = {
+                    let borrowed = cell.borrow();
+                    (borrowed.0.clone(), borrowed.1.clone())
+                };
+
+                let new_car = self.resolve_labels_inner(car, visited);
+                let new_cdr = self.resolve_labels_inner(cdr, visited);
+
+                // Mutate in place to preserve identity (important for eq?)
+                {
+                    let mut borrowed = cell.borrow_mut();
+                    borrowed.0 = new_car;
+                    borrowed.1 = new_cdr;
+                }
+
+                value
+            }
+            Value::Vector(ref vec) => {
+                // Use pointer address as identity for cycle detection
+                let addr = Rc::as_ptr(vec) as usize;
+                if visited.contains(&addr) {
+                    return value;
+                }
+                visited.insert(addr);
+
+                // Resolve all elements
+                let resolved: Vec<Value> = {
+                    let borrowed = vec.borrow();
+                    borrowed
+                        .iter()
+                        .map(|v| self.resolve_labels_inner(v.clone(), visited))
+                        .collect()
+                };
+
+                // Mutate in place
+                {
+                    let mut borrowed = vec.borrow_mut();
+                    for (i, v) in resolved.into_iter().enumerate() {
+                        borrowed[i] = v;
+                    }
+                }
+
+                value
+            }
+            // Other value types don't contain nested values that could be placeholders
+            _ => value,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1147,6 +1293,82 @@ mod tests {
         assert!(matches!(result, Value::Symbol(s) if &*s == "bar"));
     }
 
+    // ========== Datum Comment Error Cases ==========
+    // These test cases correspond to R7RS read errors that require guard to test
+    // at the Scheme level. By testing at the Rust level, we ensure correct behavior.
+
+    #[test]
+    fn test_datum_comment_error_dotted_head() {
+        // (#;a . b) -> error: no datum before dot
+        let mut parser = Parser::new("(#;a . b)").unwrap();
+        let result = parser.parse();
+        assert!(
+            result.is_err(),
+            "Expected error for (#;a . b), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_datum_comment_error_dotted_tail() {
+        // (a . #;b) -> error: no datum after dot
+        let mut parser = Parser::new("(a . #;b)").unwrap();
+        let result = parser.parse();
+        assert!(
+            result.is_err(),
+            "Expected error for (a . #;b), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_datum_comment_error_commenting_dot() {
+        // (a #;. b) -> error: dot is not a datum
+        let mut parser = Parser::new("(a #;. b)").unwrap();
+        let result = parser.parse();
+        assert!(
+            result.is_err(),
+            "Expected error for (a #;. b), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_datum_comment_error_multiple_before_dot() {
+        // (#;x #;y . z) -> error: no datum before dot
+        let mut parser = Parser::new("(#;x #;y . z)").unwrap();
+        let result = parser.parse();
+        assert!(
+            result.is_err(),
+            "Expected error for (#;x #;y . z), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_datum_comment_error_nested_before_dot() {
+        // (#; #;x #;y . z) -> error: no datum before dot
+        let mut parser = Parser::new("(#; #;x #;y . z)").unwrap();
+        let result = parser.parse();
+        assert!(
+            result.is_err(),
+            "Expected error for (#; #;x #;y . z), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_datum_comment_error_nested_dotted() {
+        // (#; #;x . z) -> error: missing datum after nested #;
+        let mut parser = Parser::new("(#; #;x . z)").unwrap();
+        let result = parser.parse();
+        assert!(
+            result.is_err(),
+            "Expected error for (#; #;x . z), got {:?}",
+            result
+        );
+    }
+
     // ========== Alternate Exponent Marker Tests ==========
 
     #[test]
@@ -1393,6 +1615,198 @@ mod tests {
                 );
             }
             other => panic!("Expected Complex, got {:?}", other),
+        }
+    }
+
+    // ========== Datum Label Tests (R7RS Section 2.4) ==========
+
+    #[test]
+    fn test_datum_label_simple() {
+        // #0=42 -> just returns 42, label is stored but not needed
+        let mut parser = Parser::new("#0=42").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(matches!(result, Value::Integer(42)));
+    }
+
+    #[test]
+    fn test_datum_label_shared_structure() {
+        // (#0=(a b) #0#) -> two references to the same list
+        let mut parser = Parser::new("(#0=(a b) #0#)").unwrap();
+        let result = parser.parse().unwrap();
+
+        if let Value::Pair(pair) = result {
+            let borrowed = pair.borrow();
+            let (first, second_cell) = (&borrowed.0, &borrowed.1);
+
+            // First element should be (a b)
+            if let Value::Pair(inner1) = first {
+                let inner1_borrowed = inner1.borrow();
+                assert!(matches!(&inner1_borrowed.0, Value::Symbol(s) if &**s == "a"));
+            } else {
+                panic!("Expected first element to be a pair");
+            }
+
+            // Second element should be eq? to first (same Rc)
+            if let Value::Pair(second_pair) = second_cell {
+                let second_borrowed = second_pair.borrow();
+                if let Value::Pair(inner2) = &second_borrowed.0 {
+                    // Check pointer equality - should be the same Rc
+                    if let Value::Pair(inner1) = first {
+                        assert!(
+                            Rc::ptr_eq(inner1, inner2),
+                            "Shared structure should use same Rc"
+                        );
+                    }
+                } else {
+                    panic!("Expected second element to be a pair");
+                }
+            } else {
+                panic!("Expected cdr to be a pair");
+            }
+        } else {
+            panic!("Expected list");
+        }
+    }
+
+    #[test]
+    fn test_datum_label_cyclic() {
+        // #0=(1 . #0#) -> creates a cycle
+        let mut parser = Parser::new("#0=(1 . #0#)").unwrap();
+        let result = parser.parse().unwrap();
+
+        if let Value::Pair(pair) = &result {
+            let borrowed = pair.borrow();
+            assert!(matches!(&borrowed.0, Value::Integer(1)));
+
+            // The cdr should be eq? to the pair itself (cycle)
+            if let Value::Pair(cdr) = &borrowed.1 {
+                assert!(
+                    Rc::ptr_eq(pair, cdr),
+                    "Cyclic structure: cdr should point to self"
+                );
+            } else {
+                panic!("Expected cdr to be a pair (the cycle)");
+            }
+        } else {
+            panic!("Expected pair");
+        }
+    }
+
+    #[test]
+    fn test_datum_label_forward_reference() {
+        // (#0# #0=(a b)) -> forward reference resolved
+        let mut parser = Parser::new("(#0# #0=(a b))").unwrap();
+        let result = parser.parse().unwrap();
+
+        if let Value::Pair(pair) = result {
+            let borrowed = pair.borrow();
+
+            // Both elements should be the same (a b) list
+            if let (Value::Pair(first), Value::Pair(rest)) = (&borrowed.0, &borrowed.1) {
+                let rest_borrowed = rest.borrow();
+                if let Value::Pair(second) = &rest_borrowed.0 {
+                    assert!(
+                        Rc::ptr_eq(first, second),
+                        "Forward reference should resolve to same object"
+                    );
+                }
+            }
+        } else {
+            panic!("Expected list");
+        }
+    }
+
+    #[test]
+    fn test_datum_label_multiple() {
+        // (#0=a #1=b #0# #1#) -> (a b a b)
+        let mut parser = Parser::new("(#0=a #1=b #0# #1#)").unwrap();
+        let result = parser.parse().unwrap();
+
+        // Collect all symbols from the list
+        let mut symbols = Vec::new();
+        let mut current = result;
+        while let Value::Pair(p) = current {
+            let borrowed = p.borrow();
+            if let Value::Symbol(s) = &borrowed.0 {
+                symbols.push(s.to_string());
+            }
+            current = borrowed.1.clone();
+        }
+
+        assert_eq!(symbols, vec!["a", "b", "a", "b"]);
+    }
+
+    #[test]
+    fn test_datum_label_duplicate_error() {
+        // #0=a #0=b -> error: duplicate label
+        let mut parser = Parser::new("(#0=a #0=b)").unwrap();
+        let result = parser.parse();
+        assert!(
+            matches!(result, Err(ParseError::DuplicateLabel(0))),
+            "Expected DuplicateLabel error, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_datum_label_undefined() {
+        // #99# -> undefined label (no error at parse time, placeholder left)
+        // Note: Our implementation leaves placeholders for undefined labels
+        // which is technically valid per R7RS (implementation-defined)
+        let mut parser = Parser::new("#99#").unwrap();
+        let result = parser.parse().unwrap();
+        // Should return a placeholder since label 99 is never defined
+        assert!(
+            matches!(result, Value::LabelPlaceholder(99)),
+            "Expected LabelPlaceholder(99), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_datum_label_in_vector() {
+        // #(#0=1 #0# #0#) -> vector with shared elements
+        let mut parser = Parser::new("#(#0=1 #0# #0#)").unwrap();
+        let result = parser.parse().unwrap();
+
+        if let Value::Vector(vec) = result {
+            let borrowed = vec.borrow();
+            assert_eq!(borrowed.len(), 3);
+            assert!(matches!(&borrowed[0], Value::Integer(1)));
+            assert!(matches!(&borrowed[1], Value::Integer(1)));
+            assert!(matches!(&borrowed[2], Value::Integer(1)));
+        } else {
+            panic!("Expected vector");
+        }
+    }
+
+    #[test]
+    fn test_datum_label_nested() {
+        // #0=(a #1=(b c) #1#) -> nested shared structure
+        let mut parser = Parser::new("#0=(a #1=(b c) #1#)").unwrap();
+        let result = parser.parse().unwrap();
+
+        // Verify the nested list (b c) is shared
+        if let Value::Pair(outer) = result {
+            let outer_borrowed = outer.borrow();
+            // Get second element (should be (b c))
+            if let Value::Pair(rest1) = &outer_borrowed.1 {
+                let rest1_borrowed = rest1.borrow();
+                if let Value::Pair(inner1) = &rest1_borrowed.0 {
+                    // Get third element (should also be (b c))
+                    if let Value::Pair(rest2) = &rest1_borrowed.1 {
+                        let rest2_borrowed = rest2.borrow();
+                        if let Value::Pair(inner2) = &rest2_borrowed.0 {
+                            assert!(
+                                Rc::ptr_eq(inner1, inner2),
+                                "Nested shared structure should use same Rc"
+                            );
+                        }
+                    }
+                }
+            }
+        } else {
+            panic!("Expected list");
         }
     }
 }

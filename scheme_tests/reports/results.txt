@@ -2799,11 +2799,9 @@ Testing:
 Testing: 
 (cadr (read (open-input-string "#0=(1 . #0#)")))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: 0
 Testing: 
 (cadr (read (open-input-string "(#0=(1 2 3) #0#)")))
 
-Error: Invalid syntax: read: Lexer error: Unexpected character: 0
 Testing: 
 (read (open-input-string "'(1 2)"))
 
@@ -3042,7 +3040,7 @@ Testing:
 Testing: 
 (get-output-string out)
 
-Tests run: 93, Passed: 85, Failed: 0, Errors: 8
+Tests run: 93, Passed: 87, Failed: 0, Errors: 6
 
 Running test suite: Numeric syntax
 Testing: 

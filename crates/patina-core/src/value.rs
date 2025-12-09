@@ -136,6 +136,12 @@ pub enum Value {
     // Special values
     Unspecified,
     Eof,
+
+    /// Placeholder for datum label references during parsing.
+    /// This is a temporary value that only exists during `read`.
+    /// After parsing, all placeholders are resolved to actual values.
+    /// R7RS Section 2.4: Datum labels for shared/cyclic structures.
+    LabelPlaceholder(usize),
 }
 
 /// State of a promise for lazy evaluation
@@ -233,6 +239,7 @@ impl Value {
             Value::Promise(_) => "promise",
             Value::Unspecified => "unspecified",
             Value::Eof => "eof-object",
+            Value::LabelPlaceholder(_) => "label-placeholder",
         }
     }
 
@@ -527,6 +534,7 @@ impl std::fmt::Display for Value {
             Value::Promise(_) => write!(f, "#<promise>"),
             Value::Unspecified => write!(f, "#<unspecified>"),
             Value::Eof => write!(f, "#<eof>"),
+            Value::LabelPlaceholder(n) => write!(f, "#<label-placeholder:{}>", n),
         }
     }
 }

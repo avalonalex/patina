@@ -565,19 +565,30 @@ mod tests {
     fn test_real_to_string_scientific_large() {
         let eval = Evaluator::new();
         // Very large numbers should use scientific notation
-        assert_eq!(eval.real_to_string(1.7976931348623157e308), "1.7976931348623157e+308");
-        assert_eq!(eval.real_to_string(-1.7976931348623157e308), "-1.7976931348623157e+308");
+        assert_eq!(
+            eval.real_to_string(1.7976931348623157e308),
+            "1.7976931348623157e+308"
+        );
+        assert_eq!(
+            eval.real_to_string(-1.7976931348623157e308),
+            "-1.7976931348623157e+308"
+        );
         assert_eq!(eval.real_to_string(1e15), "1.0e+15");
         assert_eq!(eval.real_to_string(1e100), "1.0e+100");
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_real_to_string_scientific_small() {
         let eval = Evaluator::new();
         // Very small numbers should use scientific notation
         // Note: subnormal numbers may round during formatting
         let result = eval.real_to_string(4.940656458412465e-324);
-        assert!(result.contains("e-"), "Expected scientific notation for subnormal: {}", result);
+        assert!(
+            result.contains("e-"),
+            "Expected scientific notation for subnormal: {}",
+            result
+        );
 
         assert_eq!(eval.real_to_string(1e-5), "1.0e-5");
         assert_eq!(eval.real_to_string(1e-10), "1.0e-10");
@@ -624,9 +635,17 @@ mod tests {
     fn test_format_scientific_exponent_sign() {
         // Ensure exponent always has explicit sign
         let positive_exp = Evaluator::format_scientific(1e15);
-        assert!(positive_exp.contains("e+"), "Expected explicit + in exponent: {}", positive_exp);
+        assert!(
+            positive_exp.contains("e+"),
+            "Expected explicit + in exponent: {}",
+            positive_exp
+        );
 
         let negative_exp = Evaluator::format_scientific(1e-15);
-        assert!(negative_exp.contains("e-"), "Expected - in exponent: {}", negative_exp);
+        assert!(
+            negative_exp.contains("e-"),
+            "Expected - in exponent: {}",
+            negative_exp
+        );
     }
 }

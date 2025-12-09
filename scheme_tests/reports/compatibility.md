@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-07 11:02:06
+**Generated:** 2025-12-08 19:20:23
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1111 | 95.9% |
+| ✅ Passed | 1113 | 96.1% |
 | ❌ Failed | 2 | 0.2% |
-| ⚠️ Error (crashed) | 45 | 3.9% |
+| ⚠️ Error (crashed) | 43 | 3.7% |
 | **Total** | **1158** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run (usually missing features like call/cc, guard).
@@ -34,7 +34,7 @@
 | ⚠️ | 6.10 Control Features | 34 | 29 | 0 | 5 |
 | ⚠️ | 6.11 Exceptions | 25 | 2 | 2 | 21 |
 | ❌ | 6.12 Environments and evaluation | 4 | 0 | 0 | 4 |
-| ⚠️ | Read syntax | 93 | 85 | 0 | 8 |
+| ⚠️ | Read syntax | 93 | 87 | 0 | 6 |
 | ✅ | Numeric syntax | 220 | 220 | 0 | 0 |
 | ⚠️ | 6.14 System interface | 13 | 12 | 0 | 1 |
 
@@ -90,8 +90,6 @@ Error: Undefined variable: eval
 Error: Undefined variable: eval
 Error: Undefined variable: guard
 Error: Undefined variable: guard
-Error: Invalid syntax: read: Lexer error: Unexpected character: 0
-Error: Invalid syntax: read: Lexer error: Unexpected character: 0
 Error: Undefined variable: guard
 Error: Undefined variable: guard
 Error: Undefined variable: guard

@@ -16,12 +16,14 @@ pub enum Token {
     Identifier(String),
 
     // Special syntax
-    Quote,           // '
-    Quasiquote,      // `
-    Unquote,         // ,
-    UnquoteSplicing, // ,@
-    Dot,             // .
-    DatumComment,    // #; (parser should skip next datum)
+    Quote,             // '
+    Quasiquote,        // `
+    Unquote,           // ,
+    UnquoteSplicing,   // ,@
+    Dot,               // .
+    DatumComment,      // #; (parser should skip next datum)
+    DatumLabel(usize), // #n= (label definition)
+    DatumRef(usize),   // #n# (label reference)
 
     // End of input
     Eof,
@@ -478,7 +480,44 @@ impl Lexer {
                 self.advance(); // consume !
                 self.read_reader_directive()
             }
+            // R7RS datum labels: #n= (definition) and #n# (reference)
+            '0'..='9' => self.read_datum_label(),
             _ => Err(LexError::UnexpectedChar(self.current_char())),
+        }
+    }
+
+    /// Read a datum label (#n=) or datum reference (#n#)
+    /// R7RS Section 2.4: Datum labels for shared/cyclic structures
+    fn read_datum_label(&mut self) -> Result<Token, LexError> {
+        // We're positioned at the first digit after #
+        let start = self.position;
+
+        // Read all digits
+        while !self.is_at_end() && self.current_char().is_ascii_digit() {
+            self.advance();
+        }
+
+        // Parse the label number
+        let label_str: String = self.input[start..self.position].iter().collect();
+        let label: usize = label_str
+            .parse()
+            .map_err(|_| LexError::InvalidNumber(format!("Invalid datum label: {}", label_str)))?;
+
+        // Check what follows: = for definition, # for reference
+        if self.is_at_end() {
+            return Err(LexError::UnexpectedChar('\0'));
+        }
+
+        match self.current_char() {
+            '=' => {
+                self.advance(); // consume =
+                Ok(Token::DatumLabel(label))
+            }
+            '#' => {
+                self.advance(); // consume #
+                Ok(Token::DatumRef(label))
+            }
+            ch => Err(LexError::UnexpectedChar(ch)),
         }
     }
 
@@ -1108,5 +1147,71 @@ mod tests {
             lexer.next_token().unwrap(),
             Token::String("ABC".to_string())
         );
+    }
+
+    // Datum label tests
+    #[test]
+    fn test_datum_label_basic() {
+        let mut lexer = Lexer::new("#0=");
+        assert_eq!(lexer.next_token().unwrap(), Token::DatumLabel(0));
+    }
+
+    #[test]
+    fn test_datum_ref_basic() {
+        let mut lexer = Lexer::new("#0#");
+        assert_eq!(lexer.next_token().unwrap(), Token::DatumRef(0));
+    }
+
+    #[test]
+    fn test_datum_label_multi_digit() {
+        let mut lexer = Lexer::new("#123=");
+        assert_eq!(lexer.next_token().unwrap(), Token::DatumLabel(123));
+    }
+
+    #[test]
+    fn test_datum_ref_multi_digit() {
+        let mut lexer = Lexer::new("#42#");
+        assert_eq!(lexer.next_token().unwrap(), Token::DatumRef(42));
+    }
+
+    #[test]
+    fn test_datum_label_in_list() {
+        let mut lexer = Lexer::new("(#0=(a b) #0#)");
+        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(lexer.next_token().unwrap(), Token::DatumLabel(0));
+        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("a".to_string())
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("b".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+        assert_eq!(lexer.next_token().unwrap(), Token::DatumRef(0));
+        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_datum_label_cyclic() {
+        // #0=(a b c . #0#)
+        let mut lexer = Lexer::new("#0=(a . #0#)");
+        assert_eq!(lexer.next_token().unwrap(), Token::DatumLabel(0));
+        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("a".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::Dot);
+        assert_eq!(lexer.next_token().unwrap(), Token::DatumRef(0));
+        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_datum_label_invalid_no_terminator() {
+        // #0 without = or # is invalid
+        let mut lexer = Lexer::new("#0 ");
+        assert!(lexer.next_token().is_err());
     }
 }
