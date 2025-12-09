@@ -102,10 +102,9 @@ with all R7RS-small features.
 
 ### Known Limitations
 
-- Exception handling (guard, raise) not yet implemented
-- Continuations (call/cc) not yet implemented
-- Some R7RS libraries not yet implemented: (scheme eval), (scheme r5rs), (scheme process-context)
-- See `PRD/phase1/EXCEPTION_HANDLING.md` for exception handling roadmap
+- Exception handling (guard, raise, with-exception-handler) not yet implemented
+- Continuations (call/cc, dynamic-wind) not yet implemented
+- `(scheme load)` library not yet implemented
 
 ### Next Steps
 

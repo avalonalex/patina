@@ -15,6 +15,8 @@ Patina is an educational and experimental Scheme interpreter with ambitious goal
 
 Our primary focus is complete conformance to the R7RS-small specification. We validate against the comprehensive [Chibi Scheme](https://github.com/ashinn/chibi-scheme) test suite maintained by Alex Shinn, chairman of the R7RS Small Language committee.
 
+**Current status**: 97% of chibi r7rs-tests.scm passing (1123/1158 tests). Remaining gaps are continuations (call/cc) and exception handling (guard).
+
 ### Modular Architecture
 
 Patina separates concerns into independent crates with two key abstractions:
@@ -46,7 +48,7 @@ patina-pipeline     →  Pipeline orchestration
 patina-tree-walker  →  Tree-walking backend (current)
 patina-interpreter  →  High-level API
 patina-repl         →  Terminal REPL
-patina-tests        →  Integration tests
+patina-tests        →  Integration tests (~1400 tests)
 ```
 
 ### Experimental Goals
@@ -127,12 +129,14 @@ Racket-style scope sets hygiene (based on "Binding as Sets of Scopes", Flatt 201
 - Flip-scope algorithm for use-site vs introduced identifier discrimination
 - No alpha-renaming needed
 
-### Dual-Loader Library System
+### R7RS Library System
 
-Balances performance with flexibility:
+Complete R7RS-compliant library system:
 
-- **Rust libraries** - Performance-critical primitives compiled into the interpreter
-- **Scheme libraries** - Derived functions and macros loaded from `.scm` files
+- **`.sld` files** - R7RS library definitions with exports and includes
+- **Rust primitives** - Performance-critical operations in internal modules
+- **Scheme implementations** - Macros and derived forms in `.scm` files
+- **Full support** - `cond-expand`, `include`, `include-ci`, `include-library-declarations`
 
 ### Full Numeric Tower
 
@@ -161,7 +165,7 @@ Integer (i64) → BigInteger → Rational → Real (f64) → Complex
 ```
 patina/
 ├── crates/
-│   ├── patina-runtime/      # Core types, Backend trait
+│   ├── patina-runtime/      # Core types, Backend trait, internal primitives
 │   ├── patina-ir/           # CoreExpr IR
 │   ├── patina-frontend/     # Lexer, Parser, Desugarer
 │   ├── patina-macros/       # Macro expansion
@@ -169,9 +173,9 @@ patina/
 │   ├── patina-tree-walker/  # Tree-walking backend
 │   ├── patina-interpreter/  # High-level API
 │   ├── patina-repl/         # Terminal REPL
-│   └── patina-tests/        # Integration tests
+│   └── patina-tests/        # Integration tests (~1400 tests)
 ├── lib/                     # Scheme standard library
-│   └── scheme/              # R7RS library implementations
+│   └── scheme/              # R7RS .sld libraries and implementations
 ├── docs/                    # User documentation
 ├── PRD/                     # Planning documents
 └── spec/                    # R7RS specification

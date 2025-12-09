@@ -16,22 +16,30 @@ Patina uses a Rust workspace with 9 crates organized by concern:
 patina/ (workspace root)
 ├── Cargo.toml              # Workspace configuration
 ├── lib/                    # Scheme standard library
-│   ├── scheme/             # R7RS library implementations
-│   │   ├── base-extras.scm # Core macros and derived procedures for (scheme base)
-│   │   └── lazy-extras.scm # Lazy evaluation support for (scheme lazy)
-│   └── chibi/              # Chibi scheme test suite
-│       └── test-extras.scm # Testing utilities
+│   └── scheme/             # R7RS library implementations (.sld files)
+│       ├── base.sld        # (scheme base) library definition
+│       ├── base/           # Base library Scheme code (macros, derived forms)
+│       │   ├── binding.scm     # let, let*, letrec, etc.
+│       │   ├── conditionals.scm # cond, case, when, unless
+│       │   ├── iteration.scm   # do loop
+│       │   ├── lists.scm       # caar, cadr, not, zero?, etc.
+│       │   ├── numbers.scm     # number utilities
+│       │   └── records.scm     # define-record-type macro
+│       ├── char.sld, complex.sld, cxr.sld, eval.sld, file.sld
+│       ├── inexact.sld, lazy.sld, process-context.sld, r5rs.sld
+│       ├── read.sld, time.sld, write.sld, case-lambda.sld
+│       └── lazy/promises.scm   # Lazy evaluation support
 │
 └── crates/
     ├── patina-runtime/     # Core types, Backend trait, Library system
-    ├── patina-ir/          # CoreExpr IR definition (7 core forms)
+    ├── patina-ir/          # CoreExpr IR definition (9 core forms)
     ├── patina-frontend/    # Lexer, Parser, Desugarer
     ├── patina-macros/      # Macro expansion (syntax-rules with scope sets hygiene)
     ├── patina-pipeline/    # Pipeline orchestration (pluggable strategies)
     ├── patina-tree-walker/ # Tree-walking interpreter backend
     ├── patina-interpreter/ # High-level Interpreter API
     ├── patina-repl/        # Rich terminal REPL
-    └── patina-tests/       # All integration & compliance tests (~423 tests)
+    └── patina-tests/       # All integration & compliance tests (~1400 tests)
 ```
 
 ### Crate Responsibilities
@@ -41,7 +49,7 @@ patina/ (workspace root)
 - `Environment`: lexical scoping with parent chains
 - `Backend` trait: abstraction for multiple evaluation strategies
 - Library system: `LibraryRegistry`, `LibraryLoaderRegistry`, `RustLibraryLoader`
-- Standard library builders: `stdlib/scheme_base.rs`, `stdlib/scheme_char.rs`, etc.
+- Internal primitive modules: `stdlib/internal_*.rs` (numbers, lists, strings, etc.)
 - Shared types used by all other crates
 
 **patina-ir** (`crates/patina-ir/src/`)
@@ -102,11 +110,11 @@ patina/ (workspace root)
 - REPL mode: `patina` (interactive)
 
 **patina-tests** (`crates/patina-tests/tests/`)
-- R7RS compliance tests (~347 tests in scheme_base.rs)
+- R7RS compliance tests organized by category
 - Integration tests (library loading, CoreExpr integration)
 - API tests (interpreter_api.rs)
-- Case-lambda tests (21 tests, currently ignored pending import support)
-- Total: ~423 tests passing
+- Record type tests, eval tests, I/O tests
+- Total: ~1400 tests passing
 
 ### Dependency Flow
 
@@ -169,29 +177,46 @@ patina-tests → patina-interpreter
 
 ## Library System Architecture
 
-Patina features a sophisticated **dual-loader library system** that balances performance (Rust-implemented) with flexibility (Scheme-implemented).
+Patina features a sophisticated **R7RS-compliant library system** with `.sld` (Scheme Library Definition) files that combine Rust primitives with Scheme-implemented macros and derived procedures.
 
-### Library Types
+### Library Organization
 
-**1. Rust Libraries** - Performance-critical primitives
-- **Location**: `crates/patina-runtime/src/stdlib/`
-- **Examples**:
-  - `scheme_base.rs` - Core (scheme base) primitives
-  - `scheme_char.rs` - Character operations
-  - `scheme_complex.rs` - Complex number support
-  - `scheme_inexact.rs` - Inexact arithmetic
-- **Registration**: Via `RustLibraryLoader` at evaluator initialization
-- **Advantages**: Fast, compiled, type-safe
+**All R7RS libraries use `.sld` files** in `lib/scheme/`:
+- Each library has a `.sld` file defining exports and includes
+- Primitives are provided via internal Rust modules (`patina.internal.*`)
+- Macros and derived procedures are implemented in Scheme (`.scm` files)
+- Full support for `include`, `include-ci`, `include-library-declarations`, and `cond-expand`
 
-**2. Scheme Libraries** - Derived functions and macros
-- **Location**: `lib/scheme/` directory
-- **Extras files** (loaded alongside Rust libraries):
-  - `base-extras.scm` - Derived functions (caar, cadr, not, zero?, etc.) and macros (let, cond, case, do, etc.)
-  - `lazy-extras.scm` - Lazy evaluation support
-- **Pure .sld libraries** (no Rust dependency):
-  - `case-lambda.sld` - SRFI-16 macro implementation (first .sld library!)
-- **Loading**: Extras automatically loaded; .sld files loaded via SchemeLibraryLoader
-- **Advantages**: Easy to modify, leverages Scheme's expressiveness
+**Example: `(scheme base)` structure**:
+```
+lib/scheme/
+├── base.sld              # Library definition with exports
+└── base/                 # Scheme implementations
+    ├── binding.scm       # let, let*, letrec, letrec*, let-values
+    ├── conditionals.scm  # cond, case, when, unless, and, or
+    ├── iteration.scm     # do loop
+    ├── lists.scm         # caar, cadr, not, zero?, positive?, negative?
+    ├── numbers.scm       # exact, inexact predicates
+    └── records.scm       # define-record-type macro
+```
+
+**Internal Rust Modules** (`crates/patina-runtime/src/stdlib/`):
+- `internal_numbers.rs` - Numeric primitives (+, -, *, /, etc.)
+- `internal_lists.rs` - List primitives (cons, car, cdr, etc.)
+- `internal_strings.rs` - String primitives
+- `internal_chars.rs` - Character primitives
+- `internal_vectors.rs` - Vector primitives
+- `internal_bytevectors.rs` - Bytevector primitives
+- `internal_io.rs` - I/O primitives (ports, read, write)
+- `internal_control.rs` - Control flow (apply, values)
+- `internal_errors.rs` - Error handling primitives
+- `internal_records.rs` - Record type primitives
+- `internal_eval.rs` - eval, environment primitives
+- `internal_lazy.rs` - delay/force primitives
+- `internal_time.rs` - Time primitives
+- `internal_system.rs` - Process context primitives
+- `internal_predicates.rs` - Type predicates
+- `internal_params.rs` - Parameter objects
 
 ### Library Infrastructure
 
@@ -222,34 +247,33 @@ Patina features a sophisticated **dual-loader library system** that balances per
 ```
 1. User code: (import (scheme char))
 2. LibraryLoaderRegistry checks RustLibraryLoader first
-3. If found: RustLibraryLoader returns pre-built library
-4. If not found: SchemeLibraryLoader searches for scheme/char.sld
-5. Library registered in LibraryRegistry for caching
-6. Exports installed into current environment
+3. RustLibraryLoader checks for internal primitives (patina.internal.*)
+4. SchemeLibraryLoader finds and parses lib/scheme/char.sld
+5. Library evaluates: imports internal primitives, includes Scheme code
+6. Library registered in LibraryRegistry for caching
+7. Exports installed into current environment
 ```
 
 ### Current Library Status
 
-**Implemented Libraries** (Rust + Scheme macros):
-- `(scheme base)` - Core primitives + base-extras.scm macros
-- `(scheme case-lambda)` - Multi-arity procedures (pure .sld library, SRFI-16 macro)
-- `(scheme char)` - Character operations
-- `(scheme complex)` - Complex number support
-- `(scheme inexact)` - Inexact arithmetic operations
-- `(scheme lazy)` - Lazy evaluation (delay, force)
-- `(scheme write)` - Output operations
+**Fully Implemented R7RS Libraries** (all 15 R7RS-small libraries):
+- `(scheme base)` - Core primitives + macros (let, cond, case, do, define-record-type, etc.)
+- `(scheme case-lambda)` - Multi-arity procedures (SRFI-16 macro)
+- `(scheme char)` - Character operations (char-alphabetic?, char-upcase, etc.)
+- `(scheme complex)` - Complex number operations (make-rectangular, magnitude, angle)
+- `(scheme cxr)` - Extended car/cdr (caaar through cddddr)
+- `(scheme eval)` - Runtime evaluation (eval, environment, scheme-report-environment)
+- `(scheme file)` - File I/O (open-input-file, call-with-input-file, etc.)
+- `(scheme inexact)` - Inexact arithmetic (exp, log, sin, cos, sqrt, etc.)
+- `(scheme lazy)` - Lazy evaluation (delay, force, delay-force, make-promise)
+- `(scheme process-context)` - Process info (command-line, exit, get-environment-variable)
+- `(scheme r5rs)` - R5RS compatibility layer
+- `(scheme read)` - Input operations (read)
 - `(scheme time)` - Time operations (current-second, current-jiffy, jiffies-per-second)
-
-**Partially Implemented**:
-- `(scheme file)` - File I/O (basic support)
-- `(scheme read)` - Input operations (basic support)
+- `(scheme write)` - Output operations (write, display, write-shared, write-simple)
 
 **Not Yet Implemented**:
-- `(scheme cxr)` - Extended car/cdr
-- `(scheme eval)` - Runtime evaluation
-- `(scheme load)` - File loading
-- `(scheme process-context)` - Process info
-- `(scheme r5rs)` - R5RS compatibility
+- `(scheme load)` - File loading (load procedure)
 
 ## Architecture Deep Dive
 
@@ -333,7 +357,7 @@ pub enum CoreExpr {
 - Simpler to evaluate than full Value AST (9 cases vs 26 variants)
 - Foundation for future optimizations and alternative backends
 
-**Not in CoreExpr**: The desugarer does NOT handle derived forms like `let`, `cond`, `and`, `or`, etc. These are **already macros** defined in `lib/scheme/base-extras.scm`. The macro expander transforms them before the desugarer sees them.
+**Not in CoreExpr**: The desugarer does NOT handle derived forms like `let`, `cond`, `and`, `or`, etc. These are **already macros** defined in `lib/scheme/base/*.scm`. The macro expander transforms them before the desugarer sees them.
 
 ### Core Value Representation
 
@@ -476,7 +500,7 @@ pub trait SpecialForm {
 - `define-syntax`, `let-syntax`, `letrec-syntax`
 - `expand` (debugging extension)
 
-**Note**: Most "special forms" users think of (let, cond, case, do, and, or, case-lambda) are actually **macros** defined in Scheme (base-extras.scm, case-lambda-extras.scm), not special forms.
+**Note**: Most "special forms" users think of (let, cond, case, do, and, or, case-lambda) are actually **macros** defined in Scheme (`lib/scheme/base/*.scm`, `lib/scheme/case-lambda.sld`), not special forms.
 
 ### Primitives Organization
 
@@ -525,12 +549,12 @@ primitives/
 - When found, calls macro expander with flip-scope hygiene
 - Expands recursively until a special form or application remains
 
-**Core Macros** (in `lib/scheme/base-extras.scm`):
-- Binding: `let`, `let*`, `letrec`, `letrec*`, `let-values`, `let*-values`
-- Conditionals: `cond`, `case`, `when`, `unless`
-- Boolean: `and`, `or`
-- Iteration: `do` (with helper for optional step)
-- Definition: `define-values`
+**Core Macros** (in `lib/scheme/base/*.scm`):
+- Binding (`binding.scm`): `let`, `let*`, `letrec`, `letrec*`, `let-values`, `let*-values`
+- Conditionals (`conditionals.scm`): `cond`, `case`, `when`, `unless`, `and`, `or`
+- Iteration (`iteration.scm`): `do` (with helper for optional step)
+- Records (`records.scm`): `define-record-type`
+- Lists (`lists.scm`): `caar`, `cadr`, `not`, `zero?`, `positive?`, `negative?`
 
 ## Reference Implementations
 
@@ -586,7 +610,7 @@ cargo run
 ### Testing
 
 ```bash
-# Run ALL tests (~423 tests across workspace)
+# Run ALL tests (~1400 tests across workspace)
 cargo test
 
 # Run only integration tests (patina-tests crate)
@@ -630,11 +654,11 @@ This runs the complete chibi-scheme R7RS test suite (~2500 lines) and generates:
 - **Compatibility report** with pass/fail statistics
 - **Detailed test output** showing what works and what doesn't
 
-**Current status** (as of CoreExpr migration):
-- ✅ 68/129 tests passing (52.7%)
-- ❌ 4 tests failing (3.1%)
-- ⚠️ 57 tests crashing (44.2%) - missing features
-- Tests cover: primitives, macros, quasiquote, numeric tower, lists, strings, vectors, control flow
+**Current status**:
+- ✅ 1123/1158 tests passing (97.0%)
+- ❌ 2 tests failing (0.2%)
+- ⚠️ 33 tests crashing (2.8%) - missing call/cc, guard
+- Remaining gaps: continuations (call/cc), exception handling (guard, raise)
 
 ### Code Quality
 
@@ -669,11 +693,11 @@ cargo fmt -- --check
 - `patina-tree-walker`: Evaluator components
 
 **Integration Tests** - In `crates/patina-tests/tests/`:
-- `scheme_base.rs` - R7RS (scheme base) compliance (~347 tests)
-- `interpreter_api.rs` - API tests (6 tests)
-- `case_lambda.rs` - Case-lambda tests (21 tests, ignored pending import)
-- `sld_file_loading.rs` - Library loading tests
-- `library_core_expr_integration.rs` - CoreExpr integration with libraries
+- `compliance/` - R7RS compliance tests organized by category (lists, strings, numbers, etc.)
+- `scheme_eval.rs` - (scheme eval) tests
+- `record_types.rs` - define-record-type tests
+- `sld_file_loading.rs` - Library loading and .sld parsing tests
+- `interpreter_api.rs` - API tests
 - `conversion.rs` - Type conversion tests
 - `verify_bigint_promotion.rs` - Numeric tower promotion tests
 
@@ -686,7 +710,7 @@ assert_eval_error(expr)                  // Test error cases
 
 ### Running Tests
 
-**Total: ~423 tests passing**
+**Total: ~1400 tests passing**
 
 See Development Commands section above for test commands.
 
@@ -705,8 +729,9 @@ See Development Commands section above for test commands.
 3. Register in `special_forms/mod.rs::build_registry()`
 
 **New libraries**:
-- **Rust library**: Create `crates/patina-runtime/src/stdlib/<name>.rs` and register in evaluator init
-- **Scheme library**: Create `lib/scheme/<name>-extras.scm` and load in library builder
+- **Internal primitives**: Create `crates/patina-runtime/src/stdlib/internal_<name>.rs` and register
+- **Scheme library**: Create `lib/scheme/<name>.sld` defining exports and includes
+- **Scheme implementations**: Create `lib/scheme/<name>/<file>.scm` for macros and derived procedures
 
 **Value types**:
 - Extend `Value` enum in `crates/patina-runtime/src/value/mod.rs`
@@ -762,33 +787,33 @@ Use appropriate error types for each layer:
 See `docs/FEATURE_STATUS.md` for detailed test-by-test compliance matrix (canonical source).
 
 **Currently Implemented:**
-- Core special forms (quote, if, define, set!, lambda, begin)
+- Core special forms (quote, if, define, set!, lambda, begin, define-syntax)
 - Full numeric tower (integers, bignums, rationals, reals, complex)
 - List operations (cons, car, cdr, list, append, map, for-each, etc.)
 - String operations (string-append, string-length, substring, etc.)
 - Vector operations (vector, vector-ref, vector-set!, make-vector, etc.)
+- Bytevector operations (bytevector, bytevector-u8-ref, etc.)
+- Character operations (char-alphabetic?, char-upcase, etc.)
 - Type predicates and equality (number?, string?, eq?, eqv?, equal?, etc.)
 - Tail call optimization (via trampoline pattern)
 - Hygienic macros (syntax-rules with scope sets hygiene)
 - Multiple values (values, call-with-values)
-- Library system (import, library loading, dual loaders)
+- R7RS library system (import, .sld files, cond-expand, include)
 - CoreExpr IR evaluation (primary path)
+- Full I/O system (ports, read, write, file I/O)
+- Record types (define-record-type)
+- Lazy evaluation (delay, force, delay-force, make-promise)
+- Runtime evaluation (eval, environment, scheme-report-environment)
+- All 14 of 15 R7RS-small standard libraries
 
-**Partially Implemented:**
-- I/O operations (display, write, newline - basic support)
-- Ports (input-port?, output-port? - basic support)
-
-**High-Priority TODOs:**
-- Full I/O suite (read, read-char, peek-char, file operations)
-- Exception handling (guard, raise, error objects)
-- Module system enhancements (export, rename, only, except)
-- Continuations (call/cc, dynamic-wind)
-- Case-lambda (implemented but needs import support)
-- Full string/vector/bytevector operations
+**Not Yet Implemented:**
+- Continuations (call/cc, call-with-current-continuation, dynamic-wind)
+- Exception handling (guard, raise, with-exception-handler)
+- `(scheme load)` library
 
 **Current Compliance:**
-- **Internal tests**: ~794 passing (patina-tests crate)
-- **Chibi r7rs-tests.scm**: 1121/1157 passing (96.9%), 2 failing (0.2%), 34 crashing (2.9%)
+- **Internal tests**: ~1400 passing (patina-tests crate)
+- **Chibi r7rs-tests.scm**: 1123/1158 passing (97.0%), 2 failing (0.2%), 33 crashing (2.8%)
 
 ## Future Phases
 

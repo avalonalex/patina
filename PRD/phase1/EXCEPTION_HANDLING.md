@@ -14,7 +14,7 @@ R7RS requires a comprehensive exception handling system. We currently have **NON
 R7RS exception handling is based on **dynamic exception handlers** similar to try/catch but more flexible.
 
 **Dependent Features:**
-- `file-error?`, `read-error?` predicates in [IO_IMPLEMENTATION.md](./IO_IMPLEMENTATION.md)
+- `file-error?`, `read-error?` predicates - needed for I/O error handling (I/O system complete, see `internal/ARCHIVE/IO_IMPLEMENTATION.md`)
 
 ---
 
@@ -657,7 +657,7 @@ fn test_file_error() {
 
 ### Current Codebase State (as of 2025-12-06)
 
-**I/O is COMPLETE** - See [IO_IMPLEMENTATION.md](./IO_IMPLEMENTATION.md):
+**I/O is COMPLETE** - See `internal/ARCHIVE/IO_IMPLEMENTATION.md`:
 - All 6 phases of I/O implemented
 - `EvalError::IOError` is already used throughout
 - `read` procedure exists in `(scheme read)` library

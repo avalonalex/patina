@@ -8,6 +8,31 @@ This directory contains completed research, analysis, and implementation documen
 
 ## Directory Structure
 
+### `REMAINING_ARCHITECTURE_ISSUES.md`
+**Status:** ✅ ARCHIVED (2025-12-08)
+
+Consolidated architecture issues tracker. Archived because:
+- **Arithmetic Refactoring**: ✅ COMPLETE - arithmetic.rs reduced from 2,192 to 1,334 lines (39% reduction), `NumericValue` eliminated, operations moved to `patina_core::numeric`
+- **Source Location Tracking**: Tracked separately in `PRD/phase1/SOURCE_INFO_PLAN.md`
+- **VM-related items** (Tagged Pointers, Environment for VM, Bytecode VM, JIT): Belong in Phase 2
+
+---
+
+### `IO_IMPLEMENTATION.md`
+**Status:** ✅ ARCHIVED (2025-12-08)
+
+Complete R7RS I/O implementation guide. All 6 phases completed:
+- **Phase 1**: Port infrastructure, string ports, read operations
+- **Phase 2**: File I/O (open-input-file, open-output-file, etc.)
+- **Phase 3**: Extended text I/O (read-string)
+- **Phase 4**: Binary I/O (bytevector ports, read-u8, write-u8, etc.)
+- **Phase 5**: Higher-order I/O (call-with-port)
+- **Phase 6**: Advanced write (write-shared, write-simple)
+
+**Remaining**: Only `file-error?` and `read-error?` predicates, which depend on exception handling (tracked in `PRD/phase1/EXCEPTION_HANDLING.md`)
+
+---
+
 ### 📁 `completed_features/library_system_2025_12/`
 **Status:** ✅ COMPLETE - R7RS Library System 100% Compliant (2025-12-08)
 
