@@ -828,6 +828,9 @@ impl Evaluator {
             // Unspecified, EOF, and LabelPlaceholder - shouldn't appear in user code
             // LabelPlaceholder is resolved during parsing
             Value::Unspecified | Value::Eof | Value::LabelPlaceholder(_) => Ok(expr.clone()),
+
+            // Record types and records are runtime values - return as-is
+            Value::RecordType(_) | Value::Record { .. } => Ok(expr.clone()),
         }
     }
 

@@ -126,6 +126,17 @@ pub enum Value {
     // Represents a loaded library with its exports and environment
     Library(Rc<Library>),
 
+    // Record types (R7RS Section 5.5)
+    // Record type descriptor - the type itself (result of define-record-type)
+    RecordType(Rc<RecordTypeDescriptor>),
+
+    // Record instance - an instance of a record type
+    // Fields stored in a RefCell to allow mutation via modifier procedures
+    Record {
+        record_type: Rc<RecordTypeDescriptor>,
+        fields: Rc<RefCell<Vec<Value>>>,
+    },
+
     // Multiple values (R7RS Section 6.10)
     Values(Vec<Value>),
 
@@ -161,6 +172,73 @@ pub struct IdentifierData {
     /// Empty set = top-level identifier
     pub scopes: ScopeSet,
 }
+
+// =============================================================================
+// Record Types (R7RS Section 5.5)
+// =============================================================================
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Global counter for generating unique record type IDs (generative semantics)
+static RECORD_TYPE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Generate a new unique record type ID
+///
+/// Each call to define-record-type creates a new type with a unique ID.
+/// This ensures generative semantics: two record types with the same
+/// name and fields are still distinct types.
+pub fn next_record_type_id() -> usize {
+    RECORD_TYPE_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
+/// Record type descriptor - represents a record type itself
+///
+/// Created by `define-record-type`. Each invocation creates a new descriptor
+/// with a unique ID (generative semantics), even if the name and fields match
+/// a previous definition.
+///
+/// # R7RS Compliance
+///
+/// From R7RS Section 5.5:
+/// > The define-record-type construct is generative: each use creates a new
+/// > record type that is distinct from all existing types, including Scheme's
+/// > predefined types and other record types — even record types of the same
+/// > name or structure.
+#[derive(Debug, Clone)]
+pub struct RecordTypeDescriptor {
+    /// Unique identifier for this record type (generative semantics)
+    pub id: usize,
+    /// Name of the record type (for display purposes)
+    pub name: Rc<str>,
+    /// Field names in declaration order
+    pub fields: Vec<Rc<str>>,
+}
+
+impl RecordTypeDescriptor {
+    /// Create a new record type descriptor with a unique ID
+    pub fn new(name: &str, fields: Vec<String>) -> Self {
+        RecordTypeDescriptor {
+            id: next_record_type_id(),
+            name: Rc::from(name),
+            fields: fields.into_iter().map(|s| Rc::from(s.as_str())).collect(),
+        }
+    }
+
+    /// Get the index of a field by name, if it exists
+    pub fn field_index(&self, name: &str) -> Option<usize> {
+        self.fields.iter().position(|f| f.as_ref() == name)
+    }
+}
+
+impl PartialEq for RecordTypeDescriptor {
+    fn eq(&self, other: &Self) -> bool {
+        // Identity based on unique ID only (generative semantics)
+        // Two record types with the same name/fields are still distinct
+        self.id == other.id
+    }
+}
+
+impl Eq for RecordTypeDescriptor {}
 
 /// Lambda body representation - type-safe replacement for `dyn Any`
 ///
@@ -235,6 +313,8 @@ impl Value {
             Value::Port(_) => "port",
             Value::Macro(_) => "macro",
             Value::Library(_) => "library",
+            Value::RecordType(_) => "record-type",
+            Value::Record { .. } => "record",
             Value::Values(_) => "values",
             Value::Promise(_) => "promise",
             Value::Unspecified => "unspecified",
@@ -520,6 +600,8 @@ impl std::fmt::Display for Value {
             Value::Port(port) => write!(f, "{}", port),
             Value::Macro(compiled) => write!(f, "#<macro:{}>", compiled.name),
             Value::Library(lib) => write!(f, "{}", lib),
+            Value::RecordType(rtd) => write!(f, "#<record-type {}>", rtd.name),
+            Value::Record { record_type, .. } => write!(f, "#<record {}>", record_type.name),
             Value::Values(vals) => {
                 // Multiple values are usually only seen internally
                 // Display as space-separated values

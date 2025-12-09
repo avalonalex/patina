@@ -32,7 +32,9 @@ pub use library::Library;
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};
 pub use pvref::{MatchEnv, MatchValue, PVRef};
 pub use scope::{ScopeId, ScopeSet};
-pub use value::{Arity, IdentifierData, LambdaBody, Procedure, PromiseState, Value};
+pub use value::{
+    Arity, IdentifierData, LambdaBody, Procedure, PromiseState, RecordTypeDescriptor, Value,
+};
 
 #[cfg(test)]
 pub use scope::reset_scope_counter;

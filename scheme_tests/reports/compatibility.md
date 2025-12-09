@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-08 19:20:23
+**Generated:** 2025-12-08 19:49:19
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1113 | 96.1% |
+| ✅ Passed | 1118 | 96.6% |
 | ❌ Failed | 2 | 0.2% |
-| ⚠️ Error (crashed) | 43 | 3.7% |
-| **Total** | **1158** | **100%** |
+| ⚠️ Error (crashed) | 37 | 3.2% |
+| **Total** | **1157** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run (usually missing features like call/cc, guard).
 
@@ -21,7 +21,7 @@
 | ✅ | 4.1 Primitive expression types | 27 | 27 | 0 | 0 |
 | ✅ | 4.2 Derived expression types | 74 | 74 | 0 | 0 |
 | ✅ | 4.3 Macros | 25 | 25 | 0 | 0 |
-| ⚠️ | 5 Program structure | 16 | 10 | 0 | 6 |
+| ✅ | 5 Program structure | 15 | 15 | 0 | 0 |
 | ✅ | 6.1 Equivalence Predicates | 25 | 25 | 0 | 0 |
 | ✅ | 6.2 Numbers | 211 | 211 | 0 | 0 |
 | ✅ | 6.3 Booleans | 18 | 18 | 0 | 0 |
@@ -52,12 +52,6 @@ FAIL: something-went-wrong
 ### Errors
 
 ```
-Error: Undefined variable: define-record-type
-Error: Undefined variable: pare?
-Error: Undefined variable: pare?
-Error: Undefined variable: kar
-Error: Undefined variable: kdr
-Error: Undefined variable: kons
 Error: Undefined variable: call-with-current-continuation
 Error: Undefined variable: call-with-current-continuation
 Error: Undefined variable: call-with-current-continuation

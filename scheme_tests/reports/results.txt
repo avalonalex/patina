@@ -417,28 +417,22 @@ Testing:
 Testing: 
 (let ((x 1) (y 2)) (define-syntax swap! (syntax-rules () ((swap! a b) (let ((tmp a)) (set! a b) (set! b tmp))))) (swap! x y) (list x y))
 
-Error: Undefined variable: define-record-type
 Testing: 
 (pare? (kons 1 2))
 
-Error: Undefined variable: pare?
 Testing: 
 (pare? (cons 1 2))
 
-Error: Undefined variable: pare?
 Testing: 
 (kar (kons 1 2))
 
-Error: Undefined variable: kar
 Testing: 
 (kdr (kons 1 2))
 
-Error: Undefined variable: kdr
 Testing: 
 (let ((k (kons 1 2))) (set-kar! k 3) (kar k))
 
-Error: Undefined variable: kons
-Tests run: 16, Passed: 10, Failed: 0, Errors: 6
+Tests run: 15, Passed: 15, Failed: 0
 
 Running test suite: 6.1 Equivalence Predicates
 Testing: 

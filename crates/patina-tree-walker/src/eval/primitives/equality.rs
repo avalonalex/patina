@@ -51,6 +51,19 @@ pub(in crate::eval) fn values_eq(a: &Value, b: &Value) -> bool {
         (Value::Bytevector(a), Value::Bytevector(b)) => Rc::ptr_eq(a, b),
         // R7RS: eq? on procedures - use Rc pointer equality
         (Value::Procedure(a), Value::Procedure(b)) => Rc::ptr_eq(a, b),
+        // Record types - compare by Rc pointer (same type descriptor)
+        (Value::RecordType(a), Value::RecordType(b)) => Rc::ptr_eq(a, b),
+        // Records - compare by Rc pointer (same instance)
+        (
+            Value::Record {
+                record_type: rt_a,
+                fields: f_a,
+            },
+            Value::Record {
+                record_type: rt_b,
+                fields: f_b,
+            },
+        ) => Rc::ptr_eq(rt_a, rt_b) && Rc::ptr_eq(f_a, f_b),
         _ => false,
     }
 }
@@ -84,6 +97,19 @@ pub(in crate::eval) fn values_eqv(a: &Value, b: &Value) -> bool {
         (Value::Bytevector(a), Value::Bytevector(b)) => Rc::ptr_eq(a, b),
         // R7RS: eqv? on procedures - use Rc pointer equality
         (Value::Procedure(a), Value::Procedure(b)) => Rc::ptr_eq(a, b),
+        // Record types - compare by Rc pointer (same type descriptor)
+        (Value::RecordType(a), Value::RecordType(b)) => Rc::ptr_eq(a, b),
+        // Records - compare by Rc pointer (same instance)
+        (
+            Value::Record {
+                record_type: rt_a,
+                fields: f_a,
+            },
+            Value::Record {
+                record_type: rt_b,
+                fields: f_b,
+            },
+        ) => Rc::ptr_eq(rt_a, rt_b) && Rc::ptr_eq(f_a, f_b),
         _ => false,
     }
 }
@@ -131,9 +157,44 @@ pub(in crate::eval) fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalEr
             }
         }
         (Value::Bytevector(x), Value::Bytevector(y)) => *x.borrow() == *y.borrow(),
+        // Record types - compare by pointer (same type descriptor)
+        (Value::RecordType(x), Value::RecordType(y)) => std::rc::Rc::ptr_eq(x, y),
+        // Records - compare by type and field contents
+        (
+            Value::Record {
+                record_type: rt_x,
+                fields: f_x,
+            },
+            Value::Record {
+                record_type: rt_y,
+                fields: f_y,
+            },
+        ) => {
+            // Same type?
+            if !std::rc::Rc::ptr_eq(rt_x, rt_y) {
+                false
+            } else {
+                // Compare fields
+                let fx = f_x.borrow();
+                let fy = f_y.borrow();
+                if fx.len() != fy.len() {
+                    false
+                } else {
+                    let mut all_equal = true;
+                    for (a, b) in fx.iter().zip(fy.iter()) {
+                        if !values_equal(a, b)? {
+                            all_equal = false;
+                            break;
+                        }
+                    }
+                    all_equal
+                }
+            }
+        }
         _ => false,
     })
 }
+
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use super::super::EvalResult;
     use super::registry::PrimitiveFn;

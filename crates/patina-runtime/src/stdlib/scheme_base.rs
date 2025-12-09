@@ -226,6 +226,18 @@ pub fn build_scheme_base(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("make-parameter", Arity::Range(1, 2)),
         // System introspection (R7RS §6.13)
         ("features", Arity::Exact(0)),
+        // Record type primitives (R7RS §5.5)
+        // These are internal primitives used by define-record-type macro
+        ("%make-record-type", Arity::Exact(2)),
+        ("%record-type?", Arity::Exact(1)),
+        ("%record?", Arity::Exact(1)),
+        ("%record-type-of", Arity::Exact(1)),
+        ("%record-type-name", Arity::Exact(1)),
+        ("%record-type-fields", Arity::Exact(1)),
+        ("%record-type-field-index", Arity::Exact(2)),
+        ("%make-record", Arity::Exact(2)),
+        ("%record-ref", Arity::Exact(2)),
+        ("%record-set!", Arity::Exact(3)),
     ];
 
     // Install all primitives into the environment

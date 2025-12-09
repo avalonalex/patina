@@ -29,6 +29,7 @@ mod lists;
 mod parameters;
 mod predicates;
 mod process_context;
+mod records;
 mod strings;
 mod symbols;
 mod system;
@@ -112,6 +113,7 @@ impl Evaluator {
         system::register(registry);
         time::register(registry);
         process_context::register(registry);
+        records::register(registry);
 
         // All core primitives are now in the registry!
     }
