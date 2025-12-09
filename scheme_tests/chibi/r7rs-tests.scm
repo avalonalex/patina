@@ -1939,7 +1939,7 @@
 
 (test-begin "6.12 Environments and evaluation")
 
-;; (test 21 (eval '(* 7 3) (scheme-report-environment 5)))
+(test 21 (eval '(* 7 3) (scheme-report-environment 5)))
 
 (test 20
     (let ((f (eval '(lambda (f x) (f x x)) (null-environment 5))))

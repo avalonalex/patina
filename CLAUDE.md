@@ -787,8 +787,8 @@ See `docs/FEATURE_STATUS.md` for detailed test-by-test compliance matrix (canoni
 - Full string/vector/bytevector operations
 
 **Current Compliance:**
-- **Internal tests**: ~776 passing (patina-tests crate)
-- **Chibi r7rs-tests.scm**: 1118/1157 passing (96.6%), 2 failing (0.2%), 37 crashing (3.2%)
+- **Internal tests**: ~794 passing (patina-tests crate)
+- **Chibi r7rs-tests.scm**: 1121/1157 passing (96.9%), 2 failing (0.2%), 34 crashing (2.9%)
 
 ## Future Phases
 

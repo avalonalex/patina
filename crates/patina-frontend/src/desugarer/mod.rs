@@ -297,7 +297,8 @@ impl Desugarer {
             | Value::Values(_)
             | Value::LabelPlaceholder(_)
             | Value::RecordType(_)
-            | Value::Record { .. } => Err(DesugarError::RuntimeValueInAST {
+            | Value::Record { .. }
+            | Value::EnvironmentSpecifier { .. } => Err(DesugarError::RuntimeValueInAST {
                 value: value.clone(),
                 context: "Cannot desugar runtime-only value".to_string(),
             }),

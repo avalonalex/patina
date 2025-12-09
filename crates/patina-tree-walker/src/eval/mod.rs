@@ -829,8 +829,10 @@ impl Evaluator {
             // LabelPlaceholder is resolved during parsing
             Value::Unspecified | Value::Eof | Value::LabelPlaceholder(_) => Ok(expr.clone()),
 
-            // Record types and records are runtime values - return as-is
-            Value::RecordType(_) | Value::Record { .. } => Ok(expr.clone()),
+            // Record types, records, and environments are runtime values - return as-is
+            Value::RecordType(_) | Value::Record { .. } | Value::EnvironmentSpecifier { .. } => {
+                Ok(expr.clone())
+            }
         }
     }
 

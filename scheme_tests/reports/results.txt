@@ -2535,22 +2535,21 @@ Tests run: 25, Passed: 2, Failed: 2, Errors: 21
 
 Running test suite: 6.12 Environments and evaluation
 Testing: 
+(eval '(* 7 3) (scheme-report-environment 5))
+
+Testing: 
 (let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10))
 
-Error: Undefined variable: eval
 Testing: 
 (eval '(expt 2 10) (environment '(scheme base)))
 
-Error: Undefined variable: eval
 Testing: 
 (inexact (eval '(sin 0) (environment '(scheme inexact))))
 
-Error: Undefined variable: eval
 Testing: 
 (eval '(+ (expt 2 10) (inexact (sin 0))) (environment '(scheme base) '(scheme inexact)))
 
-Error: Undefined variable: eval
-Tests run: 4, Passed: 0, Failed: 0, Errors: 4
+Tests run: 5, Passed: 5, Failed: 0
 
 Running test suite: 6.13 Input and output
 Testing: 

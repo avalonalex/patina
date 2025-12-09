@@ -144,6 +144,14 @@ pub enum Value {
     // A promise is a delayed computation that can be forced to produce a value
     Promise(Rc<RefCell<PromiseState>>),
 
+    // Environment specifier (R7RS Section 6.12 - scheme eval)
+    // Represents a first-class environment that can be passed to eval
+    // The mutable flag indicates whether definitions are allowed
+    EnvironmentSpecifier {
+        env: Rc<crate::environment::Environment>,
+        mutable: bool,
+    },
+
     // Special values
     Unspecified,
     Eof,
@@ -317,6 +325,7 @@ impl Value {
             Value::Record { .. } => "record",
             Value::Values(_) => "values",
             Value::Promise(_) => "promise",
+            Value::EnvironmentSpecifier { .. } => "environment",
             Value::Unspecified => "unspecified",
             Value::Eof => "eof-object",
             Value::LabelPlaceholder(_) => "label-placeholder",
@@ -614,6 +623,7 @@ impl std::fmt::Display for Value {
                 Ok(())
             }
             Value::Promise(_) => write!(f, "#<promise>"),
+            Value::EnvironmentSpecifier { .. } => write!(f, "#<environment>"),
             Value::Unspecified => write!(f, "#<unspecified>"),
             Value::Eof => write!(f, "#<eof>"),
             Value::LabelPlaceholder(n) => write!(f, "#<label-placeholder:{}>", n),

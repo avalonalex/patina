@@ -22,6 +22,7 @@ mod characters;
 mod conversion;
 mod debug;
 pub(in crate::eval) mod equality;
+mod eval;
 mod higher_order;
 mod io;
 mod lazy;
@@ -114,6 +115,7 @@ impl Evaluator {
         time::register(registry);
         process_context::register(registry);
         records::register(registry);
+        eval::register(registry);
 
         // All core primitives are now in the registry!
     }
