@@ -144,8 +144,8 @@ fn test_member_with_comparator() {
     // R7RS: member with optional comparison procedure
     assert_eval_to("(member 2 '(1 2 3) =)", "(2 3)");
     assert_eval_to("(member 5 '(1 2 3) =)", "#f");
-    // Custom comparator using string-ci=?
-    assert_eval_to(r#"(member "B" '("a" "b" "c") string-ci=?)"#, r#"("b" "c")"#);
+    // Custom comparator using string-ci=? (requires scheme char)
+    assert_eval_with_scheme_char(r#"(member "B" '("a" "b" "c") string-ci=?)"#, r#"("b" "c")"#);
 }
 
 // 6.4 Pairs and lists - Association lists
@@ -174,8 +174,8 @@ fn test_assoc_with_comparator() {
     // R7RS: assoc with optional comparison procedure
     assert_eval_to("(assoc 2 '((1 a) (2 b) (3 c)) =)", "(2 b)");
     assert_eval_to("(assoc 5 '((1 a) (2 b) (3 c)) =)", "#f");
-    // Custom comparator using string-ci=?
-    assert_eval_to(
+    // Custom comparator using string-ci=? (requires scheme char)
+    assert_eval_with_scheme_char(
         r#"(assoc "B" '(("a" 1) ("b" 2) ("c" 3)) string-ci=?)"#,
         r#"("b" 2)"#,
     );

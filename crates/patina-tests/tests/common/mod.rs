@@ -82,3 +82,20 @@ pub fn assert_program_eval_error(code: &str) {
         result.unwrap()
     );
 }
+
+/// Assert that evaluating an expression with (scheme char) imported produces expected result
+pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
+    let code = format!("(import (scheme char)) {}", expr);
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let result = interp
+        .eval_program(&code)
+        .unwrap_or_else(|e| panic!("Failed to evaluate '{}': {}", expr, e));
+
+    let result_str = format!("{}", result);
+
+    assert_eq!(
+        result_str, expected,
+        "\nExpression: {}\nExpected: {}\nGot: {}",
+        expr, expected, result_str
+    );
+}

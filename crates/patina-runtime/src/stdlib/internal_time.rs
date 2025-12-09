@@ -1,17 +1,18 @@
-//! (scheme time) - R7RS Time Library
+//! (patina internal time) - Time operations
 //!
-//! Provides time-related procedures:
-//! - current-second: Returns current time as TAI seconds since epoch
-//! - current-jiffy: Returns elapsed jiffies since program start
-//! - jiffies-per-second: Returns the jiffy resolution (1,000,000 = microseconds)
+//! Time-related primitives for (scheme time).
 
 use crate::environment::Environment;
 use crate::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
-/// Build the (scheme time) library
-pub fn build_scheme_time(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
-    let library_name = vec!["scheme".to_string(), "time".to_string()];
+/// Build the (patina internal time) library
+pub fn build_internal_time(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+    let library_name = vec![
+        "patina".to_string(),
+        "internal".to_string(),
+        "time".to_string(),
+    ];
 
     let primitives = [
         ("current-second", Arity::Exact(0)),

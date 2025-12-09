@@ -182,6 +182,30 @@ impl PrimitiveRegistry {
         self.primitives.get(qualified_name)
     }
 
+    /// Get a primitive by unqualified name (searches all libraries)
+    ///
+    /// This searches for any primitive with the given short name, regardless of
+    /// which library it's registered under. Useful for internal libraries that
+    /// re-export primitives without needing to know the original library.
+    ///
+    /// Example: `registry.get_by_name("+")` finds "scheme.base/+"
+    pub fn get_by_name(&self, name: &str) -> Option<&PrimitiveFn> {
+        // We need to match "library/name" where name is exactly what we're looking for.
+        // We can't just use ends_with because "/" is also a valid primitive name,
+        // and "floor/" would incorrectly match when searching for "/".
+        self.primitives
+            .iter()
+            .find(|(qualified_name, _)| {
+                // Split on the first "/" to get library and primitive name
+                if let Some(pos) = qualified_name.find('/') {
+                    &qualified_name[pos + 1..] == name
+                } else {
+                    false
+                }
+            })
+            .map(|(_, prim)| prim)
+    }
+
     /// Get a primitive by unqualified name from a specific library
     ///
     /// Example: `registry.get_from_library("scheme.base", "+")`
@@ -246,17 +270,31 @@ impl PrimitiveRegistry {
     /// Apply a primitive procedure
     ///
     /// This is the main entry point for calling primitives through the registry.
+    /// It first tries to look up by qualified name (library/name), then falls
+    /// back to looking up by unqualified name. This allows internal libraries
+    /// to re-export primitives without needing to know the original library.
     pub fn apply(
         &self,
-        name: &str,
+        qualified_name: &str,
         args: Vec<Value>,
         evaluator: &Evaluator,
         in_tail: bool,
     ) -> Result<EvalResult, EvalError> {
-        // Look up the primitive
-        let primitive = self
-            .get(name)
-            .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))?;
+        // First try qualified name lookup
+        let primitive = if let Some(prim) = self.get(qualified_name) {
+            prim
+        } else {
+            // Fall back to unqualified name lookup
+            // Extract the name part from "library/name" using the first "/" as separator.
+            // This correctly handles cases like "/" being the primitive name (library// is the qualified form).
+            let name = if let Some(pos) = qualified_name.find('/') {
+                &qualified_name[pos + 1..]
+            } else {
+                qualified_name
+            };
+            self.get_by_name(name)
+                .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))?
+        };
 
         // Call it
         primitive.call(evaluator, args, in_tail)

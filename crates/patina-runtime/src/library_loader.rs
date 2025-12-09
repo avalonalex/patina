@@ -138,6 +138,30 @@ pub trait EvaluatingLibraryLoader {
 
     /// Check if this loader can handle the given library name
     fn can_load(&self, name: &[String]) -> bool;
+
+    /// Check if this loader can handle the given library name with search paths.
+    ///
+    /// This allows for accurate checking of file-based libraries (e.g., .sld files).
+    /// The default implementation just calls `can_load`.
+    fn can_load_with_paths(&self, name: &[String], _search_paths: &[PathBuf]) -> bool {
+        self.can_load(name)
+    }
+
+    /// Parse a library with a library availability checker.
+    ///
+    /// This is used for `(library <name>)` requirements in cond-expand.
+    /// The default implementation ignores the checker and calls `parse()`.
+    ///
+    /// Implementations should override this to support library checks in cond-expand.
+    fn parse_with_library_checker(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+        _can_load_library: &dyn Fn(&[String]) -> bool,
+    ) -> Result<ParsedLibrary, LibraryError> {
+        // Default: ignore the checker
+        self.parse(name, search_paths)
+    }
 }
 
 /// Registry for library loaders
@@ -211,9 +235,27 @@ impl LibraryLoaderRegistry {
         name: &[String],
         search_paths: &[PathBuf],
     ) -> Result<Option<ParsedLibrary>, LibraryError> {
+        self.try_parse_with_library_checker(name, search_paths, &|_| false)
+    }
+
+    /// Try to parse a library with a library availability checker.
+    ///
+    /// The checker is used for `(library <name>)` requirements in cond-expand.
+    ///
+    /// Returns Ok(Some(parsed)) if a loader can parse this library.
+    /// Returns Ok(None) if no loader can handle this library.
+    /// Returns Err if a loader tried but failed.
+    pub fn try_parse_with_library_checker(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+        can_load_library: &dyn Fn(&[String]) -> bool,
+    ) -> Result<Option<ParsedLibrary>, LibraryError> {
         for loader in &self.evaluating_loaders {
             if loader.can_load(name) {
-                return loader.parse(name, search_paths).map(Some);
+                return loader
+                    .parse_with_library_checker(name, search_paths, can_load_library)
+                    .map(Some);
             }
         }
         Ok(None)
@@ -237,6 +279,49 @@ impl LibraryLoaderRegistry {
         }
 
         Err(LibraryError::NotFound(name.to_vec()))
+    }
+
+    /// Check if any loader can potentially load the given library.
+    ///
+    /// This is used for `(library <name>)` requirements in cond-expand.
+    /// Returns true if any simple or evaluating loader claims to handle this library.
+    ///
+    /// Note: This method doesn't have access to search paths, so it may return
+    /// true for libraries that can't actually be loaded. Use `can_load_with_paths`
+    /// for accurate checking.
+    pub fn can_load(&self, name: &[String]) -> bool {
+        // Check simple loaders first (Rust libraries know their own names)
+        for loader in &self.simple_loaders {
+            if loader.can_load(name) {
+                return true;
+            }
+        }
+
+        // For evaluating loaders without search paths, we can't accurately check
+        // Return false since we can't verify file existence
+        false
+    }
+
+    /// Check if any loader can load the given library with search paths.
+    ///
+    /// This is used for `(library <name>)` requirements in cond-expand.
+    /// More accurate than `can_load` as it can check file existence.
+    pub fn can_load_with_paths(&self, name: &[String], search_paths: &[PathBuf]) -> bool {
+        // Check simple loaders first (they don't need search paths)
+        for loader in &self.simple_loaders {
+            if loader.can_load(name) {
+                return true;
+            }
+        }
+
+        // Check evaluating loaders with search paths
+        for loader in &self.evaluating_loaders {
+            if loader.can_load_with_paths(name, search_paths) {
+                return true;
+            }
+        }
+
+        false
     }
 }
 

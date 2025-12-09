@@ -36,6 +36,16 @@ pub enum BodyElement {
         /// If true, parse with case-insensitive reader (include-ci)
         case_insensitive: bool,
     },
+
+    /// Library declarations to include: `(include-library-declarations "file.scm" ...)`
+    ///
+    /// R7RS §5.6.1: The contents of the file are spliced directly into the
+    /// current library definition. The file should contain library declarations
+    /// like export, import, begin, include, etc.
+    IncludeLibraryDeclarations {
+        /// File paths relative to the .sld file
+        paths: Vec<String>,
+    },
 }
 
 /// A parsed library definition
@@ -59,7 +69,24 @@ impl LibraryDefinition {
     /// Parse a define-library form from a Value
     ///
     /// Expects a list: (define-library <name> <declaration>*)
+    ///
+    /// Note: This method cannot check `(library <name>)` requirements in cond-expand.
+    /// Use `from_value_with_library_checker` if you need library availability checks.
     pub fn from_value(value: &Value) -> Result<Self, ParseError> {
+        // Default: no library checker available
+        Self::from_value_with_library_checker(value, &|_| false)
+    }
+
+    /// Parse a define-library form with a library availability checker.
+    ///
+    /// The `can_load_library` callback is used for `(library <name>)` requirements
+    /// in cond-expand clauses. It should return true if the named library can be loaded.
+    ///
+    /// Expects a list: (define-library <name> <declaration>*)
+    pub fn from_value_with_library_checker(
+        value: &Value,
+        can_load_library: &dyn Fn(&[String]) -> bool,
+    ) -> Result<Self, ParseError> {
         // Must be a list starting with 'define-library
         let list = Self::expect_list(value)?;
 
@@ -87,7 +114,13 @@ impl LibraryDefinition {
         let mut body_elements = Vec::new();
 
         for decl in &list[2..] {
-            Self::parse_declaration(decl, &mut exports, &mut imports, &mut body_elements)?;
+            Self::parse_declaration(
+                decl,
+                &mut exports,
+                &mut imports,
+                &mut body_elements,
+                can_load_library,
+            )?;
         }
 
         Ok(LibraryDefinition {
@@ -134,6 +167,7 @@ impl LibraryDefinition {
         exports: &mut Vec<ExportSpec>,
         imports: &mut Vec<ImportSet>,
         body_elements: &mut Vec<BodyElement>,
+        can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<(), ParseError> {
         let list = Self::expect_list(value)?;
 
@@ -187,14 +221,20 @@ impl LibraryDefinition {
                     // (cond-expand clause1 clause2 ...)
                     // Each clause is (<feature-requirement> <declaration>*)
                     // or (else <declaration>*)
-                    Self::parse_cond_expand(&list[1..], exports, imports, body_elements)
+                    Self::parse_cond_expand(
+                        &list[1..],
+                        exports,
+                        imports,
+                        body_elements,
+                        can_load_library,
+                    )
                 }
                 "include-library-declarations" => {
-                    // TODO: Implement this
-                    Err(ParseError::InvalidSyntax(format!(
-                        "{} not yet implemented",
-                        keyword
-                    )))
+                    // (include-library-declarations "file1.scm" "file2.scm" ...)
+                    // The file contents are spliced as library declarations
+                    let paths = Self::parse_include_paths(&list[1..])?;
+                    body_elements.push(BodyElement::IncludeLibraryDeclarations { paths });
+                    Ok(())
                 }
                 _ => Err(ParseError::InvalidSyntax(format!(
                     "Unknown library declaration: {}",
@@ -246,6 +286,7 @@ impl LibraryDefinition {
         exports: &mut Vec<ExportSpec>,
         imports: &mut Vec<ImportSet>,
         body_elements: &mut Vec<BodyElement>,
+        can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<(), ParseError> {
         use crate::cond_expand::evaluate_feature_requirement;
         use patina_runtime::default_features;
@@ -257,11 +298,6 @@ impl LibraryDefinition {
         }
 
         let features = default_features();
-
-        // For library cond-expand, we don't have access to the library registry
-        // So we can't check (library ...) requirements. Just return false for those.
-        // This is a limitation - full support would require passing in a library checker.
-        let can_load_library = |_: &[String]| false;
 
         for clause in clauses {
             let clause_list = Self::expect_list(clause)?;
@@ -279,13 +315,19 @@ impl LibraryDefinition {
                 true
             } else {
                 // Evaluate the feature requirement
-                evaluate_feature_requirement(&clause_list[0], &features, &can_load_library)?
+                evaluate_feature_requirement(&clause_list[0], &features, can_load_library)?
             };
 
             if matches {
                 // Splice in the matching declarations
                 for decl in &clause_list[1..] {
-                    Self::parse_declaration(decl, exports, imports, body_elements)?;
+                    Self::parse_declaration(
+                        decl,
+                        exports,
+                        imports,
+                        body_elements,
+                        can_load_library,
+                    )?;
                 }
                 return Ok(()); // Stop after first match
             }

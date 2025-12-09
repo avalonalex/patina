@@ -2359,7 +2359,7 @@ Testing:
 Testing: 
 (call-with-current-continuation procedure?)
 
-Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 (apply + (list 3 4))
 
@@ -2420,15 +2420,15 @@ Testing:
 Testing: 
 (call-with-current-continuation (lambda (exit) (for-each (lambda (x) (if (negative? x) (exit x))) '(54 0 37 -3 245 19)) #t))
 
-Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 (list-length '(1 2 3 4))
 
-Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 (list-length '(a b . c))
 
-Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 (call-with-values (lambda () (values 4 5)) (lambda (a b) b))
 
@@ -2438,57 +2438,57 @@ Testing:
 Testing: 
 (let ((path '()) (c #f)) (let ((add (lambda (s) (set! path (cons s path))))) (dynamic-wind (lambda () (add 'connect)) (lambda () (add (call-with-current-continuation (lambda (c0) (set! c c0) 'talk1)))) (lambda () (add 'disconnect))) (if (< (length path) 4) (c 'talk2) (reverse path))))
 
-Error: Undefined variable: dynamic-wind
+Error: Undefined variable: patina.internal.control/dynamic-wind
 Tests run: 34, Passed: 29, Failed: 0, Errors: 5
 
 Running test suite: 6.11 Exceptions
 Testing: 
 (with-exception-handler (lambda (con) 42) (lambda () (+ (raise-continuable "should be a number") 23)))
 
-Error: Undefined variable: with-exception-handler
+Error: Undefined variable: patina.internal.errors/with-exception-handler
 Testing: 
 (error-object? (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
 
-Error: Undefined variable: error-object?
+Error: Undefined variable: guard
 Testing: 
 (error-object-message (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
 
-Error: Undefined variable: error-object-message
+Error: Undefined variable: guard
 Testing: 
 (error-object-irritants (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
 
-Error: Undefined variable: error-object-irritants
+Error: Undefined variable: guard
 Testing: 
 (file-error? (guard (exn (else exn)) (error "BOOM!")))
 
-Error: Undefined variable: file-error?
+Error: Undefined variable: guard
 Testing: 
 (file-error? (guard (exn (else exn)) (open-input-file " no such file ")))
 
-Error: Undefined variable: file-error?
+Error: Undefined variable: guard
 Testing: 
 (read-error? (guard (exn (else exn)) (error "BOOM!")))
 
-Error: Undefined variable: read-error?
+Error: Undefined variable: guard
 Testing: 
 (read-error? (guard (exn (else exn)) (read (open-input-string ")"))))
 
-Error: Undefined variable: read-error?
+Error: Undefined variable: guard
 Testing: 
 (read-error? (guard (exn (else exn)) (read (open-input-string """))))
 
-Error: Undefined variable: read-error?
+Error: Undefined variable: guard
 Testing: 
 (test-exception-handler-1 5)
 
-Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 something-went-wrong
 
 Testing: 
 (test-exception-handler-1 -1)
 
-Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 something-went-wrong
 
@@ -2514,11 +2514,11 @@ FAIL: something-went-wrong
   expected: #t
   but got:  #f
 
-Error: Undefined variable: with-exception-handler
+Error: Undefined variable: patina.internal.errors/with-exception-handler
 Error: Undefined variable: guard
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'a 42))))
 
@@ -3674,7 +3674,7 @@ Testing:
 Testing: 
 (file-error? (guard (exn (else exn)) (delete-file " no such file ")))
 
-Error: Undefined variable: file-error?
+Error: Undefined variable: guard
 Tests run: 13, Passed: 12, Failed: 0, Errors: 1
 
 Tests run: 13, Passed: 12, Failed: 0, Errors: 1

@@ -130,24 +130,227 @@ fn test_find_library_in_lib_directory() {
 }
 
 #[test]
-#[ignore = "Requires creating test files with dependencies"]
 fn test_library_with_imports() {
-    // TODO: Create a test library that imports another library
-    // and verify that imports are resolved correctly
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create a base library
+    fs::write(
+        lib_dir.join("base.sld"),
+        r#"
+        (define-library (test base)
+          (import (scheme base))
+          (export base-value add-ten)
+          (begin
+            (define base-value 100)
+            (define (add-ten x) (+ x 10))))
+    "#,
+    )
+    .unwrap();
+
+    // Create a library that imports the base library
+    fs::write(
+        lib_dir.join("user.sld"),
+        r#"
+        (define-library (test user)
+          (import (scheme base) (test base))
+          (export computed-value)
+          (begin
+            (define computed-value (add-ten base-value))))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "user".to_string()])
+        .expect("Failed to load library with imports");
+
+    assert!(
+        lib.exports_identifier("computed-value"),
+        "Should export computed-value"
+    );
+
+    // Verify the computed value is correct (100 + 10 = 110)
+    match lib.env.get("computed-value") {
+        Some(patina_runtime::Value::Integer(n)) => {
+            assert_eq!(n, 110, "computed-value should be 110 (base-value + 10)");
+        }
+        other => panic!("computed-value should be 110, got {:?}", other),
+    }
 }
 
 #[test]
-#[ignore = "Requires circular dependency test files"]
 fn test_circular_dependency_detection() {
-    // TODO: Create two libraries that import each other
-    // and verify that circular dependency is detected
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create two libraries that import each other (circular dependency)
+    fs::write(
+        lib_dir.join("lib-a.sld"),
+        r#"
+        (define-library (test lib-a)
+          (import (test lib-b))
+          (export a-value)
+          (begin (define a-value 1)))
+    "#,
+    )
+    .unwrap();
+
+    fs::write(
+        lib_dir.join("lib-b.sld"),
+        r#"
+        (define-library (test lib-b)
+          (import (test lib-a))
+          (export b-value)
+          (begin (define b-value 2)))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    // Attempting to load either library should fail with circular dependency error
+    let result = eval.load_library(&["test".to_string(), "lib-a".to_string()]);
+    assert!(result.is_err(), "Loading circular dependency should fail");
+
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("ircular") || err.contains("already being loaded"),
+        "Error should mention circular dependency: {}",
+        err
+    );
 }
 
 #[test]
-#[ignore = "Requires library with import modifiers"]
 fn test_import_modifiers() {
-    // TODO: Create a library that uses only, except, prefix, rename
-    // and verify they work correctly
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create a source library with multiple exports
+    fs::write(
+        lib_dir.join("source.sld"),
+        r#"
+        (define-library (test source)
+          (export foo bar baz qux)
+          (begin
+            (define foo 1)
+            (define bar 2)
+            (define baz 3)
+            (define qux 4)))
+    "#,
+    )
+    .unwrap();
+
+    // Test 'only' modifier
+    fs::write(
+        lib_dir.join("only-test.sld"),
+        r#"
+        (define-library (test only-test)
+          (import (scheme base) (only (test source) foo bar))
+          (export result)
+          (begin (define result (+ foo bar))))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "only-test".to_string()])
+        .expect("Failed to load library with 'only' modifier");
+
+    match lib.env.get("result") {
+        Some(patina_runtime::Value::Integer(n)) => {
+            assert_eq!(n, 3, "result should be 3 (foo + bar = 1 + 2)");
+        }
+        other => panic!("result should be 3, got {:?}", other),
+    }
+
+    // Test 'except' modifier
+    fs::write(
+        lib_dir.join("except-test.sld"),
+        r#"
+        (define-library (test except-test)
+          (import (scheme base) (except (test source) baz qux))
+          (export result)
+          (begin (define result (+ foo bar))))
+    "#,
+    )
+    .unwrap();
+
+    let lib = eval
+        .load_library(&["test".to_string(), "except-test".to_string()])
+        .expect("Failed to load library with 'except' modifier");
+
+    match lib.env.get("result") {
+        Some(patina_runtime::Value::Integer(n)) => {
+            assert_eq!(n, 3, "result should be 3 (foo + bar = 1 + 2)");
+        }
+        other => panic!("result should be 3, got {:?}", other),
+    }
+
+    // Test 'prefix' modifier
+    fs::write(
+        lib_dir.join("prefix-test.sld"),
+        r#"
+        (define-library (test prefix-test)
+          (import (scheme base) (prefix (test source) src:))
+          (export result)
+          (begin (define result (+ src:foo src:bar))))
+    "#,
+    )
+    .unwrap();
+
+    let lib = eval
+        .load_library(&["test".to_string(), "prefix-test".to_string()])
+        .expect("Failed to load library with 'prefix' modifier");
+
+    match lib.env.get("result") {
+        Some(patina_runtime::Value::Integer(n)) => {
+            assert_eq!(n, 3, "result should be 3 (src:foo + src:bar = 1 + 2)");
+        }
+        other => panic!("result should be 3, got {:?}", other),
+    }
+
+    // Test 'rename' modifier
+    fs::write(
+        lib_dir.join("rename-test.sld"),
+        r#"
+        (define-library (test rename-test)
+          (import (scheme base) (rename (test source) (foo first) (bar second)))
+          (export result)
+          (begin (define result (+ first second))))
+    "#,
+    )
+    .unwrap();
+
+    let lib = eval
+        .load_library(&["test".to_string(), "rename-test".to_string()])
+        .expect("Failed to load library with 'rename' modifier");
+
+    match lib.env.get("result") {
+        Some(patina_runtime::Value::Integer(n)) => {
+            assert_eq!(n, 3, "result should be 3 (first + second = 1 + 2)");
+        }
+        other => panic!("result should be 3, got {:?}", other),
+    }
 }
 
 // ============================================================================
@@ -248,4 +451,535 @@ fn test_include_file_not_found() {
         "Error should mention file not found: {}",
         err
     );
+}
+
+// ============================================================================
+// Include-CI Tests (R7RS §5.6.1 - Case-insensitive include)
+// ============================================================================
+
+#[test]
+fn test_include_ci_folds_identifiers() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create file with uppercase identifiers (legacy style)
+    fs::write(
+        lib_dir.join("legacy.scm"),
+        r#"
+        (define MY-CONST 42)
+        (define (COMPUTE-IT X) (* X MY-CONST))
+    "#,
+    )
+    .unwrap();
+
+    // Create library that uses include-ci to read the file
+    fs::write(
+        lib_dir.join("with-include-ci.sld"),
+        r#"
+        (define-library (test with-include-ci)
+          (import (scheme base))
+          (export my-const compute-it)
+          (include-ci "legacy.scm"))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "with-include-ci".to_string()])
+        .expect("Failed to load library with include-ci");
+
+    // Exports should be lowercase (case-folded)
+    assert!(
+        lib.exports_identifier("my-const"),
+        "Should export my-const (lowercase)"
+    );
+    assert!(
+        lib.exports_identifier("compute-it"),
+        "Should export compute-it (lowercase)"
+    );
+    assert_eq!(lib.export_names().len(), 2);
+
+    // Verify my-const has correct value
+    let const_val = lib.env.get("my-const").expect("my-const should be defined");
+    match const_val {
+        patina_runtime::Value::Integer(n) => {
+            assert_eq!(n, 42, "my-const should be 42");
+        }
+        _ => panic!("my-const should be an integer"),
+    }
+}
+
+#[test]
+fn test_include_ci_vs_include() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create file with mixed case
+    fs::write(
+        lib_dir.join("mixed.scm"),
+        r#"
+        (define MY-VALUE 123)
+    "#,
+    )
+    .unwrap();
+
+    // Library using regular include should preserve case
+    fs::write(
+        lib_dir.join("case-sensitive.sld"),
+        r#"
+        (define-library (test case-sensitive)
+          (export MY-VALUE)
+          (include "mixed.scm"))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "case-sensitive".to_string()])
+        .expect("Failed to load case-sensitive library");
+
+    // Regular include preserves case
+    assert!(
+        lib.exports_identifier("MY-VALUE"),
+        "Regular include should preserve MY-VALUE"
+    );
+}
+
+// ============================================================================
+// Include-Library-Declarations Tests (R7RS §5.6.1)
+// ============================================================================
+
+#[test]
+fn test_include_library_declarations_export() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create file with library declarations (exports)
+    fs::write(
+        lib_dir.join("exports.scm"),
+        r#"
+        (export foo bar)
+    "#,
+    )
+    .unwrap();
+
+    // Create library that includes declarations
+    fs::write(
+        lib_dir.join("decl-lib.sld"),
+        r#"
+        (define-library (test decl-lib)
+          (include-library-declarations "exports.scm")
+          (begin
+            (define foo 1)
+            (define bar 2)
+            (define internal 3)))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "decl-lib".to_string()])
+        .expect("Failed to load library with include-library-declarations");
+
+    // Should have exports from included file
+    assert!(lib.exports_identifier("foo"), "Should export foo");
+    assert!(lib.exports_identifier("bar"), "Should export bar");
+    assert!(
+        !lib.exports_identifier("internal"),
+        "Should not export internal"
+    );
+    assert_eq!(lib.export_names().len(), 2);
+}
+
+#[test]
+fn test_include_library_declarations_import() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create file with import declaration
+    fs::write(
+        lib_dir.join("imports.scm"),
+        r#"
+        (import (scheme base))
+    "#,
+    )
+    .unwrap();
+
+    // Create library that includes import declaration
+    fs::write(
+        lib_dir.join("import-decl.sld"),
+        r#"
+        (define-library (test import-decl)
+          (include-library-declarations "imports.scm")
+          (export double-value)
+          (begin
+            (define (double-value x) (* x 2))))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "import-decl".to_string()])
+        .expect("Failed to load library with include-library-declarations for imports");
+
+    // Library should work (has access to * from scheme base)
+    assert!(
+        lib.exports_identifier("double-value"),
+        "Should export double-value"
+    );
+}
+
+#[test]
+fn test_include_library_declarations_begin() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create file with begin declaration
+    fs::write(
+        lib_dir.join("body.scm"),
+        r#"
+        (begin
+          (define x 100)
+          (define (get-x) x))
+    "#,
+    )
+    .unwrap();
+
+    // Create library that includes begin declaration
+    fs::write(
+        lib_dir.join("begin-decl.sld"),
+        r#"
+        (define-library (test begin-decl)
+          (export x get-x)
+          (include-library-declarations "body.scm"))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "begin-decl".to_string()])
+        .expect("Failed to load library with include-library-declarations for begin");
+
+    assert!(lib.exports_identifier("x"), "Should export x");
+    assert!(lib.exports_identifier("get-x"), "Should export get-x");
+
+    // Verify x has correct value
+    let x_val = lib.env.get("x").expect("x should be defined");
+    match x_val {
+        patina_runtime::Value::Integer(n) => {
+            assert_eq!(n, 100, "x should be 100");
+        }
+        _ => panic!("x should be an integer"),
+    }
+}
+
+#[test]
+fn test_include_library_declarations_multiple_files() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // First declarations file
+    fs::write(
+        lib_dir.join("decl1.scm"),
+        r#"
+        (export foo)
+    "#,
+    )
+    .unwrap();
+
+    // Second declarations file
+    fs::write(
+        lib_dir.join("decl2.scm"),
+        r#"
+        (export bar)
+        (begin
+          (define bar 99))
+    "#,
+    )
+    .unwrap();
+
+    // Library including both
+    fs::write(
+        lib_dir.join("multi-decl.sld"),
+        r#"
+        (define-library (test multi-decl)
+          (include-library-declarations "decl1.scm" "decl2.scm")
+          (begin
+            (define foo 42)))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "multi-decl".to_string()])
+        .expect("Failed to load library with multiple include-library-declarations");
+
+    assert!(lib.exports_identifier("foo"), "Should export foo");
+    assert!(lib.exports_identifier("bar"), "Should export bar");
+    assert_eq!(lib.export_names().len(), 2);
+
+    // Verify values
+    match lib.env.get("foo") {
+        Some(patina_runtime::Value::Integer(n)) => assert_eq!(n, 42),
+        _ => panic!("foo should be 42"),
+    }
+    match lib.env.get("bar") {
+        Some(patina_runtime::Value::Integer(n)) => assert_eq!(n, 99),
+        _ => panic!("bar should be 99"),
+    }
+}
+
+#[test]
+fn test_include_library_declarations_nested() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Inner declarations file with include
+    fs::write(
+        lib_dir.join("inner.scm"),
+        r#"
+        (include "impl.scm")
+    "#,
+    )
+    .unwrap();
+
+    // Implementation file
+    fs::write(
+        lib_dir.join("impl.scm"),
+        r#"
+        (define deep-value 999)
+    "#,
+    )
+    .unwrap();
+
+    // Library with nested include
+    fs::write(
+        lib_dir.join("nested-decl.sld"),
+        r#"
+        (define-library (test nested-decl)
+          (export deep-value)
+          (include-library-declarations "inner.scm"))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "nested-decl".to_string()])
+        .expect("Failed to load library with nested include-library-declarations");
+
+    assert!(
+        lib.exports_identifier("deep-value"),
+        "Should export deep-value"
+    );
+
+    match lib.env.get("deep-value") {
+        Some(patina_runtime::Value::Integer(n)) => assert_eq!(n, 999),
+        _ => panic!("deep-value should be 999"),
+    }
+}
+
+// ============================================================================
+// cond-expand (library ...) Tests (R7RS §4.2.1)
+// ============================================================================
+
+#[test]
+fn test_cond_expand_library_check_available() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create a library that uses cond-expand to check if (scheme base) is available
+    // Since (scheme base) is always available, the first branch should be taken
+    fs::write(
+        lib_dir.join("lib-check.sld"),
+        r#"
+        (define-library (test lib-check)
+          (export result)
+          (cond-expand
+            ((library (scheme base))
+             (begin (define result 'base-available)))
+            (else
+             (begin (define result 'base-not-available)))))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "lib-check".to_string()])
+        .expect("Failed to load library with cond-expand (library ...) check");
+
+    assert!(lib.exports_identifier("result"), "Should export result");
+
+    // Verify the correct branch was taken
+    let result_val = lib.env.get("result").expect("result should be defined");
+    match result_val {
+        patina_runtime::Value::Symbol(s) => {
+            assert_eq!(
+                s.as_ref(),
+                "base-available",
+                "(library (scheme base)) should be true"
+            );
+        }
+        _ => panic!("result should be a symbol"),
+    }
+}
+
+#[test]
+fn test_cond_expand_library_check_unavailable() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // Create a library that checks for a non-existent library
+    fs::write(
+        lib_dir.join("lib-check-missing.sld"),
+        r#"
+        (define-library (test lib-check-missing)
+          (export result)
+          (cond-expand
+            ((library (nonexistent library that does not exist))
+             (begin (define result 'found-nonexistent)))
+            (else
+             (begin (define result 'correctly-not-found)))))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "lib-check-missing".to_string()])
+        .expect("Failed to load library with cond-expand for missing library");
+
+    assert!(lib.exports_identifier("result"), "Should export result");
+
+    // Verify the else branch was taken
+    let result_val = lib.env.get("result").expect("result should be defined");
+    match result_val {
+        patina_runtime::Value::Symbol(s) => {
+            assert_eq!(
+                s.as_ref(),
+                "correctly-not-found",
+                "Non-existent library should not be found"
+            );
+        }
+        _ => panic!("result should be a symbol"),
+    }
+}
+
+#[test]
+fn test_cond_expand_library_check_sld_library() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    // First create a simple .sld library
+    fs::write(
+        lib_dir.join("helper.sld"),
+        r#"
+        (define-library (test helper)
+          (export helper-value)
+          (begin (define helper-value 42)))
+    "#,
+    )
+    .unwrap();
+
+    // Create a library that checks for the .sld library
+    fs::write(
+        lib_dir.join("check-helper.sld"),
+        r#"
+        (define-library (test check-helper)
+          (export result)
+          (cond-expand
+            ((library (test helper))
+             (begin (define result 'helper-available)))
+            (else
+             (begin (define result 'helper-not-available)))))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "check-helper".to_string()])
+        .expect("Failed to load library that checks for .sld library");
+
+    assert!(lib.exports_identifier("result"), "Should export result");
+
+    // Verify (test helper) was found
+    let result_val = lib.env.get("result").expect("result should be defined");
+    match result_val {
+        patina_runtime::Value::Symbol(s) => {
+            assert_eq!(
+                s.as_ref(),
+                "helper-available",
+                "(library (test helper)) should be found"
+            );
+        }
+        _ => panic!("result should be a symbol"),
+    }
 }

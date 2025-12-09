@@ -1,21 +1,23 @@
-//! (scheme process-context) - R7RS Process Context Library
+//! (patina internal system) - System operations
 //!
-//! Provides access to the process environment:
-//! - command-line: Returns command line arguments as a list
-//! - exit: Exit program (would run dynamic-wind handlers if implemented)
-//! - emergency-exit: Exit immediately without handlers
-//! - get-environment-variable: Get a single environment variable
-//! - get-environment-variables: Get all environment variables as alist
+//! System-related primitives including features and process context.
 
 use crate::environment::Environment;
 use crate::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
-/// Build the (scheme process-context) library
-pub fn build_scheme_process_context(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
-    let library_name = vec!["scheme".to_string(), "process-context".to_string()];
+/// Build the (patina internal system) library
+pub fn build_internal_system(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+    let library_name = vec![
+        "patina".to_string(),
+        "internal".to_string(),
+        "system".to_string(),
+    ];
 
     let primitives = [
+        // Features (scheme base)
+        ("features", Arity::Exact(0)),
+        // Process context (scheme process-context)
         ("command-line", Arity::Exact(0)),
         ("exit", Arity::Range(0, 1)),
         ("emergency-exit", Arity::Range(0, 1)),

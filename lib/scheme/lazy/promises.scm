@@ -1,4 +1,4 @@
-;; (scheme lazy) extras - Macros for lazy evaluation
+;; promises.scm - Macros for lazy evaluation
 ;;
 ;; This file provides the delay and delay-force macros for lazy evaluation.
 ;; These macros work with the promise primitives (force, promise?, make-promise)
@@ -26,29 +26,7 @@
 ;; promise is forced recursively until a non-promise value is obtained.
 ;;
 ;; This is essential for lazy algorithms that would otherwise build up
-;; chains of promises:
-;;
-;; Bad (builds promise chain):
-;;   (define (lazy-filter pred lst)
-;;     (delay
-;;       (if (null? lst)
-;;           '()
-;;           (let ((head (car lst))
-;;                 (tail (cdr lst)))
-;;             (if (pred head)
-;;                 (cons head (lazy-filter pred tail))
-;;                 (force (lazy-filter pred tail)))))))  ; Builds promise chain!
-;;
-;; Good (constant space):
-;;   (define (lazy-filter pred lst)
-;;     (delay-force
-;;       (if (null? lst)
-;;           (delay '())
-;;           (let ((head (car lst))
-;;                 (tail (cdr lst)))
-;;             (if (pred head)
-;;                 (delay (cons head (lazy-filter pred tail)))
-;;                 (lazy-filter pred tail))))))  ; Tail call, no chain!
+;; chains of promises.
 (define-syntax delay-force
   (syntax-rules ()
     ((delay-force expression)

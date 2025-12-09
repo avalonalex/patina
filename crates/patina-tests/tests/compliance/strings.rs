@@ -214,40 +214,41 @@ fn test_string_greater_equal() {
 }
 
 // ===== Case-Insensitive Comparison =====
+// Note: string-ci* functions are in (scheme char), not (scheme base)
 
 #[test]
 fn test_string_ci_equal() {
-    assert_eval_to("(string-ci=? \"Hello\" \"hello\")", "#t");
-    assert_eval_to("(string-ci=? \"HELLO\" \"hello\")", "#t");
-    assert_eval_to("(string-ci=? \"hello\" \"world\")", "#f");
+    assert_eval_with_scheme_char("(string-ci=? \"Hello\" \"hello\")", "#t");
+    assert_eval_with_scheme_char("(string-ci=? \"HELLO\" \"hello\")", "#t");
+    assert_eval_with_scheme_char("(string-ci=? \"hello\" \"world\")", "#f");
 
     // Variadic
-    assert_eval_to("(string-ci=? \"ABC\" \"abc\" \"AbC\")", "#t");
+    assert_eval_with_scheme_char("(string-ci=? \"ABC\" \"abc\" \"AbC\")", "#t");
 }
 
 #[test]
 fn test_string_ci_less() {
-    assert_eval_to("(string-ci<? \"abc\" \"ABC\")", "#f");
-    assert_eval_to("(string-ci<? \"abc\" \"BCD\")", "#t");
-    assert_eval_to("(string-ci<? \"Apple\" \"BANANA\")", "#t");
+    assert_eval_with_scheme_char("(string-ci<? \"abc\" \"ABC\")", "#f");
+    assert_eval_with_scheme_char("(string-ci<? \"abc\" \"BCD\")", "#t");
+    assert_eval_with_scheme_char("(string-ci<? \"Apple\" \"BANANA\")", "#t");
 }
 
 #[test]
 fn test_string_ci_greater() {
-    assert_eval_to("(string-ci>? \"BCD\" \"abc\")", "#t");
-    assert_eval_to("(string-ci>? \"abc\" \"ABC\")", "#f");
+    assert_eval_with_scheme_char("(string-ci>? \"BCD\" \"abc\")", "#t");
+    assert_eval_with_scheme_char("(string-ci>? \"abc\" \"ABC\")", "#f");
 }
 
 #[test]
 fn test_string_ci_less_equal() {
-    assert_eval_to("(string-ci<=? \"abc\" \"ABC\")", "#t");
-    assert_eval_to("(string-ci<=? \"abc\" \"BCD\")", "#t");
+    assert_eval_with_scheme_char("(string-ci<=? \"abc\" \"ABC\")", "#t");
+    assert_eval_with_scheme_char("(string-ci<=? \"abc\" \"BCD\")", "#t");
 }
 
 #[test]
 fn test_string_ci_greater_equal() {
-    assert_eval_to("(string-ci>=? \"ABC\" \"abc\")", "#t");
-    assert_eval_to("(string-ci>=? \"BCD\" \"abc\")", "#t");
+    assert_eval_with_scheme_char("(string-ci>=? \"ABC\" \"abc\")", "#t");
+    assert_eval_with_scheme_char("(string-ci>=? \"BCD\" \"abc\")", "#t");
 }
 
 // ===== String Manipulation =====
@@ -405,7 +406,7 @@ fn test_string_comparison_ordering() {
 
     // Case sensitivity
     assert_eval_to("(string<? \"A\" \"a\")", "#t"); // ASCII: uppercase < lowercase
-    assert_eval_to("(string-ci<? \"A\" \"a\")", "#f"); // Case-insensitive: equal
+    assert_eval_with_scheme_char("(string-ci<? \"A\" \"a\")", "#f"); // Case-insensitive: equal (requires scheme char)
 }
 
 #[test]

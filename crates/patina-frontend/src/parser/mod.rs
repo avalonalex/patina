@@ -50,6 +50,20 @@ impl Parser {
         })
     }
 
+    /// Create a parser with case-folding enabled.
+    ///
+    /// Used by `include-ci` to read files in case-insensitive mode.
+    /// All identifiers will be folded to lowercase.
+    pub fn new_case_insensitive(input: &str) -> Result<Self, ParseError> {
+        let mut lexer = Lexer::new_case_insensitive(input);
+        let current_token = lexer.next_token()?;
+        Ok(Parser {
+            lexer,
+            current_token,
+            labels: HashMap::new(),
+        })
+    }
+
     fn advance(&mut self) -> Result<(), ParseError> {
         self.current_token = self.lexer.next_token()?;
         Ok(())

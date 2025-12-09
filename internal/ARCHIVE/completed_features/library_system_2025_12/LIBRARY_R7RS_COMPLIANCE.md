@@ -1,8 +1,8 @@
 # Library System R7RS Compliance
 
 **Created:** 2025-12-03
-**Updated:** 2025-12-05
-**Status:** In Progress (~95% R7RS Compliant)
+**Updated:** 2025-12-08
+**Status:** Complete (100% R7RS Compliant)
 **Priority:** High - Required for Snow/SRFI ecosystem compatibility
 
 ---
@@ -24,17 +24,18 @@ Patina's library system has a solid foundation with all core import/export funct
 - ✅ Parsing `define-library` forms with export/import/begin
 - ✅ Recursive library imports and caching
 - ✅ `(include "file.scm")` - resolves relative to .sld file, multiple files, subdirs
-- ✅ `(include-ci "file.scm")` - parsed (case-insensitive reading deferred)
+- ✅ `(include-ci "file.scm")` - case-insensitive reading *(completed 2025-12-08)*
+- ✅ `(include-library-declarations "file.scm")` - declaration splicing *(completed 2025-12-08)*
 - ✅ `(cond-expand ...)` - feature-based conditional expansion *(completed 2025-12-05)*
 - ✅ `(features)` procedure - returns list of supported features *(completed 2025-12-05)*
 
-**Remaining Gaps:**
+**Remaining Gaps:** ✅ ALL COMPLETE
 1. ~~**Integer library names** - `(srfi 1)` fails, blocks entire SRFI ecosystem~~ ✅ DONE
 2. ~~**`include` declaration** - Cannot load chibi's libraries (all use `include`)~~ ✅ DONE
 3. ~~**`cond-expand`** - Cannot use portable libraries (8/~60 chibi SRFIs use it)~~ ✅ DONE
 4. ~~**`(features)` procedure** - Required by R7RS §6.13~~ ✅ DONE
-5. `(include-ci "file.scm")` - case-insensitive reading (low priority)
-6. `(include-library-declarations ...)` - declaration splicing (low priority)
+5. ~~`(include-ci "file.scm")` - case-insensitive reading~~ ✅ DONE (2025-12-08)
+6. ~~`(include-library-declarations ...)` - declaration splicing~~ ✅ DONE (2025-12-08)
 
 ---
 
@@ -110,13 +111,20 @@ Surveyed chibi-scheme's library collection to understand real-world patterns:
 | `(features)` procedure | §6.13 | `primitives/system.rs` *(2025-12-05)* |
 | Feature requirements | §4.2.1 | `cond_expand.rs:evaluate_feature_requirement` *(2025-12-05)* |
 
-### Not Implemented ✗
+### Fully Implemented ✓ (continued 2)
 
-| Feature | R7RS Section | Impact | Priority |
-|---------|--------------|--------|----------|
-| `(include-ci "file.scm")` - reading | §5.6.1 | Case-insensitive reader mode | Low |
-| `(include-library-declarations ...)` | §5.6.1 | Share declarations | Low |
-| `(library <name>)` in cond-expand | §4.2.1 | Check if library can be loaded | Low |
+| Feature | R7RS Section | Implementation |
+|---------|--------------|----------------|
+| `(include-ci "file.scm")` | §5.6.1 | `library_support.rs` + case-insensitive lexer *(2025-12-08)* |
+| `(include-library-declarations ...)` | §5.6.1 | `library_support.rs:parse_library_declarations_file` *(2025-12-08)* |
+
+### Fully Implemented ✓ (continued 3)
+
+| Feature | R7RS Section | Implementation |
+|---------|--------------|----------------|
+| `(library <name>)` in cond-expand | §4.2.1 | `library_loader.rs:can_load_with_paths` *(2025-12-08)* |
+
+*All R7RS library system features are now fully implemented!*
 
 ---
 
@@ -1430,11 +1438,16 @@ fn test_circular_include_detection() {
 - [x] `(library <name>)` requirement (returns false - no library loader access)
 - [x] `else` clause
 
-### Phase 4: Include-ci (Nice to Have)
-- [ ] Case-insensitive reading
+### Phase 4: Include-ci ✅ COMPLETE (2025-12-08)
+- [x] Case-insensitive reading via `Parser::new_case_insensitive()`
+- [x] `Lexer::new_case_insensitive()` constructor
+- [x] All identifiers folded to lowercase in included file
 
-### Phase 5: Include-library-declarations (Nice to Have)
-- [ ] Declaration splicing
+### Phase 5: Include-library-declarations ✅ COMPLETE (2025-12-08)
+- [x] Declaration splicing from external files
+- [x] Supports export, import, begin, include declarations
+- [x] Recursive processing of nested includes
+- [x] Multiple files in single declaration
 
 ---
 

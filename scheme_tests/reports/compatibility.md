@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-08 20:28:14
+**Generated:** 2025-12-08 22:08:03
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
@@ -52,29 +52,12 @@ FAIL: something-went-wrong
 ### Errors
 
 ```
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: dynamic-wind
-Error: Undefined variable: with-exception-handler
-Error: Undefined variable: error-object?
-Error: Undefined variable: error-object-message
-Error: Undefined variable: error-object-irritants
-Error: Undefined variable: file-error?
-Error: Undefined variable: file-error?
-Error: Undefined variable: read-error?
-Error: Undefined variable: read-error?
-Error: Undefined variable: read-error?
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: with-exception-handler
-Error: Undefined variable: guard
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: call-with-current-continuation
-Error: Undefined variable: call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.control/dynamic-wind
+Error: Undefined variable: patina.internal.errors/with-exception-handler
 Error: Undefined variable: guard
 Error: Undefined variable: guard
 Error: Undefined variable: guard
@@ -83,10 +66,27 @@ Error: Undefined variable: guard
 Error: Undefined variable: guard
 Error: Undefined variable: guard
 Error: Undefined variable: guard
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: guard
+Error: Undefined variable: guard
+Error: Undefined variable: patina.internal.errors/with-exception-handler
+Error: Undefined variable: guard
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Error: Undefined variable: guard
 Error: Undefined variable: guard
 Error: Undefined variable: guard
-Error: Undefined variable: file-error?
+Error: Undefined variable: guard
+Error: Undefined variable: guard
+Error: Undefined variable: guard
+Error: Undefined variable: guard
+Error: Undefined variable: guard
+Error: Undefined variable: guard
+Error: Undefined variable: guard
+Error: Undefined variable: guard
+Error: Undefined variable: guard
 ```
 
 

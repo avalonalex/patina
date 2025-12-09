@@ -88,69 +88,173 @@ impl Evaluator {
     /// Initialize library loaders
     ///
     /// Sets up the loader registry with:
-    /// 1. RustLibraryLoader for built-in libraries (scheme base, etc.)
-    /// 2. SchemeLibraryLoader for .sld files
+    /// 1. RustLibraryLoader for internal libraries (patina internal ...)
+    /// 2. RustLibraryLoader for legacy scheme libraries (transitional)
+    /// 3. SchemeLibraryLoader for .sld files
     fn init_loaders(&self) {
         use crate::library_support::SchemeLibraryLoader;
         use patina_runtime::{RustLibraryLoader, stdlib};
 
         let mut loaders = self.loader_registry.borrow_mut();
 
-        // Create Rust loader and register standard libraries
+        // Create Rust loader and register libraries
         let mut rust_loader = RustLibraryLoader::with_standard_libraries();
 
-        // Register all R7RS standard libraries
+        // === Internal libraries (patina internal ...) ===
+        // These are domain-specific primitive collections used by .sld files
         rust_loader.register(
-            vec!["scheme".to_string(), "base".to_string()],
-            stdlib::build_scheme_base,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "numbers".to_string(),
+            ],
+            stdlib::build_internal_numbers,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "char".to_string()],
-            stdlib::build_scheme_char,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "lists".to_string(),
+            ],
+            stdlib::build_internal_lists,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "complex".to_string()],
-            stdlib::build_scheme_complex,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "chars".to_string(),
+            ],
+            stdlib::build_internal_chars,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "inexact".to_string()],
-            stdlib::build_scheme_inexact,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "strings".to_string(),
+            ],
+            stdlib::build_internal_strings,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "lazy".to_string()],
-            stdlib::build_scheme_lazy,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "vectors".to_string(),
+            ],
+            stdlib::build_internal_vectors,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "time".to_string()],
-            stdlib::build_scheme_time,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "bytevectors".to_string(),
+            ],
+            stdlib::build_internal_bytevectors,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "file".to_string()],
-            stdlib::build_scheme_file,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "control".to_string(),
+            ],
+            stdlib::build_internal_control,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "read".to_string()],
-            stdlib::build_scheme_read,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "errors".to_string(),
+            ],
+            stdlib::build_internal_errors,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "write".to_string()],
-            stdlib::build_scheme_write,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "io".to_string(),
+            ],
+            stdlib::build_internal_io,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "eval".to_string()],
-            stdlib::build_scheme_eval,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "predicates".to_string(),
+            ],
+            stdlib::build_internal_predicates,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "process-context".to_string()],
-            stdlib::build_scheme_process_context,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "records".to_string(),
+            ],
+            stdlib::build_internal_records,
         );
         rust_loader.register(
-            vec!["scheme".to_string(), "r5rs".to_string()],
-            stdlib::build_scheme_r5rs,
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "params".to_string(),
+            ],
+            stdlib::build_internal_params,
+        );
+        rust_loader.register(
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "time".to_string(),
+            ],
+            stdlib::build_internal_time,
+        );
+        rust_loader.register(
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "system".to_string(),
+            ],
+            stdlib::build_internal_system,
+        );
+        rust_loader.register(
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "lazy".to_string(),
+            ],
+            stdlib::build_internal_lazy,
+        );
+        rust_loader.register(
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "eval".to_string(),
+            ],
+            stdlib::build_internal_eval,
+        );
+        rust_loader.register(
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
+                "r5rs".to_string(),
+            ],
+            stdlib::build_internal_r5rs,
         );
 
-        // Register test framework primitives
-        // The full (chibi test) library is in lib/chibi/test.sld
+        // === R7RS libraries are now loaded from .sld files ===
+        // (scheme base)           -> lib/scheme/base.sld
+        // (scheme char)           -> lib/scheme/char.sld
+        // (scheme complex)        -> lib/scheme/complex.sld
+        // (scheme inexact)        -> lib/scheme/inexact.sld
+        // (scheme lazy)           -> lib/scheme/lazy.sld
+        // (scheme time)           -> lib/scheme/time.sld
+        // (scheme file)           -> lib/scheme/file.sld
+        // (scheme read)           -> lib/scheme/read.sld
+        // (scheme write)          -> lib/scheme/write.sld
+        // (scheme eval)           -> lib/scheme/eval.sld
+        // (scheme process-context)-> lib/scheme/process-context.sld
+        // (scheme cxr)            -> lib/scheme/cxr.sld
+        // (scheme r5rs)           -> lib/scheme/r5rs.sld
+
+        // === Test framework ===
         rust_loader.register(
             vec![
                 "chibi".to_string(),
@@ -160,7 +264,7 @@ impl Evaluator {
             stdlib::build_chibi_test_primitives,
         );
 
-        // Register Patina extensions
+        // === Patina extensions ===
         rust_loader.register(
             vec!["patina".to_string(), "debug".to_string()],
             stdlib::build_patina_debug,
@@ -1124,9 +1228,17 @@ impl Evaluator {
             (lib, true)
         } else {
             // Try evaluating loaders (Scheme .sld files)
+            // Create a library availability checker for cond-expand
+            // Clone search_paths for use in the closure
+            let search_paths_for_checker = search_paths.clone();
+            let can_load_library = |lib_name: &[String]| {
+                let loaders = self.loader_registry.borrow();
+                loaders.can_load_with_paths(lib_name, &search_paths_for_checker)
+            };
+
             let parsed = {
                 let loaders = self.loader_registry.borrow();
-                loaders.try_parse(name, &search_paths)?
+                loaders.try_parse_with_library_checker(name, &search_paths, &can_load_library)?
             };
 
             if let Some(parsed) = parsed {

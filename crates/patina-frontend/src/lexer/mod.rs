@@ -78,6 +78,18 @@ impl Lexer {
         }
     }
 
+    /// Create a lexer with case-folding enabled from the start.
+    ///
+    /// This is used for `include-ci` which reads files in case-insensitive mode.
+    /// Identifiers will be folded to lowercase, matching R7RS `#!fold-case` behavior.
+    pub fn new_case_insensitive(input: &str) -> Self {
+        Lexer {
+            input: input.chars().collect(),
+            position: 0,
+            fold_case: true,
+        }
+    }
+
     pub fn next_token(&mut self) -> Result<Token, LexError> {
         self.skip_whitespace_and_comments()?;
 

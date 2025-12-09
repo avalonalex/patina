@@ -27,7 +27,7 @@ pub fn evaluate_feature_requirement<F>(
     can_load_library: &F,
 ) -> Result<bool, ParseError>
 where
-    F: Fn(&[String]) -> bool,
+    F: Fn(&[String]) -> bool + ?Sized,
 {
     match req {
         // Simple feature identifier
