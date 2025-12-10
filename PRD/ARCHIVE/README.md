@@ -1,234 +1,282 @@
-# PRD Archive: Completed Phase 1 Implementation Documents
+# Archive: Completed Research and Implementation Docs
 
-This directory contains Product Requirement Documents (PRDs) for features that have been successfully implemented during Phase 1 (R7RS Compliance).
+This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2025-11-18
-
----
-
-## Why Archive PRDs?
-
-Unlike research documents in `internal/ARCHIVE/`, these PRDs served as:
-1. **Implementation specifications** - Detailed requirements and design
-2. **Decision records** - Why certain approaches were chosen
-3. **Historical context** - Understanding feature evolution
-
-They're archived because:
-- ✅ Features are **fully implemented**
-- ✅ Requirements have been **met**
-- ✅ Design decisions have been **executed**
-- ✅ No longer needed for **active development**
-
-But preserved for:
-- 📚 Understanding design rationale
-- 🔍 Debugging implementation details
-- 📖 Onboarding new contributors
-- 🎓 Educational reference
+**Last Updated:** 2025-12-08
 
 ---
 
-## Archived Documents
+## Directory Structure
 
-### 📁 `phase1_planning/`
+### `REMAINING_ARCHITECTURE_ISSUES.md`
+**Status:** ✅ ARCHIVED (2025-12-08)
 
-**Completed high-level planning and strategy documents**
-
-After workspace refactoring, these planning docs served their purpose:
-- `R7RS_ROADMAP.md` - Strategic roadmap (now in code structure)
-- `R7RS_TESTING_STRATEGY.md` - Test organization (now in `docs/TEST_ORGANIZATION.md`)
-- `CHIBI_TEST_SUITE_ANALYSIS.md` - Test suite analysis (tests now implemented)
-
-**Archived 2025-11-18:**
-- `ROADMAP_2025-11.md` - Root-level roadmap snapshot from Nov 2025 (outdated: showed 47% complete, actually 92%)
-- `PRD_ROADMAP_2025-11.md` - PRD-level roadmap snapshot from Nov 2025 (outdated)
-- **Current Source of Truth:** `PRD/phase1/IMPLEMENTATION_STATUS.md` (canonical, actively updated)
-
-These guided initial development but details are now captured in working code and active tests.
-
-### 📁 `phase1_completed/`
-
-#### Macro System (2025-11-07/08)
-
-**MACRO_SYSTEM_RESEARCH.md**
-- Research phase document for R7RS macro system
-- Analyzed multiple implementations (Steel, Chibi, Vonuvoli)
-- Led to successful hygienic macro implementation
-- **Outcome:** 96% complete macro system, 50+ tests passing
-
-**MACRO_IMPLEMENTATION_DESIGN.md**
-- Single source of truth for macro system design
-- Detailed architecture, data structures, algorithms
-- Inspired by Steel's implementation
-- **Outcome:** Full `syntax-rules` with hygiene, pattern matching, template expansion
-
-**Current Status:** Macro system fully implemented in `src/macro_system/`
+Consolidated architecture issues tracker. Archived because:
+- **Arithmetic Refactoring**: ✅ COMPLETE - arithmetic.rs reduced from 2,192 to 1,334 lines (39% reduction), `NumericValue` eliminated, operations moved to `patina_core::numeric`
+- **Source Location Tracking**: Tracked separately in `PRD/phase1/SOURCE_INFO_PLAN.md`
+- **VM-related items** (Tagged Pointers, Environment for VM, Bytecode VM, JIT): Belong in Phase 2
 
 ---
 
-#### Evaluator Refactoring (2025-11-05/07)
+### `IO_IMPLEMENTATION.md`
+**Status:** ✅ ARCHIVED (2025-12-08)
 
-**EVAL_MODULE_REFACTORING.md**
-- Phase 1 plan: Break down monolithic 2,711-line eval module
-- Proposed modular architecture
-- **Outcome:** Successfully split into 5 modules
+Complete R7RS I/O implementation guide. All 6 phases completed:
+- **Phase 1**: Port infrastructure, string ports, read operations
+- **Phase 2**: File I/O (open-input-file, open-output-file, etc.)
+- **Phase 3**: Extended text I/O (read-string)
+- **Phase 4**: Binary I/O (bytevector ports, read-u8, write-u8, etc.)
+- **Phase 5**: Higher-order I/O (call-with-port)
+- **Phase 6**: Advanced write (write-shared, write-simple)
 
-**EVAL_MODULE_REFACTORING_PHASE2.md**
-- Phase 2 plan: Split primitives.rs (2,697 lines)
-- Organized primitives by category
-- **Outcome:** Split into 11 modules (arithmetic, strings, vectors, etc.)
-
-**Current Status:** Evaluator fully modularized
-```
-src/eval/
-├── mod.rs (516 lines)
-├── special_forms.rs (770 lines)
-├── application.rs (185 lines)
-├── error.rs (32 lines)
-├── debug.rs (100 lines)
-└── primitives/
-    ├── mod.rs (388 lines)
-    ├── arithmetic.rs (673 lines)
-    ├── strings.rs (487 lines)
-    ├── vectors.rs (597 lines)
-    ├── lists.rs (297 lines)
-    ├── predicates.rs (150 lines)
-    ├── equality.rs (86 lines)
-    ├── higher_order.rs (133 lines)
-    ├── values.rs (74 lines)
-    ├── io.rs (69 lines)
-    └── debug.rs (116 lines)
-```
+**Remaining**: Only `file-error?` and `read-error?` predicates, which depend on exception handling (tracked in `PRD/phase1/EXCEPTION_HANDLING.md`)
 
 ---
 
-#### Debug Mode (2025-11-07)
+### 📁 `completed_features/library_system_2025_12/`
+**Status:** ✅ COMPLETE - R7RS Library System 100% Compliant (2025-12-08)
 
-**DEBUG_MODE_IMPLEMENTATION.md**
-- Implementation plan for comprehensive debug system
-- Scheme-based API design (not REPL commands)
-- Support for multiple debug stages (eval, macro, parse)
-- **Outcome:** Fully implemented debug mode
+Full R7RS library system implementation:
+- `LIBRARY_R7RS_COMPLIANCE.md` - Comprehensive implementation status and test suite
 
-**Current Status:** Debug mode working
-- `(debug-mode)` - Toggle all debug output
-- `(debug-enable 'stage)` - Enable specific stage
-- `(debug-disable 'stage)` - Disable specific stage
-- Implementation: `src/eval/debug.rs`, `src/eval/primitives/debug.rs`
+**Features Implemented:**
+- All 7 library declarations: export, import, begin, include, include-ci, include-library-declarations, cond-expand
+- All 5 import modifiers: only, except, prefix, rename, nested composition
+- All 5 feature requirements: identifier, library, and, or, not, else
+- Integer library names: `(srfi 1)`, `(srfi 69)`, etc.
+- `(features)` procedure with platform/arch/endian detection
+- `(library <name>)` requirement in cond-expand with loader callback
 
----
-
-#### Future Enhancements (2025-11-10/11)
-
-**NESTED_ELLIPSIS_IMPLEMENTATION.md**
-- Detailed design for nested ellipsis support
-- Pattern matching for multi-dimensional bindings
-- Template expansion with nested iteration
-- **Status:** Design complete, not yet implemented (low priority)
-- **Note:** See `internal/NESTED_ELLIPSIS_LIMITATION.md` for current limitations
-
-**DEBUGGER_HOOK_SYSTEM.md**
-- Comprehensive hook system design for debugging/profiling
-- Interactive debugger with breakpoints and stepping
-- Call stack tracking and backtraces
-- **Status:** Research complete, not yet implemented
-- **Note:** Deferred until after TCO implementation
+**Outcome:**
+- 23 sld_file_loading tests passing
+- Full Snow-Fort/SRFI compatibility
+- Verified against R7RS spec §5.2, §5.6, §4.2.1, Appendix B
 
 ---
 
-## Active PRD Documents
+### 📁 `parameter_fix_2025_11/`
+**Status:** ✅ COMPLETE - Parameter bug fixed (2025-11-19)
 
-### Still in PRD/ (Not Archived)
+Analysis and fix documentation for the parameter/parameterize bug:
+- `PARAMETER_BUG.md` - Bug analysis, root cause (tail call optimization interaction), and fix
+- `CHIBI_PARAMETERIZE_ANALYSIS.md` - How chibi-scheme handles parameterize via dynamic-wind
 
-**Vision & Planning:**
-- `PROJECT_VISION.md` - Overall project vision
-- `ROADMAP.md` - Multi-phase roadmap
-- `README.md` - PRD directory index
-- `DEBUG_MODE.md` - Debug mode design (reference doc, not implementation plan)
-
-**Analysis & Research:**
-- `LINEAR_TYPES_REACTIVE_ANALYSIS.md` - Phase 3 research
-- `MULTI_BACKEND_STRATEGY.md` - Future architecture
-- `NOTEBOOK_DATA_SCIENCE_VISION.md` - Phase 4 vision
-- `PROJECT_STRUCTURE_DESIGN.md` - Project organization
-- `UNIQUE_FEATURES_ANALYSIS.md` - Differentiating features
-
-### In PRD/phase1/ (Active Phase 1)
-
-**Living Documents (Continuously Updated):**
-- ⭐ `IMPLEMENTATION_STATUS.md` - ⭐ **CANONICAL** Current progress, roadmap, priorities
-- ⭐ `NUMERIC_SUMMARY.md` - ⭐ **CANONICAL** Numeric tower guide
-- ⭐ `TAIL_CALL_OPTIMIZATION.md` - ✅ Complete technical summary (keep for reference!)
-
-**Implementation Plans (Not Yet Complete):**
-- `EXCEPTION_HANDLING.md` - Guard, raise (not implemented)
-- `HELP_SYSTEM.md` - Help system design (deferred)
-- `IO_IMPLEMENTATION.md` - Full I/O system (partial)
-- `MODULE_SYSTEM_DESIGN.md` - Module system (not implemented)
-- `STRING_OPTIMIZATION.md` - String optimizations (deferred)
-
-### In PRD/future/ (Future Phases)
-
-- `GENERAL_TAIL_CALL_OPTIMIZATION.md` - Advanced TCO research
-- `phase4/` - Notebook interface design (11 documents)
+**Outcome:**
+- All 12 parameter tests passing
+- Fixed tail call optimization interaction with parameter stack
+- Implemented Option 2 (parameter stack approach)
+- Documented future work for dynamic-wind implementation
 
 ---
 
-## When to Consult This Archive
+### 📁 `macro_hygiene_2025_12/`
+**Status:** ✅ COMPLETE - All macro hygiene issues resolved (2025-12-04)
 
-### Macro System
-- **Why certain design choices?** → MACRO_IMPLEMENTATION_DESIGN.md
-- **How did we research?** → MACRO_SYSTEM_RESEARCH.md
-- **What implementations were studied?** → Both docs
+Final macro hygiene fixes and analysis:
+- `MACRO_IGNORED_TESTS.md` - Tracking doc for ignored macro tests (all 5 fixed)
+- `MACRO_HYGIENE_ANALYSIS.md` - Comprehensive hygiene system analysis with debug infrastructure
+- `MACRO_GENERATING_MACRO_HYGIENE.md` - Macro-generating macro hygiene research
+- `MACRO_MISSING_FEATURES.md` - Analysis of underscore literals, ellipsis escaping, macro-generating macros (all now working)
 
-### Evaluator Refactoring
-- **Why split into these modules?** → EVAL_MODULE_REFACTORING.md
-- **How were primitives organized?** → EVAL_MODULE_REFACTORING_PHASE2.md
-- **What was the migration process?** → Both docs
-
-### Debug Mode
-- **How is debug mode designed?** → DEBUG_MODE_IMPLEMENTATION.md
-- **Why Scheme API vs REPL commands?** → Implementation doc
-- **What stages are supported?** → Implementation doc
+**Outcome:**
+- All previously ignored macro tests now pass
+- Fixed: `test_macro_introduced_temp_variable`, `test_nested_ellipsis_macro`, `test_recursive_macro_hygiene`, `test_let_syntax_nested_lexical_scoping`, `test_nested_macro_literal_matching_same_symbol`
+- Fixed scope-set tie-breaking in environment lookup
+- Fixed literal matching to use subset semantics (bound-identifier=?)
+- Underscore literal handling now correct
+- Ellipsis escaping (`(... template)`) working
+- Macro-generating macros working
+- Debug infrastructure complete with scope tracking
+- Verified against chibi-scheme and Gauche
 
 ---
 
-## Difference from internal/ARCHIVE
+### 📁 `macro_research/`
+**Status:** ✅ COMPLETE - Macro system fully implemented (2025-11-08)
 
-| Location | Contents | Purpose |
-|----------|----------|---------|
-| `PRD/ARCHIVE/` | Completed implementation specs | Requirements & design docs |
-| `internal/ARCHIVE/` | Completed research & analysis | Research findings & investigations |
+Research and analysis that led to the complete hygienic macro system implementation:
+- `CHIBI_MACRO_ANALYSIS.md` - Chibi-scheme macro implementation study
+- `STEEL_MACRO_ANALYSIS.md` - Steel macro implementation study
+- `VONUVOLI_ANALYSIS.md` - Vonuvoli macro implementation study
+- `vonuvoli_learning.md` - Learning notes from Vonuvoli
+- `MACRO_R7RS_ANALYSIS.md` - R7RS macro specification analysis
+- `MACRO_RESEARCH_SUMMARY.md` - Consolidated research findings
+- `STEEL_HYGIENE_COMPARISON.md` - Comparison showing Patina's implementation is better
+- `R7RS_HYGIENE_REQUIREMENTS.md` - R7RS hygiene specification
+- `HYGIENE_BINDING_FORMS.md` - Hygiene in binding constructs
 
-**PRD Archive:**
-- Implementation plans (what to build)
-- Design specifications (how to build it)
-- Requirements documents (why to build it)
+**Additional Implementation Docs (2025-11-10/11):**
+- `MACRO_ARCHITECTURE_DECISIONS.md` - Design decisions and trade-offs
+- `MACRO_MIGRATION_STATUS.md` - Special form → macro migration tracking
+- `MACRO_MIGRATION_SUMMARY.md` - and/or migration details
+- `TEMPLATE_ELLIPSIS_FIX.md` - Multiple ellipsis implementation fix
+- `CHIBI_VM_ANALYSIS.md` - Analysis of chibi-scheme's VM approach
 
-**Internal Archive:**
-- Research notes (understanding problem space)
-- Implementation analysis (how it was built)
-- Investigation results (what was learned)
+**Outcome:**
+- 96% complete macro system (50+ tests passing)
+- Full hygiene with pattern variable preservation
+- Better than Steel (correct quote handling)
+- Successfully migrated 6+ special forms to macros
+- Nested ellipsis now working (see `internal/MACRO_SYSTEM_KNOWN_LIMITATIONS.md`)
+
+---
+
+### 📁 `numeric_research/`
+**Status:** ✅ 94% COMPLETE - Numeric tower implemented (2025-11-04)
+
+Research and implementation guides for numeric tower:
+- `chibi_numeric_tower_analysis.md` - Chibi numeric implementation study
+- `numeric_implementation_guide.md` - Implementation guidance
+- `rust_numeric_patterns.md` - Rust patterns for numeric types
+- `README_NUMERIC_ANALYSIS.md` - Index to numeric research
+- `NUMERIC_TOWER_DESIGN.md` - Original design (superseded)
+- `NUMERIC_TOWER_REVISED.md` - Revised design (superseded)
+- `README_NUMERIC.md` - Numeric README (superseded)
+
+**Outcome:**
+- Full complex number support (25/25 tests)
+- Integer overflow → BigInteger promotion
+- Rational number support
+- Proper inexact contagion
+- Only transcendental functions remaining (sin, cos, exp, log, etc.)
+
+**Current Source of Truth:** `PRD/phase1/NUMERIC_SUMMARY.md` ⭐ CANONICAL
+
+---
+
+### 📁 `completed_features/`
+**Status:** ✅ COMPLETE - Features fully implemented
+
+Implementation documentation for completed features:
+
+#### `DO_LOOP_IMPLEMENTATION.md` (2025-11-09)
+- Full R7RS `do` loop implementation as special form
+- 10 comprehensive tests (all passing)
+- Implementation: `src/eval/special_forms.rs:1157-1294`
+- Tests: `tests/compliance/derived.rs:179-285`
+
+#### `MACRO_SYSTEM_COMPLETE.md` (2025-11-08)
+- Comprehensive macro system summary
+- Architecture documentation
+- Test coverage: 50+ tests
+- Comparison with other implementations
+- Production readiness checklist
+
+#### `DO_MACRO_INVESTIGATION.md` (2025-11-11)
+- Investigation of `do` as macro vs special form
+- Found working macro solution using `apply`
+- Documented TCO limitations requiring special form
+- Educational value for nested ellipsis workarounds
+
+#### `CODE_QUALITY_REVIEW_2025-11-11.md` (2025-11-11)
+- Comprehensive code quality review
+- Analysis of recent macro system changes
+- Identified improvement opportunities
+- Metrics and recommendations
+
+#### `CODE_IMPROVEMENTS_2025-11-11.md` (2025-11-11)
+- Implemented code quality improvements
+- Removed 25 lines of dead code
+- Updated TODO comments with PRD references
+- Added table of contents to bootstrap.scm
+
+---
+
+### 📁 `historical/`
+**Status:** Historical bugs and issues (resolved)
+
+#### `NESTED_MACRO_ISSUE.md`
+- Bug with nested macro calls (RESOLVED 2025-11-08)
+- Pattern variable preservation issue
+- Fixed by collecting symbols from binding values
+
+---
+
+### 📁 `completed_planning/`
+**Status:** ✅ COMPLETE - Planning documents for completed tasks
+
+#### `WORKSPACE_CLEANUP_PLAN.md` (2025-11-11)
+- Planning document for workspace migration cleanup
+- Documented outdated documentation and redundant files
+- All action items completed
+- Workspace successfully migrated and cleaned
+
+---
+
+### 📁 `documentation/`
+**Status:** Historical documentation meta-files
+
+#### `DOCUMENTATION_MAP.md` (2025-11-09)
+- Quick reference guide for documentation navigation
+- Superseded by CLAUDE.md's documentation section
+- Archived to reduce cognitive overhead (2025-11-18)
+
+---
+
+## Active Documentation (Not Archived)
+
+### Current Sources of Truth:
+
+**Strategic Planning (PRD/phase1/):**
+- ⭐ `IMPLEMENTATION_STATUS.md` - Overall roadmap, priorities, remaining work
+- ⭐ `R7RS_ROADMAP.md` - Strategic R7RS compliance planning
+- ⭐ `NUMERIC_SUMMARY.md` - Canonical numeric tower guide
+- `STRING_OPTIMIZATION.md` - Future optimization plans
+- `HELP_SYSTEM.md` - Future help system design
+
+**Feature Status (docs/):**
+- ⭐ `FEATURE_STATUS.md` - Detailed test-by-test R7RS compliance matrix
+- `API.md` - Public API reference
+- `GETTING_STARTED.md` - User guide
+- `README.md` - Project overview
+- `TESTING.md` - Test guide
+- `DEVELOPMENT.md` - Developer guide
+
+**Implementation Notes (internal/):**
+- ⭐ `MILESTONES.md` - Historical achievements and progress
+- `NESTED_ELLIPSIS_LIMITATION.md` - Future enhancement (not yet implemented)
+
+**Reference Implementations (internal/reference_impls/):**
+- `CHIBI_REFERENCE.md` - Chibi-scheme reference
+- `CHEZ_REFERENCE.md` - Chez Scheme reference
+
+---
+
+## Why Archive?
+
+These documents were critical for implementation but are now primarily historical:
+1. **Research complete** - Decisions made, features implemented
+2. **Reduce cognitive load** - Active docs are easier to find
+3. **Preserve knowledge** - Keep for future reference
+4. **Single source of truth** - Avoid outdated/conflicting information
+
+---
+
+## When to Consult Archive
+
+**Macro System:**
+- Understanding design decisions
+- Comparing with other implementations
+- Researching nested ellipsis implementation
+
+**Numeric Tower:**
+- Understanding numeric type design
+- Implementing remaining transcendental functions
+- Debugging numeric edge cases
+
+**Historical Context:**
+- Understanding why certain approaches were chosen
+- Learning from past issues
+- Researching alternative implementations
 
 ---
 
 ## Maintenance
 
 This archive should:
-- ✅ Preserve completed implementation plans
-- ✅ Serve as historical reference
-- ✅ Help understand design decisions
-- ❌ Not be used for active development planning
+- ✅ Remain read-only (no updates needed)
+- ✅ Be preserved in git history
+- ✅ Be referenced when needed for context
+- ❌ Not be used as active documentation
 
-For current plans and status, always consult:
-- ⭐ `PRD/phase1/IMPLEMENTATION_STATUS.md` (canonical roadmap and status)
-- Active phase 1 docs in `PRD/phase1/`
-
----
-
-## Summary
-
-**Archived:** 5 completed Phase 1 implementation documents
-**Reason:** Features fully implemented, requirements met
-**Value:** Historical context, design rationale, educational reference
-
-All Phase 1 implementation work represented by these documents has been successfully completed! 🎉
+For current status, always consult the active docs listed above.

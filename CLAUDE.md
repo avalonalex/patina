@@ -135,36 +135,33 @@ patina-tests → patina-interpreter
 
 ### 📁 Active Documentation (Frequently Updated)
 
-- **`PRD/phase1/`** - Strategic planning and high-level design (current phase only)
-  - **`IMPLEMENTATION_STATUS.md`** - ⭐ **CANONICAL** overall roadmap, priorities, and remaining work
-  - **`TECH_DEBT_CLEANUP.md`** - ⭐ Tech debt to address before Phase 2 (VM backend)
-  - **`NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
-  - **`VALUE_SIZE_OPTIMIZATION.md`** - ⭐ Value/CoreExpr size analysis and optimization roadmap
-  - `STRING_OPTIMIZATION.md` - Future optimization plans (deferred)
-  - `HELP_SYSTEM.md` - Future help system design (deferred)
-
-- **`PRD/phase2/`** - Future enhancements
-  - **`SYNTAX_CASE_DESIGN.md`** - ⭐ syntax-case implementation design (future macro system)
+- **`PRD/`** - Strategic planning and design documents
+  - **`MILESTONES.md`** - ⭐ Historical achievements and progress milestones (keep updated)
+  - **`phase1/`** - Current phase planning
+    - **`IMPLEMENTATION_STATUS.md`** - ⭐ **CANONICAL** overall roadmap, priorities, and remaining work
+    - **`TECH_DEBT_CLEANUP.md`** - ⭐ Tech debt to address before Phase 2 (VM backend)
+    - **`NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
+    - **`VALUE_SIZE_OPTIMIZATION.md`** - ⭐ Value/CoreExpr size analysis and optimization roadmap
+    - **`CALLCC_IMPLEMENTATION.md`** - call/cc implementation design
+    - **`MACRO_SYSTEM_KNOWN_LIMITATIONS.md`** - Minor known macro edge cases
+  - **`phase2/`** - Future enhancements
+    - **`SYNTAX_CASE_DESIGN.md`** - ⭐ syntax-case implementation design (future macro system)
 
 - **`docs/`** - User-facing documentation and developer guides
   - **`FEATURE_STATUS.md`** - ⭐ **CANONICAL** detailed test-by-test R7RS compliance matrix
   - **`MACRO_SYSTEM.md`** - ⭐ Comprehensive macro system architecture (syntax-case roadmap)
   - **`R7RS_LARGE_STATUS.md`** - R7RS-large editions tracking (Red, Tangerine, etc.)
   - **`TEST_ORGANIZATION.md`** - ⭐ Test structure and running tests
+  - **`reference_impls/`** - Reference implementation notes (Chibi, Chez, Gauche, Clojure)
   - `API.md` - Public API reference
   - `GETTING_STARTED.md` - User guide for getting started
   - `README.md` - Project overview
   - `TESTING.md` - Test infrastructure and usage
   - `DEVELOPMENT.md` - Developer guide
 
-- **`internal/`** - Implementation notes and progress tracking
-  - **`MILESTONES.md`** - Historical achievements and progress milestones (keep updated)
-  - `MACRO_SYSTEM_KNOWN_LIMITATIONS.md` - Macro system limitations (nested ellipsis now works!)
-  - `reference_impls/` - Reference implementation notes (Chibi, Chez)
-
 ### 🗄️ Archived Documentation (Read-Only Reference)
 
-- **`internal/ARCHIVE/`** - Completed research and historical docs (see `internal/ARCHIVE/README.md`)
+- **`PRD/ARCHIVE/`** - Completed research and historical docs (see `PRD/ARCHIVE/README.md`)
   - `core_ir_migration_2025_11/` - CoreExpr migration work (✅ COMPLETE 2025-11-23)
   - `macro_research/` - Macro system research (✅ COMPLETE 2025-11-08)
   - `numeric_research/` - Numeric tower research (✅ 94% COMPLETE 2025-11-04)
@@ -573,11 +570,11 @@ primitives/
 2. Test Patina's output against chibi's output for compatibility
 3. Reference the comprehensive test suite for validation
 
-**Documentation:** See `internal/reference_impls/CHIBI_REFERENCE.md` for detailed notes
+**Documentation:** See `docs/reference_impls/CHIBI_REFERENCE.md` for detailed notes
 
 ### Other Reference Implementations
 
-**Chez Scheme:** See `internal/reference_impls/CHEZ_REFERENCE.md` for notes on Chez implementation patterns
+**Chez Scheme:** See `docs/reference_impls/CHEZ_REFERENCE.md` for notes on Chez implementation patterns
 
 ### R7RS Specification
 
