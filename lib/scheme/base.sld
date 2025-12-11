@@ -199,4 +199,5 @@
   (include "base/conditionals.scm")
   (include "base/binding.scm")
   (include "base/iteration.scm")
-  (include "base/records.scm"))
+  (include "base/records.scm")
+  (include "base/higher_order.scm"))

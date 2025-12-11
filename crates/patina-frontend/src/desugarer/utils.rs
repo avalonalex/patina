@@ -237,32 +237,39 @@ pub fn check_no_duplicates(params: &[Symbol], context: &str) -> Result<()> {
     Ok(())
 }
 
-/// Parse define function syntax: (name param1 param2 ...)
-/// Returns (name, formals)
+/// Parse define function syntax: (name param1 param2 ...) or (name . args)
+/// Returns (name, formals) where formals preserves improper list structure for variadic.
+///
+/// Examples:
+/// - `(f x y)` -> ("f", (x y))           ; fixed arity
+/// - `(f . args)` -> ("f", args)         ; fully variadic
+/// - `(f x . rest)` -> ("f", (x . rest)) ; mixed arity
 pub fn parse_define_function(pattern: &Value) -> Result<(Symbol, Value)> {
-    let pattern_list = list_to_vec(pattern)?;
+    // Pattern must be a pair: (name . params) where params is the rest of the list
+    match pattern {
+        Value::Pair(pair) => {
+            let borrowed = pair.borrow();
+            let car = &borrowed.0;
+            let cdr = borrowed.1.clone();
 
-    if pattern_list.is_empty() {
-        return Err(DesugarError::InvalidSyntax(
-            "define function requires name and parameters".to_string(),
-        ));
-    }
+            // Extract name from car (first element)
+            let name = match car {
+                Value::Symbol(s) => s.clone(),
+                Value::Identifier(id) => id.name.clone(),
+                _ => {
+                    return Err(DesugarError::InvalidSyntax(
+                        "define function name must be a symbol".to_string(),
+                    ));
+                }
+            };
 
-    // Accept both Symbol and Identifier (from macro expansion)
-    let name = match &pattern_list[0] {
-        Value::Symbol(s) => s.clone(),
-        Value::Identifier(id) => id.name.clone(),
-        _ => {
-            return Err(DesugarError::InvalidSyntax(
-                "define function name must be a symbol".to_string(),
-            ));
+            // Return cdr as formals (preserves improper list structure)
+            Ok((name, cdr))
         }
-    };
-
-    // Convert remaining parameters back to list form for convert_formals
-    let params = vec_to_list(&pattern_list[1..]);
-
-    Ok((name, params))
+        _ => Err(DesugarError::InvalidSyntax(
+            "define function requires (name params...) pattern".to_string(),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -290,5 +297,87 @@ mod tests {
         let formals = Value::symbol("args");
         let result = convert_formals(&formals).unwrap();
         assert!(matches!(result, Formals::Variadic(_)));
+    }
+
+    #[test]
+    fn test_convert_formals_mixed() {
+        use std::cell::RefCell;
+        // Improper list: (x y . rest)
+        let inner = Value::Pair(Rc::new(RefCell::new((
+            Value::symbol("y"),
+            Value::symbol("rest"), // Improper tail
+        ))));
+        let formals = Value::Pair(Rc::new(RefCell::new((Value::symbol("x"), inner))));
+
+        let result = convert_formals(&formals).unwrap();
+        if let Formals::Mixed { fixed, rest } = result {
+            assert_eq!(fixed.len(), 2);
+            assert_eq!(fixed[0].name.as_ref(), "x");
+            assert_eq!(fixed[1].name.as_ref(), "y");
+            assert_eq!(rest.name.as_ref(), "rest");
+        } else {
+            panic!("Expected Mixed formals, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_parse_define_function_fixed() {
+        // (f x y) - proper list
+        let pattern = vec_to_list(&[Value::symbol("f"), Value::symbol("x"), Value::symbol("y")]);
+        let (name, formals) = parse_define_function(&pattern).unwrap();
+        assert_eq!(name.as_ref(), "f");
+
+        // formals should be (x y)
+        let formals_result = convert_formals(&formals).unwrap();
+        if let Formals::Fixed(fixed) = formals_result {
+            assert_eq!(fixed.len(), 2);
+            assert_eq!(fixed[0].name.as_ref(), "x");
+            assert_eq!(fixed[1].name.as_ref(), "y");
+        } else {
+            panic!("Expected Fixed formals, got {:?}", formals_result);
+        }
+    }
+
+    #[test]
+    fn test_parse_define_function_variadic() {
+        use std::cell::RefCell;
+        // (f . args) - improper list with variadic only
+        let pattern = Value::Pair(Rc::new(RefCell::new((
+            Value::symbol("f"),
+            Value::symbol("args"),
+        ))));
+        let (name, formals) = parse_define_function(&pattern).unwrap();
+        assert_eq!(name.as_ref(), "f");
+
+        // formals should be just `args` symbol (variadic)
+        let formals_result = convert_formals(&formals).unwrap();
+        assert!(
+            matches!(formals_result, Formals::Variadic(_)),
+            "Expected Variadic formals, got {:?}",
+            formals_result
+        );
+    }
+
+    #[test]
+    fn test_parse_define_function_mixed() {
+        use std::cell::RefCell;
+        // (f x . rest) - improper list with mixed args
+        let inner = Value::Pair(Rc::new(RefCell::new((
+            Value::symbol("x"),
+            Value::symbol("rest"),
+        ))));
+        let pattern = Value::Pair(Rc::new(RefCell::new((Value::symbol("f"), inner))));
+        let (name, formals) = parse_define_function(&pattern).unwrap();
+        assert_eq!(name.as_ref(), "f");
+
+        // formals should be (x . rest) - mixed arity
+        let formals_result = convert_formals(&formals).unwrap();
+        if let Formals::Mixed { fixed, rest } = formals_result {
+            assert_eq!(fixed.len(), 1);
+            assert_eq!(fixed[0].name.as_ref(), "x");
+            assert_eq!(rest.name.as_ref(), "rest");
+        } else {
+            panic!("Expected Mixed formals, got {:?}", formals_result);
+        }
     }
 }

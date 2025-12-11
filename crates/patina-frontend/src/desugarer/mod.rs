@@ -1661,6 +1661,78 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_desugar_define_variadic() {
+        use std::cell::RefCell;
+        let desugarer = Desugarer::new();
+        // (define (f . args) args)
+        // This creates an improper list: (f . args)
+        let name_and_params = Value::Pair(Rc::new(RefCell::new((
+            Value::symbol("f"),
+            Value::symbol("args"), // Improper list - directly a symbol
+        ))));
+        let list = utils::vec_to_list(&[
+            Value::symbol("define"),
+            name_and_params,
+            Value::symbol("args"),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Define { name, value } = result {
+            assert_eq!(name.as_ref(), "f");
+            if let CoreExpr::Lambda { params, .. } = &*value {
+                assert!(
+                    matches!(params, patina_ir::Formals::Variadic(_)),
+                    "Expected variadic formals, got {:?}",
+                    params
+                );
+            } else {
+                panic!("Expected Lambda, got {:?}", value);
+            }
+        } else {
+            panic!("Expected Define, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_desugar_define_mixed_variadic() {
+        use std::cell::RefCell;
+        let desugarer = Desugarer::new();
+        // (define (f x y . rest) rest)
+        // This creates an improper list: (f x y . rest)
+        let inner = Value::Pair(Rc::new(RefCell::new((
+            Value::symbol("y"),
+            Value::symbol("rest"), // Improper tail
+        ))));
+        let middle = Value::Pair(Rc::new(RefCell::new((Value::symbol("x"), inner))));
+        let name_and_params = Value::Pair(Rc::new(RefCell::new((Value::symbol("f"), middle))));
+
+        let list = utils::vec_to_list(&[
+            Value::symbol("define"),
+            name_and_params,
+            Value::symbol("rest"),
+        ]);
+
+        let result = desugarer.desugar(&list).unwrap();
+        if let CoreExpr::Define { name, value } = result {
+            assert_eq!(name.as_ref(), "f");
+            if let CoreExpr::Lambda { params, .. } = &*value {
+                if let patina_ir::Formals::Mixed { fixed, rest } = params {
+                    assert_eq!(fixed.len(), 2);
+                    assert_eq!(fixed[0].name.as_ref(), "x");
+                    assert_eq!(fixed[1].name.as_ref(), "y");
+                    assert_eq!(rest.name.as_ref(), "rest");
+                } else {
+                    panic!("Expected mixed formals, got {:?}", params);
+                }
+            } else {
+                panic!("Expected Lambda, got {:?}", value);
+            }
+        } else {
+            panic!("Expected Define, got {:?}", result);
+        }
+    }
+
     // =========================================================================
     // Core Form: begin
     // =========================================================================

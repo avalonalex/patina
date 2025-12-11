@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-08 22:08:03
+**Generated:** 2025-12-11 11:16:43
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
@@ -102,9 +102,10 @@ with all R7RS-small features.
 
 ### Known Limitations
 
-- Exception handling (guard, raise, with-exception-handler) not yet implemented
-- Continuations (call/cc, dynamic-wind) not yet implemented
-- `(scheme load)` library not yet implemented
+- Exception handling (guard, raise) not yet implemented
+- Continuations (call/cc) not yet implemented
+- Some R7RS libraries not yet implemented: (scheme eval), (scheme r5rs), (scheme process-context)
+- See `PRD/phase1/EXCEPTION_HANDLING.md` for exception handling roadmap
 
 ### Next Steps
 

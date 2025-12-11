@@ -20,9 +20,8 @@ pub fn build_internal_control(_name: Vec<String>, env: Rc<Environment>) -> Vec<S
         ("procedure?", Arity::Exact(1)),
         // Application
         ("apply", Arity::Min(2)),
-        // Iteration (R7RS §6.10 lists these under control)
-        ("map", Arity::Min(2)),
-        ("for-each", Arity::Min(2)),
+        // Note: map and for-each are now implemented in Scheme (base/higher_order.scm)
+        // for CPS compatibility with call/cc
         // Multiple values
         ("values", Arity::Min(0)),
         ("call-with-values", Arity::Exact(2)),
