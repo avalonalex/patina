@@ -157,6 +157,14 @@ pub enum Value {
     Unspecified,
     Eof,
 
+    // ==========================================================================
+    // Exception Handling (R7RS Section 6.11)
+    // ==========================================================================
+    /// Exception object for R7RS exception handling
+    /// Created by `error` procedure or by converting internal errors
+    /// Used with `guard`, `raise`, `with-exception-handler`
+    Exception(Rc<ExceptionObject>),
+
     /// Placeholder for datum label references during parsing.
     /// This is a temporary value that only exists during `read`.
     /// After parsing, all placeholders are resolved to actual values.
@@ -166,7 +174,6 @@ pub enum Value {
     // =========================================================================
     // CPS Continuation Support
     // =========================================================================
-
     /// Continuation prompt tag for delimited continuations
     /// Created by `make-continuation-prompt-tag`
     /// Used to identify prompt boundaries for shift/reset
@@ -185,6 +192,44 @@ pub enum PromiseState {
     Delayed(Value),
     /// Evaluated - contains the cached result
     Forced(Value),
+}
+
+// =============================================================================
+// Exception Object (R7RS Section 6.11)
+// =============================================================================
+
+/// Exception object for R7RS exception handling
+///
+/// Created by the `error` procedure or by converting internal errors.
+/// Can be caught by `guard` or `with-exception-handler`.
+#[derive(Debug, Clone)]
+pub struct ExceptionObject {
+    /// The kind of exception (error, file-error, read-error, etc.)
+    pub kind: ExceptionKind,
+    /// The error message string
+    pub message: String,
+    /// Additional values related to the error ("irritants" in R7RS terminology)
+    pub irritants: Vec<Value>,
+}
+
+/// The kind of exception
+///
+/// R7RS defines specific predicates for different exception types:
+/// - `error-object?` - any error object created by `error`
+/// - `file-error?` - I/O errors related to files
+/// - `read-error?` - errors during parsing/reading
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExceptionKind {
+    /// Generic error created by `(error message irritant ...)`
+    Error,
+    /// File I/O error (maps from EvalError::IOError)
+    /// Satisfies `file-error?` predicate
+    FileError,
+    /// Read/parse error (maps from parse errors)
+    /// Satisfies `read-error?` predicate
+    ReadError,
+    /// User-defined exception kind
+    Custom(String),
 }
 
 // =============================================================================
@@ -234,8 +279,7 @@ pub struct CpsContinuation {
 }
 
 /// Global counter for generating unique dynamic-wind IDs
-static DYNAMIC_WIND_COUNTER: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static DYNAMIC_WIND_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// A record of a dynamic-wind that needs to be managed during continuation jumps
 #[derive(Debug, Clone)]
@@ -435,6 +479,7 @@ impl Value {
             Value::EnvironmentSpecifier { .. } => "environment",
             Value::Unspecified => "unspecified",
             Value::Eof => "eof-object",
+            Value::Exception(_) => "error-object",
             Value::LabelPlaceholder(_) => "label-placeholder",
             Value::ContinuationPromptTag(_) => "continuation-prompt-tag",
             Value::Continuation(_) => "continuation",
@@ -735,6 +780,9 @@ impl std::fmt::Display for Value {
             Value::EnvironmentSpecifier { .. } => write!(f, "#<environment>"),
             Value::Unspecified => write!(f, "#<unspecified>"),
             Value::Eof => write!(f, "#<eof>"),
+            Value::Exception(exc) => {
+                write!(f, "#<error-object: {}>", exc.message)
+            }
             Value::LabelPlaceholder(n) => write!(f, "#<label-placeholder:{}>", n),
             Value::ContinuationPromptTag(tag) => write!(f, "{}", tag),
             Value::Continuation(_) => write!(f, "#<continuation>"),

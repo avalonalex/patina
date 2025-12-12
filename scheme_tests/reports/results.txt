@@ -2440,93 +2440,82 @@ Running test suite: 6.11 Exceptions
 Testing: 
 (with-exception-handler (lambda (con) 42) (lambda () (+ (raise-continuable "should be a number") 23)))
 
-Error: Undefined variable: patina.internal.errors/with-exception-handler
 Testing: 
 (error-object? (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
 
-Error: Undefined variable: guard
 Testing: 
 (error-object-message (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
 
-Error: Undefined variable: guard
 Testing: 
 (error-object-irritants (guard (exn (else exn)) (error "BOOM!" 1 2 3)))
 
-Error: Undefined variable: guard
 Testing: 
 (file-error? (guard (exn (else exn)) (error "BOOM!")))
 
-Error: Undefined variable: guard
 Testing: 
 (file-error? (guard (exn (else exn)) (open-input-file " no such file ")))
 
-Error: Undefined variable: guard
 Testing: 
 (read-error? (guard (exn (else exn)) (error "BOOM!")))
 
-Error: Undefined variable: guard
 Testing: 
 (read-error? (guard (exn (else exn)) (read (open-input-string ")"))))
 
-Error: Undefined variable: guard
 Testing: 
 (read-error? (guard (exn (else exn)) (read (open-input-string """))))
 
-Error: Undefined variable: guard
 Testing: 
 (test-exception-handler-1 5)
 
-Error: Undefined variable: patina.internal.errors/with-exception-handler
 Testing: 
 something-went-wrong
 
 Testing: 
 (test-exception-handler-1 -1)
 
-Error: Undefined variable: patina.internal.errors/with-exception-handler
 Testing: 
 something-went-wrong
-
-FAIL: something-went-wrong
-  expected: ("condition: " an-error)
-  but got:  #f
 
 Testing: 
 (test-exception-handler-2 5)
 
-Error: Undefined variable: guard
 Testing: 
 something-went-wrong
 
 Testing: 
 (test-exception-handler-2 -1)
 
-Error: Undefined variable: guard
 Testing: 
 something-went-wrong
 
-FAIL: something-went-wrong
-  expected: #t
-  but got:  #f
+Testing: 
+(get-output-string out)
 
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: guard
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: patina.internal.errors/with-exception-handler
+Testing: 
+value
+
+Testing: 
+value
+
+Testing: 
+(get-output-string out)
+
+Testing: 
+(get-output-string out)
+
+Testing: 
+value
+
 Testing: 
 (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'a 42))))
 
-Error: Undefined variable: guard
 Testing: 
 (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'b 23))))
 
-Error: Undefined variable: guard
 Testing: 
 (guard (condition ((assq 'c condition) 'caught-c) ((assq 'd condition) 'caught-d)) (list (sqrt 8) (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'd 24))))))
 
-Error: Undefined variable: guard
-Tests run: 25, Passed: 2, Failed: 2, Errors: 21
+Tests run: 26, Passed: 26, Failed: 0
 
 Running test suite: 6.12 Environments and evaluation
 Testing: 
@@ -2595,11 +2584,9 @@ Testing:
 Testing: 
 (let ((in (open-input-string "abc"))) (close-input-port in) (guard (exn (else 'error)) (read-char in)))
 
-Error: Undefined variable: guard
 Testing: 
 (let ((out (open-output-string))) (close-output-port out) (guard (exn (else 'error)) (write-char #\c out)))
 
-Error: Undefined variable: guard
 Testing: 
 (eof-object? (eof-object))
 
@@ -2864,12 +2851,6 @@ Testing:
 Testing: 
 (read (open-input-string "(a . b #;c)"))
 
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
 Testing: 
 (read (open-input-string "#\a"))
 
@@ -3028,7 +3009,7 @@ Testing:
 Testing: 
 (get-output-string out)
 
-Tests run: 93, Passed: 87, Failed: 0, Errors: 6
+Tests run: 93, Passed: 93, Failed: 0
 
 Running test suite: Numeric syntax
 Testing: 
@@ -3669,8 +3650,7 @@ Testing:
 Testing: 
 (file-error? (guard (exn (else exn)) (delete-file " no such file ")))
 
-Error: Undefined variable: guard
-Tests run: 13, Passed: 12, Failed: 0, Errors: 1
+Tests run: 13, Passed: 13, Failed: 0
 
-Tests run: 13, Passed: 12, Failed: 0, Errors: 1
+Tests run: 13, Passed: 13, Failed: 0
 

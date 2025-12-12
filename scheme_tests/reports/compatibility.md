@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-11 20:44:53
+**Generated:** 2025-12-12 07:56:07
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1128 | 97.4% |
-| ❌ Failed | 2 | 0.2% |
-| ⚠️ Error (crashed) | 28 | 2.4% |
-| **Total** | **1158** | **100%** |
+| ✅ Passed | 1159 | 100.0% |
+| ❌ Failed | 0 | 0.0% |
+| ⚠️ Error (crashed) | 0 | 0.0% |
+| **Total** | **1159** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run (usually missing features like call/cc, guard).
 
@@ -32,57 +32,15 @@
 | ✅ | 6.8 Vectors | 43 | 43 | 0 | 0 |
 | ✅ | 6.9 Bytevectors | 39 | 39 | 0 | 0 |
 | ✅ | 6.10 Control Features | 34 | 34 | 0 | 0 |
-| ⚠️ | 6.11 Exceptions | 25 | 2 | 2 | 21 |
+| ✅ | 6.11 Exceptions | 26 | 26 | 0 | 0 |
 | ✅ | 6.12 Environments and evaluation | 5 | 5 | 0 | 0 |
-| ⚠️ | Read syntax | 93 | 87 | 0 | 6 |
+| ✅ | Read syntax | 93 | 93 | 0 | 0 |
 | ✅ | Numeric syntax | 220 | 220 | 0 | 0 |
-| ⚠️ | 6.14 System interface | 13 | 12 | 0 | 1 |
+| ✅ | 6.14 System interface | 13 | 13 | 0 | 0 |
 
 **Legend:** ✅ = All passing, ⚠️ = Partial, ❌ = None passing
 
 ## Failed Tests
-
-### Test Failures
-
-```
-FAIL: something-went-wrong
-FAIL: something-went-wrong
-```
-
-### Errors
-
-```
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: guard
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: patina.internal.errors/with-exception-handler
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-Error: Undefined variable: guard
-```
 
 
 ## Full Results

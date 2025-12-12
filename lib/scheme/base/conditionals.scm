@@ -64,6 +64,13 @@
            (proc temp)
            (cond clause ...))))
 
+    ;; Multiple clauses with bare test in first (returns test value if true)
+    ((cond (test) clause ...)
+     (let ((temp test))
+       (if temp
+           temp
+           (cond clause ...))))
+
     ;; Multiple clauses - standard case
     ((cond (test result1 result2 ...) clause ...)
      (if test

@@ -84,10 +84,8 @@ impl Evaluator {
                     use crate::eval::cps_eval::CpsEvaluator;
 
                     let cps_eval = CpsEvaluator::new(self);
-                    let result = cps_eval.apply_from_direct(
-                        Value::Procedure(proc_box.clone()),
-                        args,
-                    )?;
+                    let result =
+                        cps_eval.apply_from_direct(Value::Procedure(proc_box.clone()), args)?;
 
                     Ok(super::EvalResult::Value(result))
                 }

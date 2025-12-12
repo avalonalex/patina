@@ -9,7 +9,7 @@ mod primitives;
 
 // Re-export error type for public API
 pub use core_eval::eval_core;
-pub use cps_eval::{eval_cps, CpsEvaluator};
+pub use cps_eval::{CpsEvaluator, eval_cps};
 pub use error::EvalError;
 
 use debug::DebugConfig;
@@ -942,6 +942,9 @@ impl Evaluator {
 
             // Continuation types are runtime values - return as-is
             Value::ContinuationPromptTag(_) | Value::Continuation(_) => Ok(expr.clone()),
+
+            // Exception objects are runtime values - return as-is
+            Value::Exception(_) => Ok(expr.clone()),
         }
     }
 

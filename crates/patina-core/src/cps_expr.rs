@@ -266,10 +266,7 @@ pub enum CpsExpr {
     /// Evaluates a quasiquote template, processing unquote and unquote-splicing.
     /// The template is a Value that may contain unquote/unquote-splicing forms
     /// which need to be evaluated at runtime.
-    Quasiquote {
-        template: Rc<Value>,
-        cont: ContVar,
-    },
+    Quasiquote { template: Rc<Value>, cont: ContVar },
 
     // ==================== Primitives ====================
     /// Primitive operation (known at compile time)

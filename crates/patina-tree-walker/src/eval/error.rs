@@ -5,6 +5,15 @@
 use patina_frontend::FrontendError;
 use thiserror::Error;
 
+/// The kind of Scheme exception, matching ExceptionKind in patina-core
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemeExceptionKind {
+    Error,
+    FileError,
+    ReadError,
+    Custom(String),
+}
+
 #[derive(Error, Debug)]
 pub enum EvalError {
     #[error("Undefined variable: {0}")]
@@ -39,6 +48,17 @@ pub enum EvalError {
     /// (see cps_eval::PENDING_CONTINUATION_ESCAPE).
     #[error("Continuation escape")]
     ContinuationEscape,
+
+    /// A Scheme-level exception was raised (R7RS Section 6.11)
+    /// We store only the message and kind (not the full Value) to satisfy Send+Sync.
+    /// The irritants are serialized to a string for the error message.
+    /// This can be caught by `guard` or `with-exception-handler`.
+    #[error("Scheme exception ({kind:?}): {message}")]
+    SchemeException {
+        kind: SchemeExceptionKind,
+        message: String,
+        irritants_display: String, // Serialized display of irritants
+    },
 }
 
 // Convert FrontendError to EvalError

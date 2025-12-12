@@ -35,7 +35,8 @@ pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortDat
 pub use pvref::{MatchEnv, MatchValue, PVRef};
 pub use scope::{ScopeId, ScopeSet};
 pub use value::{
-    Arity, IdentifierData, LambdaBody, Procedure, PromiseState, RecordTypeDescriptor, Value,
+    Arity, ExceptionKind, ExceptionObject, IdentifierData, LambdaBody, Procedure, PromiseState,
+    RecordTypeDescriptor, Value,
 };
 
 #[cfg(test)]

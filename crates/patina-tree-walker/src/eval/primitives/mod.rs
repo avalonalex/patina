@@ -24,6 +24,7 @@ mod conversion;
 mod debug;
 pub(in crate::eval) mod equality;
 mod eval;
+mod exceptions;
 mod higher_order;
 mod io;
 mod lazy;
@@ -118,6 +119,7 @@ impl Evaluator {
         process_context::register(registry);
         records::register(registry);
         eval::register(registry);
+        exceptions::register(registry);
 
         // All core primitives are now in the registry!
     }

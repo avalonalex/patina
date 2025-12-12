@@ -118,12 +118,13 @@
     call-with-continuation-prompt abort-current-continuation
 
     ;; === Exceptions (§6.11) ===
-    ;; Note: These are currently stubs
     error
     error-object? error-object-message error-object-irritants
     file-error? read-error?
     raise raise-continuable
     with-exception-handler
+    ;; guard is a macro defined in base/exceptions.scm
+    guard
 
     ;; === Input and output (§6.13) ===
     ;; Ports
@@ -205,4 +206,5 @@
   (include "base/binding.scm")
   (include "base/iteration.scm")
   (include "base/records.scm")
-  (include "base/higher_order.scm"))
+  (include "base/higher_order.scm")
+  (include "base/exceptions.scm"))

@@ -53,7 +53,7 @@
 use super::error::EvalError;
 use patina_core::cps_expr::{CpsExpr, CpsParam, CpsPrimitive, PromptTag};
 use patina_core::value::{CpsContinuation, DynamicWindRecord, Procedure, Value};
-use patina_core::{Environment, ScopedParam, ScopeSet};
+use patina_core::{Environment, ScopeSet, ScopedParam};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -93,6 +93,16 @@ struct PromptFrame {
     dynamic_winds: Vec<DynamicWindRecord>,
 }
 
+/// An exception handler installed by with-exception-handler
+///
+/// Exception handlers form a stack (like dynamic-wind records).
+/// When raise is called, the topmost handler is invoked.
+#[derive(Debug, Clone)]
+struct ExceptionHandler {
+    /// The handler procedure (lambda (condition) ...)
+    handler: Value,
+}
+
 /// Continuation values used during CPS evaluation
 ///
 /// Continuations can be either:
@@ -101,6 +111,7 @@ struct PromptFrame {
 /// - The halt continuation (program end)
 /// - Special continuations for CPS-aware primitives
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 enum ContValue {
     /// A local continuation defined by LetCont
     Local {
@@ -112,7 +123,8 @@ enum ContValue {
         /// that were in scope when the let-cont was evaluated.
         cont_env: HashMap<Rc<str>, ContValue>,
     },
-    /// A captured first-class continuation
+    /// A captured first-class continuation (used when re-invoking serialized continuations)
+    #[allow(dead_code)]
     Captured(Rc<CpsContinuation>),
     /// The halt continuation - returns final value
     Halt,
@@ -160,6 +172,20 @@ enum ContValue {
         result_value: Value,
         original_cont: Box<ContValue>,
     },
+    /// Special continuation for with-exception-handler cleanup
+    /// When the thunk completes normally, pop the exception handler and continue
+    ExceptionHandlerCleanup { original_cont: Box<ContValue> },
+    /// Special continuation for raise when handler returns
+    /// For non-continuable raise: if handler returns, raise secondary exception
+    /// For continuable raise: handler's return value continues from raise-continuable
+    RaiseHandlerReturn {
+        /// Whether this was a continuable raise
+        continuable: bool,
+        /// For non-continuable: the original exception (to include in secondary error)
+        original_exception: Option<Value>,
+        /// For continuable: the continuation to continue with
+        original_cont: Box<ContValue>,
+    },
 }
 
 /// Result of a single evaluation step (for trampoline)
@@ -177,6 +203,7 @@ enum StepResult {
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
     },
     /// Invoke a continuation with a value
     InvokeContinuation {
@@ -186,6 +213,7 @@ enum StepResult {
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
     },
     /// Apply a procedure
     ApplyProc {
@@ -196,6 +224,7 @@ enum StepResult {
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
     },
 }
 
@@ -227,6 +256,7 @@ impl<'a> CpsEvaluator<'a> {
         let cont_env = HashMap::new();
         let prompt_stack = Vec::new();
         let dynamic_winds = Vec::new();
+        let exception_handlers = Vec::new();
 
         // Start with ApplyProc step with Halt continuation
         let mut current_step = self.apply_cps_step(
@@ -237,6 +267,7 @@ impl<'a> CpsEvaluator<'a> {
             cont_env,
             prompt_stack,
             dynamic_winds,
+            exception_handlers,
         )?;
 
         // Run trampoline until done
@@ -252,6 +283,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
+                    exception_handlers,
                 } => {
                     current_step = self.eval_one_step(
                         &expr,
@@ -259,6 +291,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds,
+                        exception_handlers,
                     )?;
                 }
 
@@ -269,6 +302,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
+                    exception_handlers,
                 } => {
                     current_step = self.invoke_continuation_step(
                         cont,
@@ -277,6 +311,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds,
+                        exception_handlers,
                     )?;
                 }
 
@@ -288,6 +323,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
+                    exception_handlers,
                 } => {
                     current_step = self.apply_cps_step(
                         proc,
@@ -297,6 +333,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds,
+                        exception_handlers,
                     )?;
                 }
             }
@@ -316,6 +353,7 @@ impl<'a> CpsEvaluator<'a> {
         let cont_env = HashMap::new();
         let prompt_stack = Vec::new();
         let dynamic_winds = Vec::new();
+        let exception_handlers = Vec::new();
 
         // Debug: show the CPS expression
         let debug = std::env::var("CPS_DEBUG").is_ok();
@@ -330,6 +368,7 @@ impl<'a> CpsEvaluator<'a> {
             cont_env,
             prompt_stack,
             dynamic_winds,
+            exception_handlers,
         ) {
             Ok(step) => step,
             Err(e) => {
@@ -346,7 +385,11 @@ impl<'a> CpsEvaluator<'a> {
         loop {
             step_count += 1;
             if debug && step_count <= 30 {
-                eprintln!("[CPS] Step {}: {:?}", step_count, std::mem::discriminant(&current_step));
+                eprintln!(
+                    "[CPS] Step {}: {:?}",
+                    step_count,
+                    std::mem::discriminant(&current_step)
+                );
             }
             // Process step, catching ContinuationEscape to handle escaped continuations
             let step_result = match current_step {
@@ -363,9 +406,15 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
-                } => {
-                    self.eval_one_step(&expr, env, cont_env, prompt_stack, dynamic_winds)
-                }
+                    exception_handlers,
+                } => self.eval_one_step(
+                    &expr,
+                    env,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                ),
 
                 StepResult::InvokeContinuation {
                     cont,
@@ -374,9 +423,16 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
-                } => {
-                    self.invoke_continuation_step(cont, value, env, cont_env, prompt_stack, dynamic_winds)
-                }
+                    exception_handlers,
+                } => self.invoke_continuation_step(
+                    cont,
+                    value,
+                    env,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                ),
 
                 StepResult::ApplyProc {
                     proc,
@@ -386,9 +442,17 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
-                } => {
-                    self.apply_cps_step(proc, args, cont, env, cont_env, prompt_stack, dynamic_winds)
-                }
+                    exception_handlers,
+                } => self.apply_cps_step(
+                    proc,
+                    args,
+                    cont,
+                    env,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                ),
             };
 
             // Handle result, catching ContinuationEscape
@@ -413,7 +477,8 @@ impl<'a> CpsEvaluator<'a> {
                         if is_dw_cleanup {
                             // Reconstruct the DynamicWindCleanup continuation
                             let new_cont = self.restore_dynamic_wind_cleanup(&k)?;
-                            let restored_cont_env = self.restore_cont_bindings(&k.captured_cont_bindings);
+                            let restored_cont_env =
+                                self.restore_cont_bindings(&k.captured_cont_bindings);
                             current_step = self.invoke_continuation_step(
                                 new_cont,
                                 value,
@@ -421,10 +486,12 @@ impl<'a> CpsEvaluator<'a> {
                                 restored_cont_env,
                                 Vec::new(),
                                 k.dynamic_winds.clone(),
+                                Vec::new(),
                             )?;
                         } else {
                             // Normal continuation - resume with the escaped continuation
-                            let restored_cont_env = self.restore_cont_bindings(&k.captured_cont_bindings);
+                            let restored_cont_env =
+                                self.restore_cont_bindings(&k.captured_cont_bindings);
                             let new_cont = ContValue::Local {
                                 param: k.param.clone(),
                                 body: k.body.clone(),
@@ -438,11 +505,12 @@ impl<'a> CpsEvaluator<'a> {
                                 restored_cont_env,
                                 Vec::new(),
                                 k.dynamic_winds.clone(),
+                                Vec::new(),
                             )?;
                         }
                     } else {
                         return Err(EvalError::InternalError(
-                            "ContinuationEscape without pending data".to_string()
+                            "ContinuationEscape without pending data".to_string(),
                         ));
                     }
                 }
@@ -463,6 +531,7 @@ impl<'a> CpsEvaluator<'a> {
         mut cont_env: HashMap<Rc<str>, ContValue>,
         mut prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
         // Process LetVal/LetCont/If/Set/Define/Prompt in a local loop
         // since they just update state and continue with a new expression
@@ -481,7 +550,6 @@ impl<'a> CpsEvaluator<'a> {
             match &current_expr {
                 // ==================== Trivial Expressions ====================
                 // These evaluate immediately and return Done
-
                 CpsExpr::Literal(v) => {
                     return Ok(StepResult::Done(v.as_ref().clone()));
                 }
@@ -495,7 +563,11 @@ impl<'a> CpsEvaluator<'a> {
                     let cont = cont_env
                         .get(k)
                         .ok_or_else(|| EvalError::UndefinedVariable(k.to_string()))?;
-                    return Ok(StepResult::Done(self.reify_continuation(cont, &cont_env, &current_winds)));
+                    return Ok(StepResult::Done(self.reify_continuation(
+                        cont,
+                        &cont_env,
+                        &current_winds,
+                    )));
                 }
 
                 CpsExpr::Lambda {
@@ -518,7 +590,6 @@ impl<'a> CpsEvaluator<'a> {
 
                 // ==================== Expressions that update state and continue ====================
                 // These are handled in the inner loop
-
                 CpsExpr::LetVal { name, value, body } => {
                     let val = self.eval_trivial(value, &current_env, &cont_env)?;
                     let new_env = Rc::new(Environment::with_parent(current_env.clone()));
@@ -668,7 +739,6 @@ impl<'a> CpsEvaluator<'a> {
 
                 // ==================== Expressions that return StepResult ====================
                 // These require trampolining to avoid stack growth
-
                 CpsExpr::App { func, args, cont } => {
                     let proc = self.eval_trivial(func, &current_env, &cont_env)?;
                     let arg_values: Result<Vec<Value>, _> = args
@@ -690,6 +760,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds: current_winds,
+                        exception_handlers,
                     });
                 }
 
@@ -735,6 +806,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds: current_winds,
+                        exception_handlers,
                     });
                 }
 
@@ -752,6 +824,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds: current_winds,
+                        exception_handlers,
                     });
                 }
 
@@ -773,6 +846,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds: current_winds,
+                        exception_handlers,
                     });
                 }
 
@@ -806,6 +880,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds: prompt_frame.dynamic_winds,
+                        exception_handlers,
                     });
                 }
 
@@ -831,6 +906,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds: prompt_frame.dynamic_winds,
+                        exception_handlers,
                     });
                 }
 
@@ -855,6 +931,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds: current_winds,
+                        exception_handlers,
                     });
                 }
 
@@ -879,6 +956,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds: current_winds,
+                        exception_handlers,
                     });
                 }
 
@@ -918,7 +996,14 @@ impl<'a> CpsEvaluator<'a> {
                 cont_param,
                 body,
                 binding_scope,
-            } => Ok(self.make_cps_closure(params, variadic.as_ref(), cont_param, body, env, *binding_scope)),
+            } => Ok(self.make_cps_closure(
+                params,
+                variadic.as_ref(),
+                cont_param,
+                body,
+                env,
+                *binding_scope,
+            )),
 
             _ => Err(EvalError::InternalError(format!(
                 "Non-trivial expression in trivial position: {}",
@@ -1012,9 +1097,15 @@ impl<'a> CpsEvaluator<'a> {
             .iter()
             .filter_map(|(name, cont_val)| {
                 match cont_val {
-                    ContValue::Local { param, body, env, cont_env: nested_cont_env } => {
+                    ContValue::Local {
+                        param,
+                        body,
+                        env,
+                        cont_env: nested_cont_env,
+                    } => {
                         // Recursively capture nested cont_env
-                        let nested_bindings = Self::capture_cont_bindings(nested_cont_env, dynamic_winds);
+                        let nested_bindings =
+                            Self::capture_cont_bindings(nested_cont_env, dynamic_winds);
                         Some((
                             name.clone(),
                             Rc::new(CpsContinuation {
@@ -1031,11 +1122,21 @@ impl<'a> CpsEvaluator<'a> {
                     ContValue::Halt => None, // Halt doesn't need to be captured
 
                     // DynamicWindCleanup needs special handling - serialize to CpsContinuation
-                    ContValue::DynamicWindCleanup { after, wind_id, original_cont } => {
+                    ContValue::DynamicWindCleanup {
+                        after,
+                        wind_id,
+                        original_cont,
+                    } => {
                         // Recursively capture the original continuation
                         let orig_bindings = match original_cont.as_ref() {
-                            ContValue::Local { param, body, env, cont_env: nested_cont_env } => {
-                                let nested = Self::capture_cont_bindings(nested_cont_env, dynamic_winds);
+                            ContValue::Local {
+                                param,
+                                body,
+                                env,
+                                cont_env: nested_cont_env,
+                            } => {
+                                let nested =
+                                    Self::capture_cont_bindings(nested_cont_env, dynamic_winds);
                                 vec![(
                                     Rc::from("__dw_original__") as Rc<str>,
                                     Rc::new(CpsContinuation {
@@ -1051,9 +1152,16 @@ impl<'a> CpsEvaluator<'a> {
                             ContValue::DynamicWindCleanup { .. } => {
                                 // Nested DynamicWindCleanup - recursively capture
                                 if let Some((_, k)) = Self::capture_cont_bindings(
-                                    &std::iter::once((Rc::from("__inner__") as Rc<str>, original_cont.as_ref().clone())).collect(),
-                                    dynamic_winds
-                                ).into_iter().next() {
+                                    &std::iter::once((
+                                        Rc::from("__inner__") as Rc<str>,
+                                        original_cont.as_ref().clone(),
+                                    ))
+                                    .collect(),
+                                    dynamic_winds,
+                                )
+                                .into_iter()
+                                .next()
+                                {
                                     vec![(Rc::from("__dw_original__"), k)]
                                 } else {
                                     vec![]
@@ -1079,7 +1187,9 @@ impl<'a> CpsEvaluator<'a> {
                         bindings.push((
                             Rc::from("__dw_wind_id__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(Rc::new(Value::Integer(*wind_id as i64)))),
+                                body: Rc::new(CpsExpr::Literal(Rc::new(Value::Integer(
+                                    *wind_id as i64,
+                                )))),
                                 param: Rc::from("__unused__"),
                                 env: Rc::new(Environment::new()),
                                 prompt_tag: None,
@@ -1109,7 +1219,9 @@ impl<'a> CpsEvaluator<'a> {
                     | ContValue::ForceCache { .. }
                     | ContValue::ParameterizeCleanup { .. }
                     | ContValue::DynamicWindSetup { .. }
-                    | ContValue::DynamicWindAfterDone { .. } => None,
+                    | ContValue::DynamicWindAfterDone { .. }
+                    | ContValue::ExceptionHandlerCleanup { .. }
+                    | ContValue::RaiseHandlerReturn { .. } => None,
                 }
             })
             .collect()
@@ -1167,10 +1279,7 @@ impl<'a> CpsEvaluator<'a> {
     /// When call/cc captures a continuation that was a DynamicWindCleanup,
     /// we serialize its state into special bindings. This function reconstructs
     /// the original DynamicWindCleanup ContValue.
-    fn restore_dynamic_wind_cleanup(
-        &self,
-        k: &CpsContinuation,
-    ) -> Result<ContValue, EvalError> {
+    fn restore_dynamic_wind_cleanup(&self, k: &CpsContinuation) -> Result<ContValue, EvalError> {
         // Extract the after thunk
         let after = k
             .captured_cont_bindings
@@ -1257,7 +1366,12 @@ impl<'a> CpsEvaluator<'a> {
         dynamic_winds: &[DynamicWindRecord],
     ) -> Value {
         match cont {
-            ContValue::Local { param, body, env, cont_env: local_cont_env } => {
+            ContValue::Local {
+                param,
+                body,
+                env,
+                cont_env: local_cont_env,
+            } => {
                 // Capture the continuation environment so it can be restored when invoked
                 let captured_bindings = Self::capture_cont_bindings(local_cont_env, dynamic_winds);
                 Value::Continuation(Rc::new(CpsContinuation {
@@ -1291,7 +1405,8 @@ impl<'a> CpsEvaluator<'a> {
                 original_cont,
             } => {
                 // Recursively reify the original continuation
-                let reified_original = self.reify_continuation(original_cont, cont_env, dynamic_winds);
+                let reified_original =
+                    self.reify_continuation(original_cont, cont_env, dynamic_winds);
 
                 // Create a CpsContinuation that will recreate the DynamicWindCleanup state
                 // when invoked. We store the after thunk, wind_id, and original continuation
@@ -1325,7 +1440,9 @@ impl<'a> CpsEvaluator<'a> {
                         bindings.push((
                             Rc::from("__dw_wind_id__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(Rc::new(Value::Integer(*wind_id as i64)))),
+                                body: Rc::new(CpsExpr::Literal(Rc::new(Value::Integer(
+                                    *wind_id as i64,
+                                )))),
                                 param: Rc::from("__unused__"),
                                 env: self.evaluator.global_env.clone(),
                                 prompt_tag: None,
@@ -1347,7 +1464,9 @@ impl<'a> CpsEvaluator<'a> {
             | ContValue::ForceCache { .. }
             | ContValue::ParameterizeCleanup { .. }
             | ContValue::DynamicWindSetup { .. }
-            | ContValue::DynamicWindAfterDone { .. } => {
+            | ContValue::DynamicWindAfterDone { .. }
+            | ContValue::ExceptionHandlerCleanup { .. }
+            | ContValue::RaiseHandlerReturn { .. } => {
                 // For now, these return a placeholder. They could be enhanced similarly.
                 // TODO: Implement proper capture for these special continuations
                 Value::Continuation(Rc::new(CpsContinuation {
@@ -1375,6 +1494,7 @@ impl<'a> CpsEvaluator<'a> {
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
         match proc {
             Value::Procedure(p) => match p.as_ref() {
@@ -1470,6 +1590,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env: new_cont_env,
                         prompt_stack,
                         dynamic_winds,
+                        exception_handlers,
                     })
                 }
 
@@ -1485,6 +1606,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds,
+                        exception_handlers,
                     })
                 }
 
@@ -1521,6 +1643,7 @@ impl<'a> CpsEvaluator<'a> {
                                 cont_env,
                                 prompt_stack,
                                 dynamic_winds,
+                                exception_handlers,
                             })
                         }
 
@@ -1539,6 +1662,7 @@ impl<'a> CpsEvaluator<'a> {
                                 cont_env,
                                 prompt_stack,
                                 dynamic_winds,
+                                exception_handlers,
                             )
                         }
 
@@ -1595,7 +1719,227 @@ impl<'a> CpsEvaluator<'a> {
                                 cont_env,
                                 prompt_stack,
                                 dynamic_winds,
+                                exception_handlers,
                             })
+                        }
+
+                        "with-exception-handler" => {
+                            // (with-exception-handler handler thunk)
+                            // Installs handler for duration of thunk's dynamic extent
+                            if args.len() != 2 {
+                                return Err(EvalError::WrongArity {
+                                    expected: "2".to_string(),
+                                    actual: args.len(),
+                                });
+                            }
+                            let handler = args[0].clone();
+                            let thunk = args[1].clone();
+
+                            // Verify both are procedures
+                            if !matches!(handler, Value::Procedure(_) | Value::Continuation(_)) {
+                                return Err(EvalError::TypeError(
+                                    "with-exception-handler: first argument must be a procedure"
+                                        .to_string(),
+                                ));
+                            }
+                            if !matches!(thunk, Value::Procedure(_) | Value::Continuation(_)) {
+                                return Err(EvalError::TypeError(
+                                    "with-exception-handler: second argument must be a procedure"
+                                        .to_string(),
+                                ));
+                            }
+
+                            // Create cleanup continuation that pops the handler when thunk completes
+                            let cleanup_cont = ContValue::ExceptionHandlerCleanup {
+                                original_cont: Box::new(cont),
+                            };
+
+                            // Push the exception handler onto the stack
+                            let new_handler = ExceptionHandler { handler };
+                            let mut new_exception_handlers = exception_handlers;
+                            new_exception_handlers.push(new_handler);
+
+                            // Call the thunk with cleanup continuation
+                            Ok(StepResult::ApplyProc {
+                                proc: thunk,
+                                args: vec![],
+                                cont: cleanup_cont,
+                                env: self.evaluator.global_env.clone(),
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                                exception_handlers: new_exception_handlers,
+                            })
+                        }
+
+                        "raise" => {
+                            // (raise obj) - Raise non-continuable exception
+                            // If handler returns, raises secondary exception
+                            if args.len() != 1 {
+                                return Err(EvalError::WrongArity {
+                                    expected: "1".to_string(),
+                                    actual: args.len(),
+                                });
+                            }
+                            let exception = args.into_iter().next().unwrap();
+
+                            if let Some(handler_entry) = exception_handlers.last().cloned() {
+                                // Pop this handler (one-shot semantics)
+                                let mut new_handlers = exception_handlers;
+                                new_handlers.pop();
+
+                                // Create continuation for when handler returns
+                                // For non-continuable raise, returning is an error
+                                let handler_return_cont = ContValue::RaiseHandlerReturn {
+                                    continuable: false,
+                                    original_exception: Some(exception.clone()),
+                                    original_cont: Box::new(cont),
+                                };
+
+                                // Call handler with exception
+                                Ok(StepResult::ApplyProc {
+                                    proc: handler_entry.handler,
+                                    args: vec![exception],
+                                    cont: handler_return_cont,
+                                    env: self.evaluator.global_env.clone(),
+                                    cont_env,
+                                    prompt_stack,
+                                    dynamic_winds,
+                                    exception_handlers: new_handlers,
+                                })
+                            } else {
+                                // No handler - propagate to Rust level
+                                use super::error::SchemeExceptionKind;
+                                Err(EvalError::SchemeException {
+                                    kind: SchemeExceptionKind::Error,
+                                    message: format!("unhandled exception: {}", exception),
+                                    irritants_display: String::new(),
+                                })
+                            }
+                        }
+
+                        "raise-continuable" => {
+                            // (raise-continuable obj) - Raise continuable exception
+                            // Handler's return value becomes result of raise-continuable
+                            if args.len() != 1 {
+                                return Err(EvalError::WrongArity {
+                                    expected: "1".to_string(),
+                                    actual: args.len(),
+                                });
+                            }
+                            let exception = args.into_iter().next().unwrap();
+
+                            if let Some(handler_entry) = exception_handlers.last().cloned() {
+                                // Pop this handler (one-shot semantics)
+                                let mut new_handlers = exception_handlers;
+                                new_handlers.pop();
+
+                                // Create continuation for when handler returns
+                                // For continuable raise, handler's return value continues
+                                let handler_return_cont = ContValue::RaiseHandlerReturn {
+                                    continuable: true,
+                                    original_exception: None,
+                                    original_cont: Box::new(cont),
+                                };
+
+                                // Call handler with exception
+                                Ok(StepResult::ApplyProc {
+                                    proc: handler_entry.handler,
+                                    args: vec![exception],
+                                    cont: handler_return_cont,
+                                    env: self.evaluator.global_env.clone(),
+                                    cont_env,
+                                    prompt_stack,
+                                    dynamic_winds,
+                                    exception_handlers: new_handlers,
+                                })
+                            } else {
+                                // No handler - propagate to Rust level
+                                use super::error::SchemeExceptionKind;
+                                Err(EvalError::SchemeException {
+                                    kind: SchemeExceptionKind::Error,
+                                    message: format!(
+                                        "unhandled continuable exception: {}",
+                                        exception
+                                    ),
+                                    irritants_display: String::new(),
+                                })
+                            }
+                        }
+
+                        "error" => {
+                            // (error message obj ...) - Create error object and raise it
+                            // This is CPS-aware so it goes through the exception handler stack
+                            if args.is_empty() {
+                                return Err(EvalError::WrongArity {
+                                    expected: "at least 1".to_string(),
+                                    actual: args.len(),
+                                });
+                            }
+
+                            // First argument must be a string (the message)
+                            let message = match &args[0] {
+                                Value::String(s) => s.borrow().clone(),
+                                _ => {
+                                    return Err(EvalError::TypeError(
+                                        "error: first argument must be a string".to_string(),
+                                    ));
+                                }
+                            };
+
+                            // Remaining arguments are irritants
+                            let irritants: Vec<Value> = args[1..].to_vec();
+
+                            // Create exception object
+                            let exception = Value::Exception(Rc::new(
+                                patina_core::ExceptionObject {
+                                    kind: patina_core::ExceptionKind::Error,
+                                    message,
+                                    irritants,
+                                },
+                            ));
+
+                            // Now do the same as raise (non-continuable)
+                            if let Some(handler_entry) = exception_handlers.last().cloned() {
+                                // Pop this handler (one-shot semantics)
+                                let mut new_handlers = exception_handlers;
+                                new_handlers.pop();
+
+                                // Create continuation for when handler returns
+                                let handler_return_cont = ContValue::RaiseHandlerReturn {
+                                    continuable: false,
+                                    original_exception: Some(exception.clone()),
+                                    original_cont: Box::new(cont),
+                                };
+
+                                // Call handler with exception
+                                Ok(StepResult::ApplyProc {
+                                    proc: handler_entry.handler,
+                                    args: vec![exception],
+                                    cont: handler_return_cont,
+                                    env: self.evaluator.global_env.clone(),
+                                    cont_env,
+                                    prompt_stack,
+                                    dynamic_winds,
+                                    exception_handlers: new_handlers,
+                                })
+                            } else {
+                                // No handler - propagate to Rust level
+                                use super::error::SchemeExceptionKind;
+                                let irritants_display = args[1..]
+                                    .iter()
+                                    .map(|v| format!("{}", v))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                Err(EvalError::SchemeException {
+                                    kind: SchemeExceptionKind::Error,
+                                    message: match &args[0] {
+                                        Value::String(s) => s.borrow().clone(),
+                                        _ => "error".to_string(),
+                                    },
+                                    irritants_display,
+                                })
+                            }
                         }
 
                         "apply" => {
@@ -1646,6 +1990,7 @@ impl<'a> CpsEvaluator<'a> {
                                 cont_env,
                                 prompt_stack,
                                 dynamic_winds,
+                                exception_handlers,
                             })
                         }
 
@@ -1653,27 +1998,47 @@ impl<'a> CpsEvaluator<'a> {
                             // For other primitives, delegate to direct evaluator
                             // Higher-order primitives like map/for-each should be implemented
                             // in Scheme (lib/scheme/base/) for proper CPS compatibility.
-                            let result =
+                            //
+                            // IMPORTANT: Wrap primitive calls to catch I/O and read errors
+                            // and route them through the CPS exception handler stack.
+                            let prim_result =
                                 self.evaluator
-                                    .apply(Value::Procedure(p.clone()), args, false)?;
-                            let result = match result {
-                                super::EvalResult::Value(v) => v,
-                                _ => {
-                                    return Err(EvalError::InternalError(
-                                        "Primitive returned tail call".to_string(),
-                                    ))
-                                }
-                            };
+                                    .apply(Value::Procedure(p.clone()), args, false);
 
-                            // Return InvokeContinuation step instead of recursive call
-                            Ok(StepResult::InvokeContinuation {
-                                cont,
-                                value: result,
-                                env: self.evaluator.global_env.clone(),
-                                cont_env,
-                                prompt_stack,
-                                dynamic_winds,
-                            })
+                            match prim_result {
+                                Ok(eval_result) => {
+                                    let result = match eval_result {
+                                        super::EvalResult::Value(v) => v,
+                                        _ => {
+                                            return Err(EvalError::InternalError(
+                                                "Primitive returned tail call".to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    // Return InvokeContinuation step instead of recursive call
+                                    Ok(StepResult::InvokeContinuation {
+                                        cont,
+                                        value: result,
+                                        env: self.evaluator.global_env.clone(),
+                                        cont_env,
+                                        prompt_stack,
+                                        dynamic_winds,
+                                        exception_handlers,
+                                    })
+                                }
+                                Err(err) => {
+                                    // Check if this error should be routed through CPS handlers
+                                    self.maybe_route_error_through_cps(
+                                        err,
+                                        cont,
+                                        cont_env,
+                                        prompt_stack,
+                                        dynamic_winds,
+                                        exception_handlers,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1756,6 +2121,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
+                    exception_handlers,
                 })
             }
 
@@ -1774,20 +2140,100 @@ impl<'a> CpsEvaluator<'a> {
                 // Need to trampoline
                 self.evaluator.eval_in_env(&expr, &env)
             }
-            super::EvalResult::TailCallPrimitive { proc, args } => {
-                self.evaluator.apply(proc, args, false).and_then(|r| {
-                    match r {
-                        super::EvalResult::Value(v) => Ok(v),
-                        _ => Err(EvalError::InternalError(
-                            "Unexpected tail call from primitive".to_string(),
-                        )),
-                    }
-                })
+            super::EvalResult::TailCallPrimitive { proc, args } => self
+                .evaluator
+                .apply(proc, args, false)
+                .and_then(|r| match r {
+                    super::EvalResult::Value(v) => Ok(v),
+                    _ => Err(EvalError::InternalError(
+                        "Unexpected tail call from primitive".to_string(),
+                    )),
+                }),
+        }
+    }
+
+    /// Convert certain errors (IOError, InvalidSyntax) to CPS-routed exceptions
+    ///
+    /// If there are exception handlers installed, convert the error to a Scheme
+    /// exception value and route it through the handler stack. Otherwise,
+    /// propagate the error as a Rust Err.
+    fn maybe_route_error_through_cps(
+        &self,
+        err: EvalError,
+        cont: ContValue,
+        cont_env: HashMap<Rc<str>, ContValue>,
+        prompt_stack: Vec<PromptFrame>,
+        dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
+    ) -> Result<StepResult, EvalError> {
+        // Determine if this error should be converted to a CPS exception
+        let (exception_kind, message) = match &err {
+            EvalError::IOError(msg) => {
+                // Check if it's a file error (contains "Cannot open", "Cannot delete", etc.)
+                let kind = if msg.contains("Cannot open")
+                    || msg.contains("Cannot delete")
+                    || msg.contains("Cannot read")
+                    || msg.contains("Cannot write")
+                    || msg.contains("No such file")
+                {
+                    patina_core::ExceptionKind::FileError
+                } else {
+                    patina_core::ExceptionKind::Error
+                };
+                (kind, msg.clone())
             }
+            EvalError::InvalidSyntax(msg) => {
+                // Read errors typically contain "read:" in the message
+                let kind = if msg.contains("read:") {
+                    patina_core::ExceptionKind::ReadError
+                } else {
+                    patina_core::ExceptionKind::Error
+                };
+                (kind, msg.clone())
+            }
+            // Other errors: propagate as-is
+            _ => return Err(err),
+        };
+
+        // If there are exception handlers, route through them
+        if let Some(handler_entry) = exception_handlers.last().cloned() {
+            // Create exception object
+            let exception = Value::Exception(Rc::new(patina_core::ExceptionObject {
+                kind: exception_kind,
+                message,
+                irritants: vec![],
+            }));
+
+            // Pop the handler (it's been invoked)
+            let new_handlers = exception_handlers[..exception_handlers.len() - 1].to_vec();
+
+            // Create continuation for when handler returns
+            // Since these are system errors, treat as non-continuable
+            let raise_return_cont = ContValue::RaiseHandlerReturn {
+                continuable: false,
+                original_exception: Some(exception.clone()),
+                original_cont: Box::new(cont),
+            };
+
+            // Call the handler with the exception
+            Ok(StepResult::ApplyProc {
+                proc: handler_entry.handler,
+                args: vec![exception],
+                cont: raise_return_cont,
+                env: self.evaluator.global_env.clone(),
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers: new_handlers,
+            })
+        } else {
+            // No handlers - propagate the error as-is
+            Err(err)
         }
     }
 
     /// Invoke a continuation with a value (returns StepResult for trampolining)
+    #[allow(clippy::too_many_arguments)]
     fn invoke_continuation_step(
         &self,
         cont: ContValue,
@@ -1796,9 +2242,15 @@ impl<'a> CpsEvaluator<'a> {
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
         match cont {
-            ContValue::Local { param, body, env: captured_env, cont_env: captured_cont_env } => {
+            ContValue::Local {
+                param,
+                body,
+                env: captured_env,
+                cont_env: captured_cont_env,
+            } => {
                 // Bind the value to the parameter in the captured value environment
                 // NOTE: CPS continuations are administrative - they don't create new scopes
                 // like Scheme lambdas do. We define in the captured environment directly.
@@ -1816,6 +2268,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env: captured_cont_env,
                     prompt_stack,
                     dynamic_winds,
+                    exception_handlers,
                 })
             }
 
@@ -1835,6 +2288,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds: k.dynamic_winds.clone(),
+                    exception_handlers,
                 })
             }
 
@@ -1843,7 +2297,10 @@ impl<'a> CpsEvaluator<'a> {
                 Ok(StepResult::Done(value))
             }
 
-            ContValue::CallWithValuesConsumer { consumer, original_cont } => {
+            ContValue::CallWithValuesConsumer {
+                consumer,
+                original_cont,
+            } => {
                 // Producer has returned a value - unpack multiple values and call consumer
                 let consumer_args = match value {
                     Value::Values(vals) => vals,
@@ -1859,10 +2316,14 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
+                    exception_handlers,
                 })
             }
 
-            ContValue::ForceCache { promise, original_cont } => {
+            ContValue::ForceCache {
+                promise,
+                original_cont,
+            } => {
                 // Thunk has returned a value
                 // Check if result is a promise (delay-force pattern) - need to force recursively
                 if let Value::Promise(_) = &value {
@@ -1878,6 +2339,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds,
+                        exception_handlers,
                     );
                 }
 
@@ -1895,6 +2357,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
+                    exception_handlers,
                 })
             }
 
@@ -1917,6 +2380,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
+                    exception_handlers,
                 })
             }
 
@@ -1941,6 +2405,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds: new_winds,
+                    exception_handlers,
                 })
             }
 
@@ -1973,6 +2438,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds: new_winds,
+                    exception_handlers,
                 })
             }
 
@@ -1989,7 +2455,93 @@ impl<'a> CpsEvaluator<'a> {
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
+                    exception_handlers,
                 })
+            }
+
+            ContValue::ExceptionHandlerCleanup { original_cont } => {
+                // Thunk completed normally - pop the exception handler and continue
+                // Note: The handler was already pushed when we installed this continuation,
+                // so it should already be popped from exception_handlers when the thunk ran.
+                // Just continue with the value.
+                let mut new_handlers = exception_handlers;
+                new_handlers.pop(); // Pop the handler that was installed
+
+                Ok(StepResult::InvokeContinuation {
+                    cont: *original_cont,
+                    value,
+                    env: self.evaluator.global_env.clone(),
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers: new_handlers,
+                })
+            }
+
+            ContValue::RaiseHandlerReturn {
+                continuable,
+                original_exception,
+                original_cont,
+            } => {
+                if continuable {
+                    // Handler returned from raise-continuable
+                    // Use handler's return value as result
+                    Ok(StepResult::InvokeContinuation {
+                        cont: *original_cont,
+                        value,
+                        env: self.evaluator.global_env.clone(),
+                        cont_env,
+                        prompt_stack,
+                        dynamic_winds,
+                        exception_handlers,
+                    })
+                } else {
+                    // Handler returned from non-continuable raise
+                    // This is an error - raise secondary exception through CPS
+                    let secondary_exception = Value::Exception(Rc::new(
+                        patina_core::ExceptionObject {
+                            kind: patina_core::ExceptionKind::Error,
+                            message: "exception handler returned from non-continuable exception"
+                                .to_string(),
+                            irritants: original_exception.into_iter().collect(),
+                        },
+                    ));
+
+                    // Try to raise through the exception handler stack
+                    if let Some(handler_entry) = exception_handlers.last().cloned() {
+                        // Pop this handler (one-shot semantics)
+                        let mut new_handlers = exception_handlers;
+                        new_handlers.pop();
+
+                        // Create continuation for when handler returns (recursively)
+                        let handler_return_cont = ContValue::RaiseHandlerReturn {
+                            continuable: false,
+                            original_exception: Some(secondary_exception.clone()),
+                            original_cont,
+                        };
+
+                        // Call handler with secondary exception
+                        Ok(StepResult::ApplyProc {
+                            proc: handler_entry.handler,
+                            args: vec![secondary_exception],
+                            cont: handler_return_cont,
+                            env: self.evaluator.global_env.clone(),
+                            cont_env,
+                            prompt_stack,
+                            dynamic_winds,
+                            exception_handlers: new_handlers,
+                        })
+                    } else {
+                        // No handler - propagate to Rust level
+                        use super::error::SchemeExceptionKind;
+                        Err(EvalError::SchemeException {
+                            kind: SchemeExceptionKind::Error,
+                            message: "exception handler returned from non-continuable exception"
+                                .to_string(),
+                            irritants_display: String::new(),
+                        })
+                    }
+                }
             }
         }
     }
@@ -2005,6 +2557,7 @@ impl<'a> CpsEvaluator<'a> {
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
         match value {
             Value::Promise(promise_ref) => {
@@ -2019,6 +2572,7 @@ impl<'a> CpsEvaluator<'a> {
                             cont_env,
                             prompt_stack,
                             dynamic_winds,
+                            exception_handlers,
                         })
                     }
                     patina_core::value::PromiseState::Delayed(thunk) => {
@@ -2041,6 +2595,7 @@ impl<'a> CpsEvaluator<'a> {
                             cont_env,
                             prompt_stack,
                             dynamic_winds,
+                            exception_handlers,
                         })
                     }
                 }
@@ -2054,6 +2609,7 @@ impl<'a> CpsEvaluator<'a> {
                 cont_env,
                 prompt_stack,
                 dynamic_winds,
+                exception_handlers,
             }),
         }
     }
@@ -2199,7 +2755,6 @@ impl<'a> CpsEvaluator<'a> {
             Err(EvalError::UndefinedVariable(name.to_string()))
         }
     }
-
 }
 
 /// Evaluate a CoreExpr using CPS transformation
@@ -2230,10 +2785,8 @@ pub fn eval_cps(
     // and doesn't need CPS transformation
     if let CoreExpr::Import { import_sets } = expr {
         for import_set_expr in import_sets {
-            let import_set =
-                patina_frontend::LibraryDefinition::parse_import_set(import_set_expr).map_err(
-                    |e| EvalError::InvalidSyntax(format!("Invalid import set: {}", e)),
-                )?;
+            let import_set = patina_frontend::LibraryDefinition::parse_import_set(import_set_expr)
+                .map_err(|e| EvalError::InvalidSyntax(format!("Invalid import set: {}", e)))?;
             evaluator.process_import_for_eval(&import_set, &env)?;
         }
         return Ok(Value::Unspecified);
@@ -2247,7 +2800,6 @@ pub fn eval_cps(
     let cps_evaluator = CpsEvaluator::new(evaluator);
     cps_evaluator.eval(&cps_expr)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -2280,7 +2832,9 @@ mod tests {
     #[test]
     fn test_cps_eval_variable() {
         let evaluator = make_test_evaluator();
-        evaluator.global_env.define("x".to_string(), Value::Integer(10));
+        evaluator
+            .global_env
+            .define("x".to_string(), Value::Integer(10));
         let cps_eval = CpsEvaluator::new(&evaluator);
 
         // CPS: (halt x)

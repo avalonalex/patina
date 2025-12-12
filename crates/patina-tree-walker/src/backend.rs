@@ -4,7 +4,7 @@
 //! and implements the `Backend` trait from `patina-runtime`. This allows the
 //! tree-walker to be used as a pluggable backend in the interpreter.
 
-use crate::eval::{eval_cps, EvalError, Evaluator};
+use crate::eval::{EvalError, Evaluator, eval_cps};
 use patina_runtime::{Backend, Environment, Value};
 use std::rc::Rc;
 

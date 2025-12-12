@@ -300,7 +300,8 @@ impl Desugarer {
             | Value::Record { .. }
             | Value::EnvironmentSpecifier { .. }
             | Value::ContinuationPromptTag(_)
-            | Value::Continuation(_) => Err(DesugarError::RuntimeValueInAST {
+            | Value::Continuation(_)
+            | Value::Exception(_) => Err(DesugarError::RuntimeValueInAST {
                 value: value.clone(),
                 context: "Cannot desugar runtime-only value".to_string(),
             }),
