@@ -11,7 +11,7 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 | Priority | Count | Effort |
 |----------|-------|--------|
 | HIGH | 1 | ✅ COMPLETE |
-| MEDIUM | 5 | Medium-Large |
+| MEDIUM | 5 | Medium-Large (1 partially complete) |
 | LOW | 2 | Large (needs profiling) |
 
 ---
@@ -78,8 +78,8 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 **Problem**: Debug statements left in code that should use tracing:
 
 **Locations**:
-- `cps_eval.rs`: CPS debug output
-- `quasiquote.rs`: Quasiquote evaluation debug output (formerly core_eval.rs)
+- `cps_eval/mod.rs`: CPS debug output in trampoline loop
+- `cps_eval/quasiquote.rs`: Quasiquote evaluation debug output
 
 **Solution**: Replace with `tracing::debug!()` or `tracing::trace!()` calls. Infrastructure already exists.
 
@@ -104,7 +104,7 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
    ```
    **Impact**: Character category predicates may be incomplete
 
-3. **Delimited continuation capture** (`cps_eval.rs`, lines 1479, 2632)
+3. **Delimited continuation capture** (`cps_eval/continuation.rs`, `cps_eval/wind.rs`)
    ```rust
    // TODO: Implement proper capture for these special continuations
    // TODO: Implement proper delimited continuation capture
@@ -124,27 +124,59 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 **Effort**: Medium (4-6 hours)
 **Crate**: patina-tree-walker
 
+**Note**: For macro-related large files (matcher.rs, compiler.rs, expander.rs), see `TECH_DEBT_CLEANUP.md` item 10.
+
 **Files needing decomposition**:
 
-1. **`cps_eval.rs`** - 3,174 lines
-   - Core CPS evaluation loop
-   - Continuation mechanics
-   - Exception handling
-   - Dynamic-wind
-   - Prompts
+1. **`cps_eval.rs`** - ~3,100 lines ✅ COMPLETE (2025-12-12)
 
-   **Recommendation**: Split into:
-   - `cps_eval/core.rs` - Main evaluation loop
-   - `cps_eval/continuations.rs` - Continuation handling
-   - `cps_eval/exceptions.rs` - Exception handling
-   - `cps_eval/prompts.rs` - Prompt/reset handling
+   Split into modular `cps_eval/` directory structure:
 
-2. **`io.rs`** - 2,761 lines (90 functions)
+   | Module | Lines | Purpose |
+   |--------|-------|---------|
+   | `mod.rs` | ~400 | CpsEvaluator struct, eval(), trampoline loop, eval_cps() |
+   | `types.rs` | ~250 | ContValue, StepResult, PromptFrame, ExceptionHandler |
+   | `step.rs` | ~460 | eval_one_step - main dispatch for all CpsExpr forms |
+   | `application.rs` | ~790 | apply_cps_step, eval_primop, CPS-sensitive primitives |
+   | `continuation.rs` | ~310 | capture/restore/reify continuations, invoke_continuation_step |
+   | `environment.rs` | ~200 | eval_trivial, lookup_var, set_var, make_cps_closure |
+   | `wind.rs` | ~230 | run_wind_handlers, force_promise_cps, apply_from_direct |
+   | `exceptions.rs` | ~100 | maybe_route_error_through_cps |
+   | `quasiquote.rs` | ~260 | Quasiquote evaluation (moved from eval/quasiquote.rs) |
 
-   **Recommendation**: Split into:
-   - `io/ports.rs` - Port management
-   - `io/read.rs` - Read operations
-   - `io/write.rs` - Write operations
+   Also removed `eval/quasiquote.rs` since only cps_eval uses it.
+
+2. **`io.rs`** - ~2,700 lines ✅ COMPLETE (2025-12-12)
+
+   Split into modular `io/` directory structure:
+
+   | Module | Lines | Purpose |
+   |--------|-------|---------|
+   | `mod.rs` | ~400 | Registration, tests, re-exports |
+   | `datum_writer.rs` | ~300 | DatumLabelWriter for circular structures |
+   | `ports.rs` | ~400 | Port predicates, string/bytevector ports, current ports |
+   | `text_output.rs` | ~180 | display, write, write-shared, newline, write-char, write-string |
+   | `text_input.rs` | ~120 | read-char, peek-char, char-ready?, read-line, read-string |
+   | `binary.rs` | ~260 | read-u8, peek-u8, write-u8, read-bytevector, write-bytevector |
+   | `read.rs` | ~240 | read S-expression parsing |
+   | `file.rs` | ~270 | File I/O and higher-order file procedures |
+
+3. **`arithmetic.rs`** - ~1,335 lines ✅ COMPLETE (2025-12-12)
+
+   Split into modular `arithmetic/` directory structure:
+
+   | Module | Lines | Purpose |
+   |--------|-------|---------|
+   | `mod.rs` | ~430 | Registration of all primitives, unit tests |
+   | `helpers.rs` | ~60 | Error conversion, rational_to_value helper |
+   | `basic.rs` | ~100 | add, subtract, multiply, divide |
+   | `comparison.rs` | ~100 | =, <, >, <=, >= |
+   | `division.rs` | ~110 | quotient, remainder, modulo, floor/, truncate/ |
+   | `rounding.rs` | ~70 | floor, ceiling, truncate, round, abs, max, min |
+   | `transcendental.rs` | ~110 | sqrt, square, expt, sin, cos, tan, asin, acos, atan, exp, log |
+   | `predicates.rs` | ~50 | finite?, infinite?, nan? |
+   | `complex.rs` | ~60 | real-part, imag-part, magnitude, angle, make-rectangular, make-polar |
+   | `number_theory.rs` | ~200 | gcd, lcm, numerator, denominator, exact, inexact, exact-integer-sqrt, rationalize |
 
 ---
 
@@ -152,18 +184,30 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 
 **Effort**: Large (ongoing)
 **Crate**: patina-tree-walker
+**Status**: 🔶 DEFERRED - See `PRD/phase1/ERROR_SYSTEM_DESIGN.md`
 
-**Problem**: 443 `unwrap()`/`expect()` calls in eval module
+**Analysis (2025-12-12)**:
 
-**High-risk locations**:
-- `quasiquote.rs`: Multiple unwraps in quasiquote evaluation (formerly core_eval.rs)
-- `cps_eval.rs`: Several unwraps in continuation handling
-- `application.rs`: Parameter converter handling
+The original estimate of 443 unwrap/expect calls was inflated by test code. Actual production code has ~15 unwraps:
 
-**Solution**: Audit critical paths and convert to proper error handling. Focus on:
-1. Any unwrap in CPS continuation path
-2. Any unwrap in lambda application
-3. Any unwrap in library loading
+| Category | Count | Risk |
+|----------|-------|------|
+| Safe (after arity check) | 4 | ✅ None |
+| Safe (stack invariants) | 2 | ✅ None |
+| Risky (needs fixing) | 3 | ⚠️ Medium |
+| Internal/startup only | 2 | ⚠️ Low |
+
+**Risky locations to fix**:
+- `io/read.rs:57` - `remaining.unwrap()` without prior check
+- `number_theory.rs:196-197` - `BigRational::from_f64().unwrap()`
+
+**Deferred Reason**: Fixing unwraps is part of a larger error system redesign that unifies:
+- Parsing errors (FrontendError)
+- Desugaring errors (DesugarError)
+- Evaluation errors (EvalError)
+- Scheme exceptions (Value::Exception)
+
+See `PRD/phase1/ERROR_SYSTEM_DESIGN.md` for the comprehensive design.
 
 ---
 
@@ -171,17 +215,32 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 
 **Effort**: Medium (6-8 hours)
 **Crate**: patina-tree-walker
+**Status**: 🔶 PARTIAL - CPS feature tests added, unit tests remain
 
-**Files with insufficient unit tests**:
+**CPS-specific integration tests**: ✅ ADDED (2025-12-12)
+- Created `crates/patina-tests/tests/cps_features.rs` with 31 tests
+- **24 tests passing**, 7 ignored (document known bugs)
+
+| Category | Tests | Status |
+|----------|-------|--------|
+| Exception handler stack | 6 | ✅ 5 pass, 1 ignored (raise-continuable bug) |
+| Dynamic-wind nested | 5 | ✅ 4 pass, 1 ignored (exception/after bug) |
+| Continuation capture | 7 | ✅ All pass |
+| Guard macro | 4 | ✅ All pass |
+| Exception + dynamic-wind | 3 | ✅ 1 pass, 2 ignored (same after-thunk bug) |
+| Error objects | 3 | ✅ All pass |
+| Complex control flow | 2 | 2 ignored (continuation + exception interaction) |
+
+**Known bugs documented via ignored tests**:
+1. `raise-continuable` handler consumed after first use
+2. `dynamic-wind` after thunk not run on exception propagation
+3. `dynamic-wind` after thunk not run on call/cc escape
+4. Before/after thunks not run on continuation re-entry
+
+**Files still needing unit tests**:
 - `eval/application.rs` - No unit tests for application logic
 - `eval/library_support.rs` - No unit tests for path resolution
 - `eval/mod.rs` - No direct unit tests
-
-**CPS-specific testing gaps**:
-- Exception handler stack management
-- Dynamic-wind with multiple nested levels
-- Continuation capture edge cases
-- Prompt tag discrimination
 
 ---
 
@@ -229,9 +288,9 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 | 1. Remove dead CPS code | HIGH | ✅ COMPLETE | Completed 2025-12-12 |
 | 2. Clean up debug output | MEDIUM | Not Started | 13+ statements |
 | 3. TODO comments | MEDIUM | Not Started | 5 significant TODOs |
-| 4. Split large CPS files | MEDIUM | Not Started | cps_eval.rs, io.rs |
-| 5. Fix unwrap/expect calls | MEDIUM | Not Started | 443 calls |
-| 6. Test coverage for CPS | MEDIUM | Not Started | Multiple files |
+| 4. Split large CPS files | MEDIUM | ✅ COMPLETE | cps_eval.rs ✅, io.rs ✅, arithmetic.rs ✅ |
+| 5. Fix unwrap/expect calls | MEDIUM | 🔶 DEFERRED | See ERROR_SYSTEM_DESIGN.md |
+| 6. Test coverage for CPS | MEDIUM | 🔶 PARTIAL | 24/31 tests pass, 7 bugs documented |
 | 7. Clone optimization | LOW | Not Started | Needs profiling |
 | 8. Stub functions | LOW | N/A | Intentional |
 
@@ -246,11 +305,12 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 
 2. **Code quality** (4-6 hours):
    - Address TODO comments
-   - Add CPS tests
+   - ~~Add CPS tests~~ ✅ PARTIAL (24 passing, 7 documenting bugs)
 
-3. **Refactoring** (8-12 hours):
-   - Split `cps_eval.rs` into modules
-   - Split `io.rs` into modules
+3. **Refactoring** (8-12 hours): ✅ COMPLETE
+   - ~~Split `cps_eval.rs` into modules~~ ✅ COMPLETE (2025-12-12)
+   - ~~Split `io.rs` into modules~~ ✅ COMPLETE (2025-12-12)
+   - ~~Split `arithmetic.rs` into modules~~ ✅ COMPLETE (2025-12-12)
 
 4. **Performance** (10+ hours):
    - Profile hot paths

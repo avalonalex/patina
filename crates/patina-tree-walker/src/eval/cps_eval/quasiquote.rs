@@ -4,8 +4,8 @@
 //! The main entry point is `eval_quasiquote_in_env()` which handles
 //! quasiquote templates with proper nesting of quasiquote/unquote.
 
-use super::cps_eval::eval_cps;
-use super::error::EvalError;
+use super::eval_cps;
+use crate::eval::error::EvalError;
 use patina_frontend::Desugarer;
 use patina_runtime::environment::Environment;
 use patina_runtime::value::Value;
@@ -17,7 +17,7 @@ use std::rc::Rc;
 /// This is used by quasiquote to evaluate unquote expressions with full
 /// continuation support. The expression is desugared and evaluated via CPS.
 fn eval_value_via_cps(
-    evaluator: &super::Evaluator,
+    evaluator: &crate::eval::Evaluator,
     expr: &Value,
     env: &Rc<Environment>,
 ) -> Result<Value, EvalError> {
@@ -34,7 +34,7 @@ fn eval_value_via_cps(
 /// - depth 0: at current quasiquote level (unquotes are active)
 /// - depth > 0: inside nested quasiquote (unquotes become quoted)
 fn eval_quasiquote_impl(
-    evaluator: &super::Evaluator,
+    evaluator: &crate::eval::Evaluator,
     expr: &Value,
     env: &Rc<Environment>,
     depth: i32,
@@ -156,7 +156,7 @@ fn eval_quasiquote_impl(
 ///
 /// This handles the case where we have a list that might contain unquote-splicing
 fn process_quasiquote_pair(
-    evaluator: &super::Evaluator,
+    evaluator: &crate::eval::Evaluator,
     expr: &Value,
     env: &Rc<Environment>,
     depth: i32,
@@ -376,7 +376,7 @@ fn list_from_vec(vec: Vec<Value>) -> Value {
 /// Unquote expressions within quasiquote are evaluated via CPS for full continuation
 /// support.
 pub fn eval_quasiquote_in_env(
-    evaluator: &super::Evaluator,
+    evaluator: &crate::eval::Evaluator,
     template: &Value,
     env: &Rc<Environment>,
 ) -> Result<Value, EvalError> {
@@ -386,13 +386,12 @@ pub fn eval_quasiquote_in_env(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::eval_cps;
     use patina_ir::{CoreExpr, Formals, ScopedParam};
     use patina_runtime::ScopeSet;
 
     #[test]
     fn test_eval_literal() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::Literal(Rc::new(Value::Integer(42)));
 
@@ -402,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_eval_quote() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::Quote(Rc::new(Value::symbol("x")));
 
@@ -412,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_eval_variable() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         env.define("x".to_string(), Value::Integer(42));
 
@@ -426,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_eval_variable_unbound() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::Var {
             name: Rc::from("undefined"),
@@ -439,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_eval_if_true() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::If {
             test: Rc::new(CoreExpr::Literal(Rc::new(Value::Boolean(true)))),
@@ -453,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_eval_if_false() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::If {
             test: Rc::new(CoreExpr::Literal(Rc::new(Value::Boolean(false)))),
@@ -467,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_eval_define() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::Define {
             name: Rc::from("x"),
@@ -484,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_eval_set() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         env.define("x".to_string(), Value::Integer(1));
 
@@ -504,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_eval_begin() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::Begin(vec![
             CoreExpr::Literal(Rc::new(Value::Integer(1))),
@@ -519,7 +518,7 @@ mod tests {
 
     #[test]
     fn test_eval_lambda() {
-        let evaluator = super::super::Evaluator::new();
+        let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::Lambda {
             params: Formals::Fixed(vec![ScopedParam::simple(Rc::from("x"))]),

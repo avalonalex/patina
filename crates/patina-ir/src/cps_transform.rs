@@ -35,10 +35,10 @@
 //!
 //! Here `k` is the continuation passed in from the enclosing context.
 
-use patina_core::cps_expr::{ContVar, CpsExpr, CpsParam, CpsPrimitive};
+use patina_core::cps_expr::{ContVar, CpsExpr, CpsParam};
 use patina_core::scope::ScopeSet;
 use patina_core::value::Value;
-use patina_core::{CoreExpr, Formals, Primitive, Symbol};
+use patina_core::{CoreExpr, Formals, Symbol};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -286,13 +286,6 @@ impl CpsTransformer {
                         body: Rc::new(self.transform(value, &val_cont)),
                     }
                 }
-            }
-
-            CoreExpr::PrimCall { prim, args } => self.transform_primcall(prim, args, k),
-
-            CoreExpr::Let { bindings, body } => {
-                // Let is already in a good form - transform sequentially
-                self.transform_let(bindings, body, k)
             }
 
             // Quasiquote template - needs runtime evaluation for unquote/unquote-splicing
@@ -580,93 +573,6 @@ impl CpsTransformer {
         }
 
         result
-    }
-
-    /// Transform primitive call
-    fn transform_primcall(&self, prim: &Primitive, args: &[CoreExpr], k: &ContVar) -> CpsExpr {
-        let cps_prim = self.convert_primitive(prim);
-
-        // Generate names for arguments
-        let names: Vec<Symbol> = (0..args.len()).map(|_| self.gensym("a")).collect();
-
-        let arg_vars: Vec<CpsExpr> = names
-            .iter()
-            .map(|n| CpsExpr::Var {
-                name: n.clone(),
-                scopes: ScopeSet::new(),
-            })
-            .collect();
-
-        let primop = CpsExpr::PrimOp {
-            op: cps_prim,
-            args: arg_vars,
-            cont: k.clone(),
-        };
-
-        let exprs: Vec<&CoreExpr> = args.iter().collect();
-        self.transform_args_then(&exprs, &names, primop)
-    }
-
-    /// Convert CoreExpr Primitive to CPS Primitive
-    fn convert_primitive(&self, prim: &Primitive) -> CpsPrimitive {
-        match prim {
-            Primitive::Add => CpsPrimitive::Add,
-            Primitive::Sub => CpsPrimitive::Sub,
-            Primitive::Mul => CpsPrimitive::Mul,
-            Primitive::Div => CpsPrimitive::Div,
-            Primitive::NumEq => CpsPrimitive::NumEq,
-            Primitive::Lt => CpsPrimitive::Lt,
-            Primitive::Gt => CpsPrimitive::Gt,
-            Primitive::Lte => CpsPrimitive::Lte,
-            Primitive::Gte => CpsPrimitive::Gte,
-            Primitive::Cons => CpsPrimitive::Cons,
-            Primitive::Car => CpsPrimitive::Car,
-            Primitive::Cdr => CpsPrimitive::Cdr,
-            Primitive::List => CpsPrimitive::List,
-            Primitive::IsNull => CpsPrimitive::IsNull,
-            Primitive::IsPair => CpsPrimitive::IsPair,
-            Primitive::IsNumber => CpsPrimitive::IsNumber,
-            Primitive::IsBoolean => CpsPrimitive::IsBoolean,
-            Primitive::IsString => CpsPrimitive::IsString,
-            Primitive::IsSymbol => CpsPrimitive::IsSymbol,
-        }
-    }
-
-    /// Transform let bindings
-    fn transform_let(
-        &self,
-        bindings: &[(Symbol, CoreExpr)],
-        body: &CoreExpr,
-        k: &ContVar,
-    ) -> CpsExpr {
-        if bindings.is_empty() {
-            return self.transform(body, k);
-        }
-
-        // Transform bindings left-to-right
-        let (name, value) = &bindings[0];
-        let rest_bindings = &bindings[1..];
-
-        if self.is_trivial(value) {
-            let cps_value = self.transform_trivial(value);
-            let rest = self.transform_let(rest_bindings, body, k);
-
-            CpsExpr::LetVal {
-                name: name.clone(),
-                value: Rc::new(cps_value),
-                body: Rc::new(rest),
-            }
-        } else {
-            let bind_cont = self.gensym_cont();
-            let rest = self.transform_let(rest_bindings, body, k);
-
-            CpsExpr::LetCont {
-                name: bind_cont.clone(),
-                param: name.clone(),
-                cont_body: Rc::new(rest),
-                body: Rc::new(self.transform(value, &bind_cont)),
-            }
-        }
     }
 
     /// Transform parameterize

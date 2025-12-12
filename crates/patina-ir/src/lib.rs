@@ -13,7 +13,7 @@ pub mod surface_syntax;
 pub mod visitor;
 
 // Re-export core IR types from patina-core
-pub use patina_core::{CoreExpr, Formals, Primitive, ScopedParam, Symbol};
+pub use patina_core::{CoreExpr, Formals, ScopedParam, Symbol};
 
 // Re-export CPS types from patina-core
 pub use patina_core::{CpsExpr, CpsParam, CpsPrimitive, PromptTag};

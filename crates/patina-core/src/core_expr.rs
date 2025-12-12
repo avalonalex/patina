@@ -164,53 +164,6 @@ pub enum CoreExpr {
         func: Rc<CoreExpr>,
         args: Vec<CoreExpr>, // All args including the final list
     },
-
-    // Optional optimized forms (added by passes)
-    /// Primitive call (after optimization pass recognizes primitives)
-    /// Example: (+ 1 2) where + is known to be the primitive
-    PrimCall {
-        prim: Primitive,
-        args: Vec<CoreExpr>,
-    },
-
-    /// Local binding (after optimization pass recognizes let pattern)
-    /// Example: Internal representation of ((lambda (x) body) value)
-    Let {
-        bindings: Vec<(Symbol, CoreExpr)>,
-        body: Rc<CoreExpr>,
-    },
-}
-
-/// Primitive operations recognized by the optimizer
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Primitive {
-    // Arithmetic
-    Add,
-    Sub,
-    Mul,
-    Div,
-
-    // Comparison
-    NumEq,
-    Lt,
-    Gt,
-    Lte,
-    Gte,
-
-    // List operations
-    Cons,
-    Car,
-    Cdr,
-    List,
-
-    // Type predicates
-    IsNull,
-    IsPair,
-    IsNumber,
-    IsBoolean,
-    IsString,
-    IsSymbol,
-    // More primitives will be added as needed
 }
 
 impl CoreExpr {
@@ -218,7 +171,7 @@ impl CoreExpr {
     pub fn is_tail_position(&self) -> bool {
         matches!(
             self,
-            CoreExpr::If { .. } | CoreExpr::Begin(_) | CoreExpr::Let { .. } | CoreExpr::App { .. }
+            CoreExpr::If { .. } | CoreExpr::Begin(_) | CoreExpr::App { .. }
         )
     }
 
@@ -239,8 +192,6 @@ impl CoreExpr {
             CoreExpr::Expand { .. } => "expand",
             CoreExpr::App { .. } => "application",
             CoreExpr::Apply { .. } => "apply",
-            CoreExpr::PrimCall { .. } => "primitive-call",
-            CoreExpr::Let { .. } => "let",
         }
     }
 
@@ -310,19 +261,6 @@ impl CoreExpr {
             CoreExpr::Apply { func, args } => CoreExpr::Apply {
                 func: Rc::new(f(func)),
                 args: args.iter().map(&f).collect(),
-            },
-
-            CoreExpr::PrimCall { prim, args } => CoreExpr::PrimCall {
-                prim: *prim,
-                args: args.iter().map(&f).collect(),
-            },
-
-            CoreExpr::Let { bindings, body } => CoreExpr::Let {
-                bindings: bindings
-                    .iter()
-                    .map(|(var, val)| (var.clone(), f(val)))
-                    .collect(),
-                body: Rc::new(f(body)),
             },
         }
     }
@@ -425,23 +363,6 @@ impl std::fmt::Display for CoreExpr {
                     write!(f, " {}", arg)?;
                 }
                 write!(f, ")")
-            }
-            CoreExpr::PrimCall { prim, args } => {
-                write!(f, "({:?}", prim)?;
-                for arg in args {
-                    write!(f, " {}", arg)?;
-                }
-                write!(f, ")")
-            }
-            CoreExpr::Let { bindings, body } => {
-                write!(f, "(let (")?;
-                for (i, (var, val)) in bindings.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "({} {})", var, val)?;
-                }
-                write!(f, ") {})", body)
             }
         }
     }

@@ -135,14 +135,14 @@ Plus a fallback mechanism (lines 553-583 in mod.rs) that switches between paths 
 
 ### 6. ✅ Implement Stub Libraries (COMPLETED 2025-12)
 
-**Status**: ✅ COMPLETE - 5/7 libraries fully implemented, 2 stubs remain
+**Status**: ✅ COMPLETE - All 7 libraries fully implemented
 
 **Crate**: patina-runtime
-**File**: `src/stdlib/scheme_stubs.rs` (now only contains eval and r5rs stubs)
+**File**: `src/stdlib/scheme_stubs.rs` (removed - no longer needed)
 
 **Problem**: Originally 7 libraries returned empty exports, causing silent failures.
 
-**Resolution**: Implemented all core I/O libraries:
+**Resolution**: Implemented all libraries:
 
 **Completed**:
 - ✅ `(scheme time)` - DONE 2025-12: current-second, current-jiffy, jiffies-per-second
@@ -150,15 +150,14 @@ Plus a fallback mechanism (lines 553-583 in mod.rs) that switches between paths 
 - ✅ `(scheme write)` - DONE 2025-12: display, write, write-shared, write-simple
 - ✅ `(scheme read)` - DONE 2025-12: read
 - ✅ `(scheme file)` - DONE 2025-12: open-input-file, open-output-file, open-binary-input-file, open-binary-output-file, call-with-input-file, call-with-output-file, with-input-from-file, with-output-to-file, file-exists?, delete-file
+- ✅ `(scheme eval)` - DONE 2025-12: eval, environment (in `patina-tree-walker/src/eval/primitives/eval.rs`)
+- ✅ `(scheme r5rs)` - DONE 2025-12: null-environment, scheme-report-environment, plus all R5RS re-exports
 
-**Remaining stubs** (lower priority):
-- ⬜ `(scheme eval)` - eval, environment, scheme-report-environment, null-environment
-- ⬜ `(scheme r5rs)` - R5RS compatibility re-exports
-
-**Files created**:
+**Files created/updated**:
 - `src/stdlib/scheme_write.rs` - (scheme write) library
 - `src/stdlib/scheme_read.rs` - (scheme read) library
 - `src/stdlib/scheme_file.rs` - (scheme file) library (enhanced with binary ops)
+- `patina-tree-walker/src/eval/primitives/eval.rs` - eval, environment, null-environment, scheme-report-environment
 
 ---
 
@@ -227,38 +226,62 @@ branches.get_mut(&pvref).unwrap().push(match_value.clone());
 
 **Crates**: patina-tree-walker, patina-macros
 
-**Problem**: Several files exceed 1300 lines:
-- `tree-walker/src/eval/mod.rs` - 1,690 lines
-- `tree-walker/src/eval/core_eval.rs` - 1,607 lines
-- `tree-walker/src/eval/primitives/arithmetic.rs` - 1,334 lines
-- `macros/src/macro_expander/matcher.rs` - 1,174 lines
-- `macros/src/macro_expander/compiler.rs` - 1,386 lines
-- `macros/src/macro_expander/expander.rs` - 1,377 lines
+**Problem**: Several files exceed 1300 lines.
 
-**Solution**:
-- Extract library loading from mod.rs to separate module
-- Extract quasiquote from core_eval.rs
-- Split arithmetic.rs by operation type
-- Consider splitting macro phases into sub-modules
+**Progress**:
+- ✅ `core_eval.rs` renamed to `quasiquote.rs` (~500 lines) - now only contains quasiquote logic
+- ✅ Legacy eval methods removed from `mod.rs` (reduced from 1,690 to ~1,200 lines)
+- ✅ `matcher.rs` split into `matcher/` directory (2025-12):
+  - `matcher/mod.rs` - Matcher struct and core matching (~430 lines)
+  - `matcher/error.rs` - MatchError enum (~100 lines)
+  - `matcher/list_match.rs` - List/ellipsis matching (~300 lines)
+  - `matcher/literal.rs` - Literal matching and hygiene (~130 lines)
+  - `matcher/debug.rs` - Debug printing (~55 lines)
+- ✅ `compiler.rs` split into `compiler/` directory (2025-12):
+  - `compiler/mod.rs` - Compiler struct, constructors, compile_macro (~200 lines)
+  - `compiler/pattern.rs` - Pattern compilation (~260 lines)
+  - `compiler/template.rs` - Template compilation (~250 lines)
+  - `compiler/escape.rs` - Ellipsis escape handling (~180 lines)
+  - `compiler/helpers.rs` - Helper methods (~170 lines)
+  - `compiler/tests.rs` - Unit tests (~300 lines)
+- ✅ `expander.rs` split into `expander/` directory (2025-12):
+  - `expander/mod.rs` - Expander struct, expand(), expand_impl() (~200 lines)
+  - `expander/error.rs` - ExpandError enum (~70 lines)
+  - `expander/list.rs` - List, vector, dotted list expansion (~130 lines)
+  - `expander/ellipsis.rs` - Ellipsis expansion (single and double) (~420 lines)
+  - `expander/hygiene.rs` - Identifier renaming and hygiene (~140 lines)
+  - `expander/tests.rs` - Unit tests (~500 lines)
+
+**Remaining (patina-macros)**: ✅ All large files split!
+
+**Remaining (patina-tree-walker)** - See `POST_CPS_TECH_DEBT.md` item 4 for details:
+- `cps_eval.rs` (~3,100 lines) → split into core, continuations, exceptions, prompts
+- `io.rs` (~2,700 lines) → split into ports, read, write
+- `arithmetic.rs` (1,334 lines) → split by operation type
 
 **Effort**: Medium (2-3 days)
 
 ---
 
-### 11. Remove Incomplete CoreExpr Forms
+### 11. ✅ Remove Incomplete CoreExpr Forms (COMPLETED 2025-12)
 
-**Crate**: patina-tree-walker
-**File**: `src/eval/core_eval.rs` (lines 510-517)
+**Crate**: patina-core, patina-ir
+**Status**: ✅ COMPLETE
 
-**Problem**: Two CoreExpr forms exist but return errors:
+**Problem**: Two CoreExpr forms existed but were never generated by the desugarer:
 - `CoreExpr::PrimCall` - optimization for direct primitive calls
 - `CoreExpr::Let` - optimization for let expressions
 
-These are dead code paths that exist in the IR but can't execute.
+These were marked as "Optional optimized forms (added by passes)" but no optimization pass existed.
 
-**Solution**: Either implement these optimizations or remove from CoreExpr enum.
+**Resolution**: Removed entirely:
+1. Removed `CoreExpr::PrimCall` and `CoreExpr::Let` variants from `patina-core/src/core_expr.rs`
+2. Removed `Primitive` enum from `patina-core/src/core_expr.rs`
+3. Removed `transform_primcall`, `convert_primitive`, `transform_let` from `patina-ir/src/cps_transform.rs`
+4. Updated `is_tail_position`, `kind()`, `map_children`, and `Display` impl
+5. Removed `Primitive` from re-exports in both patina-core and patina-ir
 
-**Effort**: Low (remove) or Medium (implement)
+**Notes**: If these optimizations are needed in the future, they can be easily re-added with proper CPS support.
 
 ---
 
@@ -358,12 +381,12 @@ pub enum Value {
 | 3. Route debug through logging | HIGH | ✅ DONE | Completed 2024-12: using tracing crate |
 | 4. Fix interpreter documentation | HIGH | ✅ DONE | Completed 2024-12: removed stale USE_CORE_EXPR docs |
 | 5. DEFINE_SYNTAX_ELIMINATION | HIGH | ✅ DONE | Completed 2024-12: DefineSyntax removed from CoreExpr |
-| 6. Implement stub libraries | MEDIUM | ✅ DONE | 5/7 done: time, process-context, write, read, file completed 2025-12 |
+| 6. Implement stub libraries | MEDIUM | ✅ DONE | All 7 done: time, process-context, write, read, file, eval, r5rs completed 2025-12 |
 | 7. Fix primitive organization | MEDIUM | ✅ DONE | Completed 2025-12: sqrt, real-part, imag-part, library? moved |
 | 8. Eliminate duplicated code | MEDIUM | ✅ DONE | Completed 2024-12: removed dead compile_syntax_rules |
 | 9. Fix unsafe unwrap | MEDIUM | ✅ DONE | Completed 2024-12: using entry().or_default() |
 | 10. Split large files | MEDIUM | Not Started | |
-| 11. Remove incomplete CoreExpr | MEDIUM | Not Started | |
+| 11. Remove incomplete CoreExpr | MEDIUM | ✅ DONE | Completed 2025-12: PrimCall, Let, Primitive removed |
 | 12. Add GC for cycle handling | MEDIUM | Not Started | Use rust-gc crate |
 | 13. Reduce clone() calls | LOW | Not Started | |
 | 14. Add error conversions | LOW | Not Started | |
@@ -381,7 +404,7 @@ Phase 1 tech debt cleanup is complete when:
 3. ✅ Lambda closures store CoreExpr bodies directly (DONE 2024-12)
 4. ✅ Debug output uses proper logging infrastructure (DONE 2024-12)
 5. ✅ Interpreter documentation accurately reflects implementation (DONE 2024-12)
-6. ✅ At least 50% of MEDIUM priority items addressed (5/7 DONE: stub libraries, primitive org, duplicated code, unsafe unwrap; 2 not started)
+6. ✅ At least 50% of MEDIUM priority items addressed (6/7 DONE: all stub libraries, primitive org, duplicated code, unsafe unwrap; 1 not started)
 
 This positions the codebase for clean VM backend implementation in Phase 2.
 

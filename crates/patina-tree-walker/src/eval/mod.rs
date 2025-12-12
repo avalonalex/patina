@@ -4,7 +4,6 @@ mod cps_eval;
 mod debug;
 mod error;
 mod primitives;
-mod quasiquote;
 
 // Re-export error type for public API
 pub use cps_eval::{CpsEvaluator, eval_cps};
