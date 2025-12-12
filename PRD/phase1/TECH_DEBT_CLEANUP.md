@@ -361,8 +361,17 @@ pub enum Value {
 ### 15. Improve Test Organization
 
 **Crates**: patina-macros, patina-frontend
+**Status**: ✅ REVIEWED (2025-12-12) - Current organization is acceptable
 
-**Problem**: 800+ lines of test code mixed in production modules.
+**Original concern**: 800+ lines of test code mixed in production modules.
+
+**Analysis (2025-12-12)**:
+- Total: ~483 unit tests inline, ~1,000+ integration tests in patina-tests
+- Macro crate tests already partially extracted: `compiler/tests.rs`, `expander/tests.rs`
+- High test ratios in macro code (interface.rs: 2.4x, matcher/mod.rs: 1.3x) are justified by domain complexity
+- Frontend tests (parser, desugarer, lexer) test private internals - appropriate for inline
+
+**Conclusion**: Current organization follows Rust conventions. High inline test ratios in macro code reflect the complexity of hygiene and pattern matching. See `docs/TEST_ORGANIZATION.md` for full analysis.
 
 ### 16. String Performance
 
@@ -390,7 +399,7 @@ pub enum Value {
 | 12. Add GC for cycle handling | MEDIUM | Not Started | Use rust-gc crate |
 | 13. Reduce clone() calls | LOW | Not Started | |
 | 14. Add error conversions | LOW | Not Started | |
-| 15. Improve test organization | LOW | Not Started | |
+| 15. Improve test organization | LOW | ✅ REVIEWED | Current organization acceptable |
 | 16. String performance | LOW | Not Started | |
 
 ---
