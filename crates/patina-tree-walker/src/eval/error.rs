@@ -33,6 +33,12 @@ pub enum EvalError {
 
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    /// A continuation was invoked that escapes the current evaluation context.
+    /// The actual continuation data is stored in thread-local storage
+    /// (see cps_eval::PENDING_CONTINUATION_ESCAPE).
+    #[error("Continuation escape")]
+    ContinuationEscape,
 }
 
 // Convert FrontendError to EvalError

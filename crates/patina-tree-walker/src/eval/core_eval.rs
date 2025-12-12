@@ -563,9 +563,15 @@ fn apply_procedure(
                 }
             }
 
-            Procedure::Continuation => {
-                // Continuations are not directly supported in CoreExpr path
-                Err(EvalError::NotAProcedure(format!("{}", proc)))
+            Procedure::CpsLambda { .. } => {
+                // CPS lambdas invoked from direct mode: use the CPS evaluator
+                // to apply the procedure with a halt continuation.
+                use crate::eval::cps_eval::CpsEvaluator;
+
+                let cps_eval = CpsEvaluator::new(evaluator);
+                let result = cps_eval.apply_from_direct(proc.clone(), args.to_vec())?;
+
+                Ok(CoreEvalResult::Value(result))
             }
         },
 
@@ -1265,6 +1271,23 @@ fn list_from_vec(vec: Vec<Value>) -> Value {
         result = Value::Pair(Rc::new(RefCell::new((item, result))));
     }
     result
+}
+
+// =============================================================================
+// Public API for CPS Evaluator
+// =============================================================================
+
+/// Evaluate a quasiquote template in the given environment
+///
+/// This is a public wrapper around `eval_quasiquote_impl` for use by the CPS evaluator.
+/// Quasiquote evaluation doesn't involve continuations, so we can delegate to the
+/// direct evaluator.
+pub fn eval_quasiquote_in_env(
+    evaluator: &super::Evaluator,
+    template: &Value,
+    env: &Rc<Environment>,
+) -> Result<Value, EvalError> {
+    eval_quasiquote_impl(evaluator, template, env, 0)
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use crate::compiled_macro::CompiledMacro;
 use crate::core_expr::{CoreExpr, ScopedParam};
+use crate::cps_expr::{CpsExpr, PromptTag};
 use crate::environment::Environment;
 use crate::library::Library;
 use crate::port::Port;
@@ -161,6 +162,20 @@ pub enum Value {
     /// After parsing, all placeholders are resolved to actual values.
     /// R7RS Section 2.4: Datum labels for shared/cyclic structures.
     LabelPlaceholder(usize),
+
+    // =========================================================================
+    // CPS Continuation Support
+    // =========================================================================
+
+    /// Continuation prompt tag for delimited continuations
+    /// Created by `make-continuation-prompt-tag`
+    /// Used to identify prompt boundaries for shift/reset
+    ContinuationPromptTag(Rc<PromptTag>),
+
+    /// A captured CPS continuation (first-class continuation)
+    /// This represents a "frozen" point in the computation that can be resumed.
+    /// Created by `call/cc` or `shift`.
+    Continuation(Rc<CpsContinuation>),
 }
 
 /// State of a promise for lazy evaluation
@@ -170,6 +185,61 @@ pub enum PromiseState {
     Delayed(Value),
     /// Evaluated - contains the cached result
     Forced(Value),
+}
+
+// =============================================================================
+// CPS Continuation Types
+// =============================================================================
+
+/// A captured CPS continuation
+///
+/// In CPS, a continuation represents "what to do with a value". When captured
+/// by `call/cc` or `shift`, the continuation becomes a first-class value that
+/// can be stored and invoked later.
+///
+/// ## Full vs Delimited Continuations
+///
+/// - **Full continuation** (from `call/cc`): Captures everything from the call
+///   site to the top level. When invoked, abandons the current computation.
+///
+/// - **Delimited continuation** (from `shift`): Captures only up to the nearest
+///   enclosing `reset` prompt. When invoked, can return to the caller.
+#[derive(Debug, Clone)]
+pub struct CpsContinuation {
+    /// The CPS expression representing the captured computation
+    /// When the continuation is invoked with a value, this expression
+    /// is evaluated with the value bound to `param`.
+    pub body: Rc<CpsExpr>,
+
+    /// The parameter name that receives the value when continuation is invoked
+    pub param: Rc<str>,
+
+    /// The captured environment at the point of continuation capture
+    pub env: Rc<Environment>,
+
+    /// For delimited continuations: the prompt tag this was captured at
+    /// None for full continuations (call/cc)
+    pub prompt_tag: Option<Rc<PromptTag>>,
+
+    /// Dynamic wind handlers that were active when this continuation was captured
+    /// These need to be reinstalled when the continuation is invoked
+    pub dynamic_winds: Vec<DynamicWindRecord>,
+
+    /// Captured continuation bindings that were in scope when this continuation
+    /// was captured. Each entry is (name, continuation) representing a let-cont
+    /// binding that the continuation body may reference.
+    /// This is a Vec of boxed CpsContinuations rather than a HashMap to avoid
+    /// circular type dependencies and to keep patina-core dependency-free.
+    pub captured_cont_bindings: Vec<(Rc<str>, Rc<CpsContinuation>)>,
+}
+
+/// A record of a dynamic-wind that needs to be managed during continuation jumps
+#[derive(Debug, Clone)]
+pub struct DynamicWindRecord {
+    /// The "before" thunk to call when entering this dynamic extent
+    pub before: Value,
+    /// The "after" thunk to call when leaving this dynamic extent
+    pub after: Value,
 }
 
 /// Data for a hygienic identifier (boxed in Value::Identifier)
@@ -266,13 +336,13 @@ pub enum Procedure {
         library: Vec<String>, // Library namespace, e.g., ["scheme", "base"]
     },
 
-    /// User-defined procedure (lambda)
+    /// User-defined procedure (lambda) - direct evaluation style
     Lambda {
         /// Fixed parameters, each with optional scopes for hygiene
         params: Vec<ScopedParam>,
         /// Optional variadic parameter (rest parameter)
         variadic: Option<ScopedParam>,
-        /// Procedure body
+        /// Procedure body (direct-style CoreExpr)
         body: LambdaBody,
         /// Captured environment for closures
         env: Rc<Environment>,
@@ -284,8 +354,27 @@ pub enum Procedure {
         binding_scope: Option<ScopeId>,
     },
 
-    /// Continuation (for call/cc)
-    Continuation,
+    /// CPS-style lambda - for use with CPS evaluator
+    ///
+    /// These lambdas are created by CPS transformation and must be evaluated
+    /// by the CPS evaluator. They have an explicit continuation parameter
+    /// and their body is a CpsExpr that will call the continuation.
+    CpsLambda {
+        /// Fixed parameters, each with optional scopes for hygiene
+        params: Vec<ScopedParam>,
+        /// Optional variadic parameter (rest parameter)
+        variadic: Option<ScopedParam>,
+        /// Name of the continuation parameter
+        cont_param: Rc<str>,
+        /// Procedure body (CPS-style CpsExpr)
+        body: Rc<CpsExpr>,
+        /// Captured environment for closures
+        env: Rc<Environment>,
+        /// Binding scope for parameters without scopes (for hygiene)
+        /// When present, parameters without explicit scopes will also be bound
+        /// with this scope, allowing macro-expanded references to find them.
+        binding_scope: Option<ScopeId>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -329,6 +418,8 @@ impl Value {
             Value::Unspecified => "unspecified",
             Value::Eof => "eof-object",
             Value::LabelPlaceholder(_) => "label-placeholder",
+            Value::ContinuationPromptTag(_) => "continuation-prompt-tag",
+            Value::Continuation(_) => "continuation",
         }
     }
 
@@ -603,7 +694,7 @@ impl std::fmt::Display for Value {
                     write!(f, "#<procedure:{}:{}>", library.join("."), name)
                 }
                 Procedure::Lambda { .. } => write!(f, "#<procedure>"),
-                Procedure::Continuation => write!(f, "#<continuation>"),
+                Procedure::CpsLambda { .. } => write!(f, "#<cps-procedure>"),
             },
             Value::Parameter { .. } => write!(f, "#<parameter>"),
             Value::Port(port) => write!(f, "{}", port),
@@ -627,6 +718,8 @@ impl std::fmt::Display for Value {
             Value::Unspecified => write!(f, "#<unspecified>"),
             Value::Eof => write!(f, "#<eof>"),
             Value::LabelPlaceholder(n) => write!(f, "#<label-placeholder:{}>", n),
+            Value::ContinuationPromptTag(tag) => write!(f, "{}", tag),
+            Value::Continuation(_) => write!(f, "#<continuation>"),
         }
     }
 }

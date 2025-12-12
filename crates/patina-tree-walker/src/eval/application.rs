@@ -78,11 +78,29 @@ impl Evaluator {
                         self.prepare_lambda_env(params, variadic, args, env, *binding_scope)?;
                     self.eval_lambda_body(body, &new_env, in_tail_position)
                 }
-                Procedure::Continuation => {
-                    // Continuations handled in outer match fallback
-                    Err(EvalError::NotAProcedure(format!("{}", proc)))
+                Procedure::CpsLambda { .. } => {
+                    // CPS lambdas invoked from direct mode: use the CPS evaluator
+                    // to apply the procedure with a halt continuation.
+                    use crate::eval::cps_eval::CpsEvaluator;
+
+                    let cps_eval = CpsEvaluator::new(self);
+                    let result = cps_eval.apply_from_direct(
+                        Value::Procedure(proc_box.clone()),
+                        args,
+                    )?;
+
+                    Ok(super::EvalResult::Value(result))
                 }
             },
+            Value::Continuation(_) => {
+                // Continuations can only be invoked from within CPS mode
+                // In direct mode, we can't properly invoke them
+                return Err(EvalError::InternalError(
+                    "Continuations can only be invoked in CPS evaluation mode. \
+                     This continuation was captured in CPS mode but is being invoked in direct mode."
+                        .to_string(),
+                ));
+            }
             Value::Parameter { values, converter } => {
                 // Parameters can be called with 0 or 1 arguments:
                 // (param)      => get current value (top of stack)

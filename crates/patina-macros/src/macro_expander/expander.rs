@@ -132,7 +132,7 @@ impl Expander {
     ///
     /// Inspired by Gauche's expand_template (macro.c:800+)
     pub fn expand(&self, template: &Template, env: &MatchEnv) -> Result<Value, ExpandError> {
-        self.expand_impl(template, env, &[])
+        self.expand_impl(template, env, &[], false)
     }
 
     /// Internal expansion implementation with indices
@@ -141,6 +141,7 @@ impl Expander {
     /// * `template` - The template to expand
     /// * `env` - The match environment with variable bindings
     /// * `indices` - Current ellipsis indices for navigation
+    /// * `inside_quote` - Whether we're inside a (quote ...) form
     ///
     /// Based on Gauche's expand_rec (macro.c:820+)
     fn expand_impl(
@@ -148,6 +149,7 @@ impl Expander {
         template: &Template,
         env: &MatchEnv,
         indices: &[usize],
+        inside_quote: bool,
     ) -> Result<Value, ExpandError> {
         match template {
             Template::Literal(value) => {
@@ -185,7 +187,19 @@ impl Expander {
                         // By converting Symbol to Identifier with macro_scope, we mark it as
                         // "came from outer expansion". The inner macro compiler can then treat
                         // identifiers with scopes as literals rather than pattern variables.
-                        Ok(self.mark_substituted_value(value))
+                        //
+                        // HOWEVER: When inside a (quote ...) form, we should NOT mark the values.
+                        // Quoted data is self-quoting and should remain as plain symbols so that
+                        // memv/memq comparisons work correctly. For example, in the case macro:
+                        //   (case key ((datum ...) result))
+                        // expands to:
+                        //   (memv temp '(datum ...))
+                        // The datum values should stay as symbols, not become identifiers with scopes.
+                        if inside_quote {
+                            Ok(value)
+                        } else {
+                            Ok(self.mark_substituted_value(value))
+                        }
                     }
                     None => Err(ExpandError::UndefinedVariable {
                         pvref: format!("{:?}", pvref),
@@ -195,17 +209,17 @@ impl Expander {
 
             Template::List(templates) => {
                 // Expand list template: (t1 t2 t3)
-                self.expand_list(templates, env, indices)
+                self.expand_list(templates, env, indices, inside_quote)
             }
 
             Template::Vector(templates) => {
                 // Expand vector template: #(t1 t2 t3)
-                self.expand_vector(templates, env, indices)
+                self.expand_vector(templates, env, indices, inside_quote)
             }
 
             Template::DottedList { templates, tail } => {
                 // Expand dotted list template: (t1 t2 . rest)
-                self.expand_dotted_list(templates, tail, env, indices)
+                self.expand_dotted_list(templates, tail, env, indices, inside_quote)
             }
 
             Template::Ellipsis {
@@ -215,7 +229,15 @@ impl Expander {
                 vars,
             } => {
                 // Expand ellipsis template: (t ...)
-                self.expand_ellipsis(subtemplate, *level, *nesting, vars, env, indices)
+                self.expand_ellipsis(
+                    subtemplate,
+                    *level,
+                    *nesting,
+                    vars,
+                    env,
+                    indices,
+                    inside_quote,
+                )
             }
         }
     }
@@ -226,10 +248,18 @@ impl Expander {
         templates: &[Template],
         env: &MatchEnv,
         indices: &[usize],
+        inside_quote: bool,
     ) -> Result<Value, ExpandError> {
         let mut result = Vec::new();
 
-        for template in templates {
+        // Check if this list starts with 'quote' - if so, we're entering a quoted context
+        // for all subsequent elements (the second element in (quote datum))
+        let is_quote_form = self.is_quote_template(templates);
+
+        for (i, template) in templates.iter().enumerate() {
+            // Inside (quote datum), the datum (index 1) should use inside_quote=true
+            let in_quote_ctx = inside_quote || (is_quote_form && i >= 1);
+
             if template.is_ellipsis() {
                 // Handle ellipsis specially - it expands to multiple elements
                 if let Template::Ellipsis {
@@ -239,8 +269,15 @@ impl Expander {
                     vars,
                 } = template
                 {
-                    let expanded =
-                        self.expand_ellipsis(subtemplate, *level, *nesting, vars, env, indices)?;
+                    let expanded = self.expand_ellipsis(
+                        subtemplate,
+                        *level,
+                        *nesting,
+                        vars,
+                        env,
+                        indices,
+                        in_quote_ctx,
+                    )?;
 
                     // Expanded ellipsis should be a list - splice it in
                     match expanded {
@@ -259,7 +296,7 @@ impl Expander {
                 }
             } else {
                 // Regular template - expands to single element
-                let value = self.expand_impl(template, env, indices)?;
+                let value = self.expand_impl(template, env, indices, in_quote_ctx)?;
                 result.push(value);
             }
         }
@@ -268,17 +305,31 @@ impl Expander {
         Ok(self.vec_to_list(result))
     }
 
+    /// Check if a template list represents a (quote ...) form
+    fn is_quote_template(&self, templates: &[Template]) -> bool {
+        if templates.len() >= 2 {
+            match &templates[0] {
+                Template::Symbol(id) => id.name().as_ref() == "quote",
+                Template::Literal(Value::Symbol(s)) => s.as_ref() == "quote",
+                _ => false,
+            }
+        } else {
+            false
+        }
+    }
+
     /// Expand a vector template
     fn expand_vector(
         &self,
         templates: &[Template],
         env: &MatchEnv,
         indices: &[usize],
+        inside_quote: bool,
     ) -> Result<Value, ExpandError> {
         let mut result = Vec::new();
 
         for template in templates {
-            let value = self.expand_impl(template, env, indices)?;
+            let value = self.expand_impl(template, env, indices, inside_quote)?;
             result.push(value);
         }
 
@@ -292,16 +343,17 @@ impl Expander {
         tail: &Template,
         env: &MatchEnv,
         indices: &[usize],
+        inside_quote: bool,
     ) -> Result<Value, ExpandError> {
         // Expand the fixed part
         let mut items = Vec::new();
         for template in templates {
-            let value = self.expand_impl(template, env, indices)?;
+            let value = self.expand_impl(template, env, indices, inside_quote)?;
             items.push(value);
         }
 
         // Expand the tail
-        let tail_value = self.expand_impl(tail, env, indices)?;
+        let tail_value = self.expand_impl(tail, env, indices, inside_quote)?;
 
         // Build dotted list
         let mut result = tail_value;
@@ -325,6 +377,7 @@ impl Expander {
     /// - `vars`: Pattern variables in the subtemplate that drive iteration
     /// - `env`: The match environment containing bound values
     /// - `indices`: Current indices into nested branches for outer ellipsis levels
+    /// - `inside_quote`: Whether we're inside a (quote ...) form
     ///
     /// # How Iteration Works
     ///
@@ -340,6 +393,7 @@ impl Expander {
     /// - `nesting = 1`: Standard ellipsis - iterate over branch and collect results
     /// - `nesting = 2`: Double ellipsis (SRFI-149) - expand and flatten one level
     /// - `nesting >= 3`: Not supported
+    #[allow(clippy::too_many_arguments)]
     fn expand_ellipsis(
         &self,
         subtemplate: &Template,
@@ -348,15 +402,16 @@ impl Expander {
         vars: &[PVRef],
         env: &MatchEnv,
         indices: &[usize],
+        inside_quote: bool,
     ) -> Result<Value, ExpandError> {
         if nesting == 1 {
             // Single ellipsis - standard iteration
-            self.expand_single_ellipsis(subtemplate, level, vars, env, indices)
+            self.expand_single_ellipsis(subtemplate, level, vars, env, indices, inside_quote)
         } else if nesting == 2 {
             // Double ellipsis (SRFI-149)
             // Template: x ... ...
             // This expands x at each level, then flattens one level
-            self.expand_double_ellipsis(subtemplate, level, vars, env, indices)
+            self.expand_double_ellipsis(subtemplate, level, vars, env, indices, inside_quote)
         } else {
             // Triple+ ellipsis not supported
             Err(ExpandError::InvalidTemplate {
@@ -373,6 +428,7 @@ impl Expander {
         vars: &[PVRef],
         env: &MatchEnv,
         indices: &[usize],
+        inside_quote: bool,
     ) -> Result<Value, ExpandError> {
         // Determine iteration count from the first variable
         // Note: For nested ellipsis patterns like ((item ...) ...), the variable
@@ -407,7 +463,7 @@ impl Expander {
             }
             new_indices[level as usize] = i;
 
-            let value = self.expand_impl(subtemplate, env, &new_indices)?;
+            let value = self.expand_impl(subtemplate, env, &new_indices, inside_quote)?;
             result.push(value);
         }
 
@@ -455,6 +511,7 @@ impl Expander {
         vars: &[PVRef],
         env: &MatchEnv,
         indices: &[usize],
+        inside_quote: bool,
     ) -> Result<Value, ExpandError> {
         self.validate_double_ellipsis_level(level)?;
 
@@ -469,6 +526,7 @@ impl Expander {
             vars,
             outer_count,
             max_var_level,
+            inside_quote,
         )?;
 
         Ok(self.vec_to_list(all_results))
@@ -519,13 +577,20 @@ impl Expander {
         vars: &[PVRef],
         outer_count: usize,
         max_var_level: usize,
+        inside_quote: bool,
     ) -> Result<Vec<Value>, ExpandError> {
         let mut all_results = Vec::new();
 
         for outer_idx in 0..outer_count {
             let outer_indices = self.build_outer_indices(indices, level, outer_idx, max_var_level);
-            let inner_results =
-                self.expand_inner_iterations(subtemplate, env, &outer_indices, vars, level)?;
+            let inner_results = self.expand_inner_iterations(
+                subtemplate,
+                env,
+                &outer_indices,
+                vars,
+                level,
+                inside_quote,
+            )?;
             all_results.extend(inner_results);
         }
 
@@ -558,6 +623,7 @@ impl Expander {
         outer_indices: &[usize],
         vars: &[PVRef],
         level: u8,
+        inside_quote: bool,
     ) -> Result<Vec<Value>, ExpandError> {
         let inner_count = self.get_inner_iteration_count(vars, env, outer_indices)?;
         let var_level = self.get_inner_var_level(vars, level);
@@ -567,7 +633,7 @@ impl Expander {
         for inner_idx in 0..inner_count {
             let inner_indices =
                 self.build_inner_indices(outer_indices, inner_idx, var_level, max_var_level);
-            let value = self.expand_impl(subtemplate, env, &inner_indices)?;
+            let value = self.expand_impl(subtemplate, env, &inner_indices, inside_quote)?;
             results.push(value);
         }
 
@@ -791,6 +857,11 @@ impl Expander {
             return value;
         }
 
+        // Check if this is a (quote ...) form - quoted data should not have scopes added
+        if self.is_quote_form(&value) {
+            return value;
+        }
+
         match value {
             // Convert Symbol to Identifier with macro_scope
             // This marks it as "came from outer macro expansion"
@@ -817,19 +888,28 @@ impl Expander {
                 Value::Pair(Rc::new(RefCell::new((new_car, new_cdr))))
             }
 
-            // Recursively mark vectors
-            Value::Vector(vec) => {
-                let new_elements: Vec<_> = vec
-                    .borrow()
-                    .iter()
-                    .map(|elem| self.mark_substituted_value(elem.clone()))
-                    .collect();
-                Value::Vector(Rc::new(RefCell::new(new_elements)))
-            }
+            // Vectors are self-quoting data - don't mark their contents
+            // Symbols inside vectors should remain as symbols, not identifiers
+            Value::Vector(_) => value,
 
             // Other values pass through unchanged
             _ => value,
         }
+    }
+
+    /// Check if a value is a (quote <datum>) form
+    /// Quoted data should remain as-is without scope marking
+    fn is_quote_form(&self, value: &Value) -> bool {
+        if let Value::Pair(pair) = value {
+            let borrowed = pair.borrow();
+            if let Value::Symbol(s) = &borrowed.0 {
+                return s.as_ref() == "quote";
+            }
+            if let Value::Identifier(id) = &borrowed.0 {
+                return id.name.as_ref() == "quote";
+            }
+        }
+        false
     }
 
     /// Check if a value is a form whose contents should not be marked.

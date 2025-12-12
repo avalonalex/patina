@@ -14,6 +14,7 @@
 
 pub mod compiled_macro;
 pub mod core_expr;
+pub mod cps_expr;
 pub mod debug_format;
 pub mod environment;
 pub mod library;
@@ -27,6 +28,7 @@ pub mod value;
 // Re-export main types for convenience
 pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, Pattern, Template};
 pub use core_expr::{CoreExpr, Formals, Primitive, ScopedParam, Symbol};
+pub use cps_expr::{CpsExpr, CpsParam, CpsPrimitive, PromptTag};
 pub use environment::{Environment, ScopedBinding};
 pub use library::Library;
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};

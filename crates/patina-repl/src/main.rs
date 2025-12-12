@@ -12,18 +12,47 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
 
+    // Parse command-line options
+    let mut use_cps = false;
+    let mut filename: Option<String> = None;
+
+    for arg in args.iter().skip(1) {
+        if arg == "--cps" {
+            use_cps = true;
+        } else if arg == "--help" || arg == "-h" {
+            print_help();
+            process::exit(0);
+        } else if !arg.starts_with('-') {
+            filename = Some(arg.clone());
+        } else {
+            eprintln!("Unknown option: {}", arg);
+            print_help();
+            process::exit(1);
+        }
+    }
+
     // Check if a file argument was provided
-    if args.len() > 1 {
+    if let Some(file) = filename {
         // Script mode: run the provided file
-        let filename = &args[1];
-        run_script(filename);
+        run_script(&file, use_cps);
     } else {
         // REPL mode: interactive shell
-        run_repl();
+        run_repl(use_cps);
     }
 }
 
-fn run_script(filename: &str) {
+fn print_help() {
+    eprintln!("Usage: patina [OPTIONS] [FILE]");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --cps     Enable CPS evaluation mode (supports call/cc)");
+    eprintln!("  --help    Show this help message");
+    eprintln!();
+    eprintln!("If FILE is provided, run it as a script.");
+    eprintln!("Otherwise, start an interactive REPL.");
+}
+
+fn run_script(filename: &str, use_cps: bool) {
     // Read the file
     let code = match fs::read_to_string(filename) {
         Ok(content) => content,
@@ -34,7 +63,11 @@ fn run_script(filename: &str) {
     };
 
     // Create interpreter and run the program
-    let interp = TreeWalkInterpreter::new_tree_walker();
+    let interp = if use_cps {
+        TreeWalkInterpreter::new_tree_walker_with_cps()
+    } else {
+        TreeWalkInterpreter::new_tree_walker()
+    };
 
     // Check if this is a test file by looking for common test patterns
     let is_test_file = filename.contains("test") || code.contains("test-begin");
@@ -58,8 +91,8 @@ fn run_script(filename: &str) {
     }
 }
 
-fn run_repl() {
-    match Repl::new() {
+fn run_repl(use_cps: bool) {
+    match Repl::new_with_cps(use_cps) {
         Ok(mut repl) => {
             if let Err(e) = repl.run() {
                 eprintln!("REPL error: {}", e);

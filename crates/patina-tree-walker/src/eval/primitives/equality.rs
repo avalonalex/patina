@@ -76,6 +76,12 @@ pub(in crate::eval) fn values_eqv(a: &Value, b: &Value) -> bool {
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Null, Value::Null) => true,
         (Value::Symbol(a), Value::Symbol(b)) => a.as_ref() == b.as_ref(),
+        // Identifiers with the same name are eqv? to symbols (for quoted data comparison)
+        // This is needed because macro expansion can produce Identifiers in quoted contexts
+        // that should compare equal to regular symbols.
+        (Value::Symbol(a), Value::Identifier(b)) => a.as_ref() == b.name.as_ref(),
+        (Value::Identifier(a), Value::Symbol(b)) => a.name.as_ref() == b.as_ref(),
+        (Value::Identifier(a), Value::Identifier(b)) => a.name.as_ref() == b.name.as_ref(),
         // R7RS: eqv? for exact numbers compares mathematical values
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Integer(a), Value::BigInteger(b)) => BigInt::from(*a) == *b,
@@ -135,6 +141,10 @@ pub(in crate::eval) fn values_equal(a: &Value, b: &Value) -> Result<bool, EvalEr
         (Value::Null, Value::Null) => true,
         (Value::String(x), Value::String(y)) => *x.borrow() == *y.borrow(),
         (Value::Symbol(x), Value::Symbol(y)) => x.as_ref() == y.as_ref(),
+        // Identifiers with the same name are equal? to symbols
+        (Value::Symbol(x), Value::Identifier(y)) => x.as_ref() == y.name.as_ref(),
+        (Value::Identifier(x), Value::Symbol(y)) => x.name.as_ref() == y.as_ref(),
+        (Value::Identifier(x), Value::Identifier(y)) => x.name.as_ref() == y.name.as_ref(),
         (Value::Pair(x), Value::Pair(y)) => {
             let bx = x.borrow();
             let by = y.borrow();

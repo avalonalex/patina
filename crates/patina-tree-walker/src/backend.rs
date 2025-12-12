@@ -4,11 +4,21 @@
 //! and implements the `Backend` trait from `patina-runtime`. This allows the
 //! tree-walker to be used as a pluggable backend in the interpreter.
 
-use crate::eval::{EvalError, Evaluator};
+use crate::eval::{eval_cps, EvalError, Evaluator};
 use patina_runtime::{Backend, Environment, Value};
 use std::rc::Rc;
 
 // Note: All special forms now in CoreExpr - no fallback forms needed!
+
+/// Evaluation mode for the tree-walker backend
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EvalMode {
+    /// Direct CoreExpr evaluation (default, faster)
+    #[default]
+    Direct,
+    /// CPS transformation then evaluation (supports call/cc, shift/reset)
+    Cps,
+}
 
 /// Tree-walking interpreter backend
 ///
@@ -16,6 +26,15 @@ use std::rc::Rc;
 /// `Backend` trait. It provides the same functionality as the raw `Evaluator`,
 /// but with a standardized interface that allows it to be swapped with other
 /// backends (VM, JIT, etc.).
+///
+/// # Evaluation Modes
+///
+/// The tree-walker supports two evaluation modes:
+///
+/// - **Direct** (default): Evaluates CoreExpr directly. Faster but doesn't support
+///   first-class continuations.
+/// - **CPS**: Transforms CoreExpr to CpsExpr before evaluation. Slower but supports
+///   `call/cc`, `shift`, `reset`, and other continuation operations.
 ///
 /// # Example
 ///
@@ -28,7 +47,8 @@ use std::rc::Rc;
 /// let result = backend.eval_global(&expr).unwrap();
 /// ```
 pub struct TreeWalker {
-    evaluator: Evaluator,
+    evaluator: Rc<Evaluator>,
+    mode: EvalMode,
 }
 
 impl TreeWalker {
@@ -38,9 +58,24 @@ impl TreeWalker {
     /// - Global environment with all R7RS primitives
     /// - Library loading infrastructure
     /// - Bootstrap macros (let, cond, case, etc.)
+    ///
+    /// Uses Direct evaluation mode by default.
     pub fn new() -> Self {
         TreeWalker {
-            evaluator: Evaluator::new(),
+            evaluator: Rc::new(Evaluator::new()),
+            mode: EvalMode::Direct,
+        }
+    }
+
+    /// Create a new tree-walking backend with CPS evaluation mode
+    ///
+    /// This enables support for first-class continuations (call/cc) and
+    /// delimited continuations (shift/reset). Use this when you need
+    /// continuation support.
+    pub fn new_with_cps() -> Self {
+        TreeWalker {
+            evaluator: Rc::new(Evaluator::new()),
+            mode: EvalMode::Cps,
         }
     }
 
@@ -50,7 +85,28 @@ impl TreeWalker {
     /// before creating the backend (e.g., adding search paths, installing
     /// custom primitives).
     pub fn from_evaluator(evaluator: Evaluator) -> Self {
-        TreeWalker { evaluator }
+        TreeWalker {
+            evaluator: Rc::new(evaluator),
+            mode: EvalMode::Direct,
+        }
+    }
+
+    /// Create a tree-walker from an existing evaluator with specified mode
+    pub fn from_evaluator_with_mode(evaluator: Evaluator, mode: EvalMode) -> Self {
+        TreeWalker {
+            evaluator: Rc::new(evaluator),
+            mode,
+        }
+    }
+
+    /// Get the current evaluation mode
+    pub fn mode(&self) -> EvalMode {
+        self.mode
+    }
+
+    /// Set the evaluation mode
+    pub fn set_mode(&mut self, mode: EvalMode) {
+        self.mode = mode;
     }
 
     /// Get a reference to the underlying evaluator
@@ -81,7 +137,7 @@ impl Backend for TreeWalker {
         // CoreExpr pipeline with MACRO-AWARE DESUGARING:
         // 1. Create desugarer with environment (enables macro expansion)
         // 2. Desugar - the desugarer will expand macros as needed during desugaring
-        // 3. Evaluate via CoreExpr
+        // 3. Evaluate via CoreExpr (Direct mode) or CpsExpr (CPS mode)
         //
         // This approach is better than pre-expanding all macros because:
         // - The desugarer knows which parts of each special form to expand
@@ -99,8 +155,17 @@ impl Backend for TreeWalker {
             EvalError::InternalError(format!("Failed to desugar expression: {}", e))
         })?;
 
-        // Evaluate via CoreExpr
-        eval_core(&core_expr, env.clone(), &self.evaluator)
+        // Evaluate based on mode
+        match self.mode {
+            EvalMode::Direct => {
+                // Direct CoreExpr evaluation (faster, no continuation support)
+                eval_core(&core_expr, env.clone(), &self.evaluator)
+            }
+            EvalMode::Cps => {
+                // CPS transformation then evaluation (supports call/cc, shift/reset)
+                eval_cps(&core_expr, env.clone(), &self.evaluator)
+            }
+        }
     }
 
     fn global_env(&self) -> &Rc<Environment> {
@@ -174,5 +239,59 @@ mod tests {
         let result = backend.eval(&expr, &custom_env).unwrap();
 
         assert!(matches!(result, Value::Integer(99)));
+    }
+
+    #[test]
+    fn test_tree_walker_cps_mode() {
+        // Create backend with CPS mode
+        let backend = TreeWalker::new_with_cps();
+        assert_eq!(backend.mode(), EvalMode::Cps);
+
+        // CPS mode should still evaluate simple expressions
+        let expr = Value::Integer(42);
+        let result = backend.eval_global(&expr).unwrap();
+        assert!(matches!(result, Value::Integer(42)));
+    }
+
+    #[test]
+    fn test_tree_walker_cps_arithmetic() {
+        // Build (+ 1 2 3) as a Value
+        use std::cell::RefCell;
+        use std::rc::Rc as StdRc;
+
+        let backend = TreeWalker::new_with_cps();
+
+        let plus = Value::Symbol(StdRc::from("+"));
+        let one = Value::Integer(1);
+        let two = Value::Integer(2);
+        let three = Value::Integer(3);
+
+        let expr = Value::Pair(StdRc::new(RefCell::new((
+            plus,
+            Value::Pair(StdRc::new(RefCell::new((
+                one,
+                Value::Pair(StdRc::new(RefCell::new((
+                    two,
+                    Value::Pair(StdRc::new(RefCell::new((three, Value::Null)))),
+                )))),
+            )))),
+        ))));
+
+        let result = backend.eval_global(&expr).unwrap();
+        assert!(matches!(result, Value::Integer(6)));
+    }
+
+    #[test]
+    fn test_tree_walker_mode_switch() {
+        let mut backend = TreeWalker::new();
+        assert_eq!(backend.mode(), EvalMode::Direct);
+
+        backend.set_mode(EvalMode::Cps);
+        assert_eq!(backend.mode(), EvalMode::Cps);
+
+        // Should still work
+        let expr = Value::Integer(100);
+        let result = backend.eval_global(&expr).unwrap();
+        assert!(matches!(result, Value::Integer(100)));
     }
 }

@@ -203,6 +203,13 @@ fn flip_scope_on_value(
         Value::Symbol(_) => value.clone(),
 
         // Pairs: recursively flip both car and cdr
+        // Note: We DO recurse into (quote ...) forms because:
+        // 1. If the quoted datum came from a pattern variable substitution, it will have scopes
+        //    and those scopes need to be flipped for proper hygiene
+        // 2. If the quoted datum is literal data (plain Symbols), flip_scope is a no-op on Symbols
+        //    so they remain unchanged
+        // This distinction allows nested macro definitions to work correctly - the substituted
+        // values inside (quote y) get their scopes flipped, while literal symbols stay as symbols.
         Value::Pair(pair) => {
             let borrowed = pair.borrow();
             let new_car = flip_scope_on_value(&borrowed.0, scope);
@@ -210,15 +217,9 @@ fn flip_scope_on_value(
             Value::Pair(Rc::new(RefCell::new((new_car, new_cdr))))
         }
 
-        // Vectors: recursively flip all elements
-        Value::Vector(vec) => {
-            let new_elements: Vec<_> = vec
-                .borrow()
-                .iter()
-                .map(|elem| flip_scope_on_value(elem, scope))
-                .collect();
-            Value::Vector(Rc::new(RefCell::new(new_elements)))
-        }
+        // Vectors are self-quoting data - don't flip their contents
+        // Symbols inside vectors should remain unchanged
+        Value::Vector(_) => value.clone(),
 
         // All other values pass through unchanged
         _ => value.clone(),

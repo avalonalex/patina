@@ -19,6 +19,7 @@ pub mod registry;
 mod arithmetic;
 mod bytevectors;
 mod characters;
+mod continuations;
 mod conversion;
 mod debug;
 pub(in crate::eval) mod equality;
@@ -97,6 +98,7 @@ impl Evaluator {
         arithmetic::register(registry);
         bytevectors::register(registry);
         characters::register(registry);
+        continuations::register(registry);
         conversion::register(registry);
         lists::register(registry);
         higher_order::register(registry);

@@ -25,10 +25,17 @@ pub fn build_internal_control(_name: Vec<String>, env: Rc<Environment>) -> Vec<S
         // Multiple values
         ("values", Arity::Min(0)),
         ("call-with-values", Arity::Exact(2)),
-        // Continuations
+        // Continuations - R7RS standard
         ("call-with-current-continuation", Arity::Exact(1)),
         ("call/cc", Arity::Exact(1)),
         ("dynamic-wind", Arity::Exact(3)),
+        // Continuation predicates and delimited control operators
+        ("continuation?", Arity::Exact(1)),
+        ("make-continuation-prompt-tag", Arity::Range(0, 1)),
+        ("continuation-prompt-tag?", Arity::Exact(1)),
+        ("default-continuation-prompt-tag", Arity::Exact(0)),
+        ("call-with-continuation-prompt", Arity::Min(1)),
+        ("abort-current-continuation", Arity::Min(1)),
     ];
 
     let mut exports = Vec::new();

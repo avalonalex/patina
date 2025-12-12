@@ -1,11 +1,71 @@
-# Implementing `call/cc` in Patina's Tree-Walking Interpreter
+# Implementing Continuations in Patina's Tree-Walking Interpreter
 
-**Last Updated**: 2025-11-11
-**Status**: Design Document (Not Yet Implemented)
+**Last Updated**: 2025-12-11
+**Status**: Partially Implemented (call/cc working, shift/reset pending)
+
+## Implementation Status (2025-12-11)
+
+### ✅ Completed
+
+1. **CPS Infrastructure** - Full CPS transformation and evaluation
+   - `CpsExpr` IR in `patina-core/src/cps_expr.rs`
+   - CPS transformer in `patina-ir/src/cps_transform.rs`
+   - CPS evaluator in `patina-tree-walker/src/eval/cps_eval.rs`
+   - Trampoline pattern for stack safety
+
+2. **Basic call/cc** - Working implementation
+   - `(call-with-current-continuation proc)` and `(call/cc proc)` work
+   - Continuations satisfy `procedure?` predicate
+   - Continuation invocation properly aborts current computation
+   - Works with library functions like `for-each` (via continuation escape mechanism)
+
+3. **Continuation Escape Through Direct Evaluator**
+   - Thread-local storage for escaping continuations (see `CPS_CONTINUATION_ESCAPE.md`)
+   - When CPS lambda invokes continuation inside library function (e.g., `for-each`), properly escapes
+
+4. **Test Results**
+   - Chibi r7rs-tests.scm: 1127/1158 passing (97.3%)
+   - `(call-with-current-continuation procedure?)` → `#t`
+   - `(call-with-current-continuation (lambda (exit) (for-each ... (exit x) ...) #t))` → works
+
+### 🚧 Not Yet Implemented
+
+1. **Delimited Continuations (shift/reset)** - Designed but not coded
+   - Prompt stack infrastructure
+   - `make-continuation-prompt-tag`
+   - `call-with-continuation-prompt`
+   - `abort-current-continuation`
+   - `call-with-composable-continuation`
+   - `(patina control)` library
+
+2. **dynamic-wind** - Not implemented
+   - Wind handler tracking exists but not fully wired up
+   - Tests that use `dynamic-wind` fail
+
+3. **Exception Handling** - Not implemented
+   - `guard`, `raise`, `raise-continuable`
+   - `with-exception-handler`
+
+### 📋 Technical Debt
+
+- **Thread-local escape mechanism** - See `CPS_CONTINUATION_ESCAPE.md` for cleanup plan
+- **`--cps` flag** - Currently transitional; goal is to make CPS the default mode
+
+---
 
 ## Overview
 
-This document details how to implement `call-with-current-continuation` (and its abbreviation `call/cc`) in Patina's tree-walking interpreter. The implementation captures the current execution state and packages it as a first-class procedure (the continuation) that can be invoked to "return" to that point with a value.
+This document details how to implement continuations in Patina's tree-walking interpreter using **CPS (Continuation-Passing Style) transformation**. The implementation provides:
+
+1. **R7RS `call/cc`** - Full continuations for R7RS compliance
+2. **Delimited continuations** - Racket-style `shift`/`reset` via `(patina control)` library
+3. **Exception handling foundation** - `guard`/`raise` built on delimited continuations
+
+**Key Decision**: We use CPS transformation rather than explicit continuation stacks because:
+- CPS naturally supports both full and delimited continuations
+- Delimited continuations (`shift`/`reset`) are the more fundamental primitive
+- `call/cc` can be elegantly implemented in terms of `shift`/`reset`
+- This aligns with Phase 2 VM design which uses delimited continuations as the primitive
 
 ## R7RS Requirements
 
@@ -13,565 +73,1553 @@ From R7RS-small section 6.10 (Control features):
 
 - **Procedure**: `(call-with-current-continuation proc)`
 - **Procedure**: `(call/cc proc)` - abbreviation for the above
+- **Procedure**: `(dynamic-wind before thunk after)`
 
-> Captures the current continuation and passes it as an argument to `proc`. When the continuation is later invoked with a value, execution immediately returns to the point where `call/cc` was called, as if `call/cc` had returned that value.
-
-**Key properties:**
+**Key properties of continuations:**
 1. Continuations are first-class values (can be stored, passed around)
 2. Continuations can be invoked multiple times
 3. Continuations have indefinite extent (outlive their dynamic scope)
 4. Invoking a continuation abandons the current computation
+5. `dynamic-wind` handlers must be called when crossing continuation boundaries
 
-## Patina's Current Architecture
+## Architecture: CPS Transformation
 
-### Trampoline-Based TCO
+### Why CPS Over Explicit Continuation Stack
 
-Patina uses a trampoline pattern for tail call optimization (`crates/patina-tree-walker/src/eval/mod.rs:177-219`):
+The previous design considered an "explicit continuation stack" approach, but CPS transformation is superior for several reasons:
+
+| Aspect | Explicit Stack | CPS Transformation |
+|--------|---------------|-------------------|
+| Delimited continuations | Complex (need prompt markers) | Natural (just capture up to reset) |
+| Full continuations | Must copy entire stack | Continuation is just a closure |
+| Implementation | Many continuation frame types | Uniform: everything is a function |
+| TCO | Must track tail position carefully | Naturally preserved |
+| Exception handling | Separate unwind mechanism | Just abort to handler prompt |
+
+### CPS Basics
+
+In CPS, every function takes an extra parameter: the continuation (what to do with the result).
+
+```scheme
+;; Direct style
+(define (add1 x) (+ x 1))
+(add1 5)  ; => 6
+
+;; CPS style
+(define (add1-cps x k) (k (+ x 1)))
+(add1-cps 5 (lambda (result) result))  ; => 6
+```
+
+**Key insight**: In CPS, control flow is explicit. "Returning" means calling the continuation. "Escaping" means calling a different continuation.
+
+### Delimited Continuations: shift/reset
+
+Delimited continuations are more powerful and easier to implement than full `call/cc`. They provide bounded continuation capture.
+
+```scheme
+;; reset establishes a boundary (prompt)
+;; shift captures the continuation up to the enclosing reset
+
+(+ 1 (reset (+ 2 (shift k (k (k 10))))))
+; Step 1: shift captures k = (lambda (v) (+ 2 v))
+; Step 2: (k (k 10)) = (k (+ 2 10)) = (k 12) = (+ 2 12) = 14
+; Step 3: (+ 1 14) = 15
+```
+
+**Why delimited is better:**
+- **Bounded**: Only captures stack up to the prompt (not entire stack)
+- **Composable**: Multiple prompts can be nested with different tags
+- **Efficient**: Smaller continuations, faster capture
+- **Expressive**: Can implement exceptions, generators, async/await
+
+### Implementation Options for call/cc
+
+Since we're using CPS transformation, we have three options for implementing `call/cc`:
+
+#### Option A: call/cc Directly on CPS
+
+In CPS, every function already takes an explicit continuation parameter `k`. Implementing `call/cc` is straightforward—the continuation is literally what's being passed around.
 
 ```rust
-pub enum EvalResult {
-    Value(Value),                                    // Final result
-    TailCall { expr: Value, env: Rc<Environment> },  // Tail call to continue
-    TailCallPrimitive { proc: Value, args: Vec<Value> }, // Primitive tail call
+// In CPS evaluator, call/cc is trivial:
+fn eval_callcc(&mut self, f: Value, k: Continuation, env: Env) -> Result<Value, EvalError> {
+    // The continuation 'k' is already available - wrap it as a Value and pass to f
+    let reified_k = Value::Continuation(k.clone());
+
+    // (call/cc f) = (f k), where k is the current continuation
+    self.apply(f, vec![reified_k], k, env)
+}
+```
+
+```scheme
+;; Conceptually in CPS:
+;; (call/cc f) transforms to:
+;; (f (lambda (v ignore-k) (k v)) k)
+;;     ^^^^^^^^^^^^^^^^^^^^^^
+;;     captured continuation that ignores its own continuation
+```
+
+| Pros | Cons |
+|------|------|
+| Simple - continuation already explicit | Full continuations only (no bounded capture) |
+| Efficient - no prompt lookup overhead | `dynamic-wind` needs separate tracking |
+| Direct mapping to CPS semantics | Can't express shift/reset on top of it easily |
+| Easy to understand and debug | Less unified model |
+
+#### Option B: call/cc via shift/reset
+
+Build `call/cc` on top of delimited continuations with a top-level prompt:
+
+```scheme
+;; call/cc in terms of shift/reset (Racket style)
+(define *top-level-prompt* (make-continuation-prompt-tag 'top-level))
+
+(define (call/cc f)
+  (call-with-composable-continuation
+    (lambda (k)
+      (f (lambda (v)
+           (abort-current-continuation *top-level-prompt* (lambda () (k v))))))
+    *top-level-prompt*))
+```
+
+| Pros | Cons |
+|------|------|
+| Unified model - one primitive for all control | More machinery (prompt stack, tags, abort) |
+| shift/reset can implement call/cc, generators, exceptions | Overhead from prompt lookup |
+| `dynamic-wind` integrates naturally with prompts | More complex mental model |
+| Matches Racket's proven architecture | call/cc performance slightly worse |
+
+#### Option C: Hybrid Approach (Recommended)
+
+Implement both primitives sharing the same infrastructure:
+
+```
+                    CPS Evaluator
+                         │
+         ┌───────────────┴───────────────┐
+         │                               │
+    call/cc (direct)            shift/reset (prompt-based)
+         │                               │
+         └───────────────┬───────────────┘
+                         │
+              Shared Infrastructure:
+              • Continuation representation
+              • dynamic-wind handler stack
+              • Environment capture
+```
+
+**How it works:**
+
+1. **Shared continuation representation** - Both use the same `Continuation` type (a CPS closure + captured environment)
+
+2. **call/cc is direct** - Since continuation is already explicit in CPS, just reify it:
+   ```rust
+   fn call_cc(&mut self, f: Value, k: Continuation) -> Result<Value, EvalError> {
+       let wrapped_k = self.reify_continuation(k.clone());
+       self.apply(f, vec![wrapped_k], k)
+   }
+   ```
+
+3. **shift/reset use prompt stack** - Add prompt markers to track delimited boundaries:
+   ```rust
+   fn reset(&mut self, body: CpsExpr, k: Continuation, tag: PromptTag) -> Result<Value, EvalError> {
+       self.prompt_stack.push(Prompt { tag, continuation: k });
+       self.eval(body, identity_continuation)
+   }
+
+   fn shift(&mut self, f: Value, tag: PromptTag) -> Result<Value, EvalError> {
+       let prompt = self.find_prompt(&tag)?;
+       let delimited_k = self.capture_to_prompt(&prompt);
+       // Pop frames up to prompt, apply f with captured continuation
+       self.apply(f, vec![delimited_k], prompt.continuation)
+   }
+   ```
+
+4. **dynamic-wind integrates with both** - Wind handlers tracked in evaluator state, checked on any continuation invocation
+
+| Pros | Cons |
+|------|------|
+| Efficient call/cc (no prompt overhead) | Two code paths to maintain |
+| Full power of delimited continuations | Slightly more complex implementation |
+| Best of both worlds | Need to ensure consistency between paths |
+| Clear separation of concerns | |
+
+#### Recommendation
+
+**Use Option C (Hybrid)** because:
+
+1. **call/cc is common** - Many Scheme programs use it; direct implementation is faster
+2. **shift/reset are powerful** - Needed for `(patina control)` library, generators, etc.
+3. **CPS makes both natural** - The continuation is already explicit, so both are straightforward
+4. **Shared infrastructure** - Continuation representation, `dynamic-wind`, environment capture are the same
+
+The key insight: in CPS, a continuation is just a closure. The difference between `call/cc` and `shift` is only *how much* of the continuation to capture:
+- `call/cc`: captures everything (full continuation)
+- `shift`: captures up to the nearest `reset` prompt (delimited)
+
+Both operations work on the same underlying representation.
+
+## Implementation Strategy
+
+### Phase 1: Core CPS Infrastructure
+
+#### 1.1 CPS-Converted CoreExpr
+
+Add a CPS intermediate representation:
+
+```rust
+// In crates/patina-ir/src/cps.rs (new file)
+
+/// CPS expression - every sub-expression has explicit continuation
+#[derive(Debug, Clone)]
+pub enum CpsExpr {
+    /// Literal value, pass to continuation
+    Literal {
+        value: Value,
+        cont: Box<CpsExpr>,
+    },
+
+    /// Variable reference, pass to continuation
+    Var {
+        name: String,
+        cont: Box<CpsExpr>,
+    },
+
+    /// Lambda (closure) - takes extra continuation parameter
+    Lambda {
+        params: Vec<String>,
+        cont_param: String,  // The continuation parameter
+        body: Box<CpsExpr>,
+    },
+
+    /// Application - evaluate operator, operands, then apply
+    App {
+        operator: Box<CpsExpr>,
+        operands: Vec<CpsExpr>,
+        cont: Box<CpsExpr>,
+    },
+
+    /// If - evaluate test, then branch
+    If {
+        test: Box<CpsExpr>,
+        consequent: Box<CpsExpr>,
+        alternate: Box<CpsExpr>,
+    },
+
+    /// Set! - evaluate value, mutate, continue
+    Set {
+        var: String,
+        value: Box<CpsExpr>,
+        cont: Box<CpsExpr>,
+    },
+
+    /// Begin - sequence expressions
+    Begin {
+        exprs: Vec<CpsExpr>,
+    },
+
+    /// Call continuation with value (the "return")
+    Continue {
+        cont: String,      // Continuation variable name
+        value: Box<CpsExpr>,
+    },
+
+    // === Delimited Continuation Primitives ===
+
+    /// Reset - establish a prompt boundary
+    Reset {
+        tag: PromptTag,
+        body: Box<CpsExpr>,
+        cont: Box<CpsExpr>,
+    },
+
+    /// Shift - capture continuation up to prompt
+    Shift {
+        tag: PromptTag,
+        cont_var: String,  // Binds captured continuation
+        body: Box<CpsExpr>,
+    },
+
+    /// Abort - jump to prompt, discarding intermediate computation
+    Abort {
+        tag: PromptTag,
+        value: Box<CpsExpr>,
+    },
 }
 
-pub fn eval(&self, expr: &Value) -> Result<Value, EvalError> {
-    let mut current_expr = expr.clone();
-    let mut current_env = self.global_env.clone();
+/// Prompt tag for identifying reset boundaries
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PromptTag {
+    pub name: String,
+    pub id: u64,  // Unique identifier
+}
+```
 
-    loop {
-        match self.eval_step(&current_expr, &current_env)? {
-            EvalResult::Value(v) => return Ok(v),
-            EvalResult::TailCall { expr, env } => {
-                current_expr = expr;
-                current_env = env;
+#### 1.2 CPS Transformation Pass
+
+Transform CoreExpr to CpsExpr:
+
+```rust
+// In crates/patina-frontend/src/cps_transform.rs (new file)
+
+use patina_ir::{CoreExpr, CpsExpr, PromptTag};
+
+pub struct CpsTransformer {
+    gensym_counter: u64,
+}
+
+impl CpsTransformer {
+    pub fn new() -> Self {
+        Self { gensym_counter: 0 }
+    }
+
+    fn gensym(&mut self, prefix: &str) -> String {
+        self.gensym_counter += 1;
+        format!("{}_{}", prefix, self.gensym_counter)
+    }
+
+    /// Transform CoreExpr to CPS
+    /// The `cont` parameter is what to do with the result
+    pub fn transform(&mut self, expr: &CoreExpr, cont: CpsCont) -> CpsExpr {
+        match expr {
+            CoreExpr::Literal(v) => {
+                // (literal v) in CPS: (cont v)
+                cont.apply(CpsExpr::Literal {
+                    value: v.clone(),
+                    cont: Box::new(CpsExpr::Halt), // placeholder
+                })
             }
-            // ... handle TailCallPrimitive
+
+            CoreExpr::Var(name) => {
+                // (var x) in CPS: (cont x)
+                cont.apply(CpsExpr::Var {
+                    name: name.clone(),
+                    cont: Box::new(CpsExpr::Halt),
+                })
+            }
+
+            CoreExpr::Lambda { params, variadic, body } => {
+                // (lambda (x ...) body) in CPS:
+                // (cont (lambda (x ... k) [body in CPS with k]))
+                let cont_param = self.gensym("k");
+                let cps_body = self.transform_body(body, &cont_param);
+
+                let mut all_params = params.clone();
+                // variadic handling...
+
+                cont.apply(CpsExpr::Lambda {
+                    params: all_params,
+                    cont_param,
+                    body: Box::new(cps_body),
+                })
+            }
+
+            CoreExpr::App { operator, operands } => {
+                // (f a b) in CPS:
+                // [f in CPS with (lambda (f')
+                //   [a in CPS with (lambda (a')
+                //     [b in CPS with (lambda (b')
+                //       (f' a' b' cont))])])]
+                self.transform_app(operator, operands, cont)
+            }
+
+            CoreExpr::If { test, consequent, alternate } => {
+                // (if test then else) in CPS:
+                // [test in CPS with (lambda (t)
+                //   (if t [then in CPS] [else in CPS]))]
+                let result_var = self.gensym("if_result");
+                let join_cont = cont.clone();
+
+                let cps_then = self.transform(consequent, join_cont.clone());
+                let cps_else = self.transform(alternate, join_cont);
+
+                self.transform(test, CpsCont::If {
+                    consequent: Box::new(cps_then),
+                    alternate: Box::new(cps_else),
+                })
+            }
+
+            // ... other cases
+        }
+    }
+
+    fn transform_body(&mut self, body: &[CoreExpr], cont_param: &str) -> CpsExpr {
+        // Transform body expressions, last one uses the continuation
+        if body.is_empty() {
+            CpsExpr::Continue {
+                cont: cont_param.to_string(),
+                value: Box::new(CpsExpr::Literal {
+                    value: Value::Unspecified,
+                    cont: Box::new(CpsExpr::Halt),
+                }),
+            }
+        } else if body.len() == 1 {
+            self.transform(&body[0], CpsCont::Var(cont_param.to_string()))
+        } else {
+            // Sequence: evaluate all but last for effect
+            let last = &body[body.len() - 1];
+            let init = &body[..body.len() - 1];
+
+            let cps_last = self.transform(last, CpsCont::Var(cont_param.to_string()));
+
+            init.iter().rev().fold(cps_last, |acc, expr| {
+                let ignore_var = self.gensym("_");
+                self.transform(expr, CpsCont::Seq {
+                    var: ignore_var,
+                    next: Box::new(acc),
+                })
+            })
+        }
+    }
+}
+
+/// Represents what to do with a value (meta-continuation during transform)
+#[derive(Clone)]
+enum CpsCont {
+    /// Pass to named continuation variable
+    Var(String),
+    /// Ignore result, continue with next expression
+    Seq { var: String, next: Box<CpsExpr> },
+    /// Branch based on boolean
+    If { consequent: Box<CpsExpr>, alternate: Box<CpsExpr> },
+    // ... other cases
+}
+
+impl CpsCont {
+    fn apply(&self, value_expr: CpsExpr) -> CpsExpr {
+        match self {
+            CpsCont::Var(k) => CpsExpr::Continue {
+                cont: k.clone(),
+                value: Box::new(value_expr),
+            },
+            CpsCont::Seq { var, next } => {
+                // Let-bind the value, then continue
+                CpsExpr::Let {
+                    var: var.clone(),
+                    value: Box::new(value_expr),
+                    body: next.clone(),
+                }
+            }
+            CpsCont::If { consequent, alternate } => {
+                CpsExpr::If {
+                    test: Box::new(value_expr),
+                    consequent: consequent.clone(),
+                    alternate: alternate.clone(),
+                }
+            }
         }
     }
 }
 ```
 
-**Implication**: The Rust call stack only grows to depth of deepest *non-tail* recursion. Tail calls are handled iteratively. However, we don't explicitly maintain a Scheme call stack - the continuation state is implicit in Rust's stack and the trampoline state.
+#### 1.3 CPS Evaluator
 
-### Value Representation
-
-The `Procedure` enum already has a `Continuation` variant (`crates/patina-runtime/src/value.rs:86`):
+Evaluate CPS expressions:
 
 ```rust
-pub enum Procedure {
-    Primitive { name: &'static str, arity: Arity },
-    Lambda { params: Vec<String>, variadic: Option<String>, body: Vec<Value>, env: Rc<Environment> },
-    Continuation,  // ← Currently unused placeholder
+// In crates/patina-tree-walker/src/eval/cps_eval.rs (new file)
+
+use patina_ir::CpsExpr;
+use patina_runtime::{Environment, Value};
+use std::collections::HashMap;
+use std::rc::Rc;
+
+/// Prompt stack for delimited continuations
+struct PromptStack {
+    prompts: Vec<Prompt>,
+}
+
+struct Prompt {
+    tag: PromptTag,
+    continuation: Rc<CpsClosure>,  // What to do after reset body completes
+    env: Rc<Environment>,
+}
+
+/// A captured delimited continuation
+#[derive(Clone)]
+struct DelimitedContinuation {
+    /// The CPS code representing the captured computation
+    body: Rc<CpsExpr>,
+    /// Environment at capture point
+    env: Rc<Environment>,
+    /// Prompt tag this was captured at
+    tag: PromptTag,
+}
+
+pub struct CpsEvaluator {
+    prompt_stack: PromptStack,
+    global_env: Rc<Environment>,
+}
+
+impl CpsEvaluator {
+    pub fn eval(&mut self, expr: &CpsExpr, env: Rc<Environment>) -> Result<Value, EvalError> {
+        match expr {
+            CpsExpr::Literal { value, .. } => Ok(value.clone()),
+
+            CpsExpr::Var { name, .. } => {
+                env.get(name).ok_or_else(|| EvalError::UndefinedVariable(name.clone()))
+            }
+
+            CpsExpr::Lambda { params, cont_param, body } => {
+                Ok(Value::Procedure(Procedure::CpsLambda {
+                    params: params.clone(),
+                    cont_param: cont_param.clone(),
+                    body: Rc::new((**body).clone()),
+                    env: env.clone(),
+                }))
+            }
+
+            CpsExpr::Continue { cont, value } => {
+                // Look up continuation and invoke it
+                let cont_val = env.get(cont)?;
+                let arg = self.eval(value, env.clone())?;
+                self.apply_continuation(cont_val, arg)
+            }
+
+            CpsExpr::Reset { tag, body, cont } => {
+                // Push prompt, evaluate body, pop prompt
+                let prompt = Prompt {
+                    tag: tag.clone(),
+                    continuation: self.capture_current_cont(cont, env.clone()),
+                    env: env.clone(),
+                };
+                self.prompt_stack.prompts.push(prompt);
+
+                let result = self.eval(body, env.clone())?;
+
+                self.prompt_stack.prompts.pop();
+
+                // Continue with reset's continuation
+                self.eval(cont, env.with_binding("reset_result", result))
+            }
+
+            CpsExpr::Shift { tag, cont_var, body } => {
+                // Find matching prompt
+                let prompt_idx = self.find_prompt(tag)?;
+
+                // Capture continuation from current point to prompt
+                let captured = self.capture_delimited_continuation(prompt_idx);
+
+                // Remove frames up to and including prompt
+                self.prompt_stack.prompts.truncate(prompt_idx);
+
+                // Bind captured continuation and evaluate body
+                let new_env = env.with_binding(cont_var,
+                    Value::DelimitedContinuation(captured));
+
+                self.eval(body, new_env)
+            }
+
+            CpsExpr::Abort { tag, value } => {
+                // Find matching prompt
+                let prompt_idx = self.find_prompt(tag)?;
+                let prompt = &self.prompt_stack.prompts[prompt_idx];
+
+                // Evaluate the value to abort with
+                let abort_value = self.eval(value, env)?;
+
+                // Discard everything up to prompt, invoke prompt's handler
+                let handler_cont = prompt.continuation.clone();
+                let handler_env = prompt.env.clone();
+
+                self.prompt_stack.prompts.truncate(prompt_idx);
+
+                // Invoke the prompt's continuation with abort value
+                self.apply_continuation(
+                    Value::CpsClosure(handler_cont),
+                    abort_value
+                )
+            }
+
+            // ... other cases
+        }
+    }
+
+    fn find_prompt(&self, tag: &PromptTag) -> Result<usize, EvalError> {
+        self.prompt_stack.prompts.iter()
+            .rposition(|p| p.tag == *tag)
+            .ok_or_else(|| EvalError::NoMatchingPrompt(tag.clone()))
+    }
+
+    fn capture_delimited_continuation(&self, prompt_idx: usize) -> DelimitedContinuation {
+        // Capture the computation from current point to prompt
+        // This is the key operation for shift
+        DelimitedContinuation {
+            // ... capture relevant state
+        }
+    }
 }
 ```
 
-**Problem**: The current `Continuation` variant has no state attached. We need to capture execution state.
+### Phase 2: Delimited Continuation Primitives
 
-## Implementation Strategy
-
-### Option 1: Explicit Continuation Stack (Recommended)
-
-**Approach**: Maintain an explicit continuation stack that captures what needs to happen after each expression.
-
-#### 1.1 Enhanced Value Representation
+#### 2.1 Value Representation Updates
 
 ```rust
 // In crates/patina-runtime/src/value.rs
 
 pub enum Procedure {
-    Primitive { name: &'static str, arity: Arity },
-    Lambda {
+    Primitive { name: &'static str, arity: Arity, library: Option<&'static str> },
+    Lambda { params: Vec<String>, variadic: Option<String>, body: Vec<Value>, env: Rc<Environment> },
+
+    // New: CPS lambda with explicit continuation parameter
+    CpsLambda {
         params: Vec<String>,
-        variadic: Option<String>,
-        body: Vec<Value>,
-        env: Rc<Environment>
-    },
-    Continuation {
-        // Captured continuation stack
-        stack: Rc<Vec<Continuation>>,
-        // Captured environment at call/cc point
+        cont_param: String,
+        body: Rc<CpsExpr>,
         env: Rc<Environment>,
+    },
+
+    // New: Captured delimited continuation
+    DelimitedContinuation {
+        captured_expr: Rc<CpsExpr>,
+        captured_env: Rc<Environment>,
+        prompt_tag: PromptTag,
+    },
+
+    // Full continuation (for call/cc compatibility)
+    FullContinuation {
+        // Implemented in terms of delimited continuation + top-level prompt
+        inner: Box<Procedure>,  // DelimitedContinuation
+        top_prompt: PromptTag,
     },
 }
 
-// Represents one continuation frame - what to do next
+// Prompt tag as a first-class value
+pub enum Value {
+    // ... existing variants ...
+
+    /// Continuation prompt tag
+    PromptTag(Rc<PromptTag>),
+
+    /// Delimited continuation (composable)
+    DelimitedContinuation(Rc<DelimitedContinuationData>),
+}
+
 #[derive(Debug, Clone)]
-pub enum Continuation {
-    /// Return from current call to parent
-    Return,
+pub struct PromptTag {
+    pub name: String,
+    pub id: u64,
+}
 
-    /// Evaluate remaining expressions in sequence
-    Sequence {
-        remaining: Vec<Value>,
-        env: Rc<Environment>,
-    },
-
-    /// After evaluating operator, evaluate operands
-    EvalOperands {
-        unevaluated_args: Vec<Value>,
-        env: Rc<Environment>,
-    },
-
-    /// After evaluating all operands, apply operator
-    Apply {
-        operator: Value,
-        evaluated_args: Vec<Value>,
-        in_tail_position: bool,
-    },
-
-    /// After evaluating condition, evaluate consequent or alternative
-    If {
-        consequent: Value,
-        alternative: Option<Value>,
-        env: Rc<Environment>,
-    },
-
-    /// After evaluating test, check cases
-    Case {
-        clauses: Vec<(Vec<Value>, Vec<Value>)>,  // (datums, body)
-        else_clause: Option<Vec<Value>>,
-        env: Rc<Environment>,
-    },
-
-    /// Set! - after evaluating value, assign to variable
-    Set {
-        name: String,
-        env: Rc<Environment>,
-    },
-
-    /// Define - after evaluating value, bind in environment
-    Define {
-        name: String,
-        env: Rc<Environment>,
-    },
+#[derive(Debug, Clone)]
+pub struct DelimitedContinuationData {
+    /// The captured computation
+    pub frames: Vec<ContinuationFrame>,
+    /// Environment at capture
+    pub env: Rc<Environment>,
+    /// Tag of the prompt this was captured at
+    pub tag: PromptTag,
 }
 ```
 
-**Rationale**: Each continuation frame represents a "what to do next" instruction. When we capture a continuation with `call/cc`, we clone the current continuation stack. When we invoke a continuation, we replace the current stack with the captured one.
-
-#### 1.2 Modified Evaluator
+#### 2.2 Primitive Implementations
 
 ```rust
-// In crates/patina-tree-walker/src/eval/mod.rs
+// In crates/patina-tree-walker/src/eval/primitives/control.rs
 
-pub struct Evaluator {
-    pub(in crate::eval) global_env: Rc<Environment>,
-    pub(crate) debug: Rc<DebugConfig>,
-    pub(crate) library_registry: RefCell<LibraryRegistry>,
-    pub(crate) loader_registry: RefCell<LibraryLoaderRegistry>,
-    // NEW: Thread-local continuation stack for current evaluation
-    continuation_stack: RefCell<Vec<Continuation>>,
+/// (make-continuation-prompt-tag) -> prompt-tag
+/// (make-continuation-prompt-tag name) -> prompt-tag
+fn make_continuation_prompt_tag(args: &[Value]) -> Result<Value, EvalError> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let name = match args.get(0) {
+        Some(Value::Symbol(s)) => s.to_string(),
+        Some(v) => return Err(EvalError::TypeError("symbol", v.type_name())),
+        None => "prompt".to_string(),
+    };
+
+    Ok(Value::PromptTag(Rc::new(PromptTag {
+        name,
+        id: COUNTER.fetch_add(1, Ordering::SeqCst),
+    })))
 }
 
-impl Evaluator {
-    pub fn eval(&self, expr: &Value) -> Result<Value, EvalError> {
-        // Clear continuation stack for new top-level evaluation
-        self.continuation_stack.borrow_mut().clear();
+/// (continuation-prompt-tag? v) -> boolean
+fn continuation_prompt_tag_p(args: &[Value]) -> Result<Value, EvalError> {
+    check_arity(args, 1)?;
+    Ok(Value::Boolean(matches!(args[0], Value::PromptTag(_))))
+}
 
-        let mut current_value = None;
-        let mut current_expr = Some(expr.clone());
-        let mut current_env = self.global_env.clone();
+/// (call-with-continuation-prompt thunk tag [handler]) -> value
+/// Establishes a prompt and calls thunk
+fn call_with_continuation_prompt(
+    evaluator: &CpsEvaluator,
+    args: &[Value],
+    env: Rc<Environment>,
+) -> Result<Value, EvalError> {
+    check_arity_range(args, 2, 3)?;
 
-        loop {
-            if let Some(expr) = current_expr.take() {
-                // Evaluate the expression
-                match self.eval_step(&expr, &current_env)? {
-                    EvalResult::Value(v) => {
-                        current_value = Some(v);
-                        // Expression evaluated to value, process continuation
-                    }
-                    EvalResult::TailCall { expr, env } => {
-                        // Tail call - continue with new expression
-                        current_expr = Some(expr);
-                        current_env = env;
-                        continue;
-                    }
-                    EvalResult::TailCallPrimitive { proc, args } => {
-                        // Handle primitive tail call
-                        // ... existing logic ...
-                    }
-                }
-            }
+    let thunk = args[0].as_procedure()?;
+    let tag = args[1].as_prompt_tag()?;
+    let handler = args.get(2).cloned();
 
-            // Process the continuation stack
-            if let Some(value) = current_value.take() {
-                match self.continuation_stack.borrow_mut().pop() {
-                    None => {
-                        // No more continuations - we're done
-                        return Ok(value);
-                    }
-                    Some(cont) => {
-                        // Process this continuation with the value
-                        match self.apply_continuation(cont, value, &mut current_expr, &mut current_env)? {
-                            ContResult::Continue(v) => {
-                                current_value = Some(v);
-                            }
-                            ContResult::Eval { expr, env } => {
-                                current_expr = Some(expr);
-                                current_env = env;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    evaluator.with_prompt(tag, handler, || {
+        evaluator.apply(thunk, vec![], env)
+    })
+}
+
+/// (abort-current-continuation tag value) -> (never returns normally)
+/// Aborts to the nearest prompt with the given tag
+fn abort_current_continuation(
+    evaluator: &CpsEvaluator,
+    args: &[Value],
+) -> Result<Value, EvalError> {
+    check_arity(args, 2)?;
+
+    let tag = args[0].as_prompt_tag()?;
+    let value = args[1].clone();
+
+    // This unwinds the stack to the prompt
+    Err(EvalError::Abort { tag: tag.clone(), value })
+}
+
+/// (call-with-composable-continuation proc tag) -> value
+/// Captures delimited continuation up to prompt with tag
+fn call_with_composable_continuation(
+    evaluator: &CpsEvaluator,
+    args: &[Value],
+    env: Rc<Environment>,
+) -> Result<Value, EvalError> {
+    check_arity(args, 2)?;
+
+    let proc = args[0].as_procedure()?;
+    let tag = args[1].as_prompt_tag()?;
+
+    // Capture continuation up to prompt
+    let captured = evaluator.capture_continuation_to_prompt(&tag)?;
+
+    // Call proc with the captured continuation
+    evaluator.apply(proc, vec![Value::DelimitedContinuation(captured)], env)
+}
+```
+
+### Phase 3: shift/reset Macros
+
+The high-level `shift` and `reset` are macros built on the primitives:
+
+```scheme
+;; In lib/patina/control.sld
+
+(define-library (patina control)
+  (export
+    ;; Prompt tags
+    make-continuation-prompt-tag
+    continuation-prompt-tag?
+    default-continuation-prompt-tag
+
+    ;; Low-level primitives
+    call-with-continuation-prompt
+    abort-current-continuation
+    call-with-composable-continuation
+
+    ;; High-level: shift/reset (Danvy/Filinski style)
+    reset
+    shift
+
+    ;; High-level: control/prompt (Felleisen style)
+    prompt
+    control
+
+    ;; R7RS call/cc (implemented via delimited continuations)
+    call-with-current-continuation
+    call/cc)
+
+  (import (scheme base)
+          (patina internal control))
+
+  (begin
+    ;; Default prompt tag for reset/shift
+    (define default-continuation-prompt-tag
+      (make-continuation-prompt-tag 'default))
+
+    ;; reset: establish a prompt boundary
+    ;; (reset expr ...) = (call-with-continuation-prompt (lambda () expr ...) default-tag)
+    (define-syntax reset
+      (syntax-rules ()
+        ((reset body ...)
+         (call-with-continuation-prompt
+           (lambda () body ...)
+           default-continuation-prompt-tag))))
+
+    ;; shift: capture delimited continuation
+    ;; (shift k body ...) captures k = continuation up to enclosing reset
+    (define-syntax shift
+      (syntax-rules ()
+        ((shift k body ...)
+         (call-with-composable-continuation
+           (lambda (k)
+             (abort-current-continuation
+               default-continuation-prompt-tag
+               (lambda () body ...)))
+           default-continuation-prompt-tag))))
+
+    ;; reset0/shift0: variants that don't re-establish prompt when invoking k
+    (define-syntax reset0
+      (syntax-rules ()
+        ((reset0 body ...)
+         (call-with-continuation-prompt
+           (lambda () body ...)
+           default-continuation-prompt-tag
+           (lambda (thunk) (thunk))))))  ; Handler just calls thunk
+
+    (define-syntax shift0
+      (syntax-rules ()
+        ((shift0 k body ...)
+         (call-with-composable-continuation
+           (lambda (raw-k)
+             (abort-current-continuation
+               default-continuation-prompt-tag
+               (lambda ()
+                 (let ((k (lambda (v)
+                            ;; Don't re-establish prompt
+                            (raw-k v))))
+                   body ...))))
+           default-continuation-prompt-tag))))
+
+    ;; Felleisen-style control/prompt (non-composable by default)
+    (define-syntax prompt
+      (syntax-rules ()
+        ((prompt body ...)
+         (call-with-continuation-prompt
+           (lambda () body ...)
+           default-continuation-prompt-tag
+           (lambda (thunk) (thunk))))))
+
+    (define-syntax control
+      (syntax-rules ()
+        ((control k body ...)
+         (call-with-composable-continuation
+           (lambda (k)
+             (abort-current-continuation
+               default-continuation-prompt-tag
+               (lambda () body ...)))
+           default-continuation-prompt-tag))))
+
+    ;; === R7RS call/cc ===
+    ;; Implemented via delimited continuations with a top-level prompt
+
+    (define top-level-prompt-tag
+      (make-continuation-prompt-tag 'top-level))
+
+    ;; call/cc: capture full continuation
+    ;; The continuation, when invoked, aborts to top-level
+    (define (call-with-current-continuation proc)
+      (call-with-composable-continuation
+        (lambda (k)
+          (proc (lambda (v)
+                  (abort-current-continuation
+                    top-level-prompt-tag
+                    (lambda () (k v))))))
+        top-level-prompt-tag))
+
+    (define call/cc call-with-current-continuation)))
+```
+
+### Phase 4: dynamic-wind Integration
+
+`dynamic-wind` must interact properly with continuations:
+
+```rust
+// In crates/patina-tree-walker/src/eval/cps_eval.rs
+
+/// Dynamic wind record
+#[derive(Clone)]
+struct DynamicWindRecord {
+    before: Value,  // Thunk to call on entry
+    after: Value,   // Thunk to call on exit
+    depth: usize,   // Nesting depth
+}
+
+impl CpsEvaluator {
+    /// Track dynamic-wind handlers
+    dynamic_winds: Vec<DynamicWindRecord>,
+
+    /// (dynamic-wind before thunk after)
+    fn dynamic_wind(&mut self, before: Value, thunk: Value, after: Value, env: Rc<Environment>)
+        -> Result<Value, EvalError>
+    {
+        // Call before thunk
+        self.apply(before.clone(), vec![], env.clone())?;
+
+        // Push wind record
+        let record = DynamicWindRecord {
+            before: before.clone(),
+            after: after.clone(),
+            depth: self.dynamic_winds.len(),
+        };
+        self.dynamic_winds.push(record);
+
+        // Call main thunk
+        let result = self.apply(thunk, vec![], env.clone());
+
+        // Pop wind record
+        self.dynamic_winds.pop();
+
+        // Call after thunk
+        self.apply(after, vec![], env)?;
+
+        result
     }
 
-    fn apply_continuation(
-        &self,
-        cont: Continuation,
+    /// When invoking a continuation, run appropriate dynamic-wind handlers
+    fn invoke_continuation_with_winds(
+        &mut self,
+        cont: &DelimitedContinuationData,
         value: Value,
-        expr_out: &mut Option<Value>,
-        env_out: &mut Rc<Environment>,
-    ) -> Result<ContResult, EvalError> {
-        match cont {
-            Continuation::Return => {
-                // Just pass value up
-                Ok(ContResult::Continue(value))
-            }
+    ) -> Result<Value, EvalError> {
+        let current_depth = self.dynamic_winds.len();
+        let target_depth = cont.wind_depth;
 
-            Continuation::Sequence { remaining, env } => {
-                if remaining.is_empty() {
-                    Ok(ContResult::Continue(value))
-                } else {
-                    // Push continuation for rest of sequence
-                    if remaining.len() > 1 {
-                        self.continuation_stack.borrow_mut().push(
-                            Continuation::Sequence {
-                                remaining: remaining[1..].to_vec(),
-                                env: env.clone(),
-                            }
-                        );
-                    }
-                    // Evaluate next expression
-                    Ok(ContResult::Eval {
-                        expr: remaining[0].clone(),
-                        env,
-                    })
-                }
-            }
-
-            Continuation::Apply { operator, evaluated_args, in_tail_position } => {
-                // All operands evaluated, now apply
-                // Don't push a continuation if in tail position
-                if !in_tail_position {
-                    self.continuation_stack.borrow_mut().push(Continuation::Return);
-                }
-                match self.apply(operator, evaluated_args, in_tail_position)? {
-                    EvalResult::Value(v) => Ok(ContResult::Continue(v)),
-                    EvalResult::TailCall { expr, env } => {
-                        Ok(ContResult::Eval { expr, env })
-                    }
-                    // ... handle TailCallPrimitive
-                }
-            }
-
-            // ... implement other continuation types
-        }
-    }
-}
-
-enum ContResult {
-    Continue(Value),           // Continue with this value
-    Eval { expr: Value, env: Rc<Environment> }, // Evaluate this expression
-}
-```
-
-#### 1.3 Implementing `call/cc`
-
-```rust
-// In crates/patina-tree-walker/src/eval/special_forms.rs
-
-fn handle_callcc(&self, args: &[Value], env: &Rc<Environment>) -> Result<EvalResult, EvalError> {
-    if args.len() != 1 {
-        return Err(EvalError::WrongArity {
-            expected: "1".to_string(),
-            actual: args.len(),
-        });
-    }
-
-    // Evaluate the procedure argument
-    let proc = self.eval_in_env(&args[0], env)?;
-
-    // Capture current continuation
-    let captured_stack = self.continuation_stack.borrow().clone();
-    let captured_env = env.clone();
-
-    let continuation = Value::Procedure(Procedure::Continuation {
-        stack: Rc::new(captured_stack),
-        env: captured_env,
-    });
-
-    // Apply proc to the continuation
-    // This is NOT in tail position - we need to return to the caller
-    self.apply(proc, vec![continuation], false)
-}
-```
-
-#### 1.4 Invoking a Continuation
-
-```rust
-// In crates/patina-tree-walker/src/eval/application.rs
-
-pub(super) fn apply(
-    &self,
-    proc: Value,
-    args: Vec<Value>,
-    in_tail_position: bool,
-) -> Result<super::EvalResult, EvalError> {
-    match proc {
-        Value::Procedure(Procedure::Primitive { name, arity }) => {
-            // ... existing primitive handling
+        // Unwind: call 'after' thunks from current to common ancestor
+        while self.dynamic_winds.len() > target_depth {
+            let record = self.dynamic_winds.pop().unwrap();
+            self.apply(record.after, vec![], self.global_env.clone())?;
         }
 
-        Value::Procedure(Procedure::Lambda { .. }) => {
-            // ... existing lambda handling
+        // Rewind: call 'before' thunks from common ancestor to target
+        for record in &cont.wind_records {
+            self.apply(record.before.clone(), vec![], self.global_env.clone())?;
+            self.dynamic_winds.push(record.clone());
         }
 
-        Value::Procedure(Procedure::Continuation { stack, env }) => {
-            // Continuation invocation!
-            if args.len() != 1 {
-                return Err(EvalError::WrongArity {
-                    expected: "1".to_string(),
-                    actual: args.len(),
-                });
-            }
-
-            let return_value = args[0].clone();
-
-            // Replace current continuation stack with captured one
-            *self.continuation_stack.borrow_mut() = (*stack).clone();
-
-            // Return the value - it will be processed by the restored continuation
-            Ok(super::EvalResult::Value(return_value))
-        }
-
-        _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
+        // Now invoke the continuation
+        self.apply_delimited_continuation(cont, value)
     }
 }
 ```
-
-### Option 2: CPS Transformation (Not Recommended)
-
-**Approach**: Transform all code to Continuation-Passing Style where every function takes an explicit continuation parameter.
-
-**Pros**:
-- Continuations are naturally first-class
-- Elegant from a theoretical perspective
-
-**Cons**:
-- Requires complete rewrite of evaluator
-- Breaks existing TCO implementation
-- Complex transformation of special forms
-- Performance overhead on all evaluations
-
-**Verdict**: Too invasive for Patina's current architecture.
-
-### Option 3: Stack Copying (Simpler Alternative)
-
-**Approach**: For a tree-walker, we could try to capture the Rust call stack state, but this is not possible in safe Rust. We'd need to:
-
-1. Manually track evaluation context in a Rust-side stack
-2. Deep-copy that stack on `call/cc`
-3. Restore it on continuation invocation
-
-**Problem**: This is essentially Option 1, but we'd still need to represent continuation frames explicitly.
 
 ## Implementation Plan
 
-### Phase 1: Foundation (2-3 days)
+### Step 1: CPS Infrastructure ✅ COMPLETE
+- [x] Define `CpsExpr` IR in `patina-core`
+- [x] Implement CPS transformation pass in `patina-ir`
+- [x] Add `CpsEvaluator` in `patina-tree-walker`
+- [x] Ensure existing tests pass with CPS path (97.3% passing)
 
-1. **Define Continuation Types** (`crates/patina-runtime/src/value.rs`)
-   - [ ] Add `Continuation` enum with frame types
-   - [ ] Update `Procedure::Continuation` to store state
-   - [ ] Implement `Clone` for continuation types
-   - [ ] Update `Display` for continuations (display as `#<continuation>`)
+### Step 2: Basic call/cc ✅ COMPLETE
+- [x] Implement `call/cc` and `call-with-current-continuation`
+- [x] Continuation invocation aborts current computation
+- [x] Continuations satisfy `procedure?` predicate
+- [x] Continuation escape through library functions (thread-local mechanism)
 
-2. **Add Continuation Stack** (`crates/patina-tree-walker/src/eval/mod.rs`)
-   - [ ] Add `continuation_stack: RefCell<Vec<Continuation>>` to `Evaluator`
-   - [ ] Initialize in `new()`
+### Step 3: Delimited Continuation Primitives (TODO)
+- [ ] Add `PromptTag` and `DelimitedContinuation` to Value
+- [ ] Implement prompt stack in evaluator
+- [ ] Implement `call-with-continuation-prompt`
+- [ ] Implement `abort-current-continuation`
+- [ ] Implement `call-with-composable-continuation`
 
-### Phase 2: Evaluator Restructuring (3-5 days)
+### Step 4: shift/reset Library (TODO)
+- [ ] Create `lib/patina/control.sld`
+- [ ] Implement `reset` and `shift` macros
+- [ ] Implement `control` and `prompt` variants
+- [ ] Write tests for delimited continuations
 
-3. **Modify Main Evaluation Loop**
-   - [ ] Update `eval()` to process continuation stack
-   - [ ] Implement `apply_continuation()` for each continuation type
-   - [ ] Ensure TCO still works with continuation stack
+### Step 5: dynamic-wind (TODO)
+- [ ] Implement `dynamic-wind` primitive
+- [ ] Track wind handlers in evaluator state
+- [ ] Run handlers on continuation invocation
+- [ ] Pass R7RS dynamic-wind tests
 
-4. **Update Special Forms to Use Continuations**
-   - [ ] `if` - push `Continuation::If` before evaluating condition
-   - [ ] `begin` - push `Continuation::Sequence`
-   - [ ] `set!` - push `Continuation::Set`
-   - [ ] `define` - push `Continuation::Define`
-   - [ ] `cond` - push appropriate continuation
-   - [ ] Application - push `Continuation::EvalOperands` then `Continuation::Apply`
+### Step 6: Exception Handling (TODO)
+- [ ] Implement `guard` syntax
+- [ ] Implement `raise` and `raise-continuable`
+- [ ] Implement `with-exception-handler`
+- [ ] Pass R7RS exception tests
 
-### Phase 3: call/cc Implementation (1-2 days)
-
-5. **Implement `call-with-current-continuation`**
-   - [ ] Add `handle_callcc()` in `special_forms.rs`
-   - [ ] Capture continuation stack and environment
-   - [ ] Create continuation procedure
-   - [ ] Apply user procedure to continuation
-
-6. **Implement Continuation Invocation**
-   - [ ] Add `Procedure::Continuation` case to `apply()`
-   - [ ] Replace continuation stack with captured stack
-   - [ ] Return argument value
-
-7. **Add Primitives**
-   - [ ] Register `call-with-current-continuation` primitive
-   - [ ] Register `call/cc` as alias
-
-### Phase 4: Testing (2-3 days)
-
-8. **Write Tests** (`crates/patina-tests/tests/continuations.rs`)
-   - [ ] Basic capture and invoke
-   - [ ] Non-local exit (escape from nested computation)
-   - [ ] Multiple invocations of same continuation
-   - [ ] Continuations outliving their dynamic scope
-   - [ ] Backtracking (like chibi's test08-callcc.scm)
-   - [ ] Interaction with TCO
-   - [ ] Interaction with exceptions (once implemented)
-
-9. **Run Compliance Tests**
-   - [ ] Add call/cc tests to `compliance/control.rs`
-   - [ ] Run chibi r7rs-tests.scm and verify call/cc tests pass
-
-### Phase 5: Optimization (Optional)
-
-10. **Performance Improvements**
-    - [ ] Use `Rc` for sharing continuation frames instead of cloning
-    - [ ] Implement copy-on-write for continuation stack
-    - [ ] Profile and optimize continuation application
-
-## Key Challenges
-
-### 1. Interaction with TCO
-
-**Problem**: Tail calls currently use `EvalResult::TailCall` to avoid pushing Rust stack frames. With continuations, we need to ensure tail calls still don't push *continuation* frames.
-
-**Solution**: When in tail position, don't push a `Continuation::Return`. The continuation stack should only grow for non-tail calls.
-
-### 2. Continuation Extent
-
-**Problem**: Continuations must have indefinite extent - they can outlive the dynamic scope where they were created.
-
-**Solution**: Using `Rc<Vec<Continuation>>` means continuations are heap-allocated and reference-counted. They'll live as long as needed.
-
-### 3. Multiple Invocations
-
-**Problem**: A continuation can be called multiple times, and each invocation should return to the same point.
-
-**Solution**: Store continuation stack in `Rc` (not `Box`). When invoked, clone the stack so it can be invoked again.
-
-```rust
-// In continuation application:
-*self.continuation_stack.borrow_mut() = (*stack).clone();
-```
-
-### 4. Interaction with Exceptions
-
-**Problem**: Once we implement `guard` and `raise`, continuations need to properly interact with exception handlers.
-
-**Solution**: Exception handlers should be represented as special continuation frames:
-
-```rust
-enum Continuation {
-    // ... existing variants
-    ExceptionHandler {
-        handler: Value,  // The guard handler procedure
-        env: Rc<Environment>,
-    },
-}
-```
-
-When an exception is raised, unwind the continuation stack until we find an `ExceptionHandler` frame.
-
-### 5. Space Complexity
-
-**Problem**: Capturing the entire continuation stack on every `call/cc` could be expensive.
-
-**Mitigation**:
-- Use structural sharing with `Rc` where possible
-- Most Scheme programs don't use `call/cc` heavily
-- This is an acceptable tradeoff for correctness in a tree-walker
+### Step 7: Remove --cps Flag (TODO)
+- [ ] Make CPS the default evaluation mode
+- [ ] Load libraries in CPS mode
+- [ ] Remove thread-local escape mechanism (see `CPS_CONTINUATION_ESCAPE.md`)
+- [ ] Remove `EvalMode` enum
 
 ## Testing Strategy
 
-### Unit Tests
+### Reference Test Suites
 
+We can borrow comprehensive test cases from these reference implementations:
+
+#### Gauche Test Suite (Primary Reference)
+
+**Location**: `~/Project/reference/Gauche/tests/`
+
+| File | Lines | Coverage |
+|------|-------|----------|
+| `continuation.scm` | 796 | call/cc, dynamic-wind, prompts, continuation marks |
+| `partcont.scm` | 400+ | shift/reset, interaction with call/cc, parameters |
+| `partcont-racket.scm` | - | Racket-compatible delimited continuation tests |
+| `partcont-srfi-226.scm` | - | SRFI-226 compliance tests |
+
+**Key advantage**: Tests are annotated with expected behavior across implementations:
 ```scheme
-;; Basic capture and return
-(define k #f)
-(define result
-  (call/cc (lambda (cont)
-             (set! k cont)
-             42)))
-;; result should be 42
-
-(k 99)  ;; Should "return" 99 from the call/cc
-
-;; Non-local exit
-(define (search-list lst)
-  (call/cc (lambda (return)
-             (for-each (lambda (x)
-                         (if (= x 5)
-                             (return 'found)))
-                       lst)
-             'not-found)))
-
-(search-list '(1 2 3 4 5 6))  ;; => found
-(search-list '(1 2 3 4))      ;; => not-found
-
-;; Backtracking (from chibi test08-callcc.scm)
-;; Generate Pythagorean triples
+;; native : [d01][d02][d04][d01][d03][d04]
+;; meta   : [d01][d02][d04][d01][d03][d04]
+;; srfi226: [d01][d02][d04][d01][d03][d04]
+;; racket : [d01][d02][d04][d01][d03][d04]
+(test* "dynamic-wind + reset/shift 2" ...)
 ```
 
-### Integration Tests
+#### Racket Test Suite
 
-Run chibi-scheme's `tests/basic/test08-callcc.scm` which implements a backtracking search for Pythagorean triples using continuations.
+**Location**: `~/Project/reference/racket/pkgs/racket-test/tests/racket/`
 
-### Compliance Tests
+| File | Coverage |
+|------|----------|
+| `prompt-sfs.scm` | Memory/stack frame testing for prompts |
+| `contract/prompt-tag.rkt` | Prompt tag contracts |
+| `stress/prompt-mem-use.rkt` | Memory stress tests |
 
-R7RS section 6.10 specifies `call/cc` behavior. Verify:
-- ✅ Continuation captures current state
-- ✅ Invoking continuation returns to capture point
-- ✅ Continuations can be invoked multiple times
-- ✅ Continuations have indefinite extent
-- ✅ Continuations accept exactly one argument
+#### Chibi-scheme Test Suite
+
+**Location**: `~/Project/reference/chibi-scheme/tests/`
+
+| File | Coverage |
+|------|----------|
+| `basic/test08-callcc.scm` | Pythagorean triple backtracking example |
+| `r7rs-tests.scm` | R7RS compliance (call/cc, dynamic-wind sections) |
+
+---
+
+### Test Categories
+
+#### 1. Basic call/cc Tests
+
+```scheme
+;; Environment capture with doubling loop (Gauche continuation.scm:14-23)
+(define (callcc-test1)
+  (let ((r '())
+        (c #f))
+    (let ((w (let ((v 1))
+               (set! v (+ (call/cc (lambda (c0) (set! c c0) v)) v))
+               (set! r (cons v r))
+               v)))
+      (if (<= w 1024) (c w) r))))
+;; Expected: '(2048 1024 512 256 128 64 32 16 8 4 2)
+
+;; Multiple values (Gauche continuation.scm:27-43)
+(test "call/cc (values)" '(1 2 3)
+  (call-with-values
+    (lambda () (call/cc (lambda (c) (c 1 2 3))))
+    list))
+
+;; Zero values
+(test "call/cc (zero value)" '()
+  (call-with-values
+    (lambda () (call/cc (lambda (c) (c))))
+    list))
+
+;; Inline capture in list construction (tests VM stack handling)
+(define (callcc-test2)
+  (let ((cc #f) (r '()))
+    (let ((s (list 1 2 3 4 (call/cc (lambda (c) (set! cc c) 5)) 6 7 8)))
+      (if (null? r)
+        (begin (set! r s) (cc -1))
+        (list r s)))))
+;; Expected: '((1 2 3 4 5 6 7 8) (1 2 3 4 -1 6 7 8))
+
+;; call/cc in do-loop (tests frame preparation)
+(test "call/cc (do)" 6
+  (lambda ()
+    (do ((x 0 (+ x 1))
+         (y 0 (call/cc (lambda (c) c))))
+        ((> x 5) x)
+      #f)))
+
+;; set! interaction (critical for mutable variable handling)
+(test "call/cc and set!" '((#t . 2) (#t . 1))
+  (lambda ()
+    (let ((cont #f) (r '()))
+      (let ((f (lambda (x y)
+                 (set! r (cons (cons x y) r))
+                 (set! x #f))))
+        (f #t (call/cc (lambda (c) (set! cont c) 1))))
+      (if cont
+        (let ((k cont))
+          (set! cont #f)
+          (k 2))
+        r))))
+```
+
+#### 2. dynamic-wind Tests
+
+```scheme
+;; R5RS standard example (Gauche continuation.scm:199-212)
+(define (dynwind-test1)
+  (let ((path '())
+        (c #f))
+    (let ((add (lambda (s) (set! path (cons s path)))))
+      (dynamic-wind
+        (lambda () (add 'connect))
+        (lambda () (add (call/cc (lambda (c0) (set! c c0) 'talk1))))
+        (lambda () (add 'disconnect)))
+      (if (< (length path) 4)
+        (c 'talk2)
+        (reverse path)))))
+;; Expected: '(connect talk1 disconnect connect talk2 disconnect)
+
+;; Nested dynamic-wind (Gauche continuation.scm:226-244)
+(test "dynamic-wind nested" '(a b c d e f g b c d e f g h)
+  (lambda ()
+    (let ((x '()) (c #f))
+      (dynamic-wind
+        (lambda () (set! x (cons 'a x)))
+        (lambda ()
+          (dynamic-wind
+            (lambda () (set! x (cons 'b x)))
+            (lambda ()
+              (dynamic-wind
+                (lambda () (set! x (cons 'c x)))
+                (lambda () (set! c (call/cc (lambda (k) k))))
+                (lambda () (set! x (cons 'd x)))))
+            (lambda () (set! x (cons 'e x))))
+          (dynamic-wind
+            (lambda () (set! x (cons 'f x)))
+            (lambda () (if c (c #f)))
+            (lambda () (set! x (cons 'g x)))))
+        (lambda () (set! x (cons 'h x))))
+      (reverse x))))
+
+;; Error in before thunk (Gauche continuation.scm:262-279)
+(test "dynamic-wind - error in before thunk" '(a b c d h)
+  ...)
+
+;; Error in after thunk (Gauche continuation.scm:281-298)
+(test "dynamic-wind - error in after thunk" '(a b c d e f h)
+  ...)
+```
+
+#### 3. Delimited Continuation Tests (shift/reset)
+
+```scheme
+;; Basic reset/shift (Gauche partcont.scm:20-34)
+(test "reset/shift combination 1" 1000
+  (begin
+    (define k1 #f)
+    (define k2 #f)
+    (define k3 #f)
+    (reset
+      (shift k (set! k1 k)
+        (shift k (set! k2 k)
+          (shift k (set! k3 k))))
+      1000)
+    (k1)))
+
+;; reset/shift with values (Gauche partcont.scm:40-55)
+(test "reset/shift + values 1" '(1 2 3)
+  (values->list (reset (values 1 2 3))))
+
+(test "reset/shift + values 2" '(1 2 3)
+  (begin
+    (define k1 #f)
+    (reset
+      (shift k (set! k1 k))
+      (values 1 2 3))
+    (values->list (k1))))
+
+;; Calling partial continuation (Gauche partcont.scm:557-560)
+(test "calling pc" 10
+  (+ 1 (reset (+ 2 (shift k (+ 3 (k 4)))))))
+
+(test "calling pc" '(1 3 2 4)
+  (cons 1 (reset (cons 2 (shift k (cons 3 (k (cons 4 '()))))))))
+
+;; Multiple invocations of captured continuation
+(test "calling pc multi" 14
+  (+ 1 (reset (+ 2 (shift k (+ 3 (k 5) (k 1)))))))
+
+(test "calling pc multi" '(1 3 2 2 4)
+  (cons 1 (reset (cons 2 (shift k (cons 3 (k (k (cons 4 '())))))))))
+```
+
+#### 4. shift/reset + call/cc Interaction
+
+```scheme
+;; Interaction test 1 (Gauche partcont.scm:77-93)
+(test "reset/shift + call/cc 1" "[r01][r02][r02][r03]"
+  (with-output-to-string
+    (lambda ()
+      (define k1 #f)
+      (define done #f)
+      (call/cc
+        (lambda (k0)
+          (reset
+            (display "[r01]")
+            (shift k (set! k1 k))
+            (display "[r02]")
+            (unless done
+              (set! done #t)
+              (k0))
+            (display "[r03]"))))
+      (k1))))
+
+;; Interaction test 2 (Gauche partcont.scm:99-112)
+(test "reset/shift + call/cc 2" "[r01][s01][s02][s02]"
+  (with-output-to-string
+    (lambda ()
+      (define k1 #f)
+      (define k2 #f)
+      (reset
+        (display "[r01]")
+        (shift k (set! k1 k))
+        (display "[s01]")
+        (call/cc (lambda (k) (set! k2 k)))
+        (display "[s02]"))
+      (k1)
+      (reset (reset (k2))))))
+```
+
+#### 5. shift/reset + dynamic-wind Interaction
+
+```scheme
+;; dynamic-wind inside shift body (Gauche partcont.scm:354-366)
+(test "dynamic-wind + reset/shift 1" "[d01][d02][d03][d04]"
+  (with-output-to-string
+    (lambda ()
+      (reset
+        (shift k
+          (dynamic-wind
+            (lambda () (display "[d01]"))
+            (lambda ()
+              (display "[d02]")
+              (k)
+              (display "[d03]"))
+            (lambda () (display "[d04]"))))))))
+
+;; dynamic-wind around shift (Gauche partcont.scm:372-385)
+(test "dynamic-wind + reset/shift 2" "[d01][d02][d04][d01][d03][d04]"
+  (with-output-to-string
+    (lambda ()
+      (define k1 #f)
+      (reset
+        (dynamic-wind
+          (lambda () (display "[d01]"))
+          (lambda ()
+            (display "[d02]")
+            (shift k (set! k1 k))
+            (display "[d03]"))
+          (lambda () (display "[d04]"))))
+      (k1))))
+```
+
+#### 6. shift/reset + parameterize Interaction
+
+```scheme
+;; Parameter scoping with shift (Gauche partcont.scm:61-71)
+(test "reset/shift + parameterize 1" "010"
+  (with-output-to-string
+    (lambda ()
+      (define p (make-parameter 0))
+      (display (p))
+      (reset
+        (parameterize ((p 1))
+          (display (p))
+          ;; shift body executes outside reset, so p=0
+          (shift k (display (p))))))))
+```
+
+#### 7. Prompt Tag Tests
+
+```scheme
+;; Basic prompt with tag (Gauche continuation.scm:444-462)
+(test "call-with-continuation-prompt basic" 1
+  (call-with-continuation-prompt (lambda () 1)))
+
+(test "abort-current-continuation" '(foo bar)
+  (let ((tag (make-continuation-prompt-tag)))
+    (call-with-continuation-prompt
+      (lambda ()
+        (+ 1
+           (abort-current-continuation tag 'foo 'bar)
+           2))
+      tag
+      list)))
+
+;; Missing prompt tag error
+(test "abort to missing prompt" <error>
+  (let ((tag1 (make-continuation-prompt-tag))
+        (tag2 (make-continuation-prompt-tag)))
+    (call-with-continuation-prompt
+      (lambda ()
+        (abort-current-continuation tag2 'oops))
+      tag1)))
+```
+
+#### 8. Backtracking Example (amb)
+
+```scheme
+;; Pythagorean triple search (Chibi test08-callcc.scm)
+(define fail (lambda () (error "no solution")))
+
+(define (in-range a b)
+  (call/cc
+    (lambda (cont)
+      (let enumerate ((i a))
+        (if (> i b)
+          (fail)
+          (let ((save fail))
+            (set! fail
+              (lambda ()
+                (set! fail save)
+                (enumerate (+ i 1))))
+            (cont i)))))))
+
+(test "pythagorean triple" 345  ; 3^2 + 4^2 = 5^2
+  (let ((x (in-range 1 10))
+        (y (in-range 1 10))
+        (z (in-range 1 10)))
+    (if (= (+ (* x x) (* y y)) (* z z))
+      (+ (* x 100) (* y 10) z)
+      (fail))))
+```
+
+---
+
+### Edge Cases to Test
+
+Based on Gauche's test suite, these edge cases are critical:
+
+1. **Continuation in list construction** - Tests VM stack handling when call/cc appears inside `(list ...)` expression
+2. **Continuation in do-loop step** - Tests frame preparation during iteration
+3. **set! + continuation interaction** - Tests mutable variable boxing behavior
+4. **Error during dynamic-wind handler** - Tests cleanup when before/after thunks raise errors
+5. **Nested dynamic-wind with continuation** - Tests proper wind/unwind ordering
+6. **shift inside call/cc inside reset** - Tests interaction between full and delimited continuations
+7. **Parameter scoping with shift** - Tests that shift body executes in correct parameter context
+8. **Multiple prompt tags** - Tests prompt tag discrimination
+9. **Abort to wrong/missing prompt** - Tests error handling for prompt mismatches
+10. **Continuation reuse** - Tests calling same continuation multiple times
+
+---
+
+### Test File Organization
+
+```
+crates/patina-tests/tests/
+├── continuations/
+│   ├── call_cc_basic.rs        # Basic call/cc tests
+│   ├── call_cc_values.rs       # Multiple values with continuations
+│   ├── call_cc_edge_cases.rs   # VM stack, set!, do-loop tests
+│   ├── dynamic_wind.rs         # dynamic-wind tests
+│   ├── dynamic_wind_errors.rs  # Error handling in wind thunks
+│   ├── delimited_basic.rs      # shift/reset basics
+│   ├── delimited_values.rs     # Multiple values with shift/reset
+│   ├── delimited_interaction.rs # shift/reset + call/cc interaction
+│   ├── delimited_dynamic.rs    # shift/reset + dynamic-wind
+│   ├── delimited_params.rs     # shift/reset + parameterize
+│   ├── prompt_tags.rs          # Prompt tag tests
+│   └── backtracking.rs         # amb, pythagorean triples
+└── compliance/
+    └── control.rs              # R7RS section 6.10 compliance
+```
+
+---
+
+## License Compliance for Borrowed Tests
+
+### Gauche Test Suite (BSD 3-Clause)
+
+Gauche Scheme is licensed under the **BSD 3-Clause License**, which permits reuse with attribution.
+
+**License Terms Summary:**
+1. Redistributions of source code must retain the copyright notice
+2. Redistributions in binary form must reproduce the copyright notice
+3. Neither the name of the authors nor contributors may be used to endorse products without permission
+
+**Required Attribution:**
+
+When adapting tests from Gauche, include this header in test files:
+
+```scheme
+;;; Continuation tests adapted from Gauche Scheme
+;;; Original source: https://github.com/shirok/Gauche
+;;;
+;;; Copyright (c) 2000-2025 Shiro Kawai <shiro@acm.org>
+;;;
+;;; Redistribution and use in source and binary forms, with or without
+;;; modification, are permitted provided that the following conditions
+;;; are met:
+;;;
+;;;  1. Redistributions of source code must retain the above copyright
+;;;     notice, this list of conditions and the following disclaimer.
+;;;
+;;;  2. Redistributions in binary form must reproduce the above copyright
+;;;     notice, this list of conditions and the following disclaimer in the
+;;;     documentation and/or other materials provided with the distribution.
+;;;
+;;;  3. Neither the name of the authors nor the names of its contributors
+;;;     may be used to endorse or promote products derived from this
+;;;     software without specific prior written permission.
+;;;
+;;; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+;;; "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+;;; LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+;;; A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+;;; OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+;;; SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+;;; TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+;;; PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+;;; LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+;;; NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+;;; SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+### Racket Test Suite (Apache 2.0 / MIT)
+
+Racket is dual-licensed under Apache 2.0 and MIT licenses. Both are permissive and allow reuse with attribution.
+
+**Required Attribution:**
+
+```scheme
+;;; Tests adapted from Racket
+;;; Original source: https://github.com/racket/racket
+;;;
+;;; Copyright (c) 2010-2025 PLT Design Inc.
+;;; Licensed under Apache 2.0 or MIT License
+;;; See: https://github.com/racket/racket/blob/master/LICENSE
+```
+
+### Chibi-scheme Test Suite (BSD 3-Clause)
+
+Chibi-scheme is also BSD 3-Clause licensed.
+
+**Required Attribution:**
+
+```scheme
+;;; Tests adapted from Chibi-scheme
+;;; Original source: https://github.com/ashinn/chibi-scheme
+;;;
+;;; Copyright (c) 2009-2025 Alex Shinn
+;;; Licensed under BSD 3-Clause License
+```
+
+### Implementation Strategy
+
+**Recommended approach for Patina:**
+
+1. **Create `THIRD_PARTY_LICENSES.md`** in project root documenting all borrowed test licenses
+
+2. **Organize borrowed tests** in a clear structure:
+   ```
+   crates/patina-tests/tests/
+   ├── continuations/
+   │   ├── gauche_adapted.rs      # Tests adapted from Gauche (with header)
+   │   ├── racket_adapted.rs      # Tests adapted from Racket (with header)
+   │   └── patina_original.rs     # Our original tests
+   ```
+
+3. **Use "adapted from" language** - We're writing Rust test harnesses that call Scheme code inspired by these test suites, not copying verbatim
+
+4. **Document in test files** which specific test cases were inspired by which source
+
+**Example Rust test file header:**
+
+```rust
+//! Continuation tests for Patina
+//!
+//! Many test cases in this module are adapted from:
+//! - Gauche Scheme (BSD 3-Clause) - https://github.com/shirok/Gauche
+//!   Copyright (c) 2000-2025 Shiro Kawai
+//! - Chibi-scheme (BSD 3-Clause) - https://github.com/ashinn/chibi-scheme
+//!   Copyright (c) 2009-2025 Alex Shinn
+//!
+//! See THIRD_PARTY_LICENSES.md for full license texts.
+```
+
+---
 
 ## References
 
-- **R7RS Spec**: Section 6.10 (Control features)
-- **Chibi Implementation**: `~/Project/reference/chibi-scheme/vm.c:1235-1260`
-- **Chibi Tests**: `~/Project/reference/chibi-scheme/tests/basic/test08-callcc.scm`
-- **Academic**: "Representing Control in the Presence of First-Class Continuations" (Hieb, Dybvig, Bruggeman)
+### Academic Papers
 
-## Alternative: Delimited Continuations (Future)
+1. **"A Monadic Framework for Delimited Continuations"** (Dybvig, Peyton Jones, Sabry 2007)
+   - Foundational paper on shift/reset semantics
 
-Delimited continuations (`call/cc` with explicit prompts) are more powerful and efficient. Consider for Phase 2+ if we want to support libraries like `scheme.generator`:
+2. **"Abstracting Control"** (Danvy, Filinski 1990)
+   - Original shift/reset operators
 
-- `call-with-prompt`
-- `abort-to-prompt`
-- `make-continuation-prompt-tag`
+3. **"Representing Control in the Presence of First-Class Continuations"** (Hieb, Dybvig, Bruggeman 1990)
+   - Stack-based implementation
 
-These are not in R7RS-small but are useful for advanced control flow.
+4. **"Binding as Sets of Scopes"** (Flatt 2016)
+   - Racket's hygiene model (relevant for macro interaction)
 
-## Estimated Timeline
+### Reference Implementations
 
-- **Total effort**: 8-13 days
-- **Complexity**: High (8/10)
-- **Priority**: Medium (required for R7RS compliance, but not used by most programs)
-- **Dependencies**: None (can be implemented independently)
+#### Racket
+
+**Core Implementation:**
+- `~/Project/reference/racket/racket/src/bc/src/fun.c`
+  - `call_with_continuation_prompt` (lines 7247-7521)
+  - `abort_current_continuation` (lines 7698-7778)
+  - `Scheme_Prompt` structure (schpriv.h lines 2054-2070)
+
+**Control Library:**
+- `~/Project/reference/racket/racket/collects/racket/control.rkt` (269 lines)
+  - shift/reset macros built on primitives
+  - control/prompt (Felleisen style)
+  - reset0/shift0 variants
+
+**Test Infrastructure:**
+- `~/Project/reference/racket/pkgs/racket-test/tests/racket/prompt-sfs.scm` (82 lines) - Stack frame/memory tests
+- `~/Project/reference/racket/pkgs/racket-test/tests/racket/contract/prompt-tag.rkt` (182 lines) - Contract tests
+- `~/Project/reference/racket/pkgs/racket-test/tests/racket/stress/prompt-mem-use.rkt` (76 lines) - Memory stress tests
+- `~/Project/reference/racket/pkgs/racket-benchmarks/tests/racket/benchmarks/control/cont.rkt` (32 lines) - Performance benchmarks
+
+#### Gauche (Primary Test Reference)
+
+**Test Suites:**
+- `~/Project/reference/Gauche/tests/continuation.scm` (796 lines)
+  - Comprehensive call/cc tests
+  - dynamic-wind tests with error handling
+  - Prompt/abort tests
+  - Continuation marks
+
+- `~/Project/reference/Gauche/tests/partcont.scm` (400+ lines)
+  - shift/reset tests with cross-implementation annotations
+  - Interaction with call/cc, dynamic-wind, parameters
+  - guard/error handling interaction
+
+- `~/Project/reference/Gauche/tests/partcont-racket.scm` - Racket compatibility tests
+- `~/Project/reference/Gauche/tests/partcont-srfi-226.scm` - SRFI-226 compliance
+
+**Key Feature:** Tests annotated with expected behavior across implementations:
+```scheme
+;; native : [d01][d02][d04][d01][d03][d04]
+;; meta   : [d01][d02][d04][d01][d03][d04]
+;; srfi226: [d01][d02][d04][d01][d03][d04]
+;; racket : [d01][d02][d04][d01][d03][d04]
+```
+
+#### Chibi-scheme
+
+**Implementation:**
+- `~/Project/reference/chibi-scheme/vm.c` - Simpler call/cc implementation
+
+**Tests:**
+- `~/Project/reference/chibi-scheme/tests/basic/test08-callcc.scm` (35 lines) - Pythagorean triple backtracking
+- `~/Project/reference/chibi-scheme/tests/r7rs-tests.scm` (2332 lines) - R7RS compliance
+
+### R7RS Specification
+
+- Section 6.10: Control features (call/cc, dynamic-wind)
+- Section 6.11: Exceptions (guard, raise)
+
+### SRFI References
+
+- **SRFI-226**: Control Features (delimited continuations, continuation marks)
+  - Comprehensive specification for delimited continuations
+  - Test suite available in Gauche
 
 ## Success Criteria
 
-- [ ] `call/cc` and `call-with-current-continuation` primitives implemented
-- [ ] Continuations can be captured and invoked
-- [ ] All unit tests pass
+- [x] `call/cc` basic functionality works (97.3% of tests pass)
+- [x] Continuations satisfy `procedure?` predicate
+- [x] Continuation invocation escapes through library functions
+- [ ] `(patina control)` library provides shift/reset
+- [ ] `call/cc` passes all R7RS compliance tests (including dynamic-wind)
+- [ ] `dynamic-wind` properly interacts with continuations
+- [ ] Exception handling (`guard`, `raise`) works correctly
 - [ ] Chibi's test08-callcc.scm passes
-- [ ] R7RS compliance tests for call/cc pass
-- [ ] No regression in existing TCO tests
-- [ ] Documentation updated in FEATURE_STATUS.md
+- [x] No regression in existing TCO tests
+- [x] Performance acceptable for common use cases

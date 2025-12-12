@@ -237,7 +237,10 @@ pub(super) fn boolean_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
 }
 
 pub(super) fn procedure_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Procedure(_)))
+    // R7RS: Continuations captured by call/cc satisfy procedure?
+    evaluator.make_type_predicate(args, |v| {
+        matches!(v, Value::Procedure(_) | Value::Continuation(_))
+    })
 }
 
 pub(super) fn char_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {

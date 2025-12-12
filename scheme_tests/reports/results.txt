@@ -2359,7 +2359,6 @@ Testing:
 Testing: 
 (call-with-current-continuation procedure?)
 
-Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 (apply + (list 3 4))
 
@@ -2420,15 +2419,12 @@ Testing:
 Testing: 
 (call-with-current-continuation (lambda (exit) (for-each (lambda (x) (if (negative? x) (exit x))) '(54 0 37 -3 245 19)) #t))
 
-Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 (list-length '(1 2 3 4))
 
-Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 (list-length '(a b . c))
 
-Error: Undefined variable: patina.internal.control/call-with-current-continuation
 Testing: 
 (call-with-values (lambda () (values 4 5)) (lambda (a b) b))
 
@@ -2439,7 +2435,7 @@ Testing:
 (let ((path '()) (c #f)) (let ((add (lambda (s) (set! path (cons s path))))) (dynamic-wind (lambda () (add 'connect)) (lambda () (add (call-with-current-continuation (lambda (c0) (set! c c0) 'talk1)))) (lambda () (add 'disconnect))) (if (< (length path) 4) (c 'talk2) (reverse path))))
 
 Error: Undefined variable: patina.internal.control/dynamic-wind
-Tests run: 34, Passed: 29, Failed: 0, Errors: 5
+Tests run: 34, Passed: 33, Failed: 0, Errors: 1
 
 Running test suite: 6.11 Exceptions
 Testing: 
@@ -2481,14 +2477,14 @@ Error: Undefined variable: guard
 Testing: 
 (test-exception-handler-1 5)
 
-Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.errors/with-exception-handler
 Testing: 
 something-went-wrong
 
 Testing: 
 (test-exception-handler-1 -1)
 
-Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.errors/with-exception-handler
 Testing: 
 something-went-wrong
 
@@ -2516,9 +2512,9 @@ FAIL: something-went-wrong
 
 Error: Undefined variable: patina.internal.errors/with-exception-handler
 Error: Undefined variable: guard
-Error: Undefined variable: patina.internal.control/call-with-current-continuation
-Error: Undefined variable: patina.internal.control/call-with-current-continuation
-Error: Undefined variable: patina.internal.control/call-with-current-continuation
+Error: Undefined variable: patina.internal.errors/with-exception-handler
+Error: Undefined variable: patina.internal.errors/with-exception-handler
+Error: Undefined variable: patina.internal.errors/with-exception-handler
 Testing: 
 (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'a 42))))
 

@@ -111,6 +111,11 @@
     call-with-current-continuation call/cc
     values call-with-values
     dynamic-wind
+    ;; Continuation predicates and delimited control (extensions)
+    continuation?
+    make-continuation-prompt-tag continuation-prompt-tag?
+    default-continuation-prompt-tag
+    call-with-continuation-prompt abort-current-continuation
 
     ;; === Exceptions (§6.11) ===
     ;; Note: These are currently stubs

@@ -1,6 +1,7 @@
 // Module declarations
 mod application;
 mod core_eval;
+mod cps_eval;
 mod debug;
 mod error;
 mod primitives;
@@ -8,6 +9,7 @@ mod primitives;
 
 // Re-export error type for public API
 pub use core_eval::eval_core;
+pub use cps_eval::{eval_cps, CpsEvaluator};
 pub use error::EvalError;
 
 use debug::DebugConfig;
@@ -937,6 +939,9 @@ impl Evaluator {
             Value::RecordType(_) | Value::Record { .. } | Value::EnvironmentSpecifier { .. } => {
                 Ok(expr.clone())
             }
+
+            // Continuation types are runtime values - return as-is
+            Value::ContinuationPromptTag(_) | Value::Continuation(_) => Ok(expr.clone()),
         }
     }
 
