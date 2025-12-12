@@ -384,3 +384,12 @@ Phase 1 tech debt cleanup is complete when:
 6. ✅ At least 50% of MEDIUM priority items addressed (5/7 DONE: stub libraries, primitive org, duplicated code, unsafe unwrap; 2 not started)
 
 This positions the codebase for clean VM backend implementation in Phase 2.
+
+---
+
+## Related Documents
+
+- **`POST_CPS_TECH_DEBT.md`** - Tech debt introduced during CPS transformation (2025-12-12)
+  - Dead code removal, debug output cleanup, TODO comments
+  - Large file splitting (cps_eval.rs, io.rs)
+  - Unwrap/expect audit, clone optimization, test coverage
