@@ -5,21 +5,13 @@ use std::fs;
 use std::process;
 
 fn main() {
-    // TODO: Disable macro debug mode once all macro-related tests in r7rs-tests.scm pass
-    // Currently enabled globally to help debug macro expansion issues
-    // See: PRD/phase1/IMPLEMENTATION_STATUS.md for macro test status
-    // patina_runtime::macro_debug::enable();
-
     let args: Vec<String> = env::args().collect();
 
     // Parse command-line options
-    let mut use_cps = false;
     let mut filename: Option<String> = None;
 
     for arg in args.iter().skip(1) {
-        if arg == "--cps" {
-            use_cps = true;
-        } else if arg == "--help" || arg == "-h" {
+        if arg == "--help" || arg == "-h" {
             print_help();
             process::exit(0);
         } else if !arg.starts_with('-') {
@@ -34,25 +26,28 @@ fn main() {
     // Check if a file argument was provided
     if let Some(file) = filename {
         // Script mode: run the provided file
-        run_script(&file, use_cps);
+        run_script(&file);
     } else {
         // REPL mode: interactive shell
-        run_repl(use_cps);
+        run_repl();
     }
 }
 
 fn print_help() {
-    eprintln!("Usage: patina [OPTIONS] [FILE]");
+    eprintln!("Usage: patina [FILE]");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --cps     Enable CPS evaluation mode (supports call/cc)");
     eprintln!("  --help    Show this help message");
     eprintln!();
     eprintln!("If FILE is provided, run it as a script.");
     eprintln!("Otherwise, start an interactive REPL.");
+    eprintln!();
+    eprintln!("Features:");
+    eprintln!("  - Full R7RS continuation support (call/cc, dynamic-wind)");
+    eprintln!("  - Exception handling (guard, raise)");
 }
 
-fn run_script(filename: &str, use_cps: bool) {
+fn run_script(filename: &str) {
     // Read the file
     let code = match fs::read_to_string(filename) {
         Ok(content) => content,
@@ -63,11 +58,7 @@ fn run_script(filename: &str, use_cps: bool) {
     };
 
     // Create interpreter and run the program
-    let interp = if use_cps {
-        TreeWalkInterpreter::new_tree_walker_with_cps()
-    } else {
-        TreeWalkInterpreter::new_tree_walker()
-    };
+    let interp = TreeWalkInterpreter::new_tree_walker();
 
     // Check if this is a test file by looking for common test patterns
     let is_test_file = filename.contains("test") || code.contains("test-begin");
@@ -91,8 +82,8 @@ fn run_script(filename: &str, use_cps: bool) {
     }
 }
 
-fn run_repl(use_cps: bool) {
-    match Repl::new_with_cps(use_cps) {
+fn run_repl() {
+    match Repl::new() {
         Ok(mut repl) => {
             if let Err(e) = repl.run() {
                 eprintln!("REPL error: {}", e);

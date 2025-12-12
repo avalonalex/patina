@@ -224,6 +224,9 @@ pub type TreeWalkInterpreter = Interpreter<TreeWalker>;
 impl Interpreter<TreeWalker> {
     /// Create a new interpreter with the default TreeWalker backend
     ///
+    /// This initializes an interpreter with full R7RS continuation support
+    /// including call/cc, dynamic-wind, and exception handling.
+    ///
     /// This is a convenience method that's equivalent to:
     /// ```ignore
     /// Interpreter::new(TreeWalker::new())
@@ -232,16 +235,6 @@ impl Interpreter<TreeWalker> {
         Self::new(TreeWalker::new())
     }
 
-    /// Create a new interpreter with CPS evaluation mode
-    ///
-    /// This enables support for first-class continuations (call/cc) and
-    /// delimited continuations (shift/reset). Use this when you need
-    /// continuation support.
-    ///
-    /// CPS mode is slower than direct mode but supports more features.
-    pub fn new_tree_walker_with_cps() -> Self {
-        Self::new(TreeWalker::new_with_cps())
-    }
 
     /// Create an interpreter from an existing evaluator (TreeWalker-specific)
     ///

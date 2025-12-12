@@ -39,8 +39,8 @@ echo "Results will be saved to: $RESULTS_FILE"
 echo ""
 
 # Run the tests and capture output
-# Use --cps flag to enable continuation support (required for call/cc tests)
-if "$PATINA_BIN" --cps "$TEST_FILE" > "$RESULTS_FILE" 2>&1; then
+# CPS evaluation is now the default (full continuation support)
+if "$PATINA_BIN" "$TEST_FILE" > "$RESULTS_FILE" 2>&1; then
     echo -e "${GREEN}Tests completed successfully${NC}"
 else
     echo -e "${YELLOW}Tests completed with errors (exit code: $?)${NC}"
@@ -187,10 +187,8 @@ with all R7RS-small features.
 
 ### Known Limitations
 
-- Exception handling (guard, raise) not yet implemented
-- Continuations (call/cc) not yet implemented
-- Some R7RS libraries not yet implemented: (scheme eval), (scheme r5rs), (scheme process-context)
-- See \`PRD/phase1/EXCEPTION_HANDLING.md\` for exception handling roadmap
+- \`(scheme load)\` library not yet implemented
+- See \`docs/FEATURE_STATUS.md\` for detailed compliance matrix
 
 ### Next Steps
 

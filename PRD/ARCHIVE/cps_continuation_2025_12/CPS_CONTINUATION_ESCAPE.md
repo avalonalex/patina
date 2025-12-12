@@ -1,21 +1,38 @@
 # CPS Continuation Escape - Technical Debt
 
-## Current State
+## ✅ RESOLVED (2025-12-12)
 
-When `call/cc` captures a continuation and that continuation is invoked inside a Scheme procedure like `for-each` or `map`, we need a mechanism to escape back to the main CPS evaluation loop.
+**Resolution**: Library loading now uses CPS evaluation (`eval_cps` in `evaluate_parsed_library`).
+All lambdas created during library loading are `Procedure::CpsLambda`, so the escape mechanism
+is no longer needed for library-to-user code interop.
 
-### The Problem
+**Key changes made**:
+1. `evaluate_parsed_library` now uses `eval_cps` instead of `eval_in_env`
+2. `load_library_extras` now uses `eval_cps` instead of `eval_core`
+3. `eval_cps` fixed to use the passed environment (was ignoring it!)
+4. `EvalMode` enum removed from `TreeWalker`
+5. `--cps` flag removed from REPL
 
-1. Library code (e.g., `for-each` in `lib/scheme/base/higher_order.scm`) is loaded in **direct mode**
-2. This creates `Procedure::Lambda` instead of `Procedure::CpsLambda`
-3. When user code runs in CPS mode and passes a CPS lambda to `for-each`:
-   - `for-each` calls the CPS lambda via `apply_from_direct`
-   - If the CPS lambda invokes a captured continuation, it needs to abort `for-each`
-   - But `for-each` doesn't know about CPS continuations
+**Thread-local escape retained**: The thread-local escape mechanism (`PENDING_ESCAPE`) is still
+used internally within CPS evaluation for continuation invocation. This is correct behavior -
+when a continuation is invoked, it needs to escape the current computation.
 
-### Current Solution: Thread-Local Escape
+---
 
-We use thread-local storage to pass continuation escape data:
+## Historical Context (For Reference)
+
+### The Original Problem
+
+1. Library code (e.g., `for-each` in `lib/scheme/base/higher_order.scm`) was loaded in **direct mode**
+2. This created `Procedure::Lambda` instead of `Procedure::CpsLambda`
+3. When user code ran in CPS mode and passed a CPS lambda to `for-each`:
+   - `for-each` called the CPS lambda via `apply_from_direct`
+   - If the CPS lambda invoked a captured continuation, it needed to abort `for-each`
+   - But `for-each` didn't know about CPS continuations
+
+### Original Solution: Thread-Local Escape
+
+We used thread-local storage to pass continuation escape data:
 
 ```rust
 // crates/patina-tree-walker/src/eval/cps_eval.rs
@@ -34,11 +51,11 @@ When `Value::Continuation` is invoked:
 
 `EvalError` must be `Send + Sync` (required by `Backend::Error` trait), but `Rc<CpsContinuation>` is not thread-safe. Thread-local avoids putting non-`Send` data in the error.
 
-## Future Work: Remove Thread-Local Hack
+---
 
-Once we remove the `--cps` flag and make CPS the **only** evaluation mode:
+## Options Considered (Historical)
 
-### Option 1: Load Libraries in CPS Mode
+### Option 1: Load Libraries in CPS Mode ✅ IMPLEMENTED
 
 **Approach**: When libraries are loaded, transform their code with CPS transformation.
 

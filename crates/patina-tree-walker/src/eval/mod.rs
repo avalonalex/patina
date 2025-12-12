@@ -449,8 +449,8 @@ impl Evaluator {
                         }
                     };
 
-                    // Evaluate using CoreExpr evaluator
-                    if let Err(e) = eval_core(&core_expr, eval_env.clone(), self) {
+                    // Evaluate using CPS evaluator so all lambdas become CpsLambdas
+                    if let Err(e) = eval_cps(&core_expr, eval_env.clone(), self) {
                         tracing::warn!(
                             path = %extras_path.display(),
                             error = %e,
@@ -1347,8 +1347,24 @@ impl Evaluator {
         }
 
         // Step 2: Evaluate library body (definitions only)
+        // Use CPS evaluation so that all lambdas become CpsLambdas, enabling
+        // proper continuation support throughout the codebase.
+        let desugarer = patina_frontend::Desugarer::with_env(lib_env.clone());
         for expr in &parsed.body {
-            self.eval_in_env(expr, &lib_env).map_err(|e| {
+            // Desugar to CoreExpr
+            let core_expr = desugarer.desugar(expr).map_err(|e| {
+                patina_runtime::LibraryError::ParseError {
+                    file: parsed
+                        .source
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    message: format!("Failed to desugar expression: {}", e),
+                }
+            })?;
+
+            // Evaluate using CPS evaluator
+            eval_cps(&core_expr, lib_env.clone(), self).map_err(|e| {
                 patina_runtime::LibraryError::ParseError {
                     file: parsed
                         .source

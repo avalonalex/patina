@@ -349,7 +349,15 @@ impl<'a> CpsEvaluator<'a> {
     /// Uses a trampoline pattern to avoid Rust stack overflow on deep recursion.
     /// All CPS evaluation steps are processed iteratively in a single loop.
     pub fn eval(&self, expr: &CpsExpr) -> Result<Value, EvalError> {
-        let env = self.evaluator.global_env.clone();
+        self.eval_in_env(expr, self.evaluator.global_env.clone())
+    }
+
+    /// Evaluate a CPS expression in a specific environment
+    ///
+    /// Like `eval`, but allows specifying the environment to use.
+    /// This is needed for library loading where definitions should
+    /// go into the library's environment, not the global environment.
+    pub fn eval_in_env(&self, expr: &CpsExpr, env: Rc<Environment>) -> Result<Value, EvalError> {
         let cont_env = HashMap::new();
         let prompt_stack = Vec::new();
         let dynamic_winds = Vec::new();
@@ -2768,7 +2776,7 @@ impl<'a> CpsEvaluator<'a> {
 ///
 /// # Arguments
 /// * `expr` - The CoreExpr to evaluate
-/// * `env` - The environment for variable lookup (currently unused, uses global)
+/// * `env` - The environment for variable lookup and definitions
 /// * `evaluator` - The evaluator instance (wrapped in Rc for sharing)
 ///
 /// # Returns
@@ -2796,9 +2804,9 @@ pub fn eval_cps(
     let transformer = CpsTransformer::new();
     let cps_expr = transformer.transform_toplevel(expr);
 
-    // Create CPS evaluator and evaluate
+    // Create CPS evaluator and evaluate in the specified environment
     let cps_evaluator = CpsEvaluator::new(evaluator);
-    cps_evaluator.eval(&cps_expr)
+    cps_evaluator.eval_in_env(&cps_expr, env)
 }
 
 #[cfg(test)]

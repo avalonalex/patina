@@ -101,14 +101,11 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
 }
 
 /// Assert that a multi-expression program produces expected result
-/// When `use_cps` is true, uses CPS mode which is required for continuation-related
-/// features (call/cc, dynamic-wind). In the future, CPS will become the default.
+/// This function now always uses CPS evaluation (the default mode).
+/// The `use_cps` parameter is kept for backward compatibility but is ignored.
+#[allow(unused_variables)]
 pub fn assert_program_eval_to_with_cps(code: &str, expected: &str, use_cps: bool) {
-    let interp = if use_cps {
-        TreeWalkInterpreter::new_tree_walker_with_cps()
-    } else {
-        TreeWalkInterpreter::new_tree_walker()
-    };
+    let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp
         .eval_program(code)
         .unwrap_or_else(|e| panic!("Failed to evaluate program: {}", e));

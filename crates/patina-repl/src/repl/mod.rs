@@ -70,16 +70,12 @@ impl rustyline::validate::Validator for SchemeHelper {
 }
 
 impl Repl {
-    /// Create a new REPL with direct evaluation mode (default)
-    pub fn new() -> rustyline::Result<Self> {
-        Self::new_with_cps(false)
-    }
-
-    /// Create a new REPL with optional CPS evaluation mode
+    /// Create a new REPL with full continuation support
     ///
-    /// If `use_cps` is true, enables CPS evaluation mode which supports
-    /// first-class continuations (call/cc) and delimited continuations.
-    pub fn new_with_cps(use_cps: bool) -> rustyline::Result<Self> {
+    /// The REPL uses CPS evaluation mode which supports first-class
+    /// continuations (call/cc), delimited continuations, dynamic-wind,
+    /// and exception handling.
+    pub fn new() -> rustyline::Result<Self> {
         let config = Config::builder()
             .history_ignore_space(true)
             .completion_type(CompletionType::List)
@@ -106,11 +102,7 @@ impl Repl {
             let _ = editor.load_history(path);
         }
 
-        let interpreter = if use_cps {
-            TreeWalkInterpreter::new_tree_walker_with_cps()
-        } else {
-            TreeWalkInterpreter::new_tree_walker()
-        };
+        let interpreter = TreeWalkInterpreter::new_tree_walker();
 
         Ok(Repl {
             editor,
@@ -123,10 +115,10 @@ impl Repl {
         println!("Version 0.1.0");
         println!();
         println!("Features:");
+        println!("  • Full R7RS continuation support (call/cc, dynamic-wind)");
+        println!("  • Exception handling (guard, raise)");
         println!("  • Multi-line editing with auto-indentation");
         println!("  • Syntax highlighting");
-        println!("  • Persistent history");
-        println!("  • Parenthesis balancing");
         println!();
         println!("Commands:");
         println!("  (exit) or Ctrl+D to quit");
