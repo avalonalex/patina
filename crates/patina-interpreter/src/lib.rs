@@ -60,7 +60,7 @@ pub use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_runtime::{
     Arity, Backend, Environment, Procedure, Value, stdlib::test_increment_error,
 };
-pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker, eval_core};
+pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker};
 
 /// High-level interpreter interface that combines parsing and evaluation
 ///
@@ -234,7 +234,6 @@ impl Interpreter<TreeWalker> {
     pub fn new_tree_walker() -> Self {
         Self::new(TreeWalker::new())
     }
-
 
     /// Create an interpreter from an existing evaluator (TreeWalker-specific)
     ///

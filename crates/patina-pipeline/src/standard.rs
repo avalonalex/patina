@@ -2,24 +2,21 @@
 //!
 //! This module provides the standard Scheme evaluation pipeline:
 //! 1. Parse (lexer + parser)
-//! 2. Evaluation (tree-walker with inline macro expansion)
+//! 2. Desugar (convert to CoreExpr IR, expanding macros)
+//! 3. CPS evaluation (full continuation support)
 //!
-//! Macro expansion is currently handled by the evaluator during evaluation.
-//! The evaluator expands macros as it encounters them, using the runtime
-//! Environment directly (no separate macro environment needed).
+//! All evaluation goes through CPS transformation for proper call/cc support.
 
 use crate::error::{PipelineError, PipelineResult};
 use crate::pipeline::{EvaluationStrategy, Pipeline};
-use patina_frontend::parser::Parser;
+use patina_frontend::{Desugarer, parser::Parser};
 use patina_runtime::{Environment, Value};
-use patina_tree_walker::eval::Evaluator;
+use patina_tree_walker::eval::{Evaluator, eval_cps};
 use std::rc::Rc;
 
-/// Standard pipeline: parse → eval (with inline macro expansion)
+/// Standard pipeline: parse → desugar → CPS eval
 ///
-/// Macros are expanded during evaluation as they are encountered.
-/// The evaluator uses the runtime Environment directly to check for
-/// macro bindings and expand them.
+/// All evaluation uses CPS transformation for full continuation support.
 pub struct StandardPipeline {
     evaluator: Evaluator,
     strategy: EvaluationStrategy,
@@ -30,24 +27,19 @@ impl StandardPipeline {
     pub fn new() -> Self {
         Self {
             evaluator: Evaluator::new(),
-            strategy: EvaluationStrategy::Direct,
+            strategy: EvaluationStrategy::CoreExpr,
         }
     }
 
     /// Create a pipeline with an existing evaluator
-    ///
-    /// Useful for testing or when you want to reuse an evaluator
-    /// with pre-loaded libraries.
     pub fn with_evaluator(evaluator: Evaluator) -> Self {
         Self {
             evaluator,
-            strategy: EvaluationStrategy::Direct,
+            strategy: EvaluationStrategy::CoreExpr,
         }
     }
 
     /// Get a reference to the evaluator
-    ///
-    /// Useful for accessing the global environment or other evaluator state
     pub fn evaluator(&self) -> &Evaluator {
         &self.evaluator
     }
@@ -67,16 +59,14 @@ impl Pipeline for StandardPipeline {
             .parse()
             .map_err(|e| PipelineError::Frontend(e.into()))?;
 
-        // Step 2: Macro expansion (currently done by evaluator)
-        // TODO: Add explicit macro expansion here once evaluator is updated
-        //
-        // let macro_env = self.build_macro_env(env);
-        // let expanded = expand_macros(&expr, &macro_env)?;
+        // Step 2: Desugar (with macro expansion)
+        let desugarer = Desugarer::with_env(env.clone());
+        let core_expr = desugarer
+            .desugar(&expr)
+            .map_err(|e| PipelineError::Desugaring(e.to_string()))?;
 
-        // Step 3: Evaluate
-        let result = self
-            .evaluator
-            .eval_in_env(&expr, env)
+        // Step 3: CPS evaluation
+        let result = eval_cps(&core_expr, env.clone(), &self.evaluator)
             .map_err(|e| PipelineError::Evaluation(e.to_string()))?;
 
         Ok(result)
@@ -96,13 +86,14 @@ impl Pipeline for StandardPipeline {
                 Err(e) => return Err(PipelineError::Frontend(e.into())),
             };
 
-            // Step 3: Macro expansion (currently done by evaluator)
-            // TODO: Add explicit macro expansion here
+            // Step 3: Desugar (with macro expansion)
+            let desugarer = Desugarer::with_env(env.clone());
+            let core_expr = desugarer
+                .desugar(&expr)
+                .map_err(|e| PipelineError::Desugaring(e.to_string()))?;
 
-            // Step 4: Evaluate
-            last_result = self
-                .evaluator
-                .eval_in_env(&expr, env)
+            // Step 4: CPS evaluation
+            last_result = eval_cps(&core_expr, env.clone(), &self.evaluator)
                 .map_err(|e| PipelineError::Evaluation(e.to_string()))?;
         }
 

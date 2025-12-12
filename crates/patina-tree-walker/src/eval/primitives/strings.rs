@@ -1032,7 +1032,8 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 mod tests {
     use super::*;
     use crate::eval::Evaluator;
-    use patina_frontend::Parser;
+    use crate::eval::cps_eval::eval_cps;
+    use patina_frontend::{Desugarer, Parser};
 
     fn make_evaluator() -> Evaluator {
         Evaluator::new()
@@ -1042,12 +1043,13 @@ mod tests {
         Value::String(Rc::new(RefCell::new(s.to_string())))
     }
 
-    /// Helper to parse and evaluate a lambda expression
+    /// Helper to parse and evaluate a lambda expression via CPS
     fn make_lambda(eval: &Evaluator, code: &str) -> Value {
         let mut parser = Parser::new(code).expect("Failed to create parser");
         let expr = parser.parse().expect("Failed to parse");
-        eval.eval_in_env(&expr, &eval.global_env)
-            .expect("Failed to evaluate lambda")
+        let desugarer = Desugarer::with_env(eval.global_env.clone());
+        let core_expr = desugarer.desugar(&expr).expect("Failed to desugar");
+        eval_cps(&core_expr, eval.global_env.clone(), eval).expect("Failed to evaluate lambda")
     }
 
     // string-map tests

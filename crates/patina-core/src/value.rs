@@ -398,24 +398,6 @@ pub enum Procedure {
         library: Vec<String>, // Library namespace, e.g., ["scheme", "base"]
     },
 
-    /// User-defined procedure (lambda) - direct evaluation style
-    Lambda {
-        /// Fixed parameters, each with optional scopes for hygiene
-        params: Vec<ScopedParam>,
-        /// Optional variadic parameter (rest parameter)
-        variadic: Option<ScopedParam>,
-        /// Procedure body (direct-style CoreExpr)
-        body: LambdaBody,
-        /// Captured environment for closures
-        env: Rc<Environment>,
-        /// Optional scope for parameter bindings (for scope-based hygiene)
-        /// If Some AND parameters have no scopes, parameters are bound with this scope.
-        /// If None, parameters' own scopes are used (from macro expansion).
-        /// This enables hygienic macro expansion: free variables with matching
-        /// scopes can see these bindings, while others cannot.
-        binding_scope: Option<ScopeId>,
-    },
-
     /// CPS-style lambda - for use with CPS evaluator
     ///
     /// These lambdas are created by CPS transformation and must be evaluated
@@ -756,8 +738,7 @@ impl std::fmt::Display for Value {
                 Procedure::Primitive { name, library, .. } => {
                     write!(f, "#<procedure:{}:{}>", library.join("."), name)
                 }
-                Procedure::Lambda { .. } => write!(f, "#<procedure>"),
-                Procedure::CpsLambda { .. } => write!(f, "#<cps-procedure>"),
+                Procedure::CpsLambda { .. } => write!(f, "#<procedure>"),
             },
             Value::Parameter { .. } => write!(f, "#<parameter>"),
             Value::Port(port) => write!(f, "{}", port),

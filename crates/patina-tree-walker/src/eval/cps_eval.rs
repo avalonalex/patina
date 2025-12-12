@@ -124,6 +124,7 @@ enum ContValue {
         cont_env: HashMap<Rc<str>, ContValue>,
     },
     /// A captured first-class continuation (used when re-invoking serialized continuations)
+    /// Currently only matched, not constructed - will be used when continuation serialization is implemented
     #[allow(dead_code)]
     Captured(Rc<CpsContinuation>),
     /// The halt continuation - returns final value
@@ -919,9 +920,8 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::Quasiquote { template, cont } => {
-                    // Evaluate quasiquote template using the direct evaluator
-                    // since quasiquote doesn't involve continuations
-                    let result = super::core_eval::eval_quasiquote_in_env(
+                    // Evaluate quasiquote template
+                    let result = super::quasiquote::eval_quasiquote_in_env(
                         self.evaluator,
                         template,
                         &current_env,
@@ -1602,22 +1602,6 @@ impl<'a> CpsEvaluator<'a> {
                     })
                 }
 
-                // Direct-style lambda: delegate to direct evaluator
-                Procedure::Lambda { env, .. } => {
-                    let result = self.apply_regular_proc(&p, args)?;
-
-                    // Return InvokeContinuation step instead of recursive call
-                    Ok(StepResult::InvokeContinuation {
-                        cont,
-                        value: result,
-                        env: env.clone(),
-                        cont_env,
-                        prompt_stack,
-                        dynamic_winds,
-                        exception_handlers,
-                    })
-                }
-
                 Procedure::Primitive { name, .. } => {
                     // Handle CPS-sensitive primitives specially
                     match *name {
@@ -1899,13 +1883,12 @@ impl<'a> CpsEvaluator<'a> {
                             let irritants: Vec<Value> = args[1..].to_vec();
 
                             // Create exception object
-                            let exception = Value::Exception(Rc::new(
-                                patina_core::ExceptionObject {
+                            let exception =
+                                Value::Exception(Rc::new(patina_core::ExceptionObject {
                                     kind: patina_core::ExceptionKind::Error,
                                     message,
                                     irritants,
-                                },
-                            ));
+                                }));
 
                             // Now do the same as raise (non-continuable)
                             if let Some(handler_entry) = exception_handlers.last().cloned() {
@@ -2134,29 +2117,6 @@ impl<'a> CpsEvaluator<'a> {
             }
 
             _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
-        }
-    }
-
-    /// Apply a regular (non-CPS) procedure
-    fn apply_regular_proc(&self, proc: &Procedure, args: Vec<Value>) -> Result<Value, EvalError> {
-        let result = self
-            .evaluator
-            .apply(Value::Procedure(Rc::new(proc.clone())), args, false)?;
-        match result {
-            super::EvalResult::Value(v) => Ok(v),
-            super::EvalResult::TailCall { expr, env } => {
-                // Need to trampoline
-                self.evaluator.eval_in_env(&expr, &env)
-            }
-            super::EvalResult::TailCallPrimitive { proc, args } => self
-                .evaluator
-                .apply(proc, args, false)
-                .and_then(|r| match r {
-                    super::EvalResult::Value(v) => Ok(v),
-                    _ => Err(EvalError::InternalError(
-                        "Unexpected tail call from primitive".to_string(),
-                    )),
-                }),
         }
     }
 
@@ -2506,14 +2466,13 @@ impl<'a> CpsEvaluator<'a> {
                 } else {
                     // Handler returned from non-continuable raise
                     // This is an error - raise secondary exception through CPS
-                    let secondary_exception = Value::Exception(Rc::new(
-                        patina_core::ExceptionObject {
+                    let secondary_exception =
+                        Value::Exception(Rc::new(patina_core::ExceptionObject {
                             kind: patina_core::ExceptionKind::Error,
                             message: "exception handler returned from non-continuable exception"
                                 .to_string(),
                             irritants: original_exception.into_iter().collect(),
-                        },
-                    ));
+                        }));
 
                     // Try to raise through the exception handler stack
                     if let Some(handler_entry) = exception_handlers.last().cloned() {

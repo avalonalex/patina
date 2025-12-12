@@ -10,7 +10,7 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 
 | Priority | Count | Effort |
 |----------|-------|--------|
-| HIGH | 1 | Small (2-3 hours) |
+| HIGH | 1 | ✅ COMPLETE |
 | MEDIUM | 5 | Medium-Large |
 | LOW | 2 | Large (needs profiling) |
 
@@ -18,32 +18,53 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 
 ## HIGH Priority
 
-### 1. Remove Dead Code from CPS Migration
+### 1. Remove Dead Code from CPS Migration ✅ COMPLETE (2025-12-12)
 
 **Effort**: Small (2-3 hours)
 **Crate**: patina-tree-walker
+**Status**: ✅ COMPLETE
 
-**Issues found**:
+**Completed items**:
 
-1. **Deprecated `new_with_cps()` in `backend.rs`** (line 65)
-   - Marked deprecated but still present
-   - CPS is now the only mode - remove entirely
+1. ✅ **Removed `new_with_cps()` in `backend.rs`**
+   - CPS is now the only evaluation mode
 
-2. **Empty `higher_order.rs`** (9 lines)
-   - No-op implementation - `map` and `for-each` are in Scheme now
-   - Remove file entirely
+2. ✅ **Removed `higher_order.rs`**
+   - File deleted, module declaration removed from `mod.rs`
+   - `map` and `for-each` remain in Scheme (`lib/scheme/base/higher_order.scm`)
 
-3. **Multiple `#[allow(dead_code)]` annotations in `registry.rs`**
-   - Lines 35, 171, 212, 222, 237, 243, 249, 257, 265
-   - Methods marked "Will be used by future help system" but unclear if actually used
-   - Either remove or document as intentional API
+3. ✅ **Audited `#[allow(dead_code)]` annotations in `registry.rs`**
+   - All methods are intentional API for future help system
+   - Methods have test coverage in unit tests
+   - Annotations are correct - kept as-is with documentation
 
-4. **`ContValue::Captured` in `cps_eval.rs`** (line 127)
-   - Marked `#[allow(dead_code)]` for "serialization support"
-   - Either implement serialization or remove
+4. ✅ **Audited `ContValue::Captured` in `cps_eval.rs`**
+   - Variant is matched in 3 places but never constructed
+   - Needed for future continuation serialization support
+   - Added clarifying comment and kept `#[allow(dead_code)]`
 
-5. **Unused debug methods in `debug.rs`** (lines 77, 124)
-   - `DebugConfig` methods not integrated with actual debug infrastructure
+5. ✅ **Fixed incorrect annotation in `debug.rs`**
+   - Removed `#[allow(dead_code)]` from `DebugConfig` struct (it IS used)
+   - Kept annotation on `enabled_list()` method (truly unused, for future use)
+
+6. ✅ **Removed `Procedure::Lambda` variant**
+   - All lambdas now use `Procedure::CpsLambda`
+   - Removed from `value.rs` enum definition
+   - Updated `Display` impl in `value.rs`
+   - Removed handling in `application.rs`
+   - Removed error case in `cps_eval.rs`
+
+7. ✅ **Removed legacy evaluation methods from `mod.rs`**
+   - `eval_step_expanded`, `eval_step_impl_expanded`, `eval_list_impl_expanded`
+   - `expand_all_macros`, `eval_expanded`, `eval_arguments_expanded`
+   - `prepare_lambda_env`, `eval_lambda_body`, `resolve_tail_call_core_rc`
+   - `extract_pair`, `expand_macro`
+
+8. ✅ **Renamed `core_eval.rs` → `quasiquote.rs`**
+   - File only contains quasiquote evaluation logic
+   - Updated `mod.rs` module declaration
+   - Updated `cps_eval.rs` to reference `super::quasiquote`
+   - Removed `eval_core` export from `lib.rs`
 
 ---
 
@@ -54,11 +75,11 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 **Effort**: Small (1-2 hours)
 **Crate**: patina-tree-walker
 
-**Problem**: 13+ `eprintln!`/`println!` debug statements left in code that should use tracing:
+**Problem**: Debug statements left in code that should use tracing:
 
 **Locations**:
-- `cps_eval.rs`: lines 369, 384, 396, 406, 473 - CPS debug output
-- `core_eval.rs`: lines 182, 190, 269, 276, 522, 616, 641, 651 - Eval debug output
+- `cps_eval.rs`: CPS debug output
+- `quasiquote.rs`: Quasiquote evaluation debug output (formerly core_eval.rs)
 
 **Solution**: Replace with `tracing::debug!()` or `tracing::trace!()` calls. Infrastructure already exists.
 
@@ -135,7 +156,7 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 **Problem**: 443 `unwrap()`/`expect()` calls in eval module
 
 **High-risk locations**:
-- `core_eval.rs`: Multiple unwraps in hot paths
+- `quasiquote.rs`: Multiple unwraps in quasiquote evaluation (formerly core_eval.rs)
 - `cps_eval.rs`: Several unwraps in continuation handling
 - `application.rs`: Parameter converter handling
 
@@ -205,7 +226,7 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 
 | Item | Priority | Status | Notes |
 |------|----------|--------|-------|
-| 1. Remove dead CPS code | HIGH | Not Started | Quick win |
+| 1. Remove dead CPS code | HIGH | ✅ COMPLETE | Completed 2025-12-12 |
 | 2. Clean up debug output | MEDIUM | Not Started | 13+ statements |
 | 3. TODO comments | MEDIUM | Not Started | 5 significant TODOs |
 | 4. Split large CPS files | MEDIUM | Not Started | cps_eval.rs, io.rs |
@@ -218,10 +239,10 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 
 ## Recommended Cleanup Order
 
-1. **Quick wins** (2-3 hours):
-   - Remove `new_with_cps()`
-   - Remove `higher_order.rs`
-   - Convert debug output to tracing
+1. ✅ **Quick wins** (2-3 hours): COMPLETE
+   - ~~Remove `new_with_cps()`~~
+   - ~~Remove `higher_order.rs`~~
+   - Convert debug output to tracing (remaining)
 
 2. **Code quality** (4-6 hours):
    - Address TODO comments

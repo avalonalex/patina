@@ -58,15 +58,6 @@ impl TreeWalker {
         }
     }
 
-    /// Create a new tree-walking backend with CPS evaluation mode
-    ///
-    /// This is now identical to `new()` since CPS is the only evaluation mode.
-    /// Kept for backward compatibility during transition.
-    #[deprecated(since = "0.2.0", note = "CPS is now the default mode; use new() instead")]
-    pub fn new_with_cps() -> Self {
-        Self::new()
-    }
-
     /// Create a tree-walker from an existing evaluator
     ///
     /// This is useful for tests that need to configure the evaluator

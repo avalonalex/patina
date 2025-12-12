@@ -7,8 +7,10 @@
 //! - `scheme-report-environment` - R5RS environment with all bindings
 
 use super::super::Evaluator;
+use super::super::cps_eval::eval_cps;
 use super::super::error::EvalError;
 use super::registry::{PrimitiveFn, PrimitiveRegistry};
+use patina_frontend::Desugarer;
 use patina_runtime::environment::Environment;
 use patina_runtime::value::{Arity, Procedure, Value};
 use std::rc::Rc;
@@ -112,6 +114,9 @@ fn is_definition(expr: &Value) -> bool {
 ///
 /// Evaluates an expression in the specified environment.
 /// If expr-or-def is a definition, the environment must be mutable.
+///
+/// Uses CPS evaluation to ensure proper continuation support for lambdas
+/// created during evaluation.
 fn primitive_eval(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 2, "eval")?;
 
@@ -136,8 +141,14 @@ fn primitive_eval(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Eval
         ));
     }
 
-    // Evaluate expression in the environment
-    evaluator.eval_in_env(expr, &env)
+    // Desugar the expression with macro-aware desugarer
+    let desugarer = Desugarer::with_env(env.clone());
+    let core_expr = desugarer.desugar(expr).map_err(|e| {
+        EvalError::InternalError(format!("eval: failed to desugar expression: {}", e))
+    })?;
+
+    // Evaluate via CPS for full continuation support
+    eval_cps(&core_expr, env, evaluator)
 }
 
 /// R5RS syntactic keywords (special forms)

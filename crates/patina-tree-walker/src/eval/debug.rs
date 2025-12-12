@@ -74,7 +74,6 @@ pub enum DebugStage {
 }
 
 /// Configuration for debug output
-#[allow(dead_code)]
 pub struct DebugConfig {
     enabled_stages: RefCell<HashSet<DebugStage>>,
     indent_level: RefCell<usize>,

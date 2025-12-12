@@ -6,13 +6,15 @@
 //! - `registry` - Primitive registry for runtime-extensible primitives
 //! - `arithmetic` - Numeric operations (+, -, *, /, comparisons, etc.)
 //! - `lists` - Pair and list operations (cons, car, cdr, append, etc.)
-//! - `higher_order` - map, for-each
 //! - `predicates` - Type predicates (number?, string?, etc.)
 //! - `equality` - eq?, eqv?, equal?
 //! - `values` - Multiple values support
 //! - `strings` - String operations
 //! - `vectors` - Vector operations
 //! - `parameters` - Dynamic parameters (make-parameter)
+//!
+//! Note: `map` and `for-each` are implemented in Scheme (lib/scheme/base/higher_order.scm)
+//! for proper CPS compatibility with call/cc.
 
 pub mod registry;
 
@@ -25,7 +27,6 @@ mod debug;
 pub(in crate::eval) mod equality;
 mod eval;
 mod exceptions;
-mod higher_order;
 mod io;
 mod lazy;
 mod lists;
@@ -102,7 +103,6 @@ impl Evaluator {
         continuations::register(registry);
         conversion::register(registry);
         lists::register(registry);
-        higher_order::register(registry);
         predicates::register(registry);
         equality::register(registry);
         strings::register(registry);

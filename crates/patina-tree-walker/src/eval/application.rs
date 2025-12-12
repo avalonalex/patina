@@ -4,34 +4,12 @@
 //! - `apply()` - Apply a procedure to evaluated arguments
 //! - `check_arity()` - Verify argument count matches procedure arity
 
-use patina_runtime::environment::Environment;
 use patina_runtime::value::{Arity, Procedure, Value};
-use std::rc::Rc;
 
 use super::Evaluator;
 use super::error::EvalError;
 
 impl Evaluator {
-    /// Evaluate a list of already macro-expanded argument expressions
-    ///
-    /// Uses `eval_expanded()` to avoid re-expansion.
-    pub(super) fn eval_arguments_expanded(
-        &self,
-        args: &Value,
-        env: &Rc<Environment>,
-    ) -> Result<Vec<Value>, EvalError> {
-        let mut result = Vec::new();
-        let mut current = args.clone();
-
-        while let Value::Pair(pair) = current {
-            let borrowed = pair.borrow();
-            result.push(self.eval_expanded(&borrowed.0, env)?);
-            current = borrowed.1.clone();
-        }
-
-        Ok(result)
-    }
-
     /// Apply a procedure to a vector of evaluated arguments
     ///
     /// The `in_tail_position` parameter enables tail call optimization for primitives.
@@ -66,21 +44,8 @@ impl Evaluator {
                     self.check_arity(arity, args.len())?;
                     self.apply_primitive(proc_box.as_ref(), args, in_tail_position)
                 }
-                Procedure::Lambda {
-                    params,
-                    variadic,
-                    body,
-                    env,
-                    binding_scope,
-                } => {
-                    // Use shared helper methods to prepare environment and evaluate body
-                    let new_env =
-                        self.prepare_lambda_env(params, variadic, args, env, *binding_scope)?;
-                    self.eval_lambda_body(body, &new_env, in_tail_position)
-                }
                 Procedure::CpsLambda { .. } => {
-                    // CPS lambdas invoked from direct mode: use the CPS evaluator
-                    // to apply the procedure with a halt continuation.
+                    // CPS lambdas: use the CPS evaluator to apply with a halt continuation.
                     use crate::eval::cps_eval::CpsEvaluator;
 
                     let cps_eval = CpsEvaluator::new(self);
