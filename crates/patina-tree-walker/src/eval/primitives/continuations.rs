@@ -104,6 +104,18 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
          Requires CPS evaluation mode.",
         |_eval, args, _| abort_current_continuation_stub(args).map(EvalResult::Value),
     ));
+
+    // dynamic-wind - Set up entry/exit handlers for dynamic extent
+    // Note: In direct mode, this is a stub that raises an error.
+    // In CPS mode, dynamic-wind is handled specially by the CPS evaluator.
+    registry.register(PrimitiveFn::new(
+        "patina.internal.control",
+        "dynamic-wind",
+        Arity::Exact(3),
+        "Set up thunks to be called when entering/leaving a dynamic extent. \
+         Requires CPS evaluation mode for proper continuation support.",
+        |_eval, args, _| dynamic_wind_stub(args).map(EvalResult::Value),
+    ));
 }
 
 /// Stub for call/cc in direct mode
@@ -249,6 +261,42 @@ fn abort_current_continuation_stub(args: Vec<Value>) -> Result<Value, EvalError>
     // In direct mode, we can't abort to prompts
     Err(EvalError::InternalError(
         "abort-current-continuation requires CPS evaluation mode. \
+         Use TreeWalker::new_with_cps() to enable continuation support."
+            .to_string(),
+    ))
+}
+
+/// Stub for dynamic-wind in direct mode
+///
+/// In direct mode, dynamic-wind can work for normal control flow but cannot
+/// properly handle continuation jumps. We raise an error to avoid subtle bugs.
+fn dynamic_wind_stub(args: Vec<Value>) -> Result<Value, EvalError> {
+    if args.len() != 3 {
+        return Err(EvalError::WrongArity {
+            expected: "3".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Check that all arguments are procedures
+    for (i, arg) in args.iter().enumerate() {
+        let name = match i {
+            0 => "before",
+            1 => "body",
+            _ => "after",
+        };
+        if !matches!(arg, Value::Procedure(_)) {
+            return Err(EvalError::TypeError(format!(
+                "dynamic-wind: {} thunk must be a procedure, got {}",
+                name,
+                arg.type_name()
+            )));
+        }
+    }
+
+    // In direct mode, we can't properly handle continuation jumps
+    Err(EvalError::InternalError(
+        "dynamic-wind requires CPS evaluation mode for proper continuation support. \
          Use TreeWalker::new_with_cps() to enable continuation support."
             .to_string(),
     ))

@@ -233,13 +233,31 @@ pub struct CpsContinuation {
     pub captured_cont_bindings: Vec<(Rc<str>, Rc<CpsContinuation>)>,
 }
 
+/// Global counter for generating unique dynamic-wind IDs
+static DYNAMIC_WIND_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// A record of a dynamic-wind that needs to be managed during continuation jumps
 #[derive(Debug, Clone)]
 pub struct DynamicWindRecord {
+    /// Unique identifier for this dynamic-wind invocation
+    /// Used to find the common prefix when switching continuations
+    pub id: u64,
     /// The "before" thunk to call when entering this dynamic extent
     pub before: Value,
     /// The "after" thunk to call when leaving this dynamic extent
     pub after: Value,
+}
+
+impl DynamicWindRecord {
+    /// Create a new dynamic-wind record with a unique ID
+    pub fn new(before: Value, after: Value) -> Self {
+        Self {
+            id: DYNAMIC_WIND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            before,
+            after,
+        }
+    }
 }
 
 /// Data for a hygienic identifier (boxed in Value::Identifier)

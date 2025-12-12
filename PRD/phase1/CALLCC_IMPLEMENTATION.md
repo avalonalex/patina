@@ -1,7 +1,7 @@
 # Implementing Continuations in Patina's Tree-Walking Interpreter
 
 **Last Updated**: 2025-12-11
-**Status**: Partially Implemented (call/cc working, shift/reset pending)
+**Status**: Partially Implemented (call/cc and dynamic-wind working, shift/reset pending)
 
 ## Implementation Status (2025-12-11)
 
@@ -23,10 +23,19 @@
    - Thread-local storage for escaping continuations (see `CPS_CONTINUATION_ESCAPE.md`)
    - When CPS lambda invokes continuation inside library function (e.g., `for-each`), properly escapes
 
-4. **Test Results**
+4. **dynamic-wind** - Full implementation with continuation re-entry
+   - Before/after thunks properly tracked per dynamic extent
+   - Continuation capture inside dynamic-wind works correctly
+   - Re-invoking captured continuation re-runs before thunk
+   - Exiting via continuation runs after thunk
+   - Nested dynamic-wind with continuation capture/re-entry works
+   - Classic R7RS test passes: `(connect talk1 disconnect connect talk2 disconnect)`
+
+5. **Test Results**
    - Chibi r7rs-tests.scm: 1127/1158 passing (97.3%)
    - `(call-with-current-continuation procedure?)` → `#t`
    - `(call-with-current-continuation (lambda (exit) (for-each ... (exit x) ...) #t))` → works
+   - dynamic-wind with call/cc re-entry works correctly
 
 ### 🚧 Not Yet Implemented
 
@@ -37,10 +46,6 @@
    - `abort-current-continuation`
    - `call-with-composable-continuation`
    - `(patina control)` library
-
-2. **dynamic-wind** - Not implemented
-   - Wind handler tracking exists but not fully wired up
-   - Tests that use `dynamic-wind` fail
 
 3. **Exception Handling** - Not implemented
    - `guard`, `raise`, `raise-continuable`
@@ -1016,11 +1021,12 @@ impl CpsEvaluator {
 - [ ] Implement `control` and `prompt` variants
 - [ ] Write tests for delimited continuations
 
-### Step 5: dynamic-wind (TODO)
-- [ ] Implement `dynamic-wind` primitive
-- [ ] Track wind handlers in evaluator state
-- [ ] Run handlers on continuation invocation
-- [ ] Pass R7RS dynamic-wind tests
+### Step 5: dynamic-wind ✅ COMPLETE
+- [x] Implement `dynamic-wind` primitive
+- [x] Track wind handlers in evaluator state (via `DynamicWindCleanup` continuation)
+- [x] Run handlers on continuation invocation
+- [x] Capture/restore wind state in reified continuations
+- [x] Pass R7RS dynamic-wind tests (including nested + call/cc re-entry)
 
 ### Step 6: Exception Handling (TODO)
 - [ ] Implement `guard` syntax
@@ -1616,9 +1622,10 @@ Chibi-scheme is also BSD 3-Clause licensed.
 - [x] `call/cc` basic functionality works (97.3% of tests pass)
 - [x] Continuations satisfy `procedure?` predicate
 - [x] Continuation invocation escapes through library functions
+- [x] `dynamic-wind` properly interacts with continuations
+- [x] Continuation capture inside dynamic-wind works (nested + re-entry)
+- [x] Regression test added for dynamic-wind + call/cc re-entry
 - [ ] `(patina control)` library provides shift/reset
-- [ ] `call/cc` passes all R7RS compliance tests (including dynamic-wind)
-- [ ] `dynamic-wind` properly interacts with continuations
 - [ ] Exception handling (`guard`, `raise`) works correctly
 - [ ] Chibi's test08-callcc.scm passes
 - [x] No regression in existing TCO tests

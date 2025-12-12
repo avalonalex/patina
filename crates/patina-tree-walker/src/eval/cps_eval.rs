@@ -134,6 +134,32 @@ enum ContValue {
         params: Vec<Value>,
         original_cont: Box<ContValue>,
     },
+    /// Special continuation for dynamic-wind cleanup
+    /// When the body returns, pop the wind record, call after thunk, and continue
+    DynamicWindCleanup {
+        /// The "after" thunk to call when leaving this dynamic extent
+        after: Value,
+        /// The wind record ID to pop (for verification)
+        wind_id: u64,
+        original_cont: Box<ContValue>,
+    },
+    /// Special continuation for dynamic-wind setup
+    /// After the "before" thunk returns, push wind record and call body
+    DynamicWindSetup {
+        /// The wind record to push
+        wind_record: DynamicWindRecord,
+        /// The body thunk to call
+        body: Value,
+        /// The cleanup continuation (will pop and call after)
+        cleanup_cont: Box<ContValue>,
+    },
+    /// Special continuation for dynamic-wind after thunk completion
+    /// After the "after" thunk returns, continue with the saved body result
+    DynamicWindAfterDone {
+        /// The result from the body (to pass through)
+        result_value: Value,
+        original_cont: Box<ContValue>,
+    },
 }
 
 /// Result of a single evaluation step (for trampoline)
@@ -374,22 +400,46 @@ impl<'a> CpsEvaluator<'a> {
                         if debug {
                             eprintln!("[CPS] Continuation escape with value: {}", value);
                         }
-                        // Resume with the escaped continuation
-                        let restored_cont_env = self.restore_cont_bindings(&k.captured_cont_bindings);
-                        let new_cont = ContValue::Local {
-                            param: k.param.clone(),
-                            body: k.body.clone(),
-                            env: k.env.clone(),
-                            cont_env: restored_cont_env.clone(),
-                        };
-                        current_step = self.invoke_continuation_step(
-                            new_cont,
-                            value,
-                            k.env.clone(),
-                            restored_cont_env,
-                            Vec::new(),
-                            k.dynamic_winds.clone(),
-                        )?;
+
+                        // Check if this is a special DynamicWindCleanup continuation
+                        let is_dw_cleanup = matches!(
+                            k.body.as_ref(),
+                            CpsExpr::Halt(inner) if matches!(
+                                inner.as_ref(),
+                                CpsExpr::Literal(v) if matches!(v.as_ref(), Value::Symbol(s) if s.as_ref() == "__dynamic_wind_cleanup__")
+                            )
+                        );
+
+                        if is_dw_cleanup {
+                            // Reconstruct the DynamicWindCleanup continuation
+                            let new_cont = self.restore_dynamic_wind_cleanup(&k)?;
+                            let restored_cont_env = self.restore_cont_bindings(&k.captured_cont_bindings);
+                            current_step = self.invoke_continuation_step(
+                                new_cont,
+                                value,
+                                k.env.clone(),
+                                restored_cont_env,
+                                Vec::new(),
+                                k.dynamic_winds.clone(),
+                            )?;
+                        } else {
+                            // Normal continuation - resume with the escaped continuation
+                            let restored_cont_env = self.restore_cont_bindings(&k.captured_cont_bindings);
+                            let new_cont = ContValue::Local {
+                                param: k.param.clone(),
+                                body: k.body.clone(),
+                                env: k.env.clone(),
+                                cont_env: restored_cont_env.clone(),
+                            };
+                            current_step = self.invoke_continuation_step(
+                                new_cont,
+                                value,
+                                k.env.clone(),
+                                restored_cont_env,
+                                Vec::new(),
+                                k.dynamic_winds.clone(),
+                            )?;
+                        }
                     } else {
                         return Err(EvalError::InternalError(
                             "ContinuationEscape without pending data".to_string()
@@ -772,11 +822,7 @@ impl<'a> CpsEvaluator<'a> {
                     prompt_stack.truncate(prompt_idx);
                     let prompt_frame = prompt_stack.pop().unwrap();
 
-                    self.run_wind_handlers(
-                        &current_winds,
-                        &prompt_frame.dynamic_winds,
-                        false,
-                    )?;
+                    self.run_wind_handlers(&current_winds, &prompt_frame.dynamic_winds)?;
 
                     return Ok(StepResult::InvokeContinuation {
                         cont: prompt_frame.cont,
@@ -983,10 +1029,87 @@ impl<'a> CpsEvaluator<'a> {
                     }
                     ContValue::Captured(k) => Some((name.clone(), k.clone())),
                     ContValue::Halt => None, // Halt doesn't need to be captured
-                    // Special continuations are internal - shouldn't be in cont_env to capture
+
+                    // DynamicWindCleanup needs special handling - serialize to CpsContinuation
+                    ContValue::DynamicWindCleanup { after, wind_id, original_cont } => {
+                        // Recursively capture the original continuation
+                        let orig_bindings = match original_cont.as_ref() {
+                            ContValue::Local { param, body, env, cont_env: nested_cont_env } => {
+                                let nested = Self::capture_cont_bindings(nested_cont_env, dynamic_winds);
+                                vec![(
+                                    Rc::from("__dw_original__") as Rc<str>,
+                                    Rc::new(CpsContinuation {
+                                        body: body.clone(),
+                                        param: param.clone(),
+                                        env: env.clone(),
+                                        prompt_tag: None,
+                                        dynamic_winds: dynamic_winds.to_vec(),
+                                        captured_cont_bindings: nested,
+                                    }),
+                                )]
+                            }
+                            ContValue::DynamicWindCleanup { .. } => {
+                                // Nested DynamicWindCleanup - recursively capture
+                                if let Some((_, k)) = Self::capture_cont_bindings(
+                                    &std::iter::once((Rc::from("__inner__") as Rc<str>, original_cont.as_ref().clone())).collect(),
+                                    dynamic_winds
+                                ).into_iter().next() {
+                                    vec![(Rc::from("__dw_original__"), k)]
+                                } else {
+                                    vec![]
+                                }
+                            }
+                            ContValue::Halt => vec![],
+                            _ => vec![],
+                        };
+
+                        // Build the captured bindings
+                        let mut bindings = orig_bindings;
+                        bindings.push((
+                            Rc::from("__dw_after__"),
+                            Rc::new(CpsContinuation {
+                                body: Rc::new(CpsExpr::Literal(Rc::new(after.clone()))),
+                                param: Rc::from("__unused__"),
+                                env: Rc::new(Environment::new()),
+                                prompt_tag: None,
+                                dynamic_winds: vec![],
+                                captured_cont_bindings: vec![],
+                            }),
+                        ));
+                        bindings.push((
+                            Rc::from("__dw_wind_id__"),
+                            Rc::new(CpsContinuation {
+                                body: Rc::new(CpsExpr::Literal(Rc::new(Value::Integer(*wind_id as i64)))),
+                                param: Rc::from("__unused__"),
+                                env: Rc::new(Environment::new()),
+                                prompt_tag: None,
+                                dynamic_winds: vec![],
+                                captured_cont_bindings: vec![],
+                            }),
+                        ));
+
+                        Some((
+                            name.clone(),
+                            Rc::new(CpsContinuation {
+                                // Special marker body
+                                body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(Rc::new(
+                                    Value::Symbol(Rc::from("__dynamic_wind_cleanup__")),
+                                ))))),
+                                param: Rc::from("__dw_value__"),
+                                env: Rc::new(Environment::new()),
+                                prompt_tag: None,
+                                dynamic_winds: dynamic_winds.to_vec(),
+                                captured_cont_bindings: bindings,
+                            }),
+                        ))
+                    }
+
+                    // Other special continuations - not yet implemented
                     ContValue::CallWithValuesConsumer { .. }
                     | ContValue::ForceCache { .. }
-                    | ContValue::ParameterizeCleanup { .. } => None,
+                    | ContValue::ParameterizeCleanup { .. }
+                    | ContValue::DynamicWindSetup { .. }
+                    | ContValue::DynamicWindAfterDone { .. } => None,
                 }
             })
             .collect()
@@ -1002,8 +1125,128 @@ impl<'a> CpsEvaluator<'a> {
     ) -> HashMap<Rc<str>, ContValue> {
         captured
             .iter()
-            .map(|(name, k)| (name.clone(), ContValue::Captured(k.clone())))
+            .filter(|(name, _)| {
+                // Skip the special __dw_* bindings used to store DynamicWindCleanup state
+                !name.starts_with("__dw_")
+            })
+            .filter_map(|(name, k)| {
+                // Check if this is a serialized DynamicWindCleanup
+                let is_dw_cleanup = matches!(
+                    k.body.as_ref(),
+                    CpsExpr::Halt(inner) if matches!(
+                        inner.as_ref(),
+                        CpsExpr::Literal(v) if matches!(v.as_ref(), Value::Symbol(s) if s.as_ref() == "__dynamic_wind_cleanup__")
+                    )
+                );
+
+                if is_dw_cleanup {
+                    // Restore as DynamicWindCleanup
+                    match self.restore_dynamic_wind_cleanup(k) {
+                        Ok(cont) => Some((name.clone(), cont)),
+                        Err(_) => None,
+                    }
+                } else {
+                    // Restore as Local with recursively restored cont_env
+                    let restored_nested = self.restore_cont_bindings(&k.captured_cont_bindings);
+                    Some((
+                        name.clone(),
+                        ContValue::Local {
+                            param: k.param.clone(),
+                            body: k.body.clone(),
+                            env: k.env.clone(),
+                            cont_env: restored_nested,
+                        },
+                    ))
+                }
+            })
             .collect()
+    }
+
+    /// Restore a DynamicWindCleanup continuation from captured bindings
+    ///
+    /// When call/cc captures a continuation that was a DynamicWindCleanup,
+    /// we serialize its state into special bindings. This function reconstructs
+    /// the original DynamicWindCleanup ContValue.
+    fn restore_dynamic_wind_cleanup(
+        &self,
+        k: &CpsContinuation,
+    ) -> Result<ContValue, EvalError> {
+        // Extract the after thunk
+        let after = k
+            .captured_cont_bindings
+            .iter()
+            .find(|(name, _)| name.as_ref() == "__dw_after__")
+            .and_then(|(_, cont)| {
+                // The after thunk is stored in the body as a Literal
+                if let CpsExpr::Literal(v) = cont.body.as_ref() {
+                    Some(v.as_ref().clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                EvalError::InternalError("DynamicWindCleanup missing after thunk".to_string())
+            })?;
+
+        // Extract the wind_id
+        let wind_id = k
+            .captured_cont_bindings
+            .iter()
+            .find(|(name, _)| name.as_ref() == "__dw_wind_id__")
+            .and_then(|(_, cont)| {
+                if let CpsExpr::Literal(v) = cont.body.as_ref() {
+                    if let Value::Integer(id) = v.as_ref() {
+                        Some(*id as u64)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                EvalError::InternalError("DynamicWindCleanup missing wind_id".to_string())
+            })?;
+
+        // Extract the original continuation
+        let original_cont = k
+            .captured_cont_bindings
+            .iter()
+            .find(|(name, _)| name.as_ref() == "__dw_original__")
+            .map(|(_, cont)| {
+                // Recursively restore if the original was also special
+                let is_dw_cleanup = matches!(
+                    cont.body.as_ref(),
+                    CpsExpr::Halt(inner) if matches!(
+                        inner.as_ref(),
+                        CpsExpr::Literal(v) if matches!(v.as_ref(), Value::Symbol(s) if s.as_ref() == "__dynamic_wind_cleanup__")
+                    )
+                );
+                if is_dw_cleanup {
+                    self.restore_dynamic_wind_cleanup(cont)
+                } else {
+                    // Regular continuation
+                    let restored_cont_env = self.restore_cont_bindings(&cont.captured_cont_bindings);
+                    Ok(ContValue::Local {
+                        param: cont.param.clone(),
+                        body: cont.body.clone(),
+                        env: cont.env.clone(),
+                        cont_env: restored_cont_env,
+                    })
+                }
+            })
+            .transpose()?
+            .ok_or_else(|| {
+                EvalError::InternalError(
+                    "DynamicWindCleanup missing original continuation".to_string(),
+                )
+            })?;
+
+        Ok(ContValue::DynamicWindCleanup {
+            after,
+            wind_id,
+            original_cont: Box::new(original_cont),
+        })
     }
 
     /// Reify a continuation as a first-class Value
@@ -1041,15 +1284,72 @@ impl<'a> CpsEvaluator<'a> {
                     captured_cont_bindings: Self::capture_cont_bindings(cont_env, dynamic_winds),
                 }))
             }
-            // Special continuations are internal and shouldn't be reified as first-class values
-            // They are only used as intermediate steps during CPS evaluation
+            // Special continuations need proper handling when call/cc captures them
+            ContValue::DynamicWindCleanup {
+                after,
+                wind_id,
+                original_cont,
+            } => {
+                // Recursively reify the original continuation
+                let reified_original = self.reify_continuation(original_cont, cont_env, dynamic_winds);
+
+                // Create a CpsContinuation that will recreate the DynamicWindCleanup state
+                // when invoked. We store the after thunk, wind_id, and original continuation
+                // as a special structure.
+                Value::Continuation(Rc::new(CpsContinuation {
+                    // Special marker body that indicates this is a DynamicWindCleanup wrapper
+                    body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(Rc::new(
+                        Value::Symbol(Rc::from("__dynamic_wind_cleanup__")),
+                    ))))),
+                    param: Rc::from("__dw_value__"),
+                    env: self.evaluator.global_env.clone(),
+                    prompt_tag: None,
+                    dynamic_winds: dynamic_winds.to_vec(),
+                    // Store the after thunk, wind_id, and reified original continuation
+                    // We serialize these into the captured_cont_bindings with special names
+                    captured_cont_bindings: {
+                        let mut bindings = Self::capture_cont_bindings(cont_env, dynamic_winds);
+                        // Store after thunk as a special binding
+                        bindings.push((
+                            Rc::from("__dw_after__"),
+                            Rc::new(CpsContinuation {
+                                body: Rc::new(CpsExpr::Literal(Rc::new(after.clone()))),
+                                param: Rc::from("__unused__"),
+                                env: self.evaluator.global_env.clone(),
+                                prompt_tag: None,
+                                dynamic_winds: vec![],
+                                captured_cont_bindings: vec![],
+                            }),
+                        ));
+                        // Store wind_id
+                        bindings.push((
+                            Rc::from("__dw_wind_id__"),
+                            Rc::new(CpsContinuation {
+                                body: Rc::new(CpsExpr::Literal(Rc::new(Value::Integer(*wind_id as i64)))),
+                                param: Rc::from("__unused__"),
+                                env: self.evaluator.global_env.clone(),
+                                prompt_tag: None,
+                                dynamic_winds: vec![],
+                                captured_cont_bindings: vec![],
+                            }),
+                        ));
+                        // Store original continuation
+                        if let Value::Continuation(orig_k) = reified_original {
+                            bindings.push((Rc::from("__dw_original__"), orig_k));
+                        }
+                        bindings
+                    },
+                }))
+            }
+
+            // Other special continuations that need similar treatment
             ContValue::CallWithValuesConsumer { .. }
             | ContValue::ForceCache { .. }
-            | ContValue::ParameterizeCleanup { .. } => {
-                // If we get here, it means call/cc was called in the middle of call-with-values,
-                // force, or parameterize - create a continuation that represents the current state
-                // For now, return a placeholder - proper handling would need to serialize the
-                // entire special continuation state
+            | ContValue::ParameterizeCleanup { .. }
+            | ContValue::DynamicWindSetup { .. }
+            | ContValue::DynamicWindAfterDone { .. } => {
+                // For now, these return a placeholder. They could be enhanced similarly.
+                // TODO: Implement proper capture for these special continuations
                 Value::Continuation(Rc::new(CpsContinuation {
                     body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(Rc::new(
                         Value::Unspecified,
@@ -1058,7 +1358,7 @@ impl<'a> CpsEvaluator<'a> {
                     env: self.evaluator.global_env.clone(),
                     prompt_tag: None,
                     dynamic_winds: vec![],
-                    captured_cont_bindings: vec![],
+                    captured_cont_bindings: Self::capture_cont_bindings(cont_env, dynamic_winds),
                 }))
             }
         }
@@ -1242,6 +1542,62 @@ impl<'a> CpsEvaluator<'a> {
                             )
                         }
 
+                        "dynamic-wind" => {
+                            // (dynamic-wind before body after)
+                            // Sets up handlers to be called when entering/leaving this dynamic extent
+                            if args.len() != 3 {
+                                return Err(EvalError::WrongArity {
+                                    expected: "3".to_string(),
+                                    actual: args.len(),
+                                });
+                            }
+                            let before = args[0].clone();
+                            let body = args[1].clone();
+                            let after = args[2].clone();
+
+                            // Create the wind record (but don't push yet - push after calling before)
+                            let wind_record = DynamicWindRecord::new(before.clone(), after.clone());
+                            let wind_id = wind_record.id;
+
+                            // Create cleanup continuation that will:
+                            // 1. Pop the wind record
+                            // 2. Call the after thunk
+                            // 3. Continue with the original continuation
+                            let cleanup_cont = ContValue::DynamicWindCleanup {
+                                after,
+                                wind_id,
+                                original_cont: Box::new(cont),
+                            };
+
+                            // First call the "before" thunk
+                            // After that returns, we need to:
+                            // 1. Push the wind record
+                            // 2. Call the body thunk
+                            // The result goes to cleanup_cont
+
+                            // We'll use a special two-phase approach:
+                            // Phase 1: Call before thunk with a continuation that sets up phase 2
+                            // Phase 2: Push wind record, call body with cleanup_cont
+
+                            // Create a continuation for after the "before" thunk completes
+                            let setup_cont = ContValue::DynamicWindSetup {
+                                wind_record,
+                                body,
+                                cleanup_cont: Box::new(cleanup_cont),
+                            };
+
+                            // Call the before thunk - result is ignored
+                            Ok(StepResult::ApplyProc {
+                                proc: before,
+                                args: vec![],
+                                cont: setup_cont,
+                                env: self.evaluator.global_env.clone(),
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                            })
+                        }
+
                         "apply" => {
                             // (apply proc arg1 ... args)
                             // The last argument must be a list
@@ -1335,8 +1691,8 @@ impl<'a> CpsEvaluator<'a> {
                 let val = args.into_iter().next().unwrap();
 
                 // Run dynamic-wind handlers for continuation jump
-                self.run_wind_handlers(&dynamic_winds, &k.dynamic_winds, false)?;
-                self.run_wind_handlers(&k.dynamic_winds, &dynamic_winds, true)?;
+                // This travels from current winds to the captured winds
+                self.run_wind_handlers(&dynamic_winds, &k.dynamic_winds)?;
 
                 // Store escape data and return error to propagate up
                 set_pending_escape(val, k);
@@ -1465,9 +1821,8 @@ impl<'a> CpsEvaluator<'a> {
 
             ContValue::Captured(k) => {
                 // This is a captured continuation being invoked
-                // Run dynamic-wind handlers
-                self.run_wind_handlers(&dynamic_winds, &k.dynamic_winds, false)?;
-                self.run_wind_handlers(&k.dynamic_winds, &dynamic_winds, true)?;
+                // Run dynamic-wind handlers to travel from current to captured context
+                self.run_wind_handlers(&dynamic_winds, &k.dynamic_winds)?;
 
                 // Bind value and evaluate body
                 let new_env = Rc::new(Environment::with_parent(k.env.clone()));
@@ -1564,6 +1919,78 @@ impl<'a> CpsEvaluator<'a> {
                     dynamic_winds,
                 })
             }
+
+            ContValue::DynamicWindSetup {
+                wind_record,
+                body,
+                cleanup_cont,
+            } => {
+                // "Before" thunk has returned (value is ignored)
+                // Now push the wind record and call the body
+
+                // Push the wind record
+                let mut new_winds = dynamic_winds;
+                new_winds.push(wind_record);
+
+                // Call the body thunk with the cleanup continuation
+                Ok(StepResult::ApplyProc {
+                    proc: body,
+                    args: vec![],
+                    cont: *cleanup_cont,
+                    env: self.evaluator.global_env.clone(),
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds: new_winds,
+                })
+            }
+
+            ContValue::DynamicWindCleanup {
+                after,
+                wind_id,
+                original_cont,
+            } => {
+                // Body has returned - pop wind record and call after thunk
+                let mut new_winds = dynamic_winds;
+
+                // Verify and pop the expected wind record
+                // If IDs don't match, the wind was already unwound by a continuation jump
+                if new_winds.last().is_some_and(|last| last.id == wind_id) {
+                    new_winds.pop();
+                }
+
+                // Call the after thunk, then continue with the original value
+                // We need another continuation to pass value through after the after thunk
+                let after_done_cont = ContValue::DynamicWindAfterDone {
+                    result_value: value,
+                    original_cont,
+                };
+
+                Ok(StepResult::ApplyProc {
+                    proc: after,
+                    args: vec![],
+                    cont: after_done_cont,
+                    env: self.evaluator.global_env.clone(),
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds: new_winds,
+                })
+            }
+
+            ContValue::DynamicWindAfterDone {
+                result_value,
+                original_cont,
+            } => {
+                // "After" thunk has returned (value is ignored)
+                // Continue with the saved body result
+                Ok(StepResult::InvokeContinuation {
+                    cont: *original_cont,
+                    value: result_value,
+                    env: self.evaluator.global_env.clone(),
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                })
+            }
         }
     }
 
@@ -1652,31 +2079,34 @@ impl<'a> CpsEvaluator<'a> {
         }))
     }
 
-    /// Run dynamic-wind handlers when switching continuations
+    /// Run dynamic-wind handlers when switching from one continuation to another
+    ///
+    /// This implements the "travel to point" algorithm from chibi-scheme:
+    /// 1. Find the common prefix of the two wind stacks (by ID)
+    /// 2. Run "after" handlers for winds being exited (from current to common, in reverse)
+    /// 3. Run "before" handlers for winds being entered (from common to target)
     fn run_wind_handlers(
         &self,
         from: &[DynamicWindRecord],
         to: &[DynamicWindRecord],
-        entering: bool,
     ) -> Result<(), EvalError> {
-        // Find the common prefix
+        // Find the common prefix by comparing IDs
         let common_len = from
             .iter()
             .zip(to.iter())
-            .take_while(|(a, b)| std::ptr::eq(a, b))
+            .take_while(|(a, b)| a.id == b.id)
             .count();
 
-        if entering {
-            // Run entry handlers for winds we're entering
-            for wind in to.iter().skip(common_len) {
-                self.evaluator
-                    .apply(wind.before.clone(), vec![], false)?;
-            }
-        } else {
-            // Run exit handlers for winds we're leaving (in reverse order)
-            for wind in from.iter().skip(common_len).rev() {
-                self.evaluator.apply(wind.after.clone(), vec![], false)?;
-            }
+        // Run "after" handlers for winds we're leaving (in reverse order)
+        // This exits from the innermost to the common ancestor
+        for wind in from.iter().skip(common_len).rev() {
+            self.evaluator.apply(wind.after.clone(), vec![], false)?;
+        }
+
+        // Run "before" handlers for winds we're entering
+        // This enters from the common ancestor to the target
+        for wind in to.iter().skip(common_len) {
+            self.evaluator.apply(wind.before.clone(), vec![], false)?;
         }
 
         Ok(())
@@ -2136,5 +2566,47 @@ mod tests {
 
         let result = cps_eval.eval(&expr).unwrap();
         assert!(values_equal(&result, &Value::Integer(42)));
+    }
+
+    #[test]
+    fn test_dynamic_wind_record_id() {
+        // Test that DynamicWindRecord generates unique IDs
+        let before = Value::Integer(1);
+        let after = Value::Integer(2);
+
+        let r1 = DynamicWindRecord::new(before.clone(), after.clone());
+        let r2 = DynamicWindRecord::new(before.clone(), after.clone());
+
+        // IDs should be unique
+        assert_ne!(r1.id, r2.id, "Each DynamicWindRecord should have unique ID");
+    }
+
+    #[test]
+    fn test_run_wind_handlers_common_prefix() {
+        // Test that run_wind_handlers finds common prefix correctly
+        // and runs the right handlers in the right order
+        let evaluator = make_test_evaluator();
+        let cps_eval = CpsEvaluator::new(&evaluator);
+
+        // Create mock thunks (we don't actually call them in this test)
+        let mock_thunk = Value::Integer(0);
+
+        // Create wind records
+        let r1 = DynamicWindRecord::new(mock_thunk.clone(), mock_thunk.clone());
+        let _r2 = DynamicWindRecord::new(mock_thunk.clone(), mock_thunk.clone());
+        let _r3 = DynamicWindRecord::new(mock_thunk.clone(), mock_thunk.clone());
+
+        // Test: empty stacks should not run any handlers
+        let from: Vec<DynamicWindRecord> = vec![];
+        let to: Vec<DynamicWindRecord> = vec![];
+        // This should not panic
+        cps_eval.run_wind_handlers(&from, &to).unwrap();
+
+        // Test: going from [r1] to [r1] (same ID) should not run handlers
+        let from = vec![r1.clone()];
+        let to = vec![r1.clone()]; // Same ID
+        cps_eval.run_wind_handlers(&from, &to).unwrap();
+
+        // r2 and r3 reserved for future tests with actual thunks
     }
 }

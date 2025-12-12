@@ -81,3 +81,29 @@ fn test_call_with_values_multiple_uses() {
         "3",
     );
 }
+
+// 6.10 Control features - dynamic-wind with call/cc re-entry
+// These tests require CPS mode (use_cps: true) for proper continuation support
+
+#[test]
+fn test_dynamic_wind_with_callcc_reentry() {
+    // Classic test from R7RS - captures continuation inside dynamic-wind body
+    // and re-invokes it, checking that before/after thunks run correctly
+    assert_program_eval_to_with_cps(
+        r#"
+        (let ((path '()) (c #f))
+          (let ((add (lambda (s) (set! path (cons s path)))))
+            (dynamic-wind
+              (lambda () (add 'connect))
+              (lambda ()
+                (add (call-with-current-continuation
+                       (lambda (c0) (set! c c0) 'talk1))))
+              (lambda () (add 'disconnect)))
+            (if (< (length path) 4)
+                (c 'talk2)
+                (reverse path))))
+        "#,
+        "(connect talk1 disconnect connect talk2 disconnect)",
+        true, // use_cps: required for call/cc and dynamic-wind
+    );
+}

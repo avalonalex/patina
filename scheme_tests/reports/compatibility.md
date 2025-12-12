@@ -1,15 +1,15 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-11 18:04:23
+**Generated:** 2025-12-11 20:44:53
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1127 | 97.3% |
+| ✅ Passed | 1128 | 97.4% |
 | ❌ Failed | 2 | 0.2% |
-| ⚠️ Error (crashed) | 29 | 2.5% |
+| ⚠️ Error (crashed) | 28 | 2.4% |
 | **Total** | **1158** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run (usually missing features like call/cc, guard).
@@ -31,7 +31,7 @@
 | ✅ | 6.7 Strings | 130 | 130 | 0 | 0 |
 | ✅ | 6.8 Vectors | 43 | 43 | 0 | 0 |
 | ✅ | 6.9 Bytevectors | 39 | 39 | 0 | 0 |
-| ⚠️ | 6.10 Control Features | 34 | 33 | 0 | 1 |
+| ✅ | 6.10 Control Features | 34 | 34 | 0 | 0 |
 | ⚠️ | 6.11 Exceptions | 25 | 2 | 2 | 21 |
 | ✅ | 6.12 Environments and evaluation | 5 | 5 | 0 | 0 |
 | ⚠️ | Read syntax | 93 | 87 | 0 | 6 |
@@ -52,7 +52,6 @@ FAIL: something-went-wrong
 ### Errors
 
 ```
-Error: Undefined variable: patina.internal.control/dynamic-wind
 Error: Undefined variable: patina.internal.errors/with-exception-handler
 Error: Undefined variable: guard
 Error: Undefined variable: guard

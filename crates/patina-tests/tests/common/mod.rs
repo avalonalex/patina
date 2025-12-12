@@ -99,3 +99,23 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
         expr, expected, result_str
     );
 }
+
+/// Assert that a multi-expression program produces expected result
+/// When `use_cps` is true, uses CPS mode which is required for continuation-related
+/// features (call/cc, dynamic-wind). In the future, CPS will become the default.
+pub fn assert_program_eval_to_with_cps(code: &str, expected: &str, use_cps: bool) {
+    let interp = if use_cps {
+        TreeWalkInterpreter::new_tree_walker_with_cps()
+    } else {
+        TreeWalkInterpreter::new_tree_walker()
+    };
+    let result = interp
+        .eval_program(code)
+        .unwrap_or_else(|e| panic!("Failed to evaluate program: {}", e));
+    let result_str = format!("{}", result);
+    assert_eq!(
+        result_str, expected,
+        "\nProgram:\n{}\nExpected: {}\nGot: {}",
+        code, expected, result_str
+    );
+}
