@@ -724,3 +724,61 @@ fn test_error_object_irritants() {
         "(1 2 3)",
     );
 }
+
+// =============================================================================
+// Backtracking / amb-style continuations (from Chibi test08-callcc.scm)
+// =============================================================================
+
+#[test]
+fn test_backtracking_pythagorean_triple() {
+    // Classic amb-style backtracking using call/cc
+    // Finds first Pythagorean triple where x,y,z are in range 2-9
+    // Result encodes x*100 + y*10 + z
+    // Both 534 (x=5,y=3,z=4) and 543 (x=5,y=4,z=3) are valid
+    // Patina finds 534 due to let binding evaluation order
+    let code = r#"
+        (define fail
+          (lambda () 999999))
+
+        (define in-range
+          (lambda (a b)
+            (call-with-current-continuation
+              (lambda (cont)
+                (enumerate a b cont)))))
+
+        (define enumerate
+          (lambda (a b cont)
+            (if (< b a)
+                (fail)
+                (let ((save fail))
+                  (begin
+                    (set! fail
+                      (lambda ()
+                        (begin
+                          (set! fail save)
+                          (enumerate (+ a 1) b cont))))
+                    (cont a))))))
+
+        (let ((x (in-range 2 9))
+              (y (in-range 2 9))
+              (z (in-range 2 9)))
+          (if (= (* x x)
+                 (+ (* y y) (* z z)))
+              (+ (* x 100) (+ (* y 10) z))
+              (fail)))
+        "#;
+
+    let result = eval_program(code);
+    // Accept either 534 or 543 - both are valid Pythagorean triples
+    let value: i64 = result.parse().expect("expected integer result");
+    assert!(
+        value == 534 || value == 543,
+        "Expected 534 (5,3,4) or 543 (5,4,3), got {}",
+        value
+    );
+    // Verify it's actually a Pythagorean triple
+    let x = value / 100;
+    let y = (value / 10) % 10;
+    let z = value % 10;
+    assert_eq!(x * x, y * y + z * z, "Not a valid Pythagorean triple");
+}
