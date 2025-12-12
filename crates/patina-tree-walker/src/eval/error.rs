@@ -1,18 +1,22 @@
 //! Error types for the Scheme evaluator
 //!
 //! This module defines all error types that can occur during evaluation of Scheme expressions.
+//!
+//! ## Error Categories
+//!
+//! Errors are categorized by whether they can be caught by Scheme exception handlers:
+//!
+//! - **Catchable**: Can be caught by `guard` or `with-exception-handler`
+//!   - `SchemeException`: Wraps Scheme-level exceptions
+//!   - All other runtime errors (type, arity, bounds, etc.)
+//!
+//! - **Non-catchable**: Stay in Rust, cannot be caught in Scheme
+//!   - `InternalError`: Interpreter bugs
+//!   - `ContinuationEscape`: Control flow mechanism
 
+use patina_core::{ErrorDetail, ErrorKind, ExceptionKind};
 use patina_frontend::FrontendError;
 use thiserror::Error;
-
-/// The kind of Scheme exception, matching ExceptionKind in patina-core
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SchemeExceptionKind {
-    Error,
-    FileError,
-    ReadError,
-    Custom(String),
-}
 
 #[derive(Error, Debug)]
 pub enum EvalError {
@@ -50,15 +54,73 @@ pub enum EvalError {
     ContinuationEscape,
 
     /// A Scheme-level exception was raised (R7RS Section 6.11)
-    /// We store only the message and kind (not the full Value) to satisfy Send+Sync.
+    /// Uses ExceptionKind from patina-core for consistency.
     /// The irritants are serialized to a string for the error message.
     /// This can be caught by `guard` or `with-exception-handler`.
     #[error("Scheme exception ({kind:?}): {message}")]
     SchemeException {
-        kind: SchemeExceptionKind,
+        kind: ExceptionKind,
         message: String,
         irritants_display: String, // Serialized display of irritants
     },
+}
+
+impl EvalError {
+    /// Check if this error can be caught by Scheme exception handlers
+    pub fn is_catchable(&self) -> bool {
+        !matches!(
+            self,
+            EvalError::InternalError(_) | EvalError::ContinuationEscape
+        )
+    }
+
+    /// Convert this error to an ErrorKind for classification
+    pub fn to_error_kind(&self) -> ErrorKind {
+        match self {
+            EvalError::UndefinedVariable(_) => ErrorKind::Lookup,
+            EvalError::NotAProcedure(_) => ErrorKind::Application,
+            EvalError::WrongArity { .. } => ErrorKind::Arity,
+            EvalError::InvalidSyntax(_) => ErrorKind::Syntax,
+            EvalError::TypeError(_) => ErrorKind::Type,
+            EvalError::DivisionByZero => ErrorKind::Domain,
+            EvalError::IndexOutOfBounds(_) => ErrorKind::Bounds,
+            EvalError::IOError(_) => ErrorKind::FileIO,
+            EvalError::InternalError(_) => ErrorKind::Internal,
+            EvalError::ContinuationEscape => ErrorKind::ControlFlow,
+            EvalError::SchemeException { kind, .. } => match kind {
+                ExceptionKind::FileError => ErrorKind::FileIO,
+                ExceptionKind::ReadError => ErrorKind::Read,
+                _ => ErrorKind::User,
+            },
+        }
+    }
+
+    /// Convert to ErrorDetail for rich error reporting
+    pub fn to_error_detail(&self) -> ErrorDetail {
+        let kind = self.to_error_kind();
+        match self {
+            EvalError::UndefinedVariable(name) => ErrorDetail::lookup_error(name),
+            EvalError::WrongArity { expected, actual } => {
+                ErrorDetail::arity_error(expected, *actual)
+            }
+            EvalError::DivisionByZero => ErrorDetail::domain_error("division by zero"),
+            EvalError::IOError(msg) => ErrorDetail::file_error(msg),
+            EvalError::SchemeException {
+                message,
+                irritants_display,
+                ..
+            } => {
+                let mut detail = ErrorDetail::new(kind, message);
+                if !irritants_display.is_empty() {
+                    // Note: We can't recover the actual Values from the display string,
+                    // but we include it in the message
+                    detail.message = format!("{} [{}]", message, irritants_display);
+                }
+                detail
+            }
+            _ => ErrorDetail::new(kind, self.to_string()),
+        }
+    }
 }
 
 // Convert FrontendError to EvalError
@@ -69,6 +131,49 @@ impl From<FrontendError> for EvalError {
             FrontendError::MacroError(msg) => EvalError::InvalidSyntax(msg),
             FrontendError::TypeError(msg) => EvalError::TypeError(msg),
             _ => EvalError::InternalError(format!("Frontend error: {}", err)),
+        }
+    }
+}
+
+// Convert ErrorDetail to EvalError
+impl From<ErrorDetail> for EvalError {
+    fn from(detail: ErrorDetail) -> Self {
+        match detail.kind {
+            ErrorKind::Lookup => EvalError::UndefinedVariable(detail.message),
+            ErrorKind::Application => EvalError::NotAProcedure(detail.message),
+            ErrorKind::Arity => EvalError::WrongArity {
+                expected: "?".to_string(),
+                actual: 0,
+            },
+            ErrorKind::Type => EvalError::TypeError(detail.message),
+            ErrorKind::Domain => {
+                if detail.message.contains("division by zero") {
+                    EvalError::DivisionByZero
+                } else {
+                    EvalError::TypeError(detail.message)
+                }
+            }
+            ErrorKind::Bounds => EvalError::IndexOutOfBounds(detail.message),
+            ErrorKind::FileIO => EvalError::IOError(detail.message),
+            ErrorKind::Read => {
+                let irritants_display = detail.format_irritants();
+                EvalError::SchemeException {
+                    kind: ExceptionKind::ReadError,
+                    message: detail.message,
+                    irritants_display,
+                }
+            }
+            ErrorKind::Syntax => EvalError::InvalidSyntax(detail.message),
+            ErrorKind::User => {
+                let irritants_display = detail.format_irritants();
+                EvalError::SchemeException {
+                    kind: ExceptionKind::Error,
+                    message: detail.message,
+                    irritants_display,
+                }
+            }
+            ErrorKind::Internal => EvalError::InternalError(detail.message),
+            ErrorKind::ControlFlow => EvalError::ContinuationEscape,
         }
     }
 }

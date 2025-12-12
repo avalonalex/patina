@@ -1,3 +1,4 @@
+use patina_core::{ErrorDetail, ErrorKind};
 use thiserror::Error;
 
 /// Frontend errors (lexing, parsing, macro expansion)
@@ -22,6 +23,27 @@ pub enum FrontendError {
     General(String),
 }
 
+impl FrontendError {
+    /// Get the error kind for classification
+    pub fn to_error_kind(&self) -> ErrorKind {
+        match self {
+            FrontendError::InvalidSyntax(_) => ErrorKind::Syntax,
+            FrontendError::LexError(_) => ErrorKind::Read,
+            FrontendError::ParseError(_) => ErrorKind::Read,
+            FrontendError::MacroError(_) => ErrorKind::Syntax,
+            FrontendError::TypeError(_) => ErrorKind::Type,
+            FrontendError::General(_) => ErrorKind::Internal,
+        }
+    }
+
+    /// Convert to ErrorDetail for rich error reporting
+    ///
+    /// Note: Source location will be None until SOURCE_INFO_PLAN.md is implemented.
+    pub fn to_error_detail(&self) -> ErrorDetail {
+        ErrorDetail::new(self.to_error_kind(), self.to_string())
+    }
+}
+
 // Conversions from specific error types
 impl From<crate::lexer::LexError> for FrontendError {
     fn from(e: crate::lexer::LexError) -> Self {
@@ -32,5 +54,12 @@ impl From<crate::lexer::LexError> for FrontendError {
 impl From<crate::parser::ParseError> for FrontendError {
     fn from(e: crate::parser::ParseError) -> Self {
         FrontendError::ParseError(e.to_string())
+    }
+}
+
+// Conversion to ErrorDetail
+impl From<FrontendError> for ErrorDetail {
+    fn from(e: FrontendError) -> Self {
+        e.to_error_detail()
     }
 }

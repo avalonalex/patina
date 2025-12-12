@@ -8,6 +8,7 @@
 //! - `PVRef`, `MatchEnv`: Pattern variable references for macro expansion
 //! - `Library`: R7RS library representation
 //! - `CompiledMacro`: Compiled syntax-rules macros
+//! - `ErrorKind`, `ErrorDetail`: Unified error handling
 //!
 //! By placing these types in a foundation crate, we avoid circular dependencies
 //! and enable type-safe representations (no `dyn Any` needed).
@@ -17,6 +18,7 @@ pub mod core_expr;
 pub mod cps_expr;
 pub mod debug_format;
 pub mod environment;
+pub mod error;
 pub mod library;
 pub mod macro_debug;
 pub mod numeric;
@@ -30,6 +32,7 @@ pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, Pattern, Templ
 pub use core_expr::{CoreExpr, Formals, ScopedParam, Symbol};
 pub use cps_expr::{CpsExpr, CpsParam, CpsPrimitive, PromptTag};
 pub use environment::{Environment, ScopedBinding};
+pub use error::{ErrorDetail, ErrorKind, SourceLocation};
 pub use library::Library;
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};
 pub use pvref::{MatchEnv, MatchValue, PVRef};

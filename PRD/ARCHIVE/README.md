@@ -2,11 +2,34 @@
 
 This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2025-12-08
+**Last Updated:** 2025-12-12
 
 ---
 
 ## Directory Structure
+
+### 📁 `error_system_2025_12/`
+**Status:** ✅ COMPLETE - CPS Error Routing (2025-12-12)
+
+Unified error system implementation for R7RS exception handling:
+- `ERROR_SYSTEM_DESIGN.md` - Design and implementation of CPS error routing
+
+**Features Implemented:**
+- All catchable errors routed through CPS exception handler stack
+- `guard` and `with-exception-handler` can catch runtime errors
+- Proper error classification (`file-error?`, `read-error?`, `error-object?`)
+- Error message and irritant preservation
+- 35 CPS feature tests (24 passing, 7 ignored documenting known bugs)
+
+**Phases Completed:**
+1. ✅ Core error infrastructure (`ErrorKind`, `ErrorDetail`, `SourceLocation`)
+2. ✅ Frontend errors integration (without source locations - deferred to SOURCE_INFO_PLAN.md)
+3. ✅ Evaluation errors routing (`maybe_route_error_through_cps` expanded)
+4. ✅ End-to-end testing (file-error?, read-error?, error-object-irritants)
+
+**Remaining:** Source location tracking (blocked by SOURCE_INFO_PLAN.md)
+
+---
 
 ### `REMAINING_ARCHITECTURE_ISSUES.md`
 **Status:** ✅ ARCHIVED (2025-12-08)

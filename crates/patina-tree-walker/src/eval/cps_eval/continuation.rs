@@ -716,9 +716,9 @@ impl<'a> CpsEvaluator<'a> {
                         })
                     } else {
                         // No handler - propagate to Rust level
-                        use crate::eval::error::SchemeExceptionKind;
+                        use patina_core::ExceptionKind;
                         Err(EvalError::SchemeException {
-                            kind: SchemeExceptionKind::Error,
+                            kind: ExceptionKind::Error,
                             message: "exception handler returned from non-continuable exception"
                                 .to_string(),
                             irritants_display: String::new(),

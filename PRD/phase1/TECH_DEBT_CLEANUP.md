@@ -355,8 +355,12 @@ pub enum Value {
 ### 14. Add Missing Error Conversions
 
 **Crate**: patina-interpreter
+**Status**: ✅ COMPLETE (2025-12-12)
 
 **Problem**: No `From<DesugarError>` for `InterpreterError`.
+
+**Resolution**: Added `From<DesugarError> for InterpreterError<E>` in `patina-interpreter/src/lib.rs`.
+This was completed as part of the unified error system work (Phase 1 of ERROR_SYSTEM_DESIGN.md).
 
 ### 15. Improve Test Organization
 
@@ -394,11 +398,11 @@ pub enum Value {
 | 7. Fix primitive organization | MEDIUM | ✅ DONE | Completed 2025-12: sqrt, real-part, imag-part, library? moved |
 | 8. Eliminate duplicated code | MEDIUM | ✅ DONE | Completed 2024-12: removed dead compile_syntax_rules |
 | 9. Fix unsafe unwrap | MEDIUM | ✅ DONE | Completed 2024-12: using entry().or_default() |
-| 10. Split large files | MEDIUM | Not Started | |
+| 10. Split large files | MEDIUM | ✅ DONE | Completed 2024-12: splitted multiple file with >= 1300 lines |
 | 11. Remove incomplete CoreExpr | MEDIUM | ✅ DONE | Completed 2025-12: PrimCall, Let, Primitive removed |
 | 12. Add GC for cycle handling | MEDIUM | Not Started | Use rust-gc crate |
 | 13. Reduce clone() calls | LOW | Not Started | |
-| 14. Add error conversions | LOW | Not Started | |
+| 14. Add error conversions | LOW | ✅ DONE | Completed 2025-12-12 |
 | 15. Improve test organization | LOW | ✅ REVIEWED | Current organization acceptable |
 | 16. String performance | LOW | Not Started | |
 

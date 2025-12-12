@@ -1,5 +1,6 @@
 //! Error types for the desugarer
 
+use patina_core::{ErrorDetail, ErrorKind};
 use patina_runtime::Value;
 use std::fmt;
 
@@ -33,6 +34,29 @@ pub enum DesugarError {
 
     /// Generic error with message
     Other(String),
+}
+
+impl DesugarError {
+    /// Get the error kind for classification
+    pub fn to_error_kind(&self) -> ErrorKind {
+        match self {
+            DesugarError::InvalidSyntax(_) => ErrorKind::Syntax,
+            DesugarError::WrongArgCount { .. } => ErrorKind::Arity,
+            DesugarError::EmptyBody(_) => ErrorKind::Syntax,
+            DesugarError::RuntimeValueInAST { .. } => ErrorKind::Internal,
+            DesugarError::ExpectedProperList(_) => ErrorKind::Syntax,
+            DesugarError::DuplicateParameter { .. } => ErrorKind::Syntax,
+            DesugarError::InvalidFormals(_) => ErrorKind::Syntax,
+            DesugarError::Other(_) => ErrorKind::Internal,
+        }
+    }
+
+    /// Convert to ErrorDetail for rich error reporting
+    ///
+    /// Note: Source location will be None until SOURCE_INFO_PLAN.md is implemented.
+    pub fn to_error_detail(&self) -> ErrorDetail {
+        ErrorDetail::new(self.to_error_kind(), self.to_string())
+    }
 }
 
 impl fmt::Display for DesugarError {
@@ -73,6 +97,13 @@ impl fmt::Display for DesugarError {
 }
 
 impl std::error::Error for DesugarError {}
+
+// Conversion to ErrorDetail
+impl From<DesugarError> for ErrorDetail {
+    fn from(e: DesugarError) -> Self {
+        e.to_error_detail()
+    }
+}
 
 /// Convenience result type
 pub type Result<T> = std::result::Result<T, DesugarError>;

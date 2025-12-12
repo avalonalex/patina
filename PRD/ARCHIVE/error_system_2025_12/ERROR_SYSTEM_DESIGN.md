@@ -1,8 +1,9 @@
 # Unified Error System Design
 
-**Status**: Draft
+**Status**: ✅ Phase 1-4 Complete (source locations deferred to SOURCE_INFO_PLAN.md)
 **Created**: 2025-12-12
-**Related**: `POST_CPS_TECH_DEBT.md` item 5
+**Updated**: 2025-12-12
+**Related**: `POST_CPS_TECH_DEBT.md` item 5, `TECH_DEBT_CLEANUP.md` item 14
 
 ## Overview
 
@@ -510,33 +511,85 @@ impl<'a> CpsEvaluator<'a> {
 
 ## Migration Plan
 
-### Phase 1: Unify Core Types (Low Risk)
+### Phase 1: Unify Core Types (Low Risk) ✅ COMPLETE (2025-12-12)
 
-1. Create `patina-core/src/error.rs` with `ErrorDetail`, `ErrorKind`, `SourceLocation`
-2. Update `ExceptionKind` to align with new classification
-3. Remove duplicate `SchemeExceptionKind` from `patina-tree-walker`
-4. Add conversion methods between old and new types
+1. ✅ Created `patina-core/src/error.rs` with `ErrorDetail`, `ErrorKind`, `SourceLocation`
+2. ✅ `ExceptionKind` already aligned (Error, FileError, ReadError, Custom)
+3. ✅ Removed duplicate `SchemeExceptionKind` from `patina-tree-walker/src/eval/error.rs`
+4. ✅ Added conversion methods:
+   - `EvalError::to_error_kind()` - Classify any EvalError
+   - `EvalError::to_error_detail()` - Convert to rich error context
+   - `From<ErrorDetail> for EvalError` - Convert back
+   - `From<DesugarError> for InterpreterError` - Missing conversion added
 
 ### Phase 2: Update Frontend Errors (Medium Risk)
 
-1. Update `FrontendError` to wrap `ErrorDetail`
-2. Add source location tracking to lexer/parser
-3. Preserve macro expansion trace through error transformations
-4. Update `DesugarError` to use `ErrorDetail`
+**Status**: 🔶 Partial (2025-12-12)
+
+**Completed (without source tracking)**:
+- ✅ Added `to_error_kind()` method to `FrontendError`
+- ✅ Added `to_error_detail()` method to `FrontendError`
+- ✅ Added `From<FrontendError> for ErrorDetail` conversion
+- ✅ Added `to_error_kind()` method to `DesugarError`
+- ✅ Added `to_error_detail()` method to `DesugarError`
+- ✅ Added `From<DesugarError> for ErrorDetail` conversion
+- ✅ Added `patina-core` dependency to `patina-frontend`
+
+**Deferred (requires SOURCE_INFO_PLAN.md)**:
+1. ⏳ Add source location tracking to lexer/parser
+2. ⏳ Preserve macro expansion trace through error transformations
+3. ⏳ Update errors to include `SourceLocation`
+
+Source location tracking is a larger feature that requires implementing the
+`Syntax` object system from `SOURCE_INFO_PLAN.md` first. The current changes
+provide error kind categorization and ErrorDetail conversion without locations.
 
 ### Phase 3: Update Evaluation Errors (Medium Risk)
 
-1. Refactor `EvalError` to use the new structure
-2. Update all error construction sites in primitives
-3. Expand `route_error` to handle all catchable errors
-4. Fix remaining risky `unwrap()` calls
+**Status**: ✅ COMPLETE (2025-12-12)
+
+**Completed**:
+- ✅ Expanded `maybe_route_error_through_cps` to handle ALL catchable errors:
+  - `TypeError`, `WrongArity`, `DivisionByZero`, `IndexOutOfBounds`
+  - `UndefinedVariable`, `NotAProcedure`, `IOError`, `InvalidSyntax`
+  - `SchemeException` (pass-through)
+- ✅ Updated `apply_cps_step` to route `NotAProcedure` and arity errors
+- ✅ Updated `CpsExpr::Var` handling to route `UndefinedVariable` errors
+- ✅ Updated `CpsExpr::Continue` to route errors from `eval_trivial`
+- ✅ Added comprehensive tests in `cps_features.rs`:
+  - `test_guard_catches_type_error`
+  - `test_guard_catches_undefined_variable`
+  - `test_guard_catches_arity_error`
+  - `test_guard_catches_division_by_zero`
+  - `test_guard_catches_bounds_error`
+  - `test_guard_catches_application_error`
+  - `test_with_exception_handler_catches_type_error`
+  - `test_error_message_preserved`
+
+**Deferred**:
+- ⏳ Fix remaining risky `unwrap()` calls (low priority, 2 locations)
 
 ### Phase 4: End-to-End Testing
 
-1. Verify all R7RS exception tests pass
-2. Test that `guard` catches all expected error types
-3. Test error messages include source locations
-4. Test macro expansion traces in error output
+**Status**: ✅ COMPLETE (2025-12-12)
+
+**Completed**:
+- ✅ All R7RS exception tests pass (35 tests in cps_features.rs alone)
+- ✅ `guard` catches all expected error types:
+  - `test_guard_catches_type_error`
+  - `test_guard_catches_undefined_variable`
+  - `test_guard_catches_arity_error`
+  - `test_guard_catches_division_by_zero`
+  - `test_guard_catches_bounds_error`
+  - `test_guard_catches_application_error`
+  - `test_guard_catches_file_error` (file-error? predicate)
+  - `test_guard_catches_read_error` (read-error? predicate)
+- ✅ Error message preservation tested (`test_error_message_preserved`)
+- ✅ Error irritants tested (`test_error_object_irritants`)
+
+**Deferred** (requires SOURCE_INFO_PLAN.md):
+- ⏳ Test error messages include source locations
+- ⏳ Test macro expansion traces in error output
 
 ---
 

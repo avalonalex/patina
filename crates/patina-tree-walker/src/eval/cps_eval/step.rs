@@ -49,8 +49,24 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::Var { name, scopes } => {
-                    let value = self.lookup_var(name, scopes, &current_env)?;
-                    return Ok(StepResult::Done(value));
+                    match self.lookup_var(name, scopes, &current_env) {
+                        Ok(value) => return Ok(StepResult::Done(value)),
+                        Err(err) => {
+                            // Route undefined variable errors through exception handlers
+                            // We need a continuation to deliver the error to.
+                            // For a bare Var (not in an App), we use a Halt continuation
+                            // so the error can be caught by guard/with-exception-handler.
+                            let halt_cont = ContValue::Halt;
+                            return self.maybe_route_error_through_cps(
+                                err,
+                                halt_cont,
+                                cont_env,
+                                prompt_stack,
+                                current_winds,
+                                exception_handlers,
+                            );
+                        }
+                    }
                 }
 
                 CpsExpr::ContRef(k) => {
@@ -305,11 +321,25 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::Continue { cont, value } => {
-                    let val = self.eval_trivial(value, &current_env, &cont_env)?;
                     let k = cont_env
                         .get(cont)
                         .ok_or_else(|| EvalError::UndefinedVariable(cont.to_string()))?
                         .clone();
+
+                    // Evaluate value, routing any errors through exception handlers
+                    let val = match self.eval_trivial(value, &current_env, &cont_env) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            return self.maybe_route_error_through_cps(
+                                err,
+                                k,
+                                cont_env,
+                                prompt_stack,
+                                current_winds,
+                                exception_handlers,
+                            );
+                        }
+                    };
 
                     return Ok(StepResult::InvokeContinuation {
                         cont: k,

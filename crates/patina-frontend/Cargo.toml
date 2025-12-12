@@ -6,6 +6,7 @@ description = "Frontend for Patina Scheme: Lexer + Parser + Macro Expander"
 
 [dependencies]
 # Workspace crates
+patina-core = { path = "../patina-core" }
 patina-runtime = { path = "../patina-runtime" }
 patina-ir = { path = "../patina-ir" }
 patina-macros = { path = "../patina-macros" }

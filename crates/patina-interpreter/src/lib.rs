@@ -298,6 +298,12 @@ impl<E: std::error::Error> From<LexError> for InterpreterError<E> {
     }
 }
 
+impl<E: std::error::Error> From<DesugarError> for InterpreterError<E> {
+    fn from(e: DesugarError) -> Self {
+        InterpreterError::Desugar(e)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

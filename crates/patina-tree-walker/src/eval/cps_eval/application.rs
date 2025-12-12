@@ -29,6 +29,23 @@ impl<'a> CpsEvaluator<'a> {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
+        // Helper closure to route catchable errors through exception handlers
+        let route_error = |err: EvalError,
+                           cont: ContValue,
+                           cont_env: HashMap<Rc<str>, ContValue>,
+                           prompt_stack: Vec<PromptFrame>,
+                           dynamic_winds: Vec<DynamicWindRecord>,
+                           exception_handlers: Vec<ExceptionHandler>| {
+            self.maybe_route_error_through_cps(
+                err,
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            )
+        };
+
         match proc {
             Value::Procedure(p) => match p.as_ref() {
                 // CPS lambda: evaluate the CPS body with continuation bound
@@ -43,19 +60,33 @@ impl<'a> CpsEvaluator<'a> {
                     // Create new environment for the lambda
                     let new_env = Rc::new(Environment::with_parent(lambda_env.clone()));
 
-                    // Check arity
+                    // Check arity - route through exception handlers
                     let min_args = params.len();
                     if variadic.is_none() && args.len() != min_args {
-                        return Err(EvalError::WrongArity {
-                            expected: min_args.to_string(),
-                            actual: args.len(),
-                        });
+                        return route_error(
+                            EvalError::WrongArity {
+                                expected: min_args.to_string(),
+                                actual: args.len(),
+                            },
+                            cont,
+                            cont_env,
+                            prompt_stack,
+                            dynamic_winds,
+                            exception_handlers,
+                        );
                     }
                     if args.len() < min_args {
-                        return Err(EvalError::WrongArity {
-                            expected: format!("at least {}", min_args),
-                            actual: args.len(),
-                        });
+                        return route_error(
+                            EvalError::WrongArity {
+                                expected: format!("at least {}", min_args),
+                                actual: args.len(),
+                            },
+                            cont,
+                            cont_env,
+                            prompt_stack,
+                            dynamic_winds,
+                            exception_handlers,
+                        );
                     }
 
                     // Bind fixed parameters with proper hygiene support
@@ -252,7 +283,14 @@ impl<'a> CpsEvaluator<'a> {
                 exception_handlers,
             ),
 
-            _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
+            _ => route_error(
+                EvalError::NotAProcedure(format!("{}", proc)),
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            ),
         }
     }
 
@@ -486,14 +524,14 @@ impl<'a> CpsEvaluator<'a> {
             })
         } else {
             // No handler - propagate to Rust level
-            use crate::eval::error::SchemeExceptionKind;
+            use patina_core::ExceptionKind;
             let msg = if continuable {
                 format!("unhandled continuable exception: {}", exception)
             } else {
                 format!("unhandled exception: {}", exception)
             };
             Err(EvalError::SchemeException {
-                kind: SchemeExceptionKind::Error,
+                kind: ExceptionKind::Error,
                 message: msg,
                 irritants_display: String::new(),
             })
@@ -563,14 +601,14 @@ impl<'a> CpsEvaluator<'a> {
             })
         } else {
             // No handler - propagate to Rust level
-            use crate::eval::error::SchemeExceptionKind;
+            use patina_core::ExceptionKind;
             let irritants_display = args[1..]
                 .iter()
                 .map(|v| format!("{}", v))
                 .collect::<Vec<_>>()
                 .join(" ");
             Err(EvalError::SchemeException {
-                kind: SchemeExceptionKind::Error,
+                kind: ExceptionKind::Error,
                 message: match &args[0] {
                     Value::String(s) => s.borrow().clone(),
                     _ => "error".to_string(),

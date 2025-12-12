@@ -184,7 +184,26 @@ This document tracks technical debt introduced during the CPS (Continuation-Pass
 
 **Effort**: Large (ongoing)
 **Crate**: patina-tree-walker
-**Status**: 🔶 DEFERRED - See `PRD/phase1/ERROR_SYSTEM_DESIGN.md`
+**Status**: ✅ PHASE 1-4 COMPLETE - See `PRD/ARCHIVE/error_system_2025_12/ERROR_SYSTEM_DESIGN.md`
+
+**Phase 1 completed (2025-12-12)**:
+- ✅ Created unified `ErrorDetail`, `ErrorKind`, `SourceLocation` in `patina-core/src/error.rs`
+- ✅ Removed duplicate `SchemeExceptionKind` from `patina-tree-walker`
+- ✅ Added `From<DesugarError>` for `InterpreterError` (fixes TECH_DEBT item 14)
+- ✅ Added conversion methods: `EvalError::to_error_kind()`, `EvalError::to_error_detail()`
+
+**Phase 2 partial (2025-12-12)**:
+- ✅ Added `FrontendError::to_error_kind()`, `to_error_detail()`, `From<FrontendError> for ErrorDetail`
+- ✅ Added `DesugarError::to_error_kind()`, `to_error_detail()`, `From<DesugarError> for ErrorDetail`
+- ✅ Added `patina-core` dependency to `patina-frontend`
+- ⏳ Source location tracking deferred (requires SOURCE_INFO_PLAN.md implementation)
+
+**Phase 3 completed (2025-12-12)**:
+- ✅ Expanded `maybe_route_error_through_cps` to handle ALL catchable error types
+- ✅ Updated `apply_cps_step` to route `NotAProcedure` and arity errors
+- ✅ Updated `CpsExpr::Var` handling to route `UndefinedVariable` errors
+- ✅ Updated `CpsExpr::Continue` to route errors from `eval_trivial`
+- ✅ Added 8 comprehensive tests for error catching with `guard`
 
 **Analysis (2025-12-12)**:
 
@@ -197,17 +216,18 @@ The original estimate of 443 unwrap/expect calls was inflated by test code. Actu
 | Risky (needs fixing) | 3 | ⚠️ Medium |
 | Internal/startup only | 2 | ⚠️ Low |
 
-**Risky locations to fix**:
+**Risky locations to fix** (deferred, low priority):
 - `io/read.rs:57` - `remaining.unwrap()` without prior check
 - `number_theory.rs:196-197` - `BigRational::from_f64().unwrap()`
 
-**Deferred Reason**: Fixing unwraps is part of a larger error system redesign that unifies:
-- Parsing errors (FrontendError)
-- Desugaring errors (DesugarError)
-- Evaluation errors (EvalError)
-- Scheme exceptions (Value::Exception)
+**Phase 4 completed (2025-12-12)**:
+- ✅ Added `file-error?` and `read-error?` predicate tests
+- ✅ Added `error-object-irritants` test
+- ✅ All 35 CPS feature tests passing (7 ignored for known bugs)
 
-See `PRD/phase1/ERROR_SYSTEM_DESIGN.md` for the comprehensive design.
+**Remaining work (see ARCHIVE/error_system_2025_12/ERROR_SYSTEM_DESIGN.md)**:
+- ⏳ Source location tracking (blocked by SOURCE_INFO_PLAN.md)
+- ⏳ Risky unwrap calls (low priority, 2 locations)
 
 ---
 

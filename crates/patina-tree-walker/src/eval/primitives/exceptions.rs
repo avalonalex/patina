@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::super::Evaluator;
-use super::super::error::{EvalError, SchemeExceptionKind};
+use super::super::error::EvalError;
 use patina_core::ExceptionKind;
 use patina_runtime::value::Value;
 
@@ -50,7 +50,7 @@ pub(super) fn error(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
     // For now, just return an error that includes the exception info
     // When we have full exception handling, this will call raise
     Err(EvalError::SchemeException {
-        kind: SchemeExceptionKind::Error,
+        kind: ExceptionKind::Error,
         message,
         irritants_display,
     })
@@ -123,12 +123,6 @@ pub(super) fn raise(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
 
     // If it's already an exception object, extract its info
     if let Value::Exception(exc) = obj {
-        let kind = match &exc.kind {
-            ExceptionKind::Error => SchemeExceptionKind::Error,
-            ExceptionKind::FileError => SchemeExceptionKind::FileError,
-            ExceptionKind::ReadError => SchemeExceptionKind::ReadError,
-            ExceptionKind::Custom(s) => SchemeExceptionKind::Custom(s.clone()),
-        };
         let irritants_display = exc
             .irritants
             .iter()
@@ -136,7 +130,7 @@ pub(super) fn raise(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
             .collect::<Vec<_>>()
             .join(" ");
         return Err(EvalError::SchemeException {
-            kind,
+            kind: exc.kind.clone(),
             message: exc.message.clone(),
             irritants_display,
         });
@@ -144,7 +138,7 @@ pub(super) fn raise(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, E
 
     // Otherwise, raise it as a generic exception with the object as the message
     Err(EvalError::SchemeException {
-        kind: SchemeExceptionKind::Error,
+        kind: ExceptionKind::Error,
         message: format!("{}", obj),
         irritants_display: String::new(),
     })
@@ -170,7 +164,7 @@ pub(super) fn raise_continuable(
     // Full implementation needs CPS exception handler support
     let obj = &args[0];
     Err(EvalError::SchemeException {
-        kind: SchemeExceptionKind::Error,
+        kind: ExceptionKind::Error,
         message: format!("continuable: {}", obj),
         irritants_display: String::new(),
     })

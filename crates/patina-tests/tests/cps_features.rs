@@ -578,3 +578,149 @@ fn test_exception_with_stored_continuation() {
         "(first error)",
     );
 }
+
+// =============================================================================
+// Runtime Error Routing Through Exception Handlers
+// =============================================================================
+// These tests verify that runtime errors (type errors, arity errors, etc.)
+// are properly routed through exception handlers when handlers are installed.
+
+#[test]
+fn test_guard_catches_type_error() {
+    // Type error should be caught by guard
+    assert_program_eval_to(
+        r#"
+        (guard (ex ((error-object? ex) 'caught-type-error))
+          (+ "not-a-number" 1))
+        "#,
+        "caught-type-error",
+    );
+}
+
+#[test]
+fn test_guard_catches_undefined_variable() {
+    // Undefined variable should be caught by guard
+    assert_program_eval_to(
+        r#"
+        (guard (ex ((error-object? ex) 'caught-undefined))
+          undefined-variable-xyz)
+        "#,
+        "caught-undefined",
+    );
+}
+
+#[test]
+fn test_guard_catches_arity_error() {
+    // Arity error should be caught by guard
+    assert_program_eval_to(
+        r#"
+        (guard (ex ((error-object? ex) 'caught-arity))
+          (car 1 2 3))
+        "#,
+        "caught-arity",
+    );
+}
+
+#[test]
+fn test_guard_catches_division_by_zero() {
+    // Division by zero should be caught by guard
+    assert_program_eval_to(
+        r#"
+        (guard (ex ((error-object? ex) 'caught-division))
+          (/ 1 0))
+        "#,
+        "caught-division",
+    );
+}
+
+#[test]
+fn test_guard_catches_bounds_error() {
+    // Index out of bounds should be caught by guard
+    assert_program_eval_to(
+        r#"
+        (guard (ex ((error-object? ex) 'caught-bounds))
+          (vector-ref (vector 1 2 3) 100))
+        "#,
+        "caught-bounds",
+    );
+}
+
+#[test]
+fn test_guard_catches_application_error() {
+    // Application of non-procedure should be caught by guard
+    assert_program_eval_to(
+        r#"
+        (guard (ex ((error-object? ex) 'caught-app))
+          (42 1 2))
+        "#,
+        "caught-app",
+    );
+}
+
+#[test]
+fn test_with_exception_handler_catches_type_error() {
+    // Type error should be caught by with-exception-handler
+    assert_program_eval_to(
+        r#"
+        (call-with-current-continuation
+          (lambda (escape)
+            (with-exception-handler
+              (lambda (ex) (escape (if (error-object? ex) 'caught 'not-error)))
+              (lambda () (car "not-a-pair")))))
+        "#,
+        "caught",
+    );
+}
+
+#[test]
+fn test_error_message_preserved() {
+    // The error message should be preserved in the exception object
+    assert_program_eval_to(
+        r#"
+        (guard (ex ((error-object? ex) (error-object-message ex)))
+          (car 'not-a-pair))
+        "#,
+        "\"car expects a pair\"",
+    );
+}
+
+#[test]
+fn test_guard_catches_file_error() {
+    // file-error? predicate should work for file-related errors
+    assert_program_eval_to(
+        r#"
+        (import (scheme file))
+        (guard (ex ((file-error? ex) 'file-error)
+                   ((error-object? ex) 'other-error))
+          (open-input-file "/nonexistent/path/that/does/not/exist"))
+        "#,
+        "file-error",
+    );
+}
+
+#[test]
+fn test_guard_catches_read_error() {
+    // read-error? predicate should work for parsing errors
+    // Use "1.2.3" which is an invalid number format
+    assert_program_eval_to(
+        r#"
+        (import (scheme read))
+        (guard (ex ((read-error? ex) 'read-error)
+                   ((error-object? ex) 'other-error))
+          (read (open-input-string "1.2.3")))
+        "#,
+        "read-error",
+    );
+}
+
+#[test]
+fn test_error_object_irritants() {
+    // error-object-irritants should return the irritants list
+    assert_program_eval_to(
+        r#"
+        (guard (ex ((error-object? ex) (error-object-irritants ex)))
+          (error "test error" 1 2 3))
+        "#,
+        "(1 2 3)",
+    );
+}

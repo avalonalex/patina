@@ -2,20 +2,32 @@
 //!
 //! This module contains functions for routing errors through the CPS
 //! exception handler stack instead of propagating them as Rust errors.
+//!
+//! ## Error Routing Strategy
+//!
+//! All "catchable" errors are routed through Scheme exception handlers when
+//! handlers are installed. Only truly non-catchable errors (internal bugs,
+//! continuation escapes) bypass the handler stack.
+//!
+//! This provides R7RS-compliant behavior where user code can catch and handle
+//! runtime errors using `guard` or `with-exception-handler`.
 
 use super::CpsEvaluator;
 use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
+use patina_core::ExceptionKind;
 use patina_core::value::{DynamicWindRecord, Value};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
-    /// Convert certain errors (IOError, InvalidSyntax) to CPS-routed exceptions
+    /// Route catchable errors through CPS exception handlers
     ///
-    /// If there are exception handlers installed, convert the error to a Scheme
-    /// exception value and route it through the handler stack. Otherwise,
-    /// propagate the error as a Rust Err.
+    /// All errors except `InternalError` and `ContinuationEscape` are catchable
+    /// and will be routed through any installed exception handlers. This enables
+    /// Scheme code to catch runtime errors using `guard` or `with-exception-handler`.
+    ///
+    /// If no exception handlers are installed, the error propagates as a Rust Err.
     pub(super) fn maybe_route_error_through_cps(
         &self,
         err: EvalError,
@@ -25,33 +37,86 @@ impl<'a> CpsEvaluator<'a> {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
-        // Determine if this error should be converted to a CPS exception
-        let (exception_kind, message) = match &err {
+        // Non-catchable errors always propagate as Rust errors
+        if !err.is_catchable() {
+            return Err(err);
+        }
+
+        // Convert EvalError to exception kind and message
+        let (exception_kind, message, irritants) = match &err {
+            // Lookup errors
+            EvalError::UndefinedVariable(name) => (
+                ExceptionKind::Error,
+                format!("Undefined variable: {}", name),
+                vec![],
+            ),
+
+            // Application errors
+            EvalError::NotAProcedure(desc) => (
+                ExceptionKind::Error,
+                format!("Not a procedure: {}", desc),
+                vec![],
+            ),
+
+            // Arity errors
+            EvalError::WrongArity { expected, actual } => (
+                ExceptionKind::Error,
+                format!(
+                    "Wrong number of arguments: expected {}, got {}",
+                    expected, actual
+                ),
+                vec![],
+            ),
+
+            // Type errors
+            EvalError::TypeError(msg) => (ExceptionKind::Error, msg.clone(), vec![]),
+
+            // Domain errors
+            EvalError::DivisionByZero => {
+                (ExceptionKind::Error, "Division by zero".to_string(), vec![])
+            }
+
+            // Bounds errors
+            EvalError::IndexOutOfBounds(msg) => (ExceptionKind::Error, msg.clone(), vec![]),
+
+            // I/O errors - classify as file-error when appropriate
             EvalError::IOError(msg) => {
-                // Check if it's a file error (contains "Cannot open", "Cannot delete", etc.)
                 let kind = if msg.contains("Cannot open")
                     || msg.contains("Cannot delete")
                     || msg.contains("Cannot read")
                     || msg.contains("Cannot write")
                     || msg.contains("No such file")
+                    || msg.contains("file")
                 {
-                    patina_core::ExceptionKind::FileError
+                    ExceptionKind::FileError
                 } else {
-                    patina_core::ExceptionKind::Error
+                    ExceptionKind::Error
                 };
-                (kind, msg.clone())
+                (kind, msg.clone(), vec![])
             }
+
+            // Syntax/read errors
             EvalError::InvalidSyntax(msg) => {
-                // Read errors typically contain "read:" in the message
-                let kind = if msg.contains("read:") {
-                    patina_core::ExceptionKind::ReadError
+                let kind = if msg.contains("read:") || msg.contains("parse") {
+                    ExceptionKind::ReadError
                 } else {
-                    patina_core::ExceptionKind::Error
+                    ExceptionKind::Error
                 };
-                (kind, msg.clone())
+                (kind, msg.clone(), vec![])
             }
-            // Other errors: propagate as-is
-            _ => return Err(err),
+
+            // Already a Scheme exception - use its kind
+            EvalError::SchemeException {
+                kind,
+                message,
+                irritants_display: _,
+            } => (kind.clone(), message.clone(), vec![]),
+
+            // Internal errors and continuation escapes are not catchable
+            // (handled by is_catchable() check above)
+            EvalError::InternalError(_) | EvalError::ContinuationEscape => {
+                unreachable!("Non-catchable errors should have been filtered")
+            }
         };
 
         // If there are exception handlers, route through them
@@ -60,14 +125,14 @@ impl<'a> CpsEvaluator<'a> {
             let exception = Value::Exception(Rc::new(patina_core::ExceptionObject {
                 kind: exception_kind,
                 message,
-                irritants: vec![],
+                irritants,
             }));
 
             // Pop the handler (it's been invoked)
             let new_handlers = exception_handlers[..exception_handlers.len() - 1].to_vec();
 
             // Create continuation for when handler returns
-            // Since these are system errors, treat as non-continuable
+            // Runtime errors are non-continuable (only user-raised exceptions can be continuable)
             let raise_return_cont = ContValue::RaiseHandlerReturn {
                 continuable: false,
                 original_exception: Some(exception.clone()),
