@@ -2,7 +2,7 @@
 
 This document tracks known limitations and edge cases in Patina's R7RS implementation.
 
-**Last Updated:** 2025-12-04
+**Last Updated:** 2025-12-13
 
 ---
 
@@ -45,15 +45,16 @@ Nested ellipsis patterns (e.g., `(expr ...) ...`) are now fully supported.
 
 # 2. Literal Matching Edge Case: Binding Before Macro Definition
 
-## Status: Known Limitation (Minor)
+## Status: ✅ FIXED (as of 2025-12-13)
 
 **Added:** 2025-12-04
+**Fixed:** 2025-12-13
 
-There is an edge case in literal identifier matching where Patina differs from chibi-scheme and Gauche.
+This edge case has been fixed. Patina now correctly implements `bound-identifier=?` semantics for literal matching.
 
-## The Edge Case
+## The Edge Case (Now Fixed)
 
-When a literal identifier is bound BEFORE the macro is defined, and that same binding is used in the macro invocation:
+When a literal identifier is bound BEFORE the macro is defined, and that same binding is used in the macro invocation, both should match because they refer to the SAME binding:
 
 ```scheme
 ;; Case A: Binding exists BEFORE macro definition
@@ -63,102 +64,90 @@ When a literal identifier is bound BEFORE the macro is defined, and that same bi
                     ((n x) 'no-match))))
     (n k)))                                  ; k from outer let
 
-;; chibi-scheme / Gauche: 'matched
-;; Patina: 'no-match
+;; chibi-scheme / Gauche / Patina: 'matched ✅
 ```
 
 Compare to:
 
 ```scheme
 ;; Case B: Binding created AFTER macro definition
-(let-syntax ((n (syntax-rules (k)           ; k used as literal
+(let-syntax ((n (syntax-rules (k)           ; k used as literal (unbound)
                   ((n k) 'matched)
                   ((n x) 'no-match))))
   (let ((k 999))                            ; k bound AFTER macro
     (n k)))                                  ; different binding
 
-;; chibi-scheme / Gauche / Patina: 'no-match (all correct)
+;; chibi-scheme / Gauche / Patina: 'no-match ✅ (all correct)
 ```
 
-## Why This Happens
+## How It Was Fixed
 
-Patina uses a `shadowed_names` approach to detect when literal identifiers have been shadowed by local bindings at the use-site. This correctly handles Case B (binding after macro), but cannot distinguish Case A because:
+The fix involved implementing proper `bound-identifier=?` semantics by tracking binding context at macro compile time:
 
-1. At the use-site `(n k)`, we see that `k` is bound locally
-2. We add `k` to `shadowed_names` to prevent matching
-3. But we don't track WHEN the binding was created relative to macro definition
+### 1. New `LiteralBinding` Type
 
-In Case A, the `k` in the literal list and the `k` at the use-site actually refer to the **same binding** (the outer let), so they should match. Our `shadowed_names` doesn't capture this distinction.
+Added `LiteralBinding` struct in `patina-core/src/compiled_macro.rs` to capture both the literal name and its binding scopes:
 
-## Technical Details
-
-**R7RS Section 4.3.2** specifies that literal matching uses `bound-identifier=?` semantics:
-
-> "A literal identifier matches an input identifier if both have the same binding, or both are unbound and have the same name."
-
-The key phrase is "same binding" - in Case A, both the literal `k` in the pattern and the `k` at the use-site refer to the same binding (the outer let).
-
-**What would be needed to fix:**
-
-The macro expander would need to:
-1. Track the actual binding (not just the name) when capturing literals
-2. At use-site, compare the actual bindings rather than just checking if a name is in `shadowed_names`
-
-This is conceptually similar to what chibi does with its `identifier-syntax` approach where identifiers carry their binding context.
-
-## Practical Impact
-
-**Very Low** - This pattern is rare in practice:
-
-1. Most literals are reserved keywords (`else`, `=>`, `_`) that are never bound as variables
-2. When literals ARE variable names, they're typically unbound (free identifiers)
-3. Binding a variable, then using it as a macro literal, then using it in the macro is unusual
-
-Common patterns that work correctly:
-
-```scheme
-;; Standard else literal - works fine
-(cond (else 'default))
-
-;; Standard => literal - works fine
-(case x ((1 2) => handler))
-
-;; Free identifier as literal - works fine
-(let-syntax ((m (syntax-rules (foo)
-                  ((m foo) 'matched))))
-  (m foo))  ; => 'matched
+```rust
+pub struct LiteralBinding {
+    pub name: Rc<str>,
+    /// None = unbound at definition time
+    /// Some(scopes) = bound with these scopes
+    pub binding_scopes: Option<ScopeSet>,
+}
 ```
 
-## Priority
+### 2. Updated `CompiledMacro`
 
-**Low** - Not prioritizing a fix because:
-1. All 5 previously ignored macro tests now pass
-2. The core literal matching logic is correct for common cases
-3. This edge case requires an unusual code pattern
-4. Fixing it would require significant changes to how we track bindings
+Changed `literals: Vec<Rc<str>>` to `literals: Vec<LiteralBinding>` to store binding information with each literal.
+
+### 3. Compiler Captures Binding Context
+
+The macro compiler now checks `shadowed_names` (which includes lambda parameters) when resolving literals. This allows it to treat lambda parameters as "bound" even though they're not yet in the environment:
+
+```rust
+fn resolve_literal_bindings(
+    literal_names: &[Rc<str>],
+    env: Option<&Rc<Environment>>,
+    definition_scopes: &ScopeSet,
+    shadowed_names: &HashSet<Rc<str>>,  // NEW: includes lambda params
+) -> Vec<LiteralBinding>
+```
+
+### 4. Matcher Compares Bindings
+
+The pattern matcher now compares binding contexts instead of just checking if a name is shadowed:
+
+- If literal is bound at definition time AND use-site has the same scopes → MATCH
+- If literal is unbound at definition time AND use-site is bound → NO MATCH
+- If literal is bound at definition time AND use-site has different scopes → NO MATCH
 
 ## Test Cases
 
-The following tests document the current behavior:
+The fix is verified by the following tests in `tests/hygiene.rs`:
 
-```scheme
-;; In tests/hygiene.rs
+```rust
+#[test]
+fn test_literal_bound_before_macro_definition() {
+    // Case A: k bound BEFORE macro - should match
+    // ...
+    assert_eq!(result.unwrap().to_string(), "matched");
+}
 
-;; This works (binding AFTER macro):
-(let-syntax ((m (syntax-rules (k) ((m k) 'lit) ((m x) 'var))))
-  (let ((k 1)) (m k)))  ; => 'var (correct - different binding)
-
-;; This differs from chibi (binding BEFORE macro):
-(let ((k 1))
-  (let-syntax ((m (syntax-rules (k) ((m k) 'lit) ((m x) 'var))))
-    (m k)))  ; Patina: 'var, chibi: 'lit
+#[test]
+fn test_literal_binding_before_vs_after() {
+    // Contrasts Case A (before) vs Case B (after)
+    // ...
+}
 ```
 
 ## References
 
-- R7RS Section 4.3.2 - Pattern Language, literal matching semantics
-- `crates/patina-macros/src/macro_expander/matcher.rs` - `literals_equal()` function
-- `crates/patina-tests/tests/hygiene.rs` - Test cases for literal matching
+- R7RS Section 4.3.2 - Pattern Language, `bound-identifier=?` semantics
+- `crates/patina-core/src/compiled_macro.rs` - `LiteralBinding` struct
+- `crates/patina-macros/src/macro_expander/compiler/mod.rs` - `resolve_literal_bindings()`
+- `crates/patina-macros/src/macro_expander/matcher/literal.rs` - `is_literal_shadowed()`
+- `crates/patina-tests/tests/hygiene.rs` - Test cases
 
 ---
 

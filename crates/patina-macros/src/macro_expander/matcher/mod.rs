@@ -22,7 +22,7 @@ pub use error::MatchError;
 
 use crate::macro_expander::pattern::Pattern;
 use crate::macro_expander::utils::{pattern_to_string, pattern_to_string_with_names};
-use patina_runtime::{MatchEnv, PVRef, Value};
+use patina_runtime::{LiteralBinding, MatchEnv, PVRef, ScopeSet, Value};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -47,9 +47,13 @@ pub struct Matcher {
     /// This is compile-time shadowing info from the desugarer's `shadowed_names`.
     shadowed_names: HashSet<Rc<str>>,
 
-    /// Literal identifiers from the macro definition (e.g., ["else", "=>"] for cond)
-    /// Used with shadowed_names to check if literals are shadowed.
-    literals: Vec<Rc<str>>,
+    /// Scopes from the use-site (set from the input identifier's scopes)
+    /// Used to determine if an identifier's binding matches a literal's binding.
+    use_site_scopes: ScopeSet,
+
+    /// Literal identifiers from the macro definition with their binding information.
+    /// Used with use_site_scopes to check if literals have the same binding.
+    literals: Vec<LiteralBinding>,
 }
 
 impl Matcher {
@@ -62,6 +66,7 @@ impl Matcher {
             num_pvars,
             pvar_names: None,
             shadowed_names: HashSet::new(),
+            use_site_scopes: ScopeSet::new(),
             literals: Vec::new(),
         }
     }
@@ -76,6 +81,7 @@ impl Matcher {
             num_pvars,
             pvar_names: Some(pvar_names),
             shadowed_names: HashSet::new(),
+            use_site_scopes: ScopeSet::new(),
             literals: Vec::new(),
         }
     }
@@ -86,17 +92,20 @@ impl Matcher {
     /// * `num_pvars` - Total number of pattern variables in the pattern
     /// * `pvar_names` - Mapping from PVREF to variable names
     /// * `shadowed_names` - Names shadowed by local bindings at macro use site
-    /// * `literals` - Literal identifiers from the macro definition
+    /// * `use_site_scopes` - Scopes from the use-site for binding comparison
+    /// * `literals` - Literal identifiers from the macro definition with binding info
     pub fn new_with_hygiene(
         num_pvars: usize,
         pvar_names: HashMap<PVRef, Rc<str>>,
         shadowed_names: HashSet<Rc<str>>,
-        literals: Vec<Rc<str>>,
+        use_site_scopes: ScopeSet,
+        literals: Vec<LiteralBinding>,
     ) -> Self {
         Self {
             num_pvars,
             pvar_names: Some(pvar_names),
             shadowed_names,
+            use_site_scopes,
             literals,
         }
     }
@@ -168,7 +177,13 @@ impl Matcher {
                 //
                 // Example: (let ((=> #f)) (cond (#t => 'ok)))
                 // Here `=>` is shadowed, so it shouldn't match cond's `=>` literal.
-                if literal::is_literal_shadowed(lit, input, &self.shadowed_names, &self.literals) {
+                if literal::is_literal_shadowed(
+                    lit,
+                    input,
+                    &self.shadowed_names,
+                    &self.use_site_scopes,
+                    &self.literals,
+                ) {
                     return Err(MatchError::LiteralMismatch {
                         expected: format!("{:?}", lit),
                         actual: format!("{:?} (shadowed)", input),

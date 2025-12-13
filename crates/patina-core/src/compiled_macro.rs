@@ -8,6 +8,7 @@
 //! - `Pattern` - Compiled pattern for matching
 //! - `Template` - Compiled template for expansion
 //! - `Identifier` - Hygienic identifier with scope information
+//! - `LiteralBinding` - Literal identifier with optional binding scope information
 //! - `CompiledRule` - A single pattern/template rule
 //! - `CompiledMacro` - Complete compiled macro definition
 
@@ -16,6 +17,48 @@ use crate::scope::ScopeSet;
 use crate::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+
+// ============================================================================
+// LiteralBinding
+// ============================================================================
+
+/// A literal identifier with optional binding scope information
+///
+/// R7RS Section 4.3.2 specifies that literal matching uses `bound-identifier=?` semantics:
+/// > "A literal identifier matches an input identifier if both have the same binding,
+/// >  or both are unbound and have the same name."
+///
+/// This struct captures the binding information at macro definition time so we can
+/// properly implement this semantics during pattern matching.
+///
+/// ## Example
+///
+/// ```scheme
+/// ;; Case A: k is bound BEFORE macro definition
+/// (let ((k 999))                              ; k bound with scopes {S1}
+///   (let-syntax ((n (syntax-rules (k)         ; literal k captures scopes {S1}
+///                     ((n k) 'matched)
+///                     ((n x) 'no-match))))
+///     (n k)))                                  ; k at use-site has scopes {S1}
+/// ;; Should return 'matched because both refer to the same binding
+///
+/// ;; Case B: k is bound AFTER macro definition
+/// (let-syntax ((n (syntax-rules (k)           ; literal k is unbound (None)
+///                   ((n k) 'matched)
+///                   ((n x) 'no-match))))
+///   (let ((k 999))                            ; k bound with scopes {S1, S2}
+///     (n k)))                                  ; k at use-site has scopes {S1, S2}
+/// ;; Should return 'no-match because they have different bindings
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiteralBinding {
+    /// The literal identifier name
+    pub name: Rc<str>,
+    /// Scope set of the literal's binding at macro definition time.
+    /// - `None` = the literal was unbound (free identifier) at definition time
+    /// - `Some(scopes)` = the literal was bound with these scopes at definition time
+    pub binding_scopes: Option<ScopeSet>,
+}
 
 // ============================================================================
 // Pattern
@@ -396,8 +439,12 @@ pub struct CompiledMacro {
     /// Macro name (for error messages)
     pub name: Rc<str>,
 
-    /// Literal identifiers (e.g., "else" in cond)
-    pub literals: Vec<Rc<str>>,
+    /// Literal identifiers with their binding information
+    ///
+    /// Each literal captures whether it was bound at macro definition time
+    /// and what scopes that binding had. This enables correct `bound-identifier=?`
+    /// semantics during pattern matching.
+    pub literals: Vec<LiteralBinding>,
 
     /// Compiled rules (tried in order, first-match-wins)
     pub rules: Vec<CompiledRule>,

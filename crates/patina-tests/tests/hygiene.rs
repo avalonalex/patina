@@ -1063,3 +1063,77 @@ fn test_literal_shadowed_in_nested_macro_template() {
     assert!(result.is_ok(), "Failed: {:?}", result);
     assert_eq!(result.unwrap().to_string(), "no-match");
 }
+
+/// Test: Literal bound BEFORE macro definition SHOULD match
+///
+/// R7RS Section 4.3.2 states:
+/// > "A literal identifier matches an input identifier if both have the same binding,
+/// >  or both are unbound and have the same name."
+///
+/// When a literal `k` in `(syntax-rules (k) ...)` is defined inside a `let` that
+/// binds `k`, and the macro is used in the same scope, the literal and the input
+/// should match because they refer to the SAME binding.
+///
+/// This is the "binding BEFORE macro definition" case - both the literal in the
+/// pattern and the identifier at the use site refer to the enclosing `let` binding.
+///
+/// Verified against chibi-scheme and Gauche which both return 'matched.
+#[test]
+fn test_literal_bound_before_macro_definition() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let result = interp.eval_program(
+        r#"
+        ;; Case A: k is bound BEFORE the macro is defined
+        ;; Both the literal k in the pattern AND the k at use site
+        ;; refer to the SAME binding from the outer let.
+        (let ((k 999))
+          (let-syntax ((n (syntax-rules (k)
+                            ((n k) 'matched)
+                            ((n x) 'no-match))))
+            (n k)))
+        "#,
+    );
+
+    // Should return 'matched because both k's refer to the same binding
+    assert!(result.is_ok(), "Failed: {:?}", result);
+    assert_eq!(result.unwrap().to_string(), "matched");
+}
+
+/// Test: Contrasting bound-before vs bound-after cases
+///
+/// This test demonstrates the difference between:
+/// - Case A: Binding exists BEFORE macro definition -> should match
+/// - Case B: Binding created AFTER macro definition -> should NOT match
+///
+/// Verified against chibi-scheme and Gauche.
+#[test]
+fn test_literal_binding_before_vs_after() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    // Case A: Binding BEFORE macro definition - should match
+    let result_before = interp.eval_program(
+        r#"
+        (let ((k 999))
+          (let-syntax ((n (syntax-rules (k)
+                            ((n k) 'matched-before)
+                            ((n x) 'no-match))))
+            (n k)))
+        "#,
+    );
+    assert!(result_before.is_ok(), "Case A failed: {:?}", result_before);
+    assert_eq!(result_before.unwrap().to_string(), "matched-before");
+
+    // Case B: Binding AFTER macro definition - should NOT match
+    let result_after = interp.eval_program(
+        r#"
+        (let-syntax ((n (syntax-rules (k)
+                          ((n k) 'matched-after)
+                          ((n x) 'no-match))))
+          (let ((k 999))
+            (n k)))
+        "#,
+    );
+    assert!(result_after.is_ok(), "Case B failed: {:?}", result_after);
+    assert_eq!(result_after.unwrap().to_string(), "no-match");
+}

@@ -2,7 +2,7 @@
 
 This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2025-12-12
+**Last Updated:** 2025-12-13
 
 ---
 
@@ -89,6 +89,21 @@ Analysis and fix documentation for the parameter/parameterize bug:
 - Fixed tail call optimization interaction with parameter stack
 - Implemented Option 2 (parameter stack approach)
 - Documented future work for dynamic-wind implementation
+
+---
+
+### `MACRO_SYSTEM_KNOWN_LIMITATIONS.md`
+**Status:** ✅ COMPLETE - All known limitations resolved (2025-12-13)
+
+Tracking document for macro system edge cases and limitations:
+1. **Nested Ellipsis** - ✅ IMPLEMENTED (2025-12-04)
+2. **Literal Matching Edge Case: Binding Before Macro Definition** - ✅ FIXED (2025-12-13)
+   - Implemented proper `bound-identifier=?` semantics
+   - Added `LiteralBinding` type to capture binding scopes at macro definition time
+   - Compiler now tracks `shadowed_names` (lambda parameters) as bound
+   - Verified against chibi-scheme and Gauche
+3. **Complex Ellipsis Patterns in Variadic Formals** - ✅ RESOLVED (2025-12-06)
+   - SRFI-16 reference implementation works in Patina
 
 ---
 

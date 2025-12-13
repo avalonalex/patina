@@ -31,7 +31,7 @@ mod tests;
 
 use super::utils::ELLIPSIS;
 use crate::error::MacroError;
-use patina_runtime::{Environment, PVRef, ScopeSet, Value};
+use patina_runtime::{Environment, LiteralBinding, PVRef, ScopeSet, Value};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -44,8 +44,14 @@ pub use patina_runtime::{CompiledMacro, CompiledRule};
 ///
 /// Based on Gauche's compile_rules (macro.c:604-683).
 pub struct Compiler {
-    /// Literal identifiers
-    pub(super) literals: Vec<Rc<str>>,
+    /// Literal identifiers with their binding information
+    ///
+    /// Each literal captures whether it was bound at macro definition time.
+    /// This enables correct `bound-identifier=?` semantics during matching.
+    pub(super) literals: Vec<LiteralBinding>,
+
+    /// Literal names for quick lookup (derived from literals)
+    pub(super) literal_names: Vec<Rc<str>>,
 
     /// Symbol used for ellipsis (usually "...")
     /// None means ellipsis is disabled (inside escape)
@@ -75,14 +81,68 @@ pub struct Compiler {
 }
 
 impl Compiler {
+    /// Resolve literal bindings at macro definition time
+    ///
+    /// For each literal name, check if it's bound in the environment or in
+    /// `shadowed_names` (which contains lambda parameters that aren't bound yet
+    /// but will be at runtime). If bound, capture the scopes of that binding.
+    /// This enables correct `bound-identifier=?` semantics during pattern matching.
+    fn resolve_literal_bindings(
+        literal_names: &[Rc<str>],
+        env: Option<&Rc<Environment>>,
+        definition_scopes: &ScopeSet,
+        shadowed_names: &std::collections::HashSet<Rc<str>>,
+    ) -> Vec<LiteralBinding> {
+        literal_names
+            .iter()
+            .map(|name| {
+                // Check if this literal is "bound" - either in the environment
+                // OR in shadowed_names (e.g., lambda parameters not yet evaluated)
+                let binding_scopes = if shadowed_names.contains(name) {
+                    // The literal is in shadowed_names - this means it's a lambda parameter
+                    // that will be bound when the lambda is called. Treat it as bound
+                    // with the current definition scopes.
+                    // This is the key fix for "binding before macro definition" - the
+                    // lambda parameter IS bound from the macro's perspective.
+                    Some(definition_scopes.clone())
+                } else if let Some(env) = env {
+                    // Check if the literal has a binding in the environment
+                    // First try scoped lookup, then fall back to regular lookup
+                    if env.get_with_scopes(name, definition_scopes).is_some() {
+                        // The literal is bound with scopes - capture the definition scopes
+                        Some(definition_scopes.clone())
+                    } else if env.get(name).is_some() {
+                        // Bound in regular bindings (e.g., global)
+                        Some(definition_scopes.clone())
+                    } else {
+                        // Not bound - literal is free at definition time
+                        None
+                    }
+                } else {
+                    // No environment - treat as unbound
+                    None
+                };
+
+                LiteralBinding {
+                    name: name.clone(),
+                    binding_scopes,
+                }
+            })
+            .collect()
+    }
+
     /// Create a new compiler
     ///
     /// # Arguments
     /// - `literals`: List of literal identifier names
     /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
     pub fn new(literals: Vec<Rc<str>>, ellipsis: Option<Rc<str>>) -> Self {
+        let empty_shadowed = std::collections::HashSet::new();
+        let literal_bindings =
+            Self::resolve_literal_bindings(&literals, None, &ScopeSet::new(), &empty_shadowed);
         Self {
-            literals,
+            literals: literal_bindings,
+            literal_names: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: None,
             definition_scopes: ScopeSet::new(),
@@ -103,11 +163,20 @@ impl Compiler {
         ellipsis: Option<Rc<str>>,
         env: Rc<Environment>,
     ) -> Self {
+        let definition_scopes = ScopeSet::new();
+        let empty_shadowed = std::collections::HashSet::new();
+        let literal_bindings = Self::resolve_literal_bindings(
+            &literals,
+            Some(&env),
+            &definition_scopes,
+            &empty_shadowed,
+        );
         Self {
-            literals,
+            literals: literal_bindings,
+            literal_names: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
-            definition_scopes: ScopeSet::new(),
+            definition_scopes,
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
@@ -130,8 +199,48 @@ impl Compiler {
         env: Rc<Environment>,
         scopes: ScopeSet,
     ) -> Self {
+        let empty_shadowed = std::collections::HashSet::new();
+        let literal_bindings =
+            Self::resolve_literal_bindings(&literals, Some(&env), &scopes, &empty_shadowed);
         Self {
-            literals,
+            literals: literal_bindings,
+            literal_names: literals,
+            ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
+            env: Some(env),
+            definition_scopes: scopes,
+            pvars: HashMap::new(),
+            pvar_count: 0,
+            max_level: 0,
+        }
+    }
+
+    /// Create a new compiler with environment, scope set, and shadowed names
+    ///
+    /// This is the most complete constructor that captures all binding information
+    /// for correct `bound-identifier=?` semantics.
+    ///
+    /// # Arguments
+    /// - `literals`: List of literal identifier names
+    /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
+    /// - `env`: Lexical environment where the macro is being defined
+    /// - `scopes`: Scope set at macro definition time
+    /// - `shadowed_names`: Names that are shadowed by local bindings (e.g., lambda parameters)
+    ///
+    /// The `shadowed_names` allows the compiler to treat lambda parameters as "bound"
+    /// even though they're not yet in the environment. This is essential for correct
+    /// literal matching when a literal refers to an enclosing lambda parameter.
+    pub fn with_env_scopes_and_shadowed(
+        literals: Vec<Rc<str>>,
+        ellipsis: Option<Rc<str>>,
+        env: Rc<Environment>,
+        scopes: ScopeSet,
+        shadowed_names: &std::collections::HashSet<Rc<str>>,
+    ) -> Self {
+        let literal_bindings =
+            Self::resolve_literal_bindings(&literals, Some(&env), &scopes, shadowed_names);
+        Self {
+            literals: literal_bindings,
+            literal_names: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes: scopes,

@@ -57,20 +57,24 @@ pub fn expand_macro(
         args,
         expansion_env,
         &std::collections::HashSet::new(),
+        &patina_runtime::ScopeSet::new(),
     )
 }
 
 /// Expand a macro with compile-time shadowing information
 ///
-/// This variant accepts `shadowed_names` which contains identifiers that are
-/// shadowed by local bindings at the macro use site (e.g., lambda parameters).
-/// When a literal identifier (like `=>` in cond) is shadowed, it should NOT
-/// match as a literal (R7RS 4.3.2).
+/// This variant accepts:
+/// - `shadowed_names`: identifiers shadowed by local bindings at the macro use site
+///   (e.g., lambda parameters). When a literal identifier is shadowed, it should NOT
+///   match as a literal (R7RS 4.3.2).
+/// - `use_site_scopes`: the scope set at the macro use site, used for comparing
+///   whether the use-site binding is the same as the literal's definition-time binding.
 pub fn expand_macro_with_shadowed(
     compiled_macro: &CompiledMacro,
     args: &patina_runtime::Value,
     expansion_env: &std::rc::Rc<patina_runtime::Environment>,
     shadowed_names: &std::collections::HashSet<std::rc::Rc<str>>,
+    use_site_scopes: &patina_runtime::ScopeSet,
 ) -> Result<patina_runtime::Value, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
     use debug::{DebugContext, record_expansion_step};
@@ -109,11 +113,12 @@ pub fn expand_macro_with_shadowed(
         dbg.log_trying_rule(rule_idx, rule);
 
         // Create matcher for this rule with hygiene support
-        // Pass shadowed_names and literals for checking shadowed literals (R7RS 4.3.2)
+        // Pass shadowed_names, use_site_scopes, and literals for checking shadowed literals (R7RS 4.3.2)
         let matcher = Matcher::new_with_hygiene(
             rule.num_pvars,
             rule.pvar_names.clone(),
             shadowed_names.clone(),
+            use_site_scopes.clone(),
             compiled_macro.literals.clone(),
         );
 

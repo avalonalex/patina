@@ -46,7 +46,7 @@ impl Compiler {
 
     /// Check if a symbol is a literal identifier
     pub(super) fn is_literal(&self, sym: &Rc<str>) -> bool {
-        self.literals.contains(sym)
+        self.literal_names.contains(sym)
     }
 
     /// Check if a value is the ellipsis symbol
@@ -66,7 +66,7 @@ impl Compiler {
                     _ => false,
                 };
                 // Literals have priority over ellipsis (SRFI-46, R7RS 4.3.2)
-                if is_elli && self.literals.contains(elli) {
+                if is_elli && self.literal_names.contains(elli) {
                     return false;
                 }
                 is_elli

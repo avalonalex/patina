@@ -350,12 +350,13 @@ impl Desugarer {
             && let Some(Value::Macro(compiled_macro)) = env.get(sym)
         {
             // This is a macro! Expand it and recursively desugar the result
-            // Pass shadowed_names for literal shadowing check (R7RS 4.3.2)
+            // Pass shadowed_names and use_site_scopes for literal shadowing check (R7RS 4.3.2)
             let expanded = patina_macros::expand_macro_with_shadowed(
                 &compiled_macro,
                 value,
                 env,
                 &self.shadowed_names,
+                &self.current_scopes,
             )
             .map_err(|e| DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e)))?;
 
@@ -1194,9 +1195,16 @@ impl Desugarer {
 
         let rules = self.parse_macro_rules(&rules_list)?;
 
-        // Compile using Compiler with environment AND scope set for scope-based hygiene
-        let mut compiler =
-            Compiler::with_env_and_scopes(literals, custom_ellipsis, env.clone(), scopes.clone());
+        // Compile using Compiler with environment, scope set, AND shadowed names for
+        // correct bound-identifier=? semantics. The shadowed_names enables literals
+        // that refer to enclosing lambda parameters to be treated as "bound".
+        let mut compiler = Compiler::with_env_scopes_and_shadowed(
+            literals,
+            custom_ellipsis,
+            env.clone(),
+            scopes.clone(),
+            &self.shadowed_names,
+        );
         compiler
             .compile_macro(name, rules)
             .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))

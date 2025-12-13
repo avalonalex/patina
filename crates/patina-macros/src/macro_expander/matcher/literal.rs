@@ -3,7 +3,7 @@
 //! This module implements literal matching for pattern matching, including
 //! R7RS hygiene support for shadowed literals.
 
-use patina_runtime::Value;
+use patina_runtime::{LiteralBinding, ScopeSet, Value};
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -12,25 +12,24 @@ use std::rc::Rc;
 /// R7RS 4.3.2: A literal identifier matches an input identifier if both have
 /// the same binding, or both are unbound and have the same name.
 ///
-/// If the literal is shadowed by a local binding at the use site, it should
-/// NOT match, allowing the clause to fall through to other patterns.
+/// This function implements the `bound-identifier=?` semantics:
+/// - If both literal and input are bound with the same scopes, they match
+/// - If both are unbound and have the same name, they match
+/// - If one is bound and the other is unbound (or differently bound), they DON'T match
 ///
 /// # Arguments
 /// * `lit` - The literal value from the pattern
 /// * `input` - The input value being matched
 /// * `shadowed_names` - Names shadowed by local bindings at macro use site
-/// * `literals` - Literal identifiers from the macro definition
+/// * `use_site_scopes` - Scopes at the macro use site for binding comparison
+/// * `literals` - Literal identifiers with binding information from macro definition
 pub fn is_literal_shadowed(
     lit: &Value,
     input: &Value,
     shadowed_names: &HashSet<Rc<str>>,
-    literals: &[Rc<str>],
+    use_site_scopes: &ScopeSet,
+    literals: &[LiteralBinding],
 ) -> bool {
-    // If no shadowed names, nothing can be shadowed
-    if shadowed_names.is_empty() {
-        return false;
-    }
-
     // Extract the literal name from the pattern
     let lit_name = match lit {
         Value::Symbol(s) => s.clone(),
@@ -38,12 +37,18 @@ pub fn is_literal_shadowed(
         _ => return false, // Non-identifier literals can't be shadowed
     };
 
-    // Only check literals that are in the macro's literals list
-    if !literals.iter().any(|l| l.as_ref() == lit_name.as_ref()) {
-        return false;
-    }
+    // Find the literal binding information for this literal
+    let literal_binding = literals
+        .iter()
+        .find(|lb| lb.name.as_ref() == lit_name.as_ref());
 
-    // Extract the input name
+    // If this literal is not in the macro's literals list, it's not subject to shadowing checks
+    let literal_binding = match literal_binding {
+        Some(lb) => lb,
+        None => return false,
+    };
+
+    // Extract the input name (scopes are extracted later from the input Value itself)
     let input_name = match input {
         Value::Symbol(s) => s.clone(),
         Value::Identifier(id) => id.name.clone(),
@@ -55,9 +60,74 @@ pub fn is_literal_shadowed(
         return false;
     }
 
-    // Check if the input name is in the shadowed_names set
-    // This is compile-time shadowing from lambda parameters, let bindings, etc.
-    shadowed_names.contains(&input_name)
+    // Now apply bound-identifier=? semantics:
+    // Two identifiers are bound-identifier=? if they have the same binding.
+    //
+    // Case 1: Both unbound (literal.binding_scopes = None, input not shadowed)
+    //         -> They should MATCH, so return false (not shadowed)
+    //
+    // Case 2: Both bound with the same scopes
+    //         -> They should MATCH, so return false (not shadowed)
+    //
+    // Case 3: Literal is bound, input has a different binding (shadowed at use site)
+    //         -> They should NOT match, so return true (shadowed)
+    //
+    // Case 4: Literal is unbound, input is bound (shadowed at use site)
+    //         -> They should NOT match, so return true (shadowed)
+
+    match &literal_binding.binding_scopes {
+        None => {
+            // Literal was unbound at macro definition time
+            // Check if input is also unbound (not shadowed)
+            // If input is in shadowed_names, it means a new binding exists at use site
+            if shadowed_names.contains(&input_name) {
+                // Input is bound at use site, but literal was unbound -> different bindings
+                return true; // Shadowed (should NOT match)
+            }
+            // Both unbound with same name -> same binding
+            false // Not shadowed (should match)
+        }
+        Some(literal_scopes) => {
+            // Literal was bound at macro definition time
+            // Check if input has the same binding
+
+            // First, check if input is explicitly shadowed by a new binding
+            if shadowed_names.contains(&input_name) {
+                // Input has a new binding at use site
+                // Compare the binding scopes: if different, they don't match
+                // We consider them the same binding if the literal's scopes equals the use-site scopes
+                if literal_scopes == use_site_scopes {
+                    // Same scopes = same binding (this is the key fix!)
+                    false // Not shadowed (should match)
+                } else {
+                    // Different scopes = different bindings
+                    true // Shadowed (should NOT match)
+                }
+            } else {
+                // Input is not shadowed by a new binding
+                // If literal was bound but input is in a context without that binding,
+                // they may still match if they're in the same lexical scope
+
+                // Check if input identifier has scopes that include the literal's scopes
+                if let Value::Identifier(id) = input {
+                    // If input's scopes are a superset of literal's scopes, they're in the same context
+                    if literal_scopes.is_subset_of(&id.scopes) {
+                        false // Same or compatible binding
+                    } else {
+                        // Different scopes suggest different bindings
+                        // But if the literal has scopes and input doesn't, and input is not shadowed,
+                        // we need to check if they refer to the same thing
+                        true // Different binding contexts
+                    }
+                } else {
+                    // Input is a bare Symbol - it's at top level
+                    // If literal was bound with scopes, they might be different
+                    // Only return false if the literal scopes are empty (global binding)
+                    !literal_scopes.is_empty()
+                }
+            }
+        }
+    }
 }
 
 /// Check if two values match as literals.
