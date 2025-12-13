@@ -16,7 +16,6 @@ use std::rc::Rc;
 /// Uses `patina_macros` for the underlying macro compilation and expansion.
 pub struct TestExpander {
     compiled: patina_macros::CompiledMacro,
-    test_env: Rc<Environment>,
 }
 
 impl TestExpander {
@@ -122,22 +121,21 @@ impl TestExpander {
             ));
         }
 
-        // Create test environment first (needed for compilation)
+        // Create test environment for compilation (captures bindings for hygiene)
         let test_env = Rc::new(Environment::new());
 
         // Compile it with the test environment using patina_macros
-        let mut compiler = patina_macros::Compiler::with_env(literals, None, test_env.clone());
+        let mut compiler = patina_macros::Compiler::with_env(literals, None, test_env);
         let compiled = compiler
             .compile_macro(name.into(), rules)
             .map_err(|e| FrontendError::InvalidSyntax(e.to_string()))?;
 
-        Ok(Self { compiled, test_env })
+        Ok(Self { compiled })
     }
 
     /// Create a test expander from a compiled macro
     pub fn from_compiled(compiled: patina_macros::CompiledMacro) -> Self {
-        let test_env = Rc::new(Environment::new());
-        Self { compiled, test_env }
+        Self { compiled }
     }
 
     /// Assert that the given input expands to the expected output
@@ -166,7 +164,7 @@ impl TestExpander {
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
         // Expand using patina_macros
-        let expanded = patina_macros::expand_macro(&self.compiled, &input_form, &self.test_env)
+        let expanded = patina_macros::expand_macro(&self.compiled, &input_form)
             .map_err(|e| format!("Expansion failed: {}", e))?;
 
         // Compare (ignoring gensym differences)
@@ -187,7 +185,7 @@ impl TestExpander {
         let mut parser = Parser::new(input).map_err(|e| format!("Parse error: {}", e))?;
         let input_form = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
 
-        let expanded = patina_macros::expand_macro(&self.compiled, &input_form, &self.test_env)
+        let expanded = patina_macros::expand_macro(&self.compiled, &input_form)
             .map_err(|e| format!("Expansion error: {}", e))?;
 
         Ok(format!("{}", expanded))

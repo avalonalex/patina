@@ -3,30 +3,33 @@
 //! This module implements R7RS-small `syntax-rules` macros with:
 //! - Pattern matching (including ellipsis patterns)
 //! - Template expansion
-//! - Hygienic identifier renaming using marks-and-ribs
+//! - Hygienic macro expansion using Racket-style scope sets
 //!
-//! Based on Steel-scheme's native Rust approach.
+//! Based on Gauche Scheme's PVREF encoding and Racket's "Binding as Sets of Scopes" (Flatt 2016).
 
 pub mod compiler;
 mod debug;
 pub mod expander;
 pub mod interface;
 pub mod matcher;
-pub mod pattern;
-pub mod template;
+pub mod syntax_rules_parser;
 pub mod utils;
 pub mod validator;
 
 #[cfg(test)]
 mod ellipsis_edge_cases_tests;
+#[cfg(test)]
+mod pattern_template_tests;
 
-// Re-export V2 types (now the only types)
+// Re-export core types from patina-runtime
+pub use patina_runtime::{Identifier, Pattern, Template};
+
+// Re-export macro system types
 pub use compiler::{CompiledMacro, CompiledRule, Compiler};
 pub use expander::{ExpandError, Expander};
 pub use interface::{CompiledMacroExpander, ExpansionResult, MacroExpander};
 pub use matcher::{MatchError, Matcher};
-pub use pattern::Pattern;
-pub use template::{Identifier, Template};
+pub use syntax_rules_parser::{ParsedSyntaxRules, SyntaxRulesParseError, parse_syntax_rules};
 
 // Re-export test helpers
 pub use interface::TestExpander;
@@ -49,13 +52,11 @@ pub use utils::{
 pub fn expand_macro(
     compiled_macro: &CompiledMacro,
     args: &patina_runtime::Value,
-    expansion_env: &std::rc::Rc<patina_runtime::Environment>,
 ) -> Result<patina_runtime::Value, crate::error::MacroError> {
     // No shadowed names - use default behavior
     expand_macro_with_shadowed(
         compiled_macro,
         args,
-        expansion_env,
         &std::collections::HashSet::new(),
         &patina_runtime::ScopeSet::new(),
     )
@@ -72,7 +73,6 @@ pub fn expand_macro(
 pub fn expand_macro_with_shadowed(
     compiled_macro: &CompiledMacro,
     args: &patina_runtime::Value,
-    expansion_env: &std::rc::Rc<patina_runtime::Environment>,
     shadowed_names: &std::collections::HashSet<std::rc::Rc<str>>,
     use_site_scopes: &patina_runtime::ScopeSet,
 ) -> Result<patina_runtime::Value, crate::error::MacroError> {
@@ -83,7 +83,7 @@ pub fn expand_macro_with_shadowed(
     MacroTracer::enter_expansion();
 
     // Set up debug context
-    let dbg = DebugContext::new(
+    let debug_ctx = DebugContext::new(
         patina_runtime::macro_debug::is_enabled(),
         MacroTracer::should_trace(&compiled_macro.name),
     );
@@ -92,7 +92,7 @@ pub fn expand_macro_with_shadowed(
     let macro_scope = patina_runtime::ScopeId::fresh();
 
     // Log expansion start
-    dbg.log_expansion_start(
+    debug_ctx.log_expansion_start(
         &compiled_macro.name,
         macro_scope,
         &compiled_macro.definition_scopes,
@@ -103,14 +103,14 @@ pub fn expand_macro_with_shadowed(
     // Step 1: Flip macro_scope on INPUT (adds scope to all use-site identifiers)
     // This is the first half of Racket's hygiene algorithm
     let flipped_args = flip_scope_on_value(args, macro_scope);
-    dbg.log_input_flip(macro_scope, &flipped_args);
+    debug_ctx.log_input_flip(macro_scope, &flipped_args);
 
-    // Create expander with expansion-time environment and macro scope
-    let expander = Expander::new(expansion_env.clone(), macro_scope);
+    // Create expander with macro scope for hygiene
+    let expander = Expander::new(macro_scope);
 
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
-        dbg.log_trying_rule(rule_idx, rule);
+        debug_ctx.log_trying_rule(rule_idx, rule);
 
         // Create matcher for this rule with hygiene support
         // Pass shadowed_names, use_site_scopes, and literals for checking shadowed literals (R7RS 4.3.2)
@@ -127,24 +127,24 @@ pub fn expand_macro_with_shadowed(
         match matcher.match_pattern(&rule.pattern, &flipped_args) {
             Ok(match_env) => {
                 // Pattern matched! Expand the template
-                dbg.log_match_success(&match_env, &rule.pvar_names, &rule.template);
+                debug_ctx.log_match_success(&match_env, &rule.pvar_names, &rule.template);
 
                 let expanded = expander
                     .expand(&rule.template, &match_env)
                     .map_err(|e| crate::error::MacroError::InvalidSyntax(e.to_string()))?;
 
-                dbg.log_before_output_flip(&expanded);
+                debug_ctx.log_before_output_flip(&expanded);
 
                 // Step 2: Flip macro_scope on OUTPUT (Racket-style hygiene)
                 // - Use-site identifiers (from pattern vars): macro_scope gets removed
                 // - Introduced identifiers (from template): macro_scope gets added
                 let result = flip_scope_on_value(&expanded, macro_scope);
 
-                dbg.log_expansion_complete(&compiled_macro.name, macro_scope, &result);
+                debug_ctx.log_expansion_complete(&compiled_macro.name, macro_scope, &result);
 
                 // Record expansion step for tracing
                 record_expansion_step(
-                    dbg.should_trace,
+                    debug_ctx.should_trace,
                     &compiled_macro.name,
                     rule_idx,
                     compiled_macro.rules.len(),
@@ -158,14 +158,14 @@ pub fn expand_macro_with_shadowed(
             }
             Err(e) => {
                 // This rule didn't match, try next one
-                dbg.log_match_failure(&e);
+                debug_ctx.log_match_failure(&e);
                 continue;
             }
         }
     }
 
     // No rule matched
-    dbg.log_no_rules_matched();
+    debug_ctx.log_no_rules_matched();
 
     // Exit expansion (decrement depth)
     MacroTracer::exit_expansion();
@@ -189,6 +189,40 @@ pub fn expand_macro_with_shadowed(
 ///
 /// Based on Racket's `flip-scope` operation from "Binding as Sets of Scopes" (Flatt 2016)
 fn flip_scope_on_value(
+    value: &patina_runtime::Value,
+    scope: patina_runtime::ScopeId,
+) -> patina_runtime::Value {
+    // Early exit: if no identifiers present, return value unchanged
+    // This avoids unnecessary tree reconstruction for simple data
+    if !contains_identifier(value) {
+        return value.clone();
+    }
+
+    flip_scope_on_value_impl(value, scope)
+}
+
+/// Check if a value contains any Identifier nodes
+///
+/// This is a fast traversal that returns true as soon as an Identifier is found,
+/// enabling early-exit optimization in flip_scope_on_value.
+fn contains_identifier(value: &patina_runtime::Value) -> bool {
+    use patina_runtime::Value;
+
+    match value {
+        Value::Identifier(_) => true,
+        Value::Pair(pair) => {
+            let borrowed = pair.borrow();
+            contains_identifier(&borrowed.0) || contains_identifier(&borrowed.1)
+        }
+        // Vectors don't participate in hygiene, so skip them
+        _ => false,
+    }
+}
+
+/// Implementation of flip_scope that does the actual work
+///
+/// Called only when we know identifiers are present.
+fn flip_scope_on_value_impl(
     value: &patina_runtime::Value,
     scope: patina_runtime::ScopeId,
 ) -> patina_runtime::Value {
@@ -217,8 +251,8 @@ fn flip_scope_on_value(
         // values inside (quote y) get their scopes flipped, while literal symbols stay as symbols.
         Value::Pair(pair) => {
             let borrowed = pair.borrow();
-            let new_car = flip_scope_on_value(&borrowed.0, scope);
-            let new_cdr = flip_scope_on_value(&borrowed.1, scope);
+            let new_car = flip_scope_on_value_impl(&borrowed.0, scope);
+            let new_cdr = flip_scope_on_value_impl(&borrowed.1, scope);
             Value::Pair(Rc::new(RefCell::new((new_car, new_cdr))))
         }
 

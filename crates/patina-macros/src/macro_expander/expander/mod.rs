@@ -31,12 +31,11 @@ mod tests;
 
 pub use error::ExpandError;
 
-use crate::macro_expander::template::Template;
+use crate::macro_expander::Template;
 use crate::macro_expander::utils::{
     list_to_vec as utils_list_to_vec, vec_to_list as utils_vec_to_list,
 };
 use patina_runtime::{MatchEnv, Value};
-use std::rc::Rc;
 
 /// Template expander for PVREF-based macro system
 ///
@@ -46,29 +45,18 @@ use std::rc::Rc;
 ///
 /// Based on Gauche's template expansion approach (macro.c:800+).
 pub struct Expander {
-    /// Expansion-time environment (for checking if identifiers are macro names)
-    /// We use the full runtime Environment directly to avoid duplication
-    expansion_env: Rc<patina_runtime::Environment>,
-
     /// Macro scope for this expansion (Racket-style hygiene)
     /// Used to distinguish use-site vs introduced identifiers
     macro_scope: patina_runtime::ScopeId,
 }
 
 impl Expander {
-    /// Create a new expander with runtime environment and macro scope
+    /// Create a new expander with macro scope
     ///
     /// # Arguments
-    /// * `expansion_env` - Runtime environment at expansion time
     /// * `macro_scope` - Fresh scope for this macro expansion (for Racket-style hygiene)
-    pub fn new(
-        expansion_env: Rc<patina_runtime::Environment>,
-        macro_scope: patina_runtime::ScopeId,
-    ) -> Self {
-        Self {
-            expansion_env,
-            macro_scope,
-        }
+    pub fn new(macro_scope: patina_runtime::ScopeId) -> Self {
+        Self { macro_scope }
     }
 
     /// Expand a template with the given match environment
@@ -174,15 +162,15 @@ impl Expander {
                 vars,
             } => {
                 // Expand ellipsis template: (t ...)
-                self.expand_ellipsis(
+                let ctx = ellipsis::EllipsisContext {
                     subtemplate,
-                    *level,
-                    *nesting,
-                    vars,
                     env,
                     indices,
+                    vars,
+                    level: *level,
                     inside_quote,
-                )
+                };
+                self.expand_ellipsis(&ctx, *nesting)
             }
         }
     }
@@ -200,11 +188,6 @@ impl Expander {
 
 impl Default for Expander {
     fn default() -> Self {
-        // Create an empty runtime environment for tests
-        use patina_runtime::Environment;
-        Self::new(
-            Rc::new(Environment::new()),
-            patina_runtime::ScopeId::fresh(),
-        )
+        Self::new(patina_runtime::ScopeId::fresh())
     }
 }

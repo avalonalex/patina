@@ -3,8 +3,9 @@
 //! This module handles expansion of list, vector, and dotted list templates.
 
 use super::Expander;
+use super::ellipsis::EllipsisContext;
 use super::error::ExpandError;
-use crate::macro_expander::template::Template;
+use crate::macro_expander::Template;
 use patina_runtime::{MatchEnv, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -37,15 +38,15 @@ impl Expander {
                     vars,
                 } = template
                 {
-                    let expanded = self.expand_ellipsis(
+                    let ctx = EllipsisContext {
                         subtemplate,
-                        *level,
-                        *nesting,
-                        vars,
                         env,
                         indices,
-                        in_quote_ctx,
-                    )?;
+                        vars,
+                        level: *level,
+                        inside_quote: in_quote_ctx,
+                    };
+                    let expanded = self.expand_ellipsis(&ctx, *nesting)?;
 
                     // Expanded ellipsis should be a list - splice it in
                     match expanded {

@@ -59,17 +59,17 @@ impl Compiler {
     pub(super) fn is_ellipsis(&self, form: &Value) -> bool {
         match &self.ellipsis {
             None => false, // Ellipsis disabled
-            Some(elli) => {
-                let is_elli = match form {
-                    Value::Symbol(s) => s == elli,
-                    Value::Identifier(id) => &id.name == elli,
+            Some(ellipsis_sym) => {
+                let is_ellipsis_match = match form {
+                    Value::Symbol(s) => s == ellipsis_sym,
+                    Value::Identifier(id) => &id.name == ellipsis_sym,
                     _ => false,
                 };
                 // Literals have priority over ellipsis (SRFI-46, R7RS 4.3.2)
-                if is_elli && self.literal_names.contains(elli) {
+                if is_ellipsis_match && self.literal_names.contains(ellipsis_sym) {
                     return false;
                 }
-                is_elli
+                is_ellipsis_match
             }
         }
     }

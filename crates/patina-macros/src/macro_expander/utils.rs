@@ -31,6 +31,93 @@ pub const MACRO_DEFINITION_FORMS: &[&str] = &[
 // List/Vector Conversion Utilities
 // ============================================================================
 
+/// Iterator over a Scheme list that clones elements lazily
+///
+/// This iterator traverses a Scheme list, cloning each element only when
+/// requested. This is more efficient than converting the entire list to a Vec
+/// upfront when pattern matching may fail early.
+///
+/// # Design Note
+///
+/// Due to `RefCell` borrowing constraints, we can't return references to list
+/// elements. Instead, we clone each `Value` as we iterate. However, this is
+/// still beneficial because:
+/// 1. We avoid pre-allocating a `Vec` for the entire list
+/// 2. Early pattern match failures don't pay for unused clones
+/// 3. `Value` clones are cheap for most variants (just `Rc` bumps)
+pub struct SchemeListIter {
+    current: Value,
+}
+
+impl SchemeListIter {
+    /// Create a new iterator over a Scheme list
+    pub fn new(list: &Value) -> Self {
+        Self {
+            current: list.clone(),
+        }
+    }
+
+    /// Count the length of a Scheme list without collecting
+    ///
+    /// Returns None if not a proper list.
+    pub fn len(list: &Value) -> Option<usize> {
+        let mut count = 0;
+        let mut current = list.clone();
+        loop {
+            match current {
+                Value::Null => return Some(count),
+                Value::Pair(p) => {
+                    count += 1;
+                    let borrowed = p.borrow();
+                    current = borrowed.1.clone();
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Check if a value is a proper list (ends with Null)
+    pub fn is_proper_list(list: &Value) -> bool {
+        Self::len(list).is_some()
+    }
+}
+
+impl Iterator for SchemeListIter {
+    type Item = Result<Value, ImproperListError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &self.current {
+            Value::Null => None,
+            Value::Pair(p) => {
+                let borrowed = p.borrow();
+                let car = borrowed.0.clone();
+                let cdr = borrowed.1.clone();
+                drop(borrowed);
+                self.current = cdr;
+                Some(Ok(car))
+            }
+            _ => {
+                // Return error once, then stop
+                let err = ImproperListError;
+                self.current = Value::Null; // Prevent further iteration
+                Some(Err(err))
+            }
+        }
+    }
+}
+
+/// Error indicating an improper list was encountered during iteration
+#[derive(Debug, Clone, Copy)]
+pub struct ImproperListError;
+
+impl std::fmt::Display for ImproperListError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "improper list encountered")
+    }
+}
+
+impl std::error::Error for ImproperListError {}
+
 /// Convert a Scheme proper list Value to a Vec
 ///
 /// Returns an error message if the value is not a proper list.
@@ -538,5 +625,73 @@ mod tests {
             Value::Null,
         ))));
         assert!(!is_macro_definition_form(&not_macro));
+    }
+
+    #[test]
+    fn test_scheme_list_iter_proper_list() {
+        let list = vec_to_list(vec![
+            Value::Integer(1),
+            Value::Integer(2),
+            Value::Integer(3),
+        ]);
+        let iter = SchemeListIter::new(&list);
+        let collected: Result<Vec<_>, _> = iter.collect();
+        let values = collected.unwrap();
+        assert_eq!(values.len(), 3);
+        assert!(matches!(values[0], Value::Integer(1)));
+        assert!(matches!(values[1], Value::Integer(2)));
+        assert!(matches!(values[2], Value::Integer(3)));
+    }
+
+    #[test]
+    fn test_scheme_list_iter_empty() {
+        let iter = SchemeListIter::new(&Value::Null);
+        let collected: Result<Vec<_>, _> = iter.collect();
+        let values = collected.unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn test_scheme_list_iter_improper() {
+        // Improper list: (1 . 2)
+        let improper = Value::Pair(Rc::new(RefCell::new((
+            Value::Integer(1),
+            Value::Integer(2),
+        ))));
+        let iter = SchemeListIter::new(&improper);
+        let collected: Result<Vec<_>, _> = iter.collect();
+        assert!(collected.is_err());
+    }
+
+    #[test]
+    fn test_scheme_list_iter_len() {
+        let list = vec_to_list(vec![
+            Value::Integer(1),
+            Value::Integer(2),
+            Value::Integer(3),
+        ]);
+        assert_eq!(SchemeListIter::len(&list), Some(3));
+        assert_eq!(SchemeListIter::len(&Value::Null), Some(0));
+
+        // Improper list
+        let improper = Value::Pair(Rc::new(RefCell::new((
+            Value::Integer(1),
+            Value::Integer(2),
+        ))));
+        assert_eq!(SchemeListIter::len(&improper), None);
+    }
+
+    #[test]
+    fn test_scheme_list_iter_is_proper_list() {
+        let list = vec_to_list(vec![Value::Integer(1), Value::Integer(2)]);
+        assert!(SchemeListIter::is_proper_list(&list));
+        assert!(SchemeListIter::is_proper_list(&Value::Null));
+
+        // Improper list
+        let improper = Value::Pair(Rc::new(RefCell::new((
+            Value::Integer(1),
+            Value::Integer(2),
+        ))));
+        assert!(!SchemeListIter::is_proper_list(&improper));
     }
 }

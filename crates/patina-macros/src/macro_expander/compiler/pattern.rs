@@ -5,7 +5,7 @@
 
 use super::Compiler;
 use crate::error::MacroError;
-use crate::macro_expander::pattern::Pattern;
+use crate::macro_expander::Pattern;
 use crate::macro_expander::utils::WILDCARD;
 use patina_runtime::{PVRef, Value};
 

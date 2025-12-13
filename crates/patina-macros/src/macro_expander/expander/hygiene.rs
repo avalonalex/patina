@@ -4,7 +4,7 @@
 //! including identifier renaming and marking substituted values.
 
 use super::Expander;
-use crate::macro_expander::template::Identifier;
+use crate::macro_expander::Identifier;
 use crate::macro_expander::utils::is_macro_definition_form;
 use patina_runtime::Value;
 use std::cell::RefCell;
@@ -142,11 +142,5 @@ impl Expander {
     /// - Quote forms - quoted data should remain as-is without scope marking
     pub(super) fn is_macro_definition(&self, value: &Value) -> bool {
         is_macro_definition_form(value)
-    }
-
-    /// Check if a name is bound to a macro in the expansion environment
-    #[allow(dead_code)]
-    pub(super) fn is_macro(&self, name: &Rc<str>) -> bool {
-        matches!(self.expansion_env.get(name), Some(Value::Macro(_)))
     }
 }

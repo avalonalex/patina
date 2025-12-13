@@ -1,7 +1,7 @@
 //! Unit tests for template expansion
 
 use super::*;
-use crate::macro_expander::template::Identifier;
+use crate::macro_expander::Identifier;
 use crate::macro_expander::utils::vec_to_list;
 use patina_runtime::{MatchEnv, MatchValue, PVRef, Value};
 
@@ -218,9 +218,8 @@ fn test_expand_double_ellipsis() {
     // Input: ((i 0 (+ i 1)) (j 10 (- j 1)))
     // Expected: (loop (+ i 1) (- j 1))
 
-    use patina_runtime::Environment;
     let macro_scope = patina_runtime::ScopeId::fresh();
-    let expander = Expander::new(std::rc::Rc::new(Environment::new()), macro_scope);
+    let expander = Expander::new(macro_scope);
     let step = PVRef::new(2, 0); // level 2 because it's in nested ellipsis
 
     // Template: (loop step ... ...)

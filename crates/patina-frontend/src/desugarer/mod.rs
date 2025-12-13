@@ -354,7 +354,6 @@ impl Desugarer {
             let expanded = patina_macros::expand_macro_with_shadowed(
                 &compiled_macro,
                 value,
-                env,
                 &self.shadowed_names,
                 &self.current_scopes,
             )

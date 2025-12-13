@@ -6,9 +6,6 @@
 //! 3. Vector patterns with ellipsis
 //! 4. Zero-element ellipsis matching in complex contexts
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use patina_runtime::Value;
 
 /// Helper to test that a macro definition can be parsed

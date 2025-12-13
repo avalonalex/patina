@@ -1,9 +1,8 @@
 //! Unit tests for the pattern/template compiler
 
 use crate::macro_expander::compiler::Compiler;
-use crate::macro_expander::pattern::Pattern;
-use crate::macro_expander::template::Template;
 use crate::macro_expander::utils::WILDCARD;
+use crate::macro_expander::{Pattern, Template};
 use patina_runtime::Value;
 use std::cell::RefCell;
 use std::rc::Rc;

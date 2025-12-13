@@ -4,16 +4,28 @@
 //! ellipsis handling with Gauche's num_following optimization.
 
 use super::error::MatchError;
-use crate::macro_expander::pattern::Pattern;
-use crate::macro_expander::utils::{collect_pattern_pvars, list_to_vec};
+use crate::macro_expander::Pattern;
+use crate::macro_expander::utils::{SchemeListIter, collect_pattern_pvars, list_to_vec};
 use patina_runtime::{MatchEnv, MatchValue, PVRef, Value};
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 /// Match a list pattern against a list value
 ///
 /// Handles both proper lists and lists with ellipsis patterns.
+///
+/// # Optimization Strategy
+///
+/// This function uses two different strategies based on whether ellipsis patterns
+/// are present:
+///
+/// 1. **Iterator-based** (no ellipsis): Uses `SchemeListIter` to match elements
+///    lazily. This avoids allocating a Vec upfront, which is beneficial when
+///    pattern matching fails early.
+///
+/// 2. **Vec-based** (with ellipsis): Collects all elements into a Vec because
+///    the `num_following` optimization requires knowing the total length and
+///    random access to elements.
 ///
 /// # Ellipsis Pattern Matching Algorithm
 ///
@@ -66,7 +78,87 @@ where
         });
     }
 
-    // Convert input to Vec for easier processing
+    // Check if any pattern is an ellipsis - determines which strategy to use
+    let has_ellipsis = patterns.iter().any(|p| p.is_ellipsis());
+
+    if has_ellipsis {
+        // Use Vec-based matching for ellipsis patterns (need length and random access)
+        match_list_with_ellipsis(patterns, input, env, level, num_pvars, match_impl)
+    } else {
+        // Use iterator-based matching for simple patterns (more efficient)
+        match_list_simple(patterns, input, env, level, match_impl)
+    }
+}
+
+/// Match a list pattern without ellipsis using lazy iteration
+///
+/// This is more efficient than Vec-based matching when patterns fail early,
+/// as we only clone elements we actually need to examine.
+fn match_list_simple<F>(
+    patterns: &[Pattern],
+    input: &Value,
+    env: &mut MatchEnv,
+    level: usize,
+    match_impl: F,
+) -> Result<(), MatchError>
+where
+    F: Fn(&Pattern, &Value, &mut MatchEnv, usize) -> Result<(), MatchError>,
+{
+    let mut iter = SchemeListIter::new(input);
+    let mut pattern_idx = 0;
+
+    for pattern in patterns {
+        match iter.next() {
+            Some(Ok(elem)) => {
+                match_impl(pattern, &elem, env, level)?;
+                pattern_idx += 1;
+            }
+            Some(Err(_)) => {
+                return Err(MatchError::TypeMismatch {
+                    expected: "proper list".to_string(),
+                    actual: format!("{}", input),
+                });
+            }
+            None => {
+                // Ran out of input elements
+                return Err(MatchError::TooFewElements {
+                    pattern: "list pattern".to_string(),
+                    expected: patterns.len(),
+                    actual: pattern_idx,
+                });
+            }
+        }
+    }
+
+    // Check for unconsumed input elements
+    if iter.next().is_some() {
+        // Count remaining elements for error message
+        let remaining = 1 + iter.count();
+        return Err(MatchError::TooManyElements {
+            expected: patterns.len(),
+            actual: patterns.len() + remaining,
+        });
+    }
+
+    Ok(())
+}
+
+/// Match a list pattern containing ellipsis using Vec-based approach
+///
+/// This uses Gauche's `num_following` optimization which requires knowing
+/// the total input length upfront.
+fn match_list_with_ellipsis<F>(
+    patterns: &[Pattern],
+    input: &Value,
+    env: &mut MatchEnv,
+    level: usize,
+    num_pvars: usize,
+    match_impl: F,
+) -> Result<(), MatchError>
+where
+    F: Fn(&Pattern, &Value, &mut MatchEnv, usize) -> Result<(), MatchError>,
+{
+    // Convert input to Vec for random access
     let input_list = value_to_vec(input)?;
 
     // Check if we have enough elements (accounting for ellipsis patterns)
@@ -81,11 +173,9 @@ where
 
     // Match patterns against input
     let mut input_idx = 0;
-    let mut has_ellipsis = false;
 
     for pattern in patterns {
         if pattern.is_ellipsis() {
-            has_ellipsis = true;
             // Handle ellipsis pattern
             if let Pattern::Ellipsis {
                 subpattern,
@@ -100,7 +190,7 @@ where
 
                 // Collect ALL variables from subpattern (recursively)
                 // This is critical for nested ellipsis support
-                let all_vars = collect_all_pvars(subpattern);
+                let all_vars = collect_pattern_pvars(subpattern);
 
                 // Initialize branches for ALL variables
                 let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue>> = all_vars
@@ -145,16 +235,6 @@ where
             match_impl(pattern, &input_list[input_idx], env, level)?;
             input_idx += 1;
         }
-    }
-
-    // Check for unconsumed input elements
-    // If the pattern has no ellipsis, all input elements must be consumed.
-    // This matches Gauche's behavior (macro.c:901): return SCM_NULLP(form);
-    if !has_ellipsis && input_idx < input_list.len() {
-        return Err(MatchError::TooManyElements {
-            expected: input_idx,
-            actual: input_list.len(),
-        });
     }
 
     Ok(())
@@ -244,8 +324,8 @@ where
                 let remaining_input = input_list.len() - input_idx;
                 let to_consume = remaining_input.saturating_sub(*num_following);
 
-                // Collect ALL variables from subpattern
-                let all_vars = collect_all_pvars(subpattern);
+                // Collect ALL variables from subpattern (recursively)
+                let all_vars = collect_pattern_pvars(subpattern);
 
                 // Initialize branches for ALL variables
                 let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue>> =
@@ -304,17 +384,6 @@ where
     match_impl(tail, &remaining, env, level)?;
 
     Ok(())
-}
-
-/// Recursively collect all pattern variables from a pattern
-///
-/// This is essential for nested ellipsis support. We need to extract
-/// bindings for ALL variables in the subpattern tree, not just the
-/// direct children of the ellipsis.
-///
-/// Inspired by Gauche's enter_subpattern (macro.c:766+)
-fn collect_all_pvars(pattern: &Pattern) -> HashSet<PVRef> {
-    collect_pattern_pvars(pattern)
 }
 
 /// Convert a Scheme list Value to a Vec for easier processing

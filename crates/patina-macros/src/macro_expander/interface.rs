@@ -21,15 +21,10 @@ pub trait MacroExpander {
     ///
     /// # Arguments
     /// - `macro_form`: The complete macro form including the macro name
-    /// - `expansion_env`: Runtime environment for hygiene and nested macro resolution
     ///
     /// # Returns
     /// The expanded expression, or an error if expansion fails
-    fn expand(
-        &self,
-        macro_form: &Value,
-        expansion_env: &std::rc::Rc<patina_runtime::Environment>,
-    ) -> ExpansionResult;
+    fn expand(&self, macro_form: &Value) -> ExpansionResult;
 
     /// Get the name of this macro (for error messages)
     fn name(&self) -> &str;
@@ -48,12 +43,8 @@ impl CompiledMacroExpander {
 }
 
 impl MacroExpander for CompiledMacroExpander {
-    fn expand(
-        &self,
-        macro_form: &Value,
-        expansion_env: &std::rc::Rc<patina_runtime::Environment>,
-    ) -> ExpansionResult {
-        super::expand_macro(&self.compiled, macro_form, expansion_env)
+    fn expand(&self, macro_form: &Value) -> ExpansionResult {
+        super::expand_macro(&self.compiled, macro_form)
     }
 
     fn name(&self) -> &str {
@@ -68,7 +59,6 @@ impl MacroExpander for CompiledMacroExpander {
 #[allow(dead_code)]
 pub struct TestExpander {
     expander: Box<dyn MacroExpander>,
-    test_env: std::rc::Rc<patina_runtime::Environment>,
 }
 
 impl TestExpander {
@@ -106,143 +96,24 @@ impl TestExpander {
     /// used directly when you already have a parsed Value.
     #[cfg(test)]
     fn from_syntax_rules_value(name: &str, syntax_rules_form: &Value) -> Result<Self, MacroError> {
+        use super::syntax_rules_parser::parse_syntax_rules;
         use patina_runtime::Environment;
         use std::rc::Rc;
 
-        // Helper to get symbol name
-        fn get_symbol_name(v: &Value) -> Option<Rc<str>> {
-            match v {
-                Value::Symbol(s) => Some(s.clone()),
-                Value::Identifier(id) => Some(id.name.clone()),
-                _ => None,
-            }
-        }
+        // Parse the syntax-rules form using shared parser
+        let parsed =
+            parse_syntax_rules(syntax_rules_form).map_err(|e| MacroError::InvalidSyntax(e.0))?;
 
-        // Parse the syntax-rules structure:
-        // Standard: (syntax-rules (literals) (pattern template) ...)
-        // SRFI-46:  (syntax-rules <ellipsis> (literals) (pattern template) ...)
-        let Value::Pair(p1) = syntax_rules_form else {
-            return Err(MacroError::InvalidSyntax(
-                "syntax-rules must be a list".to_string(),
-            ));
-        };
-        let b1 = p1.borrow();
-
-        // Check for syntax-rules keyword
-        let is_syntax_rules = match &b1.0 {
-            Value::Symbol(s) => s.as_ref() == "syntax-rules",
-            Value::Identifier(id) => id.name.as_ref() == "syntax-rules",
-            _ => false,
-        };
-        if !is_syntax_rules {
-            return Err(MacroError::InvalidSyntax(format!(
-                "Expected syntax-rules, got {}",
-                b1.0
-            )));
-        }
-
-        // Extract next element - could be (literals) or <custom-ellipsis>
-        let Value::Pair(p2) = &b1.1 else {
-            return Err(MacroError::InvalidSyntax(
-                "syntax-rules must have literals and rules".to_string(),
-            ));
-        };
-        let b2 = p2.borrow();
-
-        // Check if first element after syntax-rules is a symbol (SRFI-46 custom ellipsis)
-        // or a list (standard literals)
-        let (custom_ellipsis, literals_form, rules_form) = match &b2.0 {
-            // If it's a list (or null), it's the literals
-            Value::Pair(_) | Value::Null => (None, b2.0.clone(), b2.1.clone()),
-            // If it's a symbol, it's a custom ellipsis (SRFI-46)
-            Value::Symbol(s) => {
-                let Value::Pair(p3) = &b2.1 else {
-                    return Err(MacroError::InvalidSyntax(
-                        "syntax-rules with custom ellipsis must have literals".to_string(),
-                    ));
-                };
-                let b3 = p3.borrow();
-                (Some(s.clone()), b3.0.clone(), b3.1.clone())
-            }
-            Value::Identifier(id) => {
-                let Value::Pair(p3) = &b2.1 else {
-                    return Err(MacroError::InvalidSyntax(
-                        "syntax-rules with custom ellipsis must have literals".to_string(),
-                    ));
-                };
-                let b3 = p3.borrow();
-                (Some(id.name.clone()), b3.0.clone(), b3.1.clone())
-            }
-            _ => {
-                return Err(MacroError::InvalidSyntax(
-                    "Expected literals list or custom ellipsis".to_string(),
-                ));
-            }
-        };
-
-        // Parse literals list
-        let mut literals = Vec::new();
-        let mut current = literals_form;
-        while let Value::Pair(p) = current {
-            let borrowed = p.borrow();
-            if let Some(s) = get_symbol_name(&borrowed.0) {
-                literals.push(s);
-            } else {
-                return Err(MacroError::InvalidSyntax(
-                    "Literals must be symbols".to_string(),
-                ));
-            }
-            current = borrowed.1.clone();
-        }
-        if !matches!(current, Value::Null) {
-            return Err(MacroError::InvalidSyntax(
-                "Literals must be a proper list".to_string(),
-            ));
-        }
-
-        // Parse rules as (pattern template) pairs
-        let mut rules = Vec::new();
-        let mut current = rules_form;
-        while let Value::Pair(rule_pair) = current {
-            let rule_borrowed = rule_pair.borrow();
-            let Value::Pair(rule_p) = &rule_borrowed.0 else {
-                return Err(MacroError::InvalidSyntax(
-                    "Each rule must be a list".to_string(),
-                ));
-            };
-            let rule_p_borrowed = rule_p.borrow();
-            let pattern = rule_p_borrowed.0.clone();
-            let Value::Pair(tmpl_p) = &rule_p_borrowed.1 else {
-                return Err(MacroError::InvalidSyntax(
-                    "Rule must have a template".to_string(),
-                ));
-            };
-            let tmpl_p_borrowed = tmpl_p.borrow();
-            let template = tmpl_p_borrowed.0.clone();
-            if !matches!(tmpl_p_borrowed.1, Value::Null) {
-                return Err(MacroError::InvalidSyntax(
-                    "Each rule must have exactly pattern and template".to_string(),
-                ));
-            }
-            rules.push((pattern, template));
-            current = rule_borrowed.1.clone();
-        }
-        if !matches!(current, Value::Null) {
-            return Err(MacroError::InvalidSyntax(
-                "Rules must be a proper list".to_string(),
-            ));
-        }
-
-        // Create test environment
+        // Create test environment for macro compilation
         let test_env = Rc::new(Environment::new());
 
         // Compile the macro (with custom ellipsis if SRFI-46)
-        let mut compiler = super::Compiler::with_env(literals, custom_ellipsis, test_env.clone());
-        let compiled = compiler.compile_macro(name.into(), rules)?;
+        let mut compiler =
+            super::Compiler::with_env(parsed.literals, parsed.custom_ellipsis, test_env);
+        let compiled = compiler.compile_macro(name.into(), parsed.rules)?;
 
         Ok(Self {
             expander: Box::new(CompiledMacroExpander::new(compiled)),
-            test_env,
         })
     }
 
@@ -257,10 +128,8 @@ impl TestExpander {
 
     /// Create a test expander from a compiled macro
     pub fn from_compiled(compiled: super::CompiledMacro) -> Self {
-        let test_env = std::rc::Rc::new(patina_runtime::Environment::new());
         Self {
             expander: Box::new(CompiledMacroExpander::new(compiled)),
-            test_env,
         }
     }
 
@@ -293,7 +162,7 @@ impl TestExpander {
         // Expand
         let expanded = self
             .expander
-            .expand(&input_form, &self.test_env)
+            .expand(&input_form)
             .map_err(|e| format!("Expansion failed: {}", e))?;
 
         // Compare (ignoring gensym differences)
@@ -324,7 +193,7 @@ impl TestExpander {
 
         let expanded = self
             .expander
-            .expand(&input_form, &self.test_env)
+            .expand(&input_form)
             .map_err(|e| format!("Expansion error: {}", e))?;
 
         Ok(format!("{}", expanded))
@@ -374,10 +243,10 @@ impl TestExpander {
                 _ => false,
             },
             (Pair(p1), Pair(p2)) => {
-                let b1 = p1.borrow();
-                let b2 = p2.borrow();
-                Self::forms_equal_ignoring_gensym(&b1.0, &b2.0)
-                    && Self::forms_equal_ignoring_gensym(&b1.1, &b2.1)
+                let pair1 = p1.borrow();
+                let pair2 = p2.borrow();
+                Self::forms_equal_ignoring_gensym(&pair1.0, &pair2.0)
+                    && Self::forms_equal_ignoring_gensym(&pair1.1, &pair2.1)
             }
             (Vector(v1), Vector(v2)) => {
                 v1.borrow().len() == v2.borrow().len()

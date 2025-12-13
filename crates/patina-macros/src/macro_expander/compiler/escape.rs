@@ -5,7 +5,7 @@
 
 use super::Compiler;
 use crate::error::MacroError;
-use crate::macro_expander::template::Template;
+use crate::macro_expander::Template;
 use patina_runtime::Value;
 use std::rc::Rc;
 

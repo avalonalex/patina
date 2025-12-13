@@ -20,7 +20,7 @@ mod literal;
 
 pub use error::MatchError;
 
-use crate::macro_expander::pattern::Pattern;
+use crate::macro_expander::Pattern;
 use crate::macro_expander::utils::{pattern_to_string, pattern_to_string_with_names};
 use patina_runtime::{LiteralBinding, MatchEnv, PVRef, ScopeSet, Value};
 use std::collections::{HashMap, HashSet};

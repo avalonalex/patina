@@ -5,8 +5,8 @@
 
 use super::Compiler;
 use crate::error::MacroError;
-use crate::macro_expander::template::{Identifier, Template};
 use crate::macro_expander::utils::collect_template_vars_at_level;
+use crate::macro_expander::{Identifier, Template};
 use patina_runtime::{PVRef, ScopeSet, Value};
 
 impl Compiler {
