@@ -35,6 +35,7 @@ These documents describe how to implement the VM:
 - **[DESUGARER_DESIGN.md](./DESUGARER_DESIGN.md)** - Generic desugarer with `DesugarBackend` trait for producing backend-specific IR
 - **[COMPILATION_DESIGN.md](./COMPILATION_DESIGN.md)** - VmCoreExpr to bytecode compilation: register allocation, closure handling, TCO
 - **[VM_TESTING_DESIGN.md](./VM_TESTING_DESIGN.md)** - Testing framework: backend-agnostic tests, differential testing, benchmarks
+- **[FILE_SYSTEM_ABSTRACTION.md](./FILE_SYSTEM_ABSTRACTION.md)** - FileSystem trait for testing, WASM support, and embedded stdlib
 
 ---
 

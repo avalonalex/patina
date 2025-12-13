@@ -286,9 +286,7 @@ patina-tests depends on:
 
 ### Documented Bugs (via ignored tests)
 The test suite documents known bugs by marking tests as `#[ignore]`:
-- 7 CPS-related bugs in `cps_features.rs` (dynamic-wind, continuations)
-- 2 chibi comparison tests (implementation differences)
-- See `PRD/phase1/POST_CPS_TECH_DEBT.md` for details
+- Some tests are marked ignored to document implementation differences with chibi-scheme
 
 ### Future Enhancements
 

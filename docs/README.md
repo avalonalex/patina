@@ -1,119 +1,25 @@
 # Patina Documentation
 
-**Current implementation documentation** for Patina, a Scheme R7RS interpreter written in Rust.
+Documentation for **completed and implemented features** in Patina.
 
-For future plans and designs, see [../PRD/](../PRD/).
+## Contents
 
-## Quick Links
+| Document | Description |
+|----------|-------------|
+| [MACRO_SYSTEM.md](MACRO_SYSTEM.md) | Comprehensive macro system architecture (syntax-rules, hygiene, scope sets) |
+| [TEST_ORGANIZATION.md](TEST_ORGANIZATION.md) | Test structure, running tests, and test guidelines |
+| [reference_impls/](reference_impls/) | Notes on reference Scheme implementations (Chibi, Chez, Gauche, Koka) |
 
-- [Getting Started](GETTING_STARTED.md) - Installation and first steps
-- [Feature Status](FEATURE_STATUS.md) - What's currently implemented
-- [Testing](TESTING.md) - How to run and write tests
-- [Development](DEVELOPMENT.md) - Architecture and contributing
-- [API Reference](API.md) - Interpreter API documentation
+## Guidelines
 
-## Documentation Index
+This directory is for documentation of **implemented features only**.
 
-### For Users
+- **Planning docs** go in `PRD/phase1/` or `PRD/phase2/`
+- **Research docs** go in `PRD/` subdirectories
+- **Outdated docs** get archived to `PRD/ARCHIVE/`
 
-**[Getting Started](GETTING_STARTED.md)**
-- Installation
-- Running the REPL
-- Basic usage
-- Examples
+## Current Status
 
-**[Feature Status](FEATURE_STATUS.md)**
-- Implemented features
-- Work in progress
-- Planned features
-- R7RS compliance progress
+Patina has achieved **100% R7RS-small compliance** (1159/1159 chibi r7rs-tests.scm passing).
 
-### For Developers
-
-**[Development Guide](DEVELOPMENT.md)**
-- Architecture overview
-- Code organization
-- Adding new features
-- Error handling
-- Memory management
-
-**[Testing Guide](TESTING.md)**
-- Running tests
-- Writing tests
-- Test organization
-- Using chibi-scheme for reference
-- Progress tracking
-
-**[API Reference](API.md)**
-- `Interpreter` struct
-- Public methods
-- Usage examples
-- Integration guide
-
-**[Chibi Reference](CHIBI_REFERENCE.md)**
-- Using chibi-scheme as reference
-- Running comparison tests
-- R7RS test suite
-
-## Project Structure
-
-```
-patina/
-├── src/                # Source code
-│   ├── lexer/         # Tokenization
-│   ├── parser/        # AST construction
-│   ├── eval/          # Evaluation engine
-│   ├── value/         # Value types
-│   ├── env/           # Environment/scoping
-│   └── repl/          # REPL interface
-├── tests/             # Test suite
-│   ├── compliance/    # R7RS compliance tests
-│   ├── integration/   # End-to-end tests
-│   └── fixtures/      # Test data
-├── docs/              # This directory (current docs)
-├── PRD/               # Future plans & designs
-└── examples/          # Example programs
-```
-
-## Current Status (2025-11-02)
-
-**Phase 1: R7RS-small Compliance** - 47% complete
-
-- ✅ Lambda with closures
-- ✅ Basic special forms (quote, if, define, set!, begin, cond)
-- ✅ Arithmetic operations
-- ✅ List operations
-- ✅ Type predicates
-- 🚧 Binding forms (let, let*, letrec)
-- 🚧 Boolean operators (and, or)
-- ❌ String operations
-- ❌ Vector operations
-- ❌ I/O operations
-
-See [FEATURE_STATUS.md](FEATURE_STATUS.md) for detailed progress.
-
-## Contributing
-
-1. Read the [Development Guide](DEVELOPMENT.md)
-2. Check [Feature Status](FEATURE_STATUS.md) for what needs work
-3. See [Testing Guide](TESTING.md) for writing tests
-4. Submit pull requests!
-
-## Resources
-
-- **R7RS Specification**: `spec/r7rs-small-spec/`
-- **Chibi-scheme Reference**: `~/Project/reference/chibi-scheme`
-- **Test Suite**: `tests/compliance/`
-- **Feature Matrix**: `tests/FEATURE_MATRIX.md`
-
-## Future Phases
-
-This documentation covers Phase 1 (R7RS compliance). For future phases:
-
-- **Phase 2**: Gradual typing - See `PRD/phase2/`
-- **Phase 3**: Reactive concurrency - See `PRD/phase3/`
-- **Phase 4**: Notebook system - See `PRD/phase4/`
-
----
-
-**Questions?** Check the appropriate guide above or see the [main README](../README.md).
+See `scheme_tests/reports/compatibility.md` for the latest test results.

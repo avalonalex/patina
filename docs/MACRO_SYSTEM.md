@@ -1,6 +1,6 @@
 # Patina Macro System Architecture
 
-**Last Updated:** 2025-12-04
+**Last Updated:** 2025-12-13
 
 This document provides a comprehensive overview of Patina's hygienic macro system, designed to help developers understand the implementation and prepare for future `syntax-case` support.
 
@@ -39,7 +39,7 @@ Patina implements R7RS `syntax-rules` with full hygienic macro expansion using *
 | Macro-generating macros | ✅ Working |
 | Hygienic renaming | ✅ Working |
 | `let-syntax` / `letrec-syntax` | ✅ Working |
-| Custom ellipsis identifier | ❌ Not implemented |
+| Custom ellipsis identifier | ✅ Working |
 
 ### Design Principles
 

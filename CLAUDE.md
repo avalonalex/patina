@@ -138,26 +138,19 @@ patina-tests → patina-interpreter
 - **`PRD/`** - Strategic planning and design documents
   - **`MILESTONES.md`** - ⭐ Historical achievements and progress milestones (keep updated)
   - **`phase1/`** - Current phase planning
-    - **`IMPLEMENTATION_STATUS.md`** - ⭐ **CANONICAL** overall roadmap, priorities, and remaining work
-    - **`TECH_DEBT_CLEANUP.md`** - ⭐ Tech debt to address before Phase 2 (VM backend)
-    - **`NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
-    - **`VALUE_SIZE_OPTIMIZATION.md`** - ⭐ Value/CoreExpr size analysis and optimization roadmap
-    - **`CALLCC_IMPLEMENTATION.md`** - call/cc implementation design
-    - **`MACRO_SYSTEM_KNOWN_LIMITATIONS.md`** - Minor known macro edge cases
+    - **`DELIMITED_CONTINUATIONS_DESIGN.md`** - Delimited continuations design
+    - **`GC_DESIGN.md`** - Garbage collection design
+    - **`CLONE_OPTIMIZATION_ANALYSIS.md`** - Value cloning optimization analysis
+    - **`SOURCE_INFO_PLAN.md`** - Source location tracking plan
   - **`phase2/`** - Future enhancements
     - **`SYNTAX_CASE_DESIGN.md`** - ⭐ syntax-case implementation design (future macro system)
+    - **`R7RS_LARGE_STATUS.md`** - R7RS-large editions tracking (Red, Tangerine, etc.)
+  - **`ARCHIVE/numeric_research/NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
 
-- **`docs/`** - User-facing documentation and developer guides
-  - **`FEATURE_STATUS.md`** - ⭐ **CANONICAL** detailed test-by-test R7RS compliance matrix
-  - **`MACRO_SYSTEM.md`** - ⭐ Comprehensive macro system architecture (syntax-case roadmap)
-  - **`R7RS_LARGE_STATUS.md`** - R7RS-large editions tracking (Red, Tangerine, etc.)
+- **`docs/`** - Documentation for completed features
+  - **`MACRO_SYSTEM.md`** - ⭐ Comprehensive macro system architecture
   - **`TEST_ORGANIZATION.md`** - ⭐ Test structure and running tests
-  - **`reference_impls/`** - Reference implementation notes (Chibi, Chez, Gauche, Clojure)
-  - `API.md` - Public API reference
-  - `GETTING_STARTED.md` - User guide for getting started
-  - `README.md` - Project overview
-  - `TESTING.md` - Test infrastructure and usage
-  - `DEVELOPMENT.md` - Developer guide
+  - **`reference_impls/`** - Reference implementation notes (Chibi, Chez, Gauche, Koka)
 
 ### 🗄️ Archived Documentation (Read-Only Reference)
 
@@ -652,10 +645,8 @@ This runs the complete chibi-scheme R7RS test suite (~2500 lines) and generates:
 - **Detailed test output** showing what works and what doesn't
 
 **Current status**:
-- ✅ 1123/1158 tests passing (97.0%)
-- ❌ 2 tests failing (0.2%)
-- ⚠️ 33 tests crashing (2.8%) - missing call/cc, guard
-- Remaining gaps: continuations (call/cc), exception handling (guard, raise)
+- ✅ 1159/1159 tests passing (100%)
+- Phase 1 complete, now in cleanup phase before Phase 2 (VM backend)
 
 ### Code Quality
 
@@ -804,13 +795,11 @@ See `docs/FEATURE_STATUS.md` for detailed test-by-test compliance matrix (canoni
 - All 14 of 15 R7RS-small standard libraries
 
 **Not Yet Implemented:**
-- Continuations (call/cc, call-with-current-continuation, dynamic-wind)
-- Exception handling (guard, raise, with-exception-handler)
 - `(scheme load)` library
 
 **Current Compliance:**
 - **Internal tests**: ~1400 passing (patina-tests crate)
-- **Chibi r7rs-tests.scm**: 1123/1158 passing (97.0%), 2 failing (0.2%), 33 crashing (2.8%)
+- **Chibi r7rs-tests.scm**: 1159/1159 passing (100%) ✅
 
 ## Future Phases
 

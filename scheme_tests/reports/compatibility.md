@@ -56,9 +56,7 @@ with all R7RS-small features.
 ### Known Limitations
 
 - `(scheme load)` library not yet implemented
-- See `docs/FEATURE_STATUS.md` for detailed compliance matrix
 
-### Next Steps
+### Status
 
-See `docs/FEATURE_STATUS.md` for detailed R7RS compliance matrix and
-`PRD/phase1/IMPLEMENTATION_STATUS.md` for roadmap.
+Phase 1 (R7RS-small compliance) is complete. Now in cleanup phase before Phase 2 (VM backend).
