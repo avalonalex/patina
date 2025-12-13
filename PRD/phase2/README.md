@@ -17,6 +17,27 @@ This directory contains research documents for advanced VM techniques to explore
 
 ---
 
+## Core Architecture Documents
+
+These documents define the foundational VM architecture:
+
+- **[VM_SPECIFICATION.md](./VM_SPECIFICATION.md)** - Complete VM design: bytecode ISA, execution model, memory layout
+- **[VM_VALUE_ARCHITECTURE.md](./VM_VALUE_ARCHITECTURE.md)** - Dual value representation design (Value enum vs TaggedValue)
+- **[TAGGED_POINTERS.md](./TAGGED_POINTERS.md)** - 8-byte tagged pointer scheme for VM performance
+- **[SEXPR_SEPARATION_ARCHITECTURE.md](./SEXPR_SEPARATION_ARCHITECTURE.md)** - Value representation options (**Option D selected**: tree-walker uses Value, VM uses TaggedValue)
+
+---
+
+## Implementation Design Documents
+
+These documents describe how to implement the VM:
+
+- **[DESUGARER_DESIGN.md](./DESUGARER_DESIGN.md)** - Generic desugarer with `DesugarBackend` trait for producing backend-specific IR
+- **[COMPILATION_DESIGN.md](./COMPILATION_DESIGN.md)** - VmCoreExpr to bytecode compilation: register allocation, closure handling, TCO
+- **[VM_TESTING_DESIGN.md](./VM_TESTING_DESIGN.md)** - Testing framework: backend-agnostic tests, differential testing, benchmarks
+
+---
+
 ## Research Documents
 
 ### ⭐ Top Priority (Best Mix of Novelty + Implementability)
