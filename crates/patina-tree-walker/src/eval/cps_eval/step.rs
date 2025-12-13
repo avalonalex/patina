@@ -175,77 +175,8 @@ impl<'a> CpsEvaluator<'a> {
                     current_expr = body.as_ref().clone();
                 }
 
-                CpsExpr::Parameterize {
-                    bindings,
-                    body,
-                    cont,
-                } => {
-                    // Evaluate bindings and push new values onto parameter stacks
-                    let mut params = Vec::new();
-
-                    for (param_expr, value_expr) in bindings {
-                        // Evaluate param expression
-                        let param = self.eval_trivial(param_expr, &current_env, &cont_env)?;
-
-                        // Verify it's a parameter and push new value
-                        match &param {
-                            Value::Parameter { values, converter } => {
-                                // Evaluate value expression
-                                let new_val =
-                                    self.eval_trivial(value_expr, &current_env, &cont_env)?;
-
-                                // Apply converter if present
-                                let converted_val = if let Some(conv) = converter {
-                                    match self.evaluator.apply(
-                                        *conv.clone(),
-                                        vec![new_val.clone()],
-                                        false,
-                                    )? {
-                                        super::super::EvalResult::Value(v) => v,
-                                        _ => {
-                                            return Err(EvalError::InvalidSyntax(
-                                                "parameter converter returned non-value"
-                                                    .to_string(),
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    new_val
-                                };
-
-                                // Push new value onto parameter stack
-                                values.borrow_mut().push(converted_val);
-                                params.push(param.clone());
-                            }
-                            _ => {
-                                return Err(EvalError::TypeError(format!(
-                                    "parameterize: expected parameter, got {}",
-                                    param.type_name()
-                                )));
-                            }
-                        }
-                    }
-
-                    // Get the original continuation
-                    let original_cont = cont_env
-                        .get(cont)
-                        .ok_or_else(|| EvalError::UndefinedVariable(cont.to_string()))?
-                        .clone();
-
-                    // Create cleanup continuation that pops parameters and continues
-                    let cleanup_cont = ContValue::ParameterizeCleanup {
-                        params,
-                        original_cont: Box::new(original_cont),
-                    };
-
-                    // Replace the continuation in cont_env so the body's continuation
-                    // invocation goes through our cleanup
-                    cont_env.insert(cont.clone(), cleanup_cont);
-
-                    // Continue with the body - it will invoke `cont` which now points
-                    // to our cleanup continuation
-                    current_expr = body.as_ref().clone();
-                }
+                // Note: CpsExpr::Parameterize has been removed.
+                // Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
 
                 // ==================== Expressions that return StepResult ====================
                 // These require trampolining to avoid stack growth

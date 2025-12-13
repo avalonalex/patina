@@ -110,6 +110,10 @@ pub enum Value {
     // Parameters are special procedures that maintain dynamic state
     // Can be called with 0 args (get value) or 1 arg (set value)
     // Uses a stack to support nested parameterize
+    //
+    // TODO: For multi-threading support, parameter value stacks need to be thread-local.
+    // Currently uses shared Rc<RefCell<Vec<Value>>> which is fine for single-threaded
+    // R7RS-small. See SRFI-226 (Control Features) for thread-parameter interaction spec.
     Parameter {
         values: Rc<RefCell<Vec<Value>>>, // Stack of values (top = current value)
         converter: Option<Box<Value>>,   // Optional converter function

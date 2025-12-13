@@ -137,14 +137,8 @@ pub enum CoreExpr {
     /// Import sets are kept as Values (declarative data, not code)
     Import { import_sets: Vec<Value> },
 
-    /// Parameterize: dynamically rebind parameters
-    /// Example: (parameterize ((param1 val1) (param2 val2)) body ...)
-    /// Note: Body is NOT in tail position (TCO disabled to ensure proper stack cleanup)
-    Parameterize {
-        bindings: Vec<(CoreExpr, CoreExpr)>, // (param-expr, value-expr) pairs
-        body: Vec<CoreExpr>,
-    },
-
+    // Note: Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
+    // The CoreExpr::Parameterize variant has been removed.
     /// Expand: show macro expansion without evaluating
     /// Example: (expand '(let ((x 1)) x)) => ((lambda (x) x) 1)
     /// This is a Patina debugging extension, not part of R7RS
@@ -188,7 +182,6 @@ impl CoreExpr {
             CoreExpr::Begin(_) => "begin",
             CoreExpr::Define { .. } => "define",
             CoreExpr::Import { .. } => "import",
-            CoreExpr::Parameterize { .. } => "parameterize",
             CoreExpr::Expand { .. } => "expand",
             CoreExpr::App { .. } => "application",
             CoreExpr::Apply { .. } => "apply",
@@ -239,14 +232,6 @@ impl CoreExpr {
 
             CoreExpr::Import { import_sets } => CoreExpr::Import {
                 import_sets: import_sets.clone(),
-            },
-
-            CoreExpr::Parameterize { bindings, body } => CoreExpr::Parameterize {
-                bindings: bindings
-                    .iter()
-                    .map(|(param, val)| (f(param), f(val)))
-                    .collect(),
-                body: body.iter().map(&f).collect(),
             },
 
             CoreExpr::Expand { expr } => CoreExpr::Expand {
@@ -330,20 +315,6 @@ impl std::fmt::Display for CoreExpr {
                 write!(f, "(import")?;
                 for import_set in import_sets {
                     write!(f, " {}", import_set)?;
-                }
-                write!(f, ")")
-            }
-            CoreExpr::Parameterize { bindings, body } => {
-                write!(f, "(parameterize (")?;
-                for (i, (param, val)) in bindings.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "({} {})", param, val)?;
-                }
-                write!(f, ")")?;
-                for expr in body {
-                    write!(f, " {}", expr)?;
                 }
                 write!(f, ")")
             }

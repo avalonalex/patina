@@ -96,12 +96,8 @@ pub(super) enum ContValue {
         promise: Rc<std::cell::RefCell<patina_core::value::PromiseState>>,
         original_cont: Box<ContValue>,
     },
-    /// Special continuation for parameterize cleanup
-    /// When the body returns, pop parameter values and continue
-    ParameterizeCleanup {
-        params: Vec<Value>,
-        original_cont: Box<ContValue>,
-    },
+    // Note: ParameterizeCleanup has been removed.
+    // Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
     /// Special continuation for dynamic-wind cleanup
     /// When the body returns, pop the wind record, call after thunk, and continue
     DynamicWindCleanup {

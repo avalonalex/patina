@@ -90,8 +90,8 @@ fn test_parameter_with_converter() {
         (define p (make-parameter 10 (lambda (x) (* x 2))))
         (p)
     "#;
-    // Note: Converter not applied to initial value yet (TODO in implementation)
-    assert_eq!(eval(code).unwrap(), "10");
+    // Converter is applied to initial value per R7RS spec
+    assert_eq!(eval(code).unwrap(), "20");
 }
 
 #[test]

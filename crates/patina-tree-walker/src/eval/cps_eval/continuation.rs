@@ -147,7 +147,6 @@ impl<'a> CpsEvaluator<'a> {
                     // Other special continuations - not yet implemented
                     ContValue::CallWithValuesConsumer { .. }
                     | ContValue::ForceCache { .. }
-                    | ContValue::ParameterizeCleanup { .. }
                     | ContValue::DynamicWindSetup { .. }
                     | ContValue::DynamicWindAfterDone { .. }
                     | ContValue::ExceptionHandlerCleanup { .. }
@@ -395,7 +394,6 @@ impl<'a> CpsEvaluator<'a> {
             // Other special continuations that need similar treatment
             ContValue::CallWithValuesConsumer { .. }
             | ContValue::ForceCache { .. }
-            | ContValue::ParameterizeCleanup { .. }
             | ContValue::DynamicWindSetup { .. }
             | ContValue::DynamicWindAfterDone { .. }
             | ContValue::ExceptionHandlerCleanup { .. }
@@ -545,29 +543,8 @@ impl<'a> CpsEvaluator<'a> {
                 })
             }
 
-            ContValue::ParameterizeCleanup {
-                params,
-                original_cont,
-            } => {
-                // Body has returned - pop parameter values from stacks
-                for param in &params {
-                    if let Value::Parameter { values, .. } = param {
-                        values.borrow_mut().pop();
-                    }
-                }
-
-                // Continue with the body result
-                Ok(StepResult::InvokeContinuation {
-                    cont: *original_cont,
-                    value,
-                    env: self.evaluator.global_env.clone(),
-                    cont_env,
-                    prompt_stack,
-                    dynamic_winds,
-                    exception_handlers,
-                })
-            }
-
+            // Note: ParameterizeCleanup has been removed.
+            // Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
             ContValue::DynamicWindSetup {
                 wind_record,
                 body,

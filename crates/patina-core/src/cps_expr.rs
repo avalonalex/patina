@@ -277,21 +277,8 @@ pub enum CpsExpr {
         cont: ContVar,
     },
 
-    // ==================== Parameterize ====================
-    /// Parameterize - dynamically bind parameters during body evaluation
-    /// (parameterize ((param1 val1) (param2 val2) ...) body k)
-    ///
-    /// Pushes values onto parameter stacks before body evaluation,
-    /// then pops them after body completes (regardless of how it exits).
-    Parameterize {
-        /// Parameter-value binding pairs (param expr, value expr)
-        bindings: Vec<(Rc<CpsExpr>, Rc<CpsExpr>)>,
-        /// Body to evaluate with new parameter values
-        body: Rc<CpsExpr>,
-        /// Continuation to receive body result
-        cont: ContVar,
-    },
-
+    // Note: Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
+    // The CpsExpr::Parameterize variant has been removed.
     /// Halt - top-level continuation (program termination)
     /// This is the "end of the program" continuation.
     Halt(Rc<CpsExpr>),
@@ -415,7 +402,6 @@ impl CpsExpr {
             CpsExpr::Abort { .. } => "abort",
             CpsExpr::Quasiquote { .. } => "quasiquote",
             CpsExpr::PrimOp { .. } => "prim-op",
-            CpsExpr::Parameterize { .. } => "parameterize",
             CpsExpr::Halt(_) => "halt",
         }
     }
@@ -523,20 +509,6 @@ impl std::fmt::Display for CpsExpr {
                     write!(f, " {}", arg)?;
                 }
                 write!(f, " #{})", cont)
-            }
-            CpsExpr::Parameterize {
-                bindings,
-                body,
-                cont,
-            } => {
-                write!(f, "(parameterize (")?;
-                for (i, (param, val)) in bindings.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "({} {})", param, val)?;
-                }
-                write!(f, ") {} #{})", body, cont)
             }
             CpsExpr::Halt(v) => write!(f, "(halt {})", v),
         }

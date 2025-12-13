@@ -158,7 +158,7 @@
 
     ;; === Dynamic bindings (§4.2.6) ===
     make-parameter
-    ;; Note: parameterize is a macro, defined below
+    parameterize  ;; macro defined in base/parameters.scm
 
     ;; === Record types (§5.5) ===
     ;; Internal primitives for define-record-type macro
@@ -207,4 +207,5 @@
   (include "base/iteration.scm")
   (include "base/records.scm")
   (include "base/higher_order.scm")
-  (include "base/exceptions.scm"))
+  (include "base/exceptions.scm")
+  (include "base/parameters.scm"))

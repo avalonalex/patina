@@ -303,10 +303,8 @@ impl CpsTransformer {
                 panic!("Import should be handled before CPS transform")
             }
 
-            CoreExpr::Parameterize { bindings, body } => {
-                self.transform_parameterize(bindings, body, k)
-            }
-
+            // Note: Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
+            // It expands to regular code before CPS transform.
             CoreExpr::Expand { .. } => {
                 // Expand is a debugging form, skip CPS transform
                 panic!("Expand should be handled before CPS transform")
@@ -575,44 +573,8 @@ impl CpsTransformer {
         result
     }
 
-    /// Transform parameterize
-    ///
-    /// Transforms (parameterize ((p1 v1) (p2 v2) ...) body ...) into CPS.
-    /// This generates a CpsExpr::Parameterize that the CPS evaluator handles
-    /// by pushing values onto parameter stacks, evaluating body, then popping.
-    fn transform_parameterize(
-        &self,
-        bindings: &[(CoreExpr, CoreExpr)],
-        body: &[CoreExpr],
-        k: &ContVar,
-    ) -> CpsExpr {
-        // Transform the body with the same continuation k
-        // The body will eventually invoke k with its result
-        let body_cps = self.transform_sequence(body, k);
-
-        // Transform each binding pair (param expr, value expr)
-        let mut cps_bindings = Vec::new();
-        for (param_expr, value_expr) in bindings {
-            // Both param and value should be transformed as trivial expressions
-            // (they're evaluated before the body)
-            let param_cps = self.transform_trivial(param_expr);
-            let value_cps = self.transform_trivial(value_expr);
-            cps_bindings.push((Rc::new(param_cps), Rc::new(value_cps)));
-        }
-
-        // Generate parameterize CPS expression
-        // The evaluator will:
-        // 1. Evaluate param and value expressions
-        // 2. Push values onto parameter stacks
-        // 3. Replace k in cont_env with cleanup continuation
-        // 4. Evaluate body (which will eventually invoke k)
-        // 5. Cleanup continuation pops values and invokes original k
-        CpsExpr::Parameterize {
-            bindings: cps_bindings,
-            body: Rc::new(body_cps),
-            cont: k.clone(),
-        }
-    }
+    // Note: transform_parameterize has been removed.
+    // Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
 }
 
 #[cfg(test)]
