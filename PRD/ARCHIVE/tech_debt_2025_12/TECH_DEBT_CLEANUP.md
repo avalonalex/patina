@@ -287,60 +287,16 @@ These were marked as "Optional optimized forms (added by passes)" but no optimiz
 
 ### 12. Add Garbage Collection for Cycle Handling
 
-**Crate**: patina-runtime (affects all crates using Value)
-**Files**: `src/value/mod.rs`, all code using `Rc<RefCell<T>>`
+**Status**: 🔶 DEFERRED - See `GC_DESIGN.md`
 
-**Problem**: Current memory management uses `Rc<RefCell<T>>` which cannot collect cycles:
+**Problem**: `Rc<RefCell<T>>` cannot collect cycles created by `set-car!`/`set-cdr!`.
 
-```scheme
-;; This creates a cycle that Rc can't collect - memory leak
-(define x (cons 1 2))
-(set-cdr! x x)  ;; x now points to itself
-```
+**Resolution**: This is significant architectural work. Full design and implementation plan moved to `GC_DESIGN.md`.
 
-R7RS allows `set-car!` and `set-cdr!` to create circular structures. Without cycle collection, these leak memory indefinitely.
-
-**GC Options Evaluated**:
-
-| Crate | Type | Handles Cycles | Maturity | Notes |
-|-------|------|----------------|----------|-------|
-| **gc** (rust-gc) | Mark-and-sweep | Yes | High | Best fit for interpreter |
-| **bacon-rajan-cc** | Cycle-collecting RC | Yes | Medium | Drop-in for Rc |
-| **shredder** | Concurrent GC | Yes | Medium | Overkill for tree-walker |
-| **bumpalo** | Arena (no GC) | No | High | No cycle handling |
-
-**Recommended**: Use `rust-gc` crate for tree-walker:
-
-```rust
-use gc::{Gc, GcCell, Trace, Finalize};
-
-#[derive(Trace, Finalize)]
-pub enum Value {
-    Integer(i64),
-    Pair(Gc<GcCell<(Value, Value)>>),  // Was: Rc<RefCell<...>>
-    Vector(Gc<GcCell<Vec<Value>>>),
-    // ...
-}
-```
-
-**Migration Path**:
-1. Add `gc` dependency to patina-runtime
-2. Derive `Trace` and `Finalize` on Value and related types
-3. Replace `Rc<RefCell<T>>` with `Gc<GcCell<T>>` for heap-allocated values
-4. Keep `Rc` for immutable shared data (symbols, compiled macros)
-5. Update all crates that pattern-match on Value
-
-**Trade-offs**:
-- **Pro**: Correct R7RS semantics for circular structures
-- **Pro**: Drop-in replacement API (`Gc` works like `Rc`)
-- **Pro**: Mature crate (used by Servo)
-- **Con**: Requires `#[derive(Trace, Finalize)]` on all GC'd types
-- **Con**: Stop-the-world collection (acceptable for tree-walker)
-- **Con**: Some runtime overhead vs pure Rc
-
-**Note**: VM backend (Phase 2) may use different GC strategy (generational, concurrent). Tree-walker just needs correctness, not optimal performance.
-
-**Effort**: Medium-High (3-4 days) - touches many files but mechanical changes
+**Summary of planned approach**:
+- Use `rust-gc` crate (mark-and-sweep)
+- Replace `Rc<RefCell<T>>` with `Gc<GcCell<T>>` for heap types
+- Estimated effort: 3-4 days
 
 ---
 
@@ -348,9 +304,16 @@ pub enum Value {
 
 ### 13. Reduce Clone() Calls
 
-**All crates**: 400+ clone() calls identified across codebase.
+**Status**: 🔶 DEFERRED - See `CLONE_OPTIMIZATION_ANALYSIS.md`
 
-**Solution**: Profile hot paths, use Rc/Gc more aggressively. Note that GC adoption (item 12) may reduce some cloning by enabling more sharing.
+**All crates**: ~378 clone() calls in tree-walker alone.
+
+**Analysis complete**: See `CLONE_OPTIMIZATION_ANALYSIS.md` for detailed breakdown:
+- Environment clones (Rc) - already optimal
+- CpsExpr clones - opportunity to avoid .as_ref().clone()
+- ContValue/StepResult - expensive HashMap/Vec clones, candidates for persistent data structures
+
+**Decision**: Defer until profiling confirms hot paths. GC work (item 12) may also change the picture.
 
 ### 14. Add Missing Error Conversions
 
@@ -379,9 +342,13 @@ This was completed as part of the unified error system work (Phase 1 of ERROR_SY
 
 ### 16. String Performance
 
+**Status**: 🔶 DEFERRED - See `PRD/future/STRING_OPTIMIZATION.md`
+
 **Crate**: patina-tree-walker
 
 **Problem**: O(n) character indexing is spec-compliant but slow.
+
+**Analysis**: Full design doc exists at `PRD/future/STRING_OPTIMIZATION.md`. R7RS explicitly allows O(n) operations, so current implementation is compliant. Optimization deferred until profiling shows it's a bottleneck.
 
 ---
 
@@ -400,11 +367,11 @@ This was completed as part of the unified error system work (Phase 1 of ERROR_SY
 | 9. Fix unsafe unwrap | MEDIUM | ✅ DONE | Completed 2024-12: using entry().or_default() |
 | 10. Split large files | MEDIUM | ✅ DONE | Completed 2024-12: splitted multiple file with >= 1300 lines |
 | 11. Remove incomplete CoreExpr | MEDIUM | ✅ DONE | Completed 2025-12: PrimCall, Let, Primitive removed |
-| 12. Add GC for cycle handling | MEDIUM | Not Started | Use rust-gc crate |
-| 13. Reduce clone() calls | LOW | Not Started | |
+| 12. Add GC for cycle handling | MEDIUM | 🔶 DEFERRED | See GC_DESIGN.md |
+| 13. Reduce clone() calls | LOW | 🔶 DEFERRED | See CLONE_OPTIMIZATION_ANALYSIS.md |
 | 14. Add error conversions | LOW | ✅ DONE | Completed 2025-12-12 |
 | 15. Improve test organization | LOW | ✅ REVIEWED | Current organization acceptable |
-| 16. String performance | LOW | Not Started | |
+| 16. String performance | LOW | 🔶 DEFERRED | See PRD/future/STRING_OPTIMIZATION.md |
 
 ---
 

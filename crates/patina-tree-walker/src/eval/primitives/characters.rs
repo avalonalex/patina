@@ -323,9 +323,10 @@ pub(super) fn digit_value(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
 /// each script's digits 0-9 are consecutive code points. We can calculate
 /// the digit value by finding the offset from the block's zero character.
 ///
-/// TODO: Consider using the `unicode-general-category` or `unic-ucd-category`
-/// crate for more maintainable Unicode property handling. The table below
-/// covers Unicode 15.0 Nd ranges but may need updates for future Unicode versions.
+/// Note: The table below covers Unicode 15.0 Nd ranges. If future Unicode versions
+/// add new decimal digit scripts, this table should be updated. Alternative approaches
+/// like `unicode-general-category` crate could provide automatic updates but would
+/// add a dependency for marginal benefit since decimal digit ranges rarely change.
 fn unicode_digit_value(c: char) -> Option<u32> {
     // First try ASCII (fast path)
     if let Some(d) = c.to_digit(10) {

@@ -67,13 +67,16 @@ pub(super) fn make_parameter(evaluator: &Evaluator, args: Vec<Value>) -> Result<
     };
 
     // If converter is provided, apply it to initial value
-    let value = if let Some(ref _conv) = converter {
-        // We need to call the converter, but we can't do that here
-        // because we don't have access to the evaluator.
-        // For now, we'll just store the raw init value and let
-        // the converter be applied when the parameter is first set.
-        // TODO: Apply converter to initial value
-        init
+    let value = if let Some(ref conv) = converter {
+        use super::super::EvalResult;
+        match evaluator.apply(*conv.clone(), vec![init], false)? {
+            EvalResult::Value(v) => v,
+            EvalResult::TailCall { .. } | EvalResult::TailCallPrimitive { .. } => {
+                return Err(EvalError::InternalError(
+                    "make-parameter: converter returned tail call".to_string(),
+                ));
+            }
+        }
     } else {
         init
     };

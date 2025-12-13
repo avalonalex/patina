@@ -77,6 +77,7 @@ use patina_core::cps_expr::CpsExpr;
 use patina_core::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
+use tracing::debug;
 
 use types::{ContValue, StepResult, take_pending_escape};
 
@@ -122,11 +123,8 @@ impl<'a> CpsEvaluator<'a> {
         let dynamic_winds = Vec::new();
         let exception_handlers = Vec::new();
 
-        // Debug: show the CPS expression
-        let debug = std::env::var("CPS_DEBUG").is_ok();
-        if debug {
-            eprintln!("[CPS] Input expr: {}", expr);
-        }
+        // Debug: show the CPS expression (enabled via RUST_LOG=patina_tree_walker::eval::cps_eval=debug)
+        debug!(target: "patina_tree_walker::eval::cps_eval", input_expr = %expr, "CPS evaluation starting");
 
         // Start with the initial expression
         let mut current_step = match self.eval_one_step(
@@ -139,9 +137,7 @@ impl<'a> CpsEvaluator<'a> {
         ) {
             Ok(step) => step,
             Err(e) => {
-                if debug {
-                    eprintln!("[CPS] Error in initial eval_one_step: {}", e);
-                }
+                debug!(target: "patina_tree_walker::eval::cps_eval", error = %e, "Error in initial eval_one_step");
                 return Err(e);
             }
         };
@@ -151,19 +147,23 @@ impl<'a> CpsEvaluator<'a> {
         // Trampoline loop - process steps until we get a final value
         loop {
             step_count += 1;
-            if debug && step_count <= 30 {
-                eprintln!(
-                    "[CPS] Step {}: {:?}",
-                    step_count,
-                    std::mem::discriminant(&current_step)
+            if step_count <= 30 {
+                debug!(
+                    target: "patina_tree_walker::eval::cps_eval",
+                    step = step_count,
+                    step_type = ?std::mem::discriminant(&current_step),
+                    "CPS step"
                 );
             }
             // Process step, catching ContinuationEscape to handle escaped continuations
             let step_result = match current_step {
                 StepResult::Done(value) => {
-                    if debug {
-                        eprintln!("[CPS] Done after {} steps: {}", step_count, value);
-                    }
+                    debug!(
+                        target: "patina_tree_walker::eval::cps_eval",
+                        steps = step_count,
+                        result = %value,
+                        "CPS evaluation complete"
+                    );
                     return Ok(value);
                 }
 
@@ -228,9 +228,11 @@ impl<'a> CpsEvaluator<'a> {
                 Err(EvalError::ContinuationEscape) => {
                     // A continuation escaped from apply_from_direct
                     if let Some((value, k)) = take_pending_escape() {
-                        if debug {
-                            eprintln!("[CPS] Continuation escape with value: {}", value);
-                        }
+                        debug!(
+                            target: "patina_tree_walker::eval::cps_eval",
+                            escaped_value = %value,
+                            "Continuation escape"
+                        );
 
                         // Check if this is a special DynamicWindCleanup continuation
                         let is_dw_cleanup = matches!(
