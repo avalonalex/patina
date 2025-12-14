@@ -108,21 +108,27 @@ struct ForwardRef {
 }
 
 /// Tracks variable locations during compilation.
+/// See ARCHITECTURE_LESSONS.md §2 for design rationale (indexed variable access).
 struct EnvironmentTracker {
     /// Stack of scopes, each mapping names to locations.
     scopes: Vec<HashMap<Symbol, VarLocation>>,
 }
 
 /// Where a variable is located at runtime.
+/// Key insight: All local/closure variables use indices (O(1) access),
+/// only globals use name lookup.
 #[derive(Clone)]
 enum VarLocation {
     /// In a register (local variable or parameter).
+    /// Compiled to: LoadLocal { index } / StoreLocal { index }
     Register(Register),
 
     /// In the closure's environment (captured variable).
+    /// Compiled to: LoadClosure { slot } / StoreClosure { slot }
     Closure(usize),
 
     /// Global variable (looked up by name at runtime).
+    /// Compiled to: LoadGlobal { name } / StoreGlobal { name }
     Global(Symbol),
 }
 ```
@@ -523,6 +529,22 @@ pub struct GraphRegisterAllocator {
 
 ## Closure Compilation
 
+This section describes the "flat closure" design. See [ARCHITECTURE_LESSONS.md](./ARCHITECTURE_LESSONS.md) §2 for comparative analysis with other implementations.
+
+**Key design decisions:**
+1. **Flat representation:** Closures store only captured variables in a flat array (not entire environment)
+2. **Indexed access:** Variables are accessed by index, not name lookup
+3. **Copy semantics:** Values are copied at closure creation (with box indirection for mutated vars)
+
+**Comparison with tree-walker:**
+
+| Aspect | Tree-Walker | VM Compiler |
+|--------|-------------|-------------|
+| Closure env | `Rc<Environment>` | `Vec<TaggedValue>` |
+| Capture | Entire parent env | Only free variables |
+| Lookup | HashMap + chain | Direct array index |
+| Memory | O(env size) | O(free vars) |
+
 ### Free Variable Analysis
 
 Before compiling a lambda, analyze which variables are free:
@@ -683,6 +705,81 @@ impl Compiler {
     }
 }
 ```
+
+### Mutable Captured Variables
+
+When a variable is captured AND later mutated via `set!`, we need special handling
+to ensure all closures see the updated value:
+
+```rust
+/// Mutable cell for captured variables that are set!
+pub struct MutableCell {
+    value: TaggedValue,
+}
+
+impl Compiler {
+    /// Detect which free variables are mutated
+    fn analyze_mutated_vars(
+        &self,
+        body: &[VmCoreExpr],
+        free_vars: &HashSet<Symbol>,
+    ) -> HashSet<Symbol> {
+        let mut mutated = HashSet::new();
+        self.find_set_targets(body, free_vars, &mut mutated);
+        mutated
+    }
+
+    fn find_set_targets(
+        &self,
+        exprs: &[VmCoreExpr],
+        free_vars: &HashSet<Symbol>,
+        mutated: &mut HashSet<Symbol>,
+    ) {
+        for expr in exprs {
+            match expr {
+                VmCoreExpr::Set { var, .. } if free_vars.contains(var) => {
+                    mutated.insert(var.clone());
+                }
+                // Recursively check nested expressions...
+                _ => {}
+            }
+        }
+    }
+}
+```
+
+**Compilation strategy for mutated captured vars:**
+
+```scheme
+;; Example: counter with mutable capture
+(define (make-counter)
+  (let ((count 0))
+    (lambda ()
+      (set! count (+ count 1))
+      count)))
+```
+
+**Compiles to:**
+
+```
+; At let binding site:
+LoadImmediate r0, 0          ; count = 0
+BoxCell r0, r0               ; Wrap in mutable cell
+
+; At lambda creation:
+MakeClosure r1, code#1, [r0] ; Capture the cell (not value)
+
+; Inside lambda body:
+LoadClosure r2, 0            ; Get the cell
+UnboxCell r3, r2             ; Read current value
+...                          ; Compute (+ count 1)
+SetCell r2, r4               ; Update cell with new value
+```
+
+**Benefits:**
+- Multiple closures sharing a variable all see updates
+- Only mutated variables pay the indirection cost
+- Immutable captures remain simple copies
 
 ---
 
@@ -1218,8 +1315,14 @@ fn test_tail_call_optimization() {
 
 ## References
 
+### Patina Docs
+- [ARCHITECTURE_LESSONS.md](./ARCHITECTURE_LESSONS.md) - Comparative analysis (indexed vars, flat closures)
 - [VM_SPECIFICATION.md](./VM_SPECIFICATION.md) - Bytecode ISA definition
+- [VM_VALUE_ARCHITECTURE.md](./VM_VALUE_ARCHITECTURE.md) - Value representation and GC
 - [DESUGARER_DESIGN.md](./DESUGARER_DESIGN.md) - Input IR (VmCoreExpr)
 - [TAGGED_POINTERS.md](./TAGGED_POINTERS.md) - TaggedValue representation
+
+### Academic
 - "Compiling with Continuations" (Appel) - Continuation compilation
 - "Modern Compiler Implementation" (Appel) - Register allocation, SSA
+- "Three Implementation Models for Scheme" (Dybvig) - Display closures, flat closures

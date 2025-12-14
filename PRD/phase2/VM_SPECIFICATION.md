@@ -96,6 +96,7 @@ The ISA is designed to support:
 - **Type profiling** annotations on all operations
 - **Guards** for speculative optimization
 - **Multi-level representation** (can be lowered to simpler forms)
+- **Indexed variable access** - variables resolved to indices at compile time (see [ARCHITECTURE_LESSONS.md](./ARCHITECTURE_LESSONS.md) §2)
 
 ### Core Instruction Set
 
@@ -105,8 +106,32 @@ pub enum Opcode {
     // Constants & Literals
     // ─────────────────────────────────────────────────────
     LoadConst { dst: Register, constant_index: ConstantPoolIndex },
+    LoadImmediate { dst: Register, value: TaggedValue },  // Small immediates inline
+
+    // ─────────────────────────────────────────────────────
+    // Variable Access (indexed for performance)
+    // See ARCHITECTURE_LESSONS.md §2 for design rationale
+    // ─────────────────────────────────────────────────────
+    /// Load from local variable (parameter or let-bound)
+    LoadLocal { dst: Register, index: u16 },
+
+    /// Store to local variable
+    StoreLocal { src: Register, index: u16 },
+
+    /// Load from closure's captured variable array
+    LoadClosure { dst: Register, slot: u16 },
+
+    /// Store to closure's captured variable (for set! on captured vars)
+    StoreClosure { src: Register, slot: u16 },
+
+    /// Load global variable (only globals use name lookup)
     LoadGlobal { dst: Register, name: Symbol },
+
+    /// Store global variable
     StoreGlobal { src: Register, name: Symbol },
+
+    /// Move between registers
+    Move { dst: Register, src: Register },
 
     // ─────────────────────────────────────────────────────
     // Arithmetic (with profiling metadata)
@@ -217,11 +242,15 @@ pub enum Opcode {
 
     // ─────────────────────────────────────────────────────
     // Closures & Environments
+    // Flat closure design - see ARCHITECTURE_LESSONS.md §2
     // ─────────────────────────────────────────────────────
+
+    /// Create closure with captured free variables
+    /// free_vars contains values to capture (computed at call site)
     MakeClosure {
         dst: Register,
         code: CodeObjectId,
-        free_vars: RegisterSlice
+        free_vars: RegisterSlice,  // Contiguous registers with captured values
     },
 
     // ─────────────────────────────────────────────────────
@@ -680,6 +709,63 @@ pub struct CodeMetadata {
     /// Effect classification (if analyzed)
     effect_summary: Option<EffectSummary>,
 }
+```
+
+### Flat Closures
+
+Closures use a flat representation for O(1) access to captured variables.
+See [ARCHITECTURE_LESSONS.md](./ARCHITECTURE_LESSONS.md) §2 for design rationale.
+
+```rust
+/// Runtime closure object
+pub struct VmClosure {
+    /// Pointer to compiled code
+    code: CodeObjectId,
+
+    /// Captured free variables (flat array, indexed access)
+    /// Variables are copied at closure creation time
+    free_vars: Vec<TaggedValue>,
+}
+
+impl VmClosure {
+    /// Access captured variable by index (O(1))
+    #[inline(always)]
+    pub fn get_free_var(&self, index: u16) -> TaggedValue {
+        self.free_vars[index as usize]
+    }
+
+    /// Mutate captured variable (for set! on captured vars)
+    #[inline(always)]
+    pub fn set_free_var(&mut self, index: u16, value: TaggedValue) {
+        self.free_vars[index as usize] = value;
+    }
+}
+```
+
+**Comparison with tree-walker:**
+
+| Aspect | Tree-Walker | VM |
+|--------|-------------|-----|
+| Closure structure | `env: Rc<Environment>` | `free_vars: Vec<TaggedValue>` |
+| Variable lookup | Hash table + parent chain | Direct index |
+| Capture strategy | Captures entire environment | Only captured variables |
+| Memory overhead | High (parent pointers) | Low (flat array) |
+| Lookup cost | O(depth) worst case | O(1) always |
+
+**Mutable captured variables:**
+
+For variables that are `set!` after capture, we use a box indirection:
+
+```rust
+/// Mutable cell for captured variables that are set!
+pub struct MutableCell {
+    value: TaggedValue,
+}
+
+// Compiler detects set! on captured vars and wraps them
+// At capture: free_vars[i] = box_cell(initial_value)
+// At access: unbox_cell(free_vars[i])
+// At set!: set_cell(free_vars[i], new_value)
 ```
 
 ### Profiling Infrastructure
@@ -1198,7 +1284,13 @@ impl Interpreter {
 
 ## References
 
-See individual research documents:
+### Architecture & Design
+- [Architecture Lessons](./ARCHITECTURE_LESSONS.md) - Comparative analysis with other language implementations
+- [VM Value Architecture](./VM_VALUE_ARCHITECTURE.md) - Dual representation (Value/TaggedValue)
+- [Compilation Design](./COMPILATION_DESIGN.md) - Bytecode compiler design
+- [Tagged Pointers](./TAGGED_POINTERS.md) - TaggedValue implementation details
+
+### Research Documents
 - [Meta-Tracing](./01_META_TRACING.md)
 - [Effect Continuations](./02_EFFECT_CONTINUATIONS.md)
 - [Adaptive Numeric Tower](./03_ADAPTIVE_NUMERIC.md)

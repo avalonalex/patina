@@ -32,10 +32,19 @@ These documents define the foundational VM architecture:
 
 These documents describe how to implement the VM:
 
+- **[COMPILATION_DESIGN.md](./COMPILATION_DESIGN.md)** - VmCoreExpr to bytecode compilation: register allocation, flat closures, TCO
 - **[DESUGARER_DESIGN.md](./DESUGARER_DESIGN.md)** - Generic desugarer with `DesugarBackend` trait for producing backend-specific IR
-- **[COMPILATION_DESIGN.md](./COMPILATION_DESIGN.md)** - VmCoreExpr to bytecode compilation: register allocation, closure handling, TCO
 - **[VM_TESTING_DESIGN.md](./VM_TESTING_DESIGN.md)** - Testing framework: backend-agnostic tests, differential testing, benchmarks
 - **[FILE_SYSTEM_ABSTRACTION.md](./FILE_SYSTEM_ABSTRACTION.md)** - FileSystem trait for testing, WASM support, and embedded stdlib
+
+---
+
+## Architecture Analysis & Data Type Abstractions
+
+These documents provide architectural insights and abstraction designs:
+
+- **[ARCHITECTURE_LESSONS.md](./ARCHITECTURE_LESSONS.md)** - Comparative analysis with Lua, V8, Chez, Chibi, Guile: value representation, closures, GC, dispatch
+- **[STRING_ABSTRACTION_DESIGN.md](./STRING_ABSTRACTION_DESIGN.md)** - SchemeString trait design: swappable string implementations via feature flags
 
 ---
 

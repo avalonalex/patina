@@ -774,9 +774,101 @@ The VM model is faster for the common case (no call/cc) while still supporting f
 
 ---
 
+## GC Strategy Recommendation
+
+Based on analysis in [ARCHITECTURE_LESSONS.md](./ARCHITECTURE_LESSONS.md) §3, we recommend a phased approach:
+
+### Phase 2A: Arena Allocation (Immediate)
+
+Use typed arenas for evaluation temporaries:
+
+```rust
+use typed_arena::Arena;
+
+pub struct EvalArena {
+    pairs: Arena<(TaggedValue, TaggedValue)>,
+    vectors: Arena<Vec<TaggedValue>>,
+    strings: Arena<String>,
+}
+
+impl EvalArena {
+    /// Reset arena after each top-level expression
+    pub fn reset(&mut self) {
+        // Arenas are dropped and recreated
+        *self = Self::new();
+    }
+}
+```
+
+**Benefits:**
+- Reduces allocation churn during evaluation
+- Fast bump allocation
+- No GC pauses for short-lived objects
+- Simple implementation
+
+### Phase 2B: rust-gc Integration (Medium-term)
+
+For long-lived objects and cycle handling, integrate `rust-gc`:
+
+```rust
+use gc::{Gc, GcCell, Trace};
+
+#[derive(Trace)]
+pub struct GcPair {
+    car: Gc<TaggedValue>,
+    cdr: Gc<TaggedValue>,
+}
+
+#[derive(Trace)]
+pub struct GcVector {
+    elements: GcCell<Vec<TaggedValue>>,
+}
+
+impl VmHeap {
+    pub fn alloc_pair(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
+        let pair = Gc::new(GcPair { car: Gc::new(car), cdr: Gc::new(cdr) });
+        TaggedValue::gc_pair(pair)
+    }
+}
+```
+
+**Why rust-gc:**
+- Handles cycles correctly (required for R7RS: `set-car!`, `set-cdr!`)
+- Simple integration via derive macro
+- Mark-and-sweep (sufficient for interpreter)
+- Well-maintained crate
+
+### Phase 3: Generational GC (Long-term, Optional)
+
+If profiling shows GC is a bottleneck:
+- Consider implementing generational collection
+- Young generation for short-lived allocations
+- Old generation for survivors
+- More complex, only if needed
+
+### Comparison with Other Implementations
+
+| Implementation | GC Type | Handles Cycles | Complexity |
+|----------------|---------|----------------|------------|
+| Chez Scheme | Generational | Yes | High |
+| Guile | Boehm conservative | Yes | Low |
+| Chibi Scheme | Mark-sweep | Yes | Medium |
+| Lua | Incremental tri-color | Yes | Medium |
+| **Patina VM** | rust-gc mark-sweep | Yes | Low |
+
+### Implementation Order
+
+1. **Immediate:** Arena allocation for temporaries
+2. **Phase 2B:** rust-gc for heap objects
+3. **If needed:** Generational optimization
+
+---
+
 ## References
 
+- [ARCHITECTURE_LESSONS.md](./ARCHITECTURE_LESSONS.md) - Comparative analysis with other implementations
 - [TAGGED_POINTERS.md](./TAGGED_POINTERS.md) - Original tagged pointer design
 - [VM_SPECIFICATION.md](./VM_SPECIFICATION.md) - Full VM specification
+- [rust-gc crate](https://crates.io/crates/gc) - Rust garbage collection library
 - "Binding as Sets of Scopes" (Flatt 2016) - Hygiene system
 - "Three Implementation Models for Scheme" (Dybvig) - VM design
