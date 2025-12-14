@@ -61,10 +61,11 @@ pub enum Value {
     // Characters (Unicode support)
     Character(char),
 
-    // Strings (mutable in Scheme, UTF-8 encoded)
-    // Uses RefCell to allow mutation via string-set!
-    // Note: Character indexing is O(n) which is explicitly allowed by R7RS
-    String(Rc<RefCell<String>>),
+    // Strings (mutable in Scheme)
+    // Uses Vec<char> for O(1) character indexing and mutation
+    // UTF-8 conversion happens at I/O boundaries (display, write, file ops)
+    // Memory: 4 bytes per character (fixed, predictable)
+    String(Rc<RefCell<Vec<char>>>),
 
     // Symbols
     Symbol(Rc<str>),
@@ -697,7 +698,12 @@ impl std::fmt::Display for Value {
                 }
             }
             Value::Character(c) => write!(f, "#\\{}", c),
-            Value::String(s) => write!(f, "\"{}\"", s.borrow()),
+            Value::String(s) => {
+                // Convert Vec<char> to String for display
+                let chars = s.borrow();
+                let utf8_string: String = chars.iter().collect();
+                write!(f, "\"{}\"", utf8_string)
+            }
             Value::Symbol(s) => {
                 if Self::symbol_needs_vertical_bars(s) {
                     write!(f, "|{}|", Self::escape_for_vertical_bar(s))

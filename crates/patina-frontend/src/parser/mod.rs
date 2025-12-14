@@ -116,7 +116,9 @@ impl Parser {
                 Ok(val)
             }
             Token::String(s) => {
-                let val = Value::String(Rc::new(RefCell::new(s.clone())));
+                // Convert UTF-8 string to Vec<char> for O(1) character access
+                let chars: Vec<char> = s.chars().collect();
+                let val = Value::String(Rc::new(RefCell::new(chars)));
                 self.advance()?;
                 Ok(val)
             }

@@ -469,7 +469,7 @@ pub(super) fn utf8_to_string(_evaluator: &Evaluator, args: Vec<Value>) -> Result
 
     let bytes = &bv_borrowed[start..end];
     match std::str::from_utf8(bytes) {
-        Ok(s) => Ok(Value::String(Rc::new(RefCell::new(s.to_string())))),
+        Ok(s) => Ok(Value::String(Rc::new(RefCell::new(s.chars().collect())))),
         Err(e) => Err(EvalError::TypeError(format!(
             "utf8->string: invalid UTF-8 sequence at byte {}",
             e.valid_up_to()
@@ -496,7 +496,7 @@ pub(super) fn string_to_utf8(_evaluator: &Evaluator, args: Vec<Value>) -> Result
     };
 
     let s_borrowed = s.borrow();
-    let char_count = s_borrowed.chars().count();
+    let char_count = s_borrowed.len();
 
     let start = if args.len() >= 2 {
         match &args[1] {
@@ -537,7 +537,7 @@ pub(super) fn string_to_utf8(_evaluator: &Evaluator, args: Vec<Value>) -> Result
     };
 
     // Extract the substring by character indices and encode to UTF-8
-    let substring: String = s_borrowed.chars().skip(start).take(end - start).collect();
+    let substring: String = s_borrowed.iter().skip(start).take(end - start).collect();
     let bytes = substring.into_bytes();
 
     Ok(Value::Bytevector(Rc::new(RefCell::new(bytes))))
@@ -662,7 +662,7 @@ mod tests {
     }
 
     fn make_string(s: &str) -> Value {
-        Value::String(Rc::new(RefCell::new(s.to_string())))
+        Value::String(Rc::new(RefCell::new(s.chars().collect())))
     }
 
     // utf8->string tests

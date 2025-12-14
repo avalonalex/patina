@@ -557,7 +557,7 @@ impl<'a> CpsEvaluator<'a> {
 
         // First argument must be a string (the message)
         let message = match &args[0] {
-            Value::String(s) => s.borrow().clone(),
+            Value::String(s) => s.borrow().iter().collect::<String>(),
             _ => {
                 return Err(EvalError::TypeError(
                     "error: first argument must be a string".to_string(),
@@ -610,7 +610,7 @@ impl<'a> CpsEvaluator<'a> {
             Err(EvalError::SchemeException {
                 kind: ExceptionKind::Error,
                 message: match &args[0] {
-                    Value::String(s) => s.borrow().clone(),
+                    Value::String(s) => s.borrow().iter().collect::<String>(),
                     _ => "error".to_string(),
                 },
                 irritants_display,

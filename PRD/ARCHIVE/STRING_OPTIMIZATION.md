@@ -1,52 +1,94 @@
 # String Representation Optimization
 
-**Status:** Future Consideration
-**Phase:** Post Phase 1
+**Status:** Active Development
+**Phase:** Phase 1 Cleanup
 **Created:** 2025-11-07
-**Last Updated:** 2025-11-07
+**Last Updated:** 2025-12-13
 
 ## Executive Summary
 
-This document outlines a phased approach to optimizing Patina's string representation while maintaining R7RS compliance and UTF-8 correctness. The current implementation (Phase 1) is simple, correct, and sufficient for most use cases. Future optimizations should be driven by real-world profiling data.
+This document defines Patina's string representation strategy. After evaluating multiple options, we've chosen **Vec<char> (4 bytes per character)** as the internal representation for O(1) random access, with UTF-8 conversion for I/O operations.
 
-**Key Principle:** "Make it work, make it right, make it fast" - we're at "right", only move to "fast" when data justifies it.
+**Design Decision (2025-12-13):** Use `Vec<char>` internally for O(1) character access. Convert to/from UTF-8 at I/O boundaries. This prioritizes algorithmic efficiency and predictable performance over memory compactness.
 
 ---
 
-## Current Implementation (Phase 1) ✅
+## Chosen Design: Vec<char> with UTF-8 I/O
 
 ### Architecture
 
 ```rust
-// src/value/mod.rs
-Value::String(Rc<RefCell<String>>)  // UTF-8 internally
+// crates/patina-runtime/src/value/mod.rs
+Value::String(Rc<RefCell<Vec<char>>>)  // 4 bytes per char, O(1) access
+
+// Future enhancement: lazy UTF-8 cache for I/O
+pub struct SchemeString {
+    chars: Rc<RefCell<Vec<char>>>,
+    utf8_cache: Rc<RefCell<Option<String>>>,  // Invalidated on mutation
+}
 ```
 
 ### Performance Characteristics
 
-| Operation | Complexity | R7RS Requirement | Implementation |
-|-----------|-----------|------------------|----------------|
-| `string-length` | O(n) | No O(1) requirement | `.chars().count()` |
-| `string-ref` | O(n) | **"No O(1) requirement"** | `.chars().nth(k)` |
-| `string-set!` | O(n) | Not specified | Convert to `Vec<char>`, mutate, convert back |
-| `substring` | O(n) | Not specified | Slice and collect |
-| `string-append` | O(n) | Not specified | String concatenation |
-| Memory per char | 1-4 bytes | Not specified | UTF-8 variable width |
+| Operation | Complexity | Implementation |
+|-----------|-----------|----------------|
+| `string-length` | **O(1)** | `chars.len()` |
+| `string-ref` | **O(1)** | `chars[i]` |
+| `string-set!` | **O(1)** | `chars[i] = ch` (+ invalidate cache) |
+| `substring` | O(n) | Slice and collect |
+| `string-append` | O(n) | Extend vector |
+| `display`/`write` | O(n) | Convert to UTF-8 (cached) |
+| Memory per char | 4 bytes | Fixed, predictable |
 
 ### Design Rationale
 
-1. **UTF-8 Native**: Rust's `String` is already UTF-8
-2. **Simple**: Minimal code, easy to maintain
-3. **Correct**: R7RS explicitly allows O(n) operations
-4. **Memory Efficient**: UTF-8 is compact (1-2 bytes/char average)
-5. **Good I/O**: No conversion needed for display/file operations
+1. **O(1) Random Access**: Character indexing is constant time
+2. **O(1) Mutation**: `string-set!` is constant time
+3. **Predictable Performance**: No algorithmic surprises
+4. **Simple Implementation**: ~100 LOC change from current
+5. **UTF-8 at Boundaries**: I/O still works correctly with UTF-8 conversion
+
+### Trade-offs Accepted
+
+1. **Memory**: 4 bytes/char vs 1-4 bytes/char UTF-8 (2-4x more for ASCII)
+2. **I/O Conversion**: Need to convert to UTF-8 for display/file operations
+3. **String Literals**: Parser must convert UTF-8 source to Vec<char>
+
+### Why Not UTF-8 Internal?
+
+While R7RS allows O(n) string operations, O(1) access provides:
+- Better support for text-processing algorithms
+- Predictable performance for users
+- Simpler reasoning about string operations
+- Alignment with how most languages represent strings internally
 
 ### R7RS Compliance
 
 From R7RS Section 6.7:
 > "There is no requirement for this procedure [string-ref] to execute in constant time."
 
-This explicitly allows O(n) character indexing, making our current implementation fully compliant.
+Our implementation **exceeds** R7RS requirements by providing O(1) access. This is fully compliant.
+
+---
+
+## Legacy Implementation (Being Replaced)
+
+### Previous Architecture
+
+```rust
+// Old: UTF-8 internally
+Value::String(Rc<RefCell<String>>)
+```
+
+### Previous Performance
+
+| Operation | Complexity | Implementation |
+|-----------|-----------|----------------|
+| `string-length` | O(n) | `.chars().count()` |
+| `string-ref` | O(n) | `.chars().nth(k)` |
+| `string-set!` | O(n) | Convert to `Vec<char>`, mutate, convert back |
+
+This was simple and correct, but O(n) operations can be surprising for users expecting array-like string access.
 
 ---
 
@@ -357,103 +399,107 @@ pub struct SchemeString {
 
 ---
 
-## Recommended Phased Approach
+## Implementation Plan
 
-### Phase 1 (Current): UTF-8 String ✅
+### Phase 1: Vec<char> Migration (Current)
 
-**Status:** ✅ Implemented (2025-11-07)
+**Status:** 🚧 In Progress (2025-12-13)
 
+**Target Architecture:**
 ```rust
-Value::String(Rc<RefCell<String>>)
+Value::String(Rc<RefCell<Vec<char>>>)
 ```
 
-**Characteristics:**
-- Simple, correct, R7RS compliant
-- Good enough for 95% of use cases
-- UTF-8 native (1-2 bytes/char average)
-- O(n) operations (allowed by R7RS)
+**Implementation Steps:**
 
-**When to Move On:**
-- Real-world programs show string operations in profiler
-- String allocation appears in memory profiles
-- We have benchmarks showing bottlenecks
+1. **Update Value enum** (`patina-runtime/src/value/mod.rs`)
+   - Change `String(Rc<RefCell<String>>)` to `String(Rc<RefCell<Vec<char>>>)`
+   - Update Display trait to convert to UTF-8 for output
+
+2. **Update Parser** (`patina-frontend/src/parser/mod.rs`)
+   - Parse string literals from UTF-8 source to `Vec<char>`
+   - Handle escape sequences correctly
+
+3. **Update Lexer** (`patina-frontend/src/lexer/mod.rs`)
+   - Ensure string tokens preserve full Unicode content
+
+4. **Update String Primitives** (`patina-tree-walker/src/eval/primitives/strings.rs`)
+   - `string-length`: Return `chars.len()` (O(1))
+   - `string-ref`: Return `chars[k]` (O(1))
+   - `string-set!`: Set `chars[k] = ch` (O(1))
+   - `make-string`: Create `Vec<char>` with fill
+   - `string`: Collect chars into `Vec<char>`
+   - `substring`: Slice and collect
+   - `string-append`: Extend vectors
+   - `string->list`: Iterate chars
+   - `list->string`: Collect into Vec<char>
+   - `string-copy`: Clone vector
+   - `string-copy!`: Copy range
+   - `string-fill!`: Fill range with char
+
+5. **Update I/O Primitives** (`patina-tree-walker/src/eval/primitives/io.rs`)
+   - `display`: Convert Vec<char> to String for output
+   - `write`: Convert Vec<char> to String with escaping
+   - `read`: Parse string from input to Vec<char>
+
+6. **Update Comparison Primitives**
+   - `string=?`, `string<?`, etc.: Compare Vec<char> directly
+   - `string-ci=?`, etc.: Case-insensitive on chars
+
+7. **Update String/UTF-8 Conversion**
+   - `string->utf8`: Convert Vec<char> to bytevector
+   - `utf8->string`: Convert bytevector to Vec<char>
+
+8. **Run Tests**: All ~1400 tests should pass unchanged
+
+**Estimated Effort:** 1-2 days
 
 ---
 
-### Phase 2: SSO + Cached Length (Recommended Next Step)
+### Phase 2: UTF-8 Cache (Optional Enhancement)
 
-**Priority:** Medium (do when we have performance data)
+**Priority:** Low (only if I/O performance matters)
 
 ```rust
-enum StringRepr {
-    Small { len: u8, data: [u8; 23] },
-    Large { len: usize, utf8: String },
+pub struct SchemeString {
+    chars: Rc<RefCell<Vec<char>>>,
+    utf8_cache: Rc<RefCell<Option<String>>>,
 }
-Value::String(Rc<RefCell<StringRepr>>)
 ```
 
 **Benefits:**
-- ✅ Zero-allocation for 70% of strings
-- ✅ O(1) `string-length` for all strings
-- ✅ Minimal code change (~200 LOC)
-- ✅ Significant real-world speedup
-- ✅ Backward compatible
+- Avoid repeated UTF-8 conversion for display-heavy code
+- Cache invalidated on any mutation
+- Lazy computation on first I/O operation
 
-**Implementation Steps:**
-1. Define `StringRepr` enum
-2. Update parser to create `Small` or `Large`
-3. Update string primitives to handle both cases
-4. Add benchmarks to verify improvement
-5. Update tests (should all pass unchanged)
+**When to Implement:**
+- Profiling shows UTF-8 conversion as bottleneck
+- Programs with heavy string output
+- REPL or logging-intensive applications
 
-**Estimated Effort:** 2-3 days
-
-**Success Metrics:**
-- String allocation count reduced by 70%
-- Memory usage reduced for small strings
-- No performance regression on large strings
-- All tests pass unchanged
+**Estimated Effort:** 1 day
 
 ---
 
-### Phase 3: Adaptive Representation (Future)
+### Future Considerations (Not Planned)
 
-**Priority:** Low (only if Phase 2 isn't sufficient)
+The following optimizations were evaluated but **not chosen**:
 
-```rust
-enum StringRepr {
-    Small { len: u8, data: [u8; 23] },
-    Utf8 { len: usize, utf8: String },
-    Indexed { chars: Vec<char> },  // Auto-convert on first string-set!
-}
-Value::String(Rc<RefCell<StringRepr>>)
-```
+**SSO (Small String Optimization):**
+- Would reduce allocations for small strings
+- Adds complexity for marginal benefit with Vec<char>
+- May reconsider if allocation profiling shows issues
 
-**Auto-optimization Rules:**
-- Small strings (<24 bytes): Always `Small`
-- Large, never mutated: Stay as `Utf8`
-- Large, mutated once: Convert to `Indexed`
-- `Indexed` → `Utf8` on serialize/display
+**Rope:**
+- Would improve `string-append` to O(1)
+- Adds significant complexity (~500-1000 LOC)
+- Only beneficial for heavy concatenation workloads
+- May reconsider for specific use cases (templating, code gen)
 
-**Estimated Effort:** 1 week
-
-**When to Implement:**
-- Profiling shows `string-set!` as bottleneck
-- Programs with text editor-like patterns
-- We have good heuristics to avoid thrashing
-
----
-
-### Phase 4: Rope (Advanced/Optional)
-
-**Priority:** Very Low (only for specific use cases)
-
-**When to Implement:**
-- `string-append` shows up as major bottleneck
-- Programs generate large strings via concatenation
-- We have templating/code generation workloads
-
-**Estimated Effort:** 2 weeks
+**Adaptive UTF-8/Vec<char>:**
+- Would save memory for read-only strings
+- Adds complexity and unpredictable performance
+- Not worth the implementation cost
 
 ---
 
@@ -586,16 +632,20 @@ When ready to implement SSO:
 
 ## Conclusion
 
-**Current Status:** Phase 1 is complete, correct, and sufficient.
+**Design Decision (2025-12-13):** Vec<char> with 4 bytes per character.
 
-**Next Step:** Gather real-world performance data before implementing Phase 2.
+**Rationale:**
+- O(1) random access is more intuitive for users
+- O(1) mutation simplifies text-processing algorithms
+- Predictable performance with no algorithmic surprises
+- UTF-8 conversion at I/O boundaries is acceptable overhead
+- Simple implementation (~100 LOC change)
 
-**Philosophy:** Optimize based on data, not speculation. The current implementation is good enough until proven otherwise.
+**Trade-off Accepted:** Higher memory usage (4 bytes/char vs 1-4 bytes/char UTF-8) in exchange for O(1) operations and predictable performance.
 
-**When to Revisit:**
-1. Profiling shows string operations as bottleneck (>10% time)
-2. Memory profiling shows excessive string allocation
-3. We have real Scheme programs that stress string operations
-4. We want to match performance of reference implementations
+**Next Steps:**
+1. Implement Vec<char> migration (Phase 1)
+2. Run full test suite to verify correctness
+3. Consider UTF-8 cache only if I/O performance becomes an issue
 
-**Key Takeaway:** R7RS explicitly allows O(n) string operations. Our current implementation is spec-compliant and well-suited for most use cases. Optimize when data demands it, not before.
+**Key Insight:** While R7RS allows O(n) string operations, providing O(1) access exceeds spec requirements and provides a better developer experience. Memory efficiency is secondary to algorithmic efficiency for an interpreter targeting correctness and clarity.

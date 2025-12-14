@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2025-12-13 11:09:18
+**Generated:** 2025-12-13 16:13:38
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
@@ -56,7 +56,9 @@ with all R7RS-small features.
 ### Known Limitations
 
 - `(scheme load)` library not yet implemented
+- See `docs/FEATURE_STATUS.md` for detailed compliance matrix
 
-### Status
+### Next Steps
 
-Phase 1 (R7RS-small compliance) is complete. Now in cleanup phase before Phase 2 (VM backend).
+See `docs/FEATURE_STATUS.md` for detailed R7RS compliance matrix and
+`PRD/phase1/IMPLEMENTATION_STATUS.md` for roadmap.

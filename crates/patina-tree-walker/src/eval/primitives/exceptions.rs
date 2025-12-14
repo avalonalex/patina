@@ -28,7 +28,7 @@ pub(super) fn error(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
 
     // First argument must be a string (the message)
     let message = match &args[0] {
-        Value::String(s) => s.borrow().clone(),
+        Value::String(s) => s.borrow().iter().collect::<String>(),
         _ => {
             return Err(EvalError::TypeError(
                 "error: first argument must be a string".to_string(),
@@ -69,7 +69,9 @@ pub(super) fn error_object_message(
     evaluator.check_arity_exact(&args, 1, "error-object-message")?;
 
     match &args[0] {
-        Value::Exception(exc) => Ok(Value::String(Rc::new(RefCell::new(exc.message.clone())))),
+        Value::Exception(exc) => Ok(Value::String(Rc::new(RefCell::new(
+            exc.message.chars().collect(),
+        )))),
         _ => Err(EvalError::TypeError(
             "error-object-message: argument must be an error object".to_string(),
         )),

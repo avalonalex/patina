@@ -66,7 +66,7 @@ fn command_line(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalEr
     evaluator.check_arity_exact(&args, 0, "command-line")?;
 
     let args: Vec<Value> = std::env::args()
-        .map(|s| Value::String(Rc::new(RefCell::new(s))))
+        .map(|s| Value::String(Rc::new(RefCell::new(s.chars().collect()))))
         .collect();
 
     Ok(evaluator.list_from_vec(args))
@@ -128,8 +128,8 @@ fn emergency_exit(_evaluator: &Evaluator, args: Vec<Value>) -> Result<EvalResult
 fn get_environment_variable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "get-environment-variable")?;
 
-    let name = match &args[0] {
-        Value::String(s) => s.borrow().clone(),
+    let name: String = match &args[0] {
+        Value::String(s) => s.borrow().iter().collect(),
         _ => {
             return Err(EvalError::TypeError(
                 "get-environment-variable expects a string".to_string(),
@@ -138,7 +138,9 @@ fn get_environment_variable(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
     };
 
     match std::env::var(&name) {
-        Ok(value) => Ok(Value::String(Rc::new(RefCell::new(value)))),
+        Ok(value) => Ok(Value::String(Rc::new(RefCell::new(
+            value.chars().collect(),
+        )))),
         Err(_) => Ok(Value::Boolean(false)),
     }
 }
@@ -152,8 +154,8 @@ fn get_environment_variables(evaluator: &Evaluator, args: Vec<Value>) -> Result<
     let entries: Vec<Value> = std::env::vars()
         .map(|(k, v)| {
             Value::Pair(Rc::new(RefCell::new((
-                Value::String(Rc::new(RefCell::new(k))),
-                Value::String(Rc::new(RefCell::new(v))),
+                Value::String(Rc::new(RefCell::new(k.chars().collect()))),
+                Value::String(Rc::new(RefCell::new(v.chars().collect()))),
             ))))
         })
         .collect();
@@ -178,7 +180,7 @@ mod tests {
     fn test_get_environment_variable_path() {
         let eval = Evaluator::new();
         // PATH should exist on most systems
-        let name = Value::String(Rc::new(RefCell::new("PATH".to_string())));
+        let name = Value::String(Rc::new(RefCell::new("PATH".chars().collect())));
         let result = get_environment_variable(&eval, vec![name]).unwrap();
 
         // Should return a string (PATH is usually set)
@@ -189,7 +191,7 @@ mod tests {
     fn test_get_environment_variable_not_found() {
         let eval = Evaluator::new();
         let name = Value::String(Rc::new(RefCell::new(
-            "PATINA_NONEXISTENT_VAR_12345".to_string(),
+            "PATINA_NONEXISTENT_VAR_12345".chars().collect(),
         )));
         let result = get_environment_variable(&eval, vec![name]).unwrap();
 

@@ -158,7 +158,8 @@ impl DatumLabelWriter {
             }
             // For non-compound types, use the standard Display
             Value::String(s) if self.display_mode => {
-                out.push_str(&s.borrow());
+                let string: String = s.borrow().iter().collect();
+                out.push_str(&string);
             }
             Value::Character(c) if self.display_mode => {
                 out.push(*c);

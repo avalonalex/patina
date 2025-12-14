@@ -1,9 +1,11 @@
-//! String primitive operations with UTF-8 support (R7RS Section 6.7)
+//! String primitive operations with O(1) character access (R7RS Section 6.7)
 //!
-//! Implements string operations with full Unicode support:
-//! - Character-based indexing (O(n) as allowed by R7RS)
-//! - Mutable strings via string-set!
+//! Implements string operations using Vec<char> for O(1) random access:
+//! - Character indexing is O(1)
+//! - Mutation via string-set! is O(1)
 //! - Comparison operations (case-sensitive and case-insensitive)
+//!
+//! Note: UTF-8 conversion happens at I/O boundaries.
 //!
 //! Total: 20 string primitives + 2 helper functions
 
@@ -13,13 +15,18 @@ use patina_runtime::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// Helper to convert Vec<char> to String for comparison/output
+fn chars_to_string(chars: &[char]) -> String {
+    chars.iter().collect()
+}
+
 pub(super) fn string_length(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "string-length")?;
 
     match &args[0] {
         Value::String(s) => {
-            // Count Unicode characters, not bytes
-            let len = s.borrow().chars().count();
+            // O(1) - Vec<char> length
+            let len = s.borrow().len();
             Ok(Value::Integer(len as i64))
         }
         _ => Err(EvalError::TypeError(format!(
@@ -55,16 +62,19 @@ pub(super) fn string_ref(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
         )));
     }
 
-    // Get nth character (O(n) - R7RS compliant)
-    let ch = s.borrow().chars().nth(k as usize).ok_or_else(|| {
-        EvalError::IndexOutOfBounds(format!(
+    let chars = s.borrow();
+    let idx = k as usize;
+
+    // O(1) character access
+    if idx >= chars.len() {
+        return Err(EvalError::IndexOutOfBounds(format!(
             "string-ref index {} out of bounds for string of length {}",
             k,
-            s.borrow().chars().count()
-        ))
-    })?;
+            chars.len()
+        )));
+    }
 
-    Ok(Value::Character(ch))
+    Ok(Value::Character(chars[idx]))
 }
 
 pub(super) fn string_set(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -96,11 +106,10 @@ pub(super) fn string_set(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
         )));
     }
 
-    // Convert to Vec<char>, mutate, convert back
-    // This is O(n) but works correctly with UTF-8
-    let mut chars: Vec<char> = s.borrow().chars().collect();
+    let idx = k as usize;
+    let mut chars = s.borrow_mut();
 
-    if k as usize >= chars.len() {
+    if idx >= chars.len() {
         return Err(EvalError::IndexOutOfBounds(format!(
             "string-set! index {} out of bounds for string of length {}",
             k,
@@ -108,8 +117,8 @@ pub(super) fn string_set(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
         )));
     }
 
-    chars[k as usize] = ch;
-    *s.borrow_mut() = chars.into_iter().collect();
+    // O(1) mutation
+    chars[idx] = ch;
 
     Ok(Value::Unspecified)
 }
@@ -146,8 +155,8 @@ pub(super) fn make_string(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
         ' ' // Default fill character
     };
 
-    let s = std::iter::repeat_n(fill_char, k as usize).collect::<String>();
-    Ok(Value::String(Rc::new(RefCell::new(s))))
+    let chars: Vec<char> = std::iter::repeat_n(fill_char, k as usize).collect();
+    Ok(Value::String(Rc::new(RefCell::new(chars))))
 }
 
 pub(super) fn string(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -165,8 +174,7 @@ pub(super) fn string(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, 
         }
     }
 
-    let s = chars.into_iter().collect::<String>();
-    Ok(Value::String(Rc::new(RefCell::new(s))))
+    Ok(Value::String(Rc::new(RefCell::new(chars))))
 }
 
 pub(super) fn string_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -222,7 +230,7 @@ fn string_compare<F>(
     fn_name: &str,
 ) -> Result<Value, EvalError>
 where
-    F: Fn(&str, &str) -> bool,
+    F: Fn(&[char], &[char]) -> bool,
 {
     evaluator.check_arity_min(&args, 2, fn_name)?;
 
@@ -283,7 +291,10 @@ where
     for i in 0..args.len() - 1 {
         let (a, b) = match (&args[i], &args[i + 1]) {
             (Value::String(a), Value::String(b)) => {
-                (a.borrow().to_lowercase(), b.borrow().to_lowercase())
+                // Convert Vec<char> to String for case-insensitive comparison
+                let a_str = chars_to_string(&a.borrow()).to_lowercase();
+                let b_str = chars_to_string(&b.borrow()).to_lowercase();
+                (a_str, b_str)
             }
             _ => return Err(EvalError::TypeError(format!("{} expects strings", fn_name))),
         };
@@ -297,11 +308,11 @@ where
 }
 
 pub(super) fn string_append(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    let mut result = String::new();
+    let mut result: Vec<char> = Vec::new();
 
     for arg in args {
         match arg {
-            Value::String(s) => result.push_str(&s.borrow()),
+            Value::String(s) => result.extend(s.borrow().iter()),
             _ => {
                 return Err(EvalError::TypeError(format!(
                     "string-append expects strings, got {}",
@@ -343,9 +354,11 @@ pub(super) fn substring(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
         ));
     }
 
-    let chars: Vec<char> = s.borrow().chars().collect();
+    let chars = s.borrow();
+    let start_idx = start as usize;
+    let end_idx = end as usize;
 
-    if end as usize > chars.len() {
+    if end_idx > chars.len() {
         return Err(EvalError::IndexOutOfBounds(format!(
             "substring end index {} out of bounds for string of length {}",
             end,
@@ -353,7 +366,7 @@ pub(super) fn substring(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
         )));
     }
 
-    let substr: String = chars[start as usize..end as usize].iter().collect();
+    let substr: Vec<char> = chars[start_idx..end_idx].to_vec();
     Ok(Value::String(Rc::new(RefCell::new(substr))))
 }
 
@@ -365,7 +378,7 @@ pub(super) fn string_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<
         });
     }
 
-    let s = match &args[0] {
+    let chars = match &args[0] {
         Value::String(s) => s.borrow().clone(),
         _ => {
             return Err(EvalError::TypeError(
@@ -374,7 +387,6 @@ pub(super) fn string_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<
         }
     };
 
-    let chars: Vec<char> = s.chars().collect();
     let start = if args.len() >= 2 {
         match &args[1] {
             Value::Integer(n) => *n as usize,
@@ -418,10 +430,10 @@ pub(super) fn string_to_list(evaluator: &Evaluator, args: Vec<Value>) -> Result<
 pub(super) fn list_to_string(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_exact(&args, 1, "list->string")?;
 
-    let chars = evaluator.list_to_vec(args[0].clone(), "list->string")?;
-    let mut result = String::new();
+    let chars_list = evaluator.list_to_vec(args[0].clone(), "list->string")?;
+    let mut result: Vec<char> = Vec::new();
 
-    for ch_val in chars {
+    for ch_val in chars_list {
         match ch_val {
             Value::Character(ch) => result.push(ch),
             _ => {
@@ -438,7 +450,7 @@ pub(super) fn list_to_string(evaluator: &Evaluator, args: Vec<Value>) -> Result<
 pub(super) fn string_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
     evaluator.check_arity_range(&args, 1, 3, "string-copy")?;
 
-    let s = match &args[0] {
+    let chars = match &args[0] {
         Value::String(s) => s.borrow().clone(),
         _ => {
             return Err(EvalError::TypeError(
@@ -449,11 +461,10 @@ pub(super) fn string_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
 
     if args.len() == 1 {
         // Simple copy
-        return Ok(Value::String(Rc::new(RefCell::new(s))));
+        return Ok(Value::String(Rc::new(RefCell::new(chars))));
     }
 
     // Copy substring
-    let chars: Vec<char> = s.chars().collect();
     let start = match &args[1] {
         Value::Integer(n) => *n as usize,
         _ => {
@@ -482,7 +493,7 @@ pub(super) fn string_copy(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
         ));
     }
 
-    let substr: String = chars[start..end].iter().collect();
+    let substr: Vec<char> = chars[start..end].to_vec();
     Ok(Value::String(Rc::new(RefCell::new(substr))))
 }
 
@@ -494,7 +505,11 @@ pub(super) fn string_upcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
 
     match &args[0] {
         Value::String(s) => {
-            let upper = s.borrow().to_uppercase();
+            // Convert to String, uppercase, then back to Vec<char>
+            let upper: Vec<char> = chars_to_string(&s.borrow())
+                .to_uppercase()
+                .chars()
+                .collect();
             Ok(Value::String(Rc::new(RefCell::new(upper))))
         }
         _ => Err(EvalError::TypeError(
@@ -509,7 +524,11 @@ pub(super) fn string_downcase(evaluator: &Evaluator, args: Vec<Value>) -> Result
 
     match &args[0] {
         Value::String(s) => {
-            let lower = s.borrow().to_lowercase();
+            // Convert to String, lowercase, then back to Vec<char>
+            let lower: Vec<char> = chars_to_string(&s.borrow())
+                .to_lowercase()
+                .chars()
+                .collect();
             Ok(Value::String(Rc::new(RefCell::new(lower))))
         }
         _ => Err(EvalError::TypeError(
@@ -531,7 +550,7 @@ pub(super) fn string_foldcase(evaluator: &Evaluator, args: Vec<Value>) -> Result
 
     match &args[0] {
         Value::String(s) => {
-            let folded: String = s.borrow().case_fold().collect();
+            let folded: Vec<char> = chars_to_string(&s.borrow()).case_fold().collect();
             Ok(Value::String(Rc::new(RefCell::new(folded))))
         }
         _ => Err(EvalError::TypeError(
@@ -564,8 +583,7 @@ pub(super) fn string_fill(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
         }
     };
 
-    let mut s_borrowed = s.borrow_mut();
-    let chars: Vec<char> = s_borrowed.chars().collect();
+    let mut chars = s.borrow_mut();
     let len = chars.len();
 
     let start = if args.len() >= 3 {
@@ -600,12 +618,10 @@ pub(super) fn string_fill(evaluator: &Evaluator, args: Vec<Value>) -> Result<Val
         ));
     }
 
-    // Reconstruct string with filled range
-    let mut new_chars = chars;
-    for char_slot in new_chars.iter_mut().take(end).skip(start) {
-        *char_slot = fill_char;
+    // O(n) fill in the range - but now direct mutation
+    for i in start..end {
+        chars[i] = fill_char;
     }
-    *s_borrowed = new_chars.iter().collect();
 
     Ok(Value::Unspecified)
 }
@@ -620,7 +636,7 @@ pub(super) fn string_map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
     let strings: Vec<Vec<char>> = args[1..]
         .iter()
         .map(|v| match v {
-            Value::String(s) => Ok(s.borrow().chars().collect()),
+            Value::String(s) => Ok(s.borrow().clone()),
             _ => Err(EvalError::TypeError(
                 "string-map expects strings".to_string(),
             )),
@@ -628,11 +644,11 @@ pub(super) fn string_map(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
         .collect::<Result<_, _>>()?;
 
     if strings.is_empty() {
-        return Ok(Value::String(Rc::new(RefCell::new(String::new()))));
+        return Ok(Value::String(Rc::new(RefCell::new(Vec::new()))));
     }
 
     let min_len = strings.iter().map(|s| s.len()).min().unwrap_or(0);
-    let mut result = String::with_capacity(min_len);
+    let mut result: Vec<char> = Vec::with_capacity(min_len);
 
     for i in 0..min_len {
         let proc_args: Vec<Value> = strings.iter().map(|s| Value::Character(s[i])).collect();
@@ -666,7 +682,7 @@ pub(super) fn string_for_each(evaluator: &Evaluator, args: Vec<Value>) -> Result
     let strings: Vec<Vec<char>> = args[1..]
         .iter()
         .map(|v| match v {
-            Value::String(s) => Ok(s.borrow().chars().collect()),
+            Value::String(s) => Ok(s.borrow().clone()),
             _ => Err(EvalError::TypeError(
                 "string-for-each expects strings".to_string(),
             )),
@@ -730,8 +746,7 @@ pub(super) fn string_copy_mutate(
         }
     };
 
-    let from_chars: Vec<char> = from.chars().collect();
-    let from_len = from_chars.len();
+    let from_len = from.len();
 
     let start = if args.len() >= 4 {
         match &args[3] {
@@ -765,8 +780,7 @@ pub(super) fn string_copy_mutate(
         ));
     }
 
-    let mut to_borrowed = to.borrow_mut();
-    let mut to_chars: Vec<char> = to_borrowed.chars().collect();
+    let mut to_chars = to.borrow_mut();
 
     let copy_len = end - start;
     if at + copy_len > to_chars.len() {
@@ -776,9 +790,7 @@ pub(super) fn string_copy_mutate(
     }
 
     // Copy characters from source to destination
-    to_chars[at..(copy_len + at)].copy_from_slice(&from_chars[start..(copy_len + start)]);
-
-    *to_borrowed = to_chars.iter().collect();
+    to_chars[at..(copy_len + at)].copy_from_slice(&from[start..(copy_len + start)]);
 
     Ok(Value::Unspecified)
 }
@@ -1040,7 +1052,7 @@ mod tests {
     }
 
     fn make_string(s: &str) -> Value {
-        Value::String(Rc::new(RefCell::new(s.to_string())))
+        Value::String(Rc::new(RefCell::new(s.chars().collect())))
     }
 
     /// Helper to parse and evaluate a lambda expression via CPS

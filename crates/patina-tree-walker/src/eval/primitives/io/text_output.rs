@@ -136,7 +136,7 @@ pub(super) fn write_string(_eval: &Evaluator, args: Vec<Value>) -> Result<Value,
         });
     }
 
-    let s = match &args[0] {
+    let chars = match &args[0] {
         Value::String(s) => s.borrow().clone(),
         _ => {
             return Err(EvalError::TypeError(
@@ -171,11 +171,10 @@ pub(super) fn write_string(_eval: &Evaluator, args: Vec<Value>) -> Result<Value,
             }
         }
     } else {
-        s.len()
+        chars.len()
     };
 
     // Get substring by character indices (not byte indices)
-    let chars: Vec<char> = s.chars().collect();
     if start > chars.len() || end > chars.len() || start > end {
         return Err(EvalError::IndexOutOfBounds(format!(
             "write-string: index {} out of range for string of length {}",

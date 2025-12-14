@@ -52,7 +52,7 @@ fn test_begin(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErro
     evaluator.check_arity_exact(&args, 1, "test-begin")?;
 
     let name = match &args[0] {
-        Value::String(s) => s.borrow().clone(),
+        Value::String(s) => s.borrow().iter().collect::<String>(),
         Value::Symbol(s) => s.to_string(),
         _ => {
             return Err(EvalError::TypeError(

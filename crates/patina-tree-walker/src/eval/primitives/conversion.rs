@@ -109,7 +109,7 @@ impl Evaluator {
         };
 
         Ok(EvalResult::Value(Value::String(Rc::new(RefCell::new(
-            result,
+            result.chars().collect(),
         )))))
     }
 
@@ -340,8 +340,8 @@ impl Evaluator {
             });
         }
 
-        let string = match &args[0] {
-            Value::String(s) => s.borrow().clone(),
+        let string: String = match &args[0] {
+            Value::String(s) => s.borrow().iter().collect(),
             _ => {
                 return Err(EvalError::TypeError(format!(
                     "expected string, got {}",
@@ -497,7 +497,7 @@ mod tests {
             .unwrap();
         match result {
             EvalResult::Value(Value::String(s)) => {
-                assert_eq!(&*s.borrow(), "100");
+                assert_eq!(&*s.borrow(), &"100".chars().collect::<Vec<char>>());
             }
             _ => panic!("Expected string"),
         }
@@ -511,7 +511,7 @@ mod tests {
             .unwrap();
         match result {
             EvalResult::Value(Value::String(s)) => {
-                assert_eq!(&*s.borrow(), "100");
+                assert_eq!(&*s.borrow(), &"100".chars().collect::<Vec<char>>());
             }
             _ => panic!("Expected string"),
         }
@@ -522,7 +522,7 @@ mod tests {
         let eval = Evaluator::new();
         let result = eval
             .prim_string_to_number(vec![Value::String(Rc::new(RefCell::new(
-                "100".to_string(),
+                "100".chars().collect(),
             )))])
             .unwrap();
         match result {
@@ -536,7 +536,7 @@ mod tests {
         let eval = Evaluator::new();
         let result = eval
             .prim_string_to_number(vec![
-                Value::String(Rc::new(RefCell::new("100".to_string()))),
+                Value::String(Rc::new(RefCell::new("100".chars().collect()))),
                 Value::Integer(16),
             ])
             .unwrap();
@@ -551,7 +551,7 @@ mod tests {
         let eval = Evaluator::new();
         let result = eval
             .prim_string_to_number(vec![Value::String(Rc::new(RefCell::new(
-                "not a number".to_string(),
+                "not a number".chars().collect(),
             )))])
             .unwrap();
         match result {

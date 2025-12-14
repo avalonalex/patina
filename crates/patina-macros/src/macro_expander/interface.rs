@@ -268,7 +268,7 @@ impl TestExpander {
                 Self::forms_equal_ignoring_gensym(r1, r2)
                     && Self::forms_equal_ignoring_gensym(i1, i2)
             }
-            (String(s1), String(s2)) => s1.borrow().as_str() == s2.borrow().as_str(),
+            (String(s1), String(s2)) => *s1.borrow() == *s2.borrow(),
             (Character(c1), Character(c2)) => c1 == c2,
             _ => false,
         }

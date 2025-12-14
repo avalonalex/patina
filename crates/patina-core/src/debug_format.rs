@@ -83,7 +83,10 @@ fn format_value_with_scopes(value: &Value, buf: &mut String) {
             write!(buf, "#\\{}", c).unwrap();
         }
         Value::String(s) => {
-            write!(buf, "\"{}\"", s.borrow()).unwrap();
+            // Convert Vec<char> to String for display
+            let chars = s.borrow();
+            let utf8_string: String = chars.iter().collect();
+            write!(buf, "\"{}\"", utf8_string).unwrap();
         }
         Value::Procedure(proc) => {
             write!(buf, "#<procedure {:?}>", proc).unwrap();

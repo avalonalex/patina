@@ -78,7 +78,7 @@ fn make_continuation_prompt_tag(args: Vec<Value>) -> Result<Value, EvalError> {
     } else if args.len() == 1 {
         match &args[0] {
             Value::Symbol(s) => s.to_string(),
-            Value::String(s) => s.borrow().clone(),
+            Value::String(s) => s.borrow().iter().collect::<String>(),
             _ => {
                 return Err(EvalError::TypeError(
                     "make-continuation-prompt-tag: name must be a symbol or string".to_string(),

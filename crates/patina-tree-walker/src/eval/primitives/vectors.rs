@@ -362,7 +362,7 @@ pub(super) fn string_to_vector(
 ) -> Result<Value, EvalError> {
     evaluator.check_arity_range(&args, 1, 3, "string->vector")?;
 
-    let s = match &args[0] {
+    let chars = match &args[0] {
         Value::String(s) => s.borrow().clone(),
         _ => {
             return Err(EvalError::TypeError(
@@ -370,8 +370,6 @@ pub(super) fn string_to_vector(
             ));
         }
     };
-
-    let chars: Vec<char> = s.chars().collect();
 
     let start = if args.len() >= 2 {
         match &args[1] {

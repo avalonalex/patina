@@ -1342,7 +1342,7 @@ mod tests {
     #[test]
     fn test_desugar_string() {
         let desugarer = Desugarer::new();
-        let value = Value::String(Rc::new(RefCell::new("hello".to_string())));
+        let value = Value::String(Rc::new(RefCell::new("hello".chars().collect())));
         let result = desugarer.desugar(&value).unwrap();
         if let CoreExpr::Literal(v) = result {
             assert!(matches!(v.as_ref(), Value::String(_)));

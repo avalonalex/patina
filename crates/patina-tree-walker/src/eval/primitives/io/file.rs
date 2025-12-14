@@ -27,7 +27,7 @@ pub(super) fn open_input_file(_eval: &Evaluator, args: Vec<Value>) -> Result<Val
     }
     match &args[0] {
         Value::String(s) => {
-            let path = s.borrow();
+            let path: String = s.borrow().iter().collect();
             let port = Port::open_input_file(&path).map_err(|e| {
                 EvalError::IOError(format!("Cannot open '{}' for reading: {}", path, e))
             })?;
@@ -49,7 +49,7 @@ pub(super) fn open_output_file(_eval: &Evaluator, args: Vec<Value>) -> Result<Va
     }
     match &args[0] {
         Value::String(s) => {
-            let path = s.borrow();
+            let path: String = s.borrow().iter().collect();
             let port = Port::open_output_file(&path).map_err(|e| {
                 EvalError::IOError(format!("Cannot open '{}' for writing: {}", path, e))
             })?;
@@ -74,7 +74,7 @@ pub(super) fn open_binary_input_file(
     }
     match &args[0] {
         Value::String(s) => {
-            let path = s.borrow();
+            let path: String = s.borrow().iter().collect();
             let port = Port::open_binary_input_file(&path).map_err(|e| {
                 EvalError::IOError(format!("Cannot open '{}' for binary reading: {}", path, e))
             })?;
@@ -99,7 +99,7 @@ pub(super) fn open_binary_output_file(
     }
     match &args[0] {
         Value::String(s) => {
-            let path = s.borrow();
+            let path: String = s.borrow().iter().collect();
             let port = Port::open_binary_output_file(&path).map_err(|e| {
                 EvalError::IOError(format!("Cannot open '{}' for binary writing: {}", path, e))
             })?;
@@ -121,8 +121,8 @@ pub(super) fn file_exists_p(_eval: &Evaluator, args: Vec<Value>) -> Result<Value
     }
     match &args[0] {
         Value::String(s) => {
-            let path = s.borrow();
-            Ok(Value::Boolean(std::path::Path::new(&*path).exists()))
+            let path: String = s.borrow().iter().collect();
+            Ok(Value::Boolean(std::path::Path::new(&path).exists()))
         }
         _ => Err(EvalError::TypeError(
             "file-exists? expects a string filename".to_string(),
@@ -140,8 +140,8 @@ pub(super) fn delete_file(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, 
     }
     match &args[0] {
         Value::String(s) => {
-            let path = s.borrow();
-            std::fs::remove_file(&*path)
+            let path: String = s.borrow().iter().collect();
+            std::fs::remove_file(&path)
                 .map_err(|e| EvalError::IOError(format!("Cannot delete '{}': {}", path, e)))?;
             Ok(Value::Unspecified)
         }
@@ -165,7 +165,7 @@ pub(super) fn call_with_input_file(
     }
 
     let filename = match &args[0] {
-        Value::String(s) => s.borrow().to_string(),
+        Value::String(s) => s.borrow().iter().collect::<String>(),
         _ => {
             return Err(EvalError::TypeError(
                 "call-with-input-file expects a string filename".to_string(),
@@ -203,7 +203,7 @@ pub(super) fn call_with_output_file(
     }
 
     let filename = match &args[0] {
-        Value::String(s) => s.borrow().to_string(),
+        Value::String(s) => s.borrow().iter().collect::<String>(),
         _ => {
             return Err(EvalError::TypeError(
                 "call-with-output-file expects a string filename".to_string(),
@@ -242,7 +242,7 @@ pub(super) fn with_input_from_file(
     }
 
     let filename = match &args[0] {
-        Value::String(s) => s.borrow().to_string(),
+        Value::String(s) => s.borrow().iter().collect::<String>(),
         _ => {
             return Err(EvalError::TypeError(
                 "with-input-from-file expects a string filename".to_string(),
@@ -289,7 +289,7 @@ pub(super) fn with_output_to_file(
     }
 
     let filename = match &args[0] {
-        Value::String(s) => s.borrow().to_string(),
+        Value::String(s) => s.borrow().iter().collect::<String>(),
         _ => {
             return Err(EvalError::TypeError(
                 "with-output-to-file expects a string filename".to_string(),

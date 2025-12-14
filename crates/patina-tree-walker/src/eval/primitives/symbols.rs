@@ -90,9 +90,13 @@ fn symbol_to_string(args: Vec<Value>) -> Result<EvalResult, EvalError> {
     }
 
     match &args[0] {
-        Value::Symbol(s) => Ok(EvalResult::Value(Value::String(Rc::new(RefCell::new(
-            s.to_string(),
-        ))))),
+        Value::Symbol(s) => {
+            // Convert symbol name to Vec<char>
+            let chars: Vec<char> = s.chars().collect();
+            Ok(EvalResult::Value(Value::String(Rc::new(RefCell::new(
+                chars,
+            )))))
+        }
         other => Err(EvalError::TypeError(format!(
             "symbol->string expects a symbol, got {}",
             other
@@ -115,7 +119,8 @@ fn string_to_symbol(args: Vec<Value>) -> Result<EvalResult, EvalError> {
 
     match &args[0] {
         Value::String(s) => {
-            let name = s.borrow().clone();
+            // Convert Vec<char> to String for symbol name
+            let name: String = s.borrow().iter().collect();
             Ok(EvalResult::Value(Value::Symbol(Rc::from(name))))
         }
         other => Err(EvalError::TypeError(format!(
@@ -191,7 +196,8 @@ mod tests {
         let result = symbol_to_string(vec![Value::Symbol(Rc::from("flying-fish"))]).unwrap();
         match result {
             EvalResult::Value(Value::String(s)) => {
-                assert_eq!(&*s.borrow(), "flying-fish");
+                let chars: Vec<char> = "flying-fish".chars().collect();
+                assert_eq!(*s.borrow(), chars);
             }
             _ => panic!("Expected string"),
         }
@@ -200,7 +206,7 @@ mod tests {
     #[test]
     fn test_string_to_symbol() {
         let result = string_to_symbol(vec![Value::String(Rc::new(RefCell::new(
-            "foo".to_string(),
+            "foo".chars().collect(),
         )))])
         .unwrap();
         match result {
@@ -215,7 +221,7 @@ mod tests {
     fn test_roundtrip() {
         // (symbol->string (string->symbol "test")) should equal "test"
         let sym_result = string_to_symbol(vec![Value::String(Rc::new(RefCell::new(
-            "test".to_string(),
+            "test".chars().collect(),
         )))])
         .unwrap();
         let sym = match sym_result {
@@ -226,7 +232,8 @@ mod tests {
         let str_result = symbol_to_string(vec![sym]).unwrap();
         match str_result {
             EvalResult::Value(Value::String(s)) => {
-                assert_eq!(&*s.borrow(), "test");
+                let chars: Vec<char> = "test".chars().collect();
+                assert_eq!(*s.borrow(), chars);
             }
             _ => panic!("Expected string"),
         }

@@ -103,7 +103,7 @@ mod tests {
         env.define("bar".to_string(), Value::Boolean(true));
         env.define(
             "internal".to_string(),
-            Value::String(Rc::new(RefCell::new("private".to_string()))),
+            Value::String(Rc::new(RefCell::new("private".chars().collect()))),
         );
 
         // Only export foo and bar

@@ -16,7 +16,9 @@ fn build_simple_math(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
     env.define("e".to_string(), Value::Real(std::f64::consts::E));
     env.define(
         "description".to_string(),
-        Value::String(Rc::new(RefCell::new("Simple math constants".to_string()))),
+        Value::String(Rc::new(RefCell::new(
+            "Simple math constants".chars().collect(),
+        ))),
     );
 
     // Export only the constants

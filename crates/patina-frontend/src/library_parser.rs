@@ -260,7 +260,9 @@ impl LibraryDefinition {
         for value in values {
             match value {
                 Value::String(s) => {
-                    paths.push(s.borrow().clone());
+                    // Convert Vec<char> back to String for file path
+                    let path: String = s.borrow().iter().collect();
+                    paths.push(path);
                 }
                 _ => {
                     return Err(ParseError::InvalidSyntax(format!(
@@ -807,7 +809,7 @@ mod tests {
     // =========================================================================
 
     fn string(s: &str) -> Value {
-        Value::String(Rc::new(RefCell::new(s.to_string())))
+        Value::String(Rc::new(RefCell::new(s.chars().collect())))
     }
 
     #[test]

@@ -520,7 +520,7 @@ mod tests {
         // Get the string back
         let result = ports::get_output_string(&eval, vec![out_port]).unwrap();
         if let Value::String(s) = result {
-            assert_eq!(*s.borrow(), "hello");
+            assert_eq!(*s.borrow(), "hello".chars().collect::<Vec<char>>());
         } else {
             panic!("Expected string");
         }
@@ -529,7 +529,7 @@ mod tests {
     #[test]
     fn test_input_string_port() {
         let eval = Evaluator::new();
-        let input = Value::String(Rc::new(RefCell::new("abc".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("abc".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
 
         // Read characters
@@ -552,7 +552,7 @@ mod tests {
 
         let in_port = ports::open_input_string(
             &eval,
-            vec![Value::String(Rc::new(RefCell::new("".to_string())))],
+            vec![Value::String(Rc::new(RefCell::new("".chars().collect())))],
         )
         .unwrap();
         let out_port = ports::open_output_string(&eval, vec![]).unwrap();
@@ -613,7 +613,7 @@ mod tests {
         let eval = Evaluator::new();
 
         // Read an integer
-        let input = Value::String(Rc::new(RefCell::new("42".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("42".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
         let result = read::read(&eval, vec![port.clone()]).unwrap();
         assert!(matches!(result, Value::Integer(42)));
@@ -627,7 +627,7 @@ mod tests {
     fn test_read_list() {
         let eval = Evaluator::new();
 
-        let input = Value::String(Rc::new(RefCell::new("(+ 1 2)".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("(+ 1 2)".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
         let result = read::read(&eval, vec![port]).unwrap();
         assert!(matches!(result, Value::Pair(_)));
@@ -637,7 +637,7 @@ mod tests {
     fn test_read_multiple_expressions() {
         let eval = Evaluator::new();
 
-        let input = Value::String(Rc::new(RefCell::new("1 2 3".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("1 2 3".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
 
         let r1 = read::read(&eval, vec![port.clone()]).unwrap();
@@ -657,7 +657,7 @@ mod tests {
     fn test_read_quoted() {
         let eval = Evaluator::new();
 
-        let input = Value::String(Rc::new(RefCell::new("'foo".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("'foo".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
         let result = read::read(&eval, vec![port]).unwrap();
         // Should be (quote foo)
@@ -668,11 +668,11 @@ mod tests {
     fn test_read_sexp_string() {
         let eval = Evaluator::new();
 
-        let input = Value::String(Rc::new(RefCell::new("\"hello world\"".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("\"hello world\"".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
         let result = read::read(&eval, vec![port]).unwrap();
         if let Value::String(s) = result {
-            assert_eq!(*s.borrow(), "hello world");
+            assert_eq!(*s.borrow(), "hello world".chars().collect::<Vec<char>>());
         } else {
             panic!("Expected string, got {:?}", result);
         }
@@ -683,11 +683,11 @@ mod tests {
         let eval = Evaluator::new();
 
         // Read 3 chars from "abcd"
-        let input = Value::String(Rc::new(RefCell::new("abcd".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("abcd".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
         let result = text_input::read_string(&eval, vec![Value::Integer(3), port]).unwrap();
         if let Value::String(s) = result {
-            assert_eq!(*s.borrow(), "abc");
+            assert_eq!(*s.borrow(), "abc".chars().collect::<Vec<char>>());
         } else {
             panic!("Expected string, got {:?}", result);
         }
@@ -698,7 +698,7 @@ mod tests {
         let eval = Evaluator::new();
 
         // Read from empty string returns EOF
-        let input = Value::String(Rc::new(RefCell::new("".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
         let result = text_input::read_string(&eval, vec![Value::Integer(3), port]).unwrap();
         assert!(matches!(result, Value::Eof));
@@ -709,11 +709,11 @@ mod tests {
         let eval = Evaluator::new();
 
         // Read more chars than available
-        let input = Value::String(Rc::new(RefCell::new("hi".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("hi".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
         let result = text_input::read_string(&eval, vec![Value::Integer(10), port]).unwrap();
         if let Value::String(s) = result {
-            assert_eq!(*s.borrow(), "hi");
+            assert_eq!(*s.borrow(), "hi".chars().collect::<Vec<char>>());
         } else {
             panic!("Expected string, got {:?}", result);
         }
@@ -724,11 +724,11 @@ mod tests {
         let eval = Evaluator::new();
 
         // Read 0 chars returns empty string (not EOF)
-        let input = Value::String(Rc::new(RefCell::new("hello".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("hello".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
         let result = text_input::read_string(&eval, vec![Value::Integer(0), port]).unwrap();
         if let Value::String(s) = result {
-            assert_eq!(*s.borrow(), "");
+            assert_eq!(*s.borrow(), Vec::<char>::new());
         } else {
             panic!("Expected empty string, got {:?}", result);
         }
@@ -739,11 +739,11 @@ mod tests {
         let eval = Evaluator::new();
 
         // Read includes newline character
-        let input = Value::String(Rc::new(RefCell::new("abc\ndef".to_string())));
+        let input = Value::String(Rc::new(RefCell::new("abc\ndef".chars().collect())));
         let port = ports::open_input_string(&eval, vec![input]).unwrap();
         let result = text_input::read_string(&eval, vec![Value::Integer(5), port]).unwrap();
         if let Value::String(s) = result {
-            assert_eq!(*s.borrow(), "abc\nd");
+            assert_eq!(*s.borrow(), "abc\nd".chars().collect::<Vec<char>>());
         } else {
             panic!("Expected string, got {:?}", result);
         }

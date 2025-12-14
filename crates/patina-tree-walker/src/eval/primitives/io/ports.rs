@@ -222,7 +222,7 @@ pub(super) fn open_input_string(_eval: &Evaluator, args: Vec<Value>) -> Result<V
     }
     match &args[0] {
         Value::String(s) => {
-            let content = s.borrow().clone();
+            let content: String = s.borrow().iter().collect();
             Ok(Value::Port(Port::new_input_string(content)))
         }
         _ => Err(EvalError::TypeError(
@@ -252,7 +252,7 @@ pub(super) fn get_output_string(_eval: &Evaluator, args: Vec<Value>) -> Result<V
     }
     match &args[0] {
         Value::Port(p) => match p.get_output_string() {
-            Ok(s) => Ok(Value::String(Rc::new(RefCell::new(s)))),
+            Ok(s) => Ok(Value::String(Rc::new(RefCell::new(s.chars().collect())))),
             Err(e) => Err(EvalError::IOError(e.to_string())),
         },
         _ => Err(EvalError::TypeError(

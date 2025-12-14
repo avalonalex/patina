@@ -80,7 +80,7 @@ pub(super) fn read_line(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, Ev
                     line.pop();
                 }
             }
-            Ok(Value::String(Rc::new(RefCell::new(line))))
+            Ok(Value::String(Rc::new(RefCell::new(line.chars().collect()))))
         }
         Ok(None) => Ok(Value::Eof),
         Err(e) => Err(EvalError::IOError(e.to_string())),
@@ -115,7 +115,7 @@ pub(super) fn read_string(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, 
 
     // Special case: reading 0 characters returns empty string
     if k == 0 {
-        return Ok(Value::String(Rc::new(RefCell::new(String::new()))));
+        return Ok(Value::String(Rc::new(RefCell::new(Vec::new()))));
     }
 
     let mut result = String::new();
@@ -131,6 +131,8 @@ pub(super) fn read_string(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, 
         // If we couldn't read any characters (hit EOF immediately), return EOF
         Ok(Value::Eof)
     } else {
-        Ok(Value::String(Rc::new(RefCell::new(result))))
+        Ok(Value::String(Rc::new(RefCell::new(
+            result.chars().collect(),
+        ))))
     }
 }
