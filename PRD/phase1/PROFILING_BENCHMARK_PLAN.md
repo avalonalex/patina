@@ -377,14 +377,64 @@ Before implementing any optimization from `CLONE_OPTIMIZATION_ANALYSIS.md`:
 
 ---
 
+## Cargo Benchmark Setup (Ready to Use)
+
+Benchmarks are integrated into the `patina-tests` crate using Criterion:
+
+```bash
+# Run all benchmarks
+cargo bench --package patina-tests
+
+# Run specific benchmark group
+cargo bench --package patina-tests -- "r7rs/fib"
+cargo bench --package patina-tests -- "continuations"
+
+# List all benchmarks
+cargo bench --package patina-tests -- --list
+```
+
+### Benchmark Structure
+
+```
+crates/patina-tests/
+├── benches/
+│   └── scheme_benchmarks.rs    # Criterion harness
+└── bench_programs/
+    ├── common.scm              # Shared definitions (hide, run-benchmark)
+    ├── tak.scm                 # Gabriel: Takeuchi function
+    ├── fib.scm                 # Gabriel: Fibonacci
+    ├── ack.scm                 # KVW: Ackermann function
+    ├── deriv.scm               # Gabriel: Symbolic differentiation
+    ├── primes.scm              # Sieve of Eratosthenes
+    ├── nqueens.scm             # N-queens problem
+    ├── sum.scm                 # KVW: Integer summation
+    └── ctak.scm                # Gabriel: Continuation-capturing tak
+```
+
+### Benchmark Groups
+
+| Group | Benchmarks | What It Tests |
+|-------|------------|---------------|
+| `r7rs/*` | tak, fib, ack, deriv, primes, nqueens, sum | Classic R7RS performance |
+| `r7rs/ctak` | ctak | Continuation capture overhead |
+| `continuations/*` | callcc, dynamic_wind | CPS evaluator performance |
+| `data/*` | lists, vectors | Data structure operations |
+| `numeric/*` | sum, factorial, float_sum | Arithmetic performance |
+
+### Current Benchmark Results (Baseline)
+
+Run `cargo bench --package patina-tests` to establish baseline. Results are saved to `target/criterion/`.
+
+---
+
 ## Implementation Plan
 
-### Phase 1: Setup (1-2 hours)
+### Phase 1: Setup (COMPLETE)
 
-1. [ ] Clone r7rs-benchmarks repository
-2. [ ] Create Patina runner script
-3. [ ] Verify Tier 1 benchmarks run correctly
-4. [ ] Document any compatibility issues
+1. [x] ~~Clone r7rs-benchmarks repository~~ (Ported benchmarks directly)
+2. [x] Criterion benchmark harness integrated
+3. [x] 38 benchmarks across 5 groups
+4. [x] Benchmark programs in bench_programs/*.scm
 
 ### Phase 2: Baseline (2-3 hours)
 
@@ -411,21 +461,58 @@ Before implementing any optimization from `CLONE_OPTIMIZATION_ANALYSIS.md`:
 
 ## Appendix: Quick Start Commands
 
+### Benchmark Script (Recommended)
+
+```bash
+# Full benchmark suite with report (~5 min)
+./scripts/run_benchmarks.sh
+
+# Quick run with fewer samples (~2 min)
+./scripts/run_benchmarks.sh --quick
+
+# Run specific benchmark category
+./scripts/run_benchmarks.sh --filter "r7rs/fib"
+./scripts/run_benchmarks.sh --filter "continuations"
+
+# View generated report
+cat benchmark_reports/performance.md
+
+# View historical data
+cat benchmark_reports/history.csv
+```
+
+### Manual Cargo Commands
+
 ```bash
 # Build optimized binary
 cargo build --release
 
-# Run a single benchmark and time it
-time ./target/release/patina bench/tak.scm
+# Run all Criterion benchmarks directly
+cargo bench --package patina-tests
 
+# Run specific benchmark group
+cargo bench --package patina-tests -- "r7rs/fib"
+cargo bench --package patina-tests -- "continuations/callcc"
+
+# View Criterion HTML reports
+open target/criterion/report/index.html
+```
+
+### Profiling
+
+```bash
 # Profile with samply (installs Firefox Profiler integration)
 cargo install samply
-samply record ./target/release/patina bench/fib.scm
+samply record ./target/release/patina crates/patina-tests/bench_programs/fib.scm
 
-# Compare with chibi-scheme
-time chibi-scheme bench/tak.scm
-time ./target/release/patina bench/tak.scm
+# Profile with Instruments (macOS)
+xcrun xctrace record --template "Time Profiler" \
+  --launch ./target/release/patina crates/patina-tests/bench_programs/tak.scm
+```
 
+### Verification
+
+```bash
 # Run test suite to verify no regressions
 cargo test --package patina-tests
 ```

@@ -32,6 +32,9 @@ once_cell = "1.19"
 smallvec = "1.13"
 
 # Logging/tracing
-tracing = "0.1"
+tracing = "0.1.44"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
 
 # No main package anymore - workspace only

@@ -4,3 +4,6 @@ Cargo.lock
 *.swp
 *~
 .patina_history
+
+# Benchmark reports (machine-specific)
+/benchmark_reports

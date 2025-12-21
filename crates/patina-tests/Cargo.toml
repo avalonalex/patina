@@ -17,5 +17,10 @@ patina-tree-walker = { path = "../patina-tree-walker" }
 [dev-dependencies]
 assert_matches = "1.5"
 tempfile = "3"
+criterion = { workspace = true }
+
+[[bench]]
+name = "scheme_benchmarks"
+harness = false
 
 # Note: This is a test-only crate, no lib or bin targets
