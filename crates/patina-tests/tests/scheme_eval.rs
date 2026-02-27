@@ -5,7 +5,7 @@ use patina_interpreter::TreeWalkInterpreter;
 fn eval_program(code: &str) -> String {
     let interp = TreeWalkInterpreter::new_tree_walker();
     match interp.eval_program(code) {
-        Ok(v) => format!("{}", v),
+        Ok(v) => interp.display_tagged(v),
         Err(e) => format!("ERROR: {}", e),
     }
 }

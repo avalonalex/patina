@@ -6,22 +6,22 @@
 //! NOTE: These are unit tests for the desugarer only. Full integration tests
 //! (including macro expansion) are in patina-tests.
 
+use patina_core::{SharedHeap, TaggedValue};
 use patina_frontend::{Desugarer, Parser};
-use patina_runtime::Value;
+use patina_ir::CoreExpr;
 
-/// Helper: Parse code string to Value
-fn parse(code: &str) -> Value {
+/// Helper: Parse code string to TaggedValue, returning the heap for desugar_tagged
+fn parse_tv(code: &str) -> (TaggedValue, SharedHeap) {
     let mut parser = Parser::new(code).expect("Parser creation failed");
-    parser.parse().expect("Parse failed")
+    let tv = parser.parse().expect("Parse failed");
+    (tv, parser.heap().clone())
 }
 
 #[test]
 fn test_desugar_simple_quote() {
-    let code = "(quote a)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(quote a)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     assert!(result.is_ok(), "Should desugar simple quote: {:?}", result);
     println!("Quote desugared to: {:?}", result.unwrap());
@@ -29,11 +29,9 @@ fn test_desugar_simple_quote() {
 
 #[test]
 fn test_desugar_simple_lambda() {
-    let code = "(lambda (x) x)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(lambda (x) x)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     assert!(result.is_ok(), "Should desugar simple lambda: {:?}", result);
     println!("Lambda desugared to: {:?}", result.unwrap());
@@ -41,11 +39,9 @@ fn test_desugar_simple_lambda() {
 
 #[test]
 fn test_desugar_lambda_with_if() {
-    let code = "(lambda (x) (if x 1 2))";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(lambda (x) (if x 1 2))");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     assert!(
         result.is_ok(),
@@ -59,11 +55,9 @@ fn test_desugar_lambda_with_if() {
 fn test_desugar_unexpanded_or() {
     // This is what happens if we try to desugar BEFORE macro expansion
     // The desugarer treats 'or' as a regular application!
-    let code = "(or #f #t)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(or #f #t)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     // Actually SUCCEEDS - treats 'or' as a function application
     assert!(result.is_ok(), "Desugarer treats 'or' as application");
@@ -75,11 +69,9 @@ fn test_desugar_unexpanded_or() {
 #[test]
 fn test_desugar_unexpanded_let() {
     // Should succeed but treat 'let' as a function application
-    let code = "(let ((x 1)) x)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(let ((x 1)) x)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     assert!(result.is_ok(), "Desugarer treats 'let' as application");
     println!("Unexpanded 'let' desugars to: {:?}", result.unwrap());
@@ -90,11 +82,9 @@ fn test_desugar_unexpanded_let() {
 fn test_desugar_manually_expanded_or() {
     // Manually write what 'or' expands to: (if test test else)
     // (or a b) => (let ((tmp a)) (if tmp tmp b))
-    let code = "((lambda (tmp) (if tmp tmp #t)) #f)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("((lambda (tmp) (if tmp tmp #t)) #f)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     println!("Manually expanded 'or' result: {:?}", result);
     assert!(
@@ -108,11 +98,9 @@ fn test_desugar_manually_expanded_or() {
 fn test_desugar_manually_expanded_let() {
     // Manually write what 'let' expands to: ((lambda (vars...) body...) values...)
     // (let ((x 1)) x) => ((lambda (x) x) 1)
-    let code = "((lambda (x) x) 1)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("((lambda (x) x) 1)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     println!("Manually expanded 'let' result: {:?}", result);
     assert!(
@@ -125,11 +113,9 @@ fn test_desugar_manually_expanded_let() {
 #[test]
 fn test_desugar_nested_core_forms() {
     // No macros - all core forms
-    let code = "(lambda (x y) (if (if x #t #f) (begin (set! x 1) y) x))";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(lambda (x y) (if (if x #t #f) (begin (set! x 1) y) x))");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     println!("Nested core forms result: {:?}", result);
     assert!(
@@ -141,11 +127,9 @@ fn test_desugar_nested_core_forms() {
 
 #[test]
 fn test_desugar_define_simple() {
-    let code = "(define x 42)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(define x 42)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     println!("Simple define result: {:?}", result);
     assert!(
@@ -157,11 +141,9 @@ fn test_desugar_define_simple() {
 
 #[test]
 fn test_desugar_define_function() {
-    let code = "(define (f x) x)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(define (f x) x)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     println!("Function define result: {:?}", result);
     assert!(
@@ -173,11 +155,9 @@ fn test_desugar_define_function() {
 
 #[test]
 fn test_desugar_begin() {
-    let code = "(begin 1 2 3)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(begin 1 2 3)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     println!("Begin result: {:?}", result);
     assert!(result.is_ok(), "Should desugar begin: {:?}", result.err());
@@ -185,11 +165,9 @@ fn test_desugar_begin() {
 
 #[test]
 fn test_desugar_quasiquote() {
-    let code = "`(a ,b ,@c)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("`(a ,b ,@c)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     println!("Quasiquote result: {:?}", result);
     assert!(
@@ -201,11 +179,9 @@ fn test_desugar_quasiquote() {
 
 #[test]
 fn test_desugar_application() {
-    let code = "(+ 1 2 3)";
-    let value = parse(code);
-
+    let (tv, heap) = parse_tv("(+ 1 2 3)");
     let desugarer = Desugarer::new();
-    let result = desugarer.desugar(&value);
+    let result = desugarer.desugar_tagged(tv, &heap);
 
     println!("Application result: {:?}", result);
     assert!(
@@ -219,7 +195,6 @@ fn test_desugar_application() {
 // Desugarer Macro Tests - define-syntax compiles immediately
 // =========================================================================
 
-use patina_ir::CoreExpr;
 use patina_runtime::Environment;
 use std::rc::Rc;
 
@@ -227,20 +202,23 @@ use std::rc::Rc;
 /// (macro is compiled immediately and installed in environment)
 #[test]
 fn test_desugarer_returns_unspecified_for_define_syntax() {
-    let code = "(define-syntax foo (syntax-rules () ((foo x) x)))";
-    let value = parse(code);
-
-    // Create environment for desugarer
     let env = Rc::new(Environment::new());
-    let desugarer = Desugarer::with_env(env);
+    let heap = env.heap().clone();
+    let mut parser = Parser::new_with_heap(
+        "(define-syntax foo (syntax-rules () ((foo x) x)))",
+        heap.clone(),
+    )
+    .expect("Parser creation failed");
+    let tv = parser.parse().expect("Parse failed");
 
+    let desugarer = Desugarer::with_env(env);
     let result = desugarer
-        .desugar(&value)
+        .desugar_tagged(tv, &heap)
         .expect("Should desugar successfully");
 
     // Should be Literal(Unspecified) - macro is compiled at desugar time
     assert!(
-        matches!(&result, CoreExpr::Literal(val) if matches!(val.as_ref(), Value::Unspecified)),
+        matches!(&result, CoreExpr::Literal(val) if *val == TaggedValue::UNSPECIFIED),
         "Expected Literal(Unspecified), got {:?}",
         result
     );
@@ -249,25 +227,28 @@ fn test_desugarer_returns_unspecified_for_define_syntax() {
 /// Test that desugarer installs macro in environment
 #[test]
 fn test_desugarer_installs_macro_in_environment() {
-    let code = "(define-syntax foo (syntax-rules () ((foo x) x)))";
-    let value = parse(code);
-
-    // Create environment for desugarer
     let env = Rc::new(Environment::new());
-    let desugarer = Desugarer::with_env(env.clone());
+    let heap = env.heap().clone();
+    let mut parser = Parser::new_with_heap(
+        "(define-syntax foo (syntax-rules () ((foo x) x)))",
+        heap.clone(),
+    )
+    .expect("Parser creation failed");
+    let tv = parser.parse().expect("Parse failed");
 
+    let desugarer = Desugarer::with_env(env.clone());
     let _ = desugarer
-        .desugar(&value)
+        .desugar_tagged(tv, &heap)
         .expect("Should desugar successfully");
 
     // Macro should now be in the environment
-    let macro_value = env.get("foo");
+    let macro_tv = env.get("foo");
     assert!(
-        macro_value.is_some(),
+        macro_tv.is_some(),
         "Macro 'foo' should be installed in environment"
     );
     assert!(
-        matches!(macro_value.unwrap(), Value::Macro(_)),
+        heap.borrow().is_macro(macro_tv.unwrap()),
         "foo should be a Macro value"
     );
 }

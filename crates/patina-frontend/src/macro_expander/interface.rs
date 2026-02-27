@@ -7,7 +7,7 @@
 //! and provides convenient methods for testing macro behavior.
 
 use crate::error::FrontendError;
-use patina_runtime::{Environment, Value};
+use patina_runtime::Environment;
 use std::rc::Rc;
 
 /// Test helper for creating macro expanders and testing expansions
@@ -34,100 +34,27 @@ impl TestExpander {
     pub fn from_definition(name: &str, syntax_rules: &str) -> Result<Self, FrontendError> {
         use crate::parser::Parser;
 
-        // Parse the syntax-rules form
-        let mut parser = Parser::new(syntax_rules)?;
-        let syntax_rules_form = parser.parse()?;
-
-        // Parse the syntax-rules structure: (syntax-rules (literals) (pattern template) ...)
-        let Value::Pair(p1) = &syntax_rules_form else {
-            return Err(FrontendError::InvalidSyntax(
-                "syntax-rules must be a list".to_string(),
-            ));
-        };
-        let b1 = p1.borrow();
-        // Check for syntax-rules keyword - can be Symbol or Identifier (from macro expansion)
-        let is_syntax_rules = match &b1.0 {
-            Value::Symbol(s) => s.as_ref() == "syntax-rules",
-            Value::Identifier(id) => id.name.as_ref() == "syntax-rules",
-            _ => false,
-        };
-        if !is_syntax_rules {
-            return Err(FrontendError::InvalidSyntax(format!(
-                "Expected syntax-rules, got {}",
-                b1.0
-            )));
-        }
-
-        // Extract (literals) and rules
-        let Value::Pair(p2) = &b1.1 else {
-            return Err(FrontendError::InvalidSyntax(
-                "syntax-rules must have literals and rules".to_string(),
-            ));
-        };
-        let b2 = p2.borrow();
-        let literals_form = b2.0.clone();
-        let rules_form = b2.1.clone();
-
-        // Parse literals list
-        let mut literals = Vec::new();
-        let mut current = literals_form;
-        while let Value::Pair(p) = current {
-            let borrowed = p.borrow();
-            if let Value::Symbol(s) = &borrowed.0 {
-                literals.push(s.clone());
-            } else {
-                return Err(FrontendError::InvalidSyntax(
-                    "Literals must be symbols".to_string(),
-                ));
-            }
-            current = borrowed.1.clone();
-        }
-        if !matches!(current, Value::Null) {
-            return Err(FrontendError::InvalidSyntax(
-                "Literals must be a proper list".to_string(),
-            ));
-        }
-
-        // Parse rules as (pattern template) pairs
-        let mut rules = Vec::new();
-        let mut current = rules_form;
-        while let Value::Pair(rule_pair) = current {
-            let rule_borrowed = rule_pair.borrow();
-            let Value::Pair(rule_p) = &rule_borrowed.0 else {
-                return Err(FrontendError::InvalidSyntax(
-                    "Each rule must be a list".to_string(),
-                ));
-            };
-            let rule_p_borrowed = rule_p.borrow();
-            let pattern = rule_p_borrowed.0.clone();
-            let Value::Pair(tmpl_p) = &rule_p_borrowed.1 else {
-                return Err(FrontendError::InvalidSyntax(
-                    "Rule must have a template".to_string(),
-                ));
-            };
-            let tmpl_p_borrowed = tmpl_p.borrow();
-            let template = tmpl_p_borrowed.0.clone();
-            if !matches!(tmpl_p_borrowed.1, Value::Null) {
-                return Err(FrontendError::InvalidSyntax(
-                    "Each rule must have exactly pattern and template".to_string(),
-                ));
-            }
-            rules.push((pattern, template));
-            current = rule_borrowed.1.clone();
-        }
-        if !matches!(current, Value::Null) {
-            return Err(FrontendError::InvalidSyntax(
-                "Rules must be a proper list".to_string(),
-            ));
-        }
-
         // Create test environment for compilation (captures bindings for hygiene)
         let test_env = Rc::new(Environment::new());
+        let heap = test_env.heap().clone();
 
-        // Compile it with the test environment using patina_macros
-        let mut compiler = patina_macros::Compiler::with_env(literals, None, test_env);
+        // Parse the syntax-rules form directly to TaggedValue on the macro's heap
+        let mut parser = Parser::new_with_heap(syntax_rules, heap.clone())?;
+        let form_tv = parser.parse()?;
+
+        // Parse the syntax-rules structure using shared parser from patina_macros
+        let parsed = patina_macros::parse_syntax_rules(form_tv, &heap.borrow())
+            .map_err(|e| FrontendError::InvalidSyntax(e.0))?;
+
+        // Rules are already Vec<(TaggedValue, TaggedValue)> — pass directly to compiler
+        let mut compiler = patina_macros::Compiler::with_env(
+            parsed.literals,
+            parsed.custom_ellipsis,
+            test_env,
+            heap,
+        );
         let compiled = compiler
-            .compile_macro(name.into(), rules)
+            .compile_macro(name.into(), parsed.rules)
             .map_err(|e| FrontendError::InvalidSyntax(e.to_string()))?;
 
         Ok(Self { compiled })
@@ -150,30 +77,46 @@ impl TestExpander {
     pub fn assert_expands_to(&self, input: &str, expected: &str) -> Result<(), String> {
         use crate::parser::Parser;
 
-        // Parse input
-        let mut parser = Parser::new(input).map_err(|e| format!("Failed to parse input: {}", e))?;
-        let input_form = parser
+        let heap = &self.compiled.heap;
+
+        // Parse input directly to TaggedValue on the macro's heap
+        let mut parser = Parser::new_with_heap(input, heap.clone())
+            .map_err(|e| format!("Failed to parse input: {}", e))?;
+        let input_tv = parser
             .parse()
             .map_err(|e| format!("Failed to parse input: {}", e))?;
 
-        // Parse expected
-        let mut parser =
-            Parser::new(expected).map_err(|e| format!("Failed to parse expected: {}", e))?;
-        let expected_form = parser
+        // Parse expected directly to TaggedValue on the macro's heap
+        let mut parser = Parser::new_with_heap(expected, heap.clone())
+            .map_err(|e| format!("Failed to parse expected: {}", e))?;
+        let expected_tv = parser
             .parse()
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
-        // Expand using patina_macros
-        let expanded = patina_macros::expand_macro(&self.compiled, &input_form)
-            .map_err(|e| format!("Expansion failed: {}", e))?;
+        // Expand using production TaggedValue path
+        let expanded_tv = patina_macros::expand_macro_with_shadowed_tagged(
+            &self.compiled,
+            input_tv,
+            heap,
+            &std::collections::HashSet::new(),
+            &patina_runtime::ScopeSet::new(),
+        )
+        .map_err(|e| format!("Expansion failed: {}", e))?;
 
-        // Compare (ignoring gensym differences)
-        if Self::forms_equal_ignoring_gensym(&expanded, &expected_form) {
+        // Compare TaggedValues directly (ignoring gensym/hygiene differences)
+        if patina_macros::TestExpander::tagged_forms_equal_ignoring_gensym(
+            expanded_tv,
+            expected_tv,
+            &heap.borrow(),
+        ) {
             Ok(())
         } else {
+            // Format TaggedValues directly for error message
+            let expanded = patina_core::format_tagged(expanded_tv, &heap.borrow());
+            let expected = patina_core::format_tagged(expected_tv, &heap.borrow());
             Err(format!(
                 "Expansion mismatch:\nExpected: {}\nGot:      {}",
-                expected_form, expanded
+                expected, expanded
             ))
         }
     }
@@ -182,98 +125,25 @@ impl TestExpander {
     pub fn expand_to_string(&self, input: &str) -> Result<String, String> {
         use crate::parser::Parser;
 
-        let mut parser = Parser::new(input).map_err(|e| format!("Parse error: {}", e))?;
-        let input_form = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
+        let heap = &self.compiled.heap;
 
-        let expanded = patina_macros::expand_macro(&self.compiled, &input_form)
-            .map_err(|e| format!("Expansion error: {}", e))?;
+        // Parse input directly to TaggedValue on the macro's heap
+        let mut parser = Parser::new_with_heap(input, heap.clone())
+            .map_err(|e| format!("Parse error: {}", e))?;
+        let input_tv = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
 
-        Ok(format!("{}", expanded))
-    }
+        // Expand using production TaggedValue path
+        let expanded_tv = patina_macros::expand_macro_with_shadowed_tagged(
+            &self.compiled,
+            input_tv,
+            heap,
+            &std::collections::HashSet::new(),
+            &patina_runtime::ScopeSet::new(),
+        )
+        .map_err(|e| format!("Expansion error: {}", e))?;
 
-    /// Check if two forms are equal, ignoring gensym differences
-    ///
-    /// This allows comparing macro expansions that contain hygienic identifiers
-    /// like ##foo#123 and ##foo#456 as equivalent, and also treats ##foo#123
-    /// as equivalent to foo (for testing purposes).
-    fn forms_equal_ignoring_gensym(a: &Value, b: &Value) -> bool {
-        use Value::*;
-
-        // Helper to extract base name from any identifier form
-        fn base_name(v: &Value) -> Option<&str> {
-            match v {
-                Symbol(s) => {
-                    if s.starts_with("##") {
-                        // Extract name between ## and last #
-                        s.strip_prefix("##")
-                            .and_then(|ss| ss.rfind('#').map(|i| &ss[..i]))
-                            .or(Some(s.as_ref()))
-                    } else {
-                        Some(s.as_ref())
-                    }
-                }
-                Identifier(id) => Some(id.name.as_ref()),
-                _ => None,
-            }
-        }
-
-        // Try to compare as identifiers first
-        if let (Some(name1), Some(name2)) = (base_name(a), base_name(b)) {
-            return name1 == name2;
-        }
-
-        match (a, b) {
-            (Symbol(s1), Symbol(s2)) => {
-                // Extract base name from potentially hygienic symbols
-                let name1 = if s1.starts_with("##") {
-                    // Extract name between ## and last #
-                    s1.strip_prefix("##")
-                        .and_then(|s| s.rfind('#').map(|i| &s[..i]))
-                        .unwrap_or(s1.as_ref())
-                } else {
-                    s1.as_ref()
-                };
-
-                let name2 = if s2.starts_with("##") {
-                    s2.strip_prefix("##")
-                        .and_then(|s| s.rfind('#').map(|i| &s[..i]))
-                        .unwrap_or(s2.as_ref())
-                } else {
-                    s2.as_ref()
-                };
-
-                name1 == name2
-            }
-            (Pair(p1), Pair(p2)) => {
-                let b1 = p1.borrow();
-                let b2 = p2.borrow();
-                Self::forms_equal_ignoring_gensym(&b1.0, &b2.0)
-                    && Self::forms_equal_ignoring_gensym(&b1.1, &b2.1)
-            }
-            (Vector(v1), Vector(v2)) => {
-                v1.borrow().len() == v2.borrow().len()
-                    && v1
-                        .borrow()
-                        .iter()
-                        .zip(v2.borrow().iter())
-                        .all(|(a, b)| Self::forms_equal_ignoring_gensym(a, b))
-            }
-            (Null, Null) => true,
-            (Boolean(b1), Boolean(b2)) => b1 == b2,
-            (Integer(i1), Integer(i2)) => i1 == i2,
-            (BigInteger(bi1), BigInteger(bi2)) => bi1 == bi2,
-            (Rational(r1), Rational(r2)) => r1 == r2,
-            (Real(f1), Real(f2)) => (f1 - f2).abs() < f64::EPSILON,
-            (Complex(parts1), Complex(parts2)) => {
-                let (ref r1, ref i1) = **parts1;
-                let (ref r2, ref i2) = **parts2;
-                Self::forms_equal_ignoring_gensym(r1, r2)
-                    && Self::forms_equal_ignoring_gensym(i1, i2)
-            }
-            (String(s1), String(s2)) => *s1.borrow() == *s2.borrow(),
-            (Character(c1), Character(c2)) => c1 == c2,
-            _ => false,
-        }
+        // Format TaggedValue directly for display
+        Ok(patina_core::format_tagged(expanded_tv, &heap.borrow()))
     }
 }
 

@@ -1,8 +1,7 @@
-// DesugarError contains Value which is large, but boxing it would add complexity
-// for minimal benefit in this interpreter context
+// DesugarError is large, but boxing it would add complexity for minimal benefit
 #![allow(clippy::result_large_err)]
 
-//! Desugarer: Transform surface syntax (Value) to core IR (CoreExpr)
+//! Desugarer: Transform surface syntax (TaggedValue) to core IR (CoreExpr)
 //!
 //! This module converts Scheme's surface syntax into a minimal core IR.
 //! It handles the **6 core forms** that cannot be expressed as macros:
@@ -11,7 +10,7 @@
 //! # Architecture
 //!
 //! ```text
-//! Parser → Value → Macro Expander → Value → Desugarer → CoreExpr → Evaluator
+//! Parser → TaggedValue → Macro Expander → TaggedValue → Desugarer → CoreExpr → Evaluator
 //! ```
 //!
 //! # Design Decision: Core Forms Only
@@ -73,8 +72,9 @@ mod utils;
 
 pub use error::{DesugarError, Result};
 
+use patina_core::{SharedHeap, TaggedValue};
 use patina_ir::CoreExpr;
-use patina_runtime::{Environment, ScopeId, ScopeSet, Value};
+use patina_runtime::{Environment, ScopeId, ScopeSet};
 use std::rc::Rc;
 
 /// Desugarer converts Value (surface syntax) to CoreExpr (core IR)
@@ -194,45 +194,6 @@ impl Desugarer {
         self.shadowed_names.contains(name)
     }
 
-    /// Check if a value is a `define-syntax` form
-    /// Returns Some((name, transformer)) if it is, None otherwise
-    fn try_parse_define_syntax(&self, value: &Value) -> Option<(Rc<str>, Value)> {
-        // Must be a list
-        let (car, cdr) = match value {
-            Value::Pair(pair) => {
-                let borrowed = pair.borrow();
-                (borrowed.0.clone(), borrowed.1.clone())
-            }
-            _ => return None,
-        };
-
-        // First element must be 'define-syntax' symbol/identifier
-        let name_str = match &car {
-            Value::Symbol(s) => s.clone(),
-            Value::Identifier(id) => id.name.clone(),
-            _ => return None,
-        };
-
-        if name_str.as_ref() != "define-syntax" {
-            return None;
-        }
-
-        // Parse arguments: (name transformer)
-        let args_vec = utils::list_to_vec(&cdr).ok()?;
-        if args_vec.len() != 2 {
-            return None;
-        }
-
-        // Extract macro name
-        let macro_name = match &args_vec[0] {
-            Value::Symbol(s) => s.clone(),
-            Value::Identifier(id) => id.name.clone(),
-            _ => return None,
-        };
-
-        Some((macro_name, args_vec[1].clone()))
-    }
-
     /// Create a child desugarer with a new environment (for let-syntax bodies)
     ///
     /// This inherits the current shadowed_names and uses the new environment and scopes.
@@ -244,204 +205,217 @@ impl Desugarer {
         }
     }
 
-    /// Desugar a Value (surface syntax) to CoreExpr (core IR)
+    /// Desugar a TaggedValue (surface syntax) to CoreExpr (core IR)
     ///
-    /// This is the main entry point. It handles:
-    /// - Self-evaluating literals
-    /// - Variable references
-    /// - Special forms (core and derived)
-    /// - Function application
-    pub fn desugar(&self, value: &Value) -> Result<CoreExpr> {
-        match value {
-            // Self-evaluating literals
-            Value::Boolean(_)
-            | Value::Integer(_)
-            | Value::BigInteger(_)
-            | Value::Rational(_)
-            | Value::Real(_)
-            | Value::Complex(_)
-            | Value::Character(_)
-            | Value::String(_)
-            | Value::Bytevector(_)
-            | Value::Unspecified => Ok(CoreExpr::Literal(Rc::new(value.clone()))),
-
-            // Variable reference (no scopes for plain symbols)
-            Value::Symbol(s) => Ok(CoreExpr::Var {
-                name: s.clone(),
-                scopes: ScopeSet::new(),
-            }),
-
-            // Identifier with potential hygiene scopes
-            Value::Identifier(id) => Ok(CoreExpr::Var {
-                name: id.name.clone(),
-                scopes: id.scopes.clone(),
-            }),
-
-            // Empty list (unusual in AST, but possible as literal)
-            Value::Null => Ok(CoreExpr::Literal(Rc::new(Value::Null))),
-
-            // Lists - special forms or application
-            Value::Pair(_) => self.desugar_list(value),
-
-            // Vectors - literal
-            Value::Vector(_) => Ok(CoreExpr::Literal(Rc::new(value.clone()))),
-
-            // Runtime-only values should never appear in AST
-            Value::Procedure(_)
-            | Value::Parameter { .. }
-            | Value::Macro(_)
-            | Value::Library(_)
-            | Value::Port(_)
-            | Value::Promise(_)
-            | Value::Eof
-            | Value::Values(_)
-            | Value::LabelPlaceholder(_)
-            | Value::RecordType(_)
-            | Value::Record { .. }
-            | Value::EnvironmentSpecifier { .. }
-            | Value::ContinuationPromptTag(_)
-            | Value::Continuation(_)
-            | Value::Exception(_) => Err(DesugarError::RuntimeValueInAST {
-                value: value.clone(),
-                context: "Cannot desugar runtime-only value".to_string(),
-            }),
+    /// This is the primary entry point for desugaring.
+    ///
+    /// # Arguments
+    /// * `tagged` - The TaggedValue to desugar (from parser output)
+    /// * `shared_heap` - The shared heap containing the TaggedValue's data
+    ///
+    /// # Heap Borrow Management
+    /// This method takes a SharedHeap (Rc<RefCell<Heap>>) instead of &Heap so it
+    /// can manage borrows internally. This allows releasing the immutable borrow
+    /// before operations that need mutable access (like macro expansion).
+    pub fn desugar_tagged(
+        &self,
+        tagged: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        // Immediate values - no heap access needed
+        if tagged.is_fixnum() {
+            return Ok(CoreExpr::Literal(tagged));
         }
+        if tagged.is_char() {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        if tagged == TaggedValue::TRUE || tagged == TaggedValue::FALSE {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        if tagged == TaggedValue::NULL {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        if tagged == TaggedValue::UNSPECIFIED {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        if tagged == TaggedValue::EOF {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+
+        // For heap-dependent operations, borrow the heap
+        let heap = shared_heap.borrow();
+
+        // Symbol - variable reference without scopes
+        if let Some(name) = heap.get_symbol_name(tagged) {
+            return Ok(CoreExpr::Var {
+                name: Rc::from(name),
+                scopes: ScopeSet::new(),
+            });
+        }
+
+        // Identifier - variable reference with scopes (for hygiene)
+        if let Some((name, scopes)) = utils::get_identifier_info(tagged, &heap) {
+            return Ok(CoreExpr::Var { name, scopes });
+        }
+
+        // Native heap types - self-evaluating literals
+        // String - native heap strings now support mutation directly
+        if tagged.is_string() {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        if tagged.is_vector() {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        // Numeric types stored natively on heap
+        if heap.is_complex(tagged) {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        if heap.is_real(tagged) {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        if heap.is_bigint(tagged) {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        if heap.is_rational(tagged) {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+        if heap.is_bytevector(tagged) {
+            return Ok(CoreExpr::Literal(tagged));
+        }
+
+        // Pair - special form or application
+        if tagged.is_pair() {
+            // Drop the borrow before calling desugar_list_tagged
+            // (it will manage its own borrows)
+            drop(heap);
+            return self.desugar_list_tagged(tagged, shared_heap);
+        }
+
+        // All valid AST types should be handled above
+        drop(heap);
+        Err(DesugarError::InvalidSyntax(
+            "Cannot desugar unknown tagged value type".to_string(),
+        ))
     }
 
-    /// Desugar a list (special form or application)
-    fn desugar_list(&self, value: &Value) -> Result<CoreExpr> {
-        // Extract car and cdr
-        let (car, cdr) = match value {
-            Value::Pair(pair) => {
-                let borrowed = pair.borrow();
-                (borrowed.0.clone(), borrowed.1.clone())
-            }
-            _ => return Err(DesugarError::InvalidSyntax("Expected pair".to_string())),
+    /// Desugar a list (TaggedValue pair) - special form or application
+    fn desugar_list_tagged(&self, list: TaggedValue, shared_heap: &SharedHeap) -> Result<CoreExpr> {
+        // Step 1: Get car/cdr (try_pair takes &self)
+        let (car, cdr) = {
+            let heap = shared_heap.borrow();
+            heap.try_pair(list).ok_or_else(|| {
+                DesugarError::InvalidSyntax("Expected a pair in desugar_list_tagged".to_string())
+            })?
         };
+        // Borrow released
 
-        // Extract the operator name and check if it's a macro-introduced keyword
-        // Identifiers with non-empty scopes come from macro templates
-        // Symbols without scopes come from user code
-        let (name, is_macro_introduced) = match &car {
-            Value::Symbol(s) => (Some(s.clone()), false),
-            Value::Identifier(id) => (Some(id.name.clone()), !id.scopes.is_empty()),
-            _ => (None, false),
+        // Step 2: Extract operator name (immutable access only)
+        let (name, is_macro_introduced) = {
+            let heap = shared_heap.borrow();
+            if let Some(s) = heap.get_symbol_name(car) {
+                (Some(Rc::from(s)), false)
+            } else if let Some((id_name, id_scopes)) = utils::get_identifier_info(car, &heap) {
+                (Some(id_name), !id_scopes.is_empty())
+            } else {
+                (None, false)
+            }
         };
+        // Immutable borrow released
 
         // Determine if this name is shadowed by a local binding
-        // Only user code (Symbol) can be shadowed - macro-introduced identifiers
-        // always refer to their original binding
         let is_shadowed = name
             .as_ref()
             .map(|n| !is_macro_introduced && self.is_shadowed(n))
             .unwrap_or(false);
 
-        // MACRO-AWARE DESUGARING: Check if this is a macro call
-        // Rules for when to expand as a macro:
-        // 1. Must have an environment for macro lookup
-        // 2. Must NOT be shadowed by local binding (only applies to user code)
-        // 3. Must actually be bound to a macro in the environment
-        //
-        // Note: Macro-introduced identifiers (is_macro_introduced=true) should
-        // STILL be checked for macros. The macro template's `let` should expand
-        // to the `let` macro, not be treated as a variable.
-        if let (Some(env), Some(sym)) = (&self.env, &name)
-            && !is_shadowed
-            && let Some(Value::Macro(compiled_macro)) = env.get(sym)
-        {
-            // This is a macro! Expand it and recursively desugar the result
-            // Pass shadowed_names and use_site_scopes for literal shadowing check (R7RS 4.3.2)
-            let expanded = patina_macros::expand_macro_with_shadowed(
+        // Step 3: Check for macro (no heap borrow - env.get may access heap internally)
+        let macro_to_expand = if let (Some(env), Some(sym)) = (&self.env, &name) {
+            if !is_shadowed {
+                if let Some(tv) = env.get(sym) {
+                    let heap_ref = env.heap().borrow();
+                    heap_ref.get_macro(tv).cloned()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Handle macro expansion
+        // Uses expand_macro_with_shadowed_tagged which:
+        // - Accepts TaggedValue input directly
+        // - Returns TaggedValue output directly
+        if let Some(compiled_macro) = macro_to_expand {
+            let expanded_tagged = patina_macros::expand_macro_with_shadowed_tagged(
                 &compiled_macro,
-                value,
+                list, // Pass TaggedValue directly
+                shared_heap,
                 &self.shadowed_names,
                 &self.current_scopes,
             )
             .map_err(|e| DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e)))?;
 
-            // Recursively desugar the expanded result
-            return self.desugar(&expanded);
+            // Result is already TaggedValue - continue desugaring
+            return self.desugar_tagged(expanded_tagged, shared_heap);
         }
 
         // Check if it's a core special form
-        // This handles both:
-        // - Symbol("if") from user code (not shadowed)
-        // - Identifier("if", {scopes}) from macro templates
-        if let Some(sym) = &name {
-            // If NOT shadowed, treat as special form
-            // If shadowed (user code with local binding), treat as application
-            if !is_shadowed {
-                match sym.as_ref() {
-                    // The core forms (true special forms, NOT macros)
-                    "quote" => return self.desugar_quote(&cdr),
-                    "quasiquote" => return self.desugar_quasiquote(&cdr),
-                    "lambda" => return self.desugar_lambda(&cdr),
-                    "if" => return self.desugar_if(&cdr),
-                    "set!" => return self.desugar_set(&cdr),
-                    "define" => return self.desugar_define(&cdr),
-                    "define-syntax" => return self.desugar_define_syntax(&cdr),
-                    "import" => return self.desugar_import(&cdr),
-                    // parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
-                    "begin" => return self.desugar_begin(&cdr),
-                    "apply" => return self.desugar_apply(&cdr),
-                    "expand" => return self.desugar_expand(&cdr),
-                    // case-lambda is now a macro via SRFI-16 (lib/scheme/case-lambda-extras.scm)
+        let is_shadowed = name
+            .as_ref()
+            .map(|n| !is_macro_introduced && self.is_shadowed(n))
+            .unwrap_or(false);
 
-                    // Let-syntax forms: compile macros and desugar body
-                    "let-syntax" => return self.desugar_let_syntax(&cdr),
-                    "letrec-syntax" => return self.desugar_letrec_syntax(&cdr),
-
-                    // Conditional expansion (compile-time)
-                    "cond-expand" => return self.desugar_cond_expand(&cdr),
-
-                    // Not a special form - fall through to application
-                    _ => {}
-                }
+        if let Some(sym) = &name
+            && !is_shadowed
+        {
+            match sym.as_ref() {
+                "quote" => return self.desugar_quote_tagged(cdr, shared_heap),
+                "quasiquote" => return self.desugar_quasiquote_tagged(cdr, shared_heap),
+                "lambda" => return self.desugar_lambda_tagged(cdr, shared_heap),
+                "if" => return self.desugar_if_tagged(cdr, shared_heap),
+                "set!" => return self.desugar_set_tagged(cdr, shared_heap),
+                "define" => return self.desugar_define_tagged(cdr, shared_heap),
+                "define-syntax" => return self.desugar_define_syntax_tagged(cdr, shared_heap),
+                "import" => return self.desugar_import_tagged(cdr, shared_heap),
+                "begin" => return self.desugar_begin_tagged(cdr, shared_heap),
+                "apply" => return self.desugar_apply_tagged(cdr, shared_heap),
+                "expand" => return self.desugar_expand_tagged(cdr, shared_heap),
+                "let-syntax" => return self.desugar_let_syntax_tagged(cdr, shared_heap),
+                "letrec-syntax" => return self.desugar_letrec_syntax_tagged(cdr, shared_heap),
+                "cond-expand" => return self.desugar_cond_expand_tagged(cdr, shared_heap),
+                _ => {}
             }
         }
 
-        // Everything else is a procedure application
-        self.desugar_app(value)
+        // Regular application
+        self.desugar_app_tagged(list, shared_heap)
     }
 
-    /// Desugar quote: (quote datum) → Quote(datum)
-    fn desugar_quote(&self, args: &Value) -> Result<CoreExpr> {
-        let datum = utils::expect_one_arg(args, "quote")?;
-        Ok(CoreExpr::Quote(Rc::new(datum.clone())))
-    }
+    /// Desugar lambda using TaggedValue
+    fn desugar_lambda_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
 
-    /// Desugar quasiquote: (quasiquote template) → Quasiquote(template)
-    /// The template is kept as-is (Value), and will be processed by the evaluator
-    /// to handle unquote and unquote-splicing
-    fn desugar_quasiquote(&self, args: &Value) -> Result<CoreExpr> {
-        let template = utils::expect_one_arg(args, "quasiquote")?;
-        Ok(CoreExpr::Quasiquote(Rc::new(template.clone())))
-    }
+        if args_vec.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "lambda requires formals and body".to_string(),
+            ));
+        }
 
-    /// Desugar lambda: (lambda formals body ...) → Lambda { params, body }
-    ///
-    /// ## Hygiene Handling
-    ///
-    /// When parameters come from macro expansion, they carry scope information
-    /// (as `Value::Identifier` with scopes). These scopes are preserved in the
-    /// `ScopedParam` and used at runtime for hygienic binding.
-    ///
-    /// The `binding_scope` field is only used when parameters DON'T have scopes
-    /// (i.e., when they're plain `Symbol`s from non-macro code). For macro-introduced
-    /// parameters, the parameter's own scopes are used instead.
-    ///
-    /// ## Variable Shadowing
-    ///
-    /// Lambda parameters shadow any outer bindings, including macros. When
-    /// desugaring the body, parameter names are added to `shadowed_names` so
-    /// that uses of those names are not treated as macro calls. This enables
-    /// code like `(let ((let odd?)) (let 8))` where the inner `let` should
-    /// call the variable, not expand the `let` macro.
-    fn desugar_lambda(&self, args: &Value) -> Result<CoreExpr> {
-        let (formals, body) = utils::parse_lambda_syntax(args)?;
+        let formals_tv = args_vec[0];
+        let body_tvs: Vec<_> = args_vec[1..].to_vec();
 
-        // Convert formals first to check if they have scopes from macro expansion
-        let params = utils::convert_formals(&formals)?;
+        if body_tvs.is_empty() {
+            return Err(DesugarError::EmptyBody("lambda".to_string()));
+        }
+
+        let params = utils::convert_formals_tagged(formals_tv, shared_heap)?;
 
         // Check if any parameter has scopes from macro expansion
         let has_macro_scopes = match &params {
@@ -460,7 +434,6 @@ impl Desugarer {
         let body_scopes = self.current_scopes.with_scope(binding_scope);
 
         // Extract parameter names for shadowing
-        // These names will not be treated as macro calls in the body
         let param_names = utils::formals_to_names(&params);
 
         // Desugar body with:
@@ -468,11 +441,9 @@ impl Desugarer {
         // 2. Parameter names added to shadowed_names (so they don't trigger macro expansion)
         let body_desugarer = self.with_shadowed_names(param_names, body_scopes.clone());
 
-        // Process body expressions sequentially to handle define-syntax
-        // When we encounter define-syntax, we compile the macro immediately
-        // and update the environment for subsequent expressions
-        let body_exprs =
-            self.desugar_body_with_internal_defines(&body_desugarer, &body, &body_scopes)?;
+        // Desugar body expressions with internal define-syntax handling
+        let body =
+            self.desugar_body_tagged(&body_desugarer, &body_tvs, shared_heap, &body_scopes)?;
 
         // If parameters have macro scopes, set binding_scope to None
         // since we'll use the parameter-specific scopes at runtime.
@@ -485,90 +456,71 @@ impl Desugarer {
 
         Ok(CoreExpr::Lambda {
             params,
-            body: body_exprs,
+            body,
             binding_scope,
         })
     }
 
-    /// Desugar a body that may contain internal define-syntax forms
+    /// Desugar a body that may contain internal define-syntax forms (TaggedValue version)
     ///
-    /// This processes body expressions sequentially. When encountering `define-syntax`,
-    /// it compiles the macro immediately and adds it to the environment so subsequent
-    /// expressions can use it. This is required for code like:
-    ///
-    /// ```scheme
-    /// (let ()
-    ///   (define-syntax my-macro ...)
-    ///   (my-macro ...))  ; Must see my-macro as a macro, not a variable
-    /// ```
-    ///
-    /// This also handles macro-generating macros: when a macro expands to `define-syntax`,
-    /// the resulting macro definition is compiled and added to the environment.
-    ///
-    /// Returns the desugared body expressions (excluding define-syntax forms,
-    /// which are processed but not emitted to CoreExpr).
-    ///
-    /// Note: define-syntax is now compiled immediately by desugar_define_syntax()
-    /// and returns Literal(Unspecified). The macro is installed in the environment
-    /// during desugaring. This function filters out the Unspecified results from
-    /// define-syntax forms to avoid spurious expressions in the body.
-    fn desugar_body_with_internal_defines(
+    /// Matches the behavior of `desugar_body_with_internal_defines`: when encountering
+    /// `define-syntax`, creates a child environment to scope the macro locally instead
+    /// of polluting the global environment.
+    fn desugar_body_tagged(
         &self,
         initial_desugarer: &Desugarer,
-        body: &[Value],
+        body_tvs: &[TaggedValue],
+        shared_heap: &SharedHeap,
         body_scopes: &ScopeSet,
     ) -> Result<Vec<CoreExpr>> {
-        // If we don't have an environment, fall back to simple desugaring
         let env = match &initial_desugarer.env {
             Some(e) => e.clone(),
             None => {
-                return body.iter().map(|e| initial_desugarer.desugar(e)).collect();
+                return body_tvs
+                    .iter()
+                    .map(|tv| initial_desugarer.desugar_tagged(*tv, shared_heap))
+                    .collect();
             }
         };
 
         let mut body_exprs = Vec::new();
         let mut current_env = env.clone();
-        // Create initial desugarer with the environment - with_new_env handles cloning shadowed_names
         let mut current_desugarer = initial_desugarer.with_new_env(env, body_scopes.clone());
 
-        for expr in body {
+        for tv in body_tvs {
             // Check if this is a define-syntax form BEFORE desugaring
-            if let Some((macro_name, transformer)) = self.try_parse_define_syntax(expr) {
+            let define_syntax_info = self.try_parse_define_syntax_tagged(*tv, shared_heap);
+
+            if let Some((macro_name, transformer_tv)) = define_syntax_info {
                 // Compile the macro immediately
-                let compiled_macro = self.compile_syntax_rules_with_scopes(
-                    &transformer,
+                let compiled_macro = self.compile_syntax_rules_tagged(
+                    transformer_tv,
+                    shared_heap,
                     macro_name.clone(),
                     &current_env,
                     body_scopes,
                 )?;
 
-                // Create a new environment with the macro binding
+                // Create a new child environment with the macro binding
                 let new_env = Rc::new(Environment::with_parent(current_env.clone()));
-                new_env.define(
-                    macro_name.to_string(),
-                    Value::Macro(Rc::new(compiled_macro)),
-                );
+                let tv = new_env
+                    .heap()
+                    .borrow_mut()
+                    .alloc_macro(Rc::new(compiled_macro));
+                new_env.define(macro_name.to_string(), tv);
 
-                // Update the current desugarer to use the new environment
-                // with_new_env creates a new Desugarer, no Clone trait needed
                 current_env = new_env.clone();
                 current_desugarer = current_desugarer.with_new_env(new_env, body_scopes.clone());
-
-                // Don't emit anything - macro definition is compile-time only
             } else {
-                // Regular expression - desugar with current environment
-                let desugared = current_desugarer.desugar(expr)?;
+                let desugared = current_desugarer.desugar_tagged(*tv, shared_heap)?;
 
                 // Filter out Literal(Unspecified) from macro definitions
-                // (macro-generating macros also install immediately and return Unspecified)
-                if !matches!(&desugared, CoreExpr::Literal(v) if matches!(v.as_ref(), Value::Unspecified))
-                {
+                if !matches!(&desugared, CoreExpr::Literal(v) if *v == TaggedValue::UNSPECIFIED) {
                     body_exprs.push(desugared);
                 }
             }
         }
 
-        // Body must have at least one non-define-syntax expression
         if body_exprs.is_empty() {
             return Err(DesugarError::InvalidSyntax(
                 "Body must contain at least one expression (not just define-syntax)".to_string(),
@@ -578,25 +530,82 @@ impl Desugarer {
         Ok(body_exprs)
     }
 
-    /// Desugar if: (if test then [else]) → If { test, then, else_ }
-    fn desugar_if(&self, args: &Value) -> Result<CoreExpr> {
-        let args_vec = utils::list_to_vec(args)?;
+    /// Try to parse a TaggedValue as a define-syntax form
+    ///
+    /// Returns (macro_name, transformer_tv) if the TaggedValue is a
+    /// (define-syntax name transformer) form. Works directly with TaggedValue.
+    fn try_parse_define_syntax_tagged(
+        &self,
+        tagged: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Option<(Rc<str>, TaggedValue)> {
+        // Must be a pair
+        if !tagged.is_pair() {
+            return None;
+        }
 
-        match args_vec.as_slice() {
-            [test, then] => {
-                // Two-arg if: (if test then) → (if test then #<unspecified>)
+        let heap = shared_heap.borrow();
+        let (car, cdr) = heap.get_pair(tagged);
+
+        // Check car is "define-syntax"
+        let is_define_syntax = if let Some(s) = heap.get_symbol_name(car) {
+            s == "define-syntax"
+        } else if let Some((name, _)) = utils::get_identifier_info(car, &heap) {
+            name.as_ref() == "define-syntax"
+        } else {
+            false
+        };
+        if !is_define_syntax {
+            return None;
+        }
+
+        // Parse (name transformer) from cdr
+        if !cdr.is_pair() {
+            return None;
+        }
+        let (name_tv, rest) = heap.get_pair(cdr);
+        if !rest.is_pair() {
+            return None;
+        }
+        let (transformer_tv, tail) = heap.get_pair(rest);
+        if tail != TaggedValue::NULL {
+            return None;
+        }
+
+        // Extract macro name
+        let macro_name = if let Some(s) = heap.get_symbol_name(name_tv) {
+            Rc::from(s)
+        } else if let Some((id_name, _)) = utils::get_identifier_info(name_tv, &heap) {
+            id_name
+        } else {
+            return None;
+        };
+
+        Some((macro_name, transformer_tv))
+    }
+
+    /// Desugar if using TaggedValue
+    fn desugar_if_tagged(&self, args: TaggedValue, shared_heap: &SharedHeap) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
+
+        match args_vec.len() {
+            2 => {
+                let test = self.desugar_tagged(args_vec[0], shared_heap)?;
+                let then = self.desugar_tagged(args_vec[1], shared_heap)?;
                 Ok(CoreExpr::If {
-                    test: Rc::new(self.desugar(test)?),
-                    then: Rc::new(self.desugar(then)?),
-                    else_: Rc::new(CoreExpr::Literal(Rc::new(Value::Unspecified))),
+                    test: Rc::new(test),
+                    then: Rc::new(then),
+                    else_: Rc::new(CoreExpr::Literal(TaggedValue::UNSPECIFIED)),
                 })
             }
-            [test, then, else_] => {
-                // Three-arg if: (if test then else)
+            3 => {
+                let test = self.desugar_tagged(args_vec[0], shared_heap)?;
+                let then = self.desugar_tagged(args_vec[1], shared_heap)?;
+                let else_ = self.desugar_tagged(args_vec[2], shared_heap)?;
                 Ok(CoreExpr::If {
-                    test: Rc::new(self.desugar(test)?),
-                    then: Rc::new(self.desugar(then)?),
-                    else_: Rc::new(self.desugar(else_)?),
+                    test: Rc::new(test),
+                    then: Rc::new(then),
+                    else_: Rc::new(else_),
                 })
             }
             _ => Err(DesugarError::WrongArgCount {
@@ -607,114 +616,238 @@ impl Desugarer {
         }
     }
 
-    /// Desugar set!: (set! var value) → Set { var, scopes, value }
-    fn desugar_set(&self, args: &Value) -> Result<CoreExpr> {
-        let (var, value) = utils::expect_two_args(args, "set!")?;
+    /// Desugar set! using TaggedValue
+    fn desugar_set_tagged(&self, args: TaggedValue, shared_heap: &SharedHeap) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
 
-        let desugared_value = Rc::new(self.desugar(&value)?);
-
-        match &var {
-            Value::Symbol(s) => Ok(CoreExpr::Set {
-                var: s.clone(),
-                scopes: ScopeSet::new(),
-                value: desugared_value,
-            }),
-            // Handle hygienic identifiers from macro expansion
-            Value::Identifier(id) => Ok(CoreExpr::Set {
-                var: id.name.clone(),
-                scopes: id.scopes.clone(),
-                value: desugared_value,
-            }),
-            _ => Err(DesugarError::InvalidSyntax(
-                "set! requires a symbol as first argument".to_string(),
-            )),
+        if args_vec.len() != 2 {
+            return Err(DesugarError::WrongArgCount {
+                form: "set!".to_string(),
+                expected: "2".to_string(),
+                got: args_vec.len(),
+            });
         }
+
+        let var_tv = args_vec[0];
+        let (name, scopes) = {
+            let heap = shared_heap.borrow();
+            if let Some(s) = heap.get_symbol_name(var_tv) {
+                (Rc::from(s), ScopeSet::new())
+            } else if let Some((id_name, id_scopes)) = utils::get_identifier_info(var_tv, &heap) {
+                (id_name, id_scopes)
+            } else {
+                return Err(DesugarError::InvalidSyntax(
+                    "set! requires a symbol as first argument".to_string(),
+                ));
+            }
+        };
+
+        let value = self.desugar_tagged(args_vec[1], shared_heap)?;
+
+        Ok(CoreExpr::Set {
+            var: name,
+            scopes,
+            value: Rc::new(value),
+        })
     }
 
-    /// Desugar define: (define var value) or (define (name params...) body...)
-    ///
-    /// Special case: (define () value) - used by define-values with no variables.
-    /// Evaluates value for side effects, returns unspecified.
-    fn desugar_define(&self, args: &Value) -> Result<CoreExpr> {
-        let args_vec = utils::list_to_vec(args)?;
+    /// Desugar define using TaggedValue
+    fn desugar_define_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
 
-        match args_vec.as_slice() {
-            // (define var value)
-            [Value::Symbol(name), value] => Ok(CoreExpr::Define {
-                name: name.clone(),
-                value: Rc::new(self.desugar(value)?),
-            }),
+        if args_vec.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "define requires at least a name".to_string(),
+            ));
+        }
 
-            // Handle hygienic identifiers for variable names
-            [Value::Identifier(id), value] => Ok(CoreExpr::Define {
-                name: id.name.clone(),
-                value: Rc::new(self.desugar(value)?),
-            }),
+        let first = args_vec[0];
 
-            // (define () value) - empty variable list from define-values
-            // Evaluate value for side effects, discard result
-            [Value::Null, value] => {
-                // Transform to: (begin value #<unspecified>)
-                Ok(CoreExpr::Begin(vec![
-                    self.desugar(value)?,
-                    CoreExpr::Literal(Rc::new(Value::Unspecified)),
-                ]))
+        // Check if it's function shorthand: (define (name params...) body...)
+        if first.is_pair() {
+            let (name, formals_tv) = utils::parse_define_function_tagged(first, shared_heap)?;
+            let body_tvs: Vec<_> = args_vec[1..].to_vec();
+
+            if body_tvs.is_empty() {
+                return Err(DesugarError::EmptyBody("define".to_string()));
             }
 
-            // (define (name params...) body...)
-            [Value::Pair(_), body @ ..] => {
-                let (name, params) = utils::parse_define_function(&args_vec[0])?;
+            let params = utils::convert_formals_tagged(formals_tv, shared_heap)?;
 
-                if body.is_empty() {
-                    return Err(DesugarError::EmptyBody("define".to_string()));
-                }
+            // Create body desugarer with shadowed names
+            let param_names = utils::formals_to_names(&params);
+            let body_scopes = self.current_scopes.clone();
+            let body_desugarer = self.with_shadowed_names(param_names, body_scopes);
 
-                // Create a fresh scope for this lambda's bindings
-                // Every lambda gets a scope for proper hygiene
-                let binding_scope = ScopeId::fresh();
-                let body_scopes = self.current_scopes.with_scope(binding_scope);
+            // Create a fresh binding scope for this lambda
+            let binding_scope = ScopeId::fresh();
 
-                // Convert and extract parameter names for shadowing
-                let converted_params = utils::convert_formals(&params)?;
-                let param_names = utils::formals_to_names(&converted_params);
+            let body: Vec<CoreExpr> = body_tvs
+                .iter()
+                .map(|tv| body_desugarer.desugar_tagged(*tv, shared_heap))
+                .collect::<Result<Vec<_>>>()?;
 
-                // Desugar body with the new scope set and shadowed names
-                let body_desugarer = self.with_shadowed_names(param_names, body_scopes);
-
-                let lambda = CoreExpr::Lambda {
-                    params: converted_params,
-                    body: body
-                        .iter()
-                        .map(|e| body_desugarer.desugar(e))
-                        .collect::<Result<_>>()?,
+            return Ok(CoreExpr::Define {
+                name,
+                value: Rc::new(CoreExpr::Lambda {
+                    params,
+                    body,
                     binding_scope: Some(binding_scope),
-                };
-
-                Ok(CoreExpr::Define {
-                    name,
-                    value: Rc::new(lambda),
-                })
-            }
-
-            other => Err(DesugarError::InvalidSyntax(format!(
-                "define requires (define var value) or (define (name ...) body), got {} args with first arg type: {}",
-                other.len(),
-                if other.is_empty() {
-                    "none"
-                } else {
-                    other[0].type_name()
-                }
-            ))),
+                }),
+            });
         }
+
+        // Simple variable define: (define name value)
+        let name = {
+            let heap = shared_heap.borrow();
+            if let Some(s) = heap.get_symbol_name(first) {
+                Rc::from(s)
+            } else if let Some((id_name, _)) = utils::get_identifier_info(first, &heap) {
+                id_name
+            } else {
+                return Err(DesugarError::InvalidSyntax(
+                    "define requires a symbol as first argument".to_string(),
+                ));
+            }
+        };
+
+        if args_vec.len() != 2 {
+            return Err(DesugarError::WrongArgCount {
+                form: "define".to_string(),
+                expected: "2".to_string(),
+                got: args_vec.len(),
+            });
+        }
+
+        let value_tv = args_vec[1];
+        let value = self.desugar_tagged(value_tv, shared_heap)?;
+
+        Ok(CoreExpr::Define {
+            name,
+            value: Rc::new(value),
+        })
     }
 
-    /// Desugar define-syntax: (define-syntax name transformer)
+    /// Desugar begin using TaggedValue
+    fn desugar_begin_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let exprs = utils::list_to_vec_tagged(args, shared_heap)?;
+
+        if exprs.is_empty() {
+            // (begin) with no body is valid in Scheme, returns unspecified
+            return Ok(CoreExpr::Literal(TaggedValue::UNSPECIFIED));
+        }
+
+        let body: Vec<CoreExpr> = exprs
+            .iter()
+            .map(|tv| self.desugar_tagged(*tv, shared_heap))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(CoreExpr::Begin(body))
+    }
+
+    /// Desugar apply using TaggedValue
+    fn desugar_apply_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
+
+        if args_vec.len() < 2 {
+            return Err(DesugarError::WrongArgCount {
+                form: "apply".to_string(),
+                expected: "at least 2".to_string(),
+                got: args_vec.len(),
+            });
+        }
+
+        let func = self.desugar_tagged(args_vec[0], shared_heap)?;
+        let operands: Vec<CoreExpr> = args_vec[1..]
+            .iter()
+            .map(|tv| self.desugar_tagged(*tv, shared_heap))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(CoreExpr::Apply {
+            func: Rc::new(func),
+            args: operands,
+        })
+    }
+
+    /// Desugar application using TaggedValue
+    fn desugar_app_tagged(&self, list: TaggedValue, shared_heap: &SharedHeap) -> Result<CoreExpr> {
+        let exprs = utils::list_to_vec_tagged(list, shared_heap)?;
+
+        if exprs.is_empty() {
+            return Err(DesugarError::InvalidSyntax("Empty application".to_string()));
+        }
+
+        let func = self.desugar_tagged(exprs[0], shared_heap)?;
+        let operands: Vec<CoreExpr> = exprs[1..]
+            .iter()
+            .map(|tv| self.desugar_tagged(*tv, shared_heap))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(CoreExpr::App {
+            func: Rc::new(func),
+            args: operands,
+        })
+    }
+
+    /// Desugar quote using TaggedValue: (quote datum) → Quote(datum)
     ///
-    /// The macro is compiled immediately during desugaring and installed in the
-    /// environment. Returns `CoreExpr::Literal(Unspecified)` since the macro
-    /// definition is a compile-time operation with no runtime effect.
-    fn desugar_define_syntax(&self, args: &Value) -> Result<CoreExpr> {
-        let args_vec = utils::list_to_vec(args)?;
+    /// Strips identifiers to symbols in quoted data (hygiene cleanup).
+    fn desugar_quote_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
+        if args_vec.len() != 1 {
+            return Err(DesugarError::WrongArgCount {
+                form: "quote".to_string(),
+                expected: "1".to_string(),
+                got: args_vec.len(),
+            });
+        }
+        let datum = utils::strip_identifiers_tagged(args_vec[0], shared_heap);
+        Ok(CoreExpr::Quote(datum))
+    }
+
+    /// Desugar quasiquote using TaggedValue: (quasiquote template) → Quasiquote(template)
+    fn desugar_quasiquote_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
+        if args_vec.len() != 1 {
+            return Err(DesugarError::WrongArgCount {
+                form: "quasiquote".to_string(),
+                expected: "1".to_string(),
+                got: args_vec.len(),
+            });
+        }
+        Ok(CoreExpr::Quasiquote(args_vec[0]))
+    }
+
+    /// Desugar define-syntax using TaggedValue
+    ///
+    /// Extracts name and transformer from TaggedValue args. Passes the transformer
+    /// directly as TaggedValue to `compile_syntax_rules_tagged`.
+    fn desugar_define_syntax_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
 
         if args_vec.len() != 2 {
             return Err(DesugarError::InvalidSyntax(
@@ -722,18 +855,19 @@ impl Desugarer {
             ));
         }
 
-        // Extract name - can be Symbol or Identifier (from macro expansion)
-        let name = match &args_vec[0] {
-            Value::Symbol(s) => s.clone(),
-            Value::Identifier(id) => id.name.clone(),
-            _ => {
+        // Extract name from TaggedValue
+        let name = {
+            let heap = shared_heap.borrow();
+            if let Some(s) = heap.get_symbol_name(args_vec[0]) {
+                Rc::from(s)
+            } else if let Some((id_name, _)) = utils::get_identifier_info(args_vec[0], &heap) {
+                id_name
+            } else {
                 return Err(DesugarError::InvalidSyntax(
                     "define-syntax requires (define-syntax name transformer)".to_string(),
                 ));
             }
         };
-
-        let transformer = &args_vec[1];
 
         // Compile macro immediately and install in environment
         let env = self.env.as_ref().ok_or_else(|| {
@@ -742,25 +876,28 @@ impl Desugarer {
             )
         })?;
 
-        let compiled_macro = self.compile_syntax_rules_with_scopes(
-            transformer,
+        let compiled_macro = self.compile_syntax_rules_tagged(
+            args_vec[1],
+            shared_heap,
             name.clone(),
             env,
             &self.current_scopes,
         )?;
 
         // Install in environment
-        env.define(name.to_string(), Value::Macro(Rc::new(compiled_macro)));
+        let tv = env.heap().borrow_mut().alloc_macro(Rc::new(compiled_macro));
+        env.define(name.to_string(), tv);
 
-        // Return unspecified - macro is now in environment
-        Ok(CoreExpr::Literal(Rc::new(Value::Unspecified)))
+        Ok(CoreExpr::Literal(TaggedValue::UNSPECIFIED))
     }
 
-    /// Desugar import: (import import-set ...) → Import { import_sets }
-    fn desugar_import(&self, args: &Value) -> Result<CoreExpr> {
-        // Extract import sets as a vector
-        // Import sets are kept as Values (declarative data, not code to evaluate)
-        let import_sets = utils::list_to_vec(args)?;
+    /// Desugar import using TaggedValue: (import import-set ...) → Import { import_sets }
+    fn desugar_import_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let import_sets = utils::list_to_vec_tagged(args, shared_heap)?;
 
         if import_sets.is_empty() {
             return Err(DesugarError::InvalidSyntax(
@@ -771,99 +908,51 @@ impl Desugarer {
         Ok(CoreExpr::Import { import_sets })
     }
 
-    // Note: parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
-    // The desugar_parameterize function has been removed.
-
-    /// Desugar begin: (begin expr ...) → Begin(exprs)
-    ///
-    /// R7RS allows empty begin: (begin) → #<unspecified>
-    fn desugar_begin(&self, args: &Value) -> Result<CoreExpr> {
-        let exprs = utils::list_to_vec(args)?;
-
-        let core_exprs: Vec<CoreExpr> = exprs
-            .iter()
-            .map(|e| self.desugar(e))
-            .collect::<Result<_>>()?;
-
-        // Special cases:
-        // (begin) → #<unspecified> (R7RS allows this)
-        if core_exprs.is_empty() {
-            return Ok(CoreExpr::Literal(Rc::new(Value::Unspecified)));
+    /// Desugar expand using TaggedValue: (expand expr) → Expand { expr }
+    fn desugar_expand_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
+        if args_vec.len() != 1 {
+            return Err(DesugarError::WrongArgCount {
+                form: "expand".to_string(),
+                expected: "1".to_string(),
+                got: args_vec.len(),
+            });
         }
-
-        // Optimize: (begin expr) → expr
-        if core_exprs.len() == 1 {
-            Ok(core_exprs.into_iter().next().unwrap())
-        } else {
-            Ok(CoreExpr::Begin(core_exprs))
-        }
-    }
-
-    /// Desugar apply: (apply proc arg1 ... argN list) → Apply { func, args }
-    ///
-    /// The last argument is a list that gets spliced as arguments.
-    /// This requires special handling during evaluation.
-    fn desugar_apply(&self, args: &Value) -> Result<CoreExpr> {
-        let exprs = utils::list_to_vec(args)?;
-
-        if exprs.len() < 2 {
-            return Err(DesugarError::InvalidSyntax(
-                "apply requires at least 2 arguments (procedure and list)".to_string(),
-            ));
-        }
-
-        // First argument is the procedure
-        let func = Rc::new(self.desugar(&exprs[0])?);
-
-        // Remaining arguments (including the final list)
-        let args_exprs: Vec<CoreExpr> = exprs[1..]
-            .iter()
-            .map(|e| self.desugar(e))
-            .collect::<Result<_>>()?;
-
-        Ok(CoreExpr::Apply {
-            func,
-            args: args_exprs,
-        })
-    }
-
-    /// Desugar expand: (expand expr) → Expand { expr }
-    ///
-    /// Expand is a Patina debugging extension that shows macro expansion
-    /// without evaluating the result. This is useful for understanding
-    /// macro transformations.
-    fn desugar_expand(&self, args: &Value) -> Result<CoreExpr> {
-        let expr = utils::expect_one_arg(args, "expand")?;
 
         Ok(CoreExpr::Expand {
-            expr: Rc::new(self.desugar(&expr)?),
+            expr: Rc::new(self.desugar_tagged(args_vec[0], shared_heap)?),
         })
     }
 
-    /// Desugar let-syntax: (let-syntax ((name transformer) ...) body ...)
-    ///
-    /// Compiles macros in parent environment, creates extended environment,
-    /// and desugars body in that environment. The result is just the desugared body -
-    /// macros are completely eliminated during desugaring (compile-time only).
-    fn desugar_let_syntax(&self, args: &Value) -> Result<CoreExpr> {
-        self.desugar_let_syntax_impl(args, false)
+    /// Desugar let-syntax using TaggedValue
+    fn desugar_let_syntax_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        self.desugar_let_syntax_impl_tagged(args, shared_heap, false)
     }
 
-    /// Desugar letrec-syntax: (letrec-syntax ((name transformer) ...) body ...)
-    ///
-    /// Compiles macros in new environment (allowing mutual recursion),
-    /// and desugars body in that environment. Macros are eliminated during desugaring.
-    fn desugar_letrec_syntax(&self, args: &Value) -> Result<CoreExpr> {
-        self.desugar_let_syntax_impl(args, true)
+    /// Desugar letrec-syntax using TaggedValue
+    fn desugar_letrec_syntax_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        self.desugar_let_syntax_impl_tagged(args, shared_heap, true)
     }
 
-    /// Common implementation for let-syntax and letrec-syntax
-    ///
-    /// # Arguments
-    /// - `args`: The arguments to let-syntax/letrec-syntax (bindings and body)
-    /// - `is_letrec`: true for letrec-syntax, false for let-syntax
-    fn desugar_let_syntax_impl(&self, args: &Value, is_letrec: bool) -> Result<CoreExpr> {
-        // We need an environment to compile macros
+    /// Common implementation for let-syntax and letrec-syntax using TaggedValue
+    fn desugar_let_syntax_impl_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+        is_letrec: bool,
+    ) -> Result<CoreExpr> {
         let env = self.env.as_ref().ok_or_else(|| {
             DesugarError::InvalidSyntax(
                 "let-syntax requires macro environment (desugarer must be created with with_env)"
@@ -871,66 +960,61 @@ impl Desugarer {
             )
         })?;
 
-        // Create a fresh scope for this let-syntax binding form
-        // This is critical for scope-based hygiene: macros defined here
-        // will capture this scope, allowing free variables to resolve
-        // to definition-time bindings.
         let let_syntax_scope = ScopeId::fresh();
         let definition_scopes = self.current_scopes.with_scope(let_syntax_scope);
 
-        // Parse arguments: (bindings body...)
-        let args_vec = utils::list_to_vec(args)?;
+        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
+
+        let form_name = if is_letrec {
+            "letrec-syntax"
+        } else {
+            "let-syntax"
+        };
 
         if args_vec.len() < 2 {
             return Err(DesugarError::InvalidSyntax(format!(
                 "{} requires bindings and at least one body expression",
-                if is_letrec {
-                    "letrec-syntax"
-                } else {
-                    "let-syntax"
-                }
+                form_name
             )));
         }
 
         // Parse bindings: ((name transformer) ...)
-        let bindings_value = &args_vec[0];
-        let bindings_list = utils::list_to_vec(bindings_value)?;
+        let bindings_list = utils::list_to_vec_tagged(args_vec[0], shared_heap)?;
 
         // Determine compilation environment
-        // - let-syntax: compile in parent environment
-        // - letrec-syntax: compile in new environment (for mutual recursion)
         let compile_env = if is_letrec {
             Rc::new(Environment::with_parent(env.clone()))
         } else {
             env.clone()
         };
 
-        // Compile each macro binding with definition scopes
+        // Compile each macro binding — pass transformer TaggedValue directly
         let mut macro_bindings = Vec::new();
-
-        for binding in bindings_list {
-            let binding_vec = utils::list_to_vec(&binding)?;
+        for binding_tv in bindings_list {
+            let binding_vec = utils::list_to_vec_tagged(binding_tv, shared_heap)?;
             if binding_vec.len() != 2 {
                 return Err(DesugarError::InvalidSyntax(
                     "Each let-syntax binding must be (name transformer)".to_string(),
                 ));
             }
 
-            // Extract name - can be Symbol or Identifier (from macro expansion)
-            let name = match &binding_vec[0] {
-                Value::Symbol(s) => s.clone(),
-                Value::Identifier(id) => id.name.clone(),
-                _ => {
+            let name = {
+                let heap = shared_heap.borrow();
+                if let Some(s) = heap.get_symbol_name(binding_vec[0]) {
+                    Rc::from(s)
+                } else if let Some((id_name, _)) = utils::get_identifier_info(binding_vec[0], &heap)
+                {
+                    id_name
+                } else {
                     return Err(DesugarError::InvalidSyntax(
                         "Macro name must be a symbol".to_string(),
                     ));
                 }
             };
 
-            // Compile transformer using patina_macros with definition scopes
-            let transformer = &binding_vec[1];
-            let compiled_macro = self.compile_syntax_rules_with_scopes(
-                transformer,
+            let compiled_macro = self.compile_syntax_rules_tagged(
+                binding_vec[1],
+                shared_heap,
                 name.clone(),
                 &compile_env,
                 &definition_scopes,
@@ -942,33 +1026,31 @@ impl Desugarer {
         // Create environment with macro bindings
         let body_env = Rc::new(Environment::with_parent(env.clone()));
         for (name, compiled_macro) in macro_bindings {
-            let macro_value = Value::Macro(Rc::new(compiled_macro));
-            body_env.define(name.to_string(), macro_value);
+            let tv = body_env
+                .heap()
+                .borrow_mut()
+                .alloc_macro(Rc::new(compiled_macro));
+            body_env.define(name.to_string(), tv);
         }
 
-        // Create desugarer with extended environment AND scope set
-        // The body sees the let-syntax scope (for bindings introduced by macros)
-        // We use with_new_env to inherit shadowed_names from the parent
         let body_desugarer = self.with_new_env(body_env, definition_scopes.clone());
 
-        // Desugar body expressions in extended environment
-        // Use desugar_body_with_internal_defines to handle:
-        // 1. define-syntax in body (compile macros immediately)
-        // 2. Regular define in body (will need wrapping in lambda for proper scoping)
-        let body = &args_vec[1..];
+        // Get body TaggedValues
+        let body_tvs: Vec<TaggedValue> = args_vec[1..].to_vec();
 
-        // Check if body contains internal defines (not define-syntax)
-        // If so, wrap in lambda for proper R7RS scoping
-        let has_internal_defines = body.iter().any(|e| self.is_regular_define(e));
+        // Check if body contains internal defines
+        let has_internal_defines = body_tvs
+            .iter()
+            .any(|tv| self.is_regular_define_tagged(*tv, shared_heap));
 
         if has_internal_defines {
-            // Wrap body in implicit lambda for proper internal define scoping
-            // (let-syntax () (define x 1) body...) => (let-syntax () ((lambda () (define x 1) body...)))
-            // This ensures internal defines create local bindings, not modify outer scope
-            let desugared_body =
-                self.desugar_body_with_internal_defines(&body_desugarer, body, &definition_scopes)?;
+            let desugared_body = self.desugar_body_tagged(
+                &body_desugarer,
+                &body_tvs,
+                shared_heap,
+                &definition_scopes,
+            )?;
 
-            // Wrap in a lambda call: ((lambda () body...))
             Ok(CoreExpr::App {
                 func: Rc::new(CoreExpr::Lambda {
                     params: patina_ir::Formals::Fixed(vec![]),
@@ -978,12 +1060,13 @@ impl Desugarer {
                 args: vec![],
             })
         } else {
-            // No internal defines - just desugar body with define-syntax handling
-            let desugared_body =
-                self.desugar_body_with_internal_defines(&body_desugarer, body, &definition_scopes)?;
+            let desugared_body = self.desugar_body_tagged(
+                &body_desugarer,
+                &body_tvs,
+                shared_heap,
+                &definition_scopes,
+            )?;
 
-            // Return body as Begin expression
-            // Optimize: single expression doesn't need Begin wrapper
             if desugared_body.len() == 1 {
                 Ok(desugared_body.into_iter().next().unwrap())
             } else {
@@ -992,38 +1075,34 @@ impl Desugarer {
         }
     }
 
-    /// Check if a value is a regular `define` form (not `define-syntax`)
-    fn is_regular_define(&self, value: &Value) -> bool {
-        let (car, _cdr) = match value {
-            Value::Pair(pair) => {
-                let borrowed = pair.borrow();
-                (borrowed.0.clone(), borrowed.1.clone())
+    /// Check if a TaggedValue is a regular `define` form (not `define-syntax`)
+    fn is_regular_define_tagged(&self, tv: TaggedValue, shared_heap: &SharedHeap) -> bool {
+        if !tv.is_pair() {
+            return false;
+        }
+
+        let heap = shared_heap.borrow();
+        if let Some((car, _)) = heap.try_pair(tv) {
+            if let Some(s) = heap.get_symbol_name(car) {
+                return s == "define";
             }
-            _ => return false,
-        };
-
-        let name = match &car {
-            Value::Symbol(s) => s.clone(),
-            Value::Identifier(id) => id.name.clone(),
-            _ => return false,
-        };
-
-        name.as_ref() == "define"
+            if let Some((name, _)) = heap.get_identifier_data_any(car) {
+                return name.as_ref() == "define";
+            }
+        }
+        false
     }
 
-    /// Desugar cond-expand: (cond-expand clause ...)
-    ///
-    /// R7RS §4.2.1: Conditional expansion based on feature requirements.
-    /// This is a compile-time construct - the first matching clause's body
-    /// is expanded and returned; other clauses are discarded.
-    ///
-    /// Each clause is: (<feature-requirement> <expression> ...)
-    /// Special clause: (else <expression> ...) - must be last
-    fn desugar_cond_expand(&self, args: &Value) -> Result<CoreExpr> {
-        use crate::cond_expand::evaluate_feature_requirement;
+    /// Desugar cond-expand using TaggedValue: (cond-expand clause ...)
+    fn desugar_cond_expand_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        use crate::cond_expand::evaluate_feature_requirement_tagged;
         use patina_runtime::features::FeatureRegistry;
 
-        let clauses = utils::list_to_vec(args)?;
+        let clauses = utils::list_to_vec_tagged(args, shared_heap)?;
 
         if clauses.is_empty() {
             return Err(DesugarError::InvalidSyntax(
@@ -1031,21 +1110,12 @@ impl Desugarer {
             ));
         }
 
-        // Get feature registry for evaluating requirements
         let features = FeatureRegistry::new();
 
-        // Callback for checking if a library can be loaded
-        // In expression context, we don't have access to the library loader,
-        // so we use the environment to check if a library is available
-        let can_load_library = |_lib_name: &[String]| {
-            // For now, we can't check library availability in the desugarer
-            // This would require access to the library loader registry
-            // Return false for all library checks
-            false
-        };
+        let can_load_library = |_lib_name: &[String]| false;
 
-        for (i, clause) in clauses.iter().enumerate() {
-            let clause_list = utils::list_to_vec(clause)?;
+        for (i, &clause_tv) in clauses.iter().enumerate() {
+            let clause_list = utils::list_to_vec_tagged(clause_tv, shared_heap)?;
 
             if clause_list.is_empty() {
                 return Err(DesugarError::InvalidSyntax(
@@ -1053,12 +1123,20 @@ impl Desugarer {
                 ));
             }
 
-            let requirement = &clause_list[0];
-            let body = &clause_list[1..];
+            let requirement_tv = clause_list[0];
+            let body_tvs = &clause_list[1..];
 
-            // Check for 'else' clause (must be last)
-            let is_else = matches!(requirement, Value::Symbol(s) if s.as_ref() == "else")
-                || matches!(requirement, Value::Identifier(id) if id.name.as_ref() == "else");
+            // Check for 'else' clause
+            let is_else = {
+                let heap = shared_heap.borrow();
+                if let Some(s) = heap.get_symbol_name(requirement_tv) {
+                    s == "else"
+                } else if let Some((name, _)) = utils::get_identifier_info(requirement_tv, &heap) {
+                    name.as_ref() == "else"
+                } else {
+                    false
+                }
+            };
 
             if is_else {
                 if i != clauses.len() - 1 {
@@ -1066,14 +1144,17 @@ impl Desugarer {
                         "cond-expand: else clause must be last".to_string(),
                     ));
                 }
-
-                // else always matches - desugar the body
-                return self.desugar_cond_expand_body(body);
+                return self.desugar_cond_expand_body_tagged(body_tvs, shared_heap);
             }
 
-            // Evaluate the feature requirement
-            let matches = evaluate_feature_requirement(requirement, &features, &can_load_library)
-                .map_err(|e| {
+            // Evaluate feature requirement directly from TaggedValue
+            let matches = evaluate_feature_requirement_tagged(
+                requirement_tv,
+                shared_heap,
+                &features,
+                &can_load_library,
+            )
+            .map_err(|e| {
                 DesugarError::InvalidSyntax(format!(
                     "cond-expand: invalid feature requirement: {}",
                     e
@@ -1081,31 +1162,30 @@ impl Desugarer {
             })?;
 
             if matches {
-                // This clause matches - desugar the body
-                return self.desugar_cond_expand_body(body);
+                return self.desugar_cond_expand_body_tagged(body_tvs, shared_heap);
             }
         }
 
-        // No clause matched - this is an error per R7RS
         Err(DesugarError::InvalidSyntax(
             "cond-expand: no matching clause".to_string(),
         ))
     }
 
-    /// Desugar the body of a cond-expand clause
-    fn desugar_cond_expand_body(&self, body: &[Value]) -> Result<CoreExpr> {
+    /// Desugar the body of a cond-expand clause (TaggedValue version)
+    fn desugar_cond_expand_body_tagged(
+        &self,
+        body: &[TaggedValue],
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
         if body.is_empty() {
-            // Empty body returns unspecified
-            return Ok(CoreExpr::Literal(Rc::new(Value::Unspecified)));
+            return Ok(CoreExpr::Literal(TaggedValue::UNSPECIFIED));
         }
 
-        // Desugar all body expressions
         let desugared: Vec<CoreExpr> = body
             .iter()
-            .map(|e| self.desugar(e))
+            .map(|tv| self.desugar_tagged(*tv, shared_heap))
             .collect::<Result<_>>()?;
 
-        // Optimize: single expression doesn't need Begin wrapper
         if desugared.len() == 1 {
             Ok(desugared.into_iter().next().unwrap())
         } else {
@@ -1113,21 +1193,22 @@ impl Desugarer {
         }
     }
 
-    /// Compile a syntax-rules transformer with scope set for scope-based hygiene
-    ///
-    /// This version passes the definition scopes to the compiler so that
-    /// free variables in templates carry the correct scope set.
-    fn compile_syntax_rules_with_scopes(
+    // =========================================================================
+    // Shared helpers
+    // =========================================================================
+
+    /// Compile a syntax-rules transformer from TaggedValue with scope-based hygiene
+    fn compile_syntax_rules_tagged(
         &self,
-        expr: &Value,
+        transformer_tv: TaggedValue,
+        shared_heap: &SharedHeap,
         name: Rc<str>,
         env: &Rc<Environment>,
         scopes: &ScopeSet,
     ) -> Result<patina_macros::CompiledMacro> {
         use patina_macros::Compiler;
 
-        // Must be a list starting with 'syntax-rules
-        let list = utils::list_to_vec(expr)?;
+        let list = utils::list_to_vec_tagged(transformer_tv, shared_heap)?;
 
         if list.is_empty() {
             return Err(DesugarError::InvalidSyntax(
@@ -1135,12 +1216,16 @@ impl Desugarer {
             ));
         }
 
-        // Check first element is 'syntax-rules
-        // Can be either Symbol or Identifier (from macro expansion)
-        let is_syntax_rules = match &list[0] {
-            Value::Symbol(s) => s.as_ref() == "syntax-rules",
-            Value::Identifier(id) => id.name.as_ref() == "syntax-rules",
-            _ => false,
+        // Check that first element is "syntax-rules"
+        let is_syntax_rules = {
+            let heap = shared_heap.borrow();
+            if let Some(s) = heap.get_symbol_name(list[0]) {
+                s == "syntax-rules"
+            } else if let Some((name, _)) = utils::get_identifier_info(list[0], &heap) {
+                name.as_ref() == "syntax-rules"
+            } else {
+                false
+            }
         };
         if !is_syntax_rules {
             return Err(DesugarError::InvalidSyntax(
@@ -1154,100 +1239,90 @@ impl Desugarer {
             ));
         }
 
-        // R7RS syntax-rules has two forms:
-        // (syntax-rules (<literal> ...) <rule> ...)
-        // (syntax-rules <ellipsis> (<literal> ...) <rule> ...)
-        //
-        // Detect which form by checking if list[1] is a list (literals) or symbol (custom ellipsis)
-        let (custom_ellipsis, literals_index) = match &list[1] {
-            // If it's a list or null, it's the literals list (standard form)
-            Value::Pair(_) | Value::Null => (None, 1),
-            // If it's a symbol or identifier, it's a custom ellipsis
-            Value::Symbol(s) => (Some(s.clone()), 2),
-            Value::Identifier(id) => (Some(id.name.clone()), 2),
-            _ => {
+        // Check for custom ellipsis: (syntax-rules my-ellipsis (lits...) rules...)
+        let (custom_ellipsis, literals_index) = {
+            let heap = shared_heap.borrow();
+            let second = list[1];
+            if second == TaggedValue::NULL || second.is_pair() {
+                // It's a list (literals list) — no custom ellipsis
+                (None, 1)
+            } else if let Some(s) = heap.get_symbol_name(second) {
+                (Some(Rc::from(s)), 2)
+            } else if let Some((id_name, _)) = utils::get_identifier_info(second, &heap) {
+                (Some(id_name), 2)
+            } else {
                 return Err(DesugarError::InvalidSyntax(
                     "syntax-rules: expected literals list or ellipsis identifier".to_string(),
                 ));
             }
         };
 
-        // Validate we have enough elements for custom ellipsis form
         if custom_ellipsis.is_some() && list.len() < 3 {
             return Err(DesugarError::InvalidSyntax(
                 "syntax-rules with custom ellipsis requires literals and rules".to_string(),
             ));
         }
 
-        // Parse literals: (symbol ...)
-        let literals_value = &list[literals_index];
-        let literals = self.parse_literals_list(literals_value)?;
+        let literals = self.parse_literals_list_tagged(list[literals_index], shared_heap)?;
 
-        // Parse rules as (pattern, template) pairs
+        // Parse rules as (pattern, template) pairs, converting to Value at the boundary
         let rules_start = literals_index + 1;
-        let rules_list = if list.len() > rules_start {
-            // Convert rules Vec back to list Value for parsing
-            utils::vec_to_list(&list[rules_start..])
-        } else {
-            Value::Null
-        };
+        let rules = self.parse_macro_rules_tagged(&list[rules_start..], shared_heap)?;
 
-        let rules = self.parse_macro_rules(&rules_list)?;
-
-        // Compile using Compiler with environment, scope set, AND shadowed names for
-        // correct bound-identifier=? semantics. The shadowed_names enables literals
-        // that refer to enclosing lambda parameters to be treated as "bound".
         let mut compiler = Compiler::with_env_scopes_and_shadowed(
             literals,
             custom_ellipsis,
             env.clone(),
             scopes.clone(),
             &self.shadowed_names,
+            env.heap().clone(),
         );
         compiler
             .compile_macro(name, rules)
             .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
     }
 
-    /// Parse the literals list: (lit1 lit2 ...)
-    fn parse_literals_list(&self, expr: &Value) -> Result<Vec<Rc<str>>> {
+    /// Parse the literals list from TaggedValue: (lit1 lit2 ...)
+    fn parse_literals_list_tagged(
+        &self,
+        literals_tv: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<Vec<Rc<str>>> {
+        let items = utils::list_to_vec_tagged(literals_tv, shared_heap)?;
+        let heap = shared_heap.borrow();
         let mut literals = Vec::new();
-        let mut current = expr.clone();
-
-        while let Value::Pair(pair) = current {
-            let pair_ref = pair.borrow();
-            // Accept both Symbol and Identifier (from macro expansion)
-            match &pair_ref.0 {
-                Value::Symbol(s) => literals.push(s.clone()),
-                Value::Identifier(id) => literals.push(id.name.clone()),
-                _ => {
-                    return Err(DesugarError::InvalidSyntax(
-                        "syntax-rules literals must be symbols".to_string(),
-                    ));
-                }
+        for item in items {
+            if let Some(s) = heap.get_symbol_name(item) {
+                literals.push(Rc::from(s));
+            } else if let Some((name, _)) = utils::get_identifier_info(item, &heap) {
+                literals.push(name);
+            } else {
+                return Err(DesugarError::InvalidSyntax(
+                    "syntax-rules literals must be symbols".to_string(),
+                ));
             }
-            current = pair_ref.1.clone();
         }
-
-        if !matches!(current, Value::Null) {
-            return Err(DesugarError::InvalidSyntax(
-                "syntax-rules literals must be a proper list".to_string(),
-            ));
-        }
-
         Ok(literals)
     }
 
-    /// Parse macro rules as (pattern, template) pairs
-    fn parse_macro_rules(&self, expr: &Value) -> Result<Vec<(Value, Value)>> {
+    /// Parse macro rules from a slice of TaggedValue
+    ///
+    /// Each rule is a TaggedValue list `(pattern template)`. Returns the
+    /// pattern/template pairs directly as TaggedValue.
+    fn parse_macro_rules_tagged(
+        &self,
+        rules_tvs: &[TaggedValue],
+        shared_heap: &SharedHeap,
+    ) -> Result<Vec<(TaggedValue, TaggedValue)>> {
+        if rules_tvs.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "syntax-rules must have at least one rule".to_string(),
+            ));
+        }
+
         let mut rules = Vec::new();
-        let mut current = expr.clone();
-
-        while let Value::Pair(rule_pair) = current {
-            let rule_pair_ref = rule_pair.borrow();
-
-            // Each rule is (pattern template)
-            let rule_list = utils::list_to_vec(&rule_pair_ref.0)?;
+        for &rule_tv in rules_tvs {
+            let rule_list = utils::list_to_vec_tagged(rule_tv, shared_heap)?;
 
             if rule_list.len() != 2 {
                 return Err(DesugarError::InvalidSyntax(
@@ -1256,45 +1331,10 @@ impl Desugarer {
                 ));
             }
 
-            rules.push((rule_list[0].clone(), rule_list[1].clone()));
-            current = rule_pair_ref.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(DesugarError::InvalidSyntax(
-                "syntax-rules rules must be a proper list".to_string(),
-            ));
-        }
-
-        if rules.is_empty() {
-            return Err(DesugarError::InvalidSyntax(
-                "syntax-rules must have at least one rule".to_string(),
-            ));
+            rules.push((rule_list[0], rule_list[1]));
         }
 
         Ok(rules)
-    }
-
-    /// Desugar application: (func arg1 arg2 ...) → App { func, args }
-    fn desugar_app(&self, value: &Value) -> Result<CoreExpr> {
-        let list = utils::list_to_vec(value)?;
-
-        if list.is_empty() {
-            return Err(DesugarError::InvalidSyntax(
-                "Cannot evaluate empty list".to_string(),
-            ));
-        }
-
-        let func = self.desugar(&list[0])?;
-        let args: Vec<CoreExpr> = list[1..]
-            .iter()
-            .map(|e| self.desugar(e))
-            .collect::<Result<_>>()?;
-
-        Ok(CoreExpr::App {
-            func: Rc::new(func),
-            args,
-        })
     }
 }
 
@@ -1307,9 +1347,27 @@ impl Default for Desugarer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patina_core::Heap;
     use patina_ir::Formals;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// Create a fresh SharedHeap for tests
+    fn test_heap() -> SharedHeap {
+        Rc::new(RefCell::new(Heap::new()))
+    }
+
+    /// Build a proper list of TaggedValues on the heap
+    fn make_list(heap: &SharedHeap, items: &[TaggedValue]) -> TaggedValue {
+        items.iter().rev().fold(TaggedValue::NULL, |acc, tv| {
+            heap.borrow_mut().alloc_pair(*tv, acc)
+        })
+    }
+
+    /// Intern a symbol on the heap
+    fn sym(heap: &SharedHeap, name: &str) -> TaggedValue {
+        heap.borrow_mut().intern_symbol(name)
+    }
 
     // =========================================================================
     // Self-evaluating literals
@@ -1317,11 +1375,12 @@ mod tests {
 
     #[test]
     fn test_desugar_integer() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        let value = Value::Integer(42);
-        let result = desugarer.desugar(&value).unwrap();
+        let tagged = TaggedValue::fixnum(42);
+        let result = desugarer.desugar_tagged(tagged, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Integer(42)));
+            assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 42);
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1329,11 +1388,11 @@ mod tests {
 
     #[test]
     fn test_desugar_boolean() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        let value = Value::Boolean(true);
-        let result = desugarer.desugar(&value).unwrap();
+        let result = desugarer.desugar_tagged(TaggedValue::TRUE, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Boolean(true)));
+            assert_eq!(v, TaggedValue::TRUE);
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1341,11 +1400,12 @@ mod tests {
 
     #[test]
     fn test_desugar_string() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        let value = Value::String(Rc::new(RefCell::new("hello".chars().collect())));
-        let result = desugarer.desugar(&value).unwrap();
+        let tagged = heap.borrow_mut().alloc_string("hello".to_string());
+        let result = desugarer.desugar_tagged(tagged, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::String(_)));
+            assert!(!v.is_immediate());
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1353,11 +1413,12 @@ mod tests {
 
     #[test]
     fn test_desugar_character() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        let value = Value::Character('a');
-        let result = desugarer.desugar(&value).unwrap();
+        let tagged = TaggedValue::character('a');
+        let result = desugarer.desugar_tagged(tagged, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Character('a')));
+            assert!(v.is_char() && v.as_char_unchecked() == 'a');
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1369,10 +1430,10 @@ mod tests {
 
     #[test]
     fn test_desugar_variable() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        let value = Value::symbol("x");
-        let result = desugarer.desugar(&value).unwrap();
-
+        let x = sym(&heap, "x");
+        let result = desugarer.desugar_tagged(x, &heap).unwrap();
         if let CoreExpr::Var { name, scopes } = result {
             assert_eq!(name.as_ref(), "x");
             assert!(scopes.is_empty());
@@ -1387,13 +1448,12 @@ mod tests {
 
     #[test]
     fn test_desugar_quote_symbol() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        // (quote x)
-        let list = utils::vec_to_list(&[Value::symbol("quote"), Value::symbol("x")]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let list = make_list(&heap, &[sym(&heap, "quote"), sym(&heap, "x")]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Quote(val) = result {
-            assert!(matches!(val.as_ref(), Value::Symbol(_)));
+            assert!(!val.is_immediate());
         } else {
             panic!("Expected Quote, got {:?}", result);
         }
@@ -1401,14 +1461,18 @@ mod tests {
 
     #[test]
     fn test_desugar_quote_list() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        // (quote (1 2 3))
-        let list = utils::vec_to_list(&[
-            Value::symbol("quote"),
-            utils::vec_to_list(&[Value::Integer(1), Value::Integer(2), Value::Integer(3)]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let inner = make_list(
+            &heap,
+            &[
+                TaggedValue::fixnum(1),
+                TaggedValue::fixnum(2),
+                TaggedValue::fixnum(3),
+            ],
+        );
+        let list = make_list(&heap, &[sym(&heap, "quote"), inner]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         assert!(matches!(result, CoreExpr::Quote(_)));
     }
 
@@ -1418,15 +1482,13 @@ mod tests {
 
     #[test]
     fn test_desugar_lambda_fixed_params() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (lambda (x y) (+ x y))
-        let list = utils::vec_to_list(&[
-            Value::symbol("lambda"),
-            utils::vec_to_list(&[Value::symbol("x"), Value::symbol("y")]),
-            utils::vec_to_list(&[Value::symbol("+"), Value::symbol("x"), Value::symbol("y")]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let params = make_list(&heap, &[sym(&heap, "x"), sym(&heap, "y")]);
+        let body = make_list(&heap, &[sym(&heap, "+"), sym(&heap, "x"), sym(&heap, "y")]);
+        let list = make_list(&heap, &[sym(&heap, "lambda"), params, body]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Lambda { params, body, .. } = result {
             assert!(matches!(params, Formals::Fixed(_)));
             assert_eq!(body.len(), 1);
@@ -1437,15 +1499,12 @@ mod tests {
 
     #[test]
     fn test_desugar_lambda_variadic() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (lambda args (car args))
-        let list = utils::vec_to_list(&[
-            Value::symbol("lambda"),
-            Value::symbol("args"),
-            utils::vec_to_list(&[Value::symbol("car"), Value::symbol("args")]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let body = make_list(&heap, &[sym(&heap, "car"), sym(&heap, "args")]);
+        let list = make_list(&heap, &[sym(&heap, "lambda"), sym(&heap, "args"), body]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Lambda { params, body, .. } = result {
             assert!(matches!(params, Formals::Variadic(_)));
             assert_eq!(body.len(), 1);
@@ -1456,19 +1515,16 @@ mod tests {
 
     #[test]
     fn test_desugar_lambda_rest_params() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        // (lambda (x y . rest) x)
-        let formals = Value::Pair(Rc::new(RefCell::new((
-            Value::symbol("x"),
-            Value::Pair(Rc::new(RefCell::new((
-                Value::symbol("y"),
-                Value::symbol("rest"), // Dotted pair
-            )))),
-        ))));
-
-        let list = utils::vec_to_list(&[Value::symbol("lambda"), formals, Value::symbol("x")]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        // (lambda (x y . rest) x) — improper list formals
+        let rest = sym(&heap, "rest");
+        let y = sym(&heap, "y");
+        let y_rest = heap.borrow_mut().alloc_pair(y, rest);
+        let x = sym(&heap, "x");
+        let formals = heap.borrow_mut().alloc_pair(x, y_rest);
+        let list = make_list(&heap, &[sym(&heap, "lambda"), formals, sym(&heap, "x")]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Lambda { params, .. } = result {
             assert!(matches!(params, Formals::Mixed { .. }));
         } else {
@@ -1482,32 +1538,27 @@ mod tests {
 
     #[test]
     fn test_desugar_if_three_args() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (if #t 1 2)
-        let list = utils::vec_to_list(&[
-            Value::symbol("if"),
-            Value::Boolean(true),
-            Value::Integer(1),
-            Value::Integer(2),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let list = make_list(
+            &heap,
+            &[
+                sym(&heap, "if"),
+                TaggedValue::TRUE,
+                TaggedValue::fixnum(1),
+                TaggedValue::fixnum(2),
+            ],
+        );
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::If { test, then, else_ } = result {
-            if let CoreExpr::Literal(v) = &*test {
-                assert!(matches!(v.as_ref(), Value::Boolean(true)));
-            } else {
-                panic!("Expected Literal test");
-            }
-            if let CoreExpr::Literal(v) = &*then {
-                assert!(matches!(v.as_ref(), Value::Integer(1)));
-            } else {
-                panic!("Expected Literal then");
-            }
-            if let CoreExpr::Literal(v) = &*else_ {
-                assert!(matches!(v.as_ref(), Value::Integer(2)));
-            } else {
-                panic!("Expected Literal else");
-            }
+            assert!(matches!(&*test, CoreExpr::Literal(v) if *v == TaggedValue::TRUE));
+            assert!(
+                matches!(&*then, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
+            );
+            assert!(
+                matches!(&*else_, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 2)
+            );
         } else {
             panic!("Expected If, got {:?}", result);
         }
@@ -1515,28 +1566,20 @@ mod tests {
 
     #[test]
     fn test_desugar_if_two_args() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (if #t 1)
-        let list =
-            utils::vec_to_list(&[Value::symbol("if"), Value::Boolean(true), Value::Integer(1)]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let list = make_list(
+            &heap,
+            &[sym(&heap, "if"), TaggedValue::TRUE, TaggedValue::fixnum(1)],
+        );
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::If { test, then, else_ } = result {
-            if let CoreExpr::Literal(v) = &*test {
-                assert!(matches!(v.as_ref(), Value::Boolean(true)));
-            } else {
-                panic!("Expected Literal test");
-            }
-            if let CoreExpr::Literal(v) = &*then {
-                assert!(matches!(v.as_ref(), Value::Integer(1)));
-            } else {
-                panic!("Expected Literal then");
-            }
-            if let CoreExpr::Literal(v) = &*else_ {
-                assert!(matches!(v.as_ref(), Value::Unspecified));
-            } else {
-                panic!("Expected Literal else");
-            }
+            assert!(matches!(&*test, CoreExpr::Literal(v) if *v == TaggedValue::TRUE));
+            assert!(
+                matches!(&*then, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
+            );
+            assert!(matches!(&*else_, CoreExpr::Literal(v) if *v == TaggedValue::UNSPECIFIED));
         } else {
             panic!("Expected If, got {:?}", result);
         }
@@ -1548,23 +1591,20 @@ mod tests {
 
     #[test]
     fn test_desugar_set() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (set! x 42)
-        let list = utils::vec_to_list(&[
-            Value::symbol("set!"),
-            Value::symbol("x"),
-            Value::Integer(42),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let list = make_list(
+            &heap,
+            &[sym(&heap, "set!"), sym(&heap, "x"), TaggedValue::fixnum(42)],
+        );
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Set { var, scopes, value } = result {
             assert_eq!(var.as_ref(), "x");
             assert!(scopes.is_empty());
-            if let CoreExpr::Literal(v) = &*value {
-                assert!(matches!(v.as_ref(), Value::Integer(42)));
-            } else {
-                panic!("Expected Literal value");
-            }
+            assert!(
+                matches!(&*value, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
+            );
         } else {
             panic!("Expected Set, got {:?}", result);
         }
@@ -1572,15 +1612,18 @@ mod tests {
 
     #[test]
     fn test_desugar_set_non_symbol_error() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (set! 123 42) - invalid
-        let list = utils::vec_to_list(&[
-            Value::symbol("set!"),
-            Value::Integer(123),
-            Value::Integer(42),
-        ]);
-
-        let result = desugarer.desugar(&list);
+        let list = make_list(
+            &heap,
+            &[
+                sym(&heap, "set!"),
+                TaggedValue::fixnum(123),
+                TaggedValue::fixnum(42),
+            ],
+        );
+        let result = desugarer.desugar_tagged(list, &heap);
         assert!(result.is_err());
     }
 
@@ -1590,22 +1633,23 @@ mod tests {
 
     #[test]
     fn test_desugar_define_variable() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (define x 42)
-        let list = utils::vec_to_list(&[
-            Value::symbol("define"),
-            Value::symbol("x"),
-            Value::Integer(42),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let list = make_list(
+            &heap,
+            &[
+                sym(&heap, "define"),
+                sym(&heap, "x"),
+                TaggedValue::fixnum(42),
+            ],
+        );
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Define { name, value } = result {
             assert_eq!(name.as_ref(), "x");
-            if let CoreExpr::Literal(v) = &*value {
-                assert!(matches!(v.as_ref(), Value::Integer(42)));
-            } else {
-                panic!("Expected Literal value");
-            }
+            assert!(
+                matches!(&*value, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
+            );
         } else {
             panic!("Expected Define, got {:?}", result);
         }
@@ -1613,15 +1657,16 @@ mod tests {
 
     #[test]
     fn test_desugar_define_function() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (define (add x y) (+ x y))
-        let list = utils::vec_to_list(&[
-            Value::symbol("define"),
-            utils::vec_to_list(&[Value::symbol("add"), Value::symbol("x"), Value::symbol("y")]),
-            utils::vec_to_list(&[Value::symbol("+"), Value::symbol("x"), Value::symbol("y")]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let name_params = make_list(
+            &heap,
+            &[sym(&heap, "add"), sym(&heap, "x"), sym(&heap, "y")],
+        );
+        let body = make_list(&heap, &[sym(&heap, "+"), sym(&heap, "x"), sym(&heap, "y")]);
+        let list = make_list(&heap, &[sym(&heap, "define"), name_params, body]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Define { name, value } = result {
             assert_eq!(name.as_ref(), "add");
             assert!(matches!(*value, CoreExpr::Lambda { .. }));
@@ -1632,29 +1677,21 @@ mod tests {
 
     #[test]
     fn test_desugar_define_variadic() {
-        use std::cell::RefCell;
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        // (define (f . args) args)
-        // This creates an improper list: (f . args)
-        let name_and_params = Value::Pair(Rc::new(RefCell::new((
-            Value::symbol("f"),
-            Value::symbol("args"), // Improper list - directly a symbol
-        ))));
-        let list = utils::vec_to_list(&[
-            Value::symbol("define"),
-            name_and_params,
-            Value::symbol("args"),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        // (define (f . args) args) — improper list
+        let f = sym(&heap, "f");
+        let args_sym = sym(&heap, "args");
+        let name_params = heap.borrow_mut().alloc_pair(f, args_sym);
+        let list = make_list(
+            &heap,
+            &[sym(&heap, "define"), name_params, sym(&heap, "args")],
+        );
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Define { name, value } = result {
             assert_eq!(name.as_ref(), "f");
             if let CoreExpr::Lambda { params, .. } = &*value {
-                assert!(
-                    matches!(params, patina_ir::Formals::Variadic(_)),
-                    "Expected variadic formals, got {:?}",
-                    params
-                );
+                assert!(matches!(params, Formals::Variadic(_)));
             } else {
                 panic!("Expected Lambda, got {:?}", value);
             }
@@ -1665,28 +1702,25 @@ mod tests {
 
     #[test]
     fn test_desugar_define_mixed_variadic() {
-        use std::cell::RefCell;
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        // (define (f x y . rest) rest)
-        // This creates an improper list: (f x y . rest)
-        let inner = Value::Pair(Rc::new(RefCell::new((
-            Value::symbol("y"),
-            Value::symbol("rest"), // Improper tail
-        ))));
-        let middle = Value::Pair(Rc::new(RefCell::new((Value::symbol("x"), inner))));
-        let name_and_params = Value::Pair(Rc::new(RefCell::new((Value::symbol("f"), middle))));
-
-        let list = utils::vec_to_list(&[
-            Value::symbol("define"),
-            name_and_params,
-            Value::symbol("rest"),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        // (define (f x y . rest) rest) — improper list with fixed + rest
+        let y = sym(&heap, "y");
+        let rest = sym(&heap, "rest");
+        let y_rest = heap.borrow_mut().alloc_pair(y, rest);
+        let x = sym(&heap, "x");
+        let x_y_rest = heap.borrow_mut().alloc_pair(x, y_rest);
+        let f = sym(&heap, "f");
+        let name_params = heap.borrow_mut().alloc_pair(f, x_y_rest);
+        let list = make_list(
+            &heap,
+            &[sym(&heap, "define"), name_params, sym(&heap, "rest")],
+        );
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Define { name, value } = result {
             assert_eq!(name.as_ref(), "f");
             if let CoreExpr::Lambda { params, .. } = &*value {
-                if let patina_ir::Formals::Mixed { fixed, rest } = params {
+                if let Formals::Mixed { fixed, rest } = params {
                     assert_eq!(fixed.len(), 2);
                     assert_eq!(fixed[0].name.as_ref(), "x");
                     assert_eq!(fixed[1].name.as_ref(), "y");
@@ -1708,31 +1742,36 @@ mod tests {
 
     #[test]
     fn test_desugar_begin_single_expr() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (begin 42)
-        let list = utils::vec_to_list(&[Value::symbol("begin"), Value::Integer(42)]);
-
-        let result = desugarer.desugar(&list).unwrap();
-        // Single expression should be optimized away
-        if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Integer(42)));
+        let list = make_list(&heap, &[sym(&heap, "begin"), TaggedValue::fixnum(42)]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
+        if let CoreExpr::Begin(exprs) = result {
+            assert_eq!(exprs.len(), 1);
+            assert!(
+                matches!(&exprs[0], CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
+            );
         } else {
-            panic!("Expected Literal, got {:?}", result);
+            panic!("Expected Begin, got {:?}", result);
         }
     }
 
     #[test]
     fn test_desugar_begin_multiple_exprs() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (begin 1 2 3)
-        let list = utils::vec_to_list(&[
-            Value::symbol("begin"),
-            Value::Integer(1),
-            Value::Integer(2),
-            Value::Integer(3),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let list = make_list(
+            &heap,
+            &[
+                sym(&heap, "begin"),
+                TaggedValue::fixnum(1),
+                TaggedValue::fixnum(2),
+                TaggedValue::fixnum(3),
+            ],
+        );
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Begin(exprs) = result {
             assert_eq!(exprs.len(), 3);
         } else {
@@ -1742,13 +1781,13 @@ mod tests {
 
     #[test]
     fn test_desugar_begin_empty() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        // (begin) → #<unspecified> (R7RS allows this)
-        let list = utils::vec_to_list(&[Value::symbol("begin")]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        // (begin) → #<unspecified>
+        let list = make_list(&heap, &[sym(&heap, "begin")]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Unspecified));
+            assert_eq!(v, TaggedValue::UNSPECIFIED);
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1760,11 +1799,18 @@ mod tests {
 
     #[test]
     fn test_desugar_application() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (+ 1 2)
-        let list = utils::vec_to_list(&[Value::symbol("+"), Value::Integer(1), Value::Integer(2)]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let list = make_list(
+            &heap,
+            &[
+                sym(&heap, "+"),
+                TaggedValue::fixnum(1),
+                TaggedValue::fixnum(2),
+            ],
+        );
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::App { func, args } = result {
             assert!(matches!(*func, CoreExpr::Var { .. }));
             assert_eq!(args.len(), 2);
@@ -1775,18 +1821,13 @@ mod tests {
 
     #[test]
     fn test_desugar_lambda_application() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // ((lambda (x) x) 42)
-        let list = utils::vec_to_list(&[
-            utils::vec_to_list(&[
-                Value::symbol("lambda"),
-                utils::vec_to_list(&[Value::symbol("x")]),
-                Value::symbol("x"),
-            ]),
-            Value::Integer(42),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let params = make_list(&heap, &[sym(&heap, "x")]);
+        let lambda = make_list(&heap, &[sym(&heap, "lambda"), params, sym(&heap, "x")]);
+        let list = make_list(&heap, &[lambda, TaggedValue::fixnum(42)]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::App { func, args } = result {
             assert!(matches!(*func, CoreExpr::Lambda { .. }));
             assert_eq!(args.len(), 1);
@@ -1800,21 +1841,12 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_desugar_empty_list_error() {
+    fn test_desugar_empty_list_literal() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        let list = Value::Null;
-        let result = desugarer.desugar(&list);
-        // Empty list as literal is fine
+        // () as a literal is fine (Null)
+        let result = desugarer.desugar_tagged(TaggedValue::NULL, &heap);
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_desugar_runtime_value_error() {
-        let desugarer = Desugarer::new();
-        // Runtime-only values like Eof shouldn't appear in AST
-        let value = Value::Eof;
-        let result = desugarer.desugar(&value);
-        assert!(result.is_err());
     }
 
     // =========================================================================
@@ -1823,16 +1855,14 @@ mod tests {
 
     #[test]
     fn test_cond_expand_r7rs_feature() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand (r7rs 42))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[Value::symbol("r7rs"), Value::Integer(42)]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let clause = make_list(&heap, &[sym(&heap, "r7rs"), TaggedValue::fixnum(42)]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Integer(42)));
+            assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 42);
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1840,34 +1870,27 @@ mod tests {
 
     #[test]
     fn test_cond_expand_patina_feature() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
-        // (cond-expand (patina 'patina-impl))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[
-                Value::symbol("patina"),
-                utils::vec_to_list(&[Value::symbol("quote"), Value::symbol("patina-impl")]),
-            ]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
-        // Should be Quote expression
+        // (cond-expand (patina (quote patina-impl)))
+        let quoted = make_list(&heap, &[sym(&heap, "quote"), sym(&heap, "patina-impl")]);
+        let clause = make_list(&heap, &[sym(&heap, "patina"), quoted]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         assert!(matches!(result, CoreExpr::Quote(_)));
     }
 
     #[test]
     fn test_cond_expand_else_clause() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand (nonexistent 1) (else 99))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[Value::symbol("nonexistent"), Value::Integer(1)]),
-            utils::vec_to_list(&[Value::symbol("else"), Value::Integer(99)]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let c1 = make_list(&heap, &[sym(&heap, "nonexistent"), TaggedValue::fixnum(1)]);
+        let c2 = make_list(&heap, &[sym(&heap, "else"), TaggedValue::fixnum(99)]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), c1, c2]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Integer(99)));
+            assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 99);
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1875,14 +1898,12 @@ mod tests {
 
     #[test]
     fn test_cond_expand_no_match_error() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand (nonexistent 1))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[Value::symbol("nonexistent"), Value::Integer(1)]),
-        ]);
-
-        let result = desugarer.desugar(&list);
+        let clause = make_list(&heap, &[sym(&heap, "nonexistent"), TaggedValue::fixnum(1)]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
+        let result = desugarer.desugar_tagged(list, &heap);
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(err_msg.contains("no matching clause"));
@@ -1890,23 +1911,18 @@ mod tests {
 
     #[test]
     fn test_cond_expand_and_requirement() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand ((and r7rs patina) 100))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[
-                utils::vec_to_list(&[
-                    Value::symbol("and"),
-                    Value::symbol("r7rs"),
-                    Value::symbol("patina"),
-                ]),
-                Value::Integer(100),
-            ]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let req = make_list(
+            &heap,
+            &[sym(&heap, "and"), sym(&heap, "r7rs"), sym(&heap, "patina")],
+        );
+        let clause = make_list(&heap, &[req, TaggedValue::fixnum(100)]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Integer(100)));
+            assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 100);
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1914,23 +1930,22 @@ mod tests {
 
     #[test]
     fn test_cond_expand_or_requirement() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand ((or nonexistent r7rs) 200))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[
-                utils::vec_to_list(&[
-                    Value::symbol("or"),
-                    Value::symbol("nonexistent"),
-                    Value::symbol("r7rs"),
-                ]),
-                Value::Integer(200),
-            ]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let req = make_list(
+            &heap,
+            &[
+                sym(&heap, "or"),
+                sym(&heap, "nonexistent"),
+                sym(&heap, "r7rs"),
+            ],
+        );
+        let clause = make_list(&heap, &[req, TaggedValue::fixnum(200)]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Integer(200)));
+            assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 200);
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1938,19 +1953,15 @@ mod tests {
 
     #[test]
     fn test_cond_expand_not_requirement() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand ((not nonexistent) 300))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[
-                utils::vec_to_list(&[Value::symbol("not"), Value::symbol("nonexistent")]),
-                Value::Integer(300),
-            ]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let req = make_list(&heap, &[sym(&heap, "not"), sym(&heap, "nonexistent")]);
+        let clause = make_list(&heap, &[req, TaggedValue::fixnum(300)]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Integer(300)));
+            assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 300);
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -1958,19 +1969,20 @@ mod tests {
 
     #[test]
     fn test_cond_expand_multiple_expressions() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand (r7rs 1 2 3))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[
-                Value::symbol("r7rs"),
-                Value::Integer(1),
-                Value::Integer(2),
-                Value::Integer(3),
-            ]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let clause = make_list(
+            &heap,
+            &[
+                sym(&heap, "r7rs"),
+                TaggedValue::fixnum(1),
+                TaggedValue::fixnum(2),
+                TaggedValue::fixnum(3),
+            ],
+        );
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Begin(exprs) = result {
             assert_eq!(exprs.len(), 3);
         } else {
@@ -1980,19 +1992,16 @@ mod tests {
 
     #[test]
     fn test_cond_expand_first_match_wins() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand (r7rs 1) (patina 2) (else 3))
-        // r7rs should match first
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[Value::symbol("r7rs"), Value::Integer(1)]),
-            utils::vec_to_list(&[Value::symbol("patina"), Value::Integer(2)]),
-            utils::vec_to_list(&[Value::symbol("else"), Value::Integer(3)]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let c1 = make_list(&heap, &[sym(&heap, "r7rs"), TaggedValue::fixnum(1)]);
+        let c2 = make_list(&heap, &[sym(&heap, "patina"), TaggedValue::fixnum(2)]);
+        let c3 = make_list(&heap, &[sym(&heap, "else"), TaggedValue::fixnum(3)]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), c1, c2, c3]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Integer(1)));
+            assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 1);
         } else {
             panic!("Expected Literal, got {:?}", result);
         }
@@ -2000,15 +2009,13 @@ mod tests {
 
     #[test]
     fn test_cond_expand_else_not_last_error() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand (else 1) (r7rs 2))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[Value::symbol("else"), Value::Integer(1)]),
-            utils::vec_to_list(&[Value::symbol("r7rs"), Value::Integer(2)]),
-        ]);
-
-        let result = desugarer.desugar(&list);
+        let c1 = make_list(&heap, &[sym(&heap, "else"), TaggedValue::fixnum(1)]);
+        let c2 = make_list(&heap, &[sym(&heap, "r7rs"), TaggedValue::fixnum(2)]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), c1, c2]);
+        let result = desugarer.desugar_tagged(list, &heap);
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(err_msg.contains("else clause must be last"));
@@ -2016,16 +2023,14 @@ mod tests {
 
     #[test]
     fn test_cond_expand_empty_body() {
+        let heap = test_heap();
         let desugarer = Desugarer::new();
         // (cond-expand (r7rs))
-        let list = utils::vec_to_list(&[
-            Value::symbol("cond-expand"),
-            utils::vec_to_list(&[Value::symbol("r7rs")]),
-        ]);
-
-        let result = desugarer.desugar(&list).unwrap();
+        let clause = make_list(&heap, &[sym(&heap, "r7rs")]);
+        let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
+        let result = desugarer.desugar_tagged(list, &heap).unwrap();
         if let CoreExpr::Literal(v) = result {
-            assert!(matches!(v.as_ref(), Value::Unspecified));
+            assert_eq!(v, TaggedValue::UNSPECIFIED);
         } else {
             panic!("Expected Literal(Unspecified), got {:?}", result);
         }

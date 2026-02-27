@@ -1,56 +1,13 @@
-//! Clean macro expander interface
+//! Clean macro expander interface and test helpers
 //!
-//! This module provides a trait-based abstraction for macro expansion that:
-//! - Decouples the expansion algorithm from the consumer
-//! - Enables easy testing with test helpers
-//! - Allows swapping implementations (V1 vs V2, experimental algorithms, etc.)
-//! - Provides a unified API for both compiled and interpreted macros
+//! This module provides:
+//! - `TestExpander`: A test helper for creating and testing macros
+//!
+//! The TestExpander uses `patina_macros` for compilation and expansion,
+//! calling `expand_macro_with_shadowed_tagged` (the production TaggedValue path).
 
 use crate::error::MacroError;
-use patina_runtime::Value;
-
-/// Result type for macro expansion operations
-pub type ExpansionResult = Result<Value, MacroError>;
-
-/// Trait for macro expansion engines
-///
-/// Implementations can use different algorithms (pattern matching, procedural, etc.)
-/// but must all implement this common interface.
-pub trait MacroExpander {
-    /// Expand a macro call
-    ///
-    /// # Arguments
-    /// - `macro_form`: The complete macro form including the macro name
-    ///
-    /// # Returns
-    /// The expanded expression, or an error if expansion fails
-    fn expand(&self, macro_form: &Value) -> ExpansionResult;
-
-    /// Get the name of this macro (for error messages)
-    fn name(&self) -> &str;
-}
-
-/// A macro expander created from compiled macro data (V2 PVREF system)
-pub struct CompiledMacroExpander {
-    compiled: super::CompiledMacro,
-}
-
-impl CompiledMacroExpander {
-    /// Create a new expander from compiled macro data
-    pub fn new(compiled: super::CompiledMacro) -> Self {
-        Self { compiled }
-    }
-}
-
-impl MacroExpander for CompiledMacroExpander {
-    fn expand(&self, macro_form: &Value) -> ExpansionResult {
-        super::expand_macro(&self.compiled, macro_form)
-    }
-
-    fn name(&self) -> &str {
-        &self.compiled.name
-    }
-}
+use patina_core::TaggedValue;
 
 /// Test helper for creating macro expanders and testing expansions
 ///
@@ -58,7 +15,7 @@ impl MacroExpander for CompiledMacroExpander {
 /// The implementation and tests are only compiled in test mode.
 #[allow(dead_code)]
 pub struct TestExpander {
-    expander: Box<dyn MacroExpander>,
+    compiled: super::CompiledMacro,
 }
 
 impl TestExpander {
@@ -79,42 +36,30 @@ impl TestExpander {
     #[cfg(test)]
     pub fn from_definition(name: &str, syntax_rules: &str) -> Result<Self, MacroError> {
         use patina_frontend::parser::Parser;
-
-        // Parse the syntax-rules form
-        let mut parser = Parser::new(syntax_rules)
-            .map_err(|e| MacroError::InvalidSyntax(format!("Parse error: {}", e)))?;
-        let syntax_rules_form = parser
-            .parse()
-            .map_err(|e| MacroError::InvalidSyntax(format!("Parse error: {}", e)))?;
-
-        Self::from_syntax_rules_value(name, &syntax_rules_form)
-    }
-
-    /// Create a test expander from a parsed syntax-rules Value
-    ///
-    /// This is the internal implementation shared by from_definition and can be
-    /// used directly when you already have a parsed Value.
-    #[cfg(test)]
-    fn from_syntax_rules_value(name: &str, syntax_rules_form: &Value) -> Result<Self, MacroError> {
-        use super::syntax_rules_parser::parse_syntax_rules;
         use patina_runtime::Environment;
         use std::rc::Rc;
 
-        // Parse the syntax-rules form using shared parser
-        let parsed =
-            parse_syntax_rules(syntax_rules_form).map_err(|e| MacroError::InvalidSyntax(e.0))?;
-
         // Create test environment for macro compilation
         let test_env = Rc::new(Environment::new());
+        let heap = test_env.heap().clone();
 
-        // Compile the macro (with custom ellipsis if SRFI-46)
+        // Parse the syntax-rules form directly to TaggedValue on the macro's heap
+        let mut parser = Parser::new_with_heap(syntax_rules, heap.clone())
+            .map_err(|e| MacroError::InvalidSyntax(format!("Parse error: {}", e)))?;
+        let form_tv = parser
+            .parse()
+            .map_err(|e| MacroError::InvalidSyntax(format!("Parse error: {}", e)))?;
+
+        // Parse the syntax-rules structure using shared parser
+        let parsed = super::syntax_rules_parser::parse_syntax_rules(form_tv, &heap.borrow())
+            .map_err(|e| MacroError::InvalidSyntax(e.0))?;
+
+        // Rules are already Vec<(TaggedValue, TaggedValue)> — pass directly to compiler
         let mut compiler =
-            super::Compiler::with_env(parsed.literals, parsed.custom_ellipsis, test_env);
+            super::Compiler::with_env(parsed.literals, parsed.custom_ellipsis, test_env, heap);
         let compiled = compiler.compile_macro(name.into(), parsed.rules)?;
 
-        Ok(Self {
-            expander: Box::new(CompiledMacroExpander::new(compiled)),
-        })
+        Ok(Self { compiled })
     }
 
     /// Stub for non-test builds
@@ -128,9 +73,7 @@ impl TestExpander {
 
     /// Create a test expander from a compiled macro
     pub fn from_compiled(compiled: super::CompiledMacro) -> Self {
-        Self {
-            expander: Box::new(CompiledMacroExpander::new(compiled)),
-        }
+        Self { compiled }
     }
 
     /// Assert that the given input expands to the expected output
@@ -146,32 +89,41 @@ impl TestExpander {
     pub fn assert_expands_to(&self, input: &str, expected: &str) -> Result<(), String> {
         use patina_frontend::parser::Parser;
 
-        // Parse input
-        let mut parser = Parser::new(input).map_err(|e| format!("Failed to parse input: {}", e))?;
-        let input_form = parser
+        let heap = &self.compiled.heap;
+
+        // Parse input directly to TaggedValue on the macro's heap
+        let mut parser = Parser::new_with_heap(input, heap.clone())
+            .map_err(|e| format!("Failed to parse input: {}", e))?;
+        let input_tv = parser
             .parse()
             .map_err(|e| format!("Failed to parse input: {}", e))?;
 
-        // Parse expected
-        let mut parser =
-            Parser::new(expected).map_err(|e| format!("Failed to parse expected: {}", e))?;
-        let expected_form = parser
+        // Parse expected directly to TaggedValue on the macro's heap
+        let mut parser = Parser::new_with_heap(expected, heap.clone())
+            .map_err(|e| format!("Failed to parse expected: {}", e))?;
+        let expected_tv = parser
             .parse()
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
-        // Expand
-        let expanded = self
-            .expander
-            .expand(&input_form)
-            .map_err(|e| format!("Expansion failed: {}", e))?;
+        // Expand using production TaggedValue path
+        let expanded_tv = super::expand_macro_with_shadowed_tagged(
+            &self.compiled,
+            input_tv,
+            heap,
+            &std::collections::HashSet::new(),
+            &patina_runtime::ScopeSet::new(),
+        )
+        .map_err(|e| format!("Expansion failed: {}", e))?;
 
-        // Compare (ignoring gensym differences)
-        if Self::forms_equal_ignoring_gensym(&expanded, &expected_form) {
+        // Compare TaggedValues directly (ignoring gensym/hygiene differences)
+        if Self::tagged_forms_equal_ignoring_gensym(expanded_tv, expected_tv, &heap.borrow()) {
             Ok(())
         } else {
+            let heap_ref = heap.borrow();
             Err(format!(
                 "Expansion mismatch:\nExpected: {}\nGot:      {}",
-                expected_form, expanded
+                patina_core::format_tagged(expected_tv, &heap_ref),
+                patina_core::format_tagged(expanded_tv, &heap_ref)
             ))
         }
     }
@@ -188,15 +140,24 @@ impl TestExpander {
     pub fn expand_to_string(&self, input: &str) -> Result<String, String> {
         use patina_frontend::parser::Parser;
 
-        let mut parser = Parser::new(input).map_err(|e| format!("Parse error: {}", e))?;
-        let input_form = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
+        let heap = &self.compiled.heap;
 
-        let expanded = self
-            .expander
-            .expand(&input_form)
-            .map_err(|e| format!("Expansion error: {}", e))?;
+        // Parse input directly to TaggedValue on the macro's heap
+        let mut parser = Parser::new_with_heap(input, heap.clone())
+            .map_err(|e| format!("Parse error: {}", e))?;
+        let input_tv = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
 
-        Ok(format!("{}", expanded))
+        // Expand using production TaggedValue path
+        let expanded_tv = super::expand_macro_with_shadowed_tagged(
+            &self.compiled,
+            input_tv,
+            heap,
+            &std::collections::HashSet::new(),
+            &patina_runtime::ScopeSet::new(),
+        )
+        .map_err(|e| format!("Expansion error: {}", e))?;
+
+        Ok(patina_core::format_tagged(expanded_tv, &heap.borrow()))
     }
 
     /// Stub for non-test builds
@@ -206,72 +167,95 @@ impl TestExpander {
         Err("TestExpander::expand_to_string is only available in test builds".to_string())
     }
 
-    /// Check if two forms are equal, ignoring gensym/hygiene differences
+    /// Check if two TaggedValue forms are equal, ignoring gensym/hygiene differences
     ///
     /// This allows comparing macro expansions that contain hygienic identifiers:
     /// - Symbol vs Symbol: compare names (stripping gensym suffixes)
     /// - Identifier vs Identifier: compare names (ignoring scope sets)
     /// - Symbol vs Identifier: compare names (for testing where expected uses Symbols)
     #[allow(dead_code)]
-    fn forms_equal_ignoring_gensym(a: &Value, b: &Value) -> bool {
-        use Value::*;
+    pub fn tagged_forms_equal_ignoring_gensym(
+        a: TaggedValue,
+        b: TaggedValue,
+        heap: &patina_core::Heap,
+    ) -> bool {
+        // Fast path: identical tagged values
+        if a == b {
+            return true;
+        }
 
-        // Helper to extract the base name from a symbol or identifier
-        fn get_base_name(v: &Value) -> Option<&str> {
-            match v {
-                Symbol(s) => {
-                    // Strip gensym suffix (##name#123 -> name)
-                    if s.starts_with("##") {
-                        s.strip_prefix("##")
-                            .and_then(|rest| rest.rfind('#').map(|i| &rest[..i]))
-                    } else {
-                        Some(s.as_ref())
-                    }
+        // Try to compare as identifiers/symbols
+        let a_name = get_base_name_tagged(a, heap);
+        let b_name = get_base_name_tagged(b, heap);
+        if let (Some(n1), Some(n2)) = (&a_name, &b_name) {
+            return n1 == n2;
+        }
+        // If one is an identifier and the other isn't, they're not equal
+        if a_name.is_some() || b_name.is_some() {
+            return false;
+        }
+
+        // Handle pairs
+        if a.is_pair() && b.is_pair() {
+            let (a_car, a_cdr) = heap.get_pair(a);
+            let (b_car, b_cdr) = heap.get_pair(b);
+            return Self::tagged_forms_equal_ignoring_gensym(a_car, b_car, heap)
+                && Self::tagged_forms_equal_ignoring_gensym(a_cdr, b_cdr, heap);
+        }
+
+        // Handle fixnums
+        if let (Some(i1), Some(i2)) = (a.as_fixnum(), b.as_fixnum()) {
+            return i1 == i2;
+        }
+
+        // Handle booleans
+        if a == TaggedValue::TRUE && b == TaggedValue::TRUE {
+            return true;
+        }
+        if a == TaggedValue::FALSE && b == TaggedValue::FALSE {
+            return true;
+        }
+
+        // Handle null
+        if a == TaggedValue::NULL && b == TaggedValue::NULL {
+            return true;
+        }
+
+        // Handle chars
+        if let (Some(c1), Some(c2)) = (a.as_char(), b.as_char()) {
+            return c1 == c2;
+        }
+
+        // Handle vectors
+        if a.is_vector() && b.is_vector() {
+            let a_len = heap.vector_len(a);
+            let b_len = heap.vector_len(b);
+            if a_len != b_len {
+                return false;
+            }
+            for i in 0..a_len {
+                let a_elem = heap.vector_ref(a, i);
+                let b_elem = heap.vector_ref(b, i);
+                if !Self::tagged_forms_equal_ignoring_gensym(a_elem, b_elem, heap) {
+                    return false;
                 }
-                Identifier(id) => Some(id.name.as_ref()),
-                _ => None,
             }
+            return true;
         }
 
-        match (a, b) {
-            // Handle Symbol/Identifier comparisons (both directions)
-            (Symbol(_), Symbol(_))
-            | (Identifier(_), Identifier(_))
-            | (Symbol(_), Identifier(_))
-            | (Identifier(_), Symbol(_)) => match (get_base_name(a), get_base_name(b)) {
-                (Some(n1), Some(n2)) => n1 == n2,
-                _ => false,
-            },
-            (Pair(p1), Pair(p2)) => {
-                let pair1 = p1.borrow();
-                let pair2 = p2.borrow();
-                Self::forms_equal_ignoring_gensym(&pair1.0, &pair2.0)
-                    && Self::forms_equal_ignoring_gensym(&pair1.1, &pair2.1)
-            }
-            (Vector(v1), Vector(v2)) => {
-                v1.borrow().len() == v2.borrow().len()
-                    && v1
-                        .borrow()
-                        .iter()
-                        .zip(v2.borrow().iter())
-                        .all(|(a, b)| Self::forms_equal_ignoring_gensym(a, b))
-            }
-            (Null, Null) => true,
-            (Boolean(b1), Boolean(b2)) => b1 == b2,
-            (Integer(i1), Integer(i2)) => i1 == i2,
-            (BigInteger(bi1), BigInteger(bi2)) => bi1 == bi2,
-            (Rational(r1), Rational(r2)) => r1 == r2,
-            (Real(f1), Real(f2)) => (f1 - f2).abs() < f64::EPSILON,
-            (Complex(parts1), Complex(parts2)) => {
-                let (ref r1, ref i1) = **parts1;
-                let (ref r2, ref i2) = **parts2;
-                Self::forms_equal_ignoring_gensym(r1, r2)
-                    && Self::forms_equal_ignoring_gensym(i1, i2)
-            }
-            (String(s1), String(s2)) => *s1.borrow() == *s2.borrow(),
-            (Character(c1), Character(c2)) => c1 == c2,
-            _ => false,
-        }
+        false
+    }
+}
+
+/// Extract the base name from a TaggedValue symbol or identifier, stripping gensym suffixes
+fn get_base_name_tagged(tv: TaggedValue, heap: &patina_core::Heap) -> Option<String> {
+    let name = heap.get_symbol_or_identifier_name(tv)?;
+    if name.starts_with("##") {
+        // Strip gensym suffix (##name#123 -> name)
+        name.strip_prefix("##")
+            .and_then(|rest| rest.rfind('#').map(|i| rest[..i].to_string()))
+    } else {
+        Some(name.to_string())
     }
 }
 

@@ -9,7 +9,8 @@ use super::CpsEvaluator;
 use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::CpsExpr;
-use patina_core::value::{CpsContinuation, DynamicWindRecord, Value};
+use patina_core::tagged_value::TaggedValue;
+use patina_core::{CpsContinuation, DynamicWindRecord};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -35,13 +36,15 @@ impl<'a> CpsEvaluator<'a> {
         // Run "after" handlers for winds we're leaving (in reverse order)
         // This exits from the innermost to the common ancestor
         for wind in from.iter().skip(common_len).rev() {
-            self.evaluator.apply(wind.after.clone(), vec![], false)?;
+            // Use CPS machinery directly with TaggedValue - no conversion needed
+            self.apply_from_direct_tagged(wind.after, vec![])?;
         }
 
         // Run "before" handlers for winds we're entering
         // This enters from the common ancestor to the target
         for wind in to.iter().skip(common_len) {
-            self.evaluator.apply(wind.before.clone(), vec![], false)?;
+            // Use CPS machinery directly with TaggedValue - no conversion needed
+            self.apply_from_direct_tagged(wind.before, vec![])?;
         }
 
         Ok(())
@@ -53,94 +56,116 @@ impl<'a> CpsEvaluator<'a> {
     /// Otherwise, call the thunk (which may be a CPS lambda) and cache the result.
     pub(super) fn force_promise_cps(
         &self,
-        value: Value,
+        value_tagged: TaggedValue,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
-        match value {
-            Value::Promise(promise_ref) => {
-                let state = promise_ref.borrow();
-                match &*state {
-                    patina_core::value::PromiseState::Forced(v) => {
-                        // Already forced - return cached value
-                        Ok(StepResult::InvokeContinuation {
-                            cont,
-                            value: v.clone(),
-                            env: self.evaluator.global_env.clone(),
-                            cont_env,
-                            prompt_stack,
-                            dynamic_winds,
-                            exception_handlers,
-                        })
-                    }
-                    patina_core::value::PromiseState::Delayed(thunk) => {
-                        // Need to force - call the thunk
-                        let thunk = thunk.clone();
-                        drop(state); // Release borrow before calling
+        let heap = self.evaluator.global_env.heap();
 
-                        // Create a continuation that will cache the result
-                        let force_cont = ContValue::ForceCache {
-                            promise: promise_ref.clone(),
-                            original_cont: Box::new(cont),
-                        };
+        // Try to extract promise from TaggedValue
+        let promise_opt = heap.borrow().get_promise(value_tagged);
 
-                        // Call the thunk with no arguments
-                        Ok(StepResult::ApplyProc {
-                            proc: thunk,
-                            args: vec![],
-                            cont: force_cont,
-                            env: self.evaluator.global_env.clone(),
-                            cont_env,
-                            prompt_stack,
-                            dynamic_winds,
-                            exception_handlers,
-                        })
-                    }
+        if let Some(promise_ref) = promise_opt {
+            let state = promise_ref.borrow();
+            match *state {
+                patina_core::PromiseState::Forced(v_tagged) => {
+                    // Already forced - return cached TaggedValue directly
+                    Ok(StepResult::InvokeContinuation {
+                        cont,
+                        value: v_tagged,
+                        env: self.evaluator.global_env.clone(),
+                        cont_env,
+                        prompt_stack,
+                        dynamic_winds,
+                        exception_handlers,
+                    })
+                }
+                patina_core::PromiseState::Delayed(thunk_tagged) => {
+                    // Need to force - call the thunk
+                    drop(state); // Release borrow before calling
+
+                    // Create a continuation that will cache the result
+                    let force_cont = ContValue::ForceCache {
+                        promise: promise_ref.clone(),
+                        original_cont: Box::new(cont),
+                    };
+
+                    // Thunk is already TaggedValue - use directly
+                    Ok(StepResult::ApplyProc {
+                        proc: thunk_tagged,
+                        args: vec![],
+                        cont: force_cont,
+                        env: self.evaluator.global_env.clone(),
+                        cont_env,
+                        prompt_stack,
+                        dynamic_winds,
+                        exception_handlers,
+                    })
                 }
             }
+        } else {
             // If not a promise, just return the value as-is
             // (make-promise can wrap non-promises)
-            other => Ok(StepResult::InvokeContinuation {
+            Ok(StepResult::InvokeContinuation {
                 cont,
-                value: other,
+                value: value_tagged,
                 env: self.evaluator.global_env.clone(),
                 cont_env,
                 prompt_stack,
                 dynamic_winds,
                 exception_handlers,
-            }),
+            })
         }
     }
 
-    /// Create a delimited continuation value
+    /// Create a delimited continuation value as Rc<CpsContinuation>
     pub(super) fn make_delimited_continuation(
         &self,
         _captured_frames: Vec<PromptFrame>,
         _current_winds: Vec<DynamicWindRecord>,
         _prompt_winds: Vec<DynamicWindRecord>,
-    ) -> Value {
+    ) -> Rc<CpsContinuation> {
         // TODO: Implement proper delimited continuation capture
         // For now, return a placeholder
-        Value::Continuation(Rc::new(CpsContinuation {
-            body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(Rc::new(
-                Value::Unspecified,
-            ))))),
+        Rc::new(CpsContinuation {
+            body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(
+                patina_core::TaggedValue::UNSPECIFIED,
+            )))),
             param: Rc::from("__delimited__"),
             env: self.evaluator.global_env.clone(),
             prompt_tag: None,
             dynamic_winds: vec![],
             captured_cont_bindings: vec![],
-        }))
+        })
+    }
+
+    /// Create a delimited continuation value, returning TaggedValue directly
+    pub(super) fn make_delimited_continuation_tagged(
+        &self,
+        captured_frames: Vec<PromptFrame>,
+        current_winds: Vec<DynamicWindRecord>,
+        prompt_winds: Vec<DynamicWindRecord>,
+    ) -> TaggedValue {
+        let k = self.make_delimited_continuation(captured_frames, current_winds, prompt_winds);
+        self.evaluator
+            .global_env
+            .heap()
+            .borrow_mut()
+            .alloc_continuation(k)
     }
 
     /// Apply a procedure from direct (non-CPS) context
     ///
-    /// This is used when calling a CPS procedure from code that wasn't compiled
-    /// with CPS transformation (e.g., from primitives or library code).
-    pub fn apply_from_direct(&self, proc: Value, args: Vec<Value>) -> Result<Value, EvalError> {
+    /// This is the primary entry point for calling procedures from code that
+    /// wasn't compiled with CPS transformation.
+    pub fn apply_from_direct_tagged(
+        &self,
+        proc: TaggedValue,
+        args: Vec<TaggedValue>,
+    ) -> Result<TaggedValue, EvalError> {
         let env = self.evaluator.global_env.clone();
         let cont_env = HashMap::new();
         let prompt_stack = Vec::new();

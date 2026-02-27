@@ -2,84 +2,108 @@ use super::super::Evaluator;
 use super::super::debug::DebugStage;
 use super::super::error::EvalError;
 use super::registry::PrimitiveRegistry;
-use patina_runtime::value::Value;
+use patina_core::TaggedValue;
 
 /// Register all debug primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
     use super::super::EvalResult;
     use super::registry::PrimitiveFn;
-    use patina_runtime::value::Arity;
+    use patina_runtime::Arity;
 
     // Evaluation debugging primitives
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "patina.debug",
         "debug-enable",
         Arity::Exact(1),
         "Enable debugging for a specific stage (lex, parse, eval, apply, env, expand)",
-        |eval, args, _| debug_enable(eval, args).map(EvalResult::Value),
+        |eval, args, _| debug_enable(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "patina.debug",
         "debug-disable",
         Arity::Exact(1),
         "Disable debugging for a specific stage",
-        |eval, args, _| debug_disable(eval, args).map(EvalResult::Value),
+        |eval, args, _| debug_disable(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "patina.debug",
         "debug-clear",
         Arity::Exact(0),
         "Disable all debugging stages",
-        |eval, args, _| debug_clear(eval, args).map(EvalResult::Value),
+        |eval, args, _| debug_clear(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "patina.debug",
         "debug-status",
         Arity::Exact(0),
         "Return a list of currently enabled debug stages",
-        |eval, args, _| debug_status(eval, args).map(EvalResult::Value),
+        |eval, args, _| debug_status(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "patina.debug",
         "debug-mode",
         Arity::Exact(1),
         "Enable ('on/'all) or disable ('off) all debugging stages",
-        |eval, args, _| debug_mode(eval, args).map(EvalResult::Value),
+        |eval, args, _| debug_mode(eval, args).map(EvalResult::Tagged),
     ));
 
     // Macro expansion debugging (includes hygiene tracing)
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "patina.debug",
         "macro-debug-mode",
         Arity::Exact(1),
         "Control macro expansion and hygiene debugging ('on, 'off, 'status)",
-        |eval, args, _| macro_debug_mode(eval, args).map(EvalResult::Value),
+        |eval, args, _| macro_debug_mode(eval, args).map(EvalResult::Tagged),
     ));
 
     // Type introspection (Patina extension)
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "patina.debug",
         "library?",
         Arity::Exact(1),
         "Returns #t if obj is a library.",
-        |eval, args, _| library_p(eval, args).map(EvalResult::Value),
+        |eval, args, _| library_p(eval, args).map(EvalResult::Tagged),
     ));
 }
 
-pub(super) fn library_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Library(_)))
+pub(super) fn library_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(heap.borrow().is_library(args[0])))
 }
 
-pub(super) fn debug_enable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "debug-enable")?;
+pub(super) fn debug_enable(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    match &args[0] {
-        Value::Symbol(stage_name) => {
-            let stage = match stage_name.as_ref() {
+    let heap = evaluator.global_env.heap();
+    let stage_name = heap
+        .borrow()
+        .get_symbol_name(args[0])
+        .map(|s| s.to_string());
+
+    match stage_name.as_deref() {
+        Some(name) => {
+            let stage = match name {
                 "lex" => DebugStage::Lex,
                 "parse" => DebugStage::Parse,
                 "eval" => DebugStage::Eval,
@@ -89,26 +113,40 @@ pub(super) fn debug_enable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Va
                 _ => {
                     return Err(EvalError::TypeError(format!(
                         "Unknown debug stage: {}. Valid: lex, parse, eval, apply, env, expand",
-                        stage_name
+                        name
                     )));
                 }
             };
 
             evaluator.debug.enable(stage);
-            Ok(Value::Symbol("enabled".into()))
+            Ok(heap.borrow_mut().intern_symbol("enabled"))
         }
-        _ => Err(EvalError::TypeError(
+        None => Err(EvalError::TypeError(
             "debug-enable expects a symbol (lex, parse, eval, apply, env, expand)".to_string(),
         )),
     }
 }
 
-pub(super) fn debug_disable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "debug-disable")?;
+pub(super) fn debug_disable(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    match &args[0] {
-        Value::Symbol(stage_name) => {
-            let stage = match stage_name.as_ref() {
+    let heap = evaluator.global_env.heap();
+    let stage_name = heap
+        .borrow()
+        .get_symbol_name(args[0])
+        .map(|s| s.to_string());
+
+    match stage_name.as_deref() {
+        Some(name) => {
+            let stage = match name {
                 "lex" => DebugStage::Lex,
                 "parse" => DebugStage::Parse,
                 "eval" => DebugStage::Eval,
@@ -118,30 +156,48 @@ pub(super) fn debug_disable(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
                 _ => {
                     return Err(EvalError::TypeError(format!(
                         "Unknown debug stage: {}",
-                        stage_name
+                        name
                     )));
                 }
             };
 
             evaluator.debug.disable(stage);
-            Ok(Value::Symbol("disabled".into()))
+            Ok(heap.borrow_mut().intern_symbol("disabled"))
         }
-        _ => Err(EvalError::TypeError(
+        None => Err(EvalError::TypeError(
             "debug-disable expects a symbol".to_string(),
         )),
     }
 }
 
-pub(super) fn debug_clear(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 0, "debug-clear")?;
+pub(super) fn debug_clear(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if !args.is_empty() {
+        return Err(EvalError::WrongArity {
+            expected: "0".to_string(),
+            actual: args.len(),
+        });
+    }
     evaluator.debug.clear();
-    Ok(Value::Symbol("cleared".into()))
+    let heap = evaluator.global_env.heap();
+    Ok(heap.borrow_mut().intern_symbol("cleared"))
 }
 
-pub(super) fn debug_status(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 0, "debug-status")?;
+pub(super) fn debug_status(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if !args.is_empty() {
+        return Err(EvalError::WrongArity {
+            expected: "0".to_string(),
+            actual: args.len(),
+        });
+    }
 
     let stages = vec!["lex", "parse", "eval", "apply", "env", "expand"];
+    let heap = evaluator.global_env.heap();
     let mut enabled = Vec::new();
 
     for stage_name in stages {
@@ -156,31 +212,43 @@ pub(super) fn debug_status(evaluator: &Evaluator, args: Vec<Value>) -> Result<Va
         };
 
         if evaluator.debug.is_enabled(stage) {
-            enabled.push(Value::Symbol(stage_name.into()));
+            enabled.push(heap.borrow_mut().intern_symbol(stage_name));
         }
     }
 
-    Ok(evaluator.list_from_vec(enabled))
+    Ok(heap.borrow_mut().list_from_iter(enabled))
 }
 
-pub(super) fn debug_mode(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "debug-mode")?;
+pub(super) fn debug_mode(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    match &args[0] {
-        Value::Symbol(mode) => match mode.as_ref() {
-            "on" | "all" => {
-                evaluator.debug.enable_all();
-                Ok(Value::Symbol("all-enabled".into()))
-            }
-            "off" => {
-                evaluator.debug.clear();
-                Ok(Value::Symbol("disabled".into()))
-            }
-            _ => Err(EvalError::TypeError(
-                "debug-mode expects 'on, 'off, or 'all".to_string(),
-            )),
-        },
-        _ => Err(EvalError::TypeError(
+    let heap = evaluator.global_env.heap();
+    let mode = heap
+        .borrow()
+        .get_symbol_name(args[0])
+        .map(|s| s.to_string());
+
+    match mode.as_deref() {
+        Some("on" | "all") => {
+            evaluator.debug.enable_all();
+            Ok(heap.borrow_mut().intern_symbol("all-enabled"))
+        }
+        Some("off") => {
+            evaluator.debug.clear();
+            Ok(heap.borrow_mut().intern_symbol("disabled"))
+        }
+        Some(_) => Err(EvalError::TypeError(
+            "debug-mode expects 'on, 'off, or 'all".to_string(),
+        )),
+        None => Err(EvalError::TypeError(
             "debug-mode expects a symbol".to_string(),
         )),
     }
@@ -188,26 +256,37 @@ pub(super) fn debug_mode(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
 
 pub(super) fn macro_debug_mode(
     evaluator: &Evaluator,
-    args: Vec<Value>,
-) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "macro-debug-mode")?;
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    match &args[0] {
-        Value::Symbol(s) if s.as_ref() == "on" => {
+    let heap = evaluator.global_env.heap();
+    let mode = heap
+        .borrow()
+        .get_symbol_name(args[0])
+        .map(|s| s.to_string());
+
+    match mode.as_deref() {
+        Some("on") => {
             patina_runtime::macro_debug::enable(); // Also enables hygiene_debug
-            Ok(Value::Symbol("macro-debug-enabled".into()))
+            Ok(heap.borrow_mut().intern_symbol("macro-debug-enabled"))
         }
-        Value::Symbol(s) if s.as_ref() == "off" => {
+        Some("off") => {
             patina_runtime::macro_debug::disable(); // Also disables hygiene_debug
-            Ok(Value::Symbol("macro-debug-disabled".into()))
+            Ok(heap.borrow_mut().intern_symbol("macro-debug-disabled"))
         }
-        Value::Symbol(s) if s.as_ref() == "status" => {
+        Some("status") => {
             let status = if patina_runtime::macro_debug::is_enabled() {
                 "enabled"
             } else {
                 "disabled"
             };
-            Ok(Value::Symbol(status.into()))
+            Ok(heap.borrow_mut().intern_symbol(status))
         }
         _ => Err(EvalError::InvalidSyntax(
             "macro-debug-mode expects 'on, 'off, or 'status".to_string(),

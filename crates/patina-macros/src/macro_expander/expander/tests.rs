@@ -2,64 +2,89 @@
 
 use super::*;
 use crate::macro_expander::Identifier;
-use crate::macro_expander::utils::vec_to_list;
-use patina_runtime::{MatchEnv, MatchValue, PVRef, Value};
+use crate::macro_expander::interface::TestExpander;
+use patina_core::{SharedHeap, TaggedValue};
+use patina_runtime::{MatchEnv, MatchValue, PVRef};
+use std::cell::RefCell;
+use std::rc::Rc;
 
-// Use vec_to_list from utils as make_list alias for test readability
-fn make_list(values: Vec<Value>) -> Value {
-    vec_to_list(values)
+/// Helper to create a fixnum TaggedValue for tests
+fn fixnum(n: i64) -> TaggedValue {
+    TaggedValue::fixnum(n)
+}
+
+/// Helper to create an expander with a shared heap for tests
+fn make_test_expander() -> (Expander, SharedHeap) {
+    let shared_heap: SharedHeap = Rc::new(RefCell::new(patina_core::Heap::new()));
+    let macro_scope = patina_runtime::ScopeId::fresh();
+    let expander = Expander::new_with_heap(macro_scope, shared_heap.clone());
+    (expander, shared_heap)
+}
+
+/// Helper to build a TaggedValue list from a Vec
+fn make_list_tagged(values: Vec<TaggedValue>, heap: &SharedHeap) -> TaggedValue {
+    let mut result = TaggedValue::NULL;
+    for value in values.into_iter().rev() {
+        result = heap.borrow_mut().alloc_pair(value, result);
+    }
+    result
+}
+
+/// Helper to intern a symbol on the shared heap
+fn sym(name: &str, heap: &SharedHeap) -> TaggedValue {
+    heap.borrow_mut().intern_symbol(name)
 }
 
 #[test]
 fn test_expand_literal() {
-    let expander = Expander::default();
-    let template = Template::Literal(Value::Integer(42));
+    let (expander, _heap) = make_test_expander();
+    let template = Template::Literal(TaggedValue::fixnum(42));
     let env = MatchEnv::new(0);
 
     let result = expander.expand(&template, &env);
     assert!(result.is_ok());
-    assert_eq!(
-        format!("{:?}", result.unwrap()),
-        format!("{:?}", Value::Integer(42))
-    );
+    let tv = result.unwrap();
+    assert_eq!(tv.as_fixnum(), Some(42));
 }
 
 #[test]
 fn test_expand_symbol() {
-    let expander = Expander::default();
+    let (expander, heap) = make_test_expander();
     let template = Template::Symbol(Identifier::new("if"));
     let env = MatchEnv::new(0);
 
     let result = expander.expand(&template, &env);
     assert!(result.is_ok());
+    let tv = result.unwrap();
     // After hygiene implementation, symbols become Identifiers with scope sets
-    if let Value::Identifier(id) = result.unwrap() {
-        assert_eq!(&*id.name, "if");
-    } else {
-        panic!("Expected Identifier (hygiene-wrapped symbol)");
-    }
-}
-
-#[test]
-fn test_expand_var() {
-    let expander = Expander::default();
-    let pvref = PVRef::new(0, 0);
-    let template = Template::Var(pvref);
-
-    let mut env = MatchEnv::new(1);
-    env.insert(pvref, Value::Integer(42));
-
-    let result = expander.expand(&template, &env);
-    assert!(result.is_ok());
+    let name = heap
+        .borrow()
+        .get_symbol_or_identifier_name(tv)
+        .map(|s| s.to_string());
     assert_eq!(
-        format!("{:?}", result.unwrap()),
-        format!("{:?}", Value::Integer(42))
+        name,
+        Some("if".to_string()),
+        "Expected identifier with name 'if'"
     );
 }
 
 #[test]
+fn test_expand_var() {
+    let (expander, _heap) = make_test_expander();
+    let pvref = PVRef::new(0, 0);
+    let template = Template::Var(pvref);
+
+    let mut env = MatchEnv::new(1);
+    env.insert(pvref, fixnum(42));
+
+    let result = expander.expand(&template, &env);
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().as_fixnum(), Some(42));
+}
+
+#[test]
 fn test_expand_simple_list() {
-    let expander = Expander::default();
+    let (expander, heap) = make_test_expander();
     let x = PVRef::new(0, 0);
     let y = PVRef::new(0, 1);
 
@@ -71,24 +96,23 @@ fn test_expand_simple_list() {
     ]);
 
     let mut env = MatchEnv::new(2);
-    env.insert(x, Value::Integer(1));
-    env.insert(y, Value::Integer(2));
+    env.insert(x, fixnum(1));
+    env.insert(y, fixnum(2));
 
-    let result = expander.expand(&template, &env);
-    assert!(result.is_ok());
+    let result = expander.expand(&template, &env).unwrap();
 
     // Should produce (if 1 2) where 'if' is an Identifier (for hygiene)
-    let expected = make_list(vec![
-        Value::identifier("if"),
-        Value::Integer(1),
-        Value::Integer(2),
-    ]);
-    assert_eq!(format!("{:?}", result.unwrap()), format!("{:?}", expected));
+    let if_sym = sym("if", &heap);
+    let expected = make_list_tagged(vec![if_sym, fixnum(1), fixnum(2)], &heap);
+    assert!(
+        TestExpander::tagged_forms_equal_ignoring_gensym(result, expected, &heap.borrow()),
+        "Expected (if 1 2), got different structure"
+    );
 }
 
 #[test]
 fn test_expand_ellipsis_simple() {
-    let expander = Expander::default();
+    let (expander, heap) = make_test_expander();
     let x = PVRef::new(1, 0);
 
     // Template: (x ...)
@@ -104,27 +128,25 @@ fn test_expand_ellipsis_simple() {
     env.insert_branch(
         x,
         vec![
-            MatchValue::Leaf(Value::Integer(1)),
-            MatchValue::Leaf(Value::Integer(2)),
-            MatchValue::Leaf(Value::Integer(3)),
+            MatchValue::Leaf(fixnum(1)),
+            MatchValue::Leaf(fixnum(2)),
+            MatchValue::Leaf(fixnum(3)),
         ],
     );
 
-    let result = expander.expand(&template, &env);
-    assert!(result.is_ok());
+    let result = expander.expand(&template, &env).unwrap();
 
     // Should produce (1 2 3)
-    let expected = make_list(vec![
-        Value::Integer(1),
-        Value::Integer(2),
-        Value::Integer(3),
-    ]);
-    assert_eq!(format!("{:?}", result.unwrap()), format!("{:?}", expected));
+    let expected = make_list_tagged(vec![fixnum(1), fixnum(2), fixnum(3)], &heap);
+    assert!(
+        heap.borrow().tagged_values_equal(result, expected),
+        "Expected (1 2 3)"
+    );
 }
 
 #[test]
 fn test_expand_ellipsis_with_constant() {
-    let expander = Expander::default();
+    let (expander, heap) = make_test_expander();
     let x = PVRef::new(1, 0);
 
     // Template: ((+ x 1) ...)
@@ -132,7 +154,7 @@ fn test_expand_ellipsis_with_constant() {
         subtemplate: Box::new(Template::List(vec![
             Template::Symbol(Identifier::new("+")),
             Template::Var(x),
-            Template::Literal(Value::Integer(1)),
+            Template::Literal(TaggedValue::fixnum(1)),
         ])),
         level: 1,
         nesting: 1,
@@ -143,33 +165,25 @@ fn test_expand_ellipsis_with_constant() {
     // x has 2 values: 10, 20
     env.insert_branch(
         x,
-        vec![
-            MatchValue::Leaf(Value::Integer(10)),
-            MatchValue::Leaf(Value::Integer(20)),
-        ],
+        vec![MatchValue::Leaf(fixnum(10)), MatchValue::Leaf(fixnum(20))],
     );
 
-    let result = expander.expand(&template, &env);
-    assert!(result.is_ok());
+    let result = expander.expand(&template, &env).unwrap();
 
     // Should produce ((+ 10 1) (+ 20 1)) where + is an Identifier (hygiene)
-    let elem1 = make_list(vec![
-        Value::identifier("+"),
-        Value::Integer(10),
-        Value::Integer(1),
-    ]);
-    let elem2 = make_list(vec![
-        Value::identifier("+"),
-        Value::Integer(20),
-        Value::Integer(1),
-    ]);
-    let expected = make_list(vec![elem1, elem2]);
-    assert_eq!(format!("{:?}", result.unwrap()), format!("{:?}", expected));
+    let plus = sym("+", &heap);
+    let elem1 = make_list_tagged(vec![plus, fixnum(10), fixnum(1)], &heap);
+    let elem2 = make_list_tagged(vec![plus, fixnum(20), fixnum(1)], &heap);
+    let expected = make_list_tagged(vec![elem1, elem2], &heap);
+    assert!(
+        TestExpander::tagged_forms_equal_ignoring_gensym(result, expected, &heap.borrow()),
+        "Expected ((+ 10 1) (+ 20 1))"
+    );
 }
 
 #[test]
 fn test_expand_ellipsis_with_following() {
-    let expander = Expander::default();
+    let (expander, heap) = make_test_expander();
     let x = PVRef::new(1, 0);
     let y = PVRef::new(0, 1);
 
@@ -189,37 +203,25 @@ fn test_expand_ellipsis_with_following() {
     // x has 2 values: 1, 2
     env.insert_branch(
         x,
-        vec![
-            MatchValue::Leaf(Value::Integer(1)),
-            MatchValue::Leaf(Value::Integer(2)),
-        ],
+        vec![MatchValue::Leaf(fixnum(1)), MatchValue::Leaf(fixnum(2))],
     );
     // y is a single value: 99
-    env.insert(y, Value::Integer(99));
+    env.insert(y, fixnum(99));
 
-    let result = expander.expand(&template, &env);
-    assert!(result.is_ok());
+    let result = expander.expand(&template, &env).unwrap();
 
     // Should produce (begin 1 2 99) where 'begin' is an Identifier (for hygiene)
-    let expected = make_list(vec![
-        Value::identifier("begin"),
-        Value::Integer(1),
-        Value::Integer(2),
-        Value::Integer(99),
-    ]);
-    assert_eq!(format!("{:?}", result.unwrap()), format!("{:?}", expected));
+    let begin = sym("begin", &heap);
+    let expected = make_list_tagged(vec![begin, fixnum(1), fixnum(2), fixnum(99)], &heap);
+    assert!(
+        TestExpander::tagged_forms_equal_ignoring_gensym(result, expected, &heap.borrow()),
+        "Expected (begin 1 2 99)"
+    );
 }
 
 #[test]
 fn test_expand_double_ellipsis() {
-    // This tests the do macro use case with BOTH bindings having steps:
-    // Pattern: ((var init step ...) ...)
-    // Template: (loop step ... ...)
-    // Input: ((i 0 (+ i 1)) (j 10 (- j 1)))
-    // Expected: (loop (+ i 1) (- j 1))
-
-    let macro_scope = patina_runtime::ScopeId::fresh();
-    let expander = Expander::new(macro_scope);
+    let (expander, shared_heap) = make_test_expander();
     let step = PVRef::new(2, 0); // level 2 because it's in nested ellipsis
 
     // Template: (loop step ... ...)
@@ -227,7 +229,7 @@ fn test_expand_double_ellipsis() {
         Template::Symbol(Identifier::new("loop")),
         Template::Ellipsis {
             subtemplate: Box::new(Template::Var(step)),
-            level: 1, // ellipsis level is 1 for double ellipsis with level-2 variables
+            level: 1,
             nesting: 2,
             vars: vec![step],
         },
@@ -235,40 +237,23 @@ fn test_expand_double_ellipsis() {
 
     let mut env = MatchEnv::new(1);
 
-    // step is a doubly-nested structure:
-    // Branch([
-    //   Branch([Leaf((+ i 1))]),    // First binding has 1 step
-    //   Branch([Leaf((- j 1))])     // Second binding has 1 step
-    // ])
-    // NOTE: Input values are symbols, but mark_substituted_value converts them to
-    // identifiers with macro_scope when they flow through pattern variables
-    let step_i = make_list(vec![
-        Value::symbol("+"),
-        Value::symbol("i"),
-        Value::Integer(1),
-    ]);
-    let step_j = make_list(vec![
-        Value::symbol("-"),
-        Value::symbol("j"),
-        Value::Integer(1),
-    ]);
-
-    env.insert_branch(
-        step,
-        vec![
-            MatchValue::Branch(vec![MatchValue::Leaf(step_i.clone())]), // i binding: 1 step
-            MatchValue::Branch(vec![MatchValue::Leaf(step_j.clone())]), // j binding: 1 step
-        ],
+    let step_i = make_list_tagged(
+        vec![sym("+", &shared_heap), sym("i", &shared_heap), fixnum(1)],
+        &shared_heap,
+    );
+    let step_j = make_list_tagged(
+        vec![sym("-", &shared_heap), sym("j", &shared_heap), fixnum(1)],
+        &shared_heap,
     );
 
-    let result = expander.expand(&template, &env);
-    assert!(result.is_ok());
-    let result = result.unwrap();
+    // Build inner branches first
+    let inner1 = MatchValue::branch(vec![MatchValue::Leaf(step_i)], env.branches_mut());
+    let inner2 = MatchValue::branch(vec![MatchValue::Leaf(step_j)], env.branches_mut());
+    env.insert_branch(step, vec![inner1, inner2]);
 
-    // Verify structure: (loop <step1> <step2>)
-    // 'loop' is introduced by template
-    // step_i and step_j come from input but get macro_scope added by mark_substituted_value
-    let result_str = format!("{}", result);
+    let result = expander.expand(&template, &env).unwrap();
+
+    let result_str = patina_core::format_tagged(result, &shared_heap.borrow());
     assert!(
         result_str.contains("loop"),
         "Result should contain 'loop': {}",
@@ -288,61 +273,47 @@ fn test_expand_double_ellipsis() {
 
 #[test]
 fn test_expand_double_ellipsis_empty_inner() {
-    // Test case where inner ellipsis has 0 elements for some iterations
-    // Pattern: ((a b ...) ...)
-    // Template: (result b ... ...)
-    // Input: ((x 1 2) (y))
-    // Expected: (result 1 2) - empty inner branch contributes nothing
-
-    let expander = Expander::default();
+    let (expander, heap) = make_test_expander();
     let b = PVRef::new(2, 0);
 
     let template = Template::List(vec![
         Template::Symbol(Identifier::new("result")),
         Template::Ellipsis {
             subtemplate: Box::new(Template::Var(b)),
-            level: 1, // ellipsis level is 1 for double ellipsis with level-2 variables
+            level: 1,
             nesting: 2,
             vars: vec![b],
         },
     ]);
 
     let mut env = MatchEnv::new(1);
-    env.insert_branch(
-        b,
-        vec![
-            MatchValue::Branch(vec![
-                MatchValue::Leaf(Value::Integer(1)),
-                MatchValue::Leaf(Value::Integer(2)),
-            ]), // First group: 2 elements
-            MatchValue::Branch(vec![]), // Second group: 0 elements
-        ],
+    let inner1 = MatchValue::branch(
+        vec![MatchValue::Leaf(fixnum(1)), MatchValue::Leaf(fixnum(2))],
+        env.branches_mut(),
     );
+    let inner2 = MatchValue::branch(vec![], env.branches_mut()); // Empty
+    env.insert_branch(b, vec![inner1, inner2]);
 
-    let result = expander.expand(&template, &env);
-    assert!(result.is_ok());
+    let result = expander.expand(&template, &env).unwrap();
 
     // Should produce (result 1 2) - second group contributes nothing
-    // 'result' is introduced by template (so becomes Identifier)
-    let expected = make_list(vec![
-        Value::identifier("result"),
-        Value::Integer(1),
-        Value::Integer(2),
-    ]);
-
-    assert_eq!(format!("{:?}", result.unwrap()), format!("{:?}", expected));
+    let result_sym = sym("result", &heap);
+    let expected = make_list_tagged(vec![result_sym, fixnum(1), fixnum(2)], &heap);
+    assert!(
+        TestExpander::tagged_forms_equal_ignoring_gensym(result, expected, &heap.borrow()),
+        "Expected (result 1 2)"
+    );
 }
 
 // === Error Condition Tests ===
 
 #[test]
 fn test_error_undefined_variable() {
-    // Template references a variable that's not in the environment
-    let expander = Expander::default();
+    let (expander, _heap) = make_test_expander();
     let x = PVRef::new(0, 5); // Out of bounds!
     let template = Template::Var(x);
 
-    let env = MatchEnv::new(1); // Only has space for 1 var (index 0)
+    let env = MatchEnv::new(1);
 
     let result = expander.expand(&template, &env);
     assert!(result.is_err());
@@ -354,8 +325,7 @@ fn test_error_undefined_variable() {
 
 #[test]
 fn test_error_inconsistent_repetition() {
-    // Two variables in same ellipsis with different repetition counts
-    let expander = Expander::default();
+    let (expander, _heap) = make_test_expander();
     let x = PVRef::new(1, 0);
     let y = PVRef::new(1, 1);
 
@@ -368,22 +338,17 @@ fn test_error_inconsistent_repetition() {
     }]);
 
     let mut env = MatchEnv::new(2);
-    // x has 3 values
     env.insert_branch(
         x,
         vec![
-            MatchValue::Leaf(Value::Integer(1)),
-            MatchValue::Leaf(Value::Integer(2)),
-            MatchValue::Leaf(Value::Integer(3)),
+            MatchValue::Leaf(fixnum(1)),
+            MatchValue::Leaf(fixnum(2)),
+            MatchValue::Leaf(fixnum(3)),
         ],
     );
-    // y has only 2 values - INCONSISTENT!
     env.insert_branch(
         y,
-        vec![
-            MatchValue::Leaf(Value::Integer(10)),
-            MatchValue::Leaf(Value::Integer(20)),
-        ],
+        vec![MatchValue::Leaf(fixnum(10)), MatchValue::Leaf(fixnum(20))],
     );
 
     let result = expander.expand(&template, &env);
@@ -399,14 +364,13 @@ fn test_error_inconsistent_repetition() {
 
 #[test]
 fn test_error_triple_ellipsis_not_supported() {
-    // Triple ellipsis (nesting = 3) should be rejected
-    let expander = Expander::default();
+    let (expander, _heap) = make_test_expander();
     let x = PVRef::new(3, 0);
 
     let template = Template::List(vec![Template::Ellipsis {
         subtemplate: Box::new(Template::Var(x)),
         level: 1,
-        nesting: 3, // Triple ellipsis!
+        nesting: 3,
         vars: vec![x],
     }]);
 
@@ -422,13 +386,12 @@ fn test_error_triple_ellipsis_not_supported() {
 
 #[test]
 fn test_error_double_ellipsis_level_zero() {
-    // Double ellipsis with level 0 is invalid
-    let expander = Expander::default();
+    let (expander, _heap) = make_test_expander();
     let x = PVRef::new(1, 0);
 
     let template = Template::List(vec![Template::Ellipsis {
         subtemplate: Box::new(Template::Var(x)),
-        level: 0, // Level 0 with double ellipsis is invalid!
+        level: 0,
         nesting: 2,
         vars: vec![x],
     }]);
@@ -445,19 +408,14 @@ fn test_error_double_ellipsis_level_zero() {
 
 #[test]
 fn test_error_ellipsis_expands_to_non_list() {
-    // This tests that ellipsis expansion produces a list
-    // Actually, this is hard to trigger with the current implementation
-    // because ellipsis always produces lists. Keeping this as a placeholder
-    // in case we add validation later.
+    // Placeholder - ellipsis always produces lists in the current implementation
 }
 
 #[test]
 fn test_error_level_mismatch_leaf_instead_of_branch() {
-    // Try to expand an ellipsis when the variable is a Leaf instead of Branch
-    let expander = Expander::default();
+    let (expander, _heap) = make_test_expander();
     let x = PVRef::new(1, 0);
 
-    // Template: (x ...)
     let template = Template::List(vec![Template::Ellipsis {
         subtemplate: Box::new(Template::Var(x)),
         level: 1,
@@ -466,12 +424,10 @@ fn test_error_level_mismatch_leaf_instead_of_branch() {
     }]);
 
     let mut env = MatchEnv::new(1);
-    // Insert x as a Leaf instead of Branch - level mismatch!
-    env.insert(x, Value::Integer(42));
+    env.insert(x, fixnum(42));
 
     let result = expander.expand(&template, &env);
     assert!(result.is_err());
-    // This will likely be UndefinedVariable or LevelMismatch
     assert!(
         matches!(
             result.unwrap_err(),
@@ -483,8 +439,7 @@ fn test_error_level_mismatch_leaf_instead_of_branch() {
 
 #[test]
 fn test_error_undefined_in_nested_context() {
-    // Variable undefined in nested ellipsis context (out of bounds)
-    let expander = Expander::default();
+    let (expander, _heap) = make_test_expander();
     let x = PVRef::new(1, 5); // Out of bounds!
 
     let template = Template::List(vec![Template::Ellipsis {
@@ -494,8 +449,7 @@ fn test_error_undefined_in_nested_context() {
         vars: vec![x],
     }]);
 
-    // Create env with limited space
-    let env = MatchEnv::new(1); // Only has space for index 0
+    let env = MatchEnv::new(1);
 
     let result = expander.expand(&template, &env);
     assert!(result.is_err());

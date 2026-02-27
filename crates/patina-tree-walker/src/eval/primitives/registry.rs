@@ -7,8 +7,12 @@
 //! - Centralized primitive management
 
 use super::super::{EvalError, EvalResult, Evaluator};
-use patina_runtime::{Arity, Value};
+use patina_core::TaggedValue;
+use patina_runtime::Arity;
 use std::collections::HashMap;
+
+/// Handler function type for primitives that take `Vec<TaggedValue>` directly
+pub type TaggedHandler = fn(&Evaluator, Vec<TaggedValue>, bool) -> Result<EvalResult, EvalError>;
 
 /// A primitive procedure with full metadata
 ///
@@ -35,51 +39,32 @@ pub struct PrimitiveFn {
     #[allow(dead_code)] // Will be used by future help system
     pub help: &'static str,
 
-    /// The handler function that implements this primitive
-    ///
-    /// Arguments:
-    /// - `&Evaluator`: Access to the evaluator for recursive evaluation
-    /// - `Vec<Value>`: Already-evaluated arguments
-    /// - `bool`: Whether this call is in tail position (for TCO)
-    ///
-    /// Returns:
-    /// - `EvalResult` which can be a value or a tail call
-    pub handler: fn(&Evaluator, Vec<Value>, bool) -> Result<EvalResult, EvalError>,
+    /// The handler function that implements this primitive (takes Vec<TaggedValue>)
+    pub tagged_handler: TaggedHandler,
 }
 
 impl PrimitiveFn {
-    /// Create a new primitive function
+    /// Create a new primitive function with a TaggedValue handler
     ///
     /// # Arguments
     /// * `library` - The library namespace (e.g., "scheme.base")
     /// * `name` - The primitive name (e.g., "+")
     /// * `arity` - Arity specification
     /// * `help` - Help text for documentation
-    /// * `handler` - The implementation function
-    ///
-    /// # Example
-    /// ```ignore
-    /// PrimitiveFn::new(
-    ///     "scheme.base",
-    ///     "+",
-    ///     Arity::Min(0),
-    ///     "Returns the sum of its arguments.",
-    ///     |eval, args, _tail| add(eval, args).map(EvalResult::Value),
-    /// )
-    /// ```
-    pub fn new(
+    /// * `tagged_handler` - The implementation function (takes Vec<TaggedValue>)
+    pub fn new_tagged(
         library: &'static str,
         name: &'static str,
         arity: Arity,
         help: &'static str,
-        handler: fn(&Evaluator, Vec<Value>, bool) -> Result<EvalResult, EvalError>,
+        tagged_handler: TaggedHandler,
     ) -> Self {
         PrimitiveFn {
             library,
             name,
             arity,
             help,
-            handler,
+            tagged_handler,
         }
     }
 
@@ -121,18 +106,15 @@ impl PrimitiveFn {
         Ok(())
     }
 
-    /// Call this primitive with the given arguments
-    pub fn call(
+    /// Call this primitive with TaggedValue arguments
+    pub fn call_tagged(
         &self,
         evaluator: &Evaluator,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         in_tail: bool,
     ) -> Result<EvalResult, EvalError> {
-        // Check arity first
         self.check_arity(args.len())?;
-
-        // Call the handler
-        (self.handler)(evaluator, args, in_tail)
+        (self.tagged_handler)(evaluator, args, in_tail)
     }
 }
 
@@ -267,37 +249,39 @@ impl PrimitiveRegistry {
         self.primitives.values()
     }
 
-    /// Apply a primitive procedure
+    /// Apply a primitive procedure with TaggedValue arguments
     ///
-    /// This is the main entry point for calling primitives through the registry.
-    /// It first tries to look up by qualified name (library/name), then falls
-    /// back to looking up by unqualified name. This allows internal libraries
-    /// to re-export primitives without needing to know the original library.
-    pub fn apply(
+    /// This is the preferred entry point for CPS evaluation. If the primitive has
+    /// a tagged_handler, it's called directly without conversion. Otherwise, args
+    /// are converted to Value and the Value handler is called.
+    pub fn apply_tagged(
         &self,
         qualified_name: &str,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         evaluator: &Evaluator,
         in_tail: bool,
     ) -> Result<EvalResult, EvalError> {
-        // First try qualified name lookup
-        let primitive = if let Some(prim) = self.get(qualified_name) {
-            prim
-        } else {
-            // Fall back to unqualified name lookup
-            // Extract the name part from "library/name" using the first "/" as separator.
-            // This correctly handles cases like "/" being the primitive name (library// is the qualified form).
-            let name = if let Some(pos) = qualified_name.find('/') {
-                &qualified_name[pos + 1..]
-            } else {
-                qualified_name
-            };
-            self.get_by_name(name)
-                .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))?
-        };
+        let primitive = self.lookup_primitive(qualified_name)?;
+        primitive.call_tagged(evaluator, args, in_tail)
+    }
 
-        // Call it
-        primitive.call(evaluator, args, in_tail)
+    /// Internal helper to look up a primitive by qualified or unqualified name
+    fn lookup_primitive(&self, qualified_name: &str) -> Result<&PrimitiveFn, EvalError> {
+        // First try qualified name lookup
+        if let Some(prim) = self.get(qualified_name) {
+            return Ok(prim);
+        }
+
+        // Fall back to unqualified name lookup
+        // Extract the name part from "library/name" using the first "/" as separator.
+        // This correctly handles cases like "/" being the primitive name (library// is the qualified form).
+        let name = if let Some(pos) = qualified_name.find('/') {
+            &qualified_name[pos + 1..]
+        } else {
+            qualified_name
+        };
+        self.get_by_name(name)
+            .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))
     }
 }
 
@@ -311,24 +295,34 @@ impl Default for PrimitiveRegistry {
 mod tests {
     use super::*;
 
-    // Helper primitive for testing
-    fn test_add(_eval: &Evaluator, args: Vec<Value>, _tail: bool) -> Result<EvalResult, EvalError> {
-        let sum = args
+    // Helper primitive for testing - uses TaggedValue
+    fn test_add_tagged(
+        _eval: &Evaluator,
+        args: Vec<TaggedValue>,
+        _tail: bool,
+    ) -> Result<EvalResult, EvalError> {
+        let sum: i64 = args
             .into_iter()
-            .map(|v| match v {
-                Value::Integer(n) => Ok(n),
-                _ => Err(EvalError::TypeError(format!("Expected integer, got {}", v))),
+            .map(|tv| {
+                tv.as_fixnum()
+                    .ok_or_else(|| EvalError::TypeError("Expected integer".to_string()))
             })
             .collect::<Result<Vec<i64>, EvalError>>()?
             .into_iter()
             .sum();
 
-        Ok(EvalResult::Value(Value::Integer(sum)))
+        Ok(EvalResult::Tagged(TaggedValue::fixnum(sum)))
     }
 
     #[test]
     fn test_primitive_fn_creation() {
-        let prim = PrimitiveFn::new("scheme.base", "+", Arity::Min(0), "Add numbers", test_add);
+        let prim = PrimitiveFn::new_tagged(
+            "scheme.base",
+            "+",
+            Arity::Min(0),
+            "Add numbers",
+            test_add_tagged,
+        );
 
         assert_eq!(prim.library, "scheme.base");
         assert_eq!(prim.name, "+");
@@ -338,12 +332,12 @@ mod tests {
 
     #[test]
     fn test_arity_checking() {
-        let prim = PrimitiveFn::new(
+        let prim = PrimitiveFn::new_tagged(
             "scheme.base",
             "+",
             Arity::Exact(2),
             "Add two numbers",
-            test_add,
+            test_add_tagged,
         );
 
         assert!(prim.check_arity(2).is_ok());
@@ -355,7 +349,13 @@ mod tests {
     fn test_registry_registration() {
         let mut registry = PrimitiveRegistry::new();
 
-        let prim = PrimitiveFn::new("scheme.base", "+", Arity::Min(0), "Add numbers", test_add);
+        let prim = PrimitiveFn::new_tagged(
+            "scheme.base",
+            "+",
+            Arity::Min(0),
+            "Add numbers",
+            test_add_tagged,
+        );
         registry.register(prim);
 
         assert_eq!(registry.len(), 1);
@@ -367,7 +367,13 @@ mod tests {
     fn test_registry_lookup() {
         let mut registry = PrimitiveRegistry::new();
 
-        let prim = PrimitiveFn::new("scheme.base", "+", Arity::Min(0), "Add numbers", test_add);
+        let prim = PrimitiveFn::new_tagged(
+            "scheme.base",
+            "+",
+            Arity::Min(0),
+            "Add numbers",
+            test_add_tagged,
+        );
         registry.register(prim);
 
         // Test qualified lookup
@@ -388,26 +394,26 @@ mod tests {
     fn test_registry_list_names() {
         let mut registry = PrimitiveRegistry::new();
 
-        registry.register(PrimitiveFn::new(
+        registry.register(PrimitiveFn::new_tagged(
             "scheme.base",
             "+",
             Arity::Min(0),
             "Add",
-            test_add,
+            test_add_tagged,
         ));
-        registry.register(PrimitiveFn::new(
+        registry.register(PrimitiveFn::new_tagged(
             "scheme.base",
             "car",
             Arity::Exact(1),
             "Car",
-            test_add,
+            test_add_tagged,
         ));
-        registry.register(PrimitiveFn::new(
+        registry.register(PrimitiveFn::new_tagged(
             "scheme.base",
             "*",
             Arity::Min(0),
             "Multiply",
-            test_add,
+            test_add_tagged,
         ));
 
         let names = registry.list_names();
@@ -422,26 +428,26 @@ mod tests {
     fn test_get_library_primitives() {
         let mut registry = PrimitiveRegistry::new();
 
-        registry.register(PrimitiveFn::new(
+        registry.register(PrimitiveFn::new_tagged(
             "scheme.base",
             "+",
             Arity::Min(0),
             "Add",
-            test_add,
+            test_add_tagged,
         ));
-        registry.register(PrimitiveFn::new(
+        registry.register(PrimitiveFn::new_tagged(
             "scheme.base",
             "-",
             Arity::Min(1),
             "Subtract",
-            test_add,
+            test_add_tagged,
         ));
-        registry.register(PrimitiveFn::new(
+        registry.register(PrimitiveFn::new_tagged(
             "scheme.char",
             "char-upcase",
             Arity::Exact(1),
             "Upcase",
-            test_add,
+            test_add_tagged,
         ));
 
         let base_prims: Vec<_> = registry.get_library_primitives("scheme.base").collect();

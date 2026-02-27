@@ -43,7 +43,7 @@
 //!   first-class values that can be stored and invoked.
 
 use crate::scope::ScopeSet;
-use crate::value::Value;
+use crate::tagged_value::TaggedValue;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -101,7 +101,7 @@ pub enum CpsExpr {
     // They're used as arguments to serious expressions.
     /// Literal value (self-evaluating)
     /// Example: 42, #t, "hello"
-    Literal(Rc<Value>),
+    Literal(TaggedValue),
 
     /// Variable reference
     /// Example: x, my-function
@@ -264,9 +264,12 @@ pub enum CpsExpr {
     /// (quasiquote template k)
     ///
     /// Evaluates a quasiquote template, processing unquote and unquote-splicing.
-    /// The template is a Value that may contain unquote/unquote-splicing forms
+    /// The template is a TaggedValue that may contain unquote/unquote-splicing forms
     /// which need to be evaluated at runtime.
-    Quasiquote { template: Rc<Value>, cont: ContVar },
+    Quasiquote {
+        template: TaggedValue,
+        cont: ContVar,
+    },
 
     // ==================== Primitives ====================
     /// Primitive operation (known at compile time)
@@ -532,7 +535,7 @@ mod tests {
 
     #[test]
     fn test_cps_expr_is_trivial() {
-        let lit = CpsExpr::Literal(Rc::new(Value::Integer(42)));
+        let lit = CpsExpr::Literal(TaggedValue::fixnum(42));
         assert!(lit.is_trivial());
 
         let var = CpsExpr::Var {

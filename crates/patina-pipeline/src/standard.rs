@@ -9,8 +9,9 @@
 
 use crate::error::{PipelineError, PipelineResult};
 use crate::pipeline::{EvaluationStrategy, Pipeline};
+use patina_core::TaggedValue;
 use patina_frontend::{Desugarer, parser::Parser};
-use patina_runtime::{Environment, Value};
+use patina_runtime::Environment;
 use patina_tree_walker::eval::{Evaluator, eval_cps};
 use std::rc::Rc;
 
@@ -19,7 +20,6 @@ use std::rc::Rc;
 /// All evaluation uses CPS transformation for full continuation support.
 pub struct StandardPipeline {
     evaluator: Evaluator,
-    strategy: EvaluationStrategy,
 }
 
 impl StandardPipeline {
@@ -27,16 +27,12 @@ impl StandardPipeline {
     pub fn new() -> Self {
         Self {
             evaluator: Evaluator::new(),
-            strategy: EvaluationStrategy::CoreExpr,
         }
     }
 
     /// Create a pipeline with an existing evaluator
     pub fn with_evaluator(evaluator: Evaluator) -> Self {
-        Self {
-            evaluator,
-            strategy: EvaluationStrategy::CoreExpr,
-        }
+        Self { evaluator }
     }
 
     /// Get a reference to the evaluator
@@ -52,47 +48,57 @@ impl Default for StandardPipeline {
 }
 
 impl Pipeline for StandardPipeline {
-    fn eval(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<Value> {
-        // Step 1: Parse
-        let mut parser = Parser::new(code).map_err(|e| PipelineError::Frontend(e.into()))?;
+    fn eval(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
+        // Use the global environment's heap for parsing to ensure TaggedValue indices are valid
+        let heap = self.evaluator.global_env.heap();
+
+        // Step 1: Parse (returns TaggedValue in the shared heap)
+        let mut parser = Parser::new_with_heap(code, heap.clone())
+            .map_err(|e| PipelineError::Frontend(e.into()))?;
         let expr = parser
             .parse()
             .map_err(|e| PipelineError::Frontend(e.into()))?;
 
-        // Step 2: Desugar (with macro expansion)
+        // Step 2: Desugar (with macro expansion) using TaggedValue directly
+        // desugar_tagged manages heap borrows internally
         let desugarer = Desugarer::with_env(env.clone());
         let core_expr = desugarer
-            .desugar(&expr)
+            .desugar_tagged(expr, heap)
             .map_err(|e| PipelineError::Desugaring(e.to_string()))?;
 
-        // Step 3: CPS evaluation
-        let result = eval_cps(&core_expr, env.clone(), &self.evaluator)
+        // Step 3: CPS evaluation (may mutate heap via define/set!)
+        let result_tagged = eval_cps(&core_expr, env.clone(), &self.evaluator)
             .map_err(|e| PipelineError::Evaluation(e.to_string()))?;
 
-        Ok(result)
+        Ok(result_tagged)
     }
 
-    fn eval_program(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<Value> {
-        // Step 1: Parse all expressions
-        let mut parser = Parser::new(code).map_err(|e| PipelineError::Frontend(e.into()))?;
-        let mut last_result = Value::Null;
+    fn eval_program(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
+        // Use the global environment's heap for parsing to ensure TaggedValue indices are valid
+        let heap = self.evaluator.global_env.heap();
+
+        // Step 1: Parse all expressions (using shared heap)
+        let mut parser = Parser::new_with_heap(code, heap.clone())
+            .map_err(|e| PipelineError::Frontend(e.into()))?;
+        let mut last_result = TaggedValue::NULL;
 
         // Step 2: Evaluate each expression in sequence
         loop {
-            // Try to parse next expression
+            // Try to parse next expression (returns TaggedValue)
             let expr = match parser.parse() {
                 Ok(expr) => expr,
                 Err(patina_frontend::parser::ParseError::UnexpectedEof) => break,
                 Err(e) => return Err(PipelineError::Frontend(e.into())),
             };
 
-            // Step 3: Desugar (with macro expansion)
+            // Step 3: Desugar (with macro expansion) using TaggedValue directly
+            // desugar_tagged manages heap borrows internally
             let desugarer = Desugarer::with_env(env.clone());
             let core_expr = desugarer
-                .desugar(&expr)
+                .desugar_tagged(expr, heap)
                 .map_err(|e| PipelineError::Desugaring(e.to_string()))?;
 
-            // Step 4: CPS evaluation
+            // Step 4: CPS evaluation (may mutate heap via define/set!)
             last_result = eval_cps(&core_expr, env.clone(), &self.evaluator)
                 .map_err(|e| PipelineError::Evaluation(e.to_string()))?;
         }
@@ -101,7 +107,7 @@ impl Pipeline for StandardPipeline {
     }
 
     fn strategy(&self) -> EvaluationStrategy {
-        self.strategy
+        EvaluationStrategy::CoreExpr
     }
 }
 
@@ -115,7 +121,7 @@ mod tests {
         let env = pipeline.evaluator().global_env.clone();
 
         let result = pipeline.eval("(+ 1 2 3)", &env).unwrap();
-        assert_eq!(result.to_string(), "6");
+        assert_eq!(result.as_fixnum(), Some(6));
     }
 
     #[test]
@@ -130,7 +136,7 @@ mod tests {
         "#;
 
         let result = pipeline.eval_program(code, &env).unwrap();
-        assert_eq!(result.to_string(), "30");
+        assert_eq!(result.as_fixnum(), Some(30));
     }
 
     #[test]
@@ -140,6 +146,6 @@ mod tests {
 
         // Test that macros work (expanded by evaluator)
         let result = pipeline.eval("(or #f #t)", &env).unwrap();
-        assert_eq!(result.to_string(), "#t");
+        assert_eq!(result, TaggedValue::TRUE);
     }
 }

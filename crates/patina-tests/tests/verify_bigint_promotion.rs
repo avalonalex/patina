@@ -2,57 +2,76 @@
 //!
 //! This test demonstrates and verifies the overflow detection and
 //! automatic promotion from i64 to BigInt.
+//!
+//! Note: With TaggedValue storage, integers are stored as fixnums (61-bit)
+//! which means numbers larger than FIXNUM_MAX (~10^18) are automatically
+//! promoted to BigInt even before arithmetic operations.
 
-use patina_interpreter::{TreeWalkInterpreter, Value};
+use patina_core::TaggedValue;
+use patina_interpreter::TreeWalkInterpreter;
+
+/// Evaluate code and return the TaggedValue result
+fn eval(interp: &TreeWalkInterpreter, code: &str) -> TaggedValue {
+    interp.eval_str(code).unwrap()
+}
+
+/// Check if a TaggedValue is a BigInt using the heap
+fn is_bigint(interp: &TreeWalkInterpreter, tv: TaggedValue) -> bool {
+    let heap = interp.evaluator().global_env.heap();
+    heap.borrow().is_bigint(tv)
+}
+
+/// Get the BigInt string representation if it is one
+fn bigint_str(interp: &TreeWalkInterpreter, tv: TaggedValue) -> Option<String> {
+    let heap = interp.evaluator().global_env.heap();
+    heap.borrow().get_bigint(tv).map(|n| n.to_string())
+}
 
 #[test]
 fn test_overflow_promotion_step_by_step() {
     let interp = TreeWalkInterpreter::new_tree_walker();
 
-    // Step 1: Start with a small integer (stays as i64)
-    let result = interp.eval_str("42").unwrap();
-    assert!(matches!(result, Value::Integer(42)));
-    println!("✅ Small integer stays as i64: {:?}", result);
+    // Step 1: Start with a small integer (stays as fixnum)
+    let result = eval(&interp, "42");
+    assert_eq!(result.as_fixnum(), Some(42));
+    println!(
+        "Small integer stays as fixnum: {}",
+        interp.display_tagged(result)
+    );
 
-    // Step 2: i64::MAX is still i64
-    let result = interp.eval_str("9223372036854775807").unwrap();
-    assert!(matches!(result, Value::Integer(9223372036854775807)));
-    println!("✅ i64::MAX stays as i64: {:?}", result);
+    // Step 2: Numbers larger than FIXNUM_MAX are automatically promoted to BigInt
+    // with TaggedValue storage. FIXNUM_MAX is (1 << 60) - 1 = 1152921504606846975
+    // i64::MAX is 9223372036854775807, which exceeds FIXNUM_MAX
+    let result = eval(&interp, "9223372036854775807");
+    assert!(
+        is_bigint(&interp, result),
+        "Expected BigInteger for i64::MAX with TaggedValue storage, got {}",
+        interp.display_tagged(result)
+    );
+    println!(
+        "i64::MAX promoted to BigInt (exceeds fixnum range): {}",
+        interp.display_tagged(result)
+    );
 
     // Step 3: i64::MAX + 1 MUST promote to BigInt
-    let result = interp.eval_str("(+ 9223372036854775807 1)").unwrap();
-    match &result {
-        Value::BigInteger(n) => {
-            println!("✅ Overflow detected! Promoted to BigInteger: {}", n);
-            assert_eq!(n.to_string(), "9223372036854775808");
-        }
-        Value::Integer(_) => {
-            panic!("❌ FAIL: Should have promoted to BigInteger but stayed as Integer!");
-        }
-        other => {
-            panic!("❌ FAIL: Unexpected type: {:?}", other);
-        }
-    }
+    let result = eval(&interp, "(+ 9223372036854775807 1)");
+    let s = bigint_str(&interp, result);
+    assert!(s.is_some(), "FAIL: Should have promoted to BigInteger!");
+    let s = s.unwrap();
+    println!("Overflow detected! Promoted to BigInteger: {}", s);
+    assert_eq!(s, "9223372036854775808");
 
     // Step 4: Once promoted, stays as BigInt
-    let result = interp.eval_str("(+ (+ 9223372036854775807 1) 1)").unwrap();
-    match &result {
-        Value::BigInteger(n) => {
-            println!("✅ Stays as BigInteger after promotion: {}", n);
-            assert_eq!(n.to_string(), "9223372036854775809");
-        }
-        _ => panic!("Should still be BigInteger"),
-    }
+    let result = eval(&interp, "(+ (+ 9223372036854775807 1) 1)");
+    let s = bigint_str(&interp, result).expect("Should still be BigInteger");
+    println!("Stays as BigInteger after promotion: {}", s);
+    assert_eq!(s, "9223372036854775809");
 
     // Step 5: BigInt can go way beyond i64
-    let result = interp.eval_str("(* 1000000000000 1000000000000)").unwrap();
-    match &result {
-        Value::BigInteger(n) => {
-            println!("✅ Large multiplication promotes to BigInteger: {}", n);
-            assert_eq!(n.to_string(), "1000000000000000000000000");
-        }
-        _ => panic!("Large multiplication should promote to BigInteger"),
-    }
+    let result = eval(&interp, "(* 1000000000000 1000000000000)");
+    let s = bigint_str(&interp, result).expect("Large multiplication should promote to BigInteger");
+    println!("Large multiplication promotes to BigInteger: {}", s);
+    assert_eq!(s, "1000000000000000000000000");
 }
 
 #[test]
@@ -71,28 +90,22 @@ fn test_promotion_in_factorial() {
         )
         .unwrap();
 
-    // Small factorial stays as i64
-    let result = interp.eval_str("(factorial 10)").unwrap();
-    match &result {
-        Value::Integer(n) => {
-            println!("✅ factorial(10) = {} (fits in i64)", n);
-            assert_eq!(*n, 3628800);
-        }
-        _ => panic!("Small factorial should be i64"),
-    }
+    // Small factorial stays as fixnum
+    let result = eval(&interp, "(factorial 10)");
+    let n = result
+        .as_fixnum()
+        .expect("Small factorial should be fixnum");
+    println!("factorial(10) = {} (fits in fixnum)", n);
+    assert_eq!(n, 3628800);
 
     // Large factorial promotes to BigInt
-    let result = interp.eval_str("(factorial 25)").unwrap();
-    match &result {
-        Value::BigInteger(n) => {
-            println!("✅ factorial(25) = {} (promoted to BigInt)", n);
-            assert_eq!(n.to_string(), "15511210043330985984000000");
-        }
-        Value::Integer(n) => {
-            panic!("❌ FAIL: factorial(25) = {} stayed as i64 (WRONG!)", n);
-        }
-        _ => panic!("factorial(25) should be BigInteger"),
+    let result = eval(&interp, "(factorial 25)");
+    if let Some(n) = result.as_fixnum() {
+        panic!("FAIL: factorial(25) = {} stayed as fixnum (WRONG!)", n);
     }
+    let s = bigint_str(&interp, result).expect("factorial(25) should be BigInteger");
+    println!("factorial(25) = {} (promoted to BigInt)", s);
+    assert_eq!(s, "15511210043330985984000000");
 }
 
 #[test]
@@ -104,73 +117,65 @@ fn test_promotion_boundaries() {
     println!("i64::MIN = -9223372036854775808");
 
     // Test positive overflow
-    let result = interp.eval_str("(+ 9223372036854775807 1)").unwrap();
-    assert!(matches!(result, Value::BigInteger(_)));
-    println!("✅ i64::MAX + 1 promotes to BigInt");
+    let result = eval(&interp, "(+ 9223372036854775807 1)");
+    assert!(is_bigint(&interp, result));
+    println!("i64::MAX + 1 promotes to BigInt");
 
     // Test negative overflow
-    let result = interp.eval_str("(- -9223372036854775808 1)").unwrap();
-    assert!(matches!(result, Value::BigInteger(_)));
-    println!("✅ i64::MIN - 1 promotes to BigInt");
+    let result = eval(&interp, "(- -9223372036854775808 1)");
+    assert!(is_bigint(&interp, result));
+    println!("i64::MIN - 1 promotes to BigInt");
 
     // Test multiplication overflow
-    let result = interp.eval_str("(* 10000000000 10000000000)").unwrap();
-    assert!(matches!(result, Value::BigInteger(_)));
-    println!("✅ Large multiplication promotes to BigInt");
+    let result = eval(&interp, "(* 10000000000 10000000000)");
+    assert!(is_bigint(&interp, result));
+    println!("Large multiplication promotes to BigInt");
 
-    // Test that small operations stay as i64
-    let result = interp.eval_str("(+ 1 2 3 4 5)").unwrap();
-    assert!(matches!(result, Value::Integer(15)));
-    println!("✅ Small operations stay as i64");
+    // Test that small operations stay as fixnum
+    let result = eval(&interp, "(+ 1 2 3 4 5)");
+    assert_eq!(result.as_fixnum(), Some(15));
+    println!("Small operations stay as fixnum");
 }
 
 #[test]
 fn test_mixed_operations() {
     let interp = TreeWalkInterpreter::new_tree_walker();
 
-    println!("\n=== Testing Mixed i64/BigInt Operations ===");
+    println!("\n=== Testing Mixed fixnum/BigInt Operations ===");
 
-    // BigInt + i64 = BigInt
-    let result = interp
-        .eval_str("(+ (+ 9223372036854775807 1) 100)")
-        .unwrap();
-    match &result {
-        Value::BigInteger(n) => {
-            println!("✅ BigInt + i64 = BigInt: {}", n);
-            assert_eq!(n.to_string(), "9223372036854775908");
-        }
-        _ => panic!("Should be BigInteger"),
-    }
+    // BigInt + fixnum = BigInt
+    let result = eval(&interp, "(+ (+ 9223372036854775807 1) 100)");
+    let s = bigint_str(&interp, result).expect("Should be BigInteger");
+    println!("BigInt + fixnum = BigInt: {}", s);
+    assert_eq!(s, "9223372036854775908");
 
-    // i64 + BigInt = BigInt
-    let result = interp
-        .eval_str("(+ 100 (+ 9223372036854775807 1))")
-        .unwrap();
-    assert!(matches!(result, Value::BigInteger(_)));
-    println!("✅ i64 + BigInt = BigInt");
+    // fixnum + BigInt = BigInt
+    let result = eval(&interp, "(+ 100 (+ 9223372036854775807 1))");
+    assert!(is_bigint(&interp, result));
+    println!("fixnum + BigInt = BigInt");
 
     // Large literal (>i64::MAX) gets parsed as BigInt
     // 10000000000000000000 > i64::MAX (9223372036854775807)
-    let result = interp.eval_str("10000000000000000000").unwrap();
-    match &result {
-        Value::BigInteger(n) => {
-            println!("✅ Large literal parsed as BigInt: {}", n);
-            assert_eq!(n.to_string(), "10000000000000000000");
-        }
-        _ => panic!("Large literal should be BigInteger, got {:?}", result),
-    }
+    let result = eval(&interp, "10000000000000000000");
+    let s = bigint_str(&interp, result).unwrap_or_else(|| {
+        panic!(
+            "Large literal should be BigInteger, got {}",
+            interp.display_tagged(result)
+        )
+    });
+    println!("Large literal parsed as BigInt: {}", s);
+    assert_eq!(s, "10000000000000000000");
 
     // Adding BigInt literals produces BigInt
-    let result = interp
-        .eval_str("(+ 10000000000000000000 10000000000000000000)")
-        .unwrap();
-    match &result {
-        Value::BigInteger(n) => {
-            println!("✅ BigInt + BigInt = BigInt: {}", n);
-            assert_eq!(n.to_string(), "20000000000000000000");
-        }
-        _ => panic!("BigInt arithmetic should stay BigInt, got {:?}", result),
-    }
+    let result = eval(&interp, "(+ 10000000000000000000 10000000000000000000)");
+    let s = bigint_str(&interp, result).unwrap_or_else(|| {
+        panic!(
+            "BigInt arithmetic should stay BigInt, got {}",
+            interp.display_tagged(result)
+        )
+    });
+    println!("BigInt + BigInt = BigInt: {}", s);
+    assert_eq!(s, "20000000000000000000");
 }
 
 // TODO: Remove #[cfg_attr] once tail call optimization is implemented (see issue #XX)
@@ -196,34 +201,30 @@ fn test_fibonacci_demonstrates_promotion() {
         )
         .unwrap();
 
-    // Small fibonacci stays as i64
-    let result = interp.eval_str("(fib 50)").unwrap();
-    println!("fib(50) = {:?}", result);
-    // fib(50) = 12586269025 - still fits in i64
+    // Small fibonacci stays as fixnum
+    let result = eval(&interp, "(fib 50)");
+    println!("fib(50) = {}", interp.display_tagged(result));
+    // fib(50) = 12586269025 - still fits in fixnum
 
     // Large fibonacci promotes to BigInt
-    let result = interp.eval_str("(fib 100)").unwrap();
-    match &result {
-        Value::BigInteger(n) => {
-            println!("✅ fib(100) = {} (promoted to BigInt)", n);
-            assert_eq!(n.to_string(), "354224848179261915075");
-        }
-        Value::Integer(n) => {
-            panic!("❌ fib(100) = {} should have promoted to BigInt!", n);
-        }
-        _ => panic!("Unexpected type"),
+    let result = eval(&interp, "(fib 100)");
+    if let Some(n) = result.as_fixnum() {
+        panic!("fib(100) = {} should have promoted to BigInt!", n);
     }
+    let s = bigint_str(&interp, result).expect("fib(100) should be BigInteger");
+    println!("fib(100) = {} (promoted to BigInt)", s);
+    assert_eq!(s, "354224848179261915075");
 
     // The promotion happens somewhere between fib(50) and fib(100)
     // Let's find exactly where...
     println!("\n=== Finding Promotion Point ===");
 
     for i in [90, 91, 92, 93, 94] {
-        let result = interp.eval_str(&format!("(fib {})", i)).unwrap();
-        match result {
-            Value::Integer(n) => println!("fib({}) = {} (still i64)", i, n),
-            Value::BigInteger(n) => println!("fib({}) = {} (PROMOTED to BigInt!)", i, n),
-            _ => {}
+        let result = eval(&interp, &format!("(fib {})", i));
+        if let Some(n) = result.as_fixnum() {
+            println!("fib({}) = {} (still fixnum)", i, n);
+        } else if let Some(s) = bigint_str(&interp, result) {
+            println!("fib({}) = {} (PROMOTED to BigInt!)", i, s);
         }
     }
 }

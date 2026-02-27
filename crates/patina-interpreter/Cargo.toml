@@ -6,6 +6,7 @@ description = "High-level interpreter interface for Patina Scheme - supports mul
 
 [dependencies]
 # Core types
+patina-core = { path = "../patina-core" }
 patina-runtime = { path = "../patina-runtime" }
 patina-frontend = { path = "../patina-frontend" }
 patina-ir = { path = "../patina-ir" }

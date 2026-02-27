@@ -2,8 +2,8 @@
 //!
 //! System-related primitives including features and process context.
 
+use crate::Arity;
 use crate::environment::Environment;
-use crate::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
 /// Build the (patina internal system) library
@@ -26,14 +26,7 @@ pub fn build_internal_system(_name: Vec<String>, env: Rc<Environment>) -> Vec<St
     ];
 
     for (name, arity) in &primitives {
-        env.define(
-            name.to_string(),
-            Value::Procedure(Rc::new(Procedure::Primitive {
-                name,
-                arity: arity.clone(),
-                library: library_name.clone(),
-            })),
-        );
+        env.define_primitive(name, arity.clone(), library_name.clone());
     }
 
     primitives

@@ -7,13 +7,12 @@
 
 use crate::eval::primitives::registry::{PrimitiveFn, PrimitiveRegistry};
 use crate::eval::{EvalError, EvalResult, Evaluator};
-use patina_runtime::{Arity, Value};
-use std::cell::RefCell;
-use std::rc::Rc;
+use patina_core::TaggedValue;
+use patina_runtime::Arity;
 
 /// Register symbol primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "symbol=?",
         Arity::Min(2),
@@ -21,20 +20,20 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         |eval, args, _tail| symbol_equal(eval, args),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "symbol->string",
         Arity::Exact(1),
         "(symbol->string sym) - Returns the name of the symbol as a string",
-        |_eval, args, _tail| symbol_to_string(args),
+        |eval, args, _tail| symbol_to_string(eval, args),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "string->symbol",
         Arity::Exact(1),
         "(string->symbol str) - Returns a symbol with the given name",
-        |_eval, args, _tail| string_to_symbol(args),
+        |eval, args, _tail| string_to_symbol(eval, args),
     ));
 }
 
@@ -42,38 +41,46 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 ///
 /// Returns #t if all arguments are symbols and all have the same names
 /// in the sense of string=?.
-fn symbol_equal(eval: &Evaluator, args: Vec<Value>) -> Result<EvalResult, EvalError> {
-    eval.check_arity_min(&args, 2, "symbol=?")?;
+fn symbol_equal(evaluator: &Evaluator, args: Vec<TaggedValue>) -> Result<EvalResult, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    // First, check that all arguments are symbols
-    for arg in &args {
-        if !matches!(arg, Value::Symbol(_)) {
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+
+    // Check all args are symbols and get first name
+    let first_name = match heap_ref.get_symbol_name(args[0]) {
+        Some(name) => name,
+        None => {
             return Err(EvalError::TypeError(format!(
                 "symbol=? expects symbols, got {}",
-                arg
+                heap_ref.type_name(args[0])
             )));
         }
-    }
-
-    // Extract the first symbol's name
-    let first_name = match &args[0] {
-        Value::Symbol(s) => s.as_ref(),
-        _ => unreachable!(), // Already checked above
     };
 
-    // Check that all remaining symbols have the same name
-    for arg in &args[1..] {
-        match arg {
-            Value::Symbol(s) => {
-                if s.as_ref() != first_name {
-                    return Ok(EvalResult::Value(Value::Boolean(false)));
+    // Check remaining symbols have the same name
+    for &arg in &args[1..] {
+        match heap_ref.get_symbol_name(arg) {
+            Some(name) => {
+                if name != first_name {
+                    return Ok(EvalResult::Tagged(TaggedValue::FALSE));
                 }
             }
-            _ => unreachable!(), // Already checked above
+            None => {
+                return Err(EvalError::TypeError(format!(
+                    "symbol=? expects symbols, got {}",
+                    heap_ref.type_name(arg)
+                )));
+            }
         }
     }
 
-    Ok(EvalResult::Value(Value::Boolean(true)))
+    Ok(EvalResult::Tagged(TaggedValue::TRUE))
 }
 
 /// (symbol->string sym)
@@ -81,7 +88,10 @@ fn symbol_equal(eval: &Evaluator, args: Vec<Value>) -> Result<EvalResult, EvalEr
 /// Returns the name of the symbol as a string, but without adding escapes.
 /// Note: R7RS says it's an error to mutate the returned string, but we
 /// return a regular mutable string for simplicity (as most Schemes do).
-fn symbol_to_string(args: Vec<Value>) -> Result<EvalResult, EvalError> {
+fn symbol_to_string(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<EvalResult, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -89,17 +99,20 @@ fn symbol_to_string(args: Vec<Value>) -> Result<EvalResult, EvalError> {
         });
     }
 
-    match &args[0] {
-        Value::Symbol(s) => {
-            // Convert symbol name to Vec<char>
-            let chars: Vec<char> = s.chars().collect();
-            Ok(EvalResult::Value(Value::String(Rc::new(RefCell::new(
-                chars,
-            )))))
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+
+    match heap_ref.get_symbol_name(args[0]) {
+        Some(name) => {
+            // Allocate string on heap and return TaggedValue
+            let name_owned = name.to_string();
+            drop(heap_ref); // Release immutable borrow before mutable borrow
+            let tagged = heap.borrow_mut().alloc_string(name_owned);
+            Ok(EvalResult::Tagged(tagged))
         }
-        other => Err(EvalError::TypeError(format!(
+        None => Err(EvalError::TypeError(format!(
             "symbol->string expects a symbol, got {}",
-            other
+            heap_ref.type_name(args[0])
         ))),
     }
 }
@@ -109,7 +122,10 @@ fn symbol_to_string(args: Vec<Value>) -> Result<EvalResult, EvalError> {
 /// Returns the symbol whose name is the given string. This procedure can
 /// create symbols with names containing special characters that would
 /// require escaping when written, but does not interpret escapes in its input.
-fn string_to_symbol(args: Vec<Value>) -> Result<EvalResult, EvalError> {
+fn string_to_symbol(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<EvalResult, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -117,63 +133,62 @@ fn string_to_symbol(args: Vec<Value>) -> Result<EvalResult, EvalError> {
         });
     }
 
-    match &args[0] {
-        Value::String(s) => {
-            // Convert Vec<char> to String for symbol name
-            let name: String = s.borrow().iter().collect();
-            Ok(EvalResult::Value(Value::Symbol(Rc::from(name))))
-        }
-        other => Err(EvalError::TypeError(format!(
+    let heap = evaluator.global_env.heap();
+
+    // Get string contents from heap
+    let name = heap.borrow().get_string_contents(args[0]).ok_or_else(|| {
+        EvalError::TypeError(format!(
             "string->symbol expects a string, got {}",
-            other
-        ))),
-    }
+            heap.borrow().type_name(args[0])
+        ))
+    })?;
+
+    // Intern the symbol and return TaggedValue
+    let tagged = heap.borrow_mut().intern_symbol(&name);
+    Ok(EvalResult::Tagged(tagged))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn sym(name: &str, eval: &Evaluator) -> TaggedValue {
+        eval.global_env.heap().borrow_mut().intern_symbol(name)
+    }
+
+    fn string(s: &str, eval: &Evaluator) -> TaggedValue {
+        eval.global_env
+            .heap()
+            .borrow_mut()
+            .alloc_string(s.to_string())
+    }
+
+    fn get(result: EvalResult) -> TaggedValue {
+        match result {
+            EvalResult::Tagged(tv) => tv,
+            EvalResult::TailCallPrimitive { .. } => panic!("Expected EvalResult::Tagged"),
+        }
+    }
+
     #[test]
     fn test_symbol_equal_same() {
         let eval = Evaluator::new();
-        let result = symbol_equal(
-            &eval,
-            vec![
-                Value::Symbol(Rc::from("foo")),
-                Value::Symbol(Rc::from("foo")),
-            ],
-        )
-        .unwrap();
-        assert!(matches!(result, EvalResult::Value(Value::Boolean(true))));
+        let result = symbol_equal(&eval, vec![sym("foo", &eval), sym("foo", &eval)]).unwrap();
+        assert_eq!(get(result), TaggedValue::TRUE);
     }
 
     #[test]
     fn test_symbol_equal_different() {
         let eval = Evaluator::new();
-        let result = symbol_equal(
-            &eval,
-            vec![
-                Value::Symbol(Rc::from("foo")),
-                Value::Symbol(Rc::from("bar")),
-            ],
-        )
-        .unwrap();
-        assert!(matches!(result, EvalResult::Value(Value::Boolean(false))));
+        let result = symbol_equal(&eval, vec![sym("foo", &eval), sym("bar", &eval)]).unwrap();
+        assert_eq!(get(result), TaggedValue::FALSE);
     }
 
     #[test]
     fn test_symbol_equal_case_sensitive() {
         let eval = Evaluator::new();
-        let result = symbol_equal(
-            &eval,
-            vec![
-                Value::Symbol(Rc::from("foo")),
-                Value::Symbol(Rc::from("FOO")),
-            ],
-        )
-        .unwrap();
-        assert!(matches!(result, EvalResult::Value(Value::Boolean(false))));
+        let result = symbol_equal(&eval, vec![sym("foo", &eval), sym("FOO", &eval)]).unwrap();
+        assert_eq!(get(result), TaggedValue::FALSE);
     }
 
     #[test]
@@ -181,61 +196,44 @@ mod tests {
         let eval = Evaluator::new();
         let result = symbol_equal(
             &eval,
-            vec![
-                Value::Symbol(Rc::from("x")),
-                Value::Symbol(Rc::from("x")),
-                Value::Symbol(Rc::from("x")),
-            ],
+            vec![sym("x", &eval), sym("x", &eval), sym("x", &eval)],
         )
         .unwrap();
-        assert!(matches!(result, EvalResult::Value(Value::Boolean(true))));
+        assert_eq!(get(result), TaggedValue::TRUE);
     }
 
     #[test]
     fn test_symbol_to_string() {
-        let result = symbol_to_string(vec![Value::Symbol(Rc::from("flying-fish"))]).unwrap();
-        match result {
-            EvalResult::Value(Value::String(s)) => {
-                let chars: Vec<char> = "flying-fish".chars().collect();
-                assert_eq!(*s.borrow(), chars);
-            }
-            _ => panic!("Expected string"),
-        }
+        let eval = Evaluator::new();
+        let result = symbol_to_string(&eval, vec![sym("flying-fish", &eval)]).unwrap();
+        let tagged = get(result);
+        let heap = eval.global_env.heap();
+        let str_contents = heap.borrow().get_string_contents(tagged).unwrap();
+        assert_eq!(str_contents, "flying-fish");
     }
 
     #[test]
     fn test_string_to_symbol() {
-        let result = string_to_symbol(vec![Value::String(Rc::new(RefCell::new(
-            "foo".chars().collect(),
-        )))])
-        .unwrap();
-        match result {
-            EvalResult::Value(Value::Symbol(s)) => {
-                assert_eq!(s.as_ref(), "foo");
-            }
-            _ => panic!("Expected symbol"),
-        }
+        let eval = Evaluator::new();
+        let result = string_to_symbol(&eval, vec![string("foo", &eval)]).unwrap();
+        let tagged = get(result);
+        let heap = eval.global_env.heap();
+        let heap_ref = heap.borrow();
+        let sym_name = heap_ref.get_symbol_name(tagged).unwrap();
+        assert_eq!(sym_name, "foo");
     }
 
     #[test]
     fn test_roundtrip() {
+        let eval = Evaluator::new();
         // (symbol->string (string->symbol "test")) should equal "test"
-        let sym_result = string_to_symbol(vec![Value::String(Rc::new(RefCell::new(
-            "test".chars().collect(),
-        )))])
-        .unwrap();
-        let sym = match sym_result {
-            EvalResult::Value(v) => v,
-            _ => panic!("Expected value"),
-        };
+        let sym_result = string_to_symbol(&eval, vec![string("test", &eval)]).unwrap();
+        let sym_tagged = get(sym_result);
 
-        let str_result = symbol_to_string(vec![sym]).unwrap();
-        match str_result {
-            EvalResult::Value(Value::String(s)) => {
-                let chars: Vec<char> = "test".chars().collect();
-                assert_eq!(*s.borrow(), chars);
-            }
-            _ => panic!("Expected string"),
-        }
+        let str_result = symbol_to_string(&eval, vec![sym_tagged]).unwrap();
+        let str_tagged = get(str_result);
+        let heap = eval.global_env.heap();
+        let str_contents = heap.borrow().get_string_contents(str_tagged).unwrap();
+        assert_eq!(str_contents, "test");
     }
 }

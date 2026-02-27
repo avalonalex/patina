@@ -3,7 +3,8 @@
 //! This crate provides runtime services and re-exports core types from `patina-core`:
 //!
 //! **From patina-core (re-exported for convenience):**
-//! - `Value`: The Scheme value representation (numbers, lists, procedures, etc.)
+//! - `TaggedValue`: Compact NaN-boxed value representation
+//! - `Heap`, `SharedHeap`: Arena-based heap for objects
 //! - `Environment`: Lexical environment for variable bindings
 //! - `Procedure` and `Arity`: Procedure representation
 //! - `ScopeId`, `ScopeSet`: Scope tracking for hygiene
@@ -26,8 +27,7 @@ pub mod macro_debug;
 pub mod rust_library_loader;
 pub mod stdlib;
 
-// Re-export all types from patina-core for backwards compatibility
-// This allows existing code using `patina_runtime::Value` to continue working
+// Re-export all types from patina-core
 pub use patina_core::*;
 
 // Re-export runtime-specific types

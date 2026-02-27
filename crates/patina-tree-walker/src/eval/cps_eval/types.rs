@@ -8,7 +8,8 @@
 
 use patina_core::Environment;
 use patina_core::cps_expr::{CpsExpr, PromptTag};
-use patina_core::value::{CpsContinuation, DynamicWindRecord, Value};
+use patina_core::tagged_value::TaggedValue;
+use patina_core::{CpsContinuation, DynamicWindRecord};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -17,24 +18,15 @@ use std::rc::Rc;
 // When a Value::Continuation is invoked inside apply_from_direct,
 // we store it here so the outer eval loop can retrieve it.
 thread_local! {
-    static PENDING_ESCAPE: RefCell<Option<(Value, Rc<CpsContinuation>)>> = const { RefCell::new(None) };
+    static PENDING_ESCAPE: RefCell<Option<(TaggedValue, Rc<CpsContinuation>)>> = const { RefCell::new(None) };
 }
 
-pub(super) fn set_pending_escape(value: Value, cont: Rc<CpsContinuation>) {
+pub(super) fn set_pending_escape(value: TaggedValue, cont: Rc<CpsContinuation>) {
     PENDING_ESCAPE.with(|cell| *cell.borrow_mut() = Some((value, cont)));
 }
 
-pub(super) fn take_pending_escape() -> Option<(Value, Rc<CpsContinuation>)> {
+pub(super) fn take_pending_escape() -> Option<(TaggedValue, Rc<CpsContinuation>)> {
     PENDING_ESCAPE.with(|cell| cell.borrow_mut().take())
-}
-
-/// Helper: construct a Scheme list from a Vec<Value>
-pub(super) fn list_from_vec(vec: Vec<Value>) -> Value {
-    let mut result = Value::Null;
-    for item in vec.into_iter().rev() {
-        result = Value::Pair(Rc::new(RefCell::new((item, result))));
-    }
-    result
 }
 
 /// A prompt frame on the meta-continuation stack
@@ -54,8 +46,8 @@ pub(super) struct PromptFrame {
 /// When raise is called, the topmost handler is invoked.
 #[derive(Debug, Clone)]
 pub(super) struct ExceptionHandler {
-    /// The handler procedure (lambda (condition) ...)
-    pub handler: Value,
+    /// The handler procedure as TaggedValue (lambda (condition) ...)
+    pub handler: TaggedValue,
 }
 
 /// Continuation values used during CPS evaluation
@@ -87,13 +79,13 @@ pub(super) enum ContValue {
     /// Special continuation for call-with-values
     /// When the producer returns, unpack its values and call the consumer
     CallWithValuesConsumer {
-        consumer: Value,
+        consumer: TaggedValue,
         original_cont: Box<ContValue>,
     },
     /// Special continuation for force
     /// When the thunk returns, cache the value and continue
     ForceCache {
-        promise: Rc<std::cell::RefCell<patina_core::value::PromiseState>>,
+        promise: Rc<std::cell::RefCell<patina_core::PromiseState>>,
         original_cont: Box<ContValue>,
     },
     // Note: ParameterizeCleanup has been removed.
@@ -101,8 +93,8 @@ pub(super) enum ContValue {
     /// Special continuation for dynamic-wind cleanup
     /// When the body returns, pop the wind record, call after thunk, and continue
     DynamicWindCleanup {
-        /// The "after" thunk to call when leaving this dynamic extent
-        after: Value,
+        /// The "after" thunk to call when leaving this dynamic extent (as TaggedValue)
+        after: TaggedValue,
         /// The wind record ID to pop (for verification)
         wind_id: u64,
         original_cont: Box<ContValue>,
@@ -112,16 +104,16 @@ pub(super) enum ContValue {
     DynamicWindSetup {
         /// The wind record to push
         wind_record: DynamicWindRecord,
-        /// The body thunk to call
-        body: Value,
+        /// The body thunk to call (as TaggedValue)
+        body: TaggedValue,
         /// The cleanup continuation (will pop and call after)
         cleanup_cont: Box<ContValue>,
     },
     /// Special continuation for dynamic-wind after thunk completion
     /// After the "after" thunk returns, continue with the saved body result
     DynamicWindAfterDone {
-        /// The result from the body (to pass through)
-        result_value: Value,
+        /// The result from the body (to pass through, as TaggedValue for efficiency)
+        result_value: TaggedValue,
         original_cont: Box<ContValue>,
     },
     /// Special continuation for with-exception-handler cleanup
@@ -134,7 +126,7 @@ pub(super) enum ContValue {
         /// Whether this was a continuable raise
         continuable: bool,
         /// For non-continuable: the original exception (to include in secondary error)
-        original_exception: Option<Value>,
+        original_exception: Option<TaggedValue>,
         /// For continuable: the continuation to continue with
         original_cont: Box<ContValue>,
     },
@@ -146,8 +138,8 @@ pub(super) enum ContValue {
 /// Each step either produces a final value or indicates the
 /// next expression to evaluate.
 pub(super) enum StepResult {
-    /// Final value - evaluation is complete
-    Done(Value),
+    /// Final value - evaluation is complete (as TaggedValue for efficient storage)
+    Done(TaggedValue),
     /// Continue evaluation with a new expression and state
     Continue {
         expr: CpsExpr,
@@ -157,10 +149,10 @@ pub(super) enum StepResult {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     },
-    /// Invoke a continuation with a value
+    /// Invoke a continuation with a value (as TaggedValue for efficiency)
     InvokeContinuation {
         cont: ContValue,
-        value: Value,
+        value: TaggedValue,
         env: Rc<Environment>,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -169,8 +161,8 @@ pub(super) enum StepResult {
     },
     /// Apply a procedure
     ApplyProc {
-        proc: Value,
-        args: Vec<Value>,
+        proc: TaggedValue,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         env: Rc<Environment>,
         cont_env: HashMap<Rc<str>, ContValue>,

@@ -1,7 +1,6 @@
 //! Error types for the desugarer
 
 use patina_core::{ErrorDetail, ErrorKind};
-use patina_runtime::Value;
 use std::fmt;
 
 /// Errors that can occur during desugaring
@@ -21,7 +20,7 @@ pub enum DesugarError {
     EmptyBody(String),
 
     /// Runtime-only value appeared in AST
-    RuntimeValueInAST { value: Value, context: String },
+    RuntimeValueInAST { type_name: String, context: String },
 
     /// Expected a proper list but got improper list or non-list
     ExpectedProperList(String),
@@ -75,11 +74,11 @@ impl fmt::Display for DesugarError {
             DesugarError::EmptyBody(form) => {
                 write!(f, "{} body cannot be empty", form)
             }
-            DesugarError::RuntimeValueInAST { value, context } => {
+            DesugarError::RuntimeValueInAST { type_name, context } => {
                 write!(
                     f,
-                    "Runtime-only value {:?} cannot appear in AST: {}",
-                    value, context
+                    "Runtime-only value of type '{}' cannot appear in AST: {}",
+                    type_name, context
                 )
             }
             DesugarError::ExpectedProperList(context) => {

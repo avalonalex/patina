@@ -3,8 +3,8 @@
 //! This module provides common constants, helpers, and utility functions
 //! used across the macro compiler, matcher, and expander.
 
-use patina_runtime::{PVRef, Value};
-use std::cell::RefCell;
+use patina_core::{Heap, TaggedValue};
+use patina_runtime::PVRef;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -28,83 +28,8 @@ pub const MACRO_DEFINITION_FORMS: &[&str] = &[
 ];
 
 // ============================================================================
-// List/Vector Conversion Utilities
+// TaggedValue List/Vector Conversion Utilities
 // ============================================================================
-
-/// Iterator over a Scheme list that clones elements lazily
-///
-/// This iterator traverses a Scheme list, cloning each element only when
-/// requested. This is more efficient than converting the entire list to a Vec
-/// upfront when pattern matching may fail early.
-///
-/// # Design Note
-///
-/// Due to `RefCell` borrowing constraints, we can't return references to list
-/// elements. Instead, we clone each `Value` as we iterate. However, this is
-/// still beneficial because:
-/// 1. We avoid pre-allocating a `Vec` for the entire list
-/// 2. Early pattern match failures don't pay for unused clones
-/// 3. `Value` clones are cheap for most variants (just `Rc` bumps)
-pub struct SchemeListIter {
-    current: Value,
-}
-
-impl SchemeListIter {
-    /// Create a new iterator over a Scheme list
-    pub fn new(list: &Value) -> Self {
-        Self {
-            current: list.clone(),
-        }
-    }
-
-    /// Count the length of a Scheme list without collecting
-    ///
-    /// Returns None if not a proper list.
-    pub fn len(list: &Value) -> Option<usize> {
-        let mut count = 0;
-        let mut current = list.clone();
-        loop {
-            match current {
-                Value::Null => return Some(count),
-                Value::Pair(p) => {
-                    count += 1;
-                    let borrowed = p.borrow();
-                    current = borrowed.1.clone();
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    /// Check if a value is a proper list (ends with Null)
-    pub fn is_proper_list(list: &Value) -> bool {
-        Self::len(list).is_some()
-    }
-}
-
-impl Iterator for SchemeListIter {
-    type Item = Result<Value, ImproperListError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match &self.current {
-            Value::Null => None,
-            Value::Pair(p) => {
-                let borrowed = p.borrow();
-                let car = borrowed.0.clone();
-                let cdr = borrowed.1.clone();
-                drop(borrowed);
-                self.current = cdr;
-                Some(Ok(car))
-            }
-            _ => {
-                // Return error once, then stop
-                let err = ImproperListError;
-                self.current = Value::Null; // Prevent further iteration
-                Some(Err(err))
-            }
-        }
-    }
-}
 
 /// Error indicating an improper list was encountered during iteration
 #[derive(Debug, Clone, Copy)]
@@ -118,92 +43,173 @@ impl std::fmt::Display for ImproperListError {
 
 impl std::error::Error for ImproperListError {}
 
-/// Convert a Scheme proper list Value to a Vec
+/// Iterator over a Scheme list represented as TaggedValue
+///
+/// This iterator traverses a Scheme list stored on the heap, yielding each
+/// element as a TaggedValue. Works directly with TaggedValue and requires
+/// a heap reference.
+pub struct TaggedListIter<'a> {
+    current: TaggedValue,
+    heap: &'a Heap,
+}
+
+impl<'a> TaggedListIter<'a> {
+    /// Create a new iterator over a TaggedValue list
+    pub fn new(list: TaggedValue, heap: &'a Heap) -> Self {
+        Self {
+            current: list,
+            heap,
+        }
+    }
+
+    /// Count the length of a TaggedValue list without collecting
+    ///
+    /// Returns None if not a proper list.
+    pub fn len(list: TaggedValue, heap: &Heap) -> Option<usize> {
+        let mut count = 0;
+        let mut current = list;
+        loop {
+            if current == TaggedValue::NULL {
+                return Some(count);
+            } else if current.is_pair() {
+                count += 1;
+                current = heap.cdr(current);
+            } else {
+                return None;
+            }
+        }
+    }
+
+    /// Check if a TaggedValue is a proper list (ends with Null)
+    pub fn is_proper_list(list: TaggedValue, heap: &Heap) -> bool {
+        Self::len(list, heap).is_some()
+    }
+}
+
+impl<'a> Iterator for TaggedListIter<'a> {
+    type Item = Result<TaggedValue, ImproperListError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current == TaggedValue::NULL {
+            None
+        } else if self.current.is_pair() {
+            let car = self.heap.car(self.current);
+            let cdr = self.heap.cdr(self.current);
+            self.current = cdr;
+            Some(Ok(car))
+        } else {
+            // Improper list - return error and stop
+            let err = ImproperListError;
+            self.current = TaggedValue::NULL;
+            Some(Err(err))
+        }
+    }
+}
+
+/// Convert a TaggedValue proper list to a Vec
 ///
 /// Returns an error message if the value is not a proper list.
-pub fn list_to_vec(value: &Value) -> Result<Vec<Value>, String> {
+pub fn list_to_vec_tagged(value: TaggedValue, heap: &Heap) -> Result<Vec<TaggedValue>, String> {
     let mut result = Vec::new();
-    let mut current = value.clone();
+    let mut current = value;
 
     loop {
-        match current {
-            Value::Null => break,
-            Value::Pair(p) => {
-                let borrowed = p.borrow();
-                result.push(borrowed.0.clone());
-                current = borrowed.1.clone();
-            }
-            _ => {
-                return Err(format!("Expected proper list, got {}", value));
-            }
+        if current == TaggedValue::NULL {
+            break;
+        } else if current.is_pair() {
+            result.push(heap.car(current));
+            current = heap.cdr(current);
+        } else {
+            return Err(format!("Expected proper list, got {:?}", current));
         }
     }
 
     Ok(result)
 }
 
-/// Convert a Vec to a Scheme proper list Value
-pub fn vec_to_list(values: Vec<Value>) -> Value {
-    let mut result = Value::Null;
+/// Convert a Vec to a TaggedValue proper list
+pub fn vec_to_list_tagged(values: Vec<TaggedValue>, heap: &mut Heap) -> TaggedValue {
+    let mut result = TaggedValue::NULL;
     for value in values.into_iter().rev() {
-        result = Value::Pair(Rc::new(RefCell::new((value, result))));
+        result = heap.alloc_pair(value, result);
     }
     result
 }
 
-/// Convert a Scheme list to a Vec, allowing improper lists
+/// Convert a TaggedValue list to a Vec, allowing improper lists
 ///
-/// Returns (elements, tail) where tail is the final cdr (Null for proper lists)
-pub fn list_to_vec_with_tail(value: &Value) -> (Vec<Value>, Value) {
+/// Returns (elements, tail) where tail is the final cdr (NULL for proper lists)
+pub fn list_to_vec_with_tail_tagged(
+    value: TaggedValue,
+    heap: &Heap,
+) -> (Vec<TaggedValue>, TaggedValue) {
     let mut result = Vec::new();
-    let mut current = value.clone();
+    let mut current = value;
 
     loop {
-        match current {
-            Value::Null => return (result, Value::Null),
-            Value::Pair(p) => {
-                let borrowed = p.borrow();
-                result.push(borrowed.0.clone());
-                current = borrowed.1.clone();
-            }
+        if current == TaggedValue::NULL {
+            return (result, TaggedValue::NULL);
+        } else if current.is_pair() {
+            result.push(heap.car(current));
+            current = heap.cdr(current);
+        } else {
             // Improper list - return the tail
-            other => return (result, other),
+            return (result, current);
         }
     }
 }
 
 // ============================================================================
-// Symbol/Identifier Name Extraction
+// TaggedValue Symbol/Identifier Name Extraction
 // ============================================================================
 
-/// Extract the name from a Symbol or Identifier
+/// Extract the name from a TaggedValue Symbol or Identifier
 ///
 /// Returns None for non-identifier values.
-pub fn get_identifier_name(value: &Value) -> Option<Rc<str>> {
-    match value {
-        Value::Symbol(s) => Some(s.clone()),
-        Value::Identifier(id) => Some(id.name.clone()),
-        _ => None,
-    }
+/// Uses Heap's built-in method for efficiency.
+pub fn get_identifier_name_tagged(tv: TaggedValue, heap: &Heap) -> Option<Rc<str>> {
+    heap.get_symbol_or_identifier_name(tv).map(Rc::from)
 }
 
-/// Check if a value is a specific named symbol or identifier
-pub fn is_named(value: &Value, name: &str) -> bool {
-    match value {
-        Value::Symbol(s) => s.as_ref() == name,
-        Value::Identifier(id) => id.name.as_ref() == name,
-        _ => false,
-    }
+/// Check if a TaggedValue is a specific named symbol or identifier
+///
+/// Uses Heap's built-in method for efficiency.
+pub fn is_named_tagged(tv: TaggedValue, name: &str, heap: &Heap) -> bool {
+    heap.is_named(tv, name)
 }
 
-/// Check if a value is the ellipsis symbol (...)
-pub fn is_ellipsis_symbol(value: &Value) -> bool {
-    is_named(value, ELLIPSIS)
+/// Check if a TaggedValue is the ellipsis symbol (...)
+pub fn is_ellipsis_tagged(tv: TaggedValue, heap: &Heap) -> bool {
+    is_named_tagged(tv, ELLIPSIS, heap)
 }
 
-/// Check if a value is the wildcard/underscore symbol (_)
-pub fn is_wildcard_symbol(value: &Value) -> bool {
-    is_named(value, WILDCARD)
+/// Check if a TaggedValue is the wildcard/underscore symbol (_)
+pub fn is_wildcard_tagged(tv: TaggedValue, heap: &Heap) -> bool {
+    is_named_tagged(tv, WILDCARD, heap)
+}
+
+/// Check if a TaggedValue is a pair (list node)
+#[inline]
+pub fn is_pair_tagged(tv: TaggedValue) -> bool {
+    tv.is_pair()
+}
+
+/// Check if a TaggedValue is null (empty list)
+#[inline]
+pub fn is_null_tagged(tv: TaggedValue) -> bool {
+    tv == TaggedValue::NULL
+}
+
+/// Check if a TaggedValue is a list (pair or null)
+#[inline]
+pub fn is_list_tagged(tv: TaggedValue) -> bool {
+    tv.is_pair() || tv == TaggedValue::NULL
+}
+
+/// Check if a TaggedValue is a vector
+#[inline]
+pub fn is_vector_tagged(tv: TaggedValue) -> bool {
+    tv.is_vector()
 }
 
 // ============================================================================
@@ -218,7 +224,7 @@ use crate::macro_expander::Pattern;
 pub fn pattern_to_string_with_names(pattern: &Pattern, names: &HashMap<PVRef, Rc<str>>) -> String {
     match pattern {
         Pattern::Wildcard => WILDCARD.to_string(),
-        Pattern::Literal(v) => format!("{}", v),
+        Pattern::Literal(tv) => format!("{:?}", tv),
         Pattern::Var(pv) => names
             .get(pv)
             .map(|n| n.to_string())
@@ -262,7 +268,7 @@ pub fn pattern_to_string_with_names(pattern: &Pattern, names: &HashMap<PVRef, Rc
 pub fn pattern_to_string(pattern: &Pattern) -> String {
     match pattern {
         Pattern::Wildcard => WILDCARD.to_string(),
-        Pattern::Literal(v) => format!("{}", v),
+        Pattern::Literal(tv) => format!("{:?}", tv),
         Pattern::Var(_pv) => "var".to_string(),
         Pattern::List(patterns) => {
             let inner = patterns
@@ -300,7 +306,7 @@ pub fn template_to_string_with_names(
     names: &HashMap<PVRef, Rc<str>>,
 ) -> String {
     match template {
-        Template::Literal(v) => format!("{}", v),
+        Template::Literal(tv) => format!("{:?}", tv),
         Template::Symbol(id) => id.name().to_string(),
         Template::Var(pv) => names
             .get(pv)
@@ -510,188 +516,5 @@ fn collect_template_vars_at_level_impl(
             collect_template_vars_at_level_impl(subtemplate, min_level, acc);
         }
         _ => {}
-    }
-}
-
-// ============================================================================
-// Macro Form Detection
-// ============================================================================
-
-/// Check if a value is a macro definition form (syntax-rules, define-syntax, etc.)
-///
-/// These forms should not have their contents marked with macro scopes during
-/// template expansion, as they define their own hygiene context.
-pub fn is_macro_definition_form(value: &Value) -> bool {
-    if let Value::Pair(pair) = value {
-        let borrowed = pair.borrow();
-        let car = &borrowed.0;
-
-        if let Some(name) = get_identifier_name(car) {
-            return MACRO_DEFINITION_FORMS
-                .iter()
-                .any(|&form| form == name.as_ref());
-        }
-    }
-    false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_list_to_vec_proper_list() {
-        let list = vec_to_list(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-            Value::Integer(3),
-        ]);
-        let result = list_to_vec(&list).unwrap();
-        assert_eq!(result.len(), 3);
-    }
-
-    #[test]
-    fn test_list_to_vec_empty() {
-        let result = list_to_vec(&Value::Null).unwrap();
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_list_to_vec_improper() {
-        // Improper list: (1 . 2)
-        let improper = Value::Pair(Rc::new(RefCell::new((
-            Value::Integer(1),
-            Value::Integer(2),
-        ))));
-        let result = list_to_vec(&improper);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_vec_to_list_roundtrip() {
-        let original = vec![Value::Integer(1), Value::Integer(2)];
-        let list = vec_to_list(original.clone());
-        let result = list_to_vec(&list).unwrap();
-        assert_eq!(result.len(), original.len());
-    }
-
-    #[test]
-    fn test_is_named() {
-        let sym = Value::Symbol(Rc::from("foo"));
-        assert!(is_named(&sym, "foo"));
-        assert!(!is_named(&sym, "bar"));
-
-        let id = Value::Identifier(Box::new(patina_runtime::IdentifierData {
-            name: Rc::from("foo"),
-            scopes: patina_runtime::ScopeSet::new(),
-        }));
-        assert!(is_named(&id, "foo"));
-    }
-
-    #[test]
-    fn test_is_ellipsis_symbol() {
-        let ellipsis = Value::Symbol(Rc::from("..."));
-        assert!(is_ellipsis_symbol(&ellipsis));
-
-        let not_ellipsis = Value::Symbol(Rc::from("foo"));
-        assert!(!is_ellipsis_symbol(&not_ellipsis));
-    }
-
-    #[test]
-    fn test_is_wildcard_symbol() {
-        let wildcard = Value::Symbol(Rc::from("_"));
-        assert!(is_wildcard_symbol(&wildcard));
-
-        let not_wildcard = Value::Symbol(Rc::from("foo"));
-        assert!(!is_wildcard_symbol(&not_wildcard));
-    }
-
-    #[test]
-    fn test_is_macro_definition_form() {
-        let syntax_rules = Value::Pair(Rc::new(RefCell::new((
-            Value::Symbol(Rc::from("syntax-rules")),
-            Value::Null,
-        ))));
-        assert!(is_macro_definition_form(&syntax_rules));
-
-        let define_syntax = Value::Pair(Rc::new(RefCell::new((
-            Value::Symbol(Rc::from("define-syntax")),
-            Value::Null,
-        ))));
-        assert!(is_macro_definition_form(&define_syntax));
-
-        let not_macro = Value::Pair(Rc::new(RefCell::new((
-            Value::Symbol(Rc::from("lambda")),
-            Value::Null,
-        ))));
-        assert!(!is_macro_definition_form(&not_macro));
-    }
-
-    #[test]
-    fn test_scheme_list_iter_proper_list() {
-        let list = vec_to_list(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-            Value::Integer(3),
-        ]);
-        let iter = SchemeListIter::new(&list);
-        let collected: Result<Vec<_>, _> = iter.collect();
-        let values = collected.unwrap();
-        assert_eq!(values.len(), 3);
-        assert!(matches!(values[0], Value::Integer(1)));
-        assert!(matches!(values[1], Value::Integer(2)));
-        assert!(matches!(values[2], Value::Integer(3)));
-    }
-
-    #[test]
-    fn test_scheme_list_iter_empty() {
-        let iter = SchemeListIter::new(&Value::Null);
-        let collected: Result<Vec<_>, _> = iter.collect();
-        let values = collected.unwrap();
-        assert!(values.is_empty());
-    }
-
-    #[test]
-    fn test_scheme_list_iter_improper() {
-        // Improper list: (1 . 2)
-        let improper = Value::Pair(Rc::new(RefCell::new((
-            Value::Integer(1),
-            Value::Integer(2),
-        ))));
-        let iter = SchemeListIter::new(&improper);
-        let collected: Result<Vec<_>, _> = iter.collect();
-        assert!(collected.is_err());
-    }
-
-    #[test]
-    fn test_scheme_list_iter_len() {
-        let list = vec_to_list(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-            Value::Integer(3),
-        ]);
-        assert_eq!(SchemeListIter::len(&list), Some(3));
-        assert_eq!(SchemeListIter::len(&Value::Null), Some(0));
-
-        // Improper list
-        let improper = Value::Pair(Rc::new(RefCell::new((
-            Value::Integer(1),
-            Value::Integer(2),
-        ))));
-        assert_eq!(SchemeListIter::len(&improper), None);
-    }
-
-    #[test]
-    fn test_scheme_list_iter_is_proper_list() {
-        let list = vec_to_list(vec![Value::Integer(1), Value::Integer(2)]);
-        assert!(SchemeListIter::is_proper_list(&list));
-        assert!(SchemeListIter::is_proper_list(&Value::Null));
-
-        // Improper list
-        let improper = Value::Pair(Rc::new(RefCell::new((
-            Value::Integer(1),
-            Value::Integer(2),
-        ))));
-        assert!(!SchemeListIter::is_proper_list(&improper));
     }
 }

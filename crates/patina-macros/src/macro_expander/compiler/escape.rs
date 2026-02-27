@@ -6,7 +6,7 @@
 use super::Compiler;
 use crate::error::MacroError;
 use crate::macro_expander::Template;
-use patina_runtime::Value;
+use patina_core::TaggedValue;
 use std::rc::Rc;
 
 impl Compiler {
@@ -20,7 +20,7 @@ impl Compiler {
     /// as the ellipsis symbol.
     pub(super) fn compile_with_escaped_ellipsis(
         &mut self,
-        form: &Value,
+        form: TaggedValue,
         level: usize,
     ) -> Result<Template, MacroError> {
         // Save current ellipsis setting
@@ -40,60 +40,56 @@ impl Compiler {
     /// This is similar to compile_template but:
     /// 1. Ellipsis is disabled (not treated as an operator)
     /// 2. The ellipsis symbol itself becomes a literal Symbol value
-    ///
-    /// This ensures that nested macro definitions work correctly - the `...`
-    /// symbol in the inner syntax-rules will be a plain Symbol that the
-    /// macro compiler can recognize.
     fn compile_template_escaped(
         &mut self,
-        form: &Value,
+        form: TaggedValue,
         level: usize,
         escaped_ellipsis: &Option<Rc<str>>,
     ) -> Result<Template, MacroError> {
-        match form {
-            Value::Symbol(s) => {
-                // Check if it's the ellipsis symbol that was escaped
-                if escaped_ellipsis.as_ref() == Some(s) {
-                    // Produce literal Symbol value so nested macros can use it
-                    return Ok(Template::Literal(form.clone()));
-                }
-
-                // Check if it's a pattern variable
-                if let Some(pvref) = self.pvars.get(s) {
-                    // Verify level is valid
-                    if pvref.level() > level {
-                        return Err(MacroError::InvalidSyntax(format!(
-                            "Pattern variable {} at level {} used at level {}",
-                            s,
-                            pvref.level(),
-                            level
-                        )));
-                    }
-                    Ok(Template::Var(*pvref))
-                } else {
-                    // In ellipsis escape context: produce plain Symbol values.
-                    // The escaped template is meant to be compiled fresh as a new macro,
-                    // so introduced identifiers should NOT carry definition scopes.
-                    // They will become pattern variables in the inner macro when compiled.
-                    Ok(Template::Literal(form.clone()))
-                }
+        // Check for symbol/identifier
+        if let Some(s) = self.extract_symbol_name(form) {
+            // Check if it's the ellipsis symbol that was escaped
+            if escaped_ellipsis.as_ref() == Some(&s) {
+                // Produce literal Symbol value so nested macros can use it
+                return Ok(self.make_literal_template(form));
             }
 
-            Value::Pair(_) => {
+            // Check if it's a pattern variable
+            if let Some(pvref) = self.pvars.get(&s) {
+                // Verify level is valid
+                if pvref.level() > level {
+                    return Err(MacroError::InvalidSyntax(format!(
+                        "Pattern variable {} at level {} used at level {}",
+                        s,
+                        pvref.level(),
+                        level
+                    )));
+                }
+                Ok(Template::Var(*pvref))
+            } else {
+                // In ellipsis escape context: produce plain Symbol values.
+                Ok(self.make_literal_template(form))
+            }
+        } else {
+            // Check for pair
+            let is_pair = form.is_pair();
+            if is_pair {
                 let (items, tail) = self.collect_list_items(form)?;
 
                 // Check for quote form
                 if items.len() == 2
-                    && matches!(&items[0], Value::Symbol(s) if s.as_ref() == "quote")
+                    && self
+                        .extract_symbol_name(items[0])
+                        .map(|s| s.as_ref() == "quote")
+                        .unwrap_or(false)
                     && tail.is_none()
                 {
                     // Check if quoted datum contains pattern variables
-                    if self.contains_pattern_vars(&items[1]) {
-                        // Has pattern variables - compile recursively
-                    } else {
+                    if !self.contains_pattern_vars(items[1]) {
                         // No pattern variables - keep as literal
-                        return Ok(Template::Literal(form.clone()));
+                        return Ok(self.make_literal_template(form));
                     }
+                    // Has pattern variables - compile recursively (fall through)
                 }
 
                 if let Some(tail_value) = tail {
@@ -101,13 +97,13 @@ impl Compiler {
                     let mut templates = Vec::new();
                     for item in items {
                         templates.push(self.compile_template_escaped(
-                            &item,
+                            item,
                             level,
                             escaped_ellipsis,
                         )?);
                     }
                     let tail_template = Box::new(self.compile_template_escaped(
-                        &tail_value,
+                        tail_value,
                         level,
                         escaped_ellipsis,
                     )?);
@@ -120,28 +116,30 @@ impl Compiler {
                     let mut templates = Vec::new();
                     for item in items {
                         templates.push(self.compile_template_escaped(
-                            &item,
+                            item,
                             level,
                             escaped_ellipsis,
                         )?);
                     }
                     Ok(Template::List(templates))
                 }
-            }
-
-            Value::Null => Ok(Template::List(vec![])),
-
-            Value::Vector(v) => {
-                let items = v.borrow();
+            } else if form == TaggedValue::NULL {
+                Ok(Template::List(vec![]))
+            } else if form.is_vector() {
+                let heap = self.heap.borrow();
+                let len = heap.vector_len(form);
+                let elements: Vec<TaggedValue> =
+                    (0..len).map(|i| heap.vector_ref(form, i)).collect();
+                drop(heap);
                 let mut templates = Vec::new();
-                for item in items.iter() {
+                for item in elements {
                     templates.push(self.compile_template_escaped(item, level, escaped_ellipsis)?);
                 }
                 Ok(Template::Vector(templates))
+            } else {
+                // Literal value
+                Ok(self.make_literal_template(form))
             }
-
-            // Literal value
-            other => Ok(Template::Literal(other.clone())),
         }
     }
 
@@ -152,23 +150,23 @@ impl Compiler {
     /// Pattern variables are still expanded normally.
     pub(super) fn compile_quote_template_escaped(
         &mut self,
-        form: &Value,
+        form: TaggedValue,
         _level: usize,
     ) -> Result<Template, MacroError> {
-        match form {
-            Value::Symbol(s) => {
-                // Check if it's a pattern variable
-                if let Some(pvref) = self.pvars.get(s) {
-                    Ok(Template::Var(*pvref))
-                } else {
-                    // Non-pvar symbol: produce literal Symbol value
-                    Ok(Template::Literal(form.clone()))
-                }
+        // Check for symbol
+        if let Some(s) = self.extract_symbol_name(form) {
+            // Check if it's a pattern variable
+            if let Some(pvref) = self.pvars.get(&s) {
+                Ok(Template::Var(*pvref))
+            } else {
+                // Non-pvar symbol: produce literal Symbol value
+                Ok(self.make_literal_template(form))
             }
-            Value::Pair(_) => {
+        } else {
+            let is_pair = form.is_pair();
+            if is_pair {
                 let (items, tail) = self.collect_list_items(form)?;
-                if let Some(_tail_value) = tail {
-                    // Dotted list - not supported in escaped quote for now
+                if tail.is_some() {
                     return Err(MacroError::InvalidSyntax(
                         "Dotted list in ellipsis-escaped quote not supported".to_string(),
                     ));
@@ -176,21 +174,26 @@ impl Compiler {
                 // Compile each item recursively
                 let mut templates = Vec::new();
                 for item in items {
-                    templates.push(self.compile_quote_template_escaped(&item, _level)?);
+                    templates.push(self.compile_quote_template_escaped(item, _level)?);
                 }
                 Ok(Template::List(templates))
-            }
-            Value::Null => Ok(Template::List(vec![])),
-            Value::Vector(v) => {
-                let items = v.borrow();
+            } else if form == TaggedValue::NULL {
+                Ok(Template::List(vec![]))
+            } else if form.is_vector() {
+                let heap = self.heap.borrow();
+                let len = heap.vector_len(form);
+                let elements: Vec<TaggedValue> =
+                    (0..len).map(|i| heap.vector_ref(form, i)).collect();
+                drop(heap);
                 let mut templates = Vec::new();
-                for item in items.iter() {
+                for item in elements {
                     templates.push(self.compile_quote_template_escaped(item, _level)?);
                 }
                 Ok(Template::Vector(templates))
+            } else {
+                // All other values are literal
+                Ok(self.make_literal_template(form))
             }
-            // All other values are literal
-            other => Ok(Template::Literal(other.clone())),
         }
     }
 }

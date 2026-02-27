@@ -5,7 +5,8 @@
 
 use super::Compiler;
 use crate::error::MacroError;
-use patina_runtime::{PVRef, Value};
+use patina_core::TaggedValue;
+use patina_runtime::PVRef;
 use std::rc::Rc;
 
 impl Compiler {
@@ -49,21 +50,24 @@ impl Compiler {
         self.literal_names.contains(sym)
     }
 
-    /// Check if a value is the ellipsis symbol
+    /// Check if a TaggedValue is the ellipsis symbol
     ///
     /// Recognizes both plain Symbol and Identifier (with marks/scopes)
     /// to support nested macro definitions where ellipsis may be wrapped.
     ///
     /// R7RS 4.3.2: "Literals have priority over ellipsis."
     /// If the ellipsis symbol is also in the literals list, return false.
-    pub(super) fn is_ellipsis(&self, form: &Value) -> bool {
+    pub(super) fn is_ellipsis(&self, form: TaggedValue) -> bool {
         match &self.ellipsis {
             None => false, // Ellipsis disabled
             Some(ellipsis_sym) => {
-                let is_ellipsis_match = match form {
-                    Value::Symbol(s) => s == ellipsis_sym,
-                    Value::Identifier(id) => &id.name == ellipsis_sym,
-                    _ => false,
+                let heap = self.heap.borrow();
+                let is_ellipsis_match = if let Some(s) = heap.get_symbol_name(form) {
+                    s == ellipsis_sym.as_ref()
+                } else if let Some((name, _)) = heap.get_identifier_data_any(form) {
+                    &name == ellipsis_sym
+                } else {
+                    false
                 };
                 // Literals have priority over ellipsis (SRFI-46, R7RS 4.3.2)
                 if is_ellipsis_match && self.literal_names.contains(ellipsis_sym) {
@@ -74,19 +78,22 @@ impl Compiler {
         }
     }
 
-    /// Extract symbol name from any identifier type
+    /// Extract symbol name from any identifier type (TaggedValue)
     ///
     /// Returns Some(name) for Symbol or Identifier.
     /// Returns None for other value types.
-    pub(super) fn extract_symbol_name(form: &Value) -> Option<&Rc<str>> {
-        match form {
-            Value::Symbol(s) => Some(s),
-            Value::Identifier(id) => Some(&id.name),
-            _ => None,
+    pub(super) fn extract_symbol_name(&self, form: TaggedValue) -> Option<Rc<str>> {
+        let heap = self.heap.borrow();
+        if let Some(s) = heap.get_symbol_name(form) {
+            Some(Rc::from(s))
+        } else if let Some((name, _)) = heap.get_identifier_data_any(form) {
+            Some(name)
+        } else {
+            None
         }
     }
 
-    /// Check if a value is a SUBSTITUTED identifier from outer macro expansion.
+    /// Check if a TaggedValue is a SUBSTITUTED identifier from outer macro expansion.
     ///
     /// After the flip-scope algorithm in macro expansion:
     /// - Substituted values (from pattern variables): end up with EMPTY scopes
@@ -102,74 +109,95 @@ impl Compiler {
     ///    in inner patterns. They're new identifiers introduced by the outer template.
     ///
     /// This function returns true ONLY for substituted values (Identifier with empty scopes).
-    pub(super) fn is_substituted_from_outer_macro(form: &Value) -> bool {
-        match form {
-            // Identifier with EMPTY scopes = substituted from outer pattern variable
-            // Should be treated as literal in inner patterns
-            Value::Identifier(id) => id.scopes.is_empty(),
-            // Symbols are fresh - they should become pattern variables
-            // Identifiers with non-empty scopes are introduced - should also become pattern variables
-            _ => false,
+    pub(super) fn is_substituted_from_outer_macro(&self, form: TaggedValue) -> bool {
+        let heap = self.heap.borrow();
+        // Check identifier (native or boxed, unified)
+        if let Some((_, scopes)) = heap.get_identifier_data_any(form) {
+            return scopes.is_empty();
         }
+        // Symbols are fresh - they should become pattern variables
+        false
     }
 
-    /// Collect items from a list Value
+    /// Collect items from a list TaggedValue
     ///
     /// Returns (items, tail) where tail is Some(value) for improper lists
     pub(super) fn collect_list_items(
         &self,
-        expr: &Value,
-    ) -> Result<(Vec<Value>, Option<Value>), MacroError> {
+        expr: TaggedValue,
+    ) -> Result<(Vec<TaggedValue>, Option<TaggedValue>), MacroError> {
         let mut items = Vec::new();
-        let mut current = expr.clone();
+        let mut current = expr;
 
         loop {
-            match current {
-                Value::Null => return Ok((items, None)),
-                Value::Pair(pair) => {
-                    let borrowed = pair.borrow();
-                    items.push(borrowed.0.clone());
-                    current = borrowed.1.clone();
-                }
-                _ => {
-                    // Improper list: (a b . c)
-                    return Ok((items, Some(current)));
+            if current == TaggedValue::NULL {
+                return Ok((items, None));
+            }
+
+            // Fast path: native pair
+            if current.is_pair() {
+                let heap = self.heap.borrow();
+                let (car, cdr) = heap.get_pair(current);
+                items.push(car);
+                current = cdr;
+                continue;
+            }
+
+            // Check if it's any pair (including boxed)
+            let is_pair = current.is_pair();
+            if is_pair {
+                let heap = self.heap.borrow();
+                if let Some((car, cdr)) = heap.try_pair(current) {
+                    items.push(car);
+                    current = cdr;
+                    continue;
                 }
             }
+
+            // Improper list: (a b . c)
+            return Ok((items, Some(current)));
         }
     }
 
     /// Check if the item at the given index is followed by an ellipsis
-    pub(super) fn is_followed_by_ellipsis(&self, items: &[Value], index: usize) -> bool {
-        index + 1 < items.len() && self.is_ellipsis(&items[index + 1])
+    pub(super) fn is_followed_by_ellipsis(&self, items: &[TaggedValue], index: usize) -> bool {
+        index + 1 < items.len() && self.is_ellipsis(items[index + 1])
     }
 
-    /// Check if a value contains any pattern variables
+    /// Check if a TaggedValue contains any pattern variables
     /// Used to determine if a quoted expression needs template expansion
-    pub(super) fn contains_pattern_vars(&self, value: &Value) -> bool {
-        // Handle all identifier types (Symbol, ScopedIdentifier, WrappedIdentifier)
-        if let Some(s) = Self::extract_symbol_name(value) {
+    pub(super) fn contains_pattern_vars(&self, value: TaggedValue) -> bool {
+        // Handle all identifier types (Symbol, Identifier)
+        if let Some(s) = self.extract_symbol_name(value) {
             // Skip identifiers with scopes - they came from outer expansion
             // and shouldn't be treated as pattern variables
-            if Self::is_substituted_from_outer_macro(value) {
+            if self.is_substituted_from_outer_macro(value) {
                 return false;
             }
-            return self.pvars.contains_key(s);
+            return self.pvars.contains_key(&s);
         }
 
-        match value {
-            Value::Pair(_) => {
-                let items = match self.collect_list_items(value) {
-                    Ok((items, _)) => items,
-                    Err(_) => return false,
-                };
-                items.iter().any(|item| self.contains_pattern_vars(item))
-            }
-            Value::Vector(v) => v
-                .borrow()
-                .iter()
-                .any(|item| self.contains_pattern_vars(item)),
-            _ => false,
+        // Check pairs
+        if value.is_pair() {
+            let items = match self.collect_list_items(value) {
+                Ok((items, _)) => items,
+                Err(_) => return false,
+            };
+            return items.iter().any(|item| self.contains_pattern_vars(*item));
         }
+
+        // Check vectors
+        if value.is_vector() {
+            let heap = self.heap.borrow();
+            let len = heap.vector_len(value);
+            for i in 0..len {
+                if self.contains_pattern_vars(heap.vector_ref(value, i)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        false
     }
 }

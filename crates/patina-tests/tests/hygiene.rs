@@ -43,7 +43,7 @@ fn test_macro_introduced_temp_variable() {
         "Macro should expand correctly: {:?}",
         result
     );
-    assert_eq!(result.unwrap().to_string(), "5");
+    assert_eq!(interp.display_tagged(result.unwrap()), "5");
 }
 
 /// Test hygiene with nested lets
@@ -70,7 +70,8 @@ fn test_nested_let_hygiene() {
 
     assert!(result.is_ok());
     // x and y should be swapped, temp should still be 999
-    assert_eq!(result.unwrap().to_string(), "(2 1 999)");
+    let val = result.unwrap();
+    assert_eq!(interp.display_tagged(val), "(2 1 999)");
 }
 
 /// Test that macro-introduced 'if' doesn't capture user 'if'
@@ -92,7 +93,7 @@ fn test_special_form_not_captured() {
 
     assert!(result.is_ok());
     // Should return 'success, not try to use 'if' as a procedure
-    assert_eq!(result.unwrap().to_string(), "success");
+    assert_eq!(interp.display_tagged(result.unwrap()), "success");
 }
 
 /// Test hygiene with multiple macro-introduced bindings
@@ -117,7 +118,7 @@ fn test_multiple_introduced_bindings() {
 
     assert!(result.is_ok());
     // Should return 1 + 2 + 3 = 6, not use the user's temp1/temp2
-    assert_eq!(result.unwrap().to_string(), "6");
+    assert_eq!(interp.display_tagged(result.unwrap()), "6");
 }
 
 /// Test that pattern variables from the call site are preserved
@@ -139,7 +140,7 @@ fn test_pattern_variable_preservation() {
 
     assert!(result.is_ok());
     // Should return 12 (double applied twice to 3)
-    assert_eq!(result.unwrap().to_string(), "12");
+    assert_eq!(interp.display_tagged(result.unwrap()), "12");
 }
 
 /// Test hygiene with lambda
@@ -162,7 +163,7 @@ fn test_lambda_hygiene() {
 
     assert!(result.is_ok());
     // Should return 8 (3 + 5), using the macro's n, not the outer bindings
-    assert_eq!(result.unwrap().to_string(), "8");
+    assert_eq!(interp.display_tagged(result.unwrap()), "8");
 }
 
 /// Test that quoted symbols in templates are not renamed
@@ -183,7 +184,7 @@ fn test_quoted_symbols_not_renamed() {
 
     assert!(result.is_ok());
     // The quoted 'temp should remain as the symbol temp
-    assert_eq!(result.unwrap().to_string(), "#t");
+    assert_eq!(interp.display_tagged(result.unwrap()), "#t");
 }
 
 /// Test hygiene doesn't break recursive macros
@@ -223,7 +224,7 @@ fn test_recursive_macro_hygiene() {
         "Recursive macro should evaluate: {:?}",
         result
     );
-    assert_eq!(result.unwrap().to_string(), "6");
+    assert_eq!(interp.display_tagged(result.unwrap()), "6");
 }
 
 /// Test scope-based hygiene: macro captures binding from definition site
@@ -251,7 +252,7 @@ fn test_let_syntax_captures_definition_site_binding() {
     assert!(result.is_ok());
     // The macro's 'x' should refer to 'outer' (definition site),
     // not 'inner' (expansion site)
-    assert_eq!(result.unwrap().to_string(), "outer");
+    assert_eq!(interp.display_tagged(result.unwrap()), "outer");
 }
 
 /// Test scope-based hygiene with define wrapper
@@ -274,7 +275,7 @@ fn test_let_syntax_hygiene_in_define() {
     );
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "outer");
+    assert_eq!(interp.display_tagged(result.unwrap()), "outer");
 }
 
 /// Test scope-based hygiene with lambda wrapper
@@ -295,7 +296,7 @@ fn test_let_syntax_hygiene_in_lambda() {
     );
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "outer");
+    assert_eq!(interp.display_tagged(result.unwrap()), "outer");
 }
 
 /// Test scope-based hygiene with multiple nested lets
@@ -315,7 +316,7 @@ fn test_let_syntax_hygiene_multiple_nesting() {
 
     assert!(result.is_ok());
     // Should return 'level1, not 'inner
-    assert_eq!(result.unwrap().to_string(), "level1");
+    assert_eq!(interp.display_tagged(result.unwrap()), "level1");
 }
 
 // =============================================================================
@@ -344,7 +345,8 @@ fn test_underscore_as_wildcard() {
 
     assert!(result.is_ok());
     // _ should match any symbol in macro keyword position
-    assert_eq!(result.unwrap().to_string(), "(1 2 3)");
+    let val = result.unwrap();
+    assert_eq!(interp.display_tagged(val), "(1 2 3)");
 }
 
 /// Test underscore as literal (when explicitly in literals list)
@@ -373,7 +375,8 @@ fn test_underscore_as_literal() {
 
     assert!(result.is_ok());
     // Pattern (_ _ _) should only match literal _, not a and b
-    assert_eq!(result.unwrap().to_string(), "(2 0 fail fail)");
+    let val = result.unwrap();
+    assert_eq!(interp.display_tagged(val), "(2 0 fail fail)");
 }
 
 // =============================================================================
@@ -400,7 +403,7 @@ fn test_ellipsis_escape_basic() {
 
     assert!(result.is_ok());
     // (... ...) should produce just ...
-    assert_eq!(result.unwrap().to_string(), "...");
+    assert_eq!(interp.display_tagged(result.unwrap()), "...");
 }
 
 /// Test ellipsis escape preserves pattern variable substitution
@@ -420,7 +423,7 @@ fn test_ellipsis_escape_with_pattern_variable() {
 
     assert!(result.is_ok());
     // x should be substituted, but ... remains literal
-    assert_eq!(result.unwrap().to_string(), "(foo ...)");
+    assert_eq!(interp.display_tagged(result.unwrap()), "(foo ...)");
 }
 
 /// Test ellipsis escape with multiple pattern variables
@@ -440,7 +443,7 @@ fn test_ellipsis_escape_multiple_vars() {
 
     assert!(result.is_ok());
     // Both x and y should be substituted, ... remains literal
-    assert_eq!(result.unwrap().to_string(), "(... bar baz)");
+    assert_eq!(interp.display_tagged(result.unwrap()), "(... bar baz)");
 }
 
 /// Test that ellipsis escape produces proper Symbol values
@@ -460,7 +463,7 @@ fn test_ellipsis_escape_produces_symbol() {
 
     assert!(result.is_ok());
     // Should be equal to '...
-    assert_eq!(result.unwrap().to_string(), "#t");
+    assert_eq!(interp.display_tagged(result.unwrap()), "#t");
 }
 
 /// Test ellipsis escape in list produces equal? results
@@ -479,7 +482,7 @@ fn test_ellipsis_escape_equal_list() {
     );
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "#t");
+    assert_eq!(interp.display_tagged(result.unwrap()), "#t");
 }
 
 // =============================================================================
@@ -512,7 +515,7 @@ fn test_nested_macro_simple() {
     );
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "42");
+    assert_eq!(interp.display_tagged(result.unwrap()), "42");
 }
 
 /// Test nested macro with ellipsis in inner template
@@ -540,7 +543,7 @@ fn test_nested_macro_with_ellipsis() {
 
     assert!(result.is_ok());
     // sequence should work like begin, returning the last value
-    assert_eq!(result.unwrap().to_string(), "4");
+    assert_eq!(interp.display_tagged(result.unwrap()), "4");
 }
 
 /// Test nested macro generating a list macro
@@ -564,7 +567,8 @@ fn test_nested_macro_listify() {
     );
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "(1 2 3 4 5)");
+    let val = result.unwrap();
+    assert_eq!(interp.display_tagged(val), "(1 2 3 4 5)");
 }
 
 // =============================================================================
@@ -595,7 +599,7 @@ fn test_shadowed_literal_cond_arrow() {
     // Since => is shadowed, cond should treat it as a regular expression,
     // falling through to the (test result1 result2 ...) pattern.
     // The result should be 'ok, not an error from trying to call 'ok as a procedure.
-    assert_eq!(result.unwrap().to_string(), "ok");
+    assert_eq!(interp.display_tagged(result.unwrap()), "ok");
 }
 
 /// Test shadowed literal with else in cond
@@ -616,7 +620,7 @@ fn test_shadowed_literal_cond_else() {
     assert!(result.is_ok());
     // With `else` shadowed, the first clause should be (test result...) form
     // where test=#f, so it should fall through to the second clause
-    assert_eq!(result.unwrap().to_string(), "fallback");
+    assert_eq!(interp.display_tagged(result.unwrap()), "fallback");
 }
 
 /// Test that non-shadowed literal still works normally
@@ -632,7 +636,7 @@ fn test_non_shadowed_literal_cond_arrow() {
 
     assert!(result.is_ok());
     // Normal => behavior: call the procedure with the test result
-    assert_eq!(result.unwrap().to_string(), "got-true");
+    assert_eq!(interp.display_tagged(result.unwrap()), "got-true");
 }
 
 /// Test shadowed literal in nested scope
@@ -650,7 +654,7 @@ fn test_shadowed_literal_nested_scope() {
     );
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "shadowed-ok");
+    assert_eq!(interp.display_tagged(result.unwrap()), "shadowed-ok");
 }
 
 // =============================================================================
@@ -681,7 +685,7 @@ fn test_let_syntax_internal_define_scoping() {
 
     assert!(result.is_ok());
     // The outer x should still be 1, not 2
-    assert_eq!(result.unwrap().to_string(), "1");
+    assert_eq!(interp.display_tagged(result.unwrap()), "1");
 }
 
 /// Test multiple internal defines in let-syntax body
@@ -704,7 +708,7 @@ fn test_let_syntax_multiple_internal_defines() {
 
     assert!(result.is_ok());
     // Outer a + b = 1 + 2 = 3
-    assert_eq!(result.unwrap().to_string(), "3");
+    assert_eq!(interp.display_tagged(result.unwrap()), "3");
 }
 
 /// Test that define inside let-syntax can access outer variables
@@ -723,7 +727,7 @@ fn test_let_syntax_internal_define_can_read_outer() {
     );
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "15");
+    assert_eq!(interp.display_tagged(result.unwrap()), "15");
 }
 
 /// Test let-syntax with both macros and internal defines
@@ -743,7 +747,7 @@ fn test_let_syntax_macro_and_internal_define() {
     );
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "10");
+    assert_eq!(interp.display_tagged(result.unwrap()), "10");
 }
 
 /// Test letrec-syntax also has proper internal define scoping
@@ -764,7 +768,7 @@ fn test_letrec_syntax_internal_define_scoping() {
 
     assert!(result.is_ok());
     // The outer x should still be 1
-    assert_eq!(result.unwrap().to_string(), "1");
+    assert_eq!(interp.display_tagged(result.unwrap()), "1");
 }
 
 /// Test define-syntax inside let-syntax body still works
@@ -784,7 +788,7 @@ fn test_let_syntax_with_internal_define_syntax() {
     );
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().to_string(), "12");
+    assert_eq!(interp.display_tagged(result.unwrap()), "12");
 }
 
 /// Test macro-generating macros: a macro that expands to define-syntax
@@ -813,7 +817,7 @@ fn test_macro_generating_macro_simple() {
     );
 
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "hello");
+    assert_eq!(interp.display_tagged(result.unwrap()), "hello");
 }
 
 /// Test macro-generating macros with conflicting names (R7RS requirement)
@@ -846,7 +850,7 @@ fn test_macro_generating_macro_conflicting_names() {
 
     // Returns 'x (the symbol x from the outer macro call)
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "x");
+    assert_eq!(interp.display_tagged(result.unwrap()), "x");
 }
 
 /// Test macro-generating macros with multiple generated macros
@@ -870,7 +874,7 @@ fn test_macro_generating_macro_multiple() {
     );
 
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "30");
+    assert_eq!(interp.display_tagged(result.unwrap()), "30");
 }
 
 /// Test macro-generating macros where generated macro uses the enclosing environment
@@ -895,7 +899,7 @@ fn test_macro_generating_macro_captures_env() {
 
     // base=100, offset=10, x=5 => 100 + 10 + 5 = 115
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "115");
+    assert_eq!(interp.display_tagged(result.unwrap()), "115");
 }
 
 // ===== Issue 1 Fix Tests: Identifier vs Symbol in Definition Names =====
@@ -921,7 +925,7 @@ fn test_macro_generated_function_definition() {
     );
 
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "25");
+    assert_eq!(interp.display_tagged(result.unwrap()), "25");
 }
 
 /// Test macro generating syntax-rules with literals from pattern variable
@@ -968,7 +972,7 @@ fn test_macro_generated_let_syntax() {
     );
 
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "43");
+    assert_eq!(interp.display_tagged(result.unwrap()), "43");
 }
 
 // ============================================================================
@@ -1007,7 +1011,7 @@ fn test_nested_macro_literal_matching() {
     // The literal `k` in (syntax-rules (k)...) matches the `k` in (n k)
     // because both come from the outer macro's template (same binding context).
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "matched-k");
+    assert_eq!(interp.display_tagged(result.unwrap()), "matched-k");
 }
 
 /// Test: Literal shadowed by let AFTER macro definition should NOT match
@@ -1034,7 +1038,7 @@ fn test_literal_shadowed_in_macro_body() {
     // The `k` in (n k) is shadowed by the let binding, so it doesn't
     // refer to the same binding as the literal `k` in the macro pattern.
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "no-match");
+    assert_eq!(interp.display_tagged(result.unwrap()), "no-match");
 }
 
 /// Test: Literal shadowed by let in nested macro template should NOT match
@@ -1061,7 +1065,7 @@ fn test_literal_shadowed_in_nested_macro_template() {
 
     // The `k` in (n k) is shadowed by the let inside the template.
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "no-match");
+    assert_eq!(interp.display_tagged(result.unwrap()), "no-match");
 }
 
 /// Test: Literal bound BEFORE macro definition SHOULD match
@@ -1097,7 +1101,7 @@ fn test_literal_bound_before_macro_definition() {
 
     // Should return 'matched because both k's refer to the same binding
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "matched");
+    assert_eq!(interp.display_tagged(result.unwrap()), "matched");
 }
 
 /// Test: Contrasting bound-before vs bound-after cases
@@ -1122,7 +1126,10 @@ fn test_literal_binding_before_vs_after() {
         "#,
     );
     assert!(result_before.is_ok(), "Case A failed: {:?}", result_before);
-    assert_eq!(result_before.unwrap().to_string(), "matched-before");
+    assert_eq!(
+        interp.display_tagged(result_before.unwrap()),
+        "matched-before"
+    );
 
     // Case B: Binding AFTER macro definition - should NOT match
     let result_after = interp.eval_program(
@@ -1135,5 +1142,5 @@ fn test_literal_binding_before_vs_after() {
         "#,
     );
     assert!(result_after.is_ok(), "Case B failed: {:?}", result_after);
-    assert_eq!(result_after.unwrap().to_string(), "no-match");
+    assert_eq!(interp.display_tagged(result_after.unwrap()), "no-match");
 }

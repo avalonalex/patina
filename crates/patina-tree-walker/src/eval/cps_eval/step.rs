@@ -6,9 +6,10 @@
 use super::CpsEvaluator;
 use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
+use patina_core::DynamicWindRecord;
 use patina_core::Environment;
 use patina_core::cps_expr::CpsExpr;
-use patina_core::value::{DynamicWindRecord, Value};
+use patina_core::tagged_value::TaggedValue;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -45,12 +46,14 @@ impl<'a> CpsEvaluator<'a> {
                 // ==================== Trivial Expressions ====================
                 // These evaluate immediately and return Done
                 CpsExpr::Literal(v) => {
-                    return Ok(StepResult::Done(v.as_ref().clone()));
+                    return Ok(StepResult::Done(*v));
                 }
 
                 CpsExpr::Var { name, scopes } => {
-                    match self.lookup_var(name, scopes, &current_env) {
-                        Ok(value) => return Ok(StepResult::Done(value)),
+                    match self.lookup_var_tagged(name, scopes, &current_env) {
+                        Ok(tagged) => {
+                            return Ok(StepResult::Done(tagged));
+                        }
                         Err(err) => {
                             // Route undefined variable errors through exception handlers
                             // We need a continuation to deliver the error to.
@@ -73,11 +76,8 @@ impl<'a> CpsEvaluator<'a> {
                     let cont = cont_env
                         .get(k)
                         .ok_or_else(|| EvalError::UndefinedVariable(k.to_string()))?;
-                    return Ok(StepResult::Done(self.reify_continuation(
-                        cont,
-                        &cont_env,
-                        &current_winds,
-                    )));
+                    let tagged = self.reify_continuation_tagged(cont, &cont_env, &current_winds);
+                    return Ok(StepResult::Done(tagged));
                 }
 
                 CpsExpr::Lambda {
@@ -87,7 +87,7 @@ impl<'a> CpsEvaluator<'a> {
                     body,
                     binding_scope,
                 } => {
-                    let closure = self.make_cps_closure(
+                    let tagged = self.make_cps_closure_tagged(
                         params,
                         variadic.as_ref(),
                         cont_param,
@@ -95,13 +95,13 @@ impl<'a> CpsEvaluator<'a> {
                         &current_env,
                         *binding_scope,
                     );
-                    return Ok(StepResult::Done(closure));
+                    return Ok(StepResult::Done(tagged));
                 }
 
                 // ==================== Expressions that update state and continue ====================
                 // These are handled in the inner loop
                 CpsExpr::LetVal { name, value, body } => {
-                    let val = self.eval_trivial(value, &current_env, &cont_env)?;
+                    let val = self.eval_trivial_tagged(value, &current_env, &cont_env)?;
                     let new_env = Rc::new(Environment::with_parent(current_env.clone()));
                     new_env.define(name.to_string(), val);
                     current_expr = body.as_ref().clone();
@@ -129,9 +129,8 @@ impl<'a> CpsEvaluator<'a> {
                     consequent,
                     alternate,
                 } => {
-                    let test_val = self.eval_trivial(test, &current_env, &cont_env)?;
-                    let is_true = !matches!(test_val, Value::Boolean(false));
-                    current_expr = if is_true {
+                    let test_val = self.eval_trivial_tagged(test, &current_env, &cont_env)?;
+                    current_expr = if test_val.is_truthy() {
                         consequent.as_ref().clone()
                     } else {
                         alternate.as_ref().clone()
@@ -144,13 +143,13 @@ impl<'a> CpsEvaluator<'a> {
                     value,
                     cont,
                 } => {
-                    let val = self.eval_trivial(value, &current_env, &cont_env)?;
-                    self.set_var(var, scopes, val, &current_env)?;
+                    let val = self.eval_trivial_tagged(value, &current_env, &cont_env)?;
+                    self.set_var_tagged(var, scopes, val, &current_env)?;
                     current_expr = cont.as_ref().clone();
                 }
 
                 CpsExpr::Define { name, value, cont } => {
-                    let val = self.eval_trivial(value, &current_env, &cont_env)?;
+                    let val = self.eval_trivial_tagged(value, &current_env, &cont_env)?;
                     // Define in the "definition environment", not current_env
                     // - For top-level: def_env is global_env
                     // - For lambda body: def_env is the lambda's body environment
@@ -181,10 +180,11 @@ impl<'a> CpsEvaluator<'a> {
                 // ==================== Expressions that return StepResult ====================
                 // These require trampolining to avoid stack growth
                 CpsExpr::App { func, args, cont } => {
-                    let proc = self.eval_trivial(func, &current_env, &cont_env)?;
-                    let arg_values: Result<Vec<Value>, _> = args
+                    // Evaluate func to TaggedValue directly for ApplyProc.proc
+                    let proc = self.eval_trivial_tagged(func, &current_env, &cont_env)?;
+                    let arg_values: Result<Vec<TaggedValue>, _> = args
                         .iter()
-                        .map(|arg| self.eval_trivial(arg, &current_env, &cont_env))
+                        .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
                         .collect();
                     let arg_values = arg_values?;
 
@@ -206,33 +206,42 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::Apply { func, args, cont } => {
-                    let proc = self.eval_trivial(func, &current_env, &cont_env)?;
-                    let arg_values: Result<Vec<Value>, _> = args
+                    // Evaluate func to TaggedValue directly for ApplyProc.proc
+                    let proc = self.eval_trivial_tagged(func, &current_env, &cont_env)?;
+                    let heap = self.evaluator.global_env.heap();
+
+                    // Evaluate args to TaggedValue and flatten the last list
+                    let arg_tagged: Result<Vec<TaggedValue>, _> = args
                         .iter()
-                        .map(|arg| self.eval_trivial(arg, &current_env, &cont_env))
+                        .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
                         .collect();
-                    let mut arg_values = arg_values?;
+                    let mut arg_tagged = arg_tagged?;
 
                     // Flatten the last argument (must be a list)
-                    if let Some(last_arg) = arg_values.pop() {
-                        let mut current = last_arg.clone();
+                    let flat_args: Vec<TaggedValue> = if !arg_tagged.is_empty() {
+                        let last_arg = arg_tagged.pop().unwrap();
+                        let mut result: Vec<TaggedValue> = arg_tagged;
+                        let mut current = last_arg;
+
                         loop {
-                            match current {
-                                Value::Null => break,
-                                Value::Pair(pair) => {
-                                    let borrowed = pair.borrow();
-                                    arg_values.push(borrowed.0.clone());
-                                    current = borrowed.1.clone();
-                                }
-                                _ => {
-                                    return Err(EvalError::TypeError(format!(
-                                        "apply: last argument must be a list, got {:?}",
-                                        last_arg
-                                    )));
-                                }
+                            if current.is_null() {
+                                break;
+                            }
+                            // Extract car and cdr using heap helper
+                            if let Some((car, cdr)) = heap.borrow().try_pair(current) {
+                                result.push(car);
+                                current = cdr;
+                            } else {
+                                return Err(EvalError::TypeError(format!(
+                                    "apply: last argument must be a list, got {}",
+                                    heap.borrow().type_name(last_arg)
+                                )));
                             }
                         }
-                    }
+                        result
+                    } else {
+                        vec![]
+                    };
 
                     let k = cont_env
                         .get(cont)
@@ -241,7 +250,7 @@ impl<'a> CpsEvaluator<'a> {
 
                     return Ok(StepResult::ApplyProc {
                         proc,
-                        args: arg_values,
+                        args: flat_args,
                         cont: k,
                         env: current_env,
                         cont_env,
@@ -258,7 +267,8 @@ impl<'a> CpsEvaluator<'a> {
                         .clone();
 
                     // Evaluate value, routing any errors through exception handlers
-                    let val = match self.eval_trivial(value, &current_env, &cont_env) {
+                    let val_tagged = match self.eval_trivial_tagged(value, &current_env, &cont_env)
+                    {
                         Ok(v) => v,
                         Err(err) => {
                             return self.maybe_route_error_through_cps(
@@ -274,7 +284,7 @@ impl<'a> CpsEvaluator<'a> {
 
                     return Ok(StepResult::InvokeContinuation {
                         cont: k,
-                        value: val,
+                        value: val_tagged,
                         env: current_env,
                         cont_env,
                         prompt_stack,
@@ -284,18 +294,20 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::CallCC { proc, cont } => {
-                    let procedure = self.eval_trivial(proc, &current_env, &cont_env)?;
+                    // Evaluate proc to TaggedValue directly for ApplyProc.proc
+                    let procedure = self.eval_trivial_tagged(proc, &current_env, &cont_env)?;
 
                     let k = cont_env
                         .get(cont)
                         .ok_or_else(|| EvalError::UndefinedVariable(cont.to_string()))?
                         .clone();
 
-                    let captured_k = self.reify_continuation(&k, &cont_env, &current_winds);
+                    let captured_k_tagged =
+                        self.reify_continuation_tagged(&k, &cont_env, &current_winds);
 
                     return Ok(StepResult::ApplyProc {
                         proc: procedure,
-                        args: vec![captured_k],
+                        args: vec![captured_k_tagged],
                         cont: k,
                         env: current_env,
                         cont_env,
@@ -306,7 +318,8 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::Control { tag, proc } => {
-                    let procedure = self.eval_trivial(proc, &current_env, &cont_env)?;
+                    // Evaluate proc to TaggedValue directly for ApplyProc.proc
+                    let procedure = self.eval_trivial_tagged(proc, &current_env, &cont_env)?;
 
                     let prompt_idx = prompt_stack
                         .iter()
@@ -321,7 +334,7 @@ impl<'a> CpsEvaluator<'a> {
                     let prompt_frame = prompt_stack.pop().unwrap();
                     let prompt_cont = prompt_frame.cont;
 
-                    let delimited_k = self.make_delimited_continuation(
+                    let delimited_k_tagged = self.make_delimited_continuation_tagged(
                         captured_frames,
                         current_winds.clone(),
                         prompt_frame.dynamic_winds.clone(),
@@ -329,7 +342,7 @@ impl<'a> CpsEvaluator<'a> {
 
                     return Ok(StepResult::ApplyProc {
                         proc: procedure,
-                        args: vec![delimited_k],
+                        args: vec![delimited_k_tagged],
                         cont: prompt_cont,
                         env: current_env,
                         cont_env,
@@ -340,7 +353,7 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::Abort { tag, value } => {
-                    let val = self.eval_trivial(value, &current_env, &cont_env)?;
+                    let val_tagged = self.eval_trivial_tagged(value, &current_env, &cont_env)?;
 
                     let prompt_idx = prompt_stack
                         .iter()
@@ -356,7 +369,7 @@ impl<'a> CpsEvaluator<'a> {
 
                     return Ok(StepResult::InvokeContinuation {
                         cont: prompt_frame.cont,
-                        value: val,
+                        value: val_tagged,
                         env: current_env,
                         cont_env,
                         prompt_stack,
@@ -366,10 +379,10 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::Quasiquote { template, cont } => {
-                    // Evaluate quasiquote template
+                    // Evaluate quasiquote template - now works with TaggedValue directly
                     let result = super::quasiquote::eval_quasiquote_in_env(
                         self.evaluator,
-                        template,
+                        *template,
                         &current_env,
                     )?;
 
@@ -390,13 +403,15 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::PrimOp { op, args, cont } => {
-                    let arg_values: Result<Vec<Value>, _> = args
+                    // Evaluate args directly to TaggedValue
+                    let arg_values: Result<Vec<TaggedValue>, _> = args
                         .iter()
-                        .map(|arg| self.eval_trivial(arg, &current_env, &cont_env))
+                        .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
                         .collect();
                     let arg_values = arg_values?;
 
-                    let result = self.eval_primop(op, arg_values)?;
+                    // eval_primop now takes and returns TaggedValue
+                    let result_tagged = self.eval_primop(op, arg_values)?;
 
                     let k = cont_env
                         .get(cont)
@@ -405,7 +420,7 @@ impl<'a> CpsEvaluator<'a> {
 
                     return Ok(StepResult::InvokeContinuation {
                         cont: k,
-                        value: result,
+                        value: result_tagged,
                         env: current_env,
                         cont_env,
                         prompt_stack,
@@ -415,8 +430,8 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExpr::Halt(value) => {
-                    let result = self.eval_trivial(value, &current_env, &cont_env)?;
-                    return Ok(StepResult::Done(result));
+                    let tagged = self.eval_trivial_tagged(value, &current_env, &cont_env)?;
+                    return Ok(StepResult::Done(tagged));
                 }
             }
         }

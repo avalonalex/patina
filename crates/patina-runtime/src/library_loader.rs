@@ -11,9 +11,10 @@
 //! - Support both for maximum flexibility
 
 use crate::Environment;
-use crate::Value;
+use crate::heap::SharedHeap;
 use crate::library::Library;
 use crate::library_registry::LibraryError;
+use patina_core::TaggedValue;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -33,6 +34,22 @@ pub trait LibraryLoader {
     /// - Populating exports
     /// - Handling dependencies (imports)
     fn load(&self, name: &[String], search_paths: &[PathBuf]) -> Result<Library, LibraryError>;
+
+    /// Load a library with a shared heap for TaggedValue compatibility
+    ///
+    /// When provided, the library environment should use this heap so that
+    /// TaggedValues are allocated on the same heap as the global environment.
+    /// This prevents heap index mismatches when importing library exports.
+    ///
+    /// Default implementation ignores the heap and calls load().
+    fn load_with_heap(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+        _heap: SharedHeap,
+    ) -> Result<Library, LibraryError> {
+        self.load(name, search_paths)
+    }
 
     /// Check if this loader can handle the given library name
     ///
@@ -101,8 +118,11 @@ pub struct ParsedLibrary {
     /// Import specifications (will need to be resolved)
     pub imports: Vec<ImportSet>,
 
-    /// Library body expressions (need evaluation)
-    pub body: Vec<Value>,
+    /// Library body expressions (need evaluation) as TaggedValues
+    pub body: Vec<TaggedValue>,
+
+    /// The heap containing the body TaggedValues
+    pub heap: Option<SharedHeap>,
 
     /// Export specifications
     pub exports: Vec<ExportSpec>,
@@ -162,6 +182,23 @@ pub trait EvaluatingLibraryLoader {
         // Default: ignore the checker
         self.parse(name, search_paths)
     }
+
+    /// Parse a library with a shared heap and library availability checker.
+    ///
+    /// When provided, the parser uses the shared heap so that TaggedValues
+    /// in the body are allocated on the same heap as the global environment.
+    /// This eliminates the need for cross-heap conversion when evaluating.
+    ///
+    /// Default implementation ignores the heap and calls `parse_with_library_checker()`.
+    fn parse_with_heap_and_library_checker(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+        _heap: SharedHeap,
+        can_load_library: &dyn Fn(&[String]) -> bool,
+    ) -> Result<ParsedLibrary, LibraryError> {
+        self.parse_with_library_checker(name, search_paths, can_load_library)
+    }
 }
 
 /// Registry for library loaders
@@ -220,6 +257,25 @@ impl LibraryLoaderRegistry {
         for loader in &self.simple_loaders {
             if loader.can_load(name) {
                 return loader.load(name, search_paths).map(Some);
+            }
+        }
+        Ok(None)
+    }
+
+    /// Try to load a library using simple loaders with a shared heap
+    ///
+    /// Like try_simple_load, but passes a heap to loaders for TaggedValue compatibility.
+    /// This ensures that library environments use the same heap as the global environment,
+    /// preventing heap index mismatches when importing exports.
+    pub fn try_simple_load_with_heap(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+        heap: SharedHeap,
+    ) -> Result<Option<Library>, LibraryError> {
+        for loader in &self.simple_loaders {
+            if loader.can_load(name) {
+                return loader.load_with_heap(name, search_paths, heap).map(Some);
             }
         }
         Ok(None)
@@ -300,6 +356,27 @@ impl LibraryLoaderRegistry {
         // For evaluating loaders without search paths, we can't accurately check
         // Return false since we can't verify file existence
         false
+    }
+
+    /// Try to parse a library with a shared heap and library availability checker.
+    ///
+    /// Like try_parse_with_library_checker, but passes a heap so that body
+    /// TaggedValues are allocated on the global heap.
+    pub fn try_parse_with_heap_and_library_checker(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+        heap: SharedHeap,
+        can_load_library: &dyn Fn(&[String]) -> bool,
+    ) -> Result<Option<ParsedLibrary>, LibraryError> {
+        for loader in &self.evaluating_loaders {
+            if loader.can_load(name) {
+                return loader
+                    .parse_with_heap_and_library_checker(name, search_paths, heap, can_load_library)
+                    .map(Some);
+            }
+        }
+        Ok(None)
     }
 
     /// Check if any loader can load the given library with search paths.

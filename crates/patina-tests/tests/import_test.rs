@@ -14,7 +14,7 @@ fn test_import_scheme_base() {
     );
 
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "6");
+    assert_eq!(result.unwrap().as_fixnum(), Some(6));
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn test_import_only() {
     );
 
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "24");
+    assert_eq!(result.unwrap().as_fixnum(), Some(24));
 }
 
 #[test]
@@ -44,5 +44,5 @@ fn test_import_prefix() {
     );
 
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "30");
+    assert_eq!(result.unwrap().as_fixnum(), Some(30));
 }

@@ -4,20 +4,13 @@
 //! and that the library? predicate works correctly.
 
 use patina_interpreter::TreeWalkInterpreter;
-use patina_runtime::{Library, Value};
-use std::rc::Rc;
+use patina_runtime::Library;
 
 #[test]
 fn test_library_value_creation() {
-    // Create a library value directly
+    // Create a library and verify its display format
     let lib = Library::new(vec!["test".to_string(), "lib".to_string()]);
-    let lib_value = Value::Library(Rc::new(lib));
-
-    // Verify type
-    assert_eq!(lib_value.type_name(), "library");
-
-    // Verify display
-    assert_eq!(lib_value.to_string(), "#<library:(test lib)>");
+    assert_eq!(lib.to_string(), "#<library:(test lib)>");
 }
 
 #[test]
@@ -30,16 +23,16 @@ fn test_library_predicate() {
 
     // Non-library values should return #f
     let result = interp.eval_str("(library? 42)").unwrap();
-    assert_eq!(result.to_string(), "#f");
+    assert_eq!(result, patina_core::TaggedValue::FALSE);
 
     let result = interp.eval_str("(library? \"hello\")").unwrap();
-    assert_eq!(result.to_string(), "#f");
+    assert_eq!(result, patina_core::TaggedValue::FALSE);
 
     let result = interp.eval_str("(library? '(1 2 3))").unwrap();
-    assert_eq!(result.to_string(), "#f");
+    assert_eq!(result, patina_core::TaggedValue::FALSE);
 
     let result = interp.eval_str("(library? +)").unwrap();
-    assert_eq!(result.to_string(), "#f");
+    assert_eq!(result, patina_core::TaggedValue::FALSE);
 }
 
 #[test]
@@ -47,8 +40,8 @@ fn test_library_with_exports() {
     let mut lib = Library::new(vec!["mylib".to_string()]);
 
     // Add some exports
-    lib.export("foo".to_string(), Value::Integer(42));
-    lib.export("bar".to_string(), Value::Boolean(true));
+    lib.export_tagged("foo".to_string(), patina_core::TaggedValue::fixnum(42));
+    lib.export_tagged("bar".to_string(), patina_core::TaggedValue::TRUE);
 
     // Verify exports
     assert!(lib.exports_identifier("foo"));
@@ -56,11 +49,14 @@ fn test_library_with_exports() {
     assert!(!lib.exports_identifier("baz"));
 
     // Get export values
-    let foo = lib.get_export("foo").unwrap();
-    assert_eq!(foo.to_string(), "42");
-
-    let bar = lib.get_export("bar").unwrap();
-    assert_eq!(bar.to_string(), "#t");
+    assert_eq!(
+        lib.get_export_tagged("foo"),
+        Some(patina_core::TaggedValue::fixnum(42))
+    );
+    assert_eq!(
+        lib.get_export_tagged("bar"),
+        Some(patina_core::TaggedValue::TRUE)
+    );
 
     // Check export names
     let mut names = lib.export_names();

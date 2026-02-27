@@ -27,7 +27,7 @@ mod debug;
 pub(in crate::eval) mod equality;
 mod eval;
 mod exceptions;
-mod io;
+pub mod io;
 mod lazy;
 mod lists;
 mod parameters;
@@ -45,23 +45,22 @@ mod vectors;
 // Re-export registry types for convenience
 pub use registry::PrimitiveRegistry;
 
-use patina_runtime::value::{Procedure, Value};
-use std::cell::RefCell;
-use std::rc::Rc;
+use patina_core::TaggedValue;
+use patina_runtime::Procedure;
 
 use super::Evaluator;
 use super::error::EvalError;
 
 impl Evaluator {
-    /// Main dispatcher for primitive procedure calls
+    /// Dispatcher for primitive procedure calls with TaggedValue arguments
     ///
     /// The `in_tail_position` parameter indicates whether this primitive call is in tail context.
-    /// Most primitives ignore this and return `EvalResult::Value`, but certain primitives like
+    /// Most primitives ignore this and return `EvalResult::Tagged`, but certain primitives like
     /// `call-with-values` can return `EvalResult::TailCallPrimitive` to participate in TCO.
-    pub(super) fn apply_primitive(
+    pub(super) fn apply_primitive_tagged(
         &self,
         proc: &Procedure,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         in_tail_position: bool,
     ) -> Result<super::EvalResult, EvalError> {
         // Extract name and library from the primitive
@@ -69,7 +68,7 @@ impl Evaluator {
             Procedure::Primitive { name, library, .. } => (*name, library),
             _ => {
                 return Err(EvalError::TypeError(
-                    "apply_primitive called with non-primitive procedure".to_string(),
+                    "apply_primitive_tagged called with non-primitive procedure".to_string(),
                 ));
             }
         };
@@ -77,10 +76,9 @@ impl Evaluator {
         // Build qualified name using the procedure's library namespace
         let qualified_name = format!("{}/{}", library.join("."), name);
 
-        // Apply the primitive and propagate any errors
-        // (Don't swallow errors - if the primitive fails, return that error)
+        // Apply the primitive via TaggedValue interface
         self.primitive_registry
-            .apply(&qualified_name, args, self, in_tail_position)
+            .apply_tagged(&qualified_name, args, self, in_tail_position)
             .map_err(|e| {
                 // If the error is "primitive not found", give a clearer message
                 if e.to_string().contains("not found") {
@@ -122,101 +120,5 @@ impl Evaluator {
         exceptions::register(registry);
 
         // All core primitives are now in the registry!
-    }
-
-    // ========== Helper Functions for Primitives ==========
-
-    /// Check that exactly `expected` arguments were provided
-    pub(in crate::eval) fn check_arity_exact(
-        &self,
-        args: &[Value],
-        expected: usize,
-        fn_name: &str,
-    ) -> Result<(), EvalError> {
-        if args.len() != expected {
-            return Err(EvalError::WrongArity {
-                expected: format!("{} expects {} argument(s)", fn_name, expected),
-                actual: args.len(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Check that at least `min` arguments were provided
-    pub(in crate::eval) fn check_arity_min(
-        &self,
-        args: &[Value],
-        min: usize,
-        fn_name: &str,
-    ) -> Result<(), EvalError> {
-        if args.len() < min {
-            return Err(EvalError::WrongArity {
-                expected: format!("{} expects at least {} argument(s)", fn_name, min),
-                actual: args.len(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Check that between `min` and `max` arguments were provided
-    pub(in crate::eval) fn check_arity_range(
-        &self,
-        args: &[Value],
-        min: usize,
-        max: usize,
-        fn_name: &str,
-    ) -> Result<(), EvalError> {
-        if args.len() < min || args.len() > max {
-            return Err(EvalError::WrongArity {
-                expected: format!("{} expects {} to {} argument(s)", fn_name, min, max),
-                actual: args.len(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Convert a Scheme list to a Vec, validating it's a proper list
-    pub(in crate::eval) fn list_to_vec(
-        &self,
-        list: Value,
-        fn_name: &str,
-    ) -> Result<Vec<Value>, EvalError> {
-        let mut items = Vec::new();
-        let mut current = list;
-
-        while let Value::Pair(pair) = current {
-            let borrowed = pair.borrow();
-            items.push(borrowed.0.clone());
-            current = borrowed.1.clone();
-        }
-
-        if !matches!(current, Value::Null) {
-            return Err(EvalError::TypeError(format!(
-                "{}: argument must be a proper list",
-                fn_name
-            )));
-        }
-
-        Ok(items)
-    }
-
-    /// Convert a Vec to a Scheme list
-    pub(in crate::eval) fn list_from_vec(&self, items: Vec<Value>) -> Value {
-        items.into_iter().rev().fold(Value::Null, |acc, item| {
-            Value::Pair(Rc::new(RefCell::new((item, acc))))
-        })
-    }
-
-    /// Generic type predicate helper
-    pub(in crate::eval) fn make_type_predicate<F>(
-        &self,
-        args: Vec<Value>,
-        predicate: F,
-    ) -> Result<Value, EvalError>
-    where
-        F: Fn(&Value) -> bool,
-    {
-        self.check_arity_exact(&args, 1, "type predicate")?;
-        Ok(Value::Boolean(predicate(&args[0])))
     }
 }

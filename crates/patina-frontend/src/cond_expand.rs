@@ -11,155 +11,195 @@
 //! - `(not <req>)` - true if the requirement is false
 
 use crate::ParseError;
-use patina_runtime::Value;
+use patina_core::{SharedHeap, TaggedValue};
 use patina_runtime::features::FeatureRegistry;
 
-/// Evaluate a feature requirement.
+/// Evaluate a feature requirement from TaggedValue.
 ///
 /// Returns true if the requirement is satisfied.
 ///
 /// The `can_load_library` callback is used to check if a library can be loaded.
 /// This allows the evaluator to provide library checking without creating a
 /// circular dependency.
-pub fn evaluate_feature_requirement<F>(
-    req: &Value,
+pub fn evaluate_feature_requirement_tagged<F>(
+    req: TaggedValue,
+    shared_heap: &SharedHeap,
     features: &FeatureRegistry,
     can_load_library: &F,
 ) -> Result<bool, ParseError>
 where
     F: Fn(&[String]) -> bool + ?Sized,
 {
-    match req {
-        // Simple feature identifier
-        Value::Symbol(name) => Ok(features.has_feature(name)),
+    let heap = shared_heap.borrow();
 
-        // Compound requirement
-        Value::Pair(_) => {
-            let list = value_to_vec(req)?;
-            if list.is_empty() {
-                return Err(ParseError::InvalidSyntax(
-                    "Empty feature requirement".to_string(),
-                ));
+    // Simple feature identifier (symbol)
+    if let Some(name) = heap.get_symbol_name(req) {
+        return Ok(features.has_feature(name));
+    }
+
+    // Check for identifier (from macro expansion)
+    if let Some((name, _)) = heap.get_identifier_data_any(req) {
+        return Ok(features.has_feature(&name));
+    }
+
+    // Compound requirement (pair)
+    if req.is_pair() {
+        drop(heap);
+        let items = tagged_list_to_vec(req, shared_heap)?;
+        if items.is_empty() {
+            return Err(ParseError::InvalidSyntax(
+                "Empty feature requirement".to_string(),
+            ));
+        }
+
+        let operator = {
+            let heap = shared_heap.borrow();
+            if let Some(s) = heap.get_symbol_name(items[0]) {
+                Some(s.to_string())
+            } else if let Some((name, _)) = heap.get_identifier_data_any(items[0]) {
+                Some(name.to_string())
+            } else {
+                None
             }
+        };
 
-            match list[0].as_symbol() {
-                Some("and") => {
-                    // (and req1 req2 ...) - all must be true
-                    for sub_req in &list[1..] {
-                        if !evaluate_feature_requirement(sub_req, features, can_load_library)? {
-                            return Ok(false);
-                        }
-                    }
-                    Ok(true)
-                }
-
-                Some("or") => {
-                    // (or req1 req2 ...) - any must be true
-                    for sub_req in &list[1..] {
-                        if evaluate_feature_requirement(sub_req, features, can_load_library)? {
-                            return Ok(true);
-                        }
-                    }
-                    Ok(false)
-                }
-
-                Some("not") => {
-                    // (not req) - must be false
-                    if list.len() != 2 {
-                        return Err(ParseError::InvalidSyntax(
-                            "not requires exactly one argument".to_string(),
-                        ));
-                    }
-                    Ok(!evaluate_feature_requirement(
-                        &list[1],
+        match operator.as_deref() {
+            Some("and") => {
+                for &sub_req in &items[1..] {
+                    if !evaluate_feature_requirement_tagged(
+                        sub_req,
+                        shared_heap,
                         features,
                         can_load_library,
-                    )?)
-                }
-
-                Some("library") => {
-                    // (library <library-name>) - check if library exists
-                    if list.len() != 2 {
-                        return Err(ParseError::InvalidSyntax(
-                            "library requires exactly one argument".to_string(),
-                        ));
+                    )? {
+                        return Ok(false);
                     }
-                    let lib_name = parse_library_name(&list[1])?;
-                    Ok(can_load_library(&lib_name))
                 }
-
-                _ => Err(ParseError::InvalidSyntax(format!(
-                    "Unknown feature requirement operator: {}",
-                    list[0]
-                ))),
+                Ok(true)
             }
-        }
-
-        _ => Err(ParseError::InvalidSyntax(format!(
-            "Invalid feature requirement: {}",
-            req
-        ))),
-    }
-}
-
-/// Helper to get symbol from Value
-trait AsSymbol {
-    fn as_symbol(&self) -> Option<&str>;
-}
-
-impl AsSymbol for Value {
-    fn as_symbol(&self) -> Option<&str> {
-        match self {
-            Value::Symbol(s) => Some(s),
-            _ => None,
-        }
-    }
-}
-
-/// Convert a Value list to Vec
-fn value_to_vec(value: &Value) -> Result<Vec<Value>, ParseError> {
-    let mut items = Vec::new();
-    let mut current = value.clone();
-
-    loop {
-        match current {
-            Value::Null => return Ok(items),
-            Value::Pair(pair) => {
-                let borrowed = pair.borrow();
-                items.push(borrowed.0.clone());
-                current = borrowed.1.clone();
+            Some("or") => {
+                for &sub_req in &items[1..] {
+                    if evaluate_feature_requirement_tagged(
+                        sub_req,
+                        shared_heap,
+                        features,
+                        can_load_library,
+                    )? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Some("not") => {
+                if items.len() != 2 {
+                    return Err(ParseError::InvalidSyntax(
+                        "not requires exactly one argument".to_string(),
+                    ));
+                }
+                Ok(!evaluate_feature_requirement_tagged(
+                    items[1],
+                    shared_heap,
+                    features,
+                    can_load_library,
+                )?)
+            }
+            Some("library") => {
+                if items.len() != 2 {
+                    return Err(ParseError::InvalidSyntax(
+                        "library requires exactly one argument".to_string(),
+                    ));
+                }
+                let lib_name = parse_library_name_tagged(items[1], shared_heap)?;
+                Ok(can_load_library(&lib_name))
             }
             _ => {
-                return Err(ParseError::InvalidSyntax(format!(
-                    "Expected proper list, got improper list ending with: {}",
-                    current
-                )));
+                let heap = shared_heap.borrow();
+                Err(ParseError::InvalidSyntax(format!(
+                    "Unknown feature requirement operator: {}",
+                    heap.type_name(items[0])
+                )))
             }
         }
+    } else {
+        Err(ParseError::InvalidSyntax(format!(
+            "Invalid feature requirement: {}",
+            shared_heap.borrow().type_name(req)
+        )))
     }
 }
 
-/// Parse a library name from a Value
-fn parse_library_name(value: &Value) -> Result<Vec<String>, ParseError> {
-    let list = value_to_vec(value)?;
+/// Convert a TaggedValue list to Vec<TaggedValue>
+pub(crate) fn tagged_list_to_vec(
+    value: TaggedValue,
+    shared_heap: &SharedHeap,
+) -> Result<Vec<TaggedValue>, ParseError> {
+    let mut result = Vec::new();
+    let mut current = value;
 
-    if list.is_empty() {
+    loop {
+        if current == TaggedValue::NULL {
+            return Ok(result);
+        }
+
+        // Try native pair first
+        {
+            let heap = shared_heap.borrow();
+            if current.is_pair() {
+                let (car, cdr) = heap.get_pair(current);
+                result.push(car);
+                current = cdr;
+                continue;
+            }
+        }
+
+        let pair = shared_heap.borrow().try_pair(current);
+        if let Some((car, cdr)) = pair {
+            result.push(car);
+            current = cdr;
+            continue;
+        }
+
+        return Err(ParseError::InvalidSyntax(
+            "Expected proper list in feature requirement".to_string(),
+        ));
+    }
+}
+
+/// Parse a library name from TaggedValue
+pub(crate) fn parse_library_name_tagged(
+    value: TaggedValue,
+    shared_heap: &SharedHeap,
+) -> Result<Vec<String>, ParseError> {
+    let items = tagged_list_to_vec(value, shared_heap)?;
+
+    if items.is_empty() {
         return Err(ParseError::InvalidSyntax(
             "Library name cannot be empty".to_string(),
         ));
     }
 
+    let heap = shared_heap.borrow();
     let mut name = Vec::new();
-    for part in list {
-        match &part {
-            Value::Symbol(s) => name.push(s.to_string()),
-            Value::Integer(n) if *n >= 0 => name.push(n.to_string()),
-            _ => {
+    for item in items {
+        if let Some(s) = heap.get_symbol_name(item) {
+            name.push(s.to_string());
+        } else if let Some((id_name, _)) = heap.get_identifier_data_any(item) {
+            name.push(id_name.to_string());
+        } else if item.is_fixnum() {
+            let n = item.as_fixnum_unchecked();
+            if n >= 0 {
+                name.push(n.to_string());
+            } else {
                 return Err(ParseError::InvalidSyntax(format!(
-                    "Library name parts must be identifiers or non-negative integers, got: {}",
-                    part
+                    "Library name parts must be identifiers or non-negative integers, got negative: {}",
+                    n
                 )));
             }
+        } else {
+            return Err(ParseError::InvalidSyntax(format!(
+                "Library name parts must be identifiers or non-negative integers, got: {}",
+                heap.type_name(item)
+            )));
         }
     }
 
@@ -170,143 +210,205 @@ fn parse_library_name(value: &Value) -> Result<Vec<String>, ParseError> {
 mod tests {
     use super::*;
     use patina_runtime::FeatureRegistry;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
-    fn symbol(s: &str) -> Value {
-        Value::Symbol(s.into())
+    fn test_heap() -> SharedHeap {
+        patina_core::new_shared_heap()
     }
 
-    fn list(items: Vec<Value>) -> Value {
-        items.into_iter().rev().fold(Value::Null, |acc, item| {
-            Value::Pair(Rc::new(RefCell::new((item, acc))))
-        })
+    fn sym(s: &str, heap: &SharedHeap) -> TaggedValue {
+        heap.borrow_mut().intern_symbol(s)
     }
 
-    fn integer(n: i64) -> Value {
-        Value::Integer(n)
+    fn fixnum(n: i64) -> TaggedValue {
+        TaggedValue::fixnum(n)
+    }
+
+    fn list(items: Vec<TaggedValue>, heap: &SharedHeap) -> TaggedValue {
+        let mut result = TaggedValue::NULL;
+        for item in items.into_iter().rev() {
+            result = heap.borrow_mut().alloc_pair(item, result);
+        }
+        result
     }
 
     #[test]
     fn test_simple_feature() {
+        let heap = test_heap();
         let features = FeatureRegistry::new();
         let no_load = |_: &[String]| false;
 
         // r7rs should be present
-        assert!(evaluate_feature_requirement(&symbol("r7rs"), &features, &no_load).unwrap());
+        assert!(
+            evaluate_feature_requirement_tagged(sym("r7rs", &heap), &heap, &features, &no_load)
+                .unwrap()
+        );
 
         // patina should be present
-        assert!(evaluate_feature_requirement(&symbol("patina"), &features, &no_load).unwrap());
+        assert!(
+            evaluate_feature_requirement_tagged(sym("patina", &heap), &heap, &features, &no_load)
+                .unwrap()
+        );
 
         // nonexistent should be false
         assert!(
-            !evaluate_feature_requirement(&symbol("nonexistent"), &features, &no_load).unwrap()
+            !evaluate_feature_requirement_tagged(
+                sym("nonexistent", &heap),
+                &heap,
+                &features,
+                &no_load
+            )
+            .unwrap()
         );
     }
 
     #[test]
     fn test_and_requirement() {
+        let heap = test_heap();
         let features = FeatureRegistry::new();
         let no_load = |_: &[String]| false;
 
         // (and r7rs patina) should be true
-        let req = list(vec![symbol("and"), symbol("r7rs"), symbol("patina")]);
-        assert!(evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(
+            vec![sym("and", &heap), sym("r7rs", &heap), sym("patina", &heap)],
+            &heap,
+        );
+        assert!(evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
 
         // (and r7rs nonexistent) should be false
-        let req = list(vec![symbol("and"), symbol("r7rs"), symbol("nonexistent")]);
-        assert!(!evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(
+            vec![
+                sym("and", &heap),
+                sym("r7rs", &heap),
+                sym("nonexistent", &heap),
+            ],
+            &heap,
+        );
+        assert!(!evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
 
         // (and) with no args should be true (vacuous truth)
-        let req = list(vec![symbol("and")]);
-        assert!(evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(vec![sym("and", &heap)], &heap);
+        assert!(evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
     }
 
     #[test]
     fn test_or_requirement() {
+        let heap = test_heap();
         let features = FeatureRegistry::new();
         let no_load = |_: &[String]| false;
 
         // (or nonexistent r7rs) should be true
-        let req = list(vec![symbol("or"), symbol("nonexistent"), symbol("r7rs")]);
-        assert!(evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(
+            vec![
+                sym("or", &heap),
+                sym("nonexistent", &heap),
+                sym("r7rs", &heap),
+            ],
+            &heap,
+        );
+        assert!(evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
 
         // (or nonexistent1 nonexistent2) should be false
-        let req = list(vec![
-            symbol("or"),
-            symbol("nonexistent1"),
-            symbol("nonexistent2"),
-        ]);
-        assert!(!evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(
+            vec![
+                sym("or", &heap),
+                sym("nonexistent1", &heap),
+                sym("nonexistent2", &heap),
+            ],
+            &heap,
+        );
+        assert!(!evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
 
         // (or) with no args should be false (no true found)
-        let req = list(vec![symbol("or")]);
-        assert!(!evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(vec![sym("or", &heap)], &heap);
+        assert!(!evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
     }
 
     #[test]
     fn test_not_requirement() {
+        let heap = test_heap();
         let features = FeatureRegistry::new();
         let no_load = |_: &[String]| false;
 
         // (not nonexistent) should be true
-        let req = list(vec![symbol("not"), symbol("nonexistent")]);
-        assert!(evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(vec![sym("not", &heap), sym("nonexistent", &heap)], &heap);
+        assert!(evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
 
         // (not r7rs) should be false
-        let req = list(vec![symbol("not"), symbol("r7rs")]);
-        assert!(!evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(vec![sym("not", &heap), sym("r7rs", &heap)], &heap);
+        assert!(!evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
     }
 
     #[test]
     fn test_library_requirement() {
+        let heap = test_heap();
         let features = FeatureRegistry::new();
 
         // Simulate library loader that knows about (scheme base)
         let can_load = |name: &[String]| name == ["scheme", "base"];
 
         // (library (scheme base)) should be true
-        let req = list(vec![
-            symbol("library"),
-            list(vec![symbol("scheme"), symbol("base")]),
-        ]);
-        assert!(evaluate_feature_requirement(&req, &features, &can_load).unwrap());
+        let req = list(
+            vec![
+                sym("library", &heap),
+                list(vec![sym("scheme", &heap), sym("base", &heap)], &heap),
+            ],
+            &heap,
+        );
+        assert!(evaluate_feature_requirement_tagged(req, &heap, &features, &can_load).unwrap());
 
         // (library (nonexistent lib)) should be false
-        let req = list(vec![
-            symbol("library"),
-            list(vec![symbol("nonexistent"), symbol("lib")]),
-        ]);
-        assert!(!evaluate_feature_requirement(&req, &features, &can_load).unwrap());
+        let req = list(
+            vec![
+                sym("library", &heap),
+                list(vec![sym("nonexistent", &heap), sym("lib", &heap)], &heap),
+            ],
+            &heap,
+        );
+        assert!(!evaluate_feature_requirement_tagged(req, &heap, &features, &can_load).unwrap());
 
         // (library (srfi 1)) with integer
         let can_load_srfi = |name: &[String]| name == ["srfi", "1"];
-        let req = list(vec![
-            symbol("library"),
-            list(vec![symbol("srfi"), integer(1)]),
-        ]);
-        assert!(evaluate_feature_requirement(&req, &features, &can_load_srfi).unwrap());
+        let req = list(
+            vec![
+                sym("library", &heap),
+                list(vec![sym("srfi", &heap), fixnum(1)], &heap),
+            ],
+            &heap,
+        );
+        assert!(
+            evaluate_feature_requirement_tagged(req, &heap, &features, &can_load_srfi).unwrap()
+        );
     }
 
     #[test]
     fn test_nested_requirements() {
+        let heap = test_heap();
         let features = FeatureRegistry::new();
         let no_load = |_: &[String]| false;
 
         // (or (and r7rs patina) nonexistent) should be true
-        let req = list(vec![
-            symbol("or"),
-            list(vec![symbol("and"), symbol("r7rs"), symbol("patina")]),
-            symbol("nonexistent"),
-        ]);
-        assert!(evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(
+            vec![
+                sym("or", &heap),
+                list(
+                    vec![sym("and", &heap), sym("r7rs", &heap), sym("patina", &heap)],
+                    &heap,
+                ),
+                sym("nonexistent", &heap),
+            ],
+            &heap,
+        );
+        assert!(evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
 
         // (and r7rs (not nonexistent)) should be true
-        let req = list(vec![
-            symbol("and"),
-            symbol("r7rs"),
-            list(vec![symbol("not"), symbol("nonexistent")]),
-        ]);
-        assert!(evaluate_feature_requirement(&req, &features, &no_load).unwrap());
+        let req = list(
+            vec![
+                sym("and", &heap),
+                sym("r7rs", &heap),
+                list(vec![sym("not", &heap), sym("nonexistent", &heap)], &heap),
+            ],
+            &heap,
+        );
+        assert!(evaluate_feature_requirement_tagged(req, &heap, &features, &no_load).unwrap());
     }
 }

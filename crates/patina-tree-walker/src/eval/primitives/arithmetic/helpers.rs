@@ -7,8 +7,8 @@ use crate::eval::Evaluator;
 use crate::eval::error::EvalError;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
+use patina_core::TaggedValue;
 use patina_core::numeric::NumericError;
-use patina_runtime::value::Value;
 
 /// Convert a NumericError to an EvalError with context
 pub(super) fn numeric_err(e: NumericError, op: &str) -> EvalError {
@@ -36,19 +36,22 @@ pub(super) fn numeric_err(e: NumericError, op: &str) -> EvalError {
 }
 
 impl Evaluator {
-    /// Helper to convert BigRational to the appropriate Value type
-    /// Simplifies to Integer or BigInteger if denominator is 1
-    pub(in crate::eval) fn rational_to_value(&self, r: num_rational::BigRational) -> Value {
+    /// Helper to convert BigRational to the appropriate TaggedValue type
+    /// Simplifies to fixnum or BigInteger if denominator is 1
+    pub(in crate::eval) fn rational_to_tagged(&self, r: num_rational::BigRational) -> TaggedValue {
         if r.denom() == &BigInt::from(1) {
             // Denominator is 1, simplify to integer
             let numer = r.numer();
-            if let Some(n) = numer.to_i64() {
-                Value::Integer(n)
+            if let Some(n) = numer.to_i64().filter(|n| TaggedValue::fits_fixnum(*n)) {
+                TaggedValue::fixnum(n)
             } else {
-                Value::BigInteger(numer.clone())
+                self.global_env
+                    .heap()
+                    .borrow_mut()
+                    .alloc_bigint(numer.clone())
             }
         } else {
-            Value::Rational(r)
+            self.global_env.heap().borrow_mut().alloc_rational(r)
         }
     }
 }

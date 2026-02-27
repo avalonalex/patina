@@ -18,7 +18,7 @@
 
 use super::super::Evaluator;
 use super::super::error::EvalError;
-use patina_runtime::Value;
+use patina_core::TaggedValue;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -29,62 +29,55 @@ use std::rc::Rc;
 /// Creates a new parameter object with initial value `init`.
 /// If `converter` is provided, it will be called to validate/convert
 /// any value set on this parameter.
-///
-/// # Examples
-///
-/// ```scheme
-/// (define p (make-parameter 10))
-/// (p)  ; => 10
-/// (p 20)  ; Sets to 20
-/// (p)  ; => 20
-///
-/// ;; With converter
-/// (define radix
-///   (make-parameter 10
-///     (lambda (x)
-///       (if (and (integer? x) (<= 2 x 16))
-///         x
-///         (error "invalid radix")))))
-/// ```
-pub(super) fn make_parameter(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+pub(super) fn make_parameter(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
     // Check arity: 1 or 2 arguments
-    evaluator.check_arity_range(&args, 1, 2, "make-parameter")?;
+    if args.is_empty() || args.len() > 2 {
+        return Err(EvalError::WrongArity {
+            expected: "1 or 2".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    let init = args[0].clone();
-    let converter = if args.len() == 2 {
-        // Verify converter is a procedure
-        match &args[1] {
-            Value::Procedure(_) | Value::Parameter { .. } => Some(Box::new(args[1].clone())),
-            _ => {
-                return Err(EvalError::TypeError(format!(
-                    "make-parameter: converter must be a procedure, got {}",
-                    args[1].type_name()
-                )));
-            }
+    let heap = evaluator.global_env.heap();
+
+    // Check if converter is provided and is a procedure
+    let converter: Option<TaggedValue> = if args.len() == 2 {
+        let conv_tagged = args[1];
+        // Verify converter is a procedure using heap
+        if heap.borrow().is_procedure(conv_tagged) || heap.borrow().is_parameter(conv_tagged) {
+            Some(conv_tagged)
+        } else {
+            return Err(EvalError::TypeError(format!(
+                "make-parameter: converter must be a procedure, got {}",
+                heap.borrow().type_name(conv_tagged)
+            )));
         }
     } else {
         None
     };
 
     // If converter is provided, apply it to initial value
-    let value = if let Some(ref conv) = converter {
+    let init_value = if let Some(conv) = converter {
         use super::super::EvalResult;
-        match evaluator.apply(*conv.clone(), vec![init], false)? {
-            EvalResult::Value(v) => v,
-            EvalResult::TailCall { .. } | EvalResult::TailCallPrimitive { .. } => {
+        match evaluator.apply(conv, vec![args[0]], false)? {
+            EvalResult::Tagged(tv) => tv,
+            EvalResult::TailCallPrimitive { .. } => {
                 return Err(EvalError::InternalError(
                     "make-parameter: converter returned tail call".to_string(),
                 ));
             }
         }
     } else {
-        init
+        args[0]
     };
 
-    Ok(Value::Parameter {
-        values: Rc::new(RefCell::new(vec![value])),
-        converter,
-    })
+    // Create Parameter natively on the heap
+    Ok(heap
+        .borrow_mut()
+        .alloc_parameter(Rc::new(RefCell::new(vec![init_value])), converter))
 }
 
 /// Register parameter primitives with the registry
@@ -94,11 +87,11 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // make-parameter - create a parameter object
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "make-parameter",
         Arity::Range(1, 2),
         "Returns a new parameter initialized to init. If a conversion procedure converter is specified, it is called with init and the result becomes the current value of the parameter.",
-        |eval, args, _tail| make_parameter(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| make_parameter(eval, args).map(EvalResult::Tagged),
     ));
 }

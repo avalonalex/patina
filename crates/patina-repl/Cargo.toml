@@ -6,6 +6,7 @@ description = "REPL and CLI for Patina Scheme"
 
 [dependencies]
 # Workspace crates
+patina-core = { path = "../patina-core" }
 patina-runtime = { path = "../patina-runtime" }
 patina-frontend = { path = "../patina-frontend" }
 patina-tree-walker = { path = "../patina-tree-walker" }

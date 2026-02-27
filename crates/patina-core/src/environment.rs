@@ -1,5 +1,6 @@
+use crate::heap::SharedHeap;
 use crate::scope::ScopeSet;
-use crate::value::Value;
+use crate::tagged_value::TaggedValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -9,12 +10,20 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub struct ScopedBinding {
     pub scopes: ScopeSet,
-    pub value: Value,
+    /// Internal storage uses TaggedValue for efficiency
+    pub(crate) tagged_value: TaggedValue,
 }
 
 /// Environment for variable bindings
 ///
 /// Uses Rc<RefCell<>> for shared mutable state (needed for set!)
+///
+/// ## TaggedValue Storage
+///
+/// Environment internally stores values as `TaggedValue` for memory efficiency:
+/// - 8 bytes per binding vs 64+ bytes with `Value`
+/// - Faster cloning when closures capture environments
+/// - API accepts/returns `Value` for compatibility (converted at boundaries)
 ///
 /// ## Hygiene Support
 ///
@@ -32,8 +41,11 @@ pub struct ScopedBinding {
 /// 3. Fall back to simple bindings if no scoped binding matches
 #[derive(Debug, Clone)]
 pub struct Environment {
+    /// Shared heap for TaggedValue interpretation
+    heap: SharedHeap,
     /// Simple name-based bindings (for built-ins and top-level)
-    bindings: Rc<RefCell<HashMap<String, Value>>>,
+    /// Stores TaggedValue internally for memory efficiency
+    bindings: Rc<RefCell<HashMap<String, TaggedValue>>>,
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
     scoped_bindings: Rc<RefCell<HashMap<String, Vec<ScopedBinding>>>>,
@@ -41,34 +53,66 @@ pub struct Environment {
 }
 
 impl Environment {
-    /// Create a new empty environment
+    /// Create a new empty environment with a new heap
     pub fn new() -> Self {
+        Self::with_heap(crate::heap::new_shared_heap())
+    }
+
+    /// Create a new empty environment with a shared heap
+    pub fn with_heap(heap: SharedHeap) -> Self {
         Environment {
+            heap,
             bindings: Rc::new(RefCell::new(HashMap::new())),
             scoped_bindings: Rc::new(RefCell::new(HashMap::new())),
             parent: None,
         }
     }
 
-    /// Create a new environment with a parent
-    #[allow(dead_code)]
+    /// Create a new environment with a parent (shares the parent's heap)
     pub fn with_parent(parent: Rc<Environment>) -> Self {
         Environment {
+            heap: parent.heap.clone(),
             bindings: Rc::new(RefCell::new(HashMap::new())),
             scoped_bindings: Rc::new(RefCell::new(HashMap::new())),
             parent: Some(parent),
         }
     }
 
+    /// Get the shared heap
+    pub fn heap(&self) -> &SharedHeap {
+        &self.heap
+    }
+
     /// Define a new binding in this environment
     ///
     /// Use this for top-level defines, built-ins, and other simple bindings.
-    pub fn define(&self, name: String, value: Value) {
+    /// This is the primary API - accepts TaggedValue directly.
+    pub fn define(&self, name: String, value: TaggedValue) {
         self.bindings.borrow_mut().insert(name, value);
     }
 
+    /// Define a primitive procedure in this environment.
+    ///
+    /// Consolidates the common pattern of creating a `Procedure::Primitive`
+    /// and converting it to TaggedValue for storage.
+    pub fn define_primitive(
+        &self,
+        name: &'static str,
+        arity: crate::procedure::Arity,
+        library: Vec<String>,
+    ) {
+        let proc = Rc::new(crate::procedure::Procedure::Primitive {
+            name,
+            arity,
+            library,
+        });
+        let tv = self.heap.borrow_mut().alloc_procedure(proc);
+        self.define(name.to_string(), tv);
+    }
+
     /// Set an existing binding (searches parent environments)
-    pub fn set(&self, name: &str, value: Value) -> Result<(), String> {
+    /// This is the primary API - accepts TaggedValue directly.
+    pub fn set(&self, name: &str, value: TaggedValue) -> Result<(), String> {
         if self.bindings.borrow().contains_key(name) {
             self.bindings.borrow_mut().insert(name.to_string(), value);
             Ok(())
@@ -79,12 +123,13 @@ impl Environment {
         }
     }
 
-    /// Get a value from the environment (searches parent environments)
+    /// Get a TaggedValue from the environment (searches parent environments)
     ///
-    /// This is the simple name-based lookup for identifiers.
-    pub fn get(&self, name: &str) -> Option<Value> {
-        if let Some(value) = self.bindings.borrow().get(name) {
-            Some(value.clone())
+    /// This is the primary API - returns TaggedValue directly.
+    /// For the simple name-based lookup for identifiers.
+    pub fn get(&self, name: &str) -> Option<TaggedValue> {
+        if let Some(tv) = self.bindings.borrow().get(name).copied() {
+            Some(tv)
         } else if let Some(parent) = &self.parent {
             parent.get(name)
         } else {
@@ -96,13 +141,15 @@ impl Environment {
     ///
     /// Use this when creating bindings from binding forms (lambda, let, etc.)
     /// where you want to track the lexical scope for hygiene.
-    pub fn define_with_scopes(&self, name: String, scopes: ScopeSet, value: Value) {
+    /// This is the primary API - accepts TaggedValue directly.
+    pub fn define_with_scopes(&self, name: String, scopes: ScopeSet, value: TaggedValue) {
         use crate::macro_debug;
 
         if macro_debug::is_enabled() {
+            let desc = crate::debug_format::format_tagged(value, &self.heap.borrow());
             println!(
                 "[ENV] Defining '{}' with scopes {} = {}",
-                name, scopes, value
+                name, scopes, desc
             );
         }
 
@@ -111,7 +158,10 @@ impl Environment {
             self.bindings.borrow_mut().insert(name, value);
         } else {
             // Non-empty scopes = add to scoped bindings
-            let binding = ScopedBinding { scopes, value };
+            let binding = ScopedBinding {
+                scopes,
+                tagged_value: value,
+            };
             self.scoped_bindings
                 .borrow_mut()
                 .entry(name)
@@ -123,11 +173,12 @@ impl Environment {
     /// Set an existing scoped binding (searches parent environments)
     ///
     /// Finds the binding matching the scope set and updates its value.
+    /// This is the primary API - accepts TaggedValue directly.
     pub fn set_with_scopes(
         &self,
         name: &str,
         scopes: &ScopeSet,
-        value: Value,
+        value: TaggedValue,
     ) -> Result<(), String> {
         if scopes.is_empty() {
             // Empty scopes - use simple lookup
@@ -139,7 +190,7 @@ impl Environment {
         if let Some(bindings) = scoped.get_mut(name) {
             for binding in bindings.iter_mut() {
                 if &binding.scopes == scopes {
-                    binding.value = value;
+                    binding.tagged_value = value;
                     return Ok(());
                 }
             }
@@ -164,7 +215,8 @@ impl Environment {
     ///
     /// The "most specific" rule ensures that inner bindings shadow outer ones
     /// when their scopes are a subset of the reference's scopes.
-    pub fn get_with_scopes(&self, name: &str, scopes: &ScopeSet) -> Option<Value> {
+    /// This is the primary API - returns TaggedValue directly.
+    pub fn get_with_scopes(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
         use crate::macro_debug;
 
         let debug = macro_debug::is_enabled();
@@ -180,8 +232,11 @@ impl Environment {
             }
             let result = self.get(name);
             if debug {
-                match &result {
-                    Some(v) => println!("[ENV]   Result: {}", v),
+                match result {
+                    Some(tv) => {
+                        let v = crate::debug_format::format_tagged(tv, &self.heap.borrow());
+                        println!("[ENV]   Result: {}", v);
+                    }
                     None => println!("[ENV]   Result: NOT FOUND"),
                 }
             }
@@ -189,14 +244,15 @@ impl Environment {
         }
 
         // Collect all matching bindings from this environment and parents
-        let mut candidates: Vec<(ScopeSet, Value)> = Vec::new();
+        // Store TaggedValue internally for efficiency
+        let mut candidates: Vec<(ScopeSet, TaggedValue)> = Vec::new();
 
         // Helper to collect matching bindings recursively
         fn collect_matches(
             env: &Environment,
             name: &str,
             ref_scopes: &ScopeSet,
-            candidates: &mut Vec<(ScopeSet, Value)>,
+            candidates: &mut Vec<(ScopeSet, TaggedValue)>,
             debug: bool,
         ) {
             // Check scoped bindings in this environment
@@ -214,7 +270,7 @@ impl Environment {
                         );
                     }
                     if is_subset {
-                        candidates.push((binding.scopes.clone(), binding.value.clone()));
+                        candidates.push((binding.scopes.clone(), binding.tagged_value));
                     }
                 }
             }
@@ -235,8 +291,11 @@ impl Environment {
             }
             let result = self.get(name);
             if debug {
-                match &result {
-                    Some(v) => println!("[ENV]   Fallback result: {}", v),
+                match result {
+                    Some(tv) => {
+                        let v = crate::debug_format::format_tagged(tv, &self.heap.borrow());
+                        println!("[ENV]   Fallback result: {}", v);
+                    }
                     None => println!("[ENV]   Fallback result: NOT FOUND"),
                 }
             }
@@ -245,8 +304,9 @@ impl Environment {
 
         if debug {
             println!("[ENV]   Found {} candidate(s):", candidates.len());
-            for (ss, val) in &candidates {
-                println!("[ENV]     {} -> {}", ss, val);
+            for (ss, tv) in &candidates {
+                let v = crate::debug_format::format_tagged(*tv, &self.heap.borrow());
+                println!("[ENV]     {} -> {}", ss, v);
             }
         }
 
@@ -254,14 +314,14 @@ impl Environment {
         // When scope sets have the same size, prefer the earlier candidate (closer binding)
         // since collect_matches adds child environment bindings before parent environment bindings.
         // We use a stable comparison that prefers earlier elements on ties.
-        let mut best: Option<(ScopeSet, Value)> = None;
-        for (scope_set, value) in candidates {
+        let mut best: Option<(ScopeSet, TaggedValue)> = None;
+        for (scope_set, tv) in candidates {
             match &best {
-                None => best = Some((scope_set, value)),
+                None => best = Some((scope_set, tv)),
                 Some((best_scopes, _)) => {
                     // Prefer strictly larger scope set, or keep existing on tie
                     if scope_set.len() > best_scopes.len() {
-                        best = Some((scope_set, value));
+                        best = Some((scope_set, tv));
                     }
                     // On tie (same length), keep the earlier candidate (child binding)
                 }
@@ -270,8 +330,9 @@ impl Environment {
 
         if debug {
             match &best {
-                Some((ss, val)) => {
-                    println!("[ENV]   Best match (most specific): {} -> {}", ss, val);
+                Some((ss, tv)) => {
+                    let v = crate::debug_format::format_tagged(*tv, &self.heap.borrow());
+                    println!("[ENV]   Best match (most specific): {} -> {}", ss, v);
                 }
                 None => {
                     println!("[ENV]   No best match found");
@@ -279,7 +340,7 @@ impl Environment {
             }
         }
 
-        best.map(|(_, value)| value).or_else(|| self.get(name))
+        best.map(|(_, tv)| tv).or_else(|| self.get(name))
     }
 
     /// Check if a binding exists
@@ -308,13 +369,13 @@ impl Environment {
 
     /// Get all bindings in this environment only (not including parent)
     ///
-    /// Returns a vector of (name, value) pairs for all bindings defined locally.
+    /// Returns a vector of (name, TaggedValue) pairs for all bindings defined locally.
     /// This is useful for library imports where we need to iterate over all exports.
-    pub fn bindings(&self) -> Vec<(String, Value)> {
+    pub fn bindings(&self) -> Vec<(String, TaggedValue)> {
         self.bindings
             .borrow()
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, tv)| (k.clone(), *tv))
             .collect()
     }
 }
@@ -332,25 +393,25 @@ mod tests {
     #[test]
     fn test_define_and_get() {
         let env = Environment::new();
-        env.define("x".to_string(), Value::Integer(42));
-        assert!(matches!(env.get("x"), Some(Value::Integer(42))));
+        env.define("x".to_string(), TaggedValue::fixnum(42));
+        assert_eq!(env.get("x"), Some(TaggedValue::fixnum(42)));
     }
 
     #[test]
     fn test_parent_lookup() {
         let parent = Rc::new(Environment::new());
-        parent.define("x".to_string(), Value::Integer(42));
+        parent.define("x".to_string(), TaggedValue::fixnum(42));
 
         let child = Environment::with_parent(parent);
-        assert!(matches!(child.get("x"), Some(Value::Integer(42))));
+        assert_eq!(child.get("x"), Some(TaggedValue::fixnum(42)));
     }
 
     #[test]
     fn test_bindings() {
         let env = Environment::new();
-        env.define("x".to_string(), Value::Integer(42));
-        env.define("y".to_string(), Value::Boolean(true));
-        env.define("z".to_string(), Value::Integer(100));
+        env.define("x".to_string(), TaggedValue::fixnum(42));
+        env.define("y".to_string(), TaggedValue::TRUE);
+        env.define("z".to_string(), TaggedValue::fixnum(100));
 
         let bindings = env.bindings();
         assert_eq!(bindings.len(), 3);
@@ -361,12 +422,12 @@ mod tests {
         assert!(names.contains(&"y".to_string()));
         assert!(names.contains(&"z".to_string()));
 
-        // Verify values
-        for (name, value) in bindings {
+        // Verify values directly as TaggedValues
+        for (name, tv) in &bindings {
             match name.as_str() {
-                "x" => assert!(matches!(value, Value::Integer(42))),
-                "y" => assert!(matches!(value, Value::Boolean(true))),
-                "z" => assert!(matches!(value, Value::Integer(100))),
+                "x" => assert_eq!(*tv, TaggedValue::fixnum(42)),
+                "y" => assert_eq!(*tv, TaggedValue::TRUE),
+                "z" => assert_eq!(*tv, TaggedValue::fixnum(100)),
                 _ => panic!("Unexpected binding: {}", name),
             }
         }
@@ -375,17 +436,17 @@ mod tests {
     #[test]
     fn test_bindings_excludes_parent() {
         let parent = Rc::new(Environment::new());
-        parent.define("x".to_string(), Value::Integer(42));
-        parent.define("y".to_string(), Value::Integer(100));
+        parent.define("x".to_string(), TaggedValue::fixnum(42));
+        parent.define("y".to_string(), TaggedValue::fixnum(100));
 
         let child = Environment::with_parent(parent);
-        child.define("z".to_string(), Value::Boolean(true));
+        child.define("z".to_string(), TaggedValue::TRUE);
 
         // bindings() should only return local bindings
         let bindings = child.bindings();
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].0, "z");
-        assert!(matches!(bindings[0].1, Value::Boolean(true)));
+        assert_eq!(bindings[0].1, TaggedValue::TRUE);
     }
 
     #[test]
@@ -396,21 +457,17 @@ mod tests {
         let s1 = ScopeId(1);
         let scopes = ScopeSet::singleton(s1);
 
-        env.define_with_scopes("x".to_string(), scopes.clone(), Value::Integer(42));
+        env.define_with_scopes("x".to_string(), scopes.clone(), TaggedValue::fixnum(42));
 
         // Lookup with matching scopes should find the binding
-        assert!(matches!(
-            env.get_with_scopes("x", &scopes),
-            Some(Value::Integer(42))
-        ));
+        let result = env.get_with_scopes("x", &scopes);
+        assert_eq!(result, Some(TaggedValue::fixnum(42)));
 
         // Lookup with superset scopes should also find it (binding.scopes ⊆ ref.scopes)
         let s2 = ScopeId(2);
         let larger_scopes = ScopeSet::from_iter([s1, s2]);
-        assert!(matches!(
-            env.get_with_scopes("x", &larger_scopes),
-            Some(Value::Integer(42))
-        ));
+        let result = env.get_with_scopes("x", &larger_scopes);
+        assert_eq!(result, Some(TaggedValue::fixnum(42)));
     }
 
     #[test]
@@ -428,31 +485,27 @@ mod tests {
         let s2 = ScopeId(2);
         let s3 = ScopeId(3);
 
-        // Outer x binding: introduced at S1
+        // Outer x binding: introduced at S1 (Symbol requires heap allocation)
         let outer_x_scopes = ScopeSet::singleton(s1);
-        env.define_with_scopes(
-            "x".to_string(),
-            outer_x_scopes.clone(),
-            Value::Symbol("outer".into()),
-        );
+        let outer_tv = env.heap().borrow_mut().intern_symbol("outer");
+        env.define_with_scopes("x".to_string(), outer_x_scopes.clone(), outer_tv);
 
         // Inner x binding: inside S1, S2, S3
         let inner_x_scopes = ScopeSet::from_iter([s1, s2, s3]);
-        env.define_with_scopes(
-            "x".to_string(),
-            inner_x_scopes.clone(),
-            Value::Symbol("inner".into()),
-        );
+        let inner_tv = env.heap().borrow_mut().intern_symbol("inner");
+        env.define_with_scopes("x".to_string(), inner_x_scopes.clone(), inner_tv);
 
         // Free var x in macro m: inside S1, S2 (captured when macro was defined)
         let macro_x_scopes = ScopeSet::from_iter([s1, s2]);
 
         // Lookup should find outer x, NOT inner x
-        // Because:
-        // - outer_x_scopes {S1} ⊆ macro_x_scopes {S1, S2} ✓
-        // - inner_x_scopes {S1, S2, S3} ⊆ macro_x_scopes {S1, S2} ✗ (S3 not in ref)
-        let result = env.get_with_scopes("x", &macro_x_scopes);
-        assert!(matches!(result, Some(Value::Symbol(s)) if &*s == "outer"));
+        let result_tv = env.get_with_scopes("x", &macro_x_scopes).unwrap();
+        let name = env
+            .heap()
+            .borrow()
+            .get_symbol_name(result_tv)
+            .map(|s| s.to_string());
+        assert_eq!(name.as_deref(), Some("outer"));
     }
 
     #[test]
@@ -464,25 +517,32 @@ mod tests {
         let s2 = ScopeId(2);
 
         // Less specific binding
-        env.define_with_scopes("x".to_string(), ScopeSet::singleton(s1), Value::Integer(1));
+        env.define_with_scopes(
+            "x".to_string(),
+            ScopeSet::singleton(s1),
+            TaggedValue::fixnum(1),
+        );
 
         // More specific binding
         env.define_with_scopes(
             "x".to_string(),
             ScopeSet::from_iter([s1, s2]),
-            Value::Integer(2),
+            TaggedValue::fixnum(2),
         );
 
         // Lookup with {S1, S2} should find the more specific binding
         let lookup_scopes = ScopeSet::from_iter([s1, s2]);
-        let result = env.get_with_scopes("x", &lookup_scopes);
-        assert!(matches!(result, Some(Value::Integer(2))));
+        assert_eq!(
+            env.get_with_scopes("x", &lookup_scopes),
+            Some(TaggedValue::fixnum(2))
+        );
 
         // Lookup with just {S1} should find the less specific binding
-        // (since {S1, S2} ⊈ {S1})
         let lookup_scopes_s1 = ScopeSet::singleton(s1);
-        let result = env.get_with_scopes("x", &lookup_scopes_s1);
-        assert!(matches!(result, Some(Value::Integer(1))));
+        assert_eq!(
+            env.get_with_scopes("x", &lookup_scopes_s1),
+            Some(TaggedValue::fixnum(1))
+        );
     }
 
     #[test]
@@ -491,13 +551,19 @@ mod tests {
 
         let env = Environment::new();
 
-        // Define an unmarked binding (e.g., a primitive)
-        env.define("cons".to_string(), Value::Symbol("primitive-cons".into()));
+        // Define an unmarked binding (Symbol requires heap allocation)
+        let tv = env.heap().borrow_mut().intern_symbol("primitive-cons");
+        env.define("cons".to_string(), tv);
 
         // Lookup with scopes should fall back to unmarked binding
         let s1 = ScopeId(1);
         let scopes = ScopeSet::singleton(s1);
-        let result = env.get_with_scopes("cons", &scopes);
-        assert!(matches!(result, Some(Value::Symbol(s)) if &*s == "primitive-cons"));
+        let result_tv = env.get_with_scopes("cons", &scopes).unwrap();
+        let name = env
+            .heap()
+            .borrow()
+            .get_symbol_name(result_tv)
+            .map(|s| s.to_string());
+        assert_eq!(name.as_deref(), Some("primitive-cons"));
     }
 }

@@ -12,7 +12,8 @@
 //! codebase including `call/cc`, `dynamic-wind`, and exception handling.
 
 use crate::eval::{EvalError, Evaluator, eval_cps};
-use patina_runtime::{Backend, Environment, Value};
+use patina_core::TaggedValue;
+use patina_runtime::{Backend, Environment};
 use std::rc::Rc;
 
 /// Tree-walking interpreter backend
@@ -93,28 +94,16 @@ impl Default for TreeWalker {
 impl Backend for TreeWalker {
     type Error = EvalError;
 
-    fn eval(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, Self::Error> {
-        // CoreExpr pipeline with MACRO-AWARE DESUGARING:
-        // 1. Create desugarer with environment (enables macro expansion)
-        // 2. Desugar - the desugarer will expand macros as needed during desugaring
-        // 3. Evaluate via CPS transformation
-        //
-        // This approach is better than pre-expanding all macros because:
-        // - The desugarer knows which parts of each special form to expand
-        // - No duplication of special form logic
-        // - Macros are expanded lazily, only when encountered
-
+    fn eval(&self, expr: TaggedValue, env: &Rc<Environment>) -> Result<TaggedValue, Self::Error> {
         use patina_frontend::Desugarer;
 
-        // Create macro-aware desugarer with the environment
+        let internal_heap = self.evaluator.global_env.heap();
         let desugarer = Desugarer::with_env(env.clone());
 
-        // Desugar to CoreExpr - this will expand macros as needed
-        let core_expr = desugarer.desugar(expr).map_err(|e| {
+        let core_expr = desugarer.desugar_tagged(expr, internal_heap).map_err(|e| {
             EvalError::InternalError(format!("Failed to desugar expression: {}", e))
         })?;
 
-        // CPS transformation then evaluation (supports call/cc, shift/reset)
         eval_cps(&core_expr, env.clone(), &self.evaluator)
     }
 
@@ -127,6 +116,15 @@ impl Backend for TreeWalker {
 mod tests {
     use super::*;
 
+    /// Helper: parse a string and evaluate it via the Backend trait
+    fn eval_str(backend: &TreeWalker, code: &str) -> Result<TaggedValue, EvalError> {
+        let heap = backend.global_env().heap();
+        let mut parser = patina_frontend::Parser::new_with_heap(code, heap.clone()).unwrap();
+        let expr = parser.parse().unwrap();
+        drop(parser);
+        backend.eval_global(expr)
+    }
+
     #[test]
     fn test_tree_walker_creation() {
         let backend = TreeWalker::new();
@@ -136,38 +134,15 @@ mod tests {
     #[test]
     fn test_tree_walker_eval_self_evaluating() {
         let backend = TreeWalker::new();
-        let expr = Value::Integer(42);
-        let result = backend.eval_global(&expr).unwrap();
-        assert!(matches!(result, Value::Integer(42)));
+        let result = eval_str(&backend, "42").unwrap();
+        assert_eq!(result.as_fixnum(), Some(42));
     }
 
     #[test]
     fn test_tree_walker_eval_primitive() {
         let backend = TreeWalker::new();
-
-        // Build (+ 1 2 3) as a Value
-        use std::cell::RefCell;
-        use std::rc::Rc as StdRc;
-
-        let plus = Value::Symbol(StdRc::from("+"));
-        let one = Value::Integer(1);
-        let two = Value::Integer(2);
-        let three = Value::Integer(3);
-
-        // (+ 1 2 3) = (+ . (1 . (2 . (3 . ()))))
-        let expr = Value::Pair(StdRc::new(RefCell::new((
-            plus,
-            Value::Pair(StdRc::new(RefCell::new((
-                one,
-                Value::Pair(StdRc::new(RefCell::new((
-                    two,
-                    Value::Pair(StdRc::new(RefCell::new((three, Value::Null)))),
-                )))),
-            )))),
-        ))));
-
-        let result = backend.eval_global(&expr).unwrap();
-        assert!(matches!(result, Value::Integer(6)));
+        let result = eval_str(&backend, "(+ 1 2 3)").unwrap();
+        assert_eq!(result.as_fixnum(), Some(6));
     }
 
     #[test]
@@ -182,40 +157,22 @@ mod tests {
         let custom_env = Rc::new(Environment::with_parent(backend.global_env().clone()));
 
         // Define a variable in custom env
-        custom_env.define("x".to_string(), Value::Integer(99));
+        custom_env.define("x".to_string(), TaggedValue::fixnum(99));
 
-        // Evaluate x in custom env
-        let expr = Value::symbol("x");
-        let result = backend.eval(&expr, &custom_env).unwrap();
+        // Parse and evaluate x in custom env
+        let heap = backend.global_env().heap();
+        let mut parser = patina_frontend::Parser::new_with_heap("x", heap.clone()).unwrap();
+        let expr = parser.parse().unwrap();
+        drop(parser);
+        let result = backend.eval(expr, &custom_env).unwrap();
 
-        assert!(matches!(result, Value::Integer(99)));
+        assert_eq!(result.as_fixnum(), Some(99));
     }
 
     #[test]
     fn test_tree_walker_cps_arithmetic() {
-        // Build (+ 1 2 3) as a Value
-        use std::cell::RefCell;
-        use std::rc::Rc as StdRc;
-
         let backend = TreeWalker::new();
-
-        let plus = Value::Symbol(StdRc::from("+"));
-        let one = Value::Integer(1);
-        let two = Value::Integer(2);
-        let three = Value::Integer(3);
-
-        let expr = Value::Pair(StdRc::new(RefCell::new((
-            plus,
-            Value::Pair(StdRc::new(RefCell::new((
-                one,
-                Value::Pair(StdRc::new(RefCell::new((
-                    two,
-                    Value::Pair(StdRc::new(RefCell::new((three, Value::Null)))),
-                )))),
-            )))),
-        ))));
-
-        let result = backend.eval_global(&expr).unwrap();
-        assert!(matches!(result, Value::Integer(6)));
+        let result = eval_str(&backend, "(+ 1 2 3)").unwrap();
+        assert_eq!(result.as_fixnum(), Some(6));
     }
 }

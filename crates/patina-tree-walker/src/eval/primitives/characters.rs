@@ -9,160 +9,312 @@
 
 use super::super::Evaluator;
 use super::super::error::EvalError;
-use patina_runtime::value::Value;
+use patina_core::TaggedValue;
+
+// ========== TaggedValue Extraction Helpers ==========
+
+/// Extract a character from a TaggedValue
+fn get_char(
+    tv: TaggedValue,
+    _heap: &std::cell::Ref<'_, patina_core::Heap>,
+    fn_name: &str,
+) -> Result<char, EvalError> {
+    if tv.is_char() {
+        return Ok(tv.as_char_unchecked());
+    }
+    Err(EvalError::TypeError(format!(
+        "{}: requires character",
+        fn_name
+    )))
+}
+
+/// Extract an integer from a TaggedValue
+fn get_integer(
+    tv: TaggedValue,
+    _heap: &std::cell::Ref<'_, patina_core::Heap>,
+    fn_name: &str,
+) -> Result<i64, EvalError> {
+    if tv.is_fixnum() {
+        return Ok(tv.as_fixnum_unchecked());
+    }
+    Err(EvalError::TypeError(format!(
+        "{}: requires exact integer",
+        fn_name
+    )))
+}
 
 // ========== Character Comparisons ==========
 
 /// (char=? char1 char2 ...) - Character equality
-pub(super) fn char_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char=?")?;
+pub(super) fn char_equal(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char=?")?;
-        let c2 = get_char(&args[i + 1], "char=?")?;
+        let c1 = get_char(args[i], &heap_ref, "char=?")?;
+        let c2 = get_char(args[i + 1], &heap_ref, "char=?")?;
         if c1 != c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (char<? char1 char2 ...) - Character less than
-pub(super) fn char_lt(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char<?")?;
+pub(super) fn char_lt(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char<?")?;
-        let c2 = get_char(&args[i + 1], "char<?")?;
+        let c1 = get_char(args[i], &heap_ref, "char<?")?;
+        let c2 = get_char(args[i + 1], &heap_ref, "char<?")?;
         if c1 >= c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (char>? char1 char2 ...) - Character greater than
-pub(super) fn char_gt(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char>?")?;
+pub(super) fn char_gt(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char>?")?;
-        let c2 = get_char(&args[i + 1], "char>?")?;
+        let c1 = get_char(args[i], &heap_ref, "char>?")?;
+        let c2 = get_char(args[i + 1], &heap_ref, "char>?")?;
         if c1 <= c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (char<=? char1 char2 ...) - Character less than or equal
-pub(super) fn char_le(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char<=?")?;
+pub(super) fn char_le(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char<=?")?;
-        let c2 = get_char(&args[i + 1], "char<=?")?;
+        let c1 = get_char(args[i], &heap_ref, "char<=?")?;
+        let c2 = get_char(args[i + 1], &heap_ref, "char<=?")?;
         if c1 > c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (char>=? char1 char2 ...) - Character greater than or equal
-pub(super) fn char_ge(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char>=?")?;
+pub(super) fn char_ge(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char>=?")?;
-        let c2 = get_char(&args[i + 1], "char>=?")?;
+        let c1 = get_char(args[i], &heap_ref, "char>=?")?;
+        let c2 = get_char(args[i + 1], &heap_ref, "char>=?")?;
         if c1 < c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 // ========== Case-Insensitive Character Comparisons ==========
 
 /// (char-ci=? char1 char2 ...) - Case-insensitive character equality
-pub(super) fn char_ci_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char-ci=?")?;
+pub(super) fn char_ci_equal(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char-ci=?")?.to_lowercase().to_string();
-        let c2 = get_char(&args[i + 1], "char-ci=?")?
+        let c1 = get_char(args[i], &heap_ref, "char-ci=?")?
+            .to_lowercase()
+            .to_string();
+        let c2 = get_char(args[i + 1], &heap_ref, "char-ci=?")?
             .to_lowercase()
             .to_string();
         if c1 != c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (char-ci<? char1 char2 ...) - Case-insensitive character less than
-pub(super) fn char_ci_lt(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char-ci<?")?;
+pub(super) fn char_ci_lt(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char-ci<?")?.to_lowercase().to_string();
-        let c2 = get_char(&args[i + 1], "char-ci<?")?
+        let c1 = get_char(args[i], &heap_ref, "char-ci<?")?
+            .to_lowercase()
+            .to_string();
+        let c2 = get_char(args[i + 1], &heap_ref, "char-ci<?")?
             .to_lowercase()
             .to_string();
         if c1 >= c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (char-ci>? char1 char2 ...) - Case-insensitive character greater than
-pub(super) fn char_ci_gt(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char-ci>?")?;
+pub(super) fn char_ci_gt(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char-ci>?")?.to_lowercase().to_string();
-        let c2 = get_char(&args[i + 1], "char-ci>?")?
+        let c1 = get_char(args[i], &heap_ref, "char-ci>?")?
+            .to_lowercase()
+            .to_string();
+        let c2 = get_char(args[i + 1], &heap_ref, "char-ci>?")?
             .to_lowercase()
             .to_string();
         if c1 <= c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (char-ci<=? char1 char2 ...) - Case-insensitive character less than or equal
-pub(super) fn char_ci_le(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char-ci<=?")?;
+pub(super) fn char_ci_le(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char-ci<=?")?.to_lowercase().to_string();
-        let c2 = get_char(&args[i + 1], "char-ci<=?")?
+        let c1 = get_char(args[i], &heap_ref, "char-ci<=?")?
+            .to_lowercase()
+            .to_string();
+        let c2 = get_char(args[i + 1], &heap_ref, "char-ci<=?")?
             .to_lowercase()
             .to_string();
         if c1 > c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (char-ci>=? char1 char2 ...) - Case-insensitive character greater than or equal
-pub(super) fn char_ci_ge(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "char-ci>=?")?;
+pub(super) fn char_ci_ge(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(&args[i], "char-ci>=?")?.to_lowercase().to_string();
-        let c2 = get_char(&args[i + 1], "char-ci>=?")?
+        let c1 = get_char(args[i], &heap_ref, "char-ci>=?")?
+            .to_lowercase()
+            .to_string();
+        let c2 = get_char(args[i + 1], &heap_ref, "char-ci>=?")?
             .to_lowercase()
             .to_string();
         if c1 < c2 {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 // ========== Character Type Predicates ==========
@@ -170,73 +322,131 @@ pub(super) fn char_ci_ge(evaluator: &Evaluator, args: Vec<Value>) -> Result<Valu
 /// (char-alphabetic? char) - Returns #t if char is alphabetic
 pub(super) fn char_alphabetic_p(
     evaluator: &Evaluator,
-    args: Vec<Value>,
-) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "char-alphabetic?")?;
-    let c = get_char(&args[0], "char-alphabetic?")?;
-    Ok(Value::Boolean(c.is_alphabetic()))
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "char-alphabetic?")?;
+    Ok(TaggedValue::boolean(c.is_alphabetic()))
 }
 
 /// (char-numeric? char) - Returns #t if char is numeric
-pub(super) fn char_numeric_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "char-numeric?")?;
-    let c = get_char(&args[0], "char-numeric?")?;
-    Ok(Value::Boolean(c.is_numeric()))
+pub(super) fn char_numeric_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "char-numeric?")?;
+    Ok(TaggedValue::boolean(c.is_numeric()))
 }
 
 /// (char-whitespace? char) - Returns #t if char is whitespace
 pub(super) fn char_whitespace_p(
     evaluator: &Evaluator,
-    args: Vec<Value>,
-) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "char-whitespace?")?;
-    let c = get_char(&args[0], "char-whitespace?")?;
-    Ok(Value::Boolean(c.is_whitespace()))
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "char-whitespace?")?;
+    Ok(TaggedValue::boolean(c.is_whitespace()))
 }
 
 /// (char-upper-case? char) - Returns #t if char is uppercase
 pub(super) fn char_upper_case_p(
     evaluator: &Evaluator,
-    args: Vec<Value>,
-) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "char-upper-case?")?;
-    let c = get_char(&args[0], "char-upper-case?")?;
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "char-upper-case?")?;
     // R7RS: uppercase means the character has the Unicode Uppercase property
-    Ok(Value::Boolean(c.is_uppercase()))
+    Ok(TaggedValue::boolean(c.is_uppercase()))
 }
 
 /// (char-lower-case? char) - Returns #t if char is lowercase
 pub(super) fn char_lower_case_p(
     evaluator: &Evaluator,
-    args: Vec<Value>,
-) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "char-lower-case?")?;
-    let c = get_char(&args[0], "char-lower-case?")?;
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "char-lower-case?")?;
     // R7RS: lowercase means the character has the Unicode Lowercase property
-    Ok(Value::Boolean(c.is_lowercase()))
+    Ok(TaggedValue::boolean(c.is_lowercase()))
 }
 
 // ========== Character Case Conversion ==========
 
 /// (char-upcase char) - Convert character to uppercase
-pub(super) fn char_upcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "char-upcase")?;
-    let c = get_char(&args[0], "char-upcase")?;
+pub(super) fn char_upcase(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "char-upcase")?;
 
     // R7RS: Returns the uppercase version, using full Unicode case mapping
     // If multiple chars result, we use the first (per R7RS simple case mapping)
     let upper: Vec<char> = c.to_uppercase().collect();
-    Ok(Value::Character(upper[0]))
+    Ok(TaggedValue::character(upper[0]))
 }
 
 /// (char-downcase char) - Convert character to lowercase
-pub(super) fn char_downcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "char-downcase")?;
-    let c = get_char(&args[0], "char-downcase")?;
+pub(super) fn char_downcase(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "char-downcase")?;
 
     // R7RS: Returns the lowercase version, using full Unicode case mapping
     let lower: Vec<char> = c.to_lowercase().collect();
-    Ok(Value::Character(lower[0]))
+    Ok(TaggedValue::character(lower[0]))
 }
 
 /// (char-foldcase char) - Case-folding (for case-insensitive comparison)
@@ -244,9 +454,19 @@ pub(super) fn char_downcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
 /// R7RS: Returns the case-folded character. Note that full case folding
 /// can map one character to multiple (e.g., ß → ss), but char-foldcase
 /// must return a single character. We use simple case folding here.
-pub(super) fn char_foldcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "char-foldcase")?;
-    let c = get_char(&args[0], "char-foldcase")?;
+pub(super) fn char_foldcase(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "char-foldcase")?;
 
     use unicode_casefold::UnicodeCaseFold;
 
@@ -255,40 +475,54 @@ pub(super) fn char_foldcase(evaluator: &Evaluator, args: Vec<Value>) -> Result<V
     // This matches R7RS which says char-foldcase returns "a" character.
     let folded: String = c.case_fold().collect();
     let first_char = folded.chars().next().unwrap_or(c);
-    Ok(Value::Character(first_char))
+    Ok(TaggedValue::character(first_char))
 }
 
 // ========== Character/Integer Conversion ==========
 
 /// (char->integer char) - Convert character to Unicode code point
-pub(super) fn char_to_integer(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "char->integer")?;
-    let c = get_char(&args[0], "char->integer")?;
-    Ok(Value::Integer(c as u32 as i64))
+pub(super) fn char_to_integer(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "char->integer")?;
+    Ok(TaggedValue::fixnum(c as u32 as i64))
 }
 
 /// (integer->char n) - Convert Unicode code point to character
-pub(super) fn integer_to_char(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "integer->char")?;
+pub(super) fn integer_to_char(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    let n = match &args[0] {
-        Value::Integer(n) if *n >= 0 => *n as u32,
-        Value::Integer(n) => {
-            return Err(EvalError::TypeError(format!(
-                "integer->char: requires non-negative integer, got {}",
-                n
-            )));
-        }
-        other => {
-            return Err(EvalError::TypeError(format!(
-                "integer->char: requires integer, got {}",
-                other.type_name()
-            )));
-        }
-    };
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let n = get_integer(args[0], &heap_ref, "integer->char")?;
 
+    if n < 0 {
+        return Err(EvalError::TypeError(format!(
+            "integer->char: requires non-negative integer, got {}",
+            n
+        )));
+    }
+
+    let n = n as u32;
     match char::from_u32(n) {
-        Some(c) => Ok(Value::Character(c)),
+        Some(c) => Ok(TaggedValue::character(c)),
         None => Err(EvalError::TypeError(format!(
             "integer->char: {} is not a valid Unicode code point",
             n
@@ -304,15 +538,25 @@ pub(super) fn integer_to_char(evaluator: &Evaluator, args: Vec<Value>) -> Result
 /// R7RS requires this to work for all Unicode decimal digits (Nd category),
 /// not just ASCII 0-9. Unicode decimal digits are organized in blocks where
 /// each block contains 10 consecutive code points for 0-9.
-pub(super) fn digit_value(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "digit-value")?;
-    let c = get_char(&args[0], "digit-value")?;
+pub(super) fn digit_value(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let c = get_char(args[0], &heap_ref, "digit-value")?;
 
     // R7RS: Returns the numeric value 0-9 for digit characters, #f otherwise
     // Must handle all Unicode decimal digits, not just ASCII
     match unicode_digit_value(c) {
-        Some(d) => Ok(Value::Integer(d as i64)),
-        None => Ok(Value::Boolean(false)),
+        Some(d) => Ok(TaggedValue::fixnum(d as i64)),
+        None => Ok(TaggedValue::FALSE),
     }
 }
 
@@ -423,20 +667,6 @@ fn unicode_digit_value(c: char) -> Option<u32> {
     None
 }
 
-// ========== Helper Functions ==========
-
-/// Extract a character from a Value, or return an error
-fn get_char(val: &Value, func_name: &str) -> Result<char, EvalError> {
-    match val {
-        Value::Character(c) => Ok(*c),
-        other => Err(EvalError::TypeError(format!(
-            "{}: requires character, got {}",
-            func_name,
-            other.type_name()
-        ))),
-    }
-}
-
 // ========== Registration ==========
 
 /// Register all character primitives with the registry
@@ -446,177 +676,177 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // Character comparisons
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char=?",
         Arity::Min(2),
         "Returns #t if all characters are equal.",
-        |eval, args, _tail| char_equal(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_equal(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char<?",
         Arity::Min(2),
         "Returns #t if characters are monotonically increasing.",
-        |eval, args, _tail| char_lt(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_lt(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char>?",
         Arity::Min(2),
         "Returns #t if characters are monotonically decreasing.",
-        |eval, args, _tail| char_gt(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_gt(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char<=?",
         Arity::Min(2),
         "Returns #t if characters are monotonically non-decreasing.",
-        |eval, args, _tail| char_le(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_le(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char>=?",
         Arity::Min(2),
         "Returns #t if characters are monotonically non-increasing.",
-        |eval, args, _tail| char_ge(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_ge(eval, args).map(EvalResult::Tagged),
     ));
 
     // Case-insensitive comparisons
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-ci=?",
         Arity::Min(2),
         "Returns #t if all characters are equal, ignoring case.",
-        |eval, args, _tail| char_ci_equal(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_ci_equal(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-ci<?",
         Arity::Min(2),
         "Case-insensitive character less than.",
-        |eval, args, _tail| char_ci_lt(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_ci_lt(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-ci>?",
         Arity::Min(2),
         "Case-insensitive character greater than.",
-        |eval, args, _tail| char_ci_gt(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_ci_gt(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-ci<=?",
         Arity::Min(2),
         "Case-insensitive character less than or equal.",
-        |eval, args, _tail| char_ci_le(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_ci_le(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-ci>=?",
         Arity::Min(2),
         "Case-insensitive character greater than or equal.",
-        |eval, args, _tail| char_ci_ge(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_ci_ge(eval, args).map(EvalResult::Tagged),
     ));
 
     // Type predicates
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-alphabetic?",
         Arity::Exact(1),
         "Returns #t if char is alphabetic.",
-        |eval, args, _tail| char_alphabetic_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_alphabetic_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-numeric?",
         Arity::Exact(1),
         "Returns #t if char is numeric.",
-        |eval, args, _tail| char_numeric_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_numeric_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-whitespace?",
         Arity::Exact(1),
         "Returns #t if char is whitespace.",
-        |eval, args, _tail| char_whitespace_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_whitespace_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-upper-case?",
         Arity::Exact(1),
         "Returns #t if char is uppercase.",
-        |eval, args, _tail| char_upper_case_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_upper_case_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-lower-case?",
         Arity::Exact(1),
         "Returns #t if char is lowercase.",
-        |eval, args, _tail| char_lower_case_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_lower_case_p(eval, args).map(EvalResult::Tagged),
     ));
 
     // Case conversion
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-upcase",
         Arity::Exact(1),
         "Returns the uppercase version of char.",
-        |eval, args, _tail| char_upcase(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_upcase(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-downcase",
         Arity::Exact(1),
         "Returns the lowercase version of char.",
-        |eval, args, _tail| char_downcase(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_downcase(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char-foldcase",
         Arity::Exact(1),
         "Returns the case-folded version of char.",
-        |eval, args, _tail| char_foldcase(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_foldcase(eval, args).map(EvalResult::Tagged),
     ));
 
     // Character/integer conversion
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "char->integer",
         Arity::Exact(1),
         "Returns the Unicode code point of char.",
-        |eval, args, _tail| char_to_integer(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_to_integer(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "integer->char",
         Arity::Exact(1),
         "Returns the character with the given Unicode code point.",
-        |eval, args, _tail| integer_to_char(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| integer_to_char(eval, args).map(EvalResult::Tagged),
     ));
 
     // Digit value
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.char",
         "digit-value",
         Arity::Exact(1),
         "Returns the numeric value of a digit character, or #f.",
-        |eval, args, _tail| digit_value(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| digit_value(eval, args).map(EvalResult::Tagged),
     ));
 }
 

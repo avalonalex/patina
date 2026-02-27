@@ -6,17 +6,15 @@
 //! The loader is stateless and only handles parsing. The evaluator handles
 //! import resolution and evaluation, eliminating the need for circular references.
 
+use patina_core::{SharedHeap, TaggedValue};
 use patina_frontend::{BodyElement, LibraryDefinition};
-use patina_runtime::Value;
 use patina_runtime::library_loader::{
     EvaluatingLibraryLoader, ExportSpec, ImportSet, ParsedLibrary,
 };
 use patina_runtime::library_registry::LibraryError;
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 /// Result of parsing a single library declaration.
 /// Contains the exports, imports, and body elements from the declaration.
@@ -86,15 +84,27 @@ impl SchemeLibraryLoader {
 
     /// Parse a .sld file into a ParsedLibrary with a library availability checker.
     ///
-    /// This method parses the file structure and resolves all includes.
-    /// The evaluator will handle import resolution and body evaluation.
-    ///
-    /// The `can_load_library` callback is used for `(library <name>)` requirements
-    /// in cond-expand clauses.
+    /// This method creates a fresh heap for parsing. Use `parse_sld_file_with_heap_and_checker`
+    /// to provide a shared heap for TaggedValue compatibility with the global environment.
     fn parse_sld_file_with_checker(
         &self,
         name: &[String],
         path: PathBuf,
+        can_load_library: &dyn Fn(&[String]) -> bool,
+    ) -> Result<ParsedLibrary, LibraryError> {
+        let heap = patina_core::new_shared_heap();
+        self.parse_sld_file_with_heap_and_checker(name, path, heap, can_load_library)
+    }
+
+    /// Parse a .sld file into a ParsedLibrary with a shared heap and library checker.
+    ///
+    /// Uses the provided heap so that body TaggedValues are allocated on the same
+    /// heap as the global environment, eliminating cross-heap conversion overhead.
+    fn parse_sld_file_with_heap_and_checker(
+        &self,
+        name: &[String],
+        path: PathBuf,
+        heap: SharedHeap,
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
         // Read the file
@@ -102,11 +112,13 @@ impl SchemeLibraryLoader {
             LibraryError::IoError(format!("Failed to read {}: {}", path.display(), e))
         })?;
 
-        // Parse the file to get the define-library form
+        // Parse the .sld header directly as TaggedValue on the shared heap
         let mut parser =
-            patina_frontend::Parser::new(&content).map_err(|e| LibraryError::ParseError {
-                file: path.display().to_string(),
-                message: format!("{:?}", e),
+            patina_frontend::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
+                LibraryError::ParseError {
+                    file: path.display().to_string(),
+                    message: format!("{:?}", e),
+                }
             })?;
 
         let lib_form = parser.parse().map_err(|e| LibraryError::ParseError {
@@ -116,7 +128,7 @@ impl SchemeLibraryLoader {
 
         // Parse the define-library form into structured data with library checker
         let lib_def =
-            LibraryDefinition::from_value_with_library_checker(&lib_form, can_load_library)
+            LibraryDefinition::from_tagged_with_library_checker(lib_form, &heap, can_load_library)
                 .map_err(|e| LibraryError::ParseError {
                     file: path.display().to_string(),
                     message: format!("{:?}", e),
@@ -157,6 +169,7 @@ impl SchemeLibraryLoader {
             &mut exports,
             &mut imports,
             &mut body,
+            &heap,
         )?;
 
         // Return parsed library for the evaluator to process
@@ -164,6 +177,7 @@ impl SchemeLibraryLoader {
             name: lib_def.name,
             imports,
             body,
+            heap: Some(heap),
             exports,
             source: Some(path),
         })
@@ -177,6 +191,10 @@ impl SchemeLibraryLoader {
     ///
     /// `include-library-declarations` splices entire library declarations (export,
     /// import, begin, include, etc.) from external files.
+    ///
+    /// Body expressions are collected as TaggedValues on the provided heap.
+    /// Begin bodies and included files are parsed directly as TaggedValues
+    /// on the shared heap.
     #[allow(clippy::too_many_arguments)]
     fn resolve_body_elements(
         &self,
@@ -186,12 +204,15 @@ impl SchemeLibraryLoader {
         source_file: &Path,
         exports: &mut Vec<ExportSpec>,
         imports: &mut Vec<ImportSet>,
-        body: &mut Vec<Value>,
+        body: &mut Vec<TaggedValue>,
+        heap: &SharedHeap,
     ) -> Result<(), LibraryError> {
         for element in elements {
             match element {
                 BodyElement::Begin(exprs) => {
-                    body.extend(exprs.clone());
+                    // Begin bodies are already TaggedValues on the shared heap
+                    // (converted during library definition parsing).
+                    body.extend(exprs);
                 }
                 BodyElement::Include {
                     paths,
@@ -225,9 +246,13 @@ impl SchemeLibraryLoader {
                             )));
                         }
 
-                        // Read and parse the included file as expressions
-                        let exprs =
-                            self.parse_included_file(&file_path, *case_insensitive, source_file)?;
+                        // Parse included file directly as TaggedValues on shared heap
+                        let exprs = self.parse_included_file_tagged(
+                            &file_path,
+                            *case_insensitive,
+                            source_file,
+                            heap,
+                        )?;
                         body.extend(exprs);
                     }
                 }
@@ -269,6 +294,7 @@ impl SchemeLibraryLoader {
                             exports,
                             imports,
                             body,
+                            heap,
                         )?;
                     }
                 }
@@ -291,7 +317,8 @@ impl SchemeLibraryLoader {
         source_file: &Path,
         exports: &mut Vec<ExportSpec>,
         imports: &mut Vec<ImportSet>,
-        body: &mut Vec<Value>,
+        body: &mut Vec<TaggedValue>,
+        heap: &SharedHeap,
     ) -> Result<(), LibraryError> {
         let content = fs::read_to_string(path).map_err(|e| {
             LibraryError::IoError(format!(
@@ -302,11 +329,13 @@ impl SchemeLibraryLoader {
             ))
         })?;
 
-        // Parse all expressions from the file
+        // Parse all expressions directly as TaggedValues on the shared heap
         let mut parser =
-            patina_frontend::Parser::new(&content).map_err(|e| LibraryError::ParseError {
-                file: path.display().to_string(),
-                message: format!("{:?}", e),
+            patina_frontend::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
+                LibraryError::ParseError {
+                    file: path.display().to_string(),
+                    message: format!("{:?}", e),
+                }
             })?;
 
         let declarations = parser.parse_all().map_err(|e| LibraryError::ParseError {
@@ -317,7 +346,7 @@ impl SchemeLibraryLoader {
         // Parse each declaration using LibraryDefinition's parsing logic
         for decl in &declarations {
             let (decl_exports, decl_imports, decl_body) =
-                Self::parse_single_declaration(decl, path)?;
+                Self::parse_single_declaration(*decl, path, heap)?;
 
             exports.extend(decl_exports);
             imports.extend(decl_imports);
@@ -331,65 +360,58 @@ impl SchemeLibraryLoader {
                 exports,
                 imports,
                 body,
+                heap,
             )?;
         }
 
         Ok(())
     }
 
-    /// Parse a single library declaration from a Value.
+    /// Parse a single library declaration from a TaggedValue.
     ///
     /// Returns (exports, imports, body_elements) for the declaration.
     fn parse_single_declaration(
-        value: &Value,
+        tv: TaggedValue,
         source_file: &Path,
+        heap: &SharedHeap,
     ) -> Result<ParsedDeclaration, LibraryError> {
         use patina_frontend::ExportSpec as FrontendExportSpec;
 
+        // Build a dummy (define-library (temp) <decl>) wrapper on the heap
+        let dummy_lib = {
+            let mut h = heap.borrow_mut();
+            let define_library_sym = h.intern_symbol("define-library");
+            let temp_sym = h.intern_symbol("temp");
+            let temp_name = h.alloc_pair(temp_sym, TaggedValue::NULL);
+            // Build list: (define-library (temp) <decl>)
+            let tail = h.alloc_pair(tv, TaggedValue::NULL);
+            let with_name = h.alloc_pair(temp_name, tail);
+            h.alloc_pair(define_library_sym, with_name)
+        };
+
+        let lib_def = LibraryDefinition::from_tagged(dummy_lib, heap).map_err(|e| {
+            LibraryError::ParseError {
+                file: source_file.display().to_string(),
+                message: format!("Invalid library declaration: {:?}", e),
+            }
+        })?;
+
+        // Convert frontend types to runtime types
         let mut exports = Vec::new();
         let mut imports = Vec::new();
-        let body_elements;
-
-        // Use a temporary LibraryDefinition to parse the declaration
-        // We create a dummy library wrapper to reuse the parsing logic
-        let dummy_lib = Self::make_list(vec![
-            Value::symbol("define-library"),
-            Self::make_list(vec![Value::symbol("temp")]),
-            value.clone(),
-        ]);
-
-        match LibraryDefinition::from_value(&dummy_lib) {
-            Ok(lib_def) => {
-                // Convert frontend types to runtime types
-                for exp in lib_def.exports {
-                    exports.push(match exp {
-                        FrontendExportSpec::Identifier(name) => ExportSpec::Identifier(name),
-                        FrontendExportSpec::Rename { internal, external } => {
-                            ExportSpec::Rename { internal, external }
-                        }
-                    });
+        for exp in lib_def.exports {
+            exports.push(match exp {
+                FrontendExportSpec::Identifier(name) => ExportSpec::Identifier(name),
+                FrontendExportSpec::Rename { internal, external } => {
+                    ExportSpec::Rename { internal, external }
                 }
-                for imp in lib_def.imports {
-                    imports.push(Self::convert_import_set(imp));
-                }
-                body_elements = lib_def.body_elements;
-            }
-            Err(e) => {
-                return Err(LibraryError::ParseError {
-                    file: source_file.display().to_string(),
-                    message: format!("Invalid library declaration: {:?}", e),
-                });
-            }
+            });
+        }
+        for imp in lib_def.imports {
+            imports.push(Self::convert_import_set(imp));
         }
 
-        Ok((exports, imports, body_elements))
-    }
-
-    /// Helper to construct a proper Scheme list from a Vec of Values
-    fn make_list(items: Vec<Value>) -> Value {
-        items.into_iter().rev().fold(Value::Null, |acc, item| {
-            Value::Pair(Rc::new(RefCell::new((item, acc))))
-        })
+        Ok((exports, imports, lib_def.body_elements))
     }
 
     /// Convert frontend ImportSet to runtime ImportSet
@@ -426,13 +448,17 @@ impl SchemeLibraryLoader {
         }
     }
 
-    /// Parse an included file and return its expressions.
-    fn parse_included_file(
+    /// Parse an included file directly as TaggedValues on the shared heap.
+    ///
+    /// Included files (binding.scm, conditionals.scm, etc.) are parsed directly
+    /// as TaggedValues on the shared heap.
+    fn parse_included_file_tagged(
         &self,
         path: &Path,
         case_insensitive: bool,
         source_file: &Path,
-    ) -> Result<Vec<Value>, LibraryError> {
+        heap: &SharedHeap,
+    ) -> Result<Vec<TaggedValue>, LibraryError> {
         let content = fs::read_to_string(path).map_err(|e| {
             LibraryError::IoError(format!(
                 "Failed to read include file {}: {} (from {})",
@@ -442,11 +468,11 @@ impl SchemeLibraryLoader {
             ))
         })?;
 
-        // Create parser - use case-insensitive mode for include-ci
+        // Create parser with shared heap — TaggedValues go directly on global heap
         let mut parser = if case_insensitive {
-            patina_frontend::Parser::new_case_insensitive(&content)
+            patina_frontend::Parser::new_case_insensitive_with_heap(&content, heap.clone())
         } else {
-            patina_frontend::Parser::new(&content)
+            patina_frontend::Parser::new_with_heap(&content, heap.clone())
         }
         .map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
@@ -499,6 +525,22 @@ impl EvaluatingLibraryLoader for SchemeLibraryLoader {
 
         // Parse it with the library checker
         self.parse_sld_file_with_checker(name, path, can_load_library)
+    }
+
+    fn parse_with_heap_and_library_checker(
+        &self,
+        name: &[String],
+        search_paths: &[PathBuf],
+        heap: SharedHeap,
+        can_load_library: &dyn Fn(&[String]) -> bool,
+    ) -> Result<ParsedLibrary, LibraryError> {
+        // Find the .sld file
+        let path = self
+            .find_sld_file(name, search_paths)
+            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?;
+
+        // Parse it with the shared heap and library checker
+        self.parse_sld_file_with_heap_and_checker(name, path, heap, can_load_library)
     }
 }
 

@@ -3,18 +3,18 @@
 //! This module implements the R7RS read procedure for parsing
 //! S-expressions from input ports.
 
-use super::ports::get_input_port;
+use super::ports::get_input_port_tagged;
 use crate::eval::Evaluator;
 use crate::eval::error::EvalError;
+use patina_core::{SharedHeap, TaggedValue};
 use patina_frontend::Parser;
-use patina_runtime::value::Value;
 use patina_runtime::{Port, PortData};
 use std::io::{self, BufRead};
 use std::rc::Rc;
 
 /// (read [port]) - Read a Scheme expression from an input port
 /// Returns the parsed value, or eof-object if at end of input
-pub(super) fn read(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+pub(super) fn read(eval: &Evaluator, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
             expected: "read expects 0 or 1 arguments".to_string(),
@@ -22,7 +22,13 @@ pub(super) fn read(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErr
         });
     }
 
-    let port = get_input_port(&args, 0)?;
+    let heap = eval.global_env.heap();
+
+    // Extract port from tagged args or use current-input-port
+    let port = {
+        let heap_ref = heap.borrow();
+        get_input_port_tagged(&args, 0, &heap_ref)?
+    };
 
     // Determine what kind of port we have and get content if applicable
     let (remaining, is_stdin, is_file) = {
@@ -47,40 +53,38 @@ pub(super) fn read(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalErr
     };
 
     if is_stdin {
-        return read_from_stdin();
+        return read_from_stdin(heap);
     }
 
     if is_file {
-        return read_from_file_port(&port);
+        return read_from_file_port(&port, heap);
     }
 
     let remaining = remaining.unwrap();
     if remaining.trim().is_empty() {
-        return Ok(Value::Eof);
+        return Ok(TaggedValue::EOF);
     }
 
-    // Parse the expression
-    let mut parser =
-        Parser::new(&remaining).map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
+    // Parse directly into the evaluator's heap
+    let mut parser = Parser::new_with_heap(&remaining, heap.clone())
+        .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
 
-    let result = parser.parse();
-
-    match result {
-        Ok(value) => {
+    match parser.parse() {
+        Ok(tv) => {
             // Calculate bytes consumed by finding how much the parser consumed
-            let consumed = calculate_consumed_bytes(&remaining, &value);
+            let consumed = calculate_consumed_bytes(&remaining);
             port.advance_position(consumed)
                 .map_err(|e| EvalError::IOError(e.to_string()))?;
-            Ok(value)
+            Ok(tv)
         }
-        Err(patina_frontend::ParseError::UnexpectedEof) => Ok(Value::Eof),
+        Err(patina_frontend::ParseError::UnexpectedEof) => Ok(TaggedValue::EOF),
         Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
     }
 }
 
 /// Read a complete S-expression from stdin
 /// This accumulates lines until we have a complete expression
-fn read_from_stdin() -> Result<Value, EvalError> {
+fn read_from_stdin(heap: &SharedHeap) -> Result<TaggedValue, EvalError> {
     let stdin = io::stdin();
     let mut handle = stdin.lock();
     let mut buffer = String::new();
@@ -91,7 +95,7 @@ fn read_from_stdin() -> Result<Value, EvalError> {
             Ok(0) => {
                 // EOF
                 if buffer.trim().is_empty() {
-                    return Ok(Value::Eof);
+                    return Ok(TaggedValue::EOF);
                 }
                 // Try to parse what we have
                 break;
@@ -100,9 +104,9 @@ fn read_from_stdin() -> Result<Value, EvalError> {
                 buffer.push_str(&line);
                 // Try to parse - if successful, we're done
                 // If we get UnexpectedEof, we need more input
-                if let Ok(mut parser) = Parser::new(&buffer) {
+                if let Ok(mut parser) = Parser::new_with_heap(&buffer, heap.clone()) {
                     match parser.parse() {
-                        Ok(value) => return Ok(value),
+                        Ok(tv) => return Ok(tv),
                         Err(patina_frontend::ParseError::UnexpectedEof) => {
                             // Need more input
                             continue;
@@ -118,19 +122,19 @@ fn read_from_stdin() -> Result<Value, EvalError> {
     }
 
     // Try to parse the accumulated buffer
-    let mut parser =
-        Parser::new(&buffer).map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
+    let mut parser = Parser::new_with_heap(&buffer, heap.clone())
+        .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
 
     match parser.parse() {
-        Ok(value) => Ok(value),
-        Err(patina_frontend::ParseError::UnexpectedEof) => Ok(Value::Eof),
+        Ok(tv) => Ok(tv),
+        Err(patina_frontend::ParseError::UnexpectedEof) => Ok(TaggedValue::EOF),
         Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
     }
 }
 
 /// Read a complete S-expression from a file port
 /// Reads lines until we have a complete expression
-fn read_from_file_port(port: &Rc<Port>) -> Result<Value, EvalError> {
+fn read_from_file_port(port: &Rc<Port>, heap: &SharedHeap) -> Result<TaggedValue, EvalError> {
     let mut buffer = String::new();
 
     loop {
@@ -139,7 +143,7 @@ fn read_from_file_port(port: &Rc<Port>) -> Result<Value, EvalError> {
             Ok(None) => {
                 // EOF
                 if buffer.trim().is_empty() {
-                    return Ok(Value::Eof);
+                    return Ok(TaggedValue::EOF);
                 }
                 // Try to parse what we have
                 break;
@@ -148,9 +152,9 @@ fn read_from_file_port(port: &Rc<Port>) -> Result<Value, EvalError> {
                 buffer.push_str(&line);
                 // Try to parse - if successful, we're done
                 // If we get UnexpectedEof, we need more input
-                if let Ok(mut parser) = Parser::new(&buffer) {
+                if let Ok(mut parser) = Parser::new_with_heap(&buffer, heap.clone()) {
                     match parser.parse() {
-                        Ok(value) => return Ok(value),
+                        Ok(tv) => return Ok(tv),
                         Err(patina_frontend::ParseError::UnexpectedEof) => {
                             // Need more input
                             continue;
@@ -166,19 +170,19 @@ fn read_from_file_port(port: &Rc<Port>) -> Result<Value, EvalError> {
     }
 
     // Try to parse the accumulated buffer
-    let mut parser =
-        Parser::new(&buffer).map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
+    let mut parser = Parser::new_with_heap(&buffer, heap.clone())
+        .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
 
     match parser.parse() {
-        Ok(value) => Ok(value),
-        Err(patina_frontend::ParseError::UnexpectedEof) => Ok(Value::Eof),
+        Ok(tv) => Ok(tv),
+        Err(patina_frontend::ParseError::UnexpectedEof) => Ok(TaggedValue::EOF),
         Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
     }
 }
 
 /// Calculate how many bytes were consumed to parse a value
-/// This is done by re-parsing and finding where the parser stops
-fn calculate_consumed_bytes(input: &str, _parsed: &Value) -> usize {
+/// This is done by tracking parentheses/brackets and string boundaries
+fn calculate_consumed_bytes(input: &str) -> usize {
     // Skip leading whitespace
     let trimmed = input.trim_start();
     let whitespace_len = input.len() - trimmed.len();
@@ -187,10 +191,7 @@ fn calculate_consumed_bytes(input: &str, _parsed: &Value) -> usize {
         return input.len();
     }
 
-    // Parse once and measure by trying increasingly smaller substrings
-    // until parsing fails or gives a different result
-    //
-    // A more efficient approach: find the logical end of the expression
+    // Find the logical end of the expression
     // by tracking parentheses/brackets and string boundaries
     let mut depth = 0;
     let mut in_string = false;

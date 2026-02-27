@@ -3,7 +3,7 @@
 //! These tests verify the core pattern and template structures used in macro expansion.
 
 use super::{Identifier, Pattern, Template};
-use patina_runtime::{PVRef, ScopeSet, Value};
+use patina_runtime::{PVRef, ScopeSet};
 
 // ============================================================================
 // Pattern tests
@@ -57,9 +57,9 @@ fn test_pattern_ellipsis() {
 
 #[test]
 fn test_template_literal() {
-    let tmpl = Template::Literal(Value::Integer(42));
+    let tmpl = Template::Literal(patina_core::TaggedValue::fixnum(42));
     assert!(tmpl.is_literal());
-    assert_eq!(format!("{}", tmpl), "42");
+    assert!(format!("{}", tmpl).contains("literal"));
 }
 
 #[test]

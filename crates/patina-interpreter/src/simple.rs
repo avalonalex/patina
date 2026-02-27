@@ -14,8 +14,9 @@
 //! println!("Result: {}", result);
 //! ```
 
+use patina_core::TaggedValue;
 use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
-use patina_runtime::{Environment, Value};
+use patina_runtime::Environment;
 use std::rc::Rc;
 
 /// Simple interpreter using the standard pipeline
@@ -53,7 +54,7 @@ impl SimpleInterpreter {
     /// let result = interp.eval_str("(+ 1 2 3)").unwrap();
     /// assert_eq!(result.to_string(), "6");
     /// ```
-    pub fn eval_str(&self, code: &str) -> Result<Value, PipelineError> {
+    pub fn eval_str(&self, code: &str) -> Result<TaggedValue, PipelineError> {
         let env = self.global_env();
         self.pipeline.eval(code, &env)
     }
@@ -75,7 +76,7 @@ impl SimpleInterpreter {
     /// let result = interp.eval_program(code).unwrap();
     /// assert_eq!(result.to_string(), "30");
     /// ```
-    pub fn eval_program(&self, code: &str) -> Result<Value, PipelineError> {
+    pub fn eval_program(&self, code: &str) -> Result<TaggedValue, PipelineError> {
         let env = self.global_env();
         self.pipeline.eval_program(code, &env)
     }
@@ -93,6 +94,27 @@ impl SimpleInterpreter {
     pub fn evaluator(&self) -> &patina_tree_walker::Evaluator {
         self.pipeline.evaluator()
     }
+
+    /// Format a TaggedValue for display using write notation (machine-readable)
+    ///
+    /// Uses the datum writer which properly handles all TaggedValue types
+    /// including heap pairs, vectors, strings, and circular structures.
+    pub fn display_tagged(&self, tv: TaggedValue) -> String {
+        use patina_tree_walker::eval::format_write_tagged;
+        let heap = self.pipeline.evaluator().global_env.heap();
+
+        // Unpack multiple values (R7RS: each value displayed on its own line)
+        let vals = heap.borrow().get_values(tv).map(|v| v.to_vec());
+        if let Some(vals) = vals {
+            return vals
+                .iter()
+                .map(|v| format_write_tagged(*v, heap))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+
+        format_write_tagged(tv, heap)
+    }
 }
 
 impl Default for SimpleInterpreter {
@@ -109,7 +131,7 @@ mod tests {
     fn test_eval_str() {
         let interp = SimpleInterpreter::new();
         let result = interp.eval_str("(+ 1 2 3)").unwrap();
-        assert_eq!(result.to_string(), "6");
+        assert_eq!(result.as_fixnum(), Some(6));
     }
 
     #[test]
@@ -121,7 +143,7 @@ mod tests {
             (+ x y)
         "#;
         let result = interp.eval_program(code).unwrap();
-        assert_eq!(result.to_string(), "30");
+        assert_eq!(result.as_fixnum(), Some(30));
     }
 
     #[test]
@@ -138,6 +160,6 @@ mod tests {
     fn test_macros() {
         let interp = SimpleInterpreter::new();
         let result = interp.eval_str("(or #f #t)").unwrap();
-        assert_eq!(result.to_string(), "#t");
+        assert_eq!(result, TaggedValue::TRUE);
     }
 }

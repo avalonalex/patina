@@ -31,6 +31,9 @@ pub enum MatchError {
         var2: String,
         count2: usize,
     },
+
+    /// Internal error (programming error or unsupported case)
+    InternalError(String),
 }
 
 impl std::fmt::Display for MatchError {
@@ -101,6 +104,9 @@ impl std::fmt::Display for MatchError {
                      Hint: All variables in the same ellipsis pattern must match the same number of times",
                     var1, count1, var2, count2
                 )
+            }
+            MatchError::InternalError(msg) => {
+                write!(f, "Internal pattern matching error: {}", msg)
             }
         }
     }

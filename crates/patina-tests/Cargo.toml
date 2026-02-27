@@ -10,6 +10,7 @@ publish = false
 patina-interpreter = { path = "../patina-interpreter" }
 
 # For accessing internal types in tests
+patina-core = { path = "../patina-core" }
 patina-runtime = { path = "../patina-runtime" }
 patina-frontend = { path = "../patina-frontend" }
 patina-tree-walker = { path = "../patina-tree-walker" }

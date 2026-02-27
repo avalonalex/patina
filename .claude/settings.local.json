@@ -2,7 +2,20 @@
   "permissions": {
     "allow": [
       "Bash(cargo test:*)",
-      "Bash(./target/release/patina:*)"
+      "Bash(./target/release/patina:*)",
+      "Bash(cargo build:*)",
+      "Bash(git stash:*)",
+      "Bash(./scripts/run_chibi_tests.sh:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(__NEW_LINE_fbac0cac163fd61e__ echo \"=== Value::Promise usage ===\")",
+      "Bash(__NEW_LINE_53c0124dc0dd6c5d__ echo \"=== Value::Values usage ===\")",
+      "Bash(__NEW_LINE_af71f9d4341adc20__ echo \"=== Value::Exception usage ===\")",
+      "Bash(__NEW_LINE_3a495704508b4f92__ echo \"=== Value::Parameter usage ===\")",
+      "Bash(__NEW_LINE_a6a4fa1a4b448e99__ echo \"=== Value::ContinuationPromptTag usage ===\")",
+      "Bash(__NEW_LINE_de05aada80a23c3e__ echo \"=== Value::LabelPlaceholder usage ===\")",
+      "Bash(__NEW_LINE_c1e9fd24aae90ba6__ echo \"=== Value::Library usage ===\")",
+      "Bash(__NEW_LINE_9a048d997f9d74ca__ echo \"=== Value::EnvironmentSpecifier usage ===\")",
+      "Bash(samply record:*)"
     ],
     "deny": [],
     "ask": []

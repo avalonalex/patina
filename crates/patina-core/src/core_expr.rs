@@ -1,9 +1,15 @@
 use crate::scope::{ScopeId, ScopeSet};
-use crate::value::Value;
+use crate::tagged_value::TaggedValue;
 use std::rc::Rc;
 
 /// Symbol type (interned string)
 pub type Symbol = Rc<str>;
+
+/// Lambda body representation - type-safe replacement for `dyn Any`
+///
+/// Lambda body stored as CoreExpr (preserves scope IDs for hygiene).
+/// All lambdas are created with CoreExpr bodies.
+pub type LambdaBody = Vec<CoreExpr>;
 
 /// A parameter with optional scope set for hygiene
 ///
@@ -68,8 +74,8 @@ pub enum Formals {
 pub enum CoreExpr {
     /// Literal values: numbers, booleans, strings, etc.
     /// Example: 42, #t, "hello"
-    /// Uses Rc<Value> to reduce CoreExpr size (pointer vs inline 64 bytes)
-    Literal(Rc<Value>),
+    /// Uses TaggedValue (8 bytes) for compact representation
+    Literal(TaggedValue),
 
     /// Variable reference (with optional hygiene scopes)
     /// Example: x, my-function
@@ -81,15 +87,14 @@ pub enum CoreExpr {
 
     /// Quote: literal data
     /// Example: 'x, '(1 2 3)
-    /// Uses Rc<Value> to reduce CoreExpr size
-    Quote(Rc<Value>),
+    /// Uses TaggedValue (8 bytes) for compact representation
+    Quote(TaggedValue),
 
     /// Quasiquote: template with selective evaluation
     /// Example: `(a ,b ,@c) where b and c are evaluated
-    /// The template is stored as a Value, and will be processed
+    /// The template is stored as a TaggedValue, and will be processed
     /// recursively by the evaluator to handle unquote/unquote-splicing
-    /// Uses Rc<Value> to reduce CoreExpr size
-    Quasiquote(Rc<Value>),
+    Quasiquote(TaggedValue),
 
     /// Lambda abstraction
     /// Example: (lambda (x y) (+ x y))
@@ -134,8 +139,8 @@ pub enum CoreExpr {
 
     /// Import: load library bindings
     /// Example: (import (scheme base))
-    /// Import sets are kept as Values (declarative data, not code)
-    Import { import_sets: Vec<Value> },
+    /// Import sets are kept as TaggedValues (declarative data, not code)
+    Import { import_sets: Vec<TaggedValue> },
 
     // Note: Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
     // The CoreExpr::Parameterize variant has been removed.

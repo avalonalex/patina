@@ -6,85 +6,161 @@
 //! - exact, inexact - Exactness conversion
 //! - exact-integer-sqrt - Integer square root with remainder
 //! - rationalize - Find simplest rational within tolerance
+//!
+//! All operations use Heap methods which have built-in fixnum fast paths.
 
 use super::helpers::numeric_err;
 use crate::eval::Evaluator;
 use crate::eval::error::EvalError;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{Signed, ToPrimitive, Zero};
-use patina_core::numeric;
-use patina_runtime::value::Value;
+use num_traits::{ToPrimitive, Zero};
+use patina_core::TaggedValue;
 
 // ========== GCD and LCM ==========
 
 /// (gcd n1 n2 ...) - Greatest common divisor
-pub(super) fn gcd(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    numeric::numeric_gcd_many(&args).map_err(|e| numeric_err(e, "gcd"))
+/// Uses Heap::gcd_many with built-in fixnum fast path.
+pub(super) fn gcd(evaluator: &Evaluator, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+    let heap = evaluator.global_env.heap();
+    heap.borrow_mut()
+        .gcd_many(&args)
+        .map_err(|e| numeric_err(e, "gcd"))
 }
 
 /// (lcm n1 n2 ...) - Least common multiple
-pub(super) fn lcm(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    numeric::numeric_lcm_many(&args).map_err(|e| numeric_err(e, "lcm"))
+/// Uses Heap::lcm_many with built-in fixnum fast path.
+pub(super) fn lcm(evaluator: &Evaluator, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+    let heap = evaluator.global_env.heap();
+    heap.borrow_mut()
+        .lcm_many(&args)
+        .map_err(|e| numeric_err(e, "lcm"))
 }
 
 // ========== Rational Number Accessors ==========
 
 /// (numerator q) - Returns the numerator of rational q
-/// R7RS: If the argument is inexact, the result is also inexact.
-pub(super) fn numerator(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    _eval.check_arity_exact(&args, 1, "numerator")?;
-    args[0].numerator().map_err(|e| numeric_err(e, "numerator"))
+/// Uses Heap::numerator with built-in fixnum fast path.
+pub(super) fn numerator(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    heap.borrow_mut()
+        .numerator(args[0])
+        .map_err(|e| numeric_err(e, "numerator"))
 }
 
 /// (denominator q) - Returns the denominator of rational q
-/// R7RS: If the argument is inexact, the result is also inexact.
-pub(super) fn denominator(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    _eval.check_arity_exact(&args, 1, "denominator")?;
-    args[0]
-        .denominator()
+/// Uses Heap::denominator with built-in fixnum fast path.
+pub(super) fn denominator(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    heap.borrow_mut()
+        .denominator(args[0])
         .map_err(|e| numeric_err(e, "denominator"))
 }
 
 // ========== Exactness Conversion ==========
 
 /// (exact z) - Convert to exact representation (inexact->exact)
-pub(super) fn exact(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    _eval.check_arity_exact(&args, 1, "exact")?;
-    args[0].to_exact().map_err(|e| numeric_err(e, "exact"))
+/// Uses Heap::to_exact with built-in fixnum fast path.
+pub(super) fn exact(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    heap.borrow_mut()
+        .to_exact(args[0])
+        .map_err(|e| numeric_err(e, "exact"))
 }
 
 /// (inexact z) - Convert to inexact representation (exact->inexact)
-pub(super) fn inexact(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    _eval.check_arity_exact(&args, 1, "inexact")?;
-    Ok(args[0].to_inexact())
+/// Uses Heap::to_inexact with built-in fixnum fast path.
+pub(super) fn inexact(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    Ok(heap.borrow_mut().to_inexact(args[0]))
 }
 
 // ========== Additional Number Theory Functions ==========
 
 /// (exact-integer-sqrt k) - Returns two values s and r where k = s^2 + r, and k < (s+1)^2
 /// This is the integer square root with remainder
-pub(super) fn exact_integer_sqrt(_eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    _eval.check_arity_exact(&args, 1, "exact-integer-sqrt")?;
+pub(super) fn exact_integer_sqrt(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    // Convert to BigInt for uniform handling
-    let k = match &args[0] {
-        Value::Integer(n) if *n < 0 => {
+    let heap = evaluator.global_env.heap();
+
+    // Fast path for fixnums
+    if args[0].is_fixnum() {
+        let n = args[0].as_fixnum_unchecked();
+        if n < 0 {
             return Err(EvalError::TypeError(
                 "exact-integer-sqrt expects a non-negative integer".to_string(),
             ));
         }
-        Value::Integer(n) => BigInt::from(*n),
-        Value::BigInteger(n) if n < &BigInt::from(0) => {
-            return Err(EvalError::TypeError(
-                "exact-integer-sqrt expects a non-negative integer".to_string(),
-            ));
-        }
-        Value::BigInteger(n) => n.clone(),
-        other => {
+        let s = (n as f64).sqrt().floor() as i64;
+        let r = n - s * s;
+        let s_tv = TaggedValue::fixnum(s);
+        let r_tv = TaggedValue::fixnum(r);
+        return Ok(heap.borrow_mut().alloc_values(vec![s_tv, r_tv]));
+    }
+
+    // Slow path: BigInt
+    let k = {
+        let heap_ref = heap.borrow();
+        if let Some(n) = heap_ref.get_bigint(args[0]) {
+            if n < &BigInt::from(0) {
+                return Err(EvalError::TypeError(
+                    "exact-integer-sqrt expects a non-negative integer".to_string(),
+                ));
+            }
+            n.clone()
+        } else {
             return Err(EvalError::TypeError(format!(
                 "exact-integer-sqrt expects an exact integer, got {}",
-                other.type_name()
+                heap_ref.type_name(args[0])
             )));
         }
     };
@@ -101,68 +177,78 @@ pub(super) fn exact_integer_sqrt(_eval: &Evaluator, args: Vec<Value>) -> Result<
             s_next = (&s + &k / &s) / BigInt::from(2);
         }
 
-        // s is the integer square root
-        // r = k - s^2 is the remainder
         let r = &k - &s * &s;
         (s, r)
     };
 
-    // Convert s and r to appropriate Value types
-    let s_val = match s.to_i64() {
-        Some(n) => Value::Integer(n),
-        None => Value::BigInteger(s),
+    // Convert s and r to TaggedValues directly
+    let mut heap_mut = heap.borrow_mut();
+    let s_tv = match s.to_i64().filter(|n| TaggedValue::fits_fixnum(*n)) {
+        Some(n) => TaggedValue::fixnum(n),
+        None => heap_mut.alloc_bigint(s),
     };
-
-    let r_val = match r.to_i64() {
-        Some(n) => Value::Integer(n),
-        None => Value::BigInteger(r),
+    let r_tv = match r.to_i64().filter(|n| TaggedValue::fits_fixnum(*n)) {
+        Some(n) => TaggedValue::fixnum(n),
+        None => heap_mut.alloc_bigint(r),
     };
-
-    // Return as multiple values using Value::Values
-    Ok(Value::Values(vec![s_val, r_val]))
+    Ok(heap_mut.alloc_values(vec![s_tv, r_tv]))
 }
 
 /// (rationalize x tolerance) - Find simplest rational within tolerance of x
 /// Returns the rational with smallest denominator within x±tolerance
 ///
 /// R7RS: If x is inexact, the result is inexact. If x is exact, the result is exact.
-pub(super) fn rationalize(eval: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    eval.check_arity_exact(&args, 2, "rationalize")?;
-
-    let x = &args[0];
-    let tolerance = &args[1];
-
-    // Validate inputs are real numbers
-    if !x.is_number() || matches!(x, Value::Complex(_)) {
-        return Err(EvalError::TypeError(
-            "rationalize: expected real number".to_string(),
-        ));
+pub(super) fn rationalize(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 2 {
+        return Err(EvalError::WrongArity {
+            expected: "2".to_string(),
+            actual: args.len(),
+        });
     }
-    if !tolerance.is_number() || matches!(tolerance, Value::Complex(_)) {
-        return Err(EvalError::TypeError(
-            "rationalize: expected real number for tolerance".to_string(),
-        ));
+
+    let heap = evaluator.global_env.heap();
+
+    // Validate inputs are real numbers (number but not complex)
+    {
+        let heap_ref = heap.borrow();
+        if !heap_ref.is_number(args[0]) || heap_ref.is_complex(args[0]) {
+            return Err(EvalError::TypeError(
+                "rationalize: expected real number".to_string(),
+            ));
+        }
+        if !heap_ref.is_number(args[1]) || heap_ref.is_complex(args[1]) {
+            return Err(EvalError::TypeError(
+                "rationalize: expected real number for tolerance".to_string(),
+            ));
+        }
     }
 
     // Check if x is inexact - this determines the exactness of the result
-    let x_is_inexact = x.is_inexact();
+    let x_is_inexact = heap.borrow().is_inexact_number(args[0]);
 
-    // Convert to f64 for the algorithm
-    let x_f64 = match x {
-        Value::Integer(n) => *n as f64,
-        Value::BigInteger(n) => n.to_f64().unwrap_or(f64::INFINITY),
-        Value::Rational(r) => r.to_f64().unwrap_or(f64::INFINITY),
-        Value::Real(f) => *f,
-        _ => unreachable!(),
+    // Helper to extract f64 from a real-valued TaggedValue
+    let tv_to_f64 = |tv: TaggedValue| -> f64 {
+        if tv.is_fixnum() {
+            return tv.as_fixnum_unchecked() as f64;
+        }
+        let heap_ref = heap.borrow();
+        if let Some(f) = heap_ref.get_real(tv) {
+            return f;
+        }
+        if let Some(n) = heap_ref.get_bigint(tv) {
+            return n.to_f64().unwrap_or(f64::INFINITY);
+        }
+        if let Some(r) = heap_ref.get_rational(tv) {
+            return r.to_f64().unwrap_or(f64::INFINITY);
+        }
+        unreachable!()
     };
 
-    let tol_f64 = match tolerance {
-        Value::Integer(n) => (*n as f64).abs(),
-        Value::BigInteger(n) => n.to_f64().unwrap_or(f64::INFINITY).abs(),
-        Value::Rational(r) => r.to_f64().unwrap_or(f64::INFINITY).abs(),
-        Value::Real(f) => f.abs(),
-        _ => unreachable!(),
-    };
+    let x_f64 = tv_to_f64(args[0]);
+    let tol_f64 = tv_to_f64(args[1]).abs();
 
     // Range: [x - tolerance, x + tolerance]
     let lower = x_f64 - tol_f64;
@@ -211,15 +297,13 @@ pub(super) fn rationalize(eval: &Evaluator, args: Vec<Value>) -> Result<Value, E
         lower_rat
     }
 
-    let result = simplest_rational_in_range(lower, upper);
+    let result_rational = simplest_rational_in_range(lower, upper);
 
     // R7RS: If x is inexact, return inexact result; otherwise exact
     if x_is_inexact {
-        // Convert rational to inexact (f64)
-        let f = result.to_f64().unwrap_or(f64::NAN);
-        Ok(Value::Real(f))
+        let f = result_rational.to_f64().unwrap_or(f64::NAN);
+        Ok(heap.borrow_mut().alloc_real(f))
     } else {
-        // Return exact rational
-        Ok(eval.rational_to_value(result))
+        Ok(evaluator.rational_to_tagged(result_rational))
     }
 }

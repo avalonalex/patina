@@ -12,9 +12,10 @@
 //! - `CompiledRule` - A single pattern/template rule
 //! - `CompiledMacro` - Complete compiled macro definition
 
+use crate::heap::SharedHeap;
 use crate::pvref::PVRef;
 use crate::scope::ScopeSet;
-use crate::value::Value;
+use crate::tagged_value::TaggedValue;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -74,7 +75,7 @@ pub enum Pattern {
     Wildcard,
 
     /// Literal value that must match exactly
-    Literal(Value),
+    Literal(TaggedValue),
 
     /// Pattern variable - binds to matched expression
     ///
@@ -152,7 +153,7 @@ impl std::fmt::Display for Pattern {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Pattern::Wildcard => write!(f, "_"),
-            Pattern::Literal(v) => write!(f, "{}", v),
+            Pattern::Literal(tv) => write!(f, "<literal {:?}>", tv),
             Pattern::Var(pvref) => write!(f, "?{}", pvref),
             Pattern::List(patterns) => {
                 write!(f, "(")?;
@@ -276,7 +277,7 @@ impl std::fmt::Display for Identifier {
 #[derive(Clone, Debug)]
 pub enum Template {
     /// Literal value (inserted as-is)
-    Literal(Value),
+    Literal(TaggedValue),
 
     /// Symbol to be inserted (hygienically renamed)
     Symbol(Identifier),
@@ -352,7 +353,7 @@ impl Template {
 impl std::fmt::Display for Template {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Template::Literal(v) => write!(f, "{}", v),
+            Template::Literal(tv) => write!(f, "<literal {:?}>", tv),
             Template::Symbol(id) => write!(f, "{}", id),
             Template::Var(pvref) => write!(f, "${}", pvref),
             Template::List(templates) => {
@@ -456,6 +457,12 @@ pub struct CompiledMacro {
     ///
     /// Free variables in templates will carry this scope set.
     pub definition_scopes: ScopeSet,
+
+    /// Shared heap that stores TaggedValue literals from Pattern::Literal and Template::Literal.
+    ///
+    /// This heap is allocated at compile time and must be used (or merged into) the
+    /// expansion-time heap so that literal TaggedValues remain valid.
+    pub heap: SharedHeap,
 }
 
 #[cfg(test)]
@@ -480,9 +487,9 @@ mod tests {
 
     #[test]
     fn test_template_literal() {
-        let tmpl = Template::Literal(Value::Integer(42));
+        let tmpl = Template::Literal(TaggedValue::fixnum(42));
         assert!(tmpl.is_literal());
-        assert_eq!(format!("{}", tmpl), "42");
+        assert!(format!("{}", tmpl).contains("literal"));
     }
 
     #[test]

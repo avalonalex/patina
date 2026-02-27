@@ -12,21 +12,20 @@ use super::super::Evaluator;
 use super::super::error::EvalError;
 use super::registry::PrimitiveFn;
 use super::registry::PrimitiveRegistry;
-use patina_runtime::value::{Arity, Value};
-use std::cell::RefCell;
-use std::rc::Rc;
+use patina_core::TaggedValue;
+use patina_runtime::Arity;
 
 /// Register all process-context primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.process-context",
         "command-line",
         Arity::Exact(0),
         "Return the command line arguments as a list of strings",
-        |eval, args, _| command_line(eval, args).map(EvalResult::Value),
+        |eval, args, _| command_line(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.process-context",
         "exit",
         Arity::Range(0, 1),
@@ -34,7 +33,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         |eval, args, _| exit_proc(eval, args),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.process-context",
         "emergency-exit",
         Arity::Range(0, 1),
@@ -42,34 +41,43 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         |eval, args, _| emergency_exit(eval, args),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.process-context",
         "get-environment-variable",
         Arity::Exact(1),
         "Get the value of an environment variable",
-        |eval, args, _| get_environment_variable(eval, args).map(EvalResult::Value),
+        |eval, args, _| get_environment_variable(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.process-context",
         "get-environment-variables",
         Arity::Exact(0),
         "Get all environment variables as an alist",
-        |eval, args, _| get_environment_variables(eval, args).map(EvalResult::Value),
+        |eval, args, _| get_environment_variables(eval, args).map(EvalResult::Tagged),
     ));
 }
 
 /// Return the command line arguments as a list of strings.
 ///
 /// The first element is the program name (implementation-dependent).
-fn command_line(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 0, "command-line")?;
+fn command_line(evaluator: &Evaluator, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+    if !args.is_empty() {
+        return Err(EvalError::WrongArity {
+            expected: "0".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    let args: Vec<Value> = std::env::args()
-        .map(|s| Value::String(Rc::new(RefCell::new(s.chars().collect()))))
-        .collect();
-
-    Ok(evaluator.list_from_vec(args))
+    let heap = evaluator.global_env.heap();
+    let mut h = heap.borrow_mut();
+    // Allocate each arg string, then build a proper list in reverse
+    let arg_tvs: Vec<TaggedValue> = std::env::args().map(|s| h.alloc_string(s)).collect();
+    let mut result = TaggedValue::NULL;
+    for tv in arg_tvs.into_iter().rev() {
+        result = h.alloc_pair(tv, result);
+    }
+    Ok(result)
 }
 
 /// Exit the program with optional status.
@@ -80,20 +88,11 @@ fn command_line(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalEr
 /// - No argument or #t: exit with success (0)
 /// - #f: exit with failure (1)
 /// - Integer: exit with that code
-fn exit_proc(_evaluator: &Evaluator, args: Vec<Value>) -> Result<EvalResult, EvalError> {
+fn exit_proc(_evaluator: &Evaluator, args: Vec<TaggedValue>) -> Result<EvalResult, EvalError> {
     let code = if args.is_empty() {
         0 // Success
     } else {
-        match &args[0] {
-            Value::Boolean(true) => 0,
-            Value::Boolean(false) => 1,
-            Value::Integer(n) => *n as i32,
-            _ => {
-                return Err(EvalError::TypeError(
-                    "exit expects boolean or integer".to_string(),
-                ));
-            }
-        }
+        exit_code_from_arg(args[0])?
     };
 
     // Note: In a full implementation, we would run dynamic-wind handlers here
@@ -103,114 +102,146 @@ fn exit_proc(_evaluator: &Evaluator, args: Vec<Value>) -> Result<EvalResult, Eva
 /// Exit immediately without running handlers.
 ///
 /// This corresponds to _exit() in POSIX.
-fn emergency_exit(_evaluator: &Evaluator, args: Vec<Value>) -> Result<EvalResult, EvalError> {
+fn emergency_exit(_evaluator: &Evaluator, args: Vec<TaggedValue>) -> Result<EvalResult, EvalError> {
     let code = if args.is_empty() {
         0 // Success
     } else {
-        match &args[0] {
-            Value::Boolean(true) => 0,
-            Value::Boolean(false) => 1,
-            Value::Integer(n) => *n as i32,
-            _ => {
-                return Err(EvalError::TypeError(
-                    "emergency-exit expects boolean or integer".to_string(),
-                ));
-            }
-        }
+        exit_code_from_arg(args[0])?
     };
 
     std::process::exit(code);
 }
 
+/// Extract an exit code from a TaggedValue argument
+fn exit_code_from_arg(arg: TaggedValue) -> Result<i32, EvalError> {
+    if arg == TaggedValue::TRUE {
+        Ok(0)
+    } else if arg == TaggedValue::FALSE {
+        Ok(1)
+    } else if arg.is_fixnum() {
+        Ok(arg.as_fixnum_unchecked() as i32)
+    } else {
+        Err(EvalError::TypeError(
+            "exit expects boolean or integer".to_string(),
+        ))
+    }
+}
+
 /// Get the value of an environment variable.
 ///
 /// Returns #f if the variable is not set.
-fn get_environment_variable(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "get-environment-variable")?;
+fn get_environment_variable(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    let name: String = match &args[0] {
-        Value::String(s) => s.borrow().iter().collect(),
-        _ => {
-            return Err(EvalError::TypeError(
-                "get-environment-variable expects a string".to_string(),
-            ));
+    let heap = evaluator.global_env.heap();
+
+    let name: String = {
+        let heap_ref = heap.borrow();
+        match heap_ref.get_string_contents(args[0]) {
+            Some(s) => s,
+            None => {
+                return Err(EvalError::TypeError(
+                    "get-environment-variable expects a string".to_string(),
+                ));
+            }
         }
     };
 
     match std::env::var(&name) {
-        Ok(value) => Ok(Value::String(Rc::new(RefCell::new(
-            value.chars().collect(),
-        )))),
-        Err(_) => Ok(Value::Boolean(false)),
+        Ok(value) => Ok(heap.borrow_mut().alloc_string(value)),
+        Err(_) => Ok(TaggedValue::FALSE),
     }
 }
 
 /// Get all environment variables as an alist.
 ///
 /// Each entry is (name . value) where both are strings.
-fn get_environment_variables(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 0, "get-environment-variables")?;
+fn get_environment_variables(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if !args.is_empty() {
+        return Err(EvalError::WrongArity {
+            expected: "0".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    let entries: Vec<Value> = std::env::vars()
+    let heap = evaluator.global_env.heap();
+    let mut h = heap.borrow_mut();
+    // Build alist entries as (name . value) pairs
+    let entry_tvs: Vec<TaggedValue> = std::env::vars()
         .map(|(k, v)| {
-            Value::Pair(Rc::new(RefCell::new((
-                Value::String(Rc::new(RefCell::new(k.chars().collect()))),
-                Value::String(Rc::new(RefCell::new(v.chars().collect()))),
-            ))))
+            let key = h.alloc_string(k);
+            let val = h.alloc_string(v);
+            h.alloc_pair(key, val)
         })
         .collect();
-
-    Ok(evaluator.list_from_vec(entries))
+    // Build proper list in reverse
+    let mut result = TaggedValue::NULL;
+    for tv in entry_tvs.into_iter().rev() {
+        result = h.alloc_pair(tv, result);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn alloc_string(s: &str, eval: &Evaluator) -> TaggedValue {
+        eval.global_env
+            .heap()
+            .borrow_mut()
+            .alloc_string(s.to_string())
+    }
+
     #[test]
     fn test_command_line_returns_list() {
         let eval = Evaluator::new();
         let result = command_line(&eval, vec![]).unwrap();
-
-        // Should be a list (could be empty in test context)
-        assert!(matches!(result, Value::Pair(_) | Value::Null));
+        // Should be a list (null or pair)
+        assert!(result.is_null() || result.is_pair());
     }
 
     #[test]
     fn test_get_environment_variable_path() {
         let eval = Evaluator::new();
-        // PATH should exist on most systems
-        let name = Value::String(Rc::new(RefCell::new("PATH".chars().collect())));
+        let name = alloc_string("PATH", &eval);
         let result = get_environment_variable(&eval, vec![name]).unwrap();
-
-        // Should return a string (PATH is usually set)
-        assert!(matches!(result, Value::String(_)));
+        // PATH is usually set — should return a string
+        assert!(result.is_string());
     }
 
     #[test]
     fn test_get_environment_variable_not_found() {
         let eval = Evaluator::new();
-        let name = Value::String(Rc::new(RefCell::new(
-            "PATINA_NONEXISTENT_VAR_12345".chars().collect(),
-        )));
+        let name = alloc_string("PATINA_NONEXISTENT_VAR_12345", &eval);
         let result = get_environment_variable(&eval, vec![name]).unwrap();
-
-        // Should return #f for non-existent variable
-        assert!(matches!(result, Value::Boolean(false)));
+        assert_eq!(result, TaggedValue::FALSE);
     }
 
     #[test]
     fn test_get_environment_variables_returns_alist() {
         let eval = Evaluator::new();
         let result = get_environment_variables(&eval, vec![]).unwrap();
-
         // Should be a list
-        assert!(matches!(result, Value::Pair(_) | Value::Null));
+        assert!(result.is_null() || result.is_pair());
 
-        // If it's a pair, check that the car is also a pair (alist entry)
-        if let Value::Pair(p) = result {
-            let entry = p.borrow().0.clone();
-            assert!(matches!(entry, Value::Pair(_)));
+        // If non-empty, first entry should be a pair (alist entry)
+        if !result.is_null() {
+            let heap = eval.global_env.heap();
+            let heap_ref = heap.borrow();
+            let car = heap_ref.car(result);
+            assert!(car.is_pair());
         }
     }
 }

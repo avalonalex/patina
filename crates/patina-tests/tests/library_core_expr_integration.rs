@@ -15,8 +15,7 @@ fn test_simple_expression_flow() {
     println!("\n=== Evaluating: {} ===", test_code);
 
     let result = interp.eval_str(test_code).unwrap();
-    println!("Result: {}", result);
-    assert_eq!(result.to_string(), "3");
+    assert_eq!(result.as_fixnum(), Some(3));
 }
 
 #[test]
@@ -29,8 +28,7 @@ fn test_macro_expression_flow() {
     println!("\n=== Evaluating macro: {} ===", test_code);
 
     let result = interp.eval_str(test_code).unwrap();
-    println!("Result: {}", result);
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(result, patina_core::TaggedValue::TRUE);
 }
 
 #[test]
@@ -42,15 +40,13 @@ fn test_define_with_macro_body() {
     let define_code = "(define (test-or x) (or (= x 1) (= x 2)))";
     println!("\n=== Defining function with macros: {} ===", define_code);
 
-    let result = interp.eval_str(define_code).unwrap();
-    println!("Define result: {}", result);
+    interp.eval_str(define_code).unwrap();
 
     // Now call the function
     let call_code = "(test-or 1)";
     println!("\n=== Calling function: {} ===", call_code);
     let call_result = interp.eval_str(call_code).unwrap();
-    println!("Call result: {}", call_result);
-    assert_eq!(call_result.to_string(), "#t");
+    assert_eq!(call_result, patina_core::TaggedValue::TRUE);
 }
 
 #[test]
@@ -68,8 +64,10 @@ fn test_interpreter_api_with_macros() {
         (f 1)
     "#;
 
-    println!("\n=== Testing complex macro code: ===\n{}", code);
+    println!("\n=== Testing complex macro code ===");
     let result = interp.eval_program(code).unwrap();
-    println!("Result: {}", result);
-    assert_eq!(result.to_string(), "one");
+    let heap = interp.backend().evaluator().global_env.heap();
+    let heap_ref = heap.borrow();
+    let name = heap_ref.get_symbol_name(result);
+    assert_eq!(name, Some("one"));
 }

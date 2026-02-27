@@ -29,7 +29,7 @@ fn eval_with_chibi(expr: &str) -> Result<String, String> {
 fn eval_with_patina(expr: &str) -> Result<String, String> {
     let interp = TreeWalkInterpreter::new_tree_walker();
     match interp.eval_str(expr) {
-        Ok(value) => Ok(format!("{}", value)),
+        Ok(value) => Ok(interp.display_tagged(value)),
         Err(e) => Err(format!("{}", e)),
     }
 }

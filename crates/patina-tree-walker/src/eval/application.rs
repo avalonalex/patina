@@ -1,10 +1,11 @@
 //! Procedure application logic
 //!
 //! This module handles the application of procedures to arguments, including:
-//! - `apply()` - Apply a procedure to evaluated arguments
-//! - `check_arity()` - Verify argument count matches procedure arity
+//! - `apply()` - Apply a procedure to evaluated arguments (TaggedValue-native)
+//! - Arity checking is handled by the PrimitiveRegistry (registry.rs)
 
-use patina_runtime::value::{Arity, Procedure, Value};
+use patina_core::Procedure;
+use patina_core::TaggedValue;
 
 use super::Evaluator;
 use super::error::EvalError;
@@ -17,139 +18,150 @@ impl Evaluator {
     /// participate in the trampoline loop.
     pub(super) fn apply(
         &self,
-        proc: Value,
-        args: Vec<Value>,
+        proc: TaggedValue,
+        args: Vec<TaggedValue>,
         in_tail_position: bool,
     ) -> Result<super::EvalResult, EvalError> {
+        let heap = self.global_env.heap();
+
         // Debug trace entry
         if self.debug.is_enabled(super::debug::DebugStage::Apply) {
+            use crate::eval::primitives::io::datum_writer::format_display_tagged;
+            let proc_str = format_display_tagged(proc, heap);
             let args_str = args
                 .iter()
-                .map(|v| format!("{}", v))
+                .map(|tv| format_display_tagged(*tv, heap))
                 .collect::<Vec<_>>()
                 .join(" ");
             tracing::debug!(
                 target: "patina_tree_walker::apply",
                 indent = %self.debug.current_indent(),
-                proc = %proc,
+                proc = %proc_str,
                 args = %args_str,
                 "Applying"
             );
             self.debug.indent();
         }
 
-        let result = match proc {
-            Value::Procedure(ref proc_box) => match proc_box.as_ref() {
-                Procedure::Primitive { arity, .. } => {
-                    self.check_arity(arity, args.len())?;
-                    self.apply_primitive(proc_box.as_ref(), args, in_tail_position)
-                }
-                Procedure::CpsLambda { .. } => {
-                    // CPS lambdas: use the CPS evaluator to apply with a halt continuation.
-                    use crate::eval::cps_eval::CpsEvaluator;
-
-                    let cps_eval = CpsEvaluator::new(self);
-                    let result =
-                        cps_eval.apply_from_direct(Value::Procedure(proc_box.clone()), args)?;
-
-                    Ok(super::EvalResult::Value(result))
-                }
-            },
-            Value::Continuation(_) => {
-                // Continuations can only be invoked from within CPS mode
-                // In direct mode, we can't properly invoke them
-                return Err(EvalError::InternalError(
-                    "Continuations can only be invoked in CPS evaluation mode. \
-                     This continuation was captured in CPS mode but is being invoked in direct mode."
-                        .to_string(),
-                ));
-            }
-            Value::Parameter { values, converter } => {
-                // Parameters can be called with 0 or 1 arguments:
-                // (param)      => get current value (top of stack)
-                // (param val)  => set value (replace top of stack after applying converter)
-                match args.len() {
-                    0 => {
-                        // Get current value (top of stack)
-                        let stack = values.borrow();
-                        let current_value = stack.last().ok_or_else(|| {
-                            EvalError::InvalidSyntax("parameter stack is empty".to_string())
-                        })?;
-                        Ok(super::EvalResult::Value(current_value.clone()))
+        // 1. Check for closures (TAG_CLOSURE) — CPS lambdas use this tag
+        let result = if proc.is_closure() {
+            use crate::eval::cps_eval::CpsEvaluator;
+            let cps_eval = CpsEvaluator::new(self);
+            let result_tagged = cps_eval.apply_from_direct_tagged(proc, args)?;
+            Ok(super::EvalResult::Tagged(result_tagged))
+        }
+        // 2. Check for procedures
+        //    Extract to let binding first to drop heap borrow before calling into primitives
+        else {
+            let proc_opt = heap.borrow().get_procedure(proc);
+            if let Some(proc_box) = proc_opt {
+                match proc_box.as_ref() {
+                    Procedure::Primitive { .. } => {
+                        // Arity is checked inside apply_primitive_tagged → registry.call_tagged
+                        self.apply_primitive_tagged(&proc_box, args, in_tail_position)
                     }
-                    1 => {
-                        // Set value (replace top of stack after applying converter)
-                        let new_val = if let Some(conv) = converter {
-                            // Apply converter to new value
-                            let result = self.apply(
-                                *conv.clone(),
-                                vec![args[0].clone()],
-                                false, // converter call is never in tail position
-                            )?;
-                            match result {
-                                super::EvalResult::Value(v) => v,
-                                _ => {
+                    Procedure::CpsLambda { .. } => {
+                        use crate::eval::cps_eval::CpsEvaluator;
+                        let cps_eval = CpsEvaluator::new(self);
+                        let result_tagged = cps_eval.apply_from_direct_tagged(proc, args)?;
+                        Ok(super::EvalResult::Tagged(result_tagged))
+                    }
+                }
+            }
+            // 3. Check for continuations — error in direct mode
+            else {
+                let is_continuation = heap.borrow().get_continuation(proc).is_some();
+                if is_continuation {
+                    Err(EvalError::InternalError(
+                        "Continuations can only be invoked in CPS evaluation mode. \
+                         This continuation was captured in CPS mode but is being invoked in direct mode."
+                            .to_string(),
+                    ))
+                }
+                // 4. Check for parameters
+                else {
+                    let param_opt = heap.borrow().get_parameter(proc);
+                    if let Some((values, converter)) = param_opt {
+                        match args.len() {
+                            0 => {
+                                // Get current value (top of stack)
+                                let stack = values.borrow();
+                                let current_tagged = stack.last().ok_or_else(|| {
+                                    EvalError::InvalidSyntax("parameter stack is empty".to_string())
+                                })?;
+                                Ok(super::EvalResult::Tagged(*current_tagged))
+                            }
+                            1 => {
+                                // Set value (replace top of stack after applying converter)
+                                let new_val = if let Some(conv) = converter {
+                                    // Apply converter — conv and args[0] are already TaggedValue
+                                    let result = self.apply(conv, vec![args[0]], false)?;
+                                    match result {
+                                        super::EvalResult::Tagged(tv) => tv,
+                                        super::EvalResult::TailCallPrimitive { .. } => {
+                                            return Err(EvalError::InvalidSyntax(
+                                                "parameter converter returned non-value"
+                                                    .to_string(),
+                                            ));
+                                        }
+                                    }
+                                } else {
+                                    args[0]
+                                };
+
+                                // Set the new value (replace top of stack)
+                                let mut stack = values.borrow_mut();
+                                if let Some(last) = stack.last_mut() {
+                                    *last = new_val;
+                                } else {
                                     return Err(EvalError::InvalidSyntax(
-                                        "parameter converter returned non-value".to_string(),
+                                        "parameter stack is empty".to_string(),
                                     ));
                                 }
+                                Ok(super::EvalResult::Tagged(TaggedValue::UNSPECIFIED))
                             }
-                        } else {
-                            args[0].clone()
-                        };
-
-                        // Set the new value (replace top of stack)
-                        let mut stack = values.borrow_mut();
-                        if let Some(last) = stack.last_mut() {
-                            *last = new_val;
-                        } else {
-                            return Err(EvalError::InvalidSyntax(
-                                "parameter stack is empty".to_string(),
-                            ));
+                            _ => Err(EvalError::WrongArity {
+                                expected: "0 or 1".to_string(),
+                                actual: args.len(),
+                            }),
                         }
-                        Ok(super::EvalResult::Value(Value::Unspecified))
                     }
-                    _ => Err(EvalError::WrongArity {
-                        expected: "0 or 1".to_string(),
-                        actual: args.len(),
-                    }),
+                    // 5. Not callable
+                    else {
+                        let heap_ref = heap.borrow();
+                        let type_name = heap_ref.type_name(proc);
+                        Err(EvalError::NotAProcedure(type_name.to_string()))
+                    }
                 }
             }
-            _ => Err(EvalError::NotAProcedure(format!("{}", proc))),
         };
 
         // Debug trace exit
         if self.debug.is_enabled(super::debug::DebugStage::Apply) {
             self.debug.dedent();
             match &result {
-                Ok(super::EvalResult::Value(val)) => {
-                    tracing::debug!(
-                        target: "patina_tree_walker::apply",
-                        indent = %self.debug.current_indent(),
-                        result = %val,
-                        "=> value"
-                    );
-                }
-                Ok(super::EvalResult::TailCall { expr, .. }) => {
-                    tracing::debug!(
-                        target: "patina_tree_walker::apply",
-                        indent = %self.debug.current_indent(),
-                        expr = %expr,
-                        "=> tail call"
-                    );
-                }
                 Ok(super::EvalResult::TailCallPrimitive { proc, args }) => {
+                    use crate::eval::primitives::io::datum_writer::format_display_tagged;
+                    let proc_str = format_display_tagged(*proc, heap);
                     let args_str = args
                         .iter()
-                        .map(|v| format!("{}", v))
+                        .map(|tv| format_display_tagged(*tv, heap))
                         .collect::<Vec<_>>()
                         .join(" ");
                     tracing::debug!(
                         target: "patina_tree_walker::apply",
                         indent = %self.debug.current_indent(),
-                        proc = %proc,
+                        proc = %proc_str,
                         args = %args_str,
                         "=> tail call primitive"
+                    );
+                }
+                Ok(super::EvalResult::Tagged(tv)) => {
+                    tracing::debug!(
+                        target: "patina_tree_walker::apply",
+                        indent = %self.debug.current_indent(),
+                        result = ?tv,
+                        "=> tagged value"
                     );
                 }
                 Err(e) => {
@@ -164,26 +176,5 @@ impl Evaluator {
         }
 
         result
-    }
-
-    /// Check if the actual argument count matches the expected arity
-    pub(super) fn check_arity(&self, arity: &Arity, actual: usize) -> Result<(), EvalError> {
-        match arity {
-            Arity::Exact(n) if *n != actual => Err(EvalError::WrongArity {
-                expected: n.to_string(),
-                actual,
-            }),
-            Arity::Min(n) if actual < *n => Err(EvalError::WrongArity {
-                expected: format!("at least {}", n),
-                actual,
-            }),
-            Arity::Range(min, max) if actual < *min || actual > *max => {
-                Err(EvalError::WrongArity {
-                    expected: format!("{}-{}", min, max),
-                    actual,
-                })
-            }
-            _ => Ok(()),
-        }
     }
 }

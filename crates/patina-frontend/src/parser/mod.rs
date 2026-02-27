@@ -2,9 +2,10 @@ use crate::lexer::{LexError, Lexer, Token};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
-use patina_runtime::Value;
-use std::cell::RefCell;
-use std::rc::Rc;
+use patina_core::heap::HeapObjectData;
+use patina_core::{SharedHeap, TaggedValue};
+
+use std::collections::HashMap;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -29,39 +30,64 @@ pub enum ParseError {
     DuplicateLabel(usize),
 }
 
-use std::collections::HashMap;
-
 pub struct Parser {
     lexer: Lexer,
     current_token: Token,
+    /// Shared heap for allocating pairs, vectors, strings, etc.
+    heap: SharedHeap,
     /// Datum labels for shared/cyclic structure support (R7RS Section 2.4)
     /// Maps label number to the labelled value
-    labels: HashMap<usize, Value>,
+    labels: HashMap<usize, TaggedValue>,
 }
 
 impl Parser {
-    pub fn new(input: &str) -> Result<Self, ParseError> {
+    /// Create a new parser with the given heap.
+    /// This is the preferred constructor when a heap is available.
+    pub fn new_with_heap(input: &str, heap: SharedHeap) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(input);
         let current_token = lexer.next_token()?;
         Ok(Parser {
             lexer,
             current_token,
+            heap,
             labels: HashMap::new(),
         })
     }
 
-    /// Create a parser with case-folding enabled.
+    /// Create a new parser with a fresh heap.
+    /// This is provided for backward compatibility and testing.
+    pub fn new(input: &str) -> Result<Self, ParseError> {
+        let heap = patina_core::new_shared_heap();
+        Self::new_with_heap(input, heap)
+    }
+
+    /// Create a parser with case-folding enabled and the given heap.
     ///
     /// Used by `include-ci` to read files in case-insensitive mode.
     /// All identifiers will be folded to lowercase.
-    pub fn new_case_insensitive(input: &str) -> Result<Self, ParseError> {
+    pub fn new_case_insensitive_with_heap(
+        input: &str,
+        heap: SharedHeap,
+    ) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new_case_insensitive(input);
         let current_token = lexer.next_token()?;
         Ok(Parser {
             lexer,
             current_token,
+            heap,
             labels: HashMap::new(),
         })
+    }
+
+    /// Create a parser with case-folding enabled and a fresh heap.
+    pub fn new_case_insensitive(input: &str) -> Result<Self, ParseError> {
+        let heap = patina_core::new_shared_heap();
+        Self::new_case_insensitive_with_heap(input, heap)
+    }
+
+    /// Get a reference to the parser's heap
+    pub fn heap(&self) -> &SharedHeap {
+        &self.heap
     }
 
     fn advance(&mut self) -> Result<(), ParseError> {
@@ -69,7 +95,7 @@ impl Parser {
         Ok(())
     }
 
-    pub fn parse(&mut self) -> Result<Value, ParseError> {
+    pub fn parse(&mut self) -> Result<TaggedValue, ParseError> {
         let result = self.parse_expr()?;
         // After parsing the outermost datum, resolve any label placeholders
         Ok(self.resolve_labels(result))
@@ -79,7 +105,7 @@ impl Parser {
     ///
     /// Returns a vector of all parsed expressions. Useful for parsing
     /// files that contain multiple top-level expressions (like included files).
-    pub fn parse_all(&mut self) -> Result<Vec<Value>, ParseError> {
+    pub fn parse_all(&mut self) -> Result<Vec<TaggedValue>, ParseError> {
         let mut exprs = Vec::new();
         while self.current_token != Token::Eof {
             let expr = self.parse_expr()?;
@@ -91,7 +117,7 @@ impl Parser {
         Ok(exprs)
     }
 
-    fn parse_expr(&mut self) -> Result<Value, ParseError> {
+    fn parse_expr(&mut self) -> Result<TaggedValue, ParseError> {
         // Handle datum comments: #; skips the next datum
         // Multiple #; in a row each skip one datum
         while self.current_token == Token::DatumComment {
@@ -101,7 +127,11 @@ impl Parser {
 
         match &self.current_token.clone() {
             Token::Boolean(b) => {
-                let val = Value::Boolean(*b);
+                let val = if *b {
+                    TaggedValue::TRUE
+                } else {
+                    TaggedValue::FALSE
+                };
                 self.advance()?;
                 Ok(val)
             }
@@ -111,41 +141,45 @@ impl Parser {
                 Ok(val)
             }
             Token::Character(c) => {
-                let val = Value::Character(*c);
+                let val = TaggedValue::character(*c);
                 self.advance()?;
                 Ok(val)
             }
             Token::String(s) => {
-                // Convert UTF-8 string to Vec<char> for O(1) character access
-                let chars: Vec<char> = s.chars().collect();
-                let val = Value::String(Rc::new(RefCell::new(chars)));
+                // Allocate string on heap
+                let val = self.heap.borrow_mut().alloc_string(s.clone());
                 self.advance()?;
                 Ok(val)
             }
             Token::Identifier(s) => {
-                let val = Value::symbol(s);
+                // Intern symbol in heap
+                let val = self.heap.borrow_mut().intern_symbol(s);
                 self.advance()?;
                 Ok(val)
             }
             Token::Quote => {
                 self.advance()?;
                 let quoted = self.parse_expr()?;
-                Ok(self.make_list(vec![Value::symbol("quote"), quoted]))
+                let quote_sym = self.heap.borrow_mut().intern_symbol("quote");
+                Ok(self.make_list(vec![quote_sym, quoted]))
             }
             Token::Quasiquote => {
                 self.advance()?;
                 let quoted = self.parse_expr()?;
-                Ok(self.make_list(vec![Value::symbol("quasiquote"), quoted]))
+                let sym = self.heap.borrow_mut().intern_symbol("quasiquote");
+                Ok(self.make_list(vec![sym, quoted]))
             }
             Token::Unquote => {
                 self.advance()?;
                 let quoted = self.parse_expr()?;
-                Ok(self.make_list(vec![Value::symbol("unquote"), quoted]))
+                let sym = self.heap.borrow_mut().intern_symbol("unquote");
+                Ok(self.make_list(vec![sym, quoted]))
             }
             Token::UnquoteSplicing => {
                 self.advance()?;
                 let quoted = self.parse_expr()?;
-                Ok(self.make_list(vec![Value::symbol("unquote-splicing"), quoted]))
+                let sym = self.heap.borrow_mut().intern_symbol("unquote-splicing");
+                Ok(self.make_list(vec![sym, quoted]))
             }
             Token::LeftParen => self.parse_list(),
             Token::VectorOpen => self.parse_vector(),
@@ -164,7 +198,7 @@ impl Parser {
                 let datum = self.parse_expr()?;
 
                 // Store the labelled datum
-                self.labels.insert(label, datum.clone());
+                self.labels.insert(label, datum);
 
                 Ok(datum)
             }
@@ -174,15 +208,11 @@ impl Parser {
 
                 // If the label is already resolved, return a reference to it
                 // Otherwise, return a placeholder that will be resolved later
-                // Note: We don't check for self-reference here because cyclic structures
-                // like #0=(1 . #0#) are valid - the reference inside a compound datum
-                // creates a cycle. Direct self-reference #0= #0# will result in an
-                // unresolved placeholder, which is handled by resolve_labels.
                 if let Some(value) = self.labels.get(&label) {
-                    Ok(value.clone())
+                    Ok(*value)
                 } else {
                     // Return a placeholder - will be resolved after parsing completes
-                    Ok(Value::LabelPlaceholder(label))
+                    Ok(self.heap.borrow_mut().alloc_label_placeholder(label))
                 }
             }
             Token::Eof => Err(ParseError::UnexpectedEof),
@@ -251,7 +281,7 @@ impl Parser {
         Ok(())
     }
 
-    fn parse_list(&mut self) -> Result<Value, ParseError> {
+    fn parse_list(&mut self) -> Result<TaggedValue, ParseError> {
         self.advance()?; // consume (
 
         let mut elements = Vec::new();
@@ -288,7 +318,7 @@ impl Parser {
         }
     }
 
-    fn parse_vector(&mut self) -> Result<Value, ParseError> {
+    fn parse_vector(&mut self) -> Result<TaggedValue, ParseError> {
         self.advance()?; // consume #(
 
         let mut elements = Vec::new();
@@ -301,10 +331,11 @@ impl Parser {
         }
 
         self.advance()?; // consume )
-        Ok(Value::Vector(Rc::new(RefCell::new(elements))))
+        // Allocate vector on heap
+        Ok(self.heap.borrow_mut().alloc_vector(elements))
     }
 
-    fn parse_bytevector(&mut self) -> Result<Value, ParseError> {
+    fn parse_bytevector(&mut self) -> Result<TaggedValue, ParseError> {
         self.advance()?; // consume #u8(
 
         let mut bytes = Vec::new();
@@ -316,22 +347,22 @@ impl Parser {
 
             if let Token::Number(s) = &self.current_token.clone() {
                 // Parse the number (handles decimal, hex #x, binary #b, octal #o)
-                let value = self.parse_number(s)?;
+                let tv = self.parse_number(s)?;
 
                 // Extract integer value and validate it's a valid byte (0-255)
-                let byte = match value {
-                    Value::Integer(n) if (0..=255).contains(&n) => n as u8,
-                    Value::Integer(n) => {
+                let byte = if let Some(n) = tv.as_fixnum() {
+                    if (0..=255).contains(&n) {
+                        n as u8
+                    } else {
                         return Err(ParseError::InvalidSyntax(format!(
                             "Byte value out of range (0-255): {}",
                             n
                         )));
                     }
-                    _ => {
-                        return Err(ParseError::InvalidSyntax(
-                            "Bytevector must contain only integer bytes (0-255)".to_string(),
-                        ));
-                    }
+                } else {
+                    return Err(ParseError::InvalidSyntax(
+                        "Bytevector must contain only integer bytes (0-255)".to_string(),
+                    ));
                 };
                 bytes.push(byte);
                 self.advance()?;
@@ -343,10 +374,23 @@ impl Parser {
         }
 
         self.advance()?; // consume )
-        Ok(Value::Bytevector(Rc::new(RefCell::new(bytes))))
+        // Allocate bytevector on heap
+        Ok(self.heap.borrow_mut().alloc_bytevector(bytes))
     }
 
-    fn parse_number(&self, s: &str) -> Result<Value, ParseError> {
+    /// Create a TaggedValue integer from i64 (fixnum if it fits, BigInt otherwise)
+    fn tagged_integer(&self, n: i64) -> TaggedValue {
+        if TaggedValue::fits_fixnum(n) {
+            TaggedValue::fixnum(n)
+        } else {
+            self.heap
+                .borrow_mut()
+                .alloc_bigint(num_bigint::BigInt::from(n))
+        }
+    }
+
+    /// Parse a number string and return a TaggedValue
+    fn parse_number(&self, s: &str) -> Result<TaggedValue, ParseError> {
         // Parse numbers following the R7RS numeric tower
 
         // Handle R7RS numeric prefixes: #e #i #b #o #d #x
@@ -356,9 +400,9 @@ impl Parser {
 
         // Check for special R7RS floating-point literals (case-insensitive)
         match s.to_lowercase().as_str() {
-            "+inf.0" => return Ok(Value::Real(f64::INFINITY)),
-            "-inf.0" => return Ok(Value::Real(f64::NEG_INFINITY)),
-            "+nan.0" | "-nan.0" => return Ok(Value::Real(f64::NAN)),
+            "+inf.0" => return Ok(self.heap.borrow_mut().alloc_real(f64::INFINITY)),
+            "-inf.0" => return Ok(self.heap.borrow_mut().alloc_real(f64::NEG_INFINITY)),
+            "+nan.0" | "-nan.0" => return Ok(self.heap.borrow_mut().alloc_real(f64::NAN)),
             _ => {}
         }
 
@@ -374,59 +418,25 @@ impl Parser {
 
         // Check if it's a rational literal (contains '/')
         if s.contains('/') {
-            // Try to parse as rational: numerator/denominator
-            let parts: Vec<&str> = s.split('/').collect();
-            if parts.len() == 2 {
-                // Parse numerator and denominator
-                let numer = BigInt::from_str(parts[0]).map_err(|_| {
-                    ParseError::InvalidSyntax(format!("Invalid rational numerator: {}", parts[0]))
-                })?;
-                let denom = BigInt::from_str(parts[1]).map_err(|_| {
-                    ParseError::InvalidSyntax(format!("Invalid rational denominator: {}", parts[1]))
-                })?;
-
-                if denom.is_zero() {
-                    return Err(ParseError::InvalidSyntax(
-                        "Rational denominator cannot be zero".to_string(),
-                    ));
-                }
-
-                let ratio = BigRational::new(numer, denom);
-
-                // Simplify to integer if denominator is 1
-                if ratio.denom() == &BigInt::from(1) {
-                    let numer = ratio.numer();
-                    if let Some(n) = numer.to_i64() {
-                        return Ok(Value::integer(n));
-                    } else {
-                        return Ok(Value::BigInteger(numer.clone()));
-                    }
-                }
-
-                return Ok(Value::Rational(ratio));
-            }
+            return self.parse_rational(s);
         }
 
         // Try i64 first (fast path for small integers)
         if let Ok(n) = s.parse::<i64>() {
-            return Ok(Value::integer(n));
+            return Ok(self.tagged_integer(n));
         }
 
         // If it doesn't fit in i64, try BigInt (for large integers)
         if let Ok(n) = BigInt::from_str(s) {
-            return Ok(Value::BigInteger(n));
+            return Ok(self.heap.borrow_mut().alloc_bigint(n));
         }
 
         // If it's not an integer, try floating point
         // R7RS allows alternate exponent markers: s (short), f (single), d (double), l (long)
-        // Per R7RS 7.1.1: "implementations may accept" these markers - they're optional.
-        // The spec gives names but no specific precision requirements, only that s < f < d < l
-        // and "the default precision has at least as much precision as double".
-        // We normalize all to 'e' and parse as f64, which satisfies the spec since we only
-        // have one inexact type and it's double precision.
+        // We normalize all to 'e' and parse as f64.
         let normalized = Self::normalize_exponent_markers(s);
         if let Ok(f) = normalized.parse::<f64>() {
-            return Ok(Value::Real(f));
+            return Ok(self.heap.borrow_mut().alloc_real(f));
         }
 
         // Nothing worked - invalid number
@@ -464,7 +474,7 @@ impl Parser {
         std::borrow::Cow::Owned(result)
     }
 
-    fn parse_number_with_prefix(&self, s: &str) -> Result<Value, ParseError> {
+    fn parse_number_with_prefix(&self, s: &str) -> Result<TaggedValue, ParseError> {
         // R7RS numeric prefixes: #e (exact), #i (inexact), #b (binary), #o (octal), #d (decimal), #x (hex)
         // These can be combined, e.g., #e#x10, #i#b1010
 
@@ -534,34 +544,31 @@ impl Parser {
         }
 
         // Parse the number based on radix
-        let value = if radix == 10 {
-            // For decimal, use the existing parse_number logic (handles floats, rationals, complex, etc.)
+        let tv = if radix == 10 {
+            // For decimal, use the main parse_number logic (handles floats, rationals, complex, etc.)
+            // Note: rest doesn't start with '#' at this point, so this won't recurse
             self.parse_number(rest)?
         } else if rest.contains('/') {
             // Parse rational with given radix: e.g., #x1/10 -> 1/16
-            let parts: Vec<&str> = rest.split('/').collect();
-            if parts.len() != 2 {
-                return Err(ParseError::InvalidSyntax(format!(
-                    "Invalid rational: {}",
-                    rest
-                )));
-            }
+            self.parse_rational_with_radix(rest, radix)?
+        } else {
+            // For non-decimal radix, parse as integer only
+            self.parse_integer_with_radix(rest, radix)?
+        };
 
-            let radix_name = match radix {
-                2 => "binary",
-                8 => "octal",
-                16 => "hexadecimal",
-                _ => "numeric",
-            };
+        // Apply exactness conversion if specified
+        self.apply_exactness(tv, exactness, s)
+    }
 
-            let numer = BigInt::parse_bytes(parts[0].as_bytes(), radix).ok_or_else(|| {
-                ParseError::InvalidSyntax(format!("Invalid {} numerator: {}", radix_name, parts[0]))
+    /// Parse a rational number string: "numerator/denominator"
+    fn parse_rational(&self, s: &str) -> Result<TaggedValue, ParseError> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() == 2 {
+            let numer = BigInt::from_str(parts[0]).map_err(|_| {
+                ParseError::InvalidSyntax(format!("Invalid rational numerator: {}", parts[0]))
             })?;
-            let denom = BigInt::parse_bytes(parts[1].as_bytes(), radix).ok_or_else(|| {
-                ParseError::InvalidSyntax(format!(
-                    "Invalid {} denominator: {}",
-                    radix_name, parts[1]
-                ))
+            let denom = BigInt::from_str(parts[1]).map_err(|_| {
+                ParseError::InvalidSyntax(format!("Invalid rational denominator: {}", parts[1]))
             })?;
 
             if denom.is_zero() {
@@ -570,104 +577,161 @@ impl Parser {
                 ));
             }
 
-            let ratio = BigRational::new(numer, denom);
-
-            // Simplify to integer if denominator is 1
-            if ratio.denom() == &BigInt::from(1) {
-                let numer = ratio.numer();
-                if let Some(n) = numer.to_i64() {
-                    Value::integer(n)
-                } else {
-                    Value::BigInteger(numer.clone())
-                }
-            } else {
-                Value::Rational(ratio)
-            }
+            Ok(self.tagged_rational(BigRational::new(numer, denom)))
         } else {
-            // For non-decimal radix, parse as integer only
-            match i64::from_str_radix(rest, radix) {
-                Ok(n) => Value::integer(n),
-                Err(_) => {
-                    // Try BigInt if it doesn't fit in i64
-                    BigInt::parse_bytes(rest.as_bytes(), radix)
-                        .map(Value::BigInteger)
-                        .ok_or_else(|| {
-                            let radix_name = match radix {
-                                2 => "binary",
-                                8 => "octal",
-                                16 => "hexadecimal",
-                                _ => "numeric",
-                            };
-                            ParseError::InvalidSyntax(format!(
-                                "Invalid {} number: {}",
-                                radix_name, rest
-                            ))
-                        })?
-                }
-            }
+            Err(ParseError::InvalidSyntax(format!(
+                "Invalid rational: {}",
+                s
+            )))
+        }
+    }
+
+    /// Parse a rational number with a non-decimal radix
+    fn parse_rational_with_radix(&self, rest: &str, radix: u32) -> Result<TaggedValue, ParseError> {
+        let parts: Vec<&str> = rest.split('/').collect();
+        if parts.len() != 2 {
+            return Err(ParseError::InvalidSyntax(format!(
+                "Invalid rational: {}",
+                rest
+            )));
+        }
+
+        let radix_name = match radix {
+            2 => "binary",
+            8 => "octal",
+            16 => "hexadecimal",
+            _ => "numeric",
         };
 
-        // Apply exactness conversion if specified
+        let numer = BigInt::parse_bytes(parts[0].as_bytes(), radix).ok_or_else(|| {
+            ParseError::InvalidSyntax(format!("Invalid {} numerator: {}", radix_name, parts[0]))
+        })?;
+        let denom = BigInt::parse_bytes(parts[1].as_bytes(), radix).ok_or_else(|| {
+            ParseError::InvalidSyntax(format!("Invalid {} denominator: {}", radix_name, parts[1]))
+        })?;
+
+        if denom.is_zero() {
+            return Err(ParseError::InvalidSyntax(
+                "Rational denominator cannot be zero".to_string(),
+            ));
+        }
+
+        Ok(self.tagged_rational(BigRational::new(numer, denom)))
+    }
+
+    /// Parse an integer with a non-decimal radix
+    fn parse_integer_with_radix(&self, rest: &str, radix: u32) -> Result<TaggedValue, ParseError> {
+        match i64::from_str_radix(rest, radix) {
+            Ok(n) => Ok(self.tagged_integer(n)),
+            Err(_) => {
+                // Try BigInt if it doesn't fit in i64
+                BigInt::parse_bytes(rest.as_bytes(), radix)
+                    .map(|n| self.heap.borrow_mut().alloc_bigint(n))
+                    .ok_or_else(|| {
+                        let radix_name = match radix {
+                            2 => "binary",
+                            8 => "octal",
+                            16 => "hexadecimal",
+                            _ => "numeric",
+                        };
+                        ParseError::InvalidSyntax(format!(
+                            "Invalid {} number: {}",
+                            radix_name, rest
+                        ))
+                    })
+            }
+        }
+    }
+
+    /// Create a TaggedValue from a BigRational, simplifying to integer if denominator is 1
+    fn tagged_rational(&self, ratio: BigRational) -> TaggedValue {
+        if ratio.denom() == &BigInt::from(1) {
+            let numer = ratio.numer();
+            if let Some(n) = numer.to_i64() {
+                self.tagged_integer(n)
+            } else {
+                self.heap.borrow_mut().alloc_bigint(numer.clone())
+            }
+        } else {
+            self.heap.borrow_mut().alloc_rational(ratio)
+        }
+    }
+
+    /// Apply exactness prefix (#e or #i) to a parsed TaggedValue
+    fn apply_exactness(
+        &self,
+        tv: TaggedValue,
+        exactness: Option<bool>,
+        original: &str,
+    ) -> Result<TaggedValue, ParseError> {
+        let heap = &self.heap;
         match exactness {
             Some(true) => {
-                // Force exact - if it's already exact, keep it; if inexact, convert to rational
-                match value {
-                    Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => Ok(value),
-                    Value::Real(f) => {
-                        // Convert float to rational (this is approximate)
-                        // For now, just return an error as exact conversion of arbitrary floats is complex
-                        // In a full implementation, we'd need to convert the float to a rational
+                // Force exact: fixnums/bigint/rational stay; reals convert if whole
+                if tv.is_fixnum() {
+                    Ok(tv)
+                } else {
+                    let heap_ref = heap.borrow();
+                    if heap_ref.get_bigint(tv).is_some() || heap_ref.get_rational(tv).is_some() {
+                        Ok(tv)
+                    } else if let Some(f) = heap_ref.get_real(tv) {
                         if f.fract() == 0.0 && f.is_finite() {
-                            Ok(Value::integer(f as i64))
+                            drop(heap_ref);
+                            Ok(self.tagged_integer(f as i64))
                         } else {
                             Err(ParseError::InvalidSyntax(format!(
                                 "#e prefix on inexact number not yet fully supported: {}",
-                                s
+                                original
                             )))
                         }
+                    } else {
+                        Ok(tv)
                     }
-                    _ => Ok(value),
                 }
             }
             Some(false) => {
-                // Force inexact - convert to float
-                match value {
-                    Value::Integer(n) => Ok(Value::Real(n as f64)),
-                    Value::BigInteger(ref b) => {
-                        // Convert BigInt to float (may lose precision)
-                        if let Some(n) = b.to_i64() {
-                            Ok(Value::Real(n as f64))
-                        } else {
-                            // Too large for precise float representation
-                            Ok(Value::Real(b.to_f64().unwrap_or(f64::INFINITY)))
-                        }
+                // Force inexact: convert to real
+                if let Some(n) = tv.as_fixnum() {
+                    Ok(heap.borrow_mut().alloc_real(n as f64))
+                } else {
+                    let heap_ref = heap.borrow();
+                    if let Some(b) = heap_ref.get_bigint(tv) {
+                        let f = b.to_f64().unwrap_or(f64::INFINITY);
+                        drop(heap_ref);
+                        Ok(heap.borrow_mut().alloc_real(f))
+                    } else if let Some(r) = heap_ref.get_rational(tv) {
+                        let f = r.to_f64().unwrap_or(f64::NAN);
+                        drop(heap_ref);
+                        Ok(heap.borrow_mut().alloc_real(f))
+                    } else {
+                        // Already inexact (real) or other type
+                        Ok(tv)
                     }
-                    Value::Rational(ref r) => Ok(Value::Real(r.to_f64().unwrap_or(f64::NAN))),
-                    Value::Real(_) => Ok(value), // Already inexact
-                    _ => Ok(value),
                 }
             }
-            None => Ok(value), // No exactness specified, keep as-is
+            None => Ok(tv),
         }
     }
 
     /// Helper to create a Complex value from two real components
-    fn make_complex(real: Value, imag: Value) -> Value {
-        Value::Complex(Box::new((real, imag)))
+    /// Allocate a complex number on the heap from two TaggedValue components
+    fn alloc_complex(&self, real: TaggedValue, imag: TaggedValue) -> TaggedValue {
+        self.heap.borrow_mut().alloc_complex(real, imag)
     }
 
-    fn parse_rectangular(&self, s: &str) -> Result<Value, ParseError> {
+    fn parse_rectangular(&self, s: &str) -> Result<TaggedValue, ParseError> {
         // Remove the trailing 'i' or 'I'
         let s_no_i = &s[..s.len() - 1];
 
         // Handle special cases: +i, -i
+        let zero = TaggedValue::fixnum(0);
         if s_no_i == "+" || s_no_i.is_empty() {
             // +i means 0+1i (both exact integers)
-            return Ok(Self::make_complex(Value::Integer(0), Value::Integer(1)));
+            return Ok(self.alloc_complex(zero, TaggedValue::fixnum(1)));
         }
         if s_no_i == "-" {
             // -i means 0-1i (both exact integers)
-            return Ok(Self::make_complex(Value::Integer(0), Value::Integer(-1)));
+            return Ok(self.alloc_complex(zero, TaggedValue::fixnum(-1)));
         }
 
         // Find the position of + or - that separates real and imaginary parts
@@ -691,23 +755,23 @@ impl Parser {
                 imag_part_str.to_string()
             };
 
-            // Parse both parts as Values (preserving exactness)
-            let real_val = if real_part_str.is_empty() {
-                Value::Integer(0)
+            // Parse both parts as TaggedValues (preserving exactness)
+            let real_tv = if real_part_str.is_empty() {
+                zero
             } else {
-                self.parse_real_component_as_value(real_part_str)?
+                self.parse_real_component_as_tagged(real_part_str)?
             };
-            let imag_val = self.parse_real_component_as_value(&imag_str)?;
+            let imag_tv = self.parse_real_component_as_tagged(&imag_str)?;
 
-            Ok(Self::make_complex(real_val, imag_val))
+            Ok(self.alloc_complex(real_tv, imag_tv))
         } else {
             // No separator found - this is pure imaginary like "+5i" or "-3i"
-            let imag_val = self.parse_real_component_as_value(s_no_i)?;
-            Ok(Self::make_complex(Value::Integer(0), imag_val))
+            let imag_tv = self.parse_real_component_as_tagged(s_no_i)?;
+            Ok(self.alloc_complex(zero, imag_tv))
         }
     }
 
-    fn parse_polar(&self, s: &str) -> Result<Value, ParseError> {
+    fn parse_polar(&self, s: &str) -> Result<TaggedValue, ParseError> {
         let parts: Vec<&str> = s.split('@').collect();
         if parts.len() != 2 {
             return Err(ParseError::InvalidSyntax(format!(
@@ -724,18 +788,21 @@ impl Parser {
         let real = magnitude * angle.cos();
         let imag = magnitude * angle.sin();
 
-        Ok(Self::make_complex(Value::Real(real), Value::Real(imag)))
+        let mut heap = self.heap.borrow_mut();
+        let real_tv = heap.alloc_real(real);
+        let imag_tv = heap.alloc_real(imag);
+        Ok(heap.alloc_complex(real_tv, imag_tv))
     }
 
-    /// Parse a component as a Value, preserving exactness
+    /// Parse a component as a TaggedValue, preserving exactness
     /// This is key for R7RS complex number semantics: `1+0i` has exact 0 imaginary,
     /// while `1+0.0i` has inexact 0.0 imaginary.
-    fn parse_real_component_as_value(&self, s: &str) -> Result<Value, ParseError> {
+    fn parse_real_component_as_tagged(&self, s: &str) -> Result<TaggedValue, ParseError> {
         // Check for special R7RS floating-point literals (case-insensitive, always inexact)
         match s.to_lowercase().as_str() {
-            "+inf.0" => return Ok(Value::Real(f64::INFINITY)),
-            "-inf.0" => return Ok(Value::Real(f64::NEG_INFINITY)),
-            "+nan.0" | "-nan.0" => return Ok(Value::Real(f64::NAN)),
+            "+inf.0" => return Ok(self.heap.borrow_mut().alloc_real(f64::INFINITY)),
+            "-inf.0" => return Ok(self.heap.borrow_mut().alloc_real(f64::NEG_INFINITY)),
+            "+nan.0" | "-nan.0" => return Ok(self.heap.borrow_mut().alloc_real(f64::NAN)),
             _ => {}
         }
 
@@ -762,7 +829,7 @@ impl Parser {
             let val = normalized
                 .parse::<f64>()
                 .map_err(|_| ParseError::InvalidSyntax(format!("Invalid real number: {}", s)))?;
-            return Ok(Value::Real(val));
+            return Ok(self.heap.borrow_mut().alloc_real(val));
         }
 
         // Try rational (exact)
@@ -780,19 +847,19 @@ impl Parser {
                 } else {
                     BigRational::new(numer, denom)
                 };
-                return Ok(Value::Rational(ratio));
+                return Ok(self.heap.borrow_mut().alloc_rational(ratio));
             }
         }
 
         // Try i64 first (exact)
         if let Ok(n) = num_str.parse::<i64>() {
-            return Ok(Value::Integer(sign * n));
+            return Ok(self.tagged_integer(sign * n));
         }
 
         // Try BigInt (exact)
         if let Ok(n) = BigInt::from_str(num_str) {
             let n = if sign < 0 { -n } else { n };
-            return Ok(Value::BigInteger(n));
+            return Ok(self.heap.borrow_mut().alloc_bigint(n));
         }
 
         Err(ParseError::InvalidSyntax(format!(
@@ -844,16 +911,17 @@ impl Parser {
             .map_err(|_| ParseError::InvalidSyntax(format!("Invalid real number: {}", s)))
     }
 
-    fn make_list(&self, elements: Vec<Value>) -> Value {
-        elements.into_iter().rev().fold(Value::Null, |acc, elem| {
-            Value::Pair(Rc::new(RefCell::new((elem, acc))))
-        })
+    fn make_list(&self, elements: Vec<TaggedValue>) -> TaggedValue {
+        self.heap.borrow_mut().list_from_iter(elements)
     }
 
-    fn make_dotted_list(&self, elements: Vec<Value>, tail: Value) -> Value {
-        elements.into_iter().rev().fold(tail, |acc, elem| {
-            Value::Pair(Rc::new(RefCell::new((elem, acc))))
-        })
+    fn make_dotted_list(&self, elements: Vec<TaggedValue>, tail: TaggedValue) -> TaggedValue {
+        let mut heap = self.heap.borrow_mut();
+        let mut result = tail;
+        for elem in elements.into_iter().rev() {
+            result = heap.alloc_pair(elem, result);
+        }
+        result
     }
 
     /// Resolve all LabelPlaceholder values in a parsed datum.
@@ -865,79 +933,81 @@ impl Parser {
     ///
     /// For cyclic structures, this mutates pairs/vectors in place to create
     /// actual cycles (rather than copies).
-    fn resolve_labels(&self, value: Value) -> Value {
+    fn resolve_labels(&self, tv: TaggedValue) -> TaggedValue {
         use std::collections::HashSet;
         let mut visited = HashSet::new();
-        self.resolve_labels_inner(value, &mut visited)
+        self.resolve_labels_inner(tv, &mut visited)
     }
 
     fn resolve_labels_inner(
         &self,
-        value: Value,
-        visited: &mut std::collections::HashSet<usize>,
-    ) -> Value {
-        match value {
-            Value::LabelPlaceholder(n) => {
-                // Look up the label - should always exist at this point
-                self.labels.get(&n).cloned().unwrap_or(value)
+        tv: TaggedValue,
+        visited: &mut std::collections::HashSet<u64>,
+    ) -> TaggedValue {
+        // Check for LabelPlaceholder
+        if tv.is_object() {
+            let heap = self.heap.borrow();
+            if let HeapObjectData::LabelPlaceholder(n) = heap.get_object(tv) {
+                let n = *n;
+                drop(heap);
+                if let Some(&resolved) = self.labels.get(&n) {
+                    return resolved;
+                }
+                return tv;
             }
-            Value::Pair(ref cell) => {
-                // Use pointer address as identity for cycle detection
-                let addr = Rc::as_ptr(cell) as usize;
-                if visited.contains(&addr) {
-                    // Already visited - return as-is to avoid infinite loop
-                    return value;
-                }
-                visited.insert(addr);
-
-                // Resolve car and cdr
-                let (car, cdr) = {
-                    let borrowed = cell.borrow();
-                    (borrowed.0.clone(), borrowed.1.clone())
-                };
-
-                let new_car = self.resolve_labels_inner(car, visited);
-                let new_cdr = self.resolve_labels_inner(cdr, visited);
-
-                // Mutate in place to preserve identity (important for eq?)
-                {
-                    let mut borrowed = cell.borrow_mut();
-                    borrowed.0 = new_car;
-                    borrowed.1 = new_cdr;
-                }
-
-                value
-            }
-            Value::Vector(ref vec) => {
-                // Use pointer address as identity for cycle detection
-                let addr = Rc::as_ptr(vec) as usize;
-                if visited.contains(&addr) {
-                    return value;
-                }
-                visited.insert(addr);
-
-                // Resolve all elements
-                let resolved: Vec<Value> = {
-                    let borrowed = vec.borrow();
-                    borrowed
-                        .iter()
-                        .map(|v| self.resolve_labels_inner(v.clone(), visited))
-                        .collect()
-                };
-
-                // Mutate in place
-                {
-                    let mut borrowed = vec.borrow_mut();
-                    for (i, v) in resolved.into_iter().enumerate() {
-                        borrowed[i] = v;
-                    }
-                }
-
-                value
-            }
-            // Other value types don't contain nested values that could be placeholders
-            _ => value,
         }
+
+        // Handle native heap pairs
+        if tv.is_pair() {
+            let addr = tv.raw();
+            if visited.contains(&addr) {
+                // Already visited - return as-is to avoid infinite loop
+                return tv;
+            }
+            visited.insert(addr);
+
+            // Resolve car and cdr
+            let (car, cdr) = {
+                let heap = self.heap.borrow();
+                (heap.car(tv), heap.cdr(tv))
+            };
+
+            let new_car = self.resolve_labels_inner(car, visited);
+            let new_cdr = self.resolve_labels_inner(cdr, visited);
+
+            // Mutate in place to preserve identity
+            {
+                let mut heap = self.heap.borrow_mut();
+                heap.set_car(tv, new_car);
+                heap.set_cdr(tv, new_cdr);
+            }
+
+            return tv;
+        }
+
+        // Handle native heap vectors
+        if tv.is_vector() {
+            let addr = tv.raw();
+            if visited.contains(&addr) {
+                return tv;
+            }
+            visited.insert(addr);
+
+            // Get vector length and resolve all elements
+            let len = self.heap.borrow().vector_len(tv);
+            for i in 0..len {
+                let elem = self.heap.borrow().vector_ref(tv, i);
+                let resolved = self.resolve_labels_inner(elem, visited);
+                if resolved.raw() != elem.raw() {
+                    self.heap.borrow_mut().vector_set(tv, i, resolved);
+                }
+            }
+
+            return tv;
+        }
+
+        // Other value types don't contain nested values that could be placeholders
+        tv
     }
 }
 
@@ -949,52 +1019,54 @@ mod tests {
     fn test_parse_atom() {
         let mut parser = Parser::new("42").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Integer(42)));
+        // Should be a fixnum
+        assert!(result.is_fixnum());
+        assert_eq!(result.as_fixnum_unchecked(), 42);
     }
 
     #[test]
     fn test_parse_list() {
         let mut parser = Parser::new("(+ 1 2)").unwrap();
         let result = parser.parse().unwrap();
-        // Should be a list with three elements
-        assert!(matches!(result, Value::Pair(_)));
+        // Should be a pair
+        assert!(result.is_pair());
     }
 
     #[test]
     fn test_parse_small_integer() {
-        // Small integers should parse as Integer (i64)
+        // Small integers should parse as fixnum
         let mut parser = Parser::new("42").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Integer(42)));
+        assert!(result.is_fixnum());
+        assert_eq!(result.as_fixnum_unchecked(), 42);
     }
 
     #[test]
     fn test_parse_i64_max() {
-        // i64::MAX should still parse as Integer
+        // i64::MAX is larger than fixnum range, should be BigInteger
         let mut parser = Parser::new("9223372036854775807").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Integer(9223372036854775807)));
+        // This is larger than fixnum range, so it's a BigInteger on heap
+        assert!(result.is_object());
     }
 
     #[test]
     fn test_parse_i64_min() {
-        // i64::MIN should parse as Integer
+        // i64::MIN is larger magnitude than fixnum range
         let mut parser = Parser::new("-9223372036854775808").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Integer(-9223372036854775808)));
+        // This is outside fixnum range, so it's a BigInteger on heap
+        assert!(result.is_object());
     }
 
     #[test]
     fn test_parse_beyond_i64_max() {
-        // i64::MAX + 1 should parse as BigInteger
+        // i64::MAX + 1 should parse as BigInteger on heap
         let mut parser = Parser::new("9223372036854775808").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::BigInteger(n) => {
-                assert_eq!(n.to_string(), "9223372036854775808");
-            }
-            other => panic!("Expected BigInteger, got {:?}", other),
-        }
+        assert!(result.is_object());
+        // Check it's a BigInt
+        assert!(parser.heap().borrow().is_bigint(result));
     }
 
     #[test]
@@ -1002,12 +1074,8 @@ mod tests {
         // Very large number should parse as BigInteger
         let mut parser = Parser::new("10000000000000000000").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::BigInteger(n) => {
-                assert_eq!(n.to_string(), "10000000000000000000");
-            }
-            other => panic!("Expected BigInteger, got {:?}", other),
-        }
+        assert!(result.is_object());
+        assert!(parser.heap().borrow().is_bigint(result));
     }
 
     #[test]
@@ -1015,12 +1083,8 @@ mod tests {
         // Astronomically large number (2^100) should parse as BigInteger
         let mut parser = Parser::new("1267650600228229401496703205376").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::BigInteger(n) => {
-                assert_eq!(n.to_string(), "1267650600228229401496703205376");
-            }
-            other => panic!("Expected BigInteger, got {:?}", other),
-        }
+        assert!(result.is_object());
+        assert!(parser.heap().borrow().is_bigint(result));
     }
 
     #[test]
@@ -1028,12 +1092,8 @@ mod tests {
         // i64::MIN - 1 should parse as BigInteger
         let mut parser = Parser::new("-9223372036854775809").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::BigInteger(n) => {
-                assert_eq!(n.to_string(), "-9223372036854775809");
-            }
-            other => panic!("Expected BigInteger, got {:?}", other),
-        }
+        assert!(result.is_object());
+        assert!(parser.heap().borrow().is_bigint(result));
     }
 
     #[test]
@@ -1043,63 +1103,56 @@ mod tests {
         let result = parser.parse().unwrap();
 
         // The result should be a list (pair chain)
-        if let Value::Pair(pair) = result {
-            let borrowed = pair.borrow();
-            let (car, cdr) = (&borrowed.0, &borrowed.1);
-            assert!(matches!(car, Value::Symbol(_))); // The '+'
+        assert!(result.is_pair());
+        let heap = parser.heap();
+        let heap_ref = heap.borrow();
+        let car = heap_ref.car(result);
+        let cdr = heap_ref.cdr(result);
+        assert!(heap_ref.get_symbol_name(car).is_some()); // The '+'
 
-            if let Value::Pair(pair2) = cdr {
-                let borrowed2 = pair2.borrow();
-                let (car2, _) = (&borrowed2.0, &borrowed2.1);
-                // The first argument should be BigInteger
-                match car2 {
-                    Value::BigInteger(n) => {
-                        assert_eq!(n.to_string(), "10000000000000000000");
-                    }
-                    other => panic!("Expected BigInteger, got {:?}", other),
-                }
-            } else {
-                panic!("Expected pair for arguments");
-            }
-        } else {
-            panic!("Expected list");
-        }
+        assert!(cdr.is_pair());
+        let arg1 = heap_ref.car(cdr);
+        // The first argument should be BigInteger
+        let bigint = heap_ref
+            .get_bigint(arg1)
+            .expect("Expected BigInteger for first arg");
+        assert_eq!(bigint.to_string(), "10000000000000000000");
     }
 
     #[test]
     fn test_parse_positive_infinity() {
         let mut parser = Parser::new("+inf.0").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Real(f) => {
-                assert!(f.is_infinite() && f.is_sign_positive());
-            }
-            other => panic!("Expected positive infinity, got {:?}", other),
-        }
+        let f = parser
+            .heap()
+            .borrow()
+            .get_real(result)
+            .expect("Expected Real");
+        assert!(f.is_infinite() && f.is_sign_positive());
     }
 
     #[test]
     fn test_parse_negative_infinity() {
         let mut parser = Parser::new("-inf.0").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Real(f) => {
-                assert!(f.is_infinite() && f.is_sign_negative());
-            }
-            other => panic!("Expected negative infinity, got {:?}", other),
-        }
+        let f = parser
+            .heap()
+            .borrow()
+            .get_real(result)
+            .expect("Expected Real");
+        assert!(f.is_infinite() && f.is_sign_negative());
     }
 
     #[test]
     fn test_parse_nan() {
         let mut parser = Parser::new("+nan.0").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Real(f) => {
-                assert!(f.is_nan());
-            }
-            other => panic!("Expected NaN, got {:?}", other),
-        }
+        let f = parser
+            .heap()
+            .borrow()
+            .get_real(result)
+            .expect("Expected Real");
+        assert!(f.is_nan());
     }
 
     #[test]
@@ -1116,23 +1169,23 @@ mod tests {
         for (input, expected) in test_cases {
             let mut parser = Parser::new(input).unwrap();
             let result = parser.parse().unwrap();
-            match result {
-                Value::Real(f) => {
-                    assert_eq!(
-                        f.is_infinite(),
-                        expected.is_infinite(),
-                        "For input '{}': expected infinite",
-                        input
-                    );
-                    assert_eq!(
-                        f.is_sign_positive(),
-                        expected.is_sign_positive(),
-                        "For input '{}': sign mismatch",
-                        input
-                    );
-                }
-                other => panic!("For input '{}': expected Real, got {:?}", input, other),
-            }
+            let f = parser
+                .heap()
+                .borrow()
+                .get_real(result)
+                .unwrap_or_else(|| panic!("For input '{}': expected Real", input));
+            assert_eq!(
+                f.is_infinite(),
+                expected.is_infinite(),
+                "For input '{}': expected infinite",
+                input
+            );
+            assert_eq!(
+                f.is_sign_positive(),
+                expected.is_sign_positive(),
+                "For input '{}': sign mismatch",
+                input
+            );
         }
 
         // Test NaN separately (can't use == for NaN)
@@ -1140,15 +1193,12 @@ mod tests {
         for input in nan_cases {
             let mut parser = Parser::new(input).unwrap();
             let result = parser.parse().unwrap();
-            match result {
-                Value::Real(f) => {
-                    assert!(f.is_nan(), "For input '{}': expected NaN, got {}", input, f);
-                }
-                other => panic!(
-                    "For input '{}': expected Real (NaN), got {:?}",
-                    input, other
-                ),
-            }
+            let f = parser
+                .heap()
+                .borrow()
+                .get_real(result)
+                .unwrap_or_else(|| panic!("For input '{}': expected Real (NaN)", input));
+            assert!(f.is_nan(), "For input '{}': expected NaN, got {}", input, f);
         }
     }
 
@@ -1157,26 +1207,19 @@ mod tests {
         let mut parser = Parser::new("(+ +inf.0 1)").unwrap();
         let result = parser.parse().unwrap();
 
-        if let Value::Pair(pair) = result {
-            let borrowed = pair.borrow();
-            let (car, cdr) = (&borrowed.0, &borrowed.1);
-            assert!(matches!(car, Value::Symbol(_))); // The '+'
+        assert!(result.is_pair());
+        let heap = parser.heap();
+        let heap_ref = heap.borrow();
+        let car = heap_ref.car(result);
+        let cdr = heap_ref.cdr(result);
+        assert!(heap_ref.get_symbol_name(car).is_some()); // The '+'
 
-            if let Value::Pair(pair2) = cdr {
-                let borrowed2 = pair2.borrow();
-                let (car2, _) = (&borrowed2.0, &borrowed2.1);
-                match car2 {
-                    Value::Real(f) => {
-                        assert!(f.is_infinite() && f.is_sign_positive());
-                    }
-                    other => panic!("Expected positive infinity, got {:?}", other),
-                }
-            } else {
-                panic!("Expected pair for arguments");
-            }
-        } else {
-            panic!("Expected list");
-        }
+        assert!(cdr.is_pair());
+        let arg1 = heap_ref.car(cdr);
+        let f = heap_ref
+            .get_real(arg1)
+            .expect("Expected Real for first arg");
+        assert!(f.is_infinite() && f.is_sign_positive());
     }
 
     // ========== Datum Comment Tests ==========
@@ -1186,7 +1229,8 @@ mod tests {
         // #; abc def -> def
         let mut parser = Parser::new("#; abc def").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Symbol(s) if &*s == "def"));
+        let heap_ref = parser.heap().borrow();
+        assert_eq!(heap_ref.get_symbol_name(result), Some("def"));
     }
 
     #[test]
@@ -1196,12 +1240,10 @@ mod tests {
         let result = parser.parse().unwrap();
 
         // Should be a list with two elements: abs and -16
-        if let Value::Pair(pair) = result {
-            let borrowed = pair.borrow();
-            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "abs"));
-        } else {
-            panic!("Expected list");
-        }
+        assert!(result.is_pair());
+        let heap_ref = parser.heap().borrow();
+        let car = heap_ref.car(result);
+        assert_eq!(heap_ref.get_symbol_name(car), Some("abs"));
     }
 
     #[test]
@@ -1212,20 +1254,14 @@ mod tests {
         let result = parser.parse().unwrap();
 
         // Should be a list (a d)
-        if let Value::Pair(pair) = result {
-            let borrowed = pair.borrow();
-            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "a"));
+        assert!(result.is_pair());
+        let heap_ref = parser.heap().borrow();
+        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(result)), Some("a"));
 
-            if let Value::Pair(pair2) = &borrowed.1 {
-                let borrowed2 = pair2.borrow();
-                assert!(matches!(&borrowed2.0, Value::Symbol(s) if &**s == "d"));
-                assert!(matches!(&borrowed2.1, Value::Null));
-            } else {
-                panic!("Expected second element");
-            }
-        } else {
-            panic!("Expected list");
-        }
+        let cdr = heap_ref.cdr(result);
+        assert!(cdr.is_pair());
+        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(cdr)), Some("d"));
+        assert!(heap_ref.cdr(cdr).is_null());
     }
 
     #[test]
@@ -1234,20 +1270,14 @@ mod tests {
         let mut parser = Parser::new("(a #;(b #;c d) e)").unwrap();
         let result = parser.parse().unwrap();
 
-        if let Value::Pair(pair) = result {
-            let borrowed = pair.borrow();
-            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "a"));
+        assert!(result.is_pair());
+        let heap_ref = parser.heap().borrow();
+        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(result)), Some("a"));
 
-            if let Value::Pair(pair2) = &borrowed.1 {
-                let borrowed2 = pair2.borrow();
-                assert!(matches!(&borrowed2.0, Value::Symbol(s) if &**s == "e"));
-                assert!(matches!(&borrowed2.1, Value::Null));
-            } else {
-                panic!("Expected second element");
-            }
-        } else {
-            panic!("Expected list");
-        }
+        let cdr = heap_ref.cdr(result);
+        assert!(cdr.is_pair());
+        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(cdr)), Some("e"));
+        assert!(heap_ref.cdr(cdr).is_null());
     }
 
     #[test]
@@ -1256,31 +1286,23 @@ mod tests {
         let mut parser = Parser::new("(a . #;b c)").unwrap();
         let result = parser.parse().unwrap();
 
-        if let Value::Pair(pair) = result {
-            let borrowed = pair.borrow();
-            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "a"));
-            assert!(matches!(&borrowed.1, Value::Symbol(s) if &**s == "c"));
-        } else {
-            panic!("Expected pair");
-        }
+        assert!(result.is_pair());
+        let heap_ref = parser.heap().borrow();
+        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(result)), Some("a"));
+        assert_eq!(heap_ref.get_symbol_name(heap_ref.cdr(result)), Some("c"));
     }
 
     #[test]
     fn test_datum_comment_before_tail() {
         // (a . b #;c) -> This should skip c after the dotted tail
-        // Actually R7RS says: (a . b #;c) means the #;c is skipped after b
-        // But b is already the tail... let's verify the chibi behavior
         // According to tests: this should return (a . b) with c skipped
         let mut parser = Parser::new("(a . b #;c)").unwrap();
         let result = parser.parse().unwrap();
 
-        if let Value::Pair(pair) = result {
-            let borrowed = pair.borrow();
-            assert!(matches!(&borrowed.0, Value::Symbol(s) if &**s == "a"));
-            assert!(matches!(&borrowed.1, Value::Symbol(s) if &**s == "b"));
-        } else {
-            panic!("Expected pair");
-        }
+        assert!(result.is_pair());
+        let heap_ref = parser.heap().borrow();
+        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(result)), Some("a"));
+        assert_eq!(heap_ref.get_symbol_name(heap_ref.cdr(result)), Some("b"));
     }
 
     #[test]
@@ -1290,7 +1312,8 @@ mod tests {
         // (the ; comment is just a line comment consumed as whitespace)
         let mut parser = Parser::new("#; ; comment\n def ghi").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Symbol(s) if &*s == "ghi"));
+        let heap_ref = parser.heap().borrow();
+        assert_eq!(heap_ref.get_symbol_name(result), Some("ghi"));
     }
 
     #[test]
@@ -1298,7 +1321,8 @@ mod tests {
         // #;#(1 2 3) 42 -> 42
         let mut parser = Parser::new("#;#(1 2 3) 42").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Integer(42)));
+        assert!(result.is_fixnum());
+        assert_eq!(result.as_fixnum_unchecked(), 42);
     }
 
     #[test]
@@ -1306,7 +1330,8 @@ mod tests {
         // #;'foo bar -> bar
         let mut parser = Parser::new("#;'foo bar").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Symbol(s) if &*s == "bar"));
+        let heap_ref = parser.heap().borrow();
+        assert_eq!(heap_ref.get_symbol_name(result), Some("bar"));
     }
 
     // ========== Datum Comment Error Cases ==========
@@ -1406,18 +1431,18 @@ mod tests {
         for (input, expected) in test_cases {
             let mut parser = Parser::new(input).unwrap();
             let result = parser.parse().unwrap();
-            match result {
-                Value::Real(f) => {
-                    assert!(
-                        (f - expected).abs() < 1e-10,
-                        "For input '{}': expected {}, got {}",
-                        input,
-                        expected,
-                        f
-                    );
-                }
-                other => panic!("For input '{}': expected Real, got {:?}", input, other),
-            }
+            let f = parser
+                .heap()
+                .borrow()
+                .get_real(result)
+                .unwrap_or_else(|| panic!("For input '{}': expected Real", input));
+            assert!(
+                (f - expected).abs() < 1e-10,
+                "For input '{}': expected {}, got {}",
+                input,
+                expected,
+                f
+            );
         }
     }
 
@@ -1426,7 +1451,12 @@ mod tests {
         // Make sure we didn't break standard 'e' exponent
         let mut parser = Parser::new("1e2").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Real(f) if (f - 100.0).abs() < 1e-10));
+        let f = parser
+            .heap()
+            .borrow()
+            .get_real(result)
+            .expect("Expected Real");
+        assert!((f - 100.0).abs() < 1e-10);
     }
 
     // ========== Non-Decimal Radix Rational Tests ==========
@@ -1436,13 +1466,10 @@ mod tests {
         // #x1/10 = 1/16 in decimal
         let mut parser = Parser::new("#x1/10").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Rational(r) => {
-                assert_eq!(r.numer().to_i64(), Some(1));
-                assert_eq!(r.denom().to_i64(), Some(16));
-            }
-            other => panic!("Expected Rational, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let r = heap_ref.get_rational(result).expect("Expected Rational");
+        assert_eq!(r.numer().to_i64(), Some(1));
+        assert_eq!(r.denom().to_i64(), Some(16));
     }
 
     #[test]
@@ -1450,7 +1477,8 @@ mod tests {
         // #x10/2 = 16/2 = 8
         let mut parser = Parser::new("#x10/2").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Integer(8)));
+        assert!(result.is_fixnum());
+        assert_eq!(result.as_fixnum_unchecked(), 8);
     }
 
     #[test]
@@ -1458,13 +1486,10 @@ mod tests {
         // #x11/2 = 17/2
         let mut parser = Parser::new("#x11/2").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Rational(r) => {
-                assert_eq!(r.numer().to_i64(), Some(17));
-                assert_eq!(r.denom().to_i64(), Some(2));
-            }
-            other => panic!("Expected Rational, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let r = heap_ref.get_rational(result).expect("Expected Rational");
+        assert_eq!(r.numer().to_i64(), Some(17));
+        assert_eq!(r.denom().to_i64(), Some(2));
     }
 
     #[test]
@@ -1472,13 +1497,10 @@ mod tests {
         // #o11/2 = 9/2 in decimal
         let mut parser = Parser::new("#o11/2").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Rational(r) => {
-                assert_eq!(r.numer().to_i64(), Some(9));
-                assert_eq!(r.denom().to_i64(), Some(2));
-            }
-            other => panic!("Expected Rational, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let r = heap_ref.get_rational(result).expect("Expected Rational");
+        assert_eq!(r.numer().to_i64(), Some(9));
+        assert_eq!(r.denom().to_i64(), Some(2));
     }
 
     #[test]
@@ -1486,13 +1508,10 @@ mod tests {
         // #b11/10 = 3/2 in decimal
         let mut parser = Parser::new("#b11/10").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Rational(r) => {
-                assert_eq!(r.numer().to_i64(), Some(3));
-                assert_eq!(r.denom().to_i64(), Some(2));
-            }
-            other => panic!("Expected Rational, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let r = heap_ref.get_rational(result).expect("Expected Rational");
+        assert_eq!(r.numer().to_i64(), Some(3));
+        assert_eq!(r.denom().to_i64(), Some(2));
     }
 
     #[test]
@@ -1500,13 +1519,10 @@ mod tests {
         // #xa/b = 10/11
         let mut parser = Parser::new("#xa/b").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Rational(r) => {
-                assert_eq!(r.numer().to_i64(), Some(10));
-                assert_eq!(r.denom().to_i64(), Some(11));
-            }
-            other => panic!("Expected Rational, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let r = heap_ref.get_rational(result).expect("Expected Rational");
+        assert_eq!(r.numer().to_i64(), Some(10));
+        assert_eq!(r.denom().to_i64(), Some(11));
     }
 
     #[test]
@@ -1524,22 +1540,20 @@ mod tests {
         // 1s2+1.0i = 100.0+1.0i
         let mut parser = Parser::new("1s2+1.0i").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Complex(parts) => {
-                let (ref real, ref imag) = *parts;
-                assert!(
-                    matches!(real, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
-                    "Expected real part 100.0, got {:?}",
-                    real
-                );
-                assert!(
-                    matches!(imag, Value::Real(r) if (*r - 1.0).abs() < 1e-10),
-                    "Expected imag part 1.0, got {:?}",
-                    imag
-                );
-            }
-            other => panic!("Expected Complex, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let (real_tv, imag_tv) = heap_ref.get_complex(result).expect("Expected Complex");
+        let real = heap_ref.get_real(real_tv).expect("Expected real part");
+        let imag = heap_ref.get_real(imag_tv).expect("Expected imag part");
+        assert!(
+            (real - 100.0).abs() < 1e-10,
+            "Expected real 100.0, got {}",
+            real
+        );
+        assert!(
+            (imag - 1.0).abs() < 1e-10,
+            "Expected imag 1.0, got {}",
+            imag
+        );
     }
 
     #[test]
@@ -1547,22 +1561,20 @@ mod tests {
         // 1.0+1s2i = 1.0+100.0i
         let mut parser = Parser::new("1.0+1s2i").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Complex(parts) => {
-                let (ref real, ref imag) = *parts;
-                assert!(
-                    matches!(real, Value::Real(r) if (*r - 1.0).abs() < 1e-10),
-                    "Expected real part 1.0, got {:?}",
-                    real
-                );
-                assert!(
-                    matches!(imag, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
-                    "Expected imag part 100.0, got {:?}",
-                    imag
-                );
-            }
-            other => panic!("Expected Complex, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let (real_tv, imag_tv) = heap_ref.get_complex(result).expect("Expected Complex");
+        let real = heap_ref.get_real(real_tv).expect("Expected real part");
+        let imag = heap_ref.get_real(imag_tv).expect("Expected imag part");
+        assert!(
+            (real - 1.0).abs() < 1e-10,
+            "Expected real 1.0, got {}",
+            real
+        );
+        assert!(
+            (imag - 100.0).abs() < 1e-10,
+            "Expected imag 100.0, got {}",
+            imag
+        );
     }
 
     #[test]
@@ -1570,22 +1582,20 @@ mod tests {
         // 1d2+1.0i = 100.0+1.0i (double precision marker)
         let mut parser = Parser::new("1d2+1.0i").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Complex(parts) => {
-                let (ref real, ref imag) = *parts;
-                assert!(
-                    matches!(real, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
-                    "Expected real part 100.0, got {:?}",
-                    real
-                );
-                assert!(
-                    matches!(imag, Value::Real(r) if (*r - 1.0).abs() < 1e-10),
-                    "Expected imag part 1.0, got {:?}",
-                    imag
-                );
-            }
-            other => panic!("Expected Complex, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let (real_tv, imag_tv) = heap_ref.get_complex(result).expect("Expected Complex");
+        let real = heap_ref.get_real(real_tv).expect("Expected real part");
+        let imag = heap_ref.get_real(imag_tv).expect("Expected imag part");
+        assert!(
+            (real - 100.0).abs() < 1e-10,
+            "Expected real 100.0, got {}",
+            real
+        );
+        assert!(
+            (imag - 1.0).abs() < 1e-10,
+            "Expected imag 1.0, got {}",
+            imag
+        );
     }
 
     #[test]
@@ -1593,22 +1603,20 @@ mod tests {
         // 1l2+3.0i = 100.0+3.0i (long precision marker)
         let mut parser = Parser::new("1l2+3.0i").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Complex(parts) => {
-                let (ref real, ref imag) = *parts;
-                assert!(
-                    matches!(real, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
-                    "Expected real part 100.0, got {:?}",
-                    real
-                );
-                assert!(
-                    matches!(imag, Value::Real(r) if (*r - 3.0).abs() < 1e-10),
-                    "Expected imag part 3.0, got {:?}",
-                    imag
-                );
-            }
-            other => panic!("Expected Complex, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let (real_tv, imag_tv) = heap_ref.get_complex(result).expect("Expected Complex");
+        let real = heap_ref.get_real(real_tv).expect("Expected real part");
+        let imag = heap_ref.get_real(imag_tv).expect("Expected imag part");
+        assert!(
+            (real - 100.0).abs() < 1e-10,
+            "Expected real 100.0, got {}",
+            real
+        );
+        assert!(
+            (imag - 3.0).abs() < 1e-10,
+            "Expected imag 3.0, got {}",
+            imag
+        );
     }
 
     #[test]
@@ -1616,22 +1624,16 @@ mod tests {
         // 1s2@0 = 100.0+0.0i (polar notation with exponent marker)
         let mut parser = Parser::new("1s2@0").unwrap();
         let result = parser.parse().unwrap();
-        match result {
-            Value::Complex(parts) => {
-                let (ref real, ref imag) = *parts;
-                assert!(
-                    matches!(real, Value::Real(r) if (*r - 100.0).abs() < 1e-10),
-                    "Expected real part 100.0, got {:?}",
-                    real
-                );
-                assert!(
-                    matches!(imag, Value::Real(r) if r.abs() < 1e-10),
-                    "Expected imag part ~0, got {:?}",
-                    imag
-                );
-            }
-            other => panic!("Expected Complex, got {:?}", other),
-        }
+        let heap_ref = parser.heap().borrow();
+        let (real_tv, imag_tv) = heap_ref.get_complex(result).expect("Expected Complex");
+        let real = heap_ref.get_real(real_tv).expect("Expected real part");
+        let imag = heap_ref.get_real(imag_tv).expect("Expected imag part");
+        assert!(
+            (real - 100.0).abs() < 1e-10,
+            "Expected real 100.0, got {}",
+            real
+        );
+        assert!(imag.abs() < 1e-10, "Expected imag ~0, got {}", imag);
     }
 
     // ========== Datum Label Tests (R7RS Section 2.4) ==========
@@ -1641,7 +1643,8 @@ mod tests {
         // #0=42 -> just returns 42, label is stored but not needed
         let mut parser = Parser::new("#0=42").unwrap();
         let result = parser.parse().unwrap();
-        assert!(matches!(result, Value::Integer(42)));
+        assert!(result.is_fixnum());
+        assert_eq!(result.as_fixnum_unchecked(), 42);
     }
 
     #[test]
@@ -1650,38 +1653,28 @@ mod tests {
         let mut parser = Parser::new("(#0=(a b) #0#)").unwrap();
         let result = parser.parse().unwrap();
 
-        if let Value::Pair(pair) = result {
-            let borrowed = pair.borrow();
-            let (first, second_cell) = (&borrowed.0, &borrowed.1);
+        // HeapPair structure - shared structure via same TaggedValue (raw pointer)
+        assert!(result.is_pair());
+        let heap = parser.heap();
+        let heap_ref = heap.borrow();
+        let first = heap_ref.car(result);
+        let second_cell = heap_ref.cdr(result);
 
-            // First element should be (a b)
-            if let Value::Pair(inner1) = first {
-                let inner1_borrowed = inner1.borrow();
-                assert!(matches!(&inner1_borrowed.0, Value::Symbol(s) if &**s == "a"));
-            } else {
-                panic!("Expected first element to be a pair");
-            }
+        // First element should be (a b)
+        assert!(first.is_pair());
+        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(first)), Some("a"));
 
-            // Second element should be eq? to first (same Rc)
-            if let Value::Pair(second_pair) = second_cell {
-                let second_borrowed = second_pair.borrow();
-                if let Value::Pair(inner2) = &second_borrowed.0 {
-                    // Check pointer equality - should be the same Rc
-                    if let Value::Pair(inner1) = first {
-                        assert!(
-                            Rc::ptr_eq(inner1, inner2),
-                            "Shared structure should use same Rc"
-                        );
-                    }
-                } else {
-                    panic!("Expected second element to be a pair");
-                }
-            } else {
-                panic!("Expected cdr to be a pair");
-            }
-        } else {
-            panic!("Expected list");
-        }
+        // Second element of outer list should also be the same (a b)
+        assert!(second_cell.is_pair());
+        let second = heap_ref.car(second_cell);
+        assert!(second.is_pair());
+
+        // Check pointer equality - both should be the same TaggedValue
+        assert_eq!(
+            first.raw(),
+            second.raw(),
+            "Shared structure should use same heap pointer"
+        );
     }
 
     #[test]
@@ -1690,22 +1683,22 @@ mod tests {
         let mut parser = Parser::new("#0=(1 . #0#)").unwrap();
         let result = parser.parse().unwrap();
 
-        if let Value::Pair(pair) = &result {
-            let borrowed = pair.borrow();
-            assert!(matches!(&borrowed.0, Value::Integer(1)));
+        assert!(result.is_pair());
+        let heap = parser.heap();
+        let heap_ref = heap.borrow();
+        let car = heap_ref.car(result);
+        let cdr = heap_ref.cdr(result);
 
-            // The cdr should be eq? to the pair itself (cycle)
-            if let Value::Pair(cdr) = &borrowed.1 {
-                assert!(
-                    Rc::ptr_eq(pair, cdr),
-                    "Cyclic structure: cdr should point to self"
-                );
-            } else {
-                panic!("Expected cdr to be a pair (the cycle)");
-            }
-        } else {
-            panic!("Expected pair");
-        }
+        assert!(car.is_fixnum());
+        assert_eq!(car.as_fixnum_unchecked(), 1);
+
+        // The cdr should be eq? to the pair itself (cycle)
+        assert!(cdr.is_pair());
+        assert_eq!(
+            result.raw(),
+            cdr.raw(),
+            "Cyclic structure: cdr should point to self"
+        );
     }
 
     #[test]
@@ -1714,22 +1707,23 @@ mod tests {
         let mut parser = Parser::new("(#0# #0=(a b))").unwrap();
         let result = parser.parse().unwrap();
 
-        if let Value::Pair(pair) = result {
-            let borrowed = pair.borrow();
+        assert!(result.is_pair());
+        let heap = parser.heap();
+        let heap_ref = heap.borrow();
+        let first = heap_ref.car(result);
+        let rest = heap_ref.cdr(result);
 
-            // Both elements should be the same (a b) list
-            if let (Value::Pair(first), Value::Pair(rest)) = (&borrowed.0, &borrowed.1) {
-                let rest_borrowed = rest.borrow();
-                if let Value::Pair(second) = &rest_borrowed.0 {
-                    assert!(
-                        Rc::ptr_eq(first, second),
-                        "Forward reference should resolve to same object"
-                    );
-                }
-            }
-        } else {
-            panic!("Expected list");
-        }
+        // Both elements should be the same (a b) list
+        assert!(first.is_pair());
+        assert!(rest.is_pair());
+        let second = heap_ref.car(rest);
+        assert!(second.is_pair());
+
+        assert_eq!(
+            first.raw(),
+            second.raw(),
+            "Forward reference should resolve to same object"
+        );
     }
 
     #[test]
@@ -1739,14 +1733,15 @@ mod tests {
         let result = parser.parse().unwrap();
 
         // Collect all symbols from the list
+        let heap = parser.heap();
+        let heap_ref = heap.borrow();
         let mut symbols = Vec::new();
         let mut current = result;
-        while let Value::Pair(p) = current {
-            let borrowed = p.borrow();
-            if let Value::Symbol(s) = &borrowed.0 {
-                symbols.push(s.to_string());
+        while current.is_pair() {
+            if let Some(name) = heap_ref.get_symbol_name(heap_ref.car(current)) {
+                symbols.push(name.to_string());
             }
-            current = borrowed.1.clone();
+            current = heap_ref.cdr(current);
         }
 
         assert_eq!(symbols, vec!["a", "b", "a", "b"]);
@@ -1772,10 +1767,11 @@ mod tests {
         let mut parser = Parser::new("#99#").unwrap();
         let result = parser.parse().unwrap();
         // Should return a placeholder since label 99 is never defined
+        let display = patina_core::format_tagged(result, &parser.heap().borrow());
         assert!(
-            matches!(result, Value::LabelPlaceholder(99)),
-            "Expected LabelPlaceholder(99), got {:?}",
-            result
+            display.contains("label-placeholder") && display.contains("99"),
+            "Expected LabelPlaceholder(99), got {}",
+            display
         );
     }
 
@@ -1785,14 +1781,14 @@ mod tests {
         let mut parser = Parser::new("#(#0=1 #0# #0#)").unwrap();
         let result = parser.parse().unwrap();
 
-        if let Value::Vector(vec) = result {
-            let borrowed = vec.borrow();
-            assert_eq!(borrowed.len(), 3);
-            assert!(matches!(&borrowed[0], Value::Integer(1)));
-            assert!(matches!(&borrowed[1], Value::Integer(1)));
-            assert!(matches!(&borrowed[2], Value::Integer(1)));
-        } else {
-            panic!("Expected vector");
+        assert!(result.is_vector());
+        let heap_ref = parser.heap().borrow();
+        let len = heap_ref.vector_len(result);
+        assert_eq!(len, 3);
+        for i in 0..len {
+            let elem = heap_ref.vector_ref(result, i);
+            assert!(elem.is_fixnum());
+            assert_eq!(elem.as_fixnum_unchecked(), 1);
         }
     }
 
@@ -1803,26 +1799,26 @@ mod tests {
         let result = parser.parse().unwrap();
 
         // Verify the nested list (b c) is shared
-        if let Value::Pair(outer) = result {
-            let outer_borrowed = outer.borrow();
-            // Get second element (should be (b c))
-            if let Value::Pair(rest1) = &outer_borrowed.1 {
-                let rest1_borrowed = rest1.borrow();
-                if let Value::Pair(inner1) = &rest1_borrowed.0 {
-                    // Get third element (should also be (b c))
-                    if let Value::Pair(rest2) = &rest1_borrowed.1 {
-                        let rest2_borrowed = rest2.borrow();
-                        if let Value::Pair(inner2) = &rest2_borrowed.0 {
-                            assert!(
-                                Rc::ptr_eq(inner1, inner2),
-                                "Nested shared structure should use same Rc"
-                            );
-                        }
-                    }
-                }
-            }
-        } else {
-            panic!("Expected list");
-        }
+        assert!(result.is_pair());
+        let heap = parser.heap();
+        let heap_ref = heap.borrow();
+        let rest1 = heap_ref.cdr(result);
+
+        // Get second element (should be (b c))
+        assert!(rest1.is_pair());
+        let inner1 = heap_ref.car(rest1);
+        assert!(inner1.is_pair());
+
+        // Get third element (should also be (b c))
+        let rest2 = heap_ref.cdr(rest1);
+        assert!(rest2.is_pair());
+        let inner2 = heap_ref.car(rest2);
+        assert!(inner2.is_pair());
+
+        assert_eq!(
+            inner1.raw(),
+            inner2.raw(),
+            "Nested shared structure should use same heap pointer"
+        );
     }
 }

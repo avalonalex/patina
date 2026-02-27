@@ -27,14 +27,15 @@ fn load_program(interp: &TreeWalkInterpreter, filename: &str) {
     let path = bench_programs_dir().join(filename);
     let code = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
-    interp.eval_program(&code)
+    interp
+        .eval_program(&code)
         .unwrap_or_else(|e| panic!("Failed to load {}: {:?}", filename, e));
 }
 
 /// Helper to evaluate Scheme code and return the result
 fn eval(interp: &TreeWalkInterpreter, code: &str) -> String {
     match interp.eval_program(code) {
-        Ok(val) => format!("{}", val),
+        Ok(val) => interp.display_tagged(val),
         Err(e) => panic!("Evaluation error: {:?}", e),
     }
 }
@@ -51,14 +52,10 @@ fn bench_tak(c: &mut Criterion) {
     load_program(&interp, "tak.scm");
 
     // Standard r7rs-benchmark size (but fewer iterations than the suite)
-    group.bench_function("18_12_6", |b| {
-        b.iter(|| eval(&interp, "(tak 18 12 6)"))
-    });
+    group.bench_function("18_12_6", |b| b.iter(|| eval(&interp, "(tak 18 12 6)")));
 
     // Smaller size for quick iteration
-    group.bench_function("12_8_4", |b| {
-        b.iter(|| eval(&interp, "(tak 12 8 4)"))
-    });
+    group.bench_function("12_8_4", |b| b.iter(|| eval(&interp, "(tak 12 8 4)")));
 
     group.finish();
 }
@@ -102,19 +99,20 @@ fn bench_deriv(c: &mut Criterion) {
     load_program(&interp, "deriv.scm");
 
     // Single derivation
-    group.bench_function("single", |b| {
-        b.iter(|| eval(&interp, "(deriv test-expr)"))
-    });
+    group.bench_function("single", |b| b.iter(|| eval(&interp, "(deriv test-expr)")));
 
     // Multiple iterations (like the actual benchmark)
     group.bench_function("1000_iter", |b| {
         b.iter(|| {
-            eval(&interp, r#"
+            eval(
+                &interp,
+                r#"
                 (let loop ((i 1000))
                   (if (= i 0)
                       'done
                       (begin (deriv test-expr) (loop (- i 1)))))
-            "#)
+            "#,
+            )
         })
     });
 
@@ -181,14 +179,10 @@ fn bench_ctak(c: &mut Criterion) {
 
     // ctak is MUCH slower than tak due to continuation capture
     // Use smaller parameters
-    group.bench_function("12_8_4", |b| {
-        b.iter(|| eval(&interp, "(ctak 12 8 4)"))
-    });
+    group.bench_function("12_8_4", |b| b.iter(|| eval(&interp, "(ctak 12 8 4)")));
 
     // Even smaller for quick runs
-    group.bench_function("8_4_2", |b| {
-        b.iter(|| eval(&interp, "(ctak 8 4 2)"))
-    });
+    group.bench_function("8_4_2", |b| b.iter(|| eval(&interp, "(ctak 8 4 2)")));
 
     group.finish();
 }
@@ -201,17 +195,22 @@ fn bench_dynamic_wind(c: &mut Criterion) {
     // Simple dynamic-wind
     group.bench_function("simple", |b| {
         b.iter(|| {
-            eval(&interp, r#"
+            eval(
+                &interp,
+                r#"
                 (dynamic-wind
                   (lambda () #f)
                   (lambda () 42)
                   (lambda () #f))
-            "#)
+            "#,
+            )
         });
     });
 
     // Nested dynamic-wind (tests wind record cloning)
-    interp.eval_program(r#"
+    interp
+        .eval_program(
+            r#"
         (define (wind-nest n)
           (if (= n 0)
               'done
@@ -219,15 +218,13 @@ fn bench_dynamic_wind(c: &mut Criterion) {
                 (lambda () #f)
                 (lambda () (wind-nest (- n 1)))
                 (lambda () #f))))
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    group.bench_function("nested_10", |b| {
-        b.iter(|| eval(&interp, "(wind-nest 10)"))
-    });
+    group.bench_function("nested_10", |b| b.iter(|| eval(&interp, "(wind-nest 10)")));
 
-    group.bench_function("nested_20", |b| {
-        b.iter(|| eval(&interp, "(wind-nest 20)"))
-    });
+    group.bench_function("nested_20", |b| b.iter(|| eval(&interp, "(wind-nest 20)")));
 
     group.finish();
 }
@@ -243,13 +240,17 @@ fn bench_callcc(c: &mut Criterion) {
     });
 
     // call/cc in a loop - tests repeated capture/invoke
-    interp.eval_program(r#"
+    interp
+        .eval_program(
+            r#"
         (define (cc-loop n acc)
           (if (= n 0)
               acc
               (call/cc (lambda (k)
                 (cc-loop (- n 1) (+ acc 1))))))
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     for n in [50, 100, 200] {
         group.bench_with_input(BenchmarkId::new("loop", n), &n, |b, &n| {
@@ -270,19 +271,27 @@ fn bench_lists(c: &mut Criterion) {
     let interp = make_interpreter();
 
     // Build a list recursively
-    interp.eval_program(r#"
+    interp
+        .eval_program(
+            r#"
         (define (make-list n)
           (if (= n 0) '() (cons n (make-list (- n 1)))))
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     group.bench_function("make_1000", |b| {
         b.iter(|| eval(&interp, "(length (make-list 1000))"))
     });
 
     // Prepare a test list
-    interp.eval_program(r#"
+    interp
+        .eval_program(
+            r#"
         (define test-list (make-list 1000))
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     // Reverse
     group.bench_function("reverse_1000", |b| {
@@ -297,11 +306,14 @@ fn bench_lists(c: &mut Criterion) {
     // Append
     group.bench_function("append_500_500", |b| {
         b.iter(|| {
-            eval(&interp, r#"
+            eval(
+                &interp,
+                r#"
                 (let ((l1 (make-list 500))
                       (l2 (make-list 500)))
                   (length (append l1 l2)))
-            "#)
+            "#,
+            )
         })
     });
 
@@ -319,20 +331,26 @@ fn bench_vectors(c: &mut Criterion) {
     });
 
     // Sum vector elements
-    interp.eval_program(r#"
+    interp
+        .eval_program(
+            r#"
         (define test-vec (make-vector 1000 42))
         (define (sum-vec v n acc)
           (if (= n 0)
               acc
               (sum-vec v (- n 1) (+ acc (vector-ref v (- n 1))))))
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     group.bench_function("sum_1000", |b| {
         b.iter(|| eval(&interp, "(sum-vec test-vec 1000 0)"))
     });
 
     // Fill vector
-    interp.eval_program(r#"
+    interp
+        .eval_program(
+            r#"
         (define fill-vec (make-vector 1000 0))
         (define (fill! v n)
           (if (= n 0)
@@ -340,7 +358,9 @@ fn bench_vectors(c: &mut Criterion) {
               (begin
                 (vector-set! v (- n 1) n)
                 (fill! v (- n 1)))))
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     group.bench_function("fill_1000", |b| {
         b.iter(|| eval(&interp, "(begin (fill! fill-vec 1000) 'done)"))
@@ -359,20 +379,28 @@ fn bench_numeric(c: &mut Criterion) {
     let interp = make_interpreter();
 
     // Tail-recursive sum
-    interp.eval_program(r#"
+    interp
+        .eval_program(
+            r#"
         (define (sum-to n acc)
           (if (= n 0) acc (sum-to (- n 1) (+ acc n))))
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     group.bench_function("sum_10000", |b| {
         b.iter(|| eval(&interp, "(sum-to 10000 0)"))
     });
 
     // Factorial (tests bignum promotion)
-    interp.eval_program(r#"
+    interp
+        .eval_program(
+            r#"
         (define (fact n acc)
           (if (= n 0) acc (fact (- n 1) (* acc n))))
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     for n in [20, 50, 100] {
         group.bench_with_input(BenchmarkId::new("factorial", n), &n, |b, &n| {
@@ -381,10 +409,14 @@ fn bench_numeric(c: &mut Criterion) {
     }
 
     // Float arithmetic
-    interp.eval_program(r#"
+    interp
+        .eval_program(
+            r#"
         (define (float-sum n acc)
           (if (= n 0) acc (float-sum (- n 1) (+ acc 1.5))))
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     group.bench_function("float_sum_1000", |b| {
         b.iter(|| eval(&interp, "(float-sum 1000 0.0)"))

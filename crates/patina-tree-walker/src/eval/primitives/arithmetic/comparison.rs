@@ -6,93 +6,216 @@
 //! - >  (greater than)
 //! - <= (less than or equal)
 //! - >= (greater than or equal)
+//!
+//! Each comparison has a fast path for fixnum-only arguments.
 
 use super::helpers::numeric_err;
 use crate::eval::Evaluator;
 use crate::eval::error::EvalError;
-use patina_runtime::value::Value;
+use patina_core::TaggedValue;
 
 /// (= z1 z2 z3 ...) - Numeric equality
 /// Returns #t if all arguments are numerically equal.
-pub(super) fn numeric_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "=")?;
+///
+/// Fast path: If all arguments are fixnums, compares directly.
+pub(super) fn numeric_equal(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Fast path for fixnums
+    if args.iter().all(|a| a.is_fixnum()) {
+        let first = args[0].as_fixnum_unchecked();
+        for arg in &args[1..] {
+            if arg.as_fixnum_unchecked() != first {
+                return Ok(TaggedValue::FALSE);
+            }
+        }
+        return Ok(TaggedValue::TRUE);
+    }
+
+    // Slow path
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let equal = args[i]
-            .numeric_eq(&args[i + 1])
+        let equal = heap_ref
+            .numeric_eq_cmp(args[i], args[i + 1])
             .map_err(|e| numeric_err(e, "="))?;
         if !equal {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
 
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (< x1 x2 x3 ...) - Less than
 /// Returns #t if arguments are monotonically increasing.
-pub(super) fn less_than(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "<")?;
+///
+/// Fast path: If all arguments are fixnums, compares directly.
+pub(super) fn less_than(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Fast path for fixnums
+    if args.iter().all(|a| a.is_fixnum()) {
+        for i in 0..args.len() - 1 {
+            if args[i].as_fixnum_unchecked() >= args[i + 1].as_fixnum_unchecked() {
+                return Ok(TaggedValue::FALSE);
+            }
+        }
+        return Ok(TaggedValue::TRUE);
+    }
+
+    // Slow path
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let lt = args[i]
-            .numeric_lt(&args[i + 1])
+        let lt = heap_ref
+            .numeric_lt(args[i], args[i + 1])
             .map_err(|e| numeric_err(e, "<"))?;
         if !lt {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
 
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (> x1 x2 x3 ...) - Greater than
 /// Returns #t if arguments are monotonically decreasing.
-pub(super) fn greater_than(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, ">")?;
+///
+/// Fast path: If all arguments are fixnums, compares directly.
+pub(super) fn greater_than(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Fast path for fixnums
+    if args.iter().all(|a| a.is_fixnum()) {
+        for i in 0..args.len() - 1 {
+            if args[i].as_fixnum_unchecked() <= args[i + 1].as_fixnum_unchecked() {
+                return Ok(TaggedValue::FALSE);
+            }
+        }
+        return Ok(TaggedValue::TRUE);
+    }
+
+    // Slow path
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let gt = args[i]
-            .numeric_gt(&args[i + 1])
+        let gt = heap_ref
+            .numeric_gt(args[i], args[i + 1])
             .map_err(|e| numeric_err(e, ">"))?;
         if !gt {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
 
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (<= x1 x2 x3 ...) - Less than or equal
 /// Returns #t if arguments are monotonically non-decreasing.
-pub(super) fn less_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "<=")?;
+///
+/// Fast path: If all arguments are fixnums, compares directly.
+pub(super) fn less_equal(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Fast path for fixnums
+    if args.iter().all(|a| a.is_fixnum()) {
+        for i in 0..args.len() - 1 {
+            if args[i].as_fixnum_unchecked() > args[i + 1].as_fixnum_unchecked() {
+                return Ok(TaggedValue::FALSE);
+            }
+        }
+        return Ok(TaggedValue::TRUE);
+    }
+
+    // Slow path
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let le = args[i]
-            .numeric_le(&args[i + 1])
+        let le = heap_ref
+            .numeric_le(args[i], args[i + 1])
             .map_err(|e| numeric_err(e, "<="))?;
         if !le {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
 
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
 /// (>= x1 x2 x3 ...) - Greater than or equal
 /// Returns #t if arguments are monotonically non-increasing.
-pub(super) fn greater_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, ">=")?;
+///
+/// Fast path: If all arguments are fixnums, compares directly.
+pub(super) fn greater_equal(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Fast path for fixnums
+    if args.iter().all(|a| a.is_fixnum()) {
+        for i in 0..args.len() - 1 {
+            if args[i].as_fixnum_unchecked() < args[i + 1].as_fixnum_unchecked() {
+                return Ok(TaggedValue::FALSE);
+            }
+        }
+        return Ok(TaggedValue::TRUE);
+    }
+
+    // Slow path
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let ge = args[i]
-            .numeric_ge(&args[i + 1])
+        let ge = heap_ref
+            .numeric_ge(args[i], args[i + 1])
             .map_err(|e| numeric_err(e, ">="))?;
         if !ge {
-            return Ok(Value::Boolean(false));
+            return Ok(TaggedValue::FALSE);
         }
     }
 
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }

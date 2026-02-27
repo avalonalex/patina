@@ -7,17 +7,18 @@ use super::super::Evaluator;
 use super::super::error::EvalError;
 use super::registry::PrimitiveFn;
 use super::registry::PrimitiveRegistry;
+use patina_core::TaggedValue;
+use patina_runtime::Arity;
 use patina_runtime::default_features;
-use patina_runtime::value::{Arity, Value};
 
 /// Register all system primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "features",
         Arity::Exact(0),
         "Return a list of feature identifiers supported by this implementation (R7RS §6.13)",
-        |eval, args, _| features(eval, args).map(EvalResult::Value),
+        |eval, args, _| features(eval, args).map(EvalResult::Tagged),
     ));
 }
 
@@ -31,17 +32,27 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 /// (features) => (aarch64 darwin exact-closed full-unicode ieee-float
 ///                little-endian macosx patina posix r7rs ratios unix)
 /// ```
-fn features(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 0, "features")?;
+fn features(evaluator: &Evaluator, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+    if !args.is_empty() {
+        return Err(EvalError::WrongArity {
+            expected: "0".to_string(),
+            actual: args.len(),
+        });
+    }
 
+    let heap = evaluator.global_env.heap();
+    let mut h = heap.borrow_mut();
     let feature_registry = default_features();
-    let feature_list: Vec<Value> = feature_registry
+    let sym_tvs: Vec<TaggedValue> = feature_registry
         .all_features()
         .into_iter()
-        .map(|name| Value::Symbol(name.into()))
+        .map(|name| h.intern_symbol(&name))
         .collect();
-
-    Ok(evaluator.list_from_vec(feature_list))
+    let mut result = TaggedValue::NULL;
+    for tv in sym_tvs.into_iter().rev() {
+        result = h.alloc_pair(tv, result);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -51,21 +62,29 @@ mod tests {
     #[test]
     fn test_features_returns_list() {
         let eval = Evaluator::new();
-        let result = features(&eval, vec![]).unwrap();
+        let result_tv = features(&eval, vec![]).unwrap();
+        let heap = eval.global_env.heap();
 
-        // Should be a list
-        assert!(matches!(result, Value::Pair(_) | Value::Null));
+        // Should be a non-empty list
+        assert!(result_tv.is_pair());
 
-        // Convert to vec for inspection
-        let items = eval.list_to_vec(result, "test").unwrap();
-
-        // Should contain r7rs and patina at minimum
-        let has_r7rs = items
-            .iter()
-            .any(|v| matches!(v, Value::Symbol(s) if s.as_ref() == "r7rs"));
-        let has_patina = items
-            .iter()
-            .any(|v| matches!(v, Value::Symbol(s) if s.as_ref() == "patina"));
+        // Walk the list and check for r7rs and patina symbols
+        let mut has_r7rs = false;
+        let mut has_patina = false;
+        let mut current = result_tv;
+        while !current.is_null() {
+            let h = heap.borrow();
+            let car = h.car(current);
+            if let Some(name) = h.get_symbol_name(car) {
+                if name == "r7rs" {
+                    has_r7rs = true;
+                }
+                if name == "patina" {
+                    has_patina = true;
+                }
+            }
+            current = h.cdr(current);
+        }
 
         assert!(has_r7rs, "features should include r7rs");
         assert!(has_patina, "features should include patina");

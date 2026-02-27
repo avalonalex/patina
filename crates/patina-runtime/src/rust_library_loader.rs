@@ -77,7 +77,39 @@ impl LibraryLoader for RustLibraryLoader {
         // Populate exports
         for export_name in exports {
             if let Some(value) = lib.env.get(&export_name) {
-                lib.export(export_name, value.clone());
+                lib.export_tagged(export_name, value);
+            }
+        }
+
+        Ok(lib)
+    }
+
+    fn load_with_heap(
+        &self,
+        name: &[String],
+        _search_paths: &[PathBuf],
+        heap: crate::heap::SharedHeap,
+    ) -> Result<Library, LibraryError> {
+        // Look up the builder for this library
+        let builder = self
+            .builders
+            .get(name)
+            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?;
+
+        // Create a new environment that shares the provided heap
+        // This ensures TaggedValues are allocated on the global heap
+        let env = Rc::new(Environment::with_heap(heap));
+
+        // Call the builder to populate the environment
+        let exports = builder(name.to_vec(), env.clone());
+
+        // Create the library
+        let mut lib = Library::with_env(name.to_vec(), env);
+
+        // Populate exports
+        for export_name in exports {
+            if let Some(value) = lib.env.get(&export_name) {
+                lib.export_tagged(export_name, value);
             }
         }
 
@@ -92,19 +124,15 @@ impl LibraryLoader for RustLibraryLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Value;
+    use patina_core::TaggedValue;
 
     // Test builder function
     fn build_test_lib(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
-        use std::cell::RefCell;
+        let tv_internal = env.heap().borrow_mut().alloc_string("private".to_string());
 
-        // Add some test values
-        env.define("foo".to_string(), Value::Integer(42));
-        env.define("bar".to_string(), Value::Boolean(true));
-        env.define(
-            "internal".to_string(),
-            Value::String(Rc::new(RefCell::new("private".chars().collect()))),
-        );
+        env.define("foo".to_string(), TaggedValue::fixnum(42));
+        env.define("bar".to_string(), TaggedValue::TRUE);
+        env.define("internal".to_string(), tv_internal);
 
         // Only export foo and bar
         vec!["foo".to_string(), "bar".to_string()]
@@ -123,11 +151,8 @@ mod tests {
         assert!(!lib.exports_identifier("internal")); // Not exported
 
         // Check export values
-        let foo = lib.get_export("foo").unwrap();
-        assert_eq!(foo.to_string(), "42");
-
-        let bar = lib.get_export("bar").unwrap();
-        assert_eq!(bar.to_string(), "#t");
+        assert_eq!(lib.get_export_tagged("foo"), Some(TaggedValue::fixnum(42)));
+        assert_eq!(lib.get_export_tagged("bar"), Some(TaggedValue::TRUE));
 
         // Internal value should be in environment but not exported
         assert!(lib.env.get("internal").is_some());

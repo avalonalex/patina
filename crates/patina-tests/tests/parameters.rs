@@ -4,10 +4,10 @@ use patina_interpreter::TreeWalkInterpreter;
 
 fn eval(code: &str) -> Result<String, String> {
     let interp = TreeWalkInterpreter::new_tree_walker();
-    interp
-        .eval_program(code)
-        .map(|v| format!("{}", v))
-        .map_err(|e| format!("{}", e))
+    match interp.eval_program(code) {
+        Ok(v) => Ok(interp.display_tagged(v)),
+        Err(e) => Err(format!("{}", e)),
+    }
 }
 
 #[test]

@@ -21,8 +21,9 @@ mod literal;
 pub use error::MatchError;
 
 use crate::macro_expander::Pattern;
-use crate::macro_expander::utils::{pattern_to_string, pattern_to_string_with_names};
-use patina_runtime::{LiteralBinding, MatchEnv, PVRef, ScopeSet, Value};
+use crate::macro_expander::utils::pattern_to_string_with_names;
+use patina_core::{Heap, SharedHeap, TaggedValue};
+use patina_runtime::{LiteralBinding, MatchEnv, PVRef, ScopeSet};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -33,6 +34,12 @@ use std::rc::Rc;
 /// a MatchEnv with all pattern variables bound.
 ///
 /// Based on Gauche's pattern matching approach (macro.c:600+).
+///
+/// ## TaggedValue Storage
+///
+/// The Matcher stores matched values as TaggedValue in MatchEnv for memory efficiency.
+/// When a SharedHeap is provided, values are converted to TaggedValue during storage.
+/// The Expander retrieves TaggedValues and converts back to Value for template expansion.
 pub struct Matcher {
     /// Number of pattern variables (determines MatchEnv size)
     num_pvars: usize,
@@ -54,6 +61,9 @@ pub struct Matcher {
     /// Literal identifiers from the macro definition with their binding information.
     /// Used with use_site_scopes to check if literals have the same binding.
     literals: Vec<LiteralBinding>,
+
+    /// Shared heap for TaggedValue storage in MatchEnv
+    shared_heap: Option<SharedHeap>,
 }
 
 impl Matcher {
@@ -68,6 +78,7 @@ impl Matcher {
             shadowed_names: HashSet::new(),
             use_site_scopes: ScopeSet::new(),
             literals: Vec::new(),
+            shared_heap: None,
         }
     }
 
@@ -83,10 +94,14 @@ impl Matcher {
             shadowed_names: HashSet::new(),
             use_site_scopes: ScopeSet::new(),
             literals: Vec::new(),
+            shared_heap: None,
         }
     }
 
-    /// Create a new matcher with hygiene support for literal shadowing
+    /// Create a new matcher with hygiene support and SharedHeap
+    ///
+    /// When SharedHeap is provided, the matcher can access heap-allocated
+    /// values (pairs, identifiers, etc.) during pattern matching.
     ///
     /// # Arguments
     /// * `num_pvars` - Total number of pattern variables in the pattern
@@ -94,12 +109,14 @@ impl Matcher {
     /// * `shadowed_names` - Names shadowed by local bindings at macro use site
     /// * `use_site_scopes` - Scopes from the use-site for binding comparison
     /// * `literals` - Literal identifiers from the macro definition with binding info
-    pub fn new_with_hygiene(
+    /// * `shared_heap` - Shared heap for TaggedValue storage
+    pub fn new_with_heap(
         num_pvars: usize,
         pvar_names: HashMap<PVRef, Rc<str>>,
         shadowed_names: HashSet<Rc<str>>,
         use_site_scopes: ScopeSet,
         literals: Vec<LiteralBinding>,
+        shared_heap: SharedHeap,
     ) -> Self {
         Self {
             num_pvars,
@@ -107,62 +124,74 @@ impl Matcher {
             shadowed_names,
             use_site_scopes,
             literals,
+            shared_heap: Some(shared_heap),
         }
     }
 
-    /// Match a pattern against an input expression
+    /// Get reference to the shared heap (if available)
+    pub fn shared_heap(&self) -> Option<&SharedHeap> {
+        self.shared_heap.as_ref()
+    }
+
+    /// Match a pattern against a TaggedValue input expression
     ///
     /// This is the main entry point for pattern matching.
+    /// It operates directly on TaggedValue without converting to Value first.
     /// Returns a MatchEnv with all pattern variables bound on success.
     ///
-    /// Inspired by Gauche's match_pattern (macro.c:600+)
-    pub fn match_pattern(&self, pattern: &Pattern, input: &Value) -> Result<MatchEnv, MatchError> {
+    /// Requires a SharedHeap to be configured in the Matcher.
+    pub fn match_pattern_tagged(
+        &self,
+        pattern: &Pattern,
+        input: TaggedValue,
+    ) -> Result<MatchEnv, MatchError> {
+        let shared_heap = self.shared_heap.as_ref().ok_or_else(|| {
+            MatchError::InternalError("match_pattern_tagged requires a SharedHeap".to_string())
+        })?;
+
         if patina_runtime::macro_debug::is_enabled() {
-            // Use names if available, otherwise fall back to generic representation
             let pattern_str = if let Some(ref names) = self.pvar_names {
                 pattern_to_string_with_names(pattern, names)
             } else {
-                pattern_to_string(pattern)
+                crate::macro_expander::utils::pattern_to_string(pattern)
             };
             println!("[MACRO]     Pattern: {}", pattern_str);
-            println!("[MACRO]     Input: {}", input);
+            println!(
+                "[MACRO]     Input: {}",
+                patina_core::format_tagged(input, &shared_heap.borrow())
+            );
         }
 
         let mut env = MatchEnv::new(self.num_pvars);
-        let result = self.match_impl(pattern, input, &mut env, 0);
-
-        if patina_runtime::macro_debug::is_enabled() {
-            match &result {
-                Ok(_) => {
-                    println!("[MACRO]     Match: SUCCESS");
-                    println!("[MACRO]     Bindings:");
-                    debug::print_bindings(&env, self.num_pvars, self.pvar_names.as_ref());
-                }
-                Err(e) => {
-                    println!("[MACRO]     Match: FAILED ({})", e);
-                }
-            }
+        {
+            let heap = shared_heap.borrow();
+            self.match_impl_tagged(pattern, input, &mut env, 0, &heap)?;
         }
 
-        result?;
+        if patina_runtime::macro_debug::is_enabled() {
+            println!("[MACRO]     Match: SUCCESS");
+            println!("[MACRO]     Bindings:");
+            debug::print_bindings(&env, self.num_pvars, self.pvar_names.as_ref());
+        }
+
         Ok(env)
     }
 
-    /// Internal matching implementation
+    /// Internal matching implementation for TaggedValue
     ///
     /// # Arguments
     /// * `pattern` - The pattern to match
-    /// * `input` - The input expression
+    /// * `input` - The TaggedValue input expression
     /// * `env` - The match environment being built
     /// * `level` - Current ellipsis nesting level
-    ///
-    /// Based on Gauche's match_rec (macro.c:620+)
-    fn match_impl(
+    /// * `heap` - The heap for TaggedValue operations
+    fn match_impl_tagged(
         &self,
         pattern: &Pattern,
-        input: &Value,
+        input: TaggedValue,
         env: &mut MatchEnv,
         level: usize,
+        heap: &Heap,
     ) -> Result<(), MatchError> {
         match pattern {
             Pattern::Wildcard => {
@@ -171,86 +200,82 @@ impl Matcher {
             }
 
             Pattern::Literal(lit) => {
-                // Literal must match exactly, BUT we also need to check hygiene:
-                // If the literal is an identifier that's shadowed at the use site,
-                // it should NOT match (R7RS 4.3.2).
-                //
-                // Example: (let ((=> #f)) (cond (#t => 'ok)))
-                // Here `=>` is shadowed, so it shouldn't match cond's `=>` literal.
-                if literal::is_literal_shadowed(
-                    lit,
+                // Check for shadowing first
+                if literal::is_literal_shadowed_tagged(
+                    *lit,
                     input,
+                    heap,
                     &self.shadowed_names,
                     &self.use_site_scopes,
                     &self.literals,
                 ) {
                     return Err(MatchError::LiteralMismatch {
                         expected: format!("{:?}", lit),
-                        actual: format!("{:?} (shadowed)", input),
+                        actual: format!("{} (shadowed)", patina_core::format_tagged(input, heap)),
                     });
                 }
 
-                // Check for match
-                // For identifiers (Symbol and Identifier types), compare by name only.
-                // This enables recursive macro expansion where literals like `else`
-                // may be transformed from Symbol to Identifier with scopes during
-                // pattern variable substitution, but should still match.
-                if literal::values_match_as_literal(lit, input) {
+                // Check for match using TaggedValue literal comparison
+                if literal::tagged_matches_literal(input, *lit, heap) {
                     Ok(())
                 } else {
                     Err(MatchError::LiteralMismatch {
                         expected: format!("{:?}", lit),
-                        actual: format!("{:?}", input),
+                        actual: patina_core::format_tagged(input, heap),
                     })
                 }
             }
 
             Pattern::Var(pvref) => {
-                // Bind pattern variable
-                // At level 0, this is a simple leaf binding
-                env.insert(*pvref, input.clone());
+                // Bind pattern variable with TaggedValue directly
+                env.insert(*pvref, input);
                 Ok(())
             }
 
             Pattern::List(patterns) => {
-                // Match list pattern
-                list_match::match_list(patterns, input, env, level, self.num_pvars, |p, i, e, l| {
-                    self.match_impl(p, i, e, l)
-                })
+                // Match list pattern using TaggedValue
+                list_match::match_list_tagged(
+                    patterns,
+                    input,
+                    env,
+                    level,
+                    self.num_pvars,
+                    heap,
+                    |p, i, e, l, h| self.match_impl_tagged(p, i, e, l, h),
+                )
             }
 
             Pattern::Vector(patterns) => {
-                // Match vector pattern
-                list_match::match_vector(patterns, input, env, level, |p, i, e, l| {
-                    self.match_impl(p, i, e, l)
-                })
+                // Match vector pattern using TaggedValue
+                list_match::match_vector_tagged(
+                    patterns,
+                    input,
+                    env,
+                    level,
+                    heap,
+                    |p, i, e, l, h| self.match_impl_tagged(p, i, e, l, h),
+                )
             }
 
             Pattern::DottedList { patterns, tail } => {
-                // Match dotted list: (p1 p2 . rest)
-                list_match::match_dotted_list(
+                // Match dotted list pattern using TaggedValue
+                list_match::match_dotted_list_tagged(
                     patterns,
                     tail,
                     input,
                     env,
                     level,
                     self.num_pvars,
-                    |p, i, e, l| self.match_impl(p, i, e, l),
+                    heap,
+                    |p, i, e, l, h| self.match_impl_tagged(p, i, e, l, h),
                 )
             }
 
-            Pattern::Ellipsis {
-                subpattern: _,
-                level: _pattern_level,
-                num_following: _,
-                vars: _,
-            } => {
-                // Match ellipsis pattern: (p ...)
-                // This is handled inline in match_list
-                // If we get here, we're in a context where ellipsis isn't supported yet
+            Pattern::Ellipsis { .. } => {
+                // Ellipsis is handled inline in match_list
                 Err(MatchError::TypeMismatch {
                     expected: "ellipsis in list context".to_string(),
-                    actual: format!("{}", input),
+                    actual: format!("{:?}", input),
                 })
             }
         }
@@ -260,40 +285,60 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::macro_expander::utils::vec_to_list;
+    use patina_core::Heap;
+    use std::cell::RefCell;
 
-    // Use vec_to_list from utils as make_list alias for test readability
-    fn make_list(values: Vec<Value>) -> Value {
-        vec_to_list(values)
+    /// Helper to create a SharedHeap and Matcher for tests
+    fn make_test_matcher(num_pvars: usize) -> (Matcher, SharedHeap) {
+        let heap = Rc::new(RefCell::new(Heap::new()));
+        let matcher = Matcher {
+            num_pvars,
+            pvar_names: None,
+            shadowed_names: HashSet::new(),
+            use_site_scopes: ScopeSet::new(),
+            literals: Vec::new(),
+            shared_heap: Some(heap.clone()),
+        };
+        (matcher, heap)
+    }
+
+    /// Helper to build a proper list from a Vec<TaggedValue> on the heap
+    fn make_list_tagged(values: Vec<TaggedValue>, heap: &SharedHeap) -> TaggedValue {
+        let mut result = TaggedValue::NULL;
+        let mut h = heap.borrow_mut();
+        for v in values.into_iter().rev() {
+            result = h.alloc_pair(v, result);
+        }
+        result
     }
 
     #[test]
     fn test_match_wildcard() {
-        let matcher = Matcher::new(0);
+        let (matcher, _heap) = make_test_matcher(0);
         let pattern = Pattern::Wildcard;
-        let input = Value::Integer(42);
+        let input = TaggedValue::fixnum(42);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_match_literal_success() {
-        let matcher = Matcher::new(0);
-        let pattern = Pattern::Literal(Value::Integer(42));
-        let input = Value::Integer(42);
+        let (matcher, _heap) = make_test_matcher(0);
+        let pattern = Pattern::Literal(TaggedValue::fixnum(42));
+        let input = TaggedValue::fixnum(42);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_match_literal_failure() {
-        let matcher = Matcher::new(0);
-        let pattern = Pattern::Literal(Value::Integer(42));
-        let input = Value::Integer(43);
+        let (matcher, _heap) = make_test_matcher(0);
+        let pattern = Pattern::Literal(TaggedValue::fixnum(42));
+        let input = TaggedValue::fixnum(43);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -303,33 +348,33 @@ mod tests {
 
     #[test]
     fn test_match_var() {
-        let matcher = Matcher::new(1);
+        let (matcher, _heap) = make_test_matcher(1);
         let pvref = PVRef::new(0, 0);
         let pattern = Pattern::Var(pvref);
-        let input = Value::Integer(42);
+        let input = TaggedValue::fixnum(42);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_ok());
 
         let env = result.unwrap();
         let bound = env.get(pvref, &[]);
-        assert_eq!(
-            format!("{:?}", bound),
-            format!("{:?}", Some(Value::Integer(42)))
-        );
+        assert!(bound.is_some());
+        let tv = bound.unwrap();
+        assert!(tv.is_fixnum());
+        assert_eq!(tv.as_fixnum(), Some(42));
     }
 
     #[test]
     fn test_match_simple_list() {
         // Pattern: (x y)
-        let matcher = Matcher::new(2);
+        let (matcher, heap) = make_test_matcher(2);
         let x = PVRef::new(0, 0);
         let y = PVRef::new(0, 1);
         let pattern = Pattern::List(vec![Pattern::Var(x), Pattern::Var(y)]);
 
-        let input = make_list(vec![Value::Integer(1), Value::Integer(2)]);
+        let input = make_list_tagged(vec![TaggedValue::fixnum(1), TaggedValue::fixnum(2)], &heap);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_ok());
 
         let env = result.unwrap();
@@ -340,16 +385,16 @@ mod tests {
     #[test]
     fn test_match_list_too_few_elements() {
         // Pattern: (x y z)
-        let matcher = Matcher::new(3);
+        let (matcher, heap) = make_test_matcher(3);
         let pattern = Pattern::List(vec![
             Pattern::Var(PVRef::new(0, 0)),
             Pattern::Var(PVRef::new(0, 1)),
             Pattern::Var(PVRef::new(0, 2)),
         ]);
 
-        let input = make_list(vec![Value::Integer(1), Value::Integer(2)]);
+        let input = make_list_tagged(vec![TaggedValue::fixnum(1), TaggedValue::fixnum(2)], &heap);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -362,7 +407,7 @@ mod tests {
         use patina_runtime::MatchValue;
 
         // Pattern: (x ...)
-        let matcher = Matcher::new(1);
+        let (matcher, heap) = make_test_matcher(1);
         let x = PVRef::new(1, 0);
         let pattern = Pattern::List(vec![Pattern::Ellipsis {
             subpattern: Box::new(Pattern::Var(x)),
@@ -371,20 +416,24 @@ mod tests {
             vars: vec![x],
         }]);
 
-        let input = make_list(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-            Value::Integer(3),
-        ]);
+        let input = make_list_tagged(
+            vec![
+                TaggedValue::fixnum(1),
+                TaggedValue::fixnum(2),
+                TaggedValue::fixnum(3),
+            ],
+            &heap,
+        );
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_ok());
 
         let env = result.unwrap();
         let bound_raw = env.get_raw(x);
         assert!(bound_raw.is_some());
         // Should be a Branch with 3 elements
-        if let Some(MatchValue::Branch(items)) = bound_raw {
+        if let Some(MatchValue::Branch(branch_idx)) = bound_raw {
+            let items = env.branches().get(branch_idx).expect("branch should exist");
             assert_eq!(items.len(), 3);
         } else {
             panic!("Expected Branch, got {:?}", bound_raw);
@@ -396,7 +445,7 @@ mod tests {
         use patina_runtime::MatchValue;
 
         // Pattern: (x ... y)
-        let matcher = Matcher::new(2);
+        let (matcher, heap) = make_test_matcher(2);
         let x = PVRef::new(1, 0);
         let y = PVRef::new(0, 1);
         let pattern = Pattern::List(vec![
@@ -409,21 +458,25 @@ mod tests {
             Pattern::Var(y),
         ]);
 
-        let input = make_list(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-            Value::Integer(3),
-            Value::Integer(99),
-        ]);
+        let input = make_list_tagged(
+            vec![
+                TaggedValue::fixnum(1),
+                TaggedValue::fixnum(2),
+                TaggedValue::fixnum(3),
+                TaggedValue::fixnum(99),
+            ],
+            &heap,
+        );
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_ok());
 
         let env = result.unwrap();
 
         // x should match first 3 elements
         let x_bound = env.get_raw(x);
-        if let Some(MatchValue::Branch(items)) = x_bound {
+        if let Some(MatchValue::Branch(branch_idx)) = x_bound {
+            let items = env.branches().get(branch_idx).expect("branch should exist");
             assert_eq!(items.len(), 3);
         } else {
             panic!("Expected Branch for x, got {:?}", x_bound);
@@ -431,10 +484,10 @@ mod tests {
 
         // y should match last element (99)
         let y_bound = env.get(y, &[]);
-        assert_eq!(
-            format!("{:?}", y_bound),
-            format!("{:?}", Some(Value::Integer(99)))
-        );
+        assert!(y_bound.is_some());
+        let tv = y_bound.unwrap();
+        assert!(tv.is_fixnum());
+        assert_eq!(tv.as_fixnum(), Some(99));
     }
 
     // === Error Condition Tests ===
@@ -443,19 +496,22 @@ mod tests {
     fn test_error_too_many_elements() {
         // Pattern: (x y) without ellipsis
         // Input: (1 2 3) - too many elements
-        let matcher = Matcher::new(2);
+        let (matcher, heap) = make_test_matcher(2);
         let pattern = Pattern::List(vec![
             Pattern::Var(PVRef::new(0, 0)),
             Pattern::Var(PVRef::new(0, 1)),
         ]);
 
-        let input = make_list(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-            Value::Integer(3), // extra!
-        ]);
+        let input = make_list_tagged(
+            vec![
+                TaggedValue::fixnum(1),
+                TaggedValue::fixnum(2),
+                TaggedValue::fixnum(3),
+            ],
+            &heap,
+        );
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), MatchError::TooManyElements { .. }),
@@ -467,18 +523,17 @@ mod tests {
     fn test_error_type_mismatch_list_vs_vector() {
         // Pattern: (x y) - expects list
         // Input: #(1 2) - vector
-        let matcher = Matcher::new(2);
+        let (matcher, heap) = make_test_matcher(2);
         let pattern = Pattern::List(vec![
             Pattern::Var(PVRef::new(0, 0)),
             Pattern::Var(PVRef::new(0, 1)),
         ]);
 
-        let input = Value::Vector(Rc::new(std::cell::RefCell::new(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-        ])));
+        let input = heap
+            .borrow_mut()
+            .alloc_vector(vec![TaggedValue::fixnum(1), TaggedValue::fixnum(2)]);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), MatchError::TypeMismatch { .. }),
@@ -490,15 +545,15 @@ mod tests {
     fn test_error_type_mismatch_vector_vs_list() {
         // Pattern: #(x y) - expects vector
         // Input: (1 2) - list
-        let matcher = Matcher::new(2);
+        let (matcher, heap) = make_test_matcher(2);
         let pattern = Pattern::Vector(vec![
             Pattern::Var(PVRef::new(0, 0)),
             Pattern::Var(PVRef::new(0, 1)),
         ]);
 
-        let input = make_list(vec![Value::Integer(1), Value::Integer(2)]);
+        let input = make_list_tagged(vec![TaggedValue::fixnum(1), TaggedValue::fixnum(2)], &heap);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), MatchError::TypeMismatch { .. }),
@@ -510,19 +565,18 @@ mod tests {
     fn test_error_vector_size_mismatch() {
         // Pattern: #(x y z) - expects 3 elements
         // Input: #(1 2) - only 2 elements
-        let matcher = Matcher::new(3);
+        let (matcher, heap) = make_test_matcher(3);
         let pattern = Pattern::Vector(vec![
             Pattern::Var(PVRef::new(0, 0)),
             Pattern::Var(PVRef::new(0, 1)),
             Pattern::Var(PVRef::new(0, 2)),
         ]);
 
-        let input = Value::Vector(Rc::new(std::cell::RefCell::new(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-        ])));
+        let input = heap
+            .borrow_mut()
+            .alloc_vector(vec![TaggedValue::fixnum(1), TaggedValue::fixnum(2)]);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), MatchError::VectorSizeMismatch { .. }),
@@ -534,15 +588,15 @@ mod tests {
     fn test_error_type_mismatch_list_vs_atom() {
         // Pattern: (x y) - expects list
         // Input: 42 - atom
-        let matcher = Matcher::new(2);
+        let (matcher, _heap) = make_test_matcher(2);
         let pattern = Pattern::List(vec![
             Pattern::Var(PVRef::new(0, 0)),
             Pattern::Var(PVRef::new(0, 1)),
         ]);
 
-        let input = Value::Integer(42);
+        let input = TaggedValue::fixnum(42);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), MatchError::TypeMismatch { .. }),
@@ -554,7 +608,7 @@ mod tests {
     fn test_error_dotted_list_too_few() {
         // Pattern: (x y . rest) - expects at least 2 elements
         // Input: (1) - only 1 element
-        let matcher = Matcher::new(3);
+        let (matcher, heap) = make_test_matcher(3);
         let pattern = Pattern::DottedList {
             patterns: vec![
                 Pattern::Var(PVRef::new(0, 0)),
@@ -563,9 +617,9 @@ mod tests {
             tail: Box::new(Pattern::Var(PVRef::new(0, 2))),
         };
 
-        let input = make_list(vec![Value::Integer(1)]);
+        let input = make_list_tagged(vec![TaggedValue::fixnum(1)], &heap);
 
-        let result = matcher.match_pattern(&pattern, &input);
+        let result = matcher.match_pattern_tagged(&pattern, input);
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), MatchError::TooFewElements { .. }),

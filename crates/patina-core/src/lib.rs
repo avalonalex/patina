@@ -1,7 +1,8 @@
 //! Patina Core - Foundation types for Patina Scheme interpreter
 //!
 //! This crate provides the foundational data types shared across all Patina components:
-//! - `Value`: The Scheme value representation (numbers, lists, procedures, etc.)
+//! - `TaggedValue`: Compact NaN-boxed value representation (8 bytes)
+//! - `Heap`: Arena-based storage for heap-allocated objects
 //! - `Environment`: Lexical environment for variable bindings
 //! - `CoreExpr`: Core intermediate representation for evaluation
 //! - `ScopeId`, `ScopeSet`: Scope tracking for macro hygiene
@@ -14,35 +15,44 @@
 //! and enable type-safe representations (no `dyn Any` needed).
 
 pub mod compiled_macro;
+pub mod continuation;
 pub mod core_expr;
 pub mod cps_expr;
 pub mod debug_format;
 pub mod environment;
 pub mod error;
+pub mod heap;
 pub mod library;
 pub mod macro_debug;
 pub mod numeric;
 pub mod port;
+pub mod procedure;
 pub mod pvref;
+pub mod record_type;
 pub mod scope;
-pub mod value;
+pub mod tagged_value;
 
 // Re-export main types for convenience
 pub use compiled_macro::{
     CompiledMacro, CompiledRule, Identifier, LiteralBinding, Pattern, Template,
 };
-pub use core_expr::{CoreExpr, Formals, ScopedParam, Symbol};
+pub use continuation::{CpsContinuation, DynamicWindRecord};
+pub use core_expr::{CoreExpr, Formals, LambdaBody, ScopedParam, Symbol};
 pub use cps_expr::{CpsExpr, CpsParam, CpsPrimitive, PromptTag};
 pub use environment::{Environment, ScopedBinding};
-pub use error::{ErrorDetail, ErrorKind, SourceLocation};
+pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};
+pub use heap::PromiseState;
 pub use library::Library;
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};
+pub use procedure::{Arity, Procedure};
 pub use pvref::{MatchEnv, MatchValue, PVRef};
+pub use record_type::{next_record_type_id, RecordTypeDescriptor};
 pub use scope::{ScopeId, ScopeSet};
-pub use value::{
-    Arity, ExceptionKind, ExceptionObject, IdentifierData, LambdaBody, Procedure, PromiseState,
-    RecordTypeDescriptor, Value,
-};
+
+// TaggedValue and heap types for compact value representation
+pub use debug_format::{format_tagged, format_tagged_with_scopes};
+pub use heap::{new_shared_heap, Heap, SharedHeap};
+pub use tagged_value::TaggedValue;
 
 #[cfg(test)]
 pub use scope::reset_scope_counter;

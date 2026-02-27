@@ -4,7 +4,7 @@
 //! The library loading and resolution logic is in the evaluator.
 
 use crate::environment::Environment;
-use crate::value::Value;
+use crate::tagged_value::TaggedValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -13,18 +13,21 @@ use std::rc::Rc;
 ///
 /// A library encapsulates:
 /// - A unique name (e.g., (scheme base) → ["scheme", "base"])
-/// - Exported bindings (name → value mapping)
+/// - Exported bindings (name → TaggedValue mapping)
 /// - Internal environment (for library-private definitions)
 /// - Optional source location (for debugging)
+///
+/// Library exports are stored as `TaggedValue` for memory efficiency.
 #[derive(Debug, Clone)]
 pub struct Library {
     /// Library name as a list of strings
     /// Example: (scheme base) → vec!["scheme", "base"]
     pub name: Vec<String>,
 
-    /// Exported bindings: identifier name → value
+    /// Exported bindings: identifier name → TaggedValue
     /// Only these bindings are visible when the library is imported
-    pub exports: HashMap<String, Value>,
+    /// Stored as TaggedValue for memory efficiency
+    pub exports: HashMap<String, TaggedValue>,
 
     /// Library's internal environment
     /// Contains both exported and private bindings
@@ -56,7 +59,7 @@ impl Library {
     }
 
     /// Add an exported binding
-    pub fn export(&mut self, name: String, value: Value) {
+    pub fn export_tagged(&mut self, name: String, value: TaggedValue) {
         self.exports.insert(name, value);
     }
 
@@ -77,13 +80,18 @@ impl Library {
     }
 
     /// Get an exported value by name
-    pub fn get_export(&self, name: &str) -> Option<&Value> {
-        self.exports.get(name)
+    pub fn get_export_tagged(&self, name: &str) -> Option<TaggedValue> {
+        self.exports.get(name).copied()
     }
 
     /// Get all export names
     pub fn export_names(&self) -> Vec<&str> {
         self.exports.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Iterate over exports as (name, TaggedValue) pairs
+    pub fn exports_iter_tagged(&self) -> impl Iterator<Item = (&String, TaggedValue)> + '_ {
+        self.exports.iter().map(|(k, tv)| (k, *tv))
     }
 }
 
@@ -109,8 +117,8 @@ mod tests {
     fn test_library_exports() {
         let mut lib = Library::new(vec!["test".to_string()]);
 
-        lib.export("foo".to_string(), Value::Integer(42));
-        lib.export("bar".to_string(), Value::Boolean(true));
+        lib.export_tagged("foo".to_string(), TaggedValue::fixnum(42));
+        lib.export_tagged("bar".to_string(), TaggedValue::TRUE);
 
         assert!(lib.exports_identifier("foo"));
         assert!(lib.exports_identifier("bar"));

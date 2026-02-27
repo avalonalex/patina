@@ -3,7 +3,7 @@
 //! These tests run Scheme code through both Patina and chibi-scheme
 //! to ensure R7RS compliance by comparing outputs.
 
-use patina_interpreter::{TreeWalkInterpreter, Value};
+use patina_interpreter::{TaggedValue, TreeWalkInterpreter};
 use std::path::Path;
 use std::process::Command;
 
@@ -49,8 +49,8 @@ fn run_patina(code: &str) -> Result<String, String> {
         match interp.eval_str(trimmed) {
             Ok(value) => {
                 // Only display non-unspecified values (like define returns unspecified)
-                if !matches!(value, Value::Unspecified) {
-                    results.push(format!("{}", value));
+                if value != TaggedValue::UNSPECIFIED {
+                    results.push(interp.display_tagged(value));
                 }
                 // We need to advance past the expression we just parsed
                 // This is a simplified approach - in reality we'd need better parsing
@@ -109,11 +109,11 @@ fn test_definitions() {
     let interp = TreeWalkInterpreter::new_tree_walker();
     interp.eval_str("(define x 42)").unwrap();
     let result = interp.eval_str("x").unwrap();
-    assert!(matches!(result, Value::Integer(42)));
+    assert_eq!(result.as_fixnum(), Some(42));
 
     interp.eval_str("(define y 10)").unwrap();
     let result = interp.eval_str("(+ x y)").unwrap();
-    assert!(matches!(result, Value::Integer(52)));
+    assert_eq!(result.as_fixnum(), Some(52));
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn test_begin() {
     let result = interp
         .eval_str("(begin (define a 5) (define b 10) (+ a b))")
         .unwrap();
-    assert!(matches!(result, Value::Integer(15)));
+    assert_eq!(result.as_fixnum(), Some(15));
 }
 
 // Test running actual .scm files

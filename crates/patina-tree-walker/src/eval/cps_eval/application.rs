@@ -5,12 +5,11 @@
 //! `call-with-values`, `force`, `dynamic-wind`, and exception handling.
 
 use super::CpsEvaluator;
-use super::types::{
-    ContValue, ExceptionHandler, PromptFrame, StepResult, list_from_vec, set_pending_escape,
-};
+use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::CpsPrimitive;
-use patina_core::value::{DynamicWindRecord, Procedure, Value};
+use patina_core::tagged_value::TaggedValue;
+use patina_core::{DynamicWindRecord, Procedure};
 use patina_core::{Environment, ScopeSet};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -20,8 +19,8 @@ impl<'a> CpsEvaluator<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_cps_step(
         &self,
-        proc: Value,
-        args: Vec<Value>,
+        proc_tagged: TaggedValue,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         _env: Rc<Environment>,
         cont_env: HashMap<Rc<str>, ContValue>,
@@ -29,6 +28,8 @@ impl<'a> CpsEvaluator<'a> {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
+        let heap = self.evaluator.global_env.heap();
+
         // Helper closure to route catchable errors through exception handlers
         let route_error = |err: EvalError,
                            cont: ContValue,
@@ -46,8 +47,15 @@ impl<'a> CpsEvaluator<'a> {
             )
         };
 
-        match proc {
-            Value::Procedure(p) => match p.as_ref() {
+        // Extract all type checks upfront to ensure borrows are released before nested heap access
+        // This avoids RefCell borrow conflicts when primitives need to borrow the heap
+        let proc_opt = heap.borrow().get_procedure(proc_tagged);
+        let cont_opt = heap.borrow().get_continuation(proc_tagged);
+        let param_opt = heap.borrow().get_parameter(proc_tagged);
+
+        // Dispatch based on extracted types
+        if let Some(p) = proc_opt {
+            match p.as_ref() {
                 // CPS lambda: evaluate the CPS body with continuation bound
                 Procedure::CpsLambda {
                     params,
@@ -90,43 +98,45 @@ impl<'a> CpsEvaluator<'a> {
                     }
 
                     // Bind fixed parameters with proper hygiene support
-                    // This mirrors the non-CPS path in application.rs which uses binding_scope
                     for (param, arg) in params.iter().zip(args.iter()) {
                         if !param.scopes.is_empty() {
                             // Macro-introduced parameter: use its explicit scopes
                             new_env.define_with_scopes(
                                 param.name.to_string(),
                                 param.scopes.clone(),
-                                arg.clone(),
+                                *arg,
                             );
                         } else {
                             // Non-macro parameter: simple binding + scoped binding if binding_scope present
-                            new_env.define(param.name.to_string(), arg.clone());
+                            new_env.define(param.name.to_string(), *arg);
                             // Also add scoped binding so macro-expanded refs can find it
                             if let Some(scope) = binding_scope {
                                 let mut scopes = ScopeSet::new();
                                 scopes.add_scope(*scope);
-                                new_env.define_with_scopes(
-                                    param.name.to_string(),
-                                    scopes,
-                                    arg.clone(),
-                                );
+                                new_env.define_with_scopes(param.name.to_string(), scopes, *arg);
                             }
                         }
                     }
 
                     // Bind variadic parameter if present
                     if let Some(variadic_param) = variadic {
-                        let rest_args: Vec<Value> = args[params.len()..].to_vec();
-                        let rest_list = list_from_vec(rest_args);
+                        // Build rest list directly as TaggedValue (no conversion needed)
+                        let heap = new_env.heap();
+                        let rest_list = {
+                            let mut heap_mut = heap.borrow_mut();
+                            args[params.len()..]
+                                .iter()
+                                .rev()
+                                .fold(TaggedValue::NULL, |acc, &arg| heap_mut.alloc_pair(arg, acc))
+                        };
                         if !variadic_param.scopes.is_empty() {
                             new_env.define_with_scopes(
                                 variadic_param.name.to_string(),
                                 variadic_param.scopes.clone(),
-                                rest_list.clone(),
+                                rest_list,
                             );
                         } else {
-                            new_env.define(variadic_param.name.to_string(), rest_list.clone());
+                            new_env.define(variadic_param.name.to_string(), rest_list);
                             // Also add scoped binding so macro-expanded refs can find it
                             if let Some(scope) = binding_scope {
                                 let mut scopes = ScopeSet::new();
@@ -160,6 +170,7 @@ impl<'a> CpsEvaluator<'a> {
 
                 Procedure::Primitive { name, .. } => {
                     // Handle CPS-sensitive primitives specially
+                    // Helper methods now take Vec<TaggedValue> directly
                     match *name {
                         "call-with-values" => self.apply_call_with_values(
                             args,
@@ -249,30 +260,29 @@ impl<'a> CpsEvaluator<'a> {
                         }
                     }
                 }
-            },
-
-            Value::Continuation(k) => {
-                // Invoking a captured continuation - non-local control transfer
-                if args.len() != 1 {
-                    return Err(EvalError::WrongArity {
-                        expected: "1".to_string(),
-                        actual: args.len(),
-                    });
-                }
-
-                let val = args.into_iter().next().unwrap();
-
-                // Run dynamic-wind handlers for continuation jump
-                // This travels from current winds to the captured winds
-                self.run_wind_handlers(&dynamic_winds, &k.dynamic_winds)?;
-
-                // Store escape data and return error to propagate up
-                set_pending_escape(val, k);
-                Err(EvalError::ContinuationEscape)
+            }
+        } else if let Some(k) = cont_opt {
+            // Invoking a captured continuation - non-local control transfer
+            if args.len() != 1 {
+                return Err(EvalError::WrongArity {
+                    expected: "1".to_string(),
+                    actual: args.len(),
+                });
             }
 
-            // Parameters are callable - delegate to direct evaluator
-            Value::Parameter { values, converter } => self.apply_parameter(
+            // Get the single argument as TaggedValue directly
+            let val_tagged = args.into_iter().next().unwrap();
+
+            // Run dynamic-wind handlers for continuation jump
+            // This travels from current winds to the captured winds
+            self.run_wind_handlers(&dynamic_winds, &k.dynamic_winds)?;
+
+            // Store escape data and return error to propagate up
+            set_pending_escape(val_tagged, k);
+            Err(EvalError::ContinuationEscape)
+        } else if let Some((values, converter)) = param_opt {
+            // Parameters are callable - pass TaggedValue args directly
+            self.apply_parameter(
                 values,
                 converter,
                 args,
@@ -281,16 +291,18 @@ impl<'a> CpsEvaluator<'a> {
                 prompt_stack,
                 dynamic_winds,
                 exception_handlers,
-            ),
-
-            _ => route_error(
-                EvalError::NotAProcedure(format!("{}", proc)),
+            )
+        } else {
+            // Not a procedure - generate error with type name from heap
+            let type_name = heap.borrow().type_name(proc_tagged);
+            route_error(
+                EvalError::NotAProcedure(format!("#<{}>", type_name)),
                 cont,
                 cont_env,
                 prompt_stack,
                 dynamic_winds,
                 exception_handlers,
-            ),
+            )
         }
     }
 
@@ -298,7 +310,7 @@ impl<'a> CpsEvaluator<'a> {
 
     fn apply_call_with_values(
         &self,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -313,8 +325,9 @@ impl<'a> CpsEvaluator<'a> {
                 actual: args.len(),
             });
         }
-        let producer = args[0].clone();
-        let consumer = args[1].clone();
+        // Both producer and consumer stay as TaggedValue
+        let producer = args[0];
+        let consumer = args[1];
 
         // We create a special "CallWithValuesConsumer" continuation that:
         // 1. Unpacks the values from producer
@@ -340,7 +353,7 @@ impl<'a> CpsEvaluator<'a> {
 
     fn apply_force(
         &self,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -355,8 +368,9 @@ impl<'a> CpsEvaluator<'a> {
                 actual: args.len(),
             });
         }
+        // Pass TaggedValue directly - force_promise_cps handles extraction
         self.force_promise_cps(
-            args.into_iter().next().unwrap(),
+            args[0],
             cont,
             cont_env,
             prompt_stack,
@@ -367,7 +381,7 @@ impl<'a> CpsEvaluator<'a> {
 
     fn apply_dynamic_wind(
         &self,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -382,12 +396,13 @@ impl<'a> CpsEvaluator<'a> {
                 actual: args.len(),
             });
         }
-        let before = args[0].clone();
-        let body = args[1].clone();
-        let after = args[2].clone();
+        // Keep all thunks as TaggedValue for ApplyProc
+        let before = args[0]; // Keep as TaggedValue
+        let body = args[1]; // Keep as TaggedValue
+        let after = args[2]; // Keep as TaggedValue
 
-        // Create the wind record (but don't push yet - push after calling before)
-        let wind_record = DynamicWindRecord::new(before.clone(), after.clone());
+        // Create the wind record with TaggedValue thunks directly
+        let wind_record = DynamicWindRecord::new(before, after);
         let wind_id = wind_record.id;
 
         // Create cleanup continuation that will:
@@ -395,7 +410,7 @@ impl<'a> CpsEvaluator<'a> {
         // 2. Call the after thunk
         // 3. Continue with the original continuation
         let cleanup_cont = ContValue::DynamicWindCleanup {
-            after,
+            after, // TaggedValue
             wind_id,
             original_cont: Box::new(cont),
         };
@@ -403,7 +418,7 @@ impl<'a> CpsEvaluator<'a> {
         // Create a continuation for after the "before" thunk completes
         let setup_cont = ContValue::DynamicWindSetup {
             wind_record,
-            body,
+            body, // TaggedValue
             cleanup_cont: Box::new(cleanup_cont),
         };
 
@@ -422,7 +437,7 @@ impl<'a> CpsEvaluator<'a> {
 
     fn apply_with_exception_handler(
         &self,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -437,19 +452,24 @@ impl<'a> CpsEvaluator<'a> {
                 actual: args.len(),
             });
         }
-        let handler = args[0].clone();
-        let thunk = args[1].clone();
+        // Both handler and thunk stay as TaggedValue
+        let heap = self.evaluator.global_env.heap();
+        let handler = args[0]; // Keep as TaggedValue
+        let thunk = args[1]; // Keep as TaggedValue
 
-        // Verify both are procedures
-        if !matches!(handler, Value::Procedure(_) | Value::Continuation(_)) {
-            return Err(EvalError::TypeError(
-                "with-exception-handler: first argument must be a procedure".to_string(),
-            ));
-        }
-        if !matches!(thunk, Value::Procedure(_) | Value::Continuation(_)) {
-            return Err(EvalError::TypeError(
-                "with-exception-handler: second argument must be a procedure".to_string(),
-            ));
+        // Verify both are procedures (use heap type-checking methods directly)
+        {
+            let heap_ref = heap.borrow();
+            if !heap_ref.is_procedure(handler) && !heap_ref.is_continuation(handler) {
+                return Err(EvalError::TypeError(
+                    "with-exception-handler: first argument must be a procedure".to_string(),
+                ));
+            }
+            if !heap_ref.is_procedure(thunk) && !heap_ref.is_continuation(thunk) {
+                return Err(EvalError::TypeError(
+                    "with-exception-handler: second argument must be a procedure".to_string(),
+                ));
+            }
         }
 
         // Create cleanup continuation that pops the handler when thunk completes
@@ -458,7 +478,7 @@ impl<'a> CpsEvaluator<'a> {
         };
 
         // Push the exception handler onto the stack
-        let new_handler = ExceptionHandler { handler };
+        let new_handler = ExceptionHandler { handler }; // TaggedValue
         let mut new_exception_handlers = exception_handlers;
         new_exception_handlers.push(new_handler);
 
@@ -478,7 +498,7 @@ impl<'a> CpsEvaluator<'a> {
     #[allow(clippy::too_many_arguments)]
     fn apply_raise(
         &self,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -493,7 +513,8 @@ impl<'a> CpsEvaluator<'a> {
                 actual: args.len(),
             });
         }
-        let exception = args.into_iter().next().unwrap();
+        // Exception already comes as TaggedValue - no conversion needed!
+        let exception_tagged = args[0];
 
         if let Some(handler_entry) = exception_handlers.last().cloned() {
             // Pop this handler (one-shot semantics)
@@ -506,15 +527,16 @@ impl<'a> CpsEvaluator<'a> {
                 original_exception: if continuable {
                     None
                 } else {
-                    Some(exception.clone())
+                    Some(exception_tagged)
                 },
                 original_cont: Box::new(cont),
             };
 
+            // Handler is already TaggedValue - use directly for ApplyProc.proc
             // Call handler with exception
             Ok(StepResult::ApplyProc {
                 proc: handler_entry.handler,
-                args: vec![exception],
+                args: vec![exception_tagged],
                 cont: handler_return_cont,
                 env: self.evaluator.global_env.clone(),
                 cont_env,
@@ -524,11 +546,14 @@ impl<'a> CpsEvaluator<'a> {
             })
         } else {
             // No handler - propagate to Rust level
+            use crate::eval::primitives::io::datum_writer::format_display_tagged;
             use patina_core::ExceptionKind;
+            let heap = self.evaluator.global_env.heap();
+            let exception_str = format_display_tagged(exception_tagged, heap);
             let msg = if continuable {
-                format!("unhandled continuable exception: {}", exception)
+                format!("unhandled continuable exception: {}", exception_str)
             } else {
-                format!("unhandled exception: {}", exception)
+                format!("unhandled exception: {}", exception_str)
             };
             Err(EvalError::SchemeException {
                 kind: ExceptionKind::Error,
@@ -540,7 +565,7 @@ impl<'a> CpsEvaluator<'a> {
 
     fn apply_error(
         &self,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -556,24 +581,20 @@ impl<'a> CpsEvaluator<'a> {
         }
 
         // First argument must be a string (the message)
-        let message = match &args[0] {
-            Value::String(s) => s.borrow().iter().collect::<String>(),
-            _ => {
-                return Err(EvalError::TypeError(
-                    "error: first argument must be a string".to_string(),
-                ));
-            }
-        };
+        let heap = self.evaluator.global_env.heap();
+        let message = heap.borrow().get_string_contents(args[0]).ok_or_else(|| {
+            EvalError::TypeError("error: first argument must be a string".to_string())
+        })?;
 
-        // Remaining arguments are irritants
-        let irritants: Vec<Value> = args[1..].to_vec();
+        // Remaining arguments are irritants - already TaggedValue!
+        let irritants_tagged: Vec<TaggedValue> = args[1..].to_vec();
 
-        // Create exception object
-        let exception = Value::Exception(Rc::new(patina_core::ExceptionObject {
-            kind: patina_core::ExceptionKind::Error,
-            message,
-            irritants,
-        }));
+        // Create exception object directly as TaggedValue
+        let exception_tagged = heap.borrow_mut().alloc_exception(
+            patina_core::ExceptionKind::Error,
+            message.clone(),
+            irritants_tagged.clone(),
+        );
 
         // Now do the same as raise (non-continuable)
         if let Some(handler_entry) = exception_handlers.last().cloned() {
@@ -584,14 +605,15 @@ impl<'a> CpsEvaluator<'a> {
             // Create continuation for when handler returns
             let handler_return_cont = ContValue::RaiseHandlerReturn {
                 continuable: false,
-                original_exception: Some(exception.clone()),
+                original_exception: Some(exception_tagged),
                 original_cont: Box::new(cont),
             };
 
+            // Handler is already TaggedValue - use directly for ApplyProc.proc
             // Call handler with exception
             Ok(StepResult::ApplyProc {
                 proc: handler_entry.handler,
-                args: vec![exception],
+                args: vec![exception_tagged],
                 cont: handler_return_cont,
                 env: self.evaluator.global_env.clone(),
                 cont_env,
@@ -601,18 +623,16 @@ impl<'a> CpsEvaluator<'a> {
             })
         } else {
             // No handler - propagate to Rust level
+            use crate::eval::primitives::io::datum_writer::format_display_tagged;
             use patina_core::ExceptionKind;
-            let irritants_display = args[1..]
+            let irritants_display = irritants_tagged
                 .iter()
-                .map(|v| format!("{}", v))
+                .map(|tv| format_display_tagged(*tv, heap))
                 .collect::<Vec<_>>()
                 .join(" ");
             Err(EvalError::SchemeException {
                 kind: ExceptionKind::Error,
-                message: match &args[0] {
-                    Value::String(s) => s.borrow().iter().collect::<String>(),
-                    _ => "error".to_string(),
-                },
+                message,
                 irritants_display,
             })
         }
@@ -620,7 +640,7 @@ impl<'a> CpsEvaluator<'a> {
 
     fn apply_apply(
         &self,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -636,39 +656,37 @@ impl<'a> CpsEvaluator<'a> {
             });
         }
 
-        let proc = args[0].clone();
+        let heap = self.evaluator.global_env.heap();
+        let proc = args[0]; // Keep as TaggedValue for ApplyProc.proc
         let last_idx = args.len() - 1;
-        let last_arg = &args[last_idx];
 
-        // Flatten: take args[1..last] and append the list in args[last]
-        let mut flat_args: Vec<Value> = args[1..last_idx].to_vec();
+        // Flatten: take args[1..last] (already TaggedValue) and append the list in args[last]
+        let mut flat_args_tagged: Vec<TaggedValue> = args[1..last_idx].to_vec();
 
-        // Append the list
-        let mut current = last_arg.clone();
+        // Append the list - use heap's native methods for TaggedValue pairs
+        let last_arg = args[last_idx];
+        let mut current = last_arg;
+
         loop {
-            match current {
-                Value::Null => break,
-                Value::Pair(p) => {
-                    let (car, cdr) = {
-                        let b = p.borrow();
-                        (b.0.clone(), b.1.clone())
-                    };
-                    flat_args.push(car);
-                    current = cdr;
-                }
-                _ => {
-                    return Err(EvalError::TypeError(format!(
-                        "apply: expected list as last argument, got {}",
-                        last_arg
-                    )));
-                }
+            if current.is_null() {
+                break;
+            }
+            // Extract car and cdr using heap helper
+            if let Some((car, cdr)) = heap.borrow().try_pair(current) {
+                flat_args_tagged.push(car);
+                current = cdr;
+            } else {
+                return Err(EvalError::TypeError(format!(
+                    "apply: expected list as last argument, got {}",
+                    heap.borrow().type_name(last_arg)
+                )));
             }
         }
 
         // Now apply the procedure with the flattened arguments
         Ok(StepResult::ApplyProc {
             proc,
-            args: flat_args,
+            args: flat_args_tagged,
             cont,
             env: self.evaluator.global_env.clone(),
             cont_env,
@@ -682,26 +700,44 @@ impl<'a> CpsEvaluator<'a> {
     fn apply_other_primitive(
         &self,
         p: Rc<Procedure>,
-        args: Vec<Value>,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
-        // For other primitives, delegate to direct evaluator
+        // For other primitives, use the primitive registry with TaggedValue args directly.
         // Higher-order primitives like map/for-each should be implemented
         // in Scheme (lib/scheme/base/) for proper CPS compatibility.
         //
         // IMPORTANT: Wrap primitive calls to catch I/O and read errors
         // and route them through the CPS exception handler stack.
-        let prim_result = self.evaluator.apply(Value::Procedure(p), args, false);
+        //
+        // Extract the qualified name from the primitive procedure
+        let (name, library) = match p.as_ref() {
+            Procedure::Primitive { name, library, .. } => (*name, library),
+            _ => {
+                return Err(EvalError::TypeError(
+                    "apply_other_primitive called with non-primitive procedure".to_string(),
+                ));
+            }
+        };
+        let qualified_name = format!("{}/{}", library.join("."), name);
+
+        // Call the primitive using the registry's apply_tagged method
+        let prim_result = self.evaluator.primitive_registry.apply_tagged(
+            &qualified_name,
+            args,
+            self.evaluator,
+            false,
+        );
 
         match prim_result {
             Ok(eval_result) => {
-                let result = match eval_result {
-                    super::super::EvalResult::Value(v) => v,
-                    _ => {
+                let result_tagged = match eval_result {
+                    super::super::EvalResult::Tagged(tv) => tv,
+                    super::super::EvalResult::TailCallPrimitive { .. } => {
                         return Err(EvalError::InternalError(
                             "Primitive returned tail call".to_string(),
                         ));
@@ -711,7 +747,7 @@ impl<'a> CpsEvaluator<'a> {
                 // Return InvokeContinuation step instead of recursive call
                 Ok(StepResult::InvokeContinuation {
                     cont,
-                    value: result,
+                    value: result_tagged,
                     env: self.evaluator.global_env.clone(),
                     cont_env,
                     prompt_stack,
@@ -736,9 +772,9 @@ impl<'a> CpsEvaluator<'a> {
     #[allow(clippy::too_many_arguments)]
     fn apply_parameter(
         &self,
-        values: Rc<std::cell::RefCell<Vec<Value>>>,
-        converter: Option<Box<Value>>,
-        args: Vec<Value>,
+        values: Rc<std::cell::RefCell<Vec<TaggedValue>>>,
+        converter: Option<TaggedValue>,
+        args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -748,32 +784,21 @@ impl<'a> CpsEvaluator<'a> {
         // Parameters can be called with 0 or 1 arguments:
         // (param)      => get current value (top of stack)
         // (param val)  => set value (replace top of stack after applying converter)
-        let result = match args.len() {
+        let result_tagged = match args.len() {
             0 => {
-                // Get current value (top of stack)
+                // Get current value (top of stack) - already TaggedValue
                 let stack = values.borrow();
-                let current_value = stack.last().ok_or_else(|| {
+                *stack.last().ok_or_else(|| {
                     EvalError::InvalidSyntax("parameter stack is empty".to_string())
-                })?;
-                current_value.clone()
+                })?
             }
             1 => {
                 // Set value (replace top of stack after applying converter)
                 let new_val = if let Some(conv) = converter {
-                    // Apply converter to new value - delegate to direct evaluator
-                    let conv_result =
-                        self.evaluator
-                            .apply(*conv.clone(), vec![args[0].clone()], false)?;
-                    match conv_result {
-                        super::super::EvalResult::Value(v) => v,
-                        _ => {
-                            return Err(EvalError::InvalidSyntax(
-                                "parameter converter returned non-value".to_string(),
-                            ));
-                        }
-                    }
+                    // Apply converter to new value using CPS machinery
+                    self.apply_from_direct_tagged(conv, vec![args[0]])?
                 } else {
-                    args[0].clone()
+                    args[0]
                 };
 
                 // Set the new value (replace top of stack)
@@ -781,7 +806,7 @@ impl<'a> CpsEvaluator<'a> {
                 if let Some(top) = stack.last_mut() {
                     *top = new_val;
                 }
-                Value::Unspecified
+                TaggedValue::UNSPECIFIED
             }
             _ => {
                 return Err(EvalError::WrongArity {
@@ -793,7 +818,7 @@ impl<'a> CpsEvaluator<'a> {
 
         Ok(StepResult::InvokeContinuation {
             cont,
-            value: result,
+            value: result_tagged,
             env: self.evaluator.global_env.clone(),
             cont_env,
             prompt_stack,
@@ -803,11 +828,13 @@ impl<'a> CpsEvaluator<'a> {
     }
 
     /// Evaluate a CPS primitive operation
+    ///
+    /// Takes TaggedValue args directly and returns TaggedValue for efficiency.
     pub(super) fn eval_primop(
         &self,
         op: &CpsPrimitive,
-        args: Vec<Value>,
-    ) -> Result<Value, EvalError> {
+        args: Vec<TaggedValue>,
+    ) -> Result<TaggedValue, EvalError> {
         // Map CpsPrimitive to the corresponding primitive name and delegate
         let name = match op {
             CpsPrimitive::Add => "+",
@@ -849,6 +876,8 @@ impl<'a> CpsEvaluator<'a> {
             CpsPrimitive::Newline => "newline",
         };
 
+        let heap = self.evaluator.global_env.heap();
+
         // Special handling for primitives that may not exist in the global env
         match op {
             CpsPrimitive::IsContinuation => {
@@ -859,7 +888,8 @@ impl<'a> CpsEvaluator<'a> {
                         actual: args.len(),
                     });
                 }
-                return Ok(Value::Boolean(matches!(args[0], Value::Continuation(_))));
+                // Use heap's is_continuation directly - no conversion needed
+                return Ok(TaggedValue::boolean(heap.borrow().is_continuation(args[0])));
             }
             CpsPrimitive::IsPromptTag => {
                 // prompt-tag? is a new predicate
@@ -869,26 +899,32 @@ impl<'a> CpsEvaluator<'a> {
                         actual: args.len(),
                     });
                 }
-                return Ok(Value::Boolean(matches!(
-                    args[0],
-                    Value::ContinuationPromptTag(_)
-                )));
+                // Use heap's is_prompt_tag directly - no conversion needed
+                return Ok(TaggedValue::boolean(heap.borrow().is_prompt_tag(args[0])));
             }
             _ => {}
         }
 
-        // Delegate to the global environment's primitive
-        if let Some(proc) = self.evaluator.global_env.get(name) {
-            let result = self.evaluator.apply(proc, args, false)?;
-            match result {
-                super::super::EvalResult::Value(v) => Ok(v),
-                _ => Err(EvalError::InternalError(format!(
-                    "Primitive {} returned unexpected result",
-                    name
-                ))),
-            }
-        } else {
-            Err(EvalError::UndefinedVariable(name.to_string()))
+        // CPS primitives are all from scheme.base
+        let qualified_name = format!("scheme.base/{}", name);
+        let prim_result = self.evaluator.primitive_registry.apply_tagged(
+            &qualified_name,
+            args,
+            self.evaluator,
+            false,
+        );
+
+        match prim_result {
+            Ok(eval_result) => match eval_result {
+                super::super::EvalResult::Tagged(tv) => Ok(tv),
+                super::super::EvalResult::TailCallPrimitive { .. } => {
+                    Err(EvalError::InternalError(format!(
+                        "Primitive {} returned unexpected result",
+                        name
+                    )))
+                }
+            },
+            Err(e) => Err(e),
         }
     }
 }

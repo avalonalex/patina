@@ -1,14 +1,14 @@
 //! List, vector, and dotted list expansion
 //!
 //! This module handles expansion of list, vector, and dotted list templates.
+//! All methods return TaggedValue directly.
 
 use super::Expander;
 use super::ellipsis::EllipsisContext;
 use super::error::ExpandError;
 use crate::macro_expander::Template;
-use patina_runtime::{MatchEnv, Value};
-use std::cell::RefCell;
-use std::rc::Rc;
+use patina_core::TaggedValue;
+use patina_runtime::MatchEnv;
 
 impl Expander {
     /// Expand a list template
@@ -18,7 +18,7 @@ impl Expander {
         env: &MatchEnv,
         indices: &[usize],
         inside_quote: bool,
-    ) -> Result<Value, ExpandError> {
+    ) -> Result<TaggedValue, ExpandError> {
         let mut result = Vec::new();
 
         // Check if this list starts with 'quote' - if so, we're entering a quoted context
@@ -49,18 +49,16 @@ impl Expander {
                     let expanded = self.expand_ellipsis(&ctx, *nesting)?;
 
                     // Expanded ellipsis should be a list - splice it in
-                    match expanded {
-                        Value::Null => {} // Empty list - nothing to add
-                        Value::Pair(_) => {
-                            // Convert list to vec and append all elements
-                            let items = self.list_to_vec(&expanded)?;
-                            result.extend(items);
-                        }
-                        _ => {
-                            return Err(ExpandError::InvalidTemplate {
-                                message: "Ellipsis must expand to list".to_string(),
-                            });
-                        }
+                    if expanded == TaggedValue::NULL {
+                        // Empty list - nothing to add
+                    } else if expanded.is_pair() {
+                        // Convert list to vec and append all elements
+                        let items = self.list_to_vec_tagged(expanded)?;
+                        result.extend(items);
+                    } else {
+                        return Err(ExpandError::InvalidTemplate {
+                            message: "Ellipsis must expand to list".to_string(),
+                        });
                     }
                 }
             } else {
@@ -71,7 +69,7 @@ impl Expander {
         }
 
         // Convert vec back to Scheme list
-        Ok(self.vec_to_list(result))
+        Ok(self.vec_to_list_tagged(result))
     }
 
     /// Check if a template list represents a (quote ...) form
@@ -79,7 +77,10 @@ impl Expander {
         if templates.len() >= 2 {
             match &templates[0] {
                 Template::Symbol(id) => id.name().as_ref() == "quote",
-                Template::Literal(Value::Symbol(s)) => s.as_ref() == "quote",
+                Template::Literal(tv) => {
+                    let heap = self.heap().borrow();
+                    heap.get_symbol_name(*tv) == Some("quote")
+                }
                 _ => false,
             }
         } else {
@@ -94,7 +95,7 @@ impl Expander {
         env: &MatchEnv,
         indices: &[usize],
         inside_quote: bool,
-    ) -> Result<Value, ExpandError> {
+    ) -> Result<TaggedValue, ExpandError> {
         let mut result = Vec::new();
 
         for template in templates {
@@ -102,7 +103,9 @@ impl Expander {
             result.push(value);
         }
 
-        Ok(Value::Vector(Rc::new(RefCell::new(result))))
+        // Allocate vector on heap
+        let mut heap = self.heap().borrow_mut();
+        Ok(heap.alloc_vector(result))
     }
 
     /// Expand a dotted list template: (t1 t2 . rest)
@@ -113,7 +116,7 @@ impl Expander {
         env: &MatchEnv,
         indices: &[usize],
         inside_quote: bool,
-    ) -> Result<Value, ExpandError> {
+    ) -> Result<TaggedValue, ExpandError> {
         // Expand the fixed part
         let mut items = Vec::new();
         for template in templates {
@@ -124,10 +127,11 @@ impl Expander {
         // Expand the tail
         let tail_value = self.expand_impl(tail, env, indices, inside_quote)?;
 
-        // Build dotted list
+        // Build dotted list (from back to front)
         let mut result = tail_value;
+        let mut heap = self.heap().borrow_mut();
         for item in items.into_iter().rev() {
-            result = Value::Pair(Rc::new(RefCell::new((item, result))));
+            result = heap.alloc_pair(item, result);
         }
 
         Ok(result)

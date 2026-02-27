@@ -9,7 +9,9 @@ use super::CpsEvaluator;
 use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::CpsExpr;
-use patina_core::value::{CpsContinuation, DynamicWindRecord, Value};
+use patina_core::heap::SharedHeap;
+use patina_core::tagged_value::TaggedValue;
+use patina_core::{CpsContinuation, DynamicWindRecord};
 use patina_core::{Environment, ScopeSet};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -22,6 +24,7 @@ impl<'a> CpsEvaluator<'a> {
     pub(super) fn capture_cont_bindings(
         cont_env: &HashMap<Rc<str>, ContValue>,
         dynamic_winds: &[DynamicWindRecord],
+        heap: &SharedHeap,
     ) -> Vec<(Rc<str>, Rc<CpsContinuation>)> {
         cont_env
             .iter()
@@ -35,7 +38,7 @@ impl<'a> CpsEvaluator<'a> {
                     } => {
                         // Recursively capture nested cont_env
                         let nested_bindings =
-                            Self::capture_cont_bindings(nested_cont_env, dynamic_winds);
+                            Self::capture_cont_bindings(nested_cont_env, dynamic_winds, heap);
                         Some((
                             name.clone(),
                             Rc::new(CpsContinuation {
@@ -65,8 +68,11 @@ impl<'a> CpsEvaluator<'a> {
                                 env,
                                 cont_env: nested_cont_env,
                             } => {
-                                let nested =
-                                    Self::capture_cont_bindings(nested_cont_env, dynamic_winds);
+                                let nested = Self::capture_cont_bindings(
+                                    nested_cont_env,
+                                    dynamic_winds,
+                                    heap,
+                                );
                                 vec![(
                                     Rc::from("__dw_original__") as Rc<str>,
                                     Rc::new(CpsContinuation {
@@ -88,6 +94,7 @@ impl<'a> CpsEvaluator<'a> {
                                     ))
                                     .collect(),
                                     dynamic_winds,
+                                    heap,
                                 )
                                 .into_iter()
                                 .next()
@@ -106,7 +113,7 @@ impl<'a> CpsEvaluator<'a> {
                         bindings.push((
                             Rc::from("__dw_after__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(Rc::new(after.clone()))),
+                                body: Rc::new(CpsExpr::Literal(*after)), // already TaggedValue
                                 param: Rc::from("__unused__"),
                                 env: Rc::new(Environment::new()),
                                 prompt_tag: None,
@@ -117,9 +124,9 @@ impl<'a> CpsEvaluator<'a> {
                         bindings.push((
                             Rc::from("__dw_wind_id__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(Rc::new(Value::Integer(
+                                body: Rc::new(CpsExpr::Literal(TaggedValue::fixnum(
                                     *wind_id as i64,
-                                )))),
+                                ))),
                                 param: Rc::from("__unused__"),
                                 env: Rc::new(Environment::new()),
                                 prompt_tag: None,
@@ -128,13 +135,13 @@ impl<'a> CpsEvaluator<'a> {
                             }),
                         ));
 
+                        // Create marker symbol
+                        let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
                         Some((
                             name.clone(),
                             Rc::new(CpsContinuation {
                                 // Special marker body
-                                body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(Rc::new(
-                                    Value::Symbol(Rc::from("__dynamic_wind_cleanup__")),
-                                ))))),
+                                body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(marker)))),
                                 param: Rc::from("__dw_value__"),
                                 env: Rc::new(Environment::new()),
                                 prompt_tag: None,
@@ -172,11 +179,13 @@ impl<'a> CpsEvaluator<'a> {
             })
             .filter_map(|(name, k)| {
                 // Check if this is a serialized DynamicWindCleanup
+                let heap = self.evaluator.global_env.heap();
+                let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
                 let is_dw_cleanup = matches!(
                     k.body.as_ref(),
                     CpsExpr::Halt(inner) if matches!(
                         inner.as_ref(),
-                        CpsExpr::Literal(v) if matches!(v.as_ref(), Value::Symbol(s) if s.as_ref() == "__dynamic_wind_cleanup__")
+                        CpsExpr::Literal(v) if *v == marker
                     )
                 );
 
@@ -212,15 +221,17 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         k: &CpsContinuation,
     ) -> Result<ContValue, EvalError> {
-        // Extract the after thunk
+        let heap = self.evaluator.global_env.heap();
+
+        // Extract the after thunk (as TaggedValue, matches ContValue::DynamicWindCleanup)
         let after = k
             .captured_cont_bindings
             .iter()
             .find(|(name, _)| name.as_ref() == "__dw_after__")
             .and_then(|(_, cont)| {
-                // The after thunk is stored in the body as a Literal
+                // The after thunk is stored in the body as a Literal (already TaggedValue)
                 if let CpsExpr::Literal(v) = cont.body.as_ref() {
-                    Some(v.as_ref().clone())
+                    Some(*v) // Return TaggedValue directly
                 } else {
                     None
                 }
@@ -236,8 +247,8 @@ impl<'a> CpsEvaluator<'a> {
             .find(|(name, _)| name.as_ref() == "__dw_wind_id__")
             .and_then(|(_, cont)| {
                 if let CpsExpr::Literal(v) = cont.body.as_ref() {
-                    if let Value::Integer(id) = v.as_ref() {
-                        Some(*id as u64)
+                    if v.is_fixnum() {
+                        Some(v.as_fixnum_unchecked() as u64)
                     } else {
                         None
                     }
@@ -250,6 +261,7 @@ impl<'a> CpsEvaluator<'a> {
             })?;
 
         // Extract the original continuation
+        let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
         let original_cont = k
             .captured_cont_bindings
             .iter()
@@ -260,14 +272,15 @@ impl<'a> CpsEvaluator<'a> {
                     cont.body.as_ref(),
                     CpsExpr::Halt(inner) if matches!(
                         inner.as_ref(),
-                        CpsExpr::Literal(v) if matches!(v.as_ref(), Value::Symbol(s) if s.as_ref() == "__dynamic_wind_cleanup__")
+                        CpsExpr::Literal(v) if *v == marker
                     )
                 );
                 if is_dw_cleanup {
                     self.restore_dynamic_wind_cleanup(cont)
                 } else {
                     // Regular continuation
-                    let restored_cont_env = self.restore_cont_bindings(&cont.captured_cont_bindings);
+                    let restored_cont_env =
+                        self.restore_cont_bindings(&cont.captured_cont_bindings);
                     Ok(ContValue::Local {
                         param: cont.param.clone(),
                         body: cont.body.clone(),
@@ -290,13 +303,15 @@ impl<'a> CpsEvaluator<'a> {
         })
     }
 
-    /// Reify a continuation as a first-class Value
+    /// Reify a continuation as a first-class Rc<CpsContinuation>
     pub(super) fn reify_continuation(
         &self,
         cont: &ContValue,
         cont_env: &HashMap<Rc<str>, ContValue>,
         dynamic_winds: &[DynamicWindRecord],
-    ) -> Value {
+    ) -> Rc<CpsContinuation> {
+        let heap = self.evaluator.global_env.heap();
+
         match cont {
             ContValue::Local {
                 param,
@@ -305,20 +320,21 @@ impl<'a> CpsEvaluator<'a> {
                 cont_env: local_cont_env,
             } => {
                 // Capture the continuation environment so it can be restored when invoked
-                let captured_bindings = Self::capture_cont_bindings(local_cont_env, dynamic_winds);
-                Value::Continuation(Rc::new(CpsContinuation {
+                let captured_bindings =
+                    Self::capture_cont_bindings(local_cont_env, dynamic_winds, heap);
+                Rc::new(CpsContinuation {
                     body: body.clone(),
                     param: param.clone(),
                     env: env.clone(),
                     prompt_tag: None,
                     dynamic_winds: dynamic_winds.to_vec(),
                     captured_cont_bindings: captured_bindings,
-                }))
+                })
             }
-            ContValue::Captured(k) => Value::Continuation(k.clone()),
+            ContValue::Captured(k) => k.clone(),
             ContValue::Halt => {
                 // Halt continuation - create a special marker
-                Value::Continuation(Rc::new(CpsContinuation {
+                Rc::new(CpsContinuation {
                     body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Var {
                         name: Rc::from("__halt_value__"),
                         scopes: ScopeSet::new(),
@@ -327,8 +343,12 @@ impl<'a> CpsEvaluator<'a> {
                     env: self.evaluator.global_env.clone(),
                     prompt_tag: None,
                     dynamic_winds: vec![],
-                    captured_cont_bindings: Self::capture_cont_bindings(cont_env, dynamic_winds),
-                }))
+                    captured_cont_bindings: Self::capture_cont_bindings(
+                        cont_env,
+                        dynamic_winds,
+                        heap,
+                    ),
+                })
             }
             // Special continuations need proper handling when call/cc captures them
             ContValue::DynamicWindCleanup {
@@ -340,14 +360,15 @@ impl<'a> CpsEvaluator<'a> {
                 let reified_original =
                     self.reify_continuation(original_cont, cont_env, dynamic_winds);
 
+                // Create marker symbol
+                let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
+
                 // Create a CpsContinuation that will recreate the DynamicWindCleanup state
                 // when invoked. We store the after thunk, wind_id, and original continuation
                 // as a special structure.
-                Value::Continuation(Rc::new(CpsContinuation {
+                Rc::new(CpsContinuation {
                     // Special marker body that indicates this is a DynamicWindCleanup wrapper
-                    body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(Rc::new(
-                        Value::Symbol(Rc::from("__dynamic_wind_cleanup__")),
-                    ))))),
+                    body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(marker)))),
                     param: Rc::from("__dw_value__"),
                     env: self.evaluator.global_env.clone(),
                     prompt_tag: None,
@@ -355,12 +376,13 @@ impl<'a> CpsEvaluator<'a> {
                     // Store the after thunk, wind_id, and reified original continuation
                     // We serialize these into the captured_cont_bindings with special names
                     captured_cont_bindings: {
-                        let mut bindings = Self::capture_cont_bindings(cont_env, dynamic_winds);
-                        // Store after thunk as a special binding
+                        let mut bindings =
+                            Self::capture_cont_bindings(cont_env, dynamic_winds, heap);
+                        // Store after thunk as a special binding (already TaggedValue)
                         bindings.push((
                             Rc::from("__dw_after__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(Rc::new(after.clone()))),
+                                body: Rc::new(CpsExpr::Literal(*after)), // already TaggedValue
                                 param: Rc::from("__unused__"),
                                 env: self.evaluator.global_env.clone(),
                                 prompt_tag: None,
@@ -372,9 +394,9 @@ impl<'a> CpsEvaluator<'a> {
                         bindings.push((
                             Rc::from("__dw_wind_id__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(Rc::new(Value::Integer(
+                                body: Rc::new(CpsExpr::Literal(TaggedValue::fixnum(
                                     *wind_id as i64,
-                                )))),
+                                ))),
                                 param: Rc::from("__unused__"),
                                 env: self.evaluator.global_env.clone(),
                                 prompt_tag: None,
@@ -383,12 +405,10 @@ impl<'a> CpsEvaluator<'a> {
                             }),
                         ));
                         // Store original continuation
-                        if let Value::Continuation(orig_k) = reified_original {
-                            bindings.push((Rc::from("__dw_original__"), orig_k));
-                        }
+                        bindings.push((Rc::from("__dw_original__"), reified_original));
                         bindings
                     },
-                }))
+                })
             }
 
             // Other special continuations that need similar treatment
@@ -400,26 +420,47 @@ impl<'a> CpsEvaluator<'a> {
             | ContValue::RaiseHandlerReturn { .. } => {
                 // For now, these return a placeholder. They could be enhanced similarly.
                 // TODO: Implement proper capture for these special continuations
-                Value::Continuation(Rc::new(CpsContinuation {
-                    body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(Rc::new(
-                        Value::Unspecified,
-                    ))))),
+                Rc::new(CpsContinuation {
+                    body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(
+                        TaggedValue::UNSPECIFIED,
+                    )))),
                     param: Rc::from("__special__"),
                     env: self.evaluator.global_env.clone(),
                     prompt_tag: None,
                     dynamic_winds: vec![],
-                    captured_cont_bindings: Self::capture_cont_bindings(cont_env, dynamic_winds),
-                }))
+                    captured_cont_bindings: Self::capture_cont_bindings(
+                        cont_env,
+                        dynamic_winds,
+                        heap,
+                    ),
+                })
             }
         }
     }
 
+    /// Reify a continuation as a TaggedValue, allocating natively on the heap
+    pub(super) fn reify_continuation_tagged(
+        &self,
+        cont: &ContValue,
+        cont_env: &HashMap<Rc<str>, ContValue>,
+        dynamic_winds: &[DynamicWindRecord],
+    ) -> TaggedValue {
+        let k = self.reify_continuation(cont, cont_env, dynamic_winds);
+        self.evaluator
+            .global_env
+            .heap()
+            .borrow_mut()
+            .alloc_continuation(k)
+    }
+
     /// Invoke a continuation with a value, returning the next trampoline step
+    ///
+    /// Takes TaggedValue for efficiency - converts to Value only where needed.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn invoke_continuation_step(
         &self,
         cont: ContValue,
-        value: Value,
+        value: TaggedValue,
         _env: Rc<Environment>,
         cont_env: HashMap<Rc<str>, ContValue>,
         prompt_stack: Vec<PromptFrame>,
@@ -475,7 +516,7 @@ impl<'a> CpsEvaluator<'a> {
             }
 
             ContValue::Halt => {
-                // Program termination - return final value
+                // Program termination - return final value as TaggedValue
                 Ok(StepResult::Done(value))
             }
 
@@ -484,15 +525,20 @@ impl<'a> CpsEvaluator<'a> {
                 original_cont,
             } => {
                 // Producer has returned a value - unpack multiple values and call consumer
-                let consumer_args = match value {
-                    Value::Values(vals) => vals,
-                    other => vec![other],
-                };
+                // Use heap methods to check and extract Values type without full conversion
+                let heap = self.evaluator.global_env.heap();
+                let consumer_args_tagged: Vec<TaggedValue> =
+                    if let Some(vals) = heap.borrow_mut().get_values_as_tagged(value) {
+                        vals
+                    } else {
+                        vec![value] // Not a Values type - use single value directly
+                    };
 
+                // Consumer is already TaggedValue - use directly for ApplyProc.proc
                 // Call consumer with the unpacked values
                 Ok(StepResult::ApplyProc {
                     proc: consumer,
-                    args: consumer_args,
+                    args: consumer_args_tagged,
                     cont: *original_cont,
                     env: self.evaluator.global_env.clone(),
                     cont_env,
@@ -507,8 +553,11 @@ impl<'a> CpsEvaluator<'a> {
                 original_cont,
             } => {
                 // Thunk has returned a value
+                let heap = self.evaluator.global_env.heap();
+
                 // Check if result is a promise (delay-force pattern) - need to force recursively
-                if let Value::Promise(_) = &value {
+                // Use heap method to check without full conversion
+                if heap.borrow().is_promise(value) {
                     // Result is a promise - force it recursively before caching
                     // Create a new ForceCache that will cache the final result
                     let recursive_cont = ContValue::ForceCache {
@@ -516,7 +565,7 @@ impl<'a> CpsEvaluator<'a> {
                         original_cont,
                     };
                     return self.force_promise_cps(
-                        value,
+                        value, // Pass TaggedValue directly
                         recursive_cont,
                         cont_env,
                         prompt_stack,
@@ -526,9 +575,10 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 // Cache the result (non-promise value)
+                // PromiseState now stores TaggedValue directly - no conversion needed
                 {
                     let mut state = promise.borrow_mut();
-                    *state = patina_core::value::PromiseState::Forced(value.clone());
+                    *state = patina_core::PromiseState::Forced(value);
                 }
 
                 // Continue with the forced value
@@ -557,6 +607,7 @@ impl<'a> CpsEvaluator<'a> {
                 let mut new_winds = dynamic_winds;
                 new_winds.push(wind_record);
 
+                // Body is already TaggedValue - use directly for ApplyProc.proc
                 // Call the body thunk with the cleanup continuation
                 Ok(StepResult::ApplyProc {
                     proc: body,
@@ -591,6 +642,7 @@ impl<'a> CpsEvaluator<'a> {
                     original_cont,
                 };
 
+                // After is already TaggedValue - use directly for ApplyProc.proc
                 Ok(StepResult::ApplyProc {
                     proc: after,
                     args: vec![],
@@ -659,13 +711,18 @@ impl<'a> CpsEvaluator<'a> {
                 } else {
                     // Handler returned from non-continuable raise
                     // This is an error - raise secondary exception through CPS
-                    let secondary_exception =
-                        Value::Exception(Rc::new(patina_core::ExceptionObject {
-                            kind: patina_core::ExceptionKind::Error,
-                            message: "exception handler returned from non-continuable exception"
-                                .to_string(),
-                            irritants: original_exception.into_iter().collect(),
-                        }));
+                    // Create secondary exception directly as TaggedValue
+                    let irritants: Vec<TaggedValue> = original_exception.into_iter().collect();
+                    let secondary_exception_tagged = self
+                        .evaluator
+                        .global_env
+                        .heap()
+                        .borrow_mut()
+                        .alloc_exception(
+                            patina_core::ExceptionKind::Error,
+                            "exception handler returned from non-continuable exception".to_string(),
+                            irritants,
+                        );
 
                     // Try to raise through the exception handler stack
                     if let Some(handler_entry) = exception_handlers.last().cloned() {
@@ -676,14 +733,15 @@ impl<'a> CpsEvaluator<'a> {
                         // Create continuation for when handler returns (recursively)
                         let handler_return_cont = ContValue::RaiseHandlerReturn {
                             continuable: false,
-                            original_exception: Some(secondary_exception.clone()),
+                            original_exception: Some(secondary_exception_tagged),
                             original_cont,
                         };
 
+                        // Handler is already TaggedValue - use directly for ApplyProc.proc
                         // Call handler with secondary exception
                         Ok(StepResult::ApplyProc {
                             proc: handler_entry.handler,
-                            args: vec![secondary_exception],
+                            args: vec![secondary_exception_tagged],
                             cont: handler_return_cont,
                             env: self.evaluator.global_env.clone(),
                             cont_env,

@@ -62,8 +62,8 @@ fn test_scheme_base_primitives_work() {
     // The primitives should still work globally (backward compatibility)
     // Eventually we may want to test import mechanism
     let result = interp.eval_str("(+ 1 2 3)").unwrap();
-    assert_eq!(result.to_string(), "6");
+    assert_eq!(interp.display_tagged(result), "6");
 
     let result = interp.eval_str("(cons 1 2)").unwrap();
-    assert_eq!(result.to_string(), "(1 . 2)");
+    assert_eq!(interp.display_tagged(result), "(1 . 2)");
 }

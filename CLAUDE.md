@@ -6,11 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Patina is a Scheme R7RS-small interpreter written in Rust. This is an educational project with ambitious goals: implementing a full R7RS-compliant Scheme interpreter, then building a bytecode VM for performance, adding syntax-case for procedural macros, and ultimately extending with gradual typing, reactive concurrency, and logic programming. Currently in Phase 1 (basic R7RS compliance).
 
-**Architecture:** Modular workspace with 9 crates supporting multiple backends (tree-walker implemented, VM and JIT planned). Features a sophisticated dual-loader library system and CoreExpr IR-based evaluation pipeline.
+**Architecture:** Modular workspace with 10 crates supporting multiple backends (tree-walker implemented, VM and JIT planned). Features a sophisticated dual-loader library system and CoreExpr IR-based evaluation pipeline.
 
 ## Workspace Structure
 
-Patina uses a Rust workspace with 9 crates organized by concern:
+Patina uses a Rust workspace with 10 crates organized by concern:
 
 ```
 patina/ (workspace root)
@@ -31,8 +31,9 @@ patina/ (workspace root)
 │       └── lazy/promises.scm   # Lazy evaluation support
 │
 └── crates/
-    ├── patina-runtime/     # Core types, Backend trait, Library system
-    ├── patina-ir/          # CoreExpr IR definition (9 core forms)
+    ├── patina-core/        # TaggedValue, Heap, Environment, CoreExpr
+    ├── patina-runtime/     # Backend trait, Library system, re-exports patina-core
+    ├── patina-ir/          # CoreExpr IR utilities (visitor, CPS transform)
     ├── patina-frontend/    # Lexer, Parser, Desugarer
     ├── patina-macros/      # Macro expansion (syntax-rules with scope sets hygiene)
     ├── patina-pipeline/    # Pipeline orchestration (pluggable strategies)
@@ -44,13 +45,19 @@ patina/ (workspace root)
 
 ### Crate Responsibilities
 
+**patina-core** (`crates/patina-core/src/`)
+- `TaggedValue`: NaN-boxed 8-byte value representation (all Scheme types)
+- `Heap`, `SharedHeap`: Arena-based typed storage for heap objects
+- `HeapObjectData`: Enum for heap-allocated objects (BigInt, Symbol, Procedure, etc.)
+- `Environment`: Lexical scoping with parent chains and scope-set hygiene
+- `CoreExpr`, `Formals`: Core IR types
+- `Procedure`, `Arity`: Procedure representation
+
 **patina-runtime** (`crates/patina-runtime/src/`)
-- Core `Value` enum: all 26 Scheme data types
-- `Environment`: lexical scoping with parent chains
+- Re-exports all types from `patina-core`
 - `Backend` trait: abstraction for multiple evaluation strategies
 - Library system: `LibraryRegistry`, `LibraryLoaderRegistry`, `RustLibraryLoader`
 - Internal primitive modules: `stdlib/internal_*.rs` (numbers, lists, strings, etc.)
-- Shared types used by all other crates
 
 **patina-ir** (`crates/patina-ir/src/`)
 - `CoreExpr` enum: 9 core forms + 4 additional forms
@@ -59,7 +66,7 @@ patina/ (workspace root)
 
 **patina-frontend** (`crates/patina-frontend/src/`)
 - `lexer/`: Tokenizes Scheme source
-- `parser/`: Builds AST (as Value) from tokens
+- `parser/`: Builds AST (as TaggedValue list structure) from tokens
 - `desugarer/`: Converts macro-expanded AST to CoreExpr IR
   - **Macro-aware**: Expands macros on-demand during desugaring
   - Checks environment for macro bindings
@@ -119,11 +126,11 @@ patina/ (workspace root)
 ### Dependency Flow
 
 ```
-patina-repl → patina-interpreter → patina-tree-walker → patina-runtime
-                                 ↗  patina-frontend    ↗
-                                    patina-pipeline
-                                    patina-macros
-                                    patina-ir
+patina-repl → patina-interpreter → patina-tree-walker → patina-runtime → patina-core
+                                 ↗  patina-frontend    ↗                ↗
+                                    patina-pipeline                    /
+                                    patina-macros ─────────────────────
+                                    patina-ir ─────────────────────────
 patina-tests → patina-interpreter
 ```
 
@@ -276,15 +283,15 @@ Source Code
     ↓
 [Lexer] → Tokens
     ↓
-[Parser] → Value AST (homoiconic representation)
+[Parser] → TaggedValue list structure (homoiconic, heap-allocated)
     ↓
 [Backend.eval()]
     ↓
 [Desugarer with env] → Checks for macros, expands on-demand
     ↓
-[CoreExpr IR] → 9 core forms
+[CoreExpr IR] → Core forms (Literal, Var, Quote, Lambda, If, Set, Define, Begin, App, ...)
     ↓
-[CoreExpr Evaluator] → Result Value
+[CoreExpr Evaluator] → TaggedValue result
 ```
 
 **Key Innovation: Macro-Aware Desugaring**
@@ -301,116 +308,93 @@ The desugarer receives an `Environment` and checks for macro bindings:
 - Macros are expanded at the right time (after parsing, during desugaring)
 - Clean separation: macro expander handles expansion, desugarer handles traversal
 
-**Fallback Path**: Forms not yet in CoreExpr (let-syntax, expand) use the legacy Value evaluator.
-
 ### CoreExpr IR
 
-**Location:** `crates/patina-ir/src/lib.rs`
+**Location:** `crates/patina-core/src/core_expr.rs` (re-exported via `patina-ir`)
 
-CoreExpr is a minimal intermediate representation with 9 core forms:
+CoreExpr is a minimal intermediate representation:
 
 ```rust
 pub enum CoreExpr {
-    // Core forms (cannot be macros)
-    Literal(Value),              // Self-evaluating values
-    Var(String),                 // Variable reference
-    Quote(Value),                // Literal data
-    Lambda {                     // Function abstraction
-        params: Vec<String>,
-        variadic: Option<String>,
+    Literal(TaggedValue),            // Self-evaluating values (8 bytes)
+    Var { name: Symbol, scopes: ScopeSet },  // Variable reference (with hygiene)
+    Quote(TaggedValue),              // Literal data
+    Quasiquote(TaggedValue),         // Template with unquote
+    Lambda {                         // Function abstraction
+        params: Formals,             // Fixed, Variadic, or Mixed
         body: Vec<CoreExpr>,
+        binding_scope: Option<ScopeId>,
     },
-    If {                         // Conditional (always ternary)
-        test: Box<CoreExpr>,
-        consequent: Box<CoreExpr>,
-        alternate: Box<CoreExpr>,
-    },
-    Set {                        // Mutation
-        var: String,
-        value: Box<CoreExpr>,
-    },
-    Define {                     // Top-level binding
-        var: String,
-        value: Box<CoreExpr>,
-    },
-    Begin(Vec<CoreExpr>),        // Sequencing
-    App {                        // Function application
-        operator: Box<CoreExpr>,
-        operands: Vec<CoreExpr>,
-    },
+    If { test, then, else_: Rc<CoreExpr> },  // Conditional
+    Set { var, scopes, value: Rc<CoreExpr> }, // Assignment
+    Begin(Vec<CoreExpr>),            // Sequencing
+    Define { name, value: Rc<CoreExpr> },    // Top-level binding
+    Import { import_sets: Vec<TaggedValue> }, // Library imports
+    App { func: Rc<CoreExpr>, args: Vec<CoreExpr> }, // Application
+    Expand { expr: Rc<CoreExpr> },   // Debug: show macro expansion
+    // ... also Apply, CallCC, DynamicWind, CallWithValues, WithExceptionHandler
 }
 ```
 
 **Design Philosophy**:
 - Minimal set of forms that cannot be expressed as macros
 - All derived forms (let, cond, and, or, case, do, etc.) are macros
-- Simpler to evaluate than full Value AST (9 cases vs 26 variants)
+- Uses `TaggedValue` (8 bytes) for literals and quoted data
+- `Rc<CoreExpr>` for shared branches (TCO-friendly)
 - Foundation for future optimizations and alternative backends
 
 **Not in CoreExpr**: The desugarer does NOT handle derived forms like `let`, `cond`, `and`, `or`, etc. These are **already macros** defined in `lib/scheme/base/*.scm`. The macro expander transforms them before the desugarer sees them.
 
-### Core Value Representation
+### TaggedValue Representation
 
-**Location:** `crates/patina-runtime/src/value/mod.rs`
+**Location:** `crates/patina-core/src/tagged_value.rs`
 
-The `Value` enum represents all Scheme values (26 variants):
+All Scheme values are represented as `TaggedValue` — a NaN-boxed `u64` (8 bytes, `Copy`):
 
-**Numeric Tower**:
-- `Integer(i64)` - Small integers
-- `BigInteger(BigInt)` - Arbitrary precision
-- `Rational(Ratio<BigInt>)` - Exact fractions
-- `Real(f64)` - Inexact reals
-- `Complex(f64, f64)` - Complex numbers
-- Automatic promotion on overflow
-- See `PRD/phase1/NUMERIC_SUMMARY.md` for details
+**Tag encoding** (low 3 bits):
+- `000` TAG_FIXNUM — 61-bit signed integer (immediate, no heap)
+- `001` TAG_SPECIAL — #t, #f, (), eof, unspecified (immediate constants)
+- `010` TAG_CHAR — Unicode codepoint (immediate)
+- `011` TAG_PAIR — Cons cell (heap index)
+- `100` TAG_VECTOR — Mutable vector (heap index)
+- `101` TAG_STRING — Mutable string as Vec\<char\> (heap index)
+- `110` TAG_CLOSURE — Reserved for VM closures (heap index)
+- `111` TAG_OBJECT — All other types via `HeapObjectData` (heap index)
 
-**Data Structures**:
-- `Pair(Rc<RefCell<(Value, Value)>>)` - Cons cells
-- `Null` - Empty list
-- `Vector(Rc<RefCell<Vec<Value>>>)` - Vectors
-- `Bytevector(Rc<RefCell<Vec<u8>>>)` - Byte vectors
-- `String(Rc<RefCell<String>>>` - UTF-8 strings with O(n) indexing (R7RS compliant)
+**Heap Object Types** (`HeapObjectData` enum, for TAG_OBJECT):
+- Numeric: BigInt, Rational, Real(f64), Complex { real, imag }
+- Data: Symbol(Rc\<str\>), Bytevector(Vec\<u8\>), Values(Vec\<TaggedValue\>)
+- Procedure(Rc\<Procedure\>), Continuation(Rc\<CpsContinuation\>)
+- Port(Rc\<Port\>), Macro(Rc\<CompiledMacro\>)
+- Identifier { name, scopes } — hygienic identifiers
+- Record { record_type, fields }, RecordType(Rc\<RecordTypeDescriptor\>)
+- Parameter { values, converter }, Promise(Rc\<RefCell\<PromiseState\>\>)
+- Library(Rc\<Library\>), EnvironmentSpecifier, PromptTag, Exception
 
-**Procedures**:
-- `Procedure(Procedure)` where Procedure is:
-  - `Primitive { name, arity, library }` - Built-in procedures
-  - `Lambda { params, variadic, body, env }` - User-defined closures
-  - `Continuation(...)` - First-class continuations
-  - Note: `case-lambda` is now a macro (SRFI-16), not a special Procedure variant
+**Heap Architecture** (`crates/patina-core/src/heap/mod.rs`):
+- Arena-based typed storage: separate `Vec` for pairs, vectors, strings, objects
+- `SharedHeap = Rc<RefCell<Heap>>` — shared across evaluator, environments, closures
+- Free lists for each type (future GC support)
+- Symbol interning via hash map
+- Key methods: `try_pair()`, `try_vector_len()`, `try_vector_to_vec()`, `type_name()`
 
-**Hygiene Support**:
-- `Symbol(Rc<str>)` - Regular symbols (special forms, built-ins)
-- `Identifier { name, scopes }` - Hygienic identifier with scope set
-  - Uses Racket-style scope sets for hygiene
-  - Scopes track lexical context through macro expansions
-  - Flip-scope algorithm toggles scopes to distinguish use-site vs introduced identifiers
-
-**Special Values**:
-- `Boolean(bool)` - #t and #f
-- `Character(char)` - Characters
-- `Macro { name, data }` - Macro transformers
-- `Parameter(...)` - Dynamic parameters
-- `Promise { ... }` - Lazy evaluation
-- `Values(Vec<Value>)` - Multiple values
-- `Library(...)` - Library objects
-- `InputPort(...)`, `OutputPort(...)` - I/O ports
-- `Unspecified` - Undefined return value
-- `Eof` - End of file marker
-
-**Memory Management**:
-- Uses `Rc<T>` for immutable shared data
-- Uses `Rc<RefCell<T>>` for mutable data (required for `set!`)
-- Efficient sharing without unnecessary cloning
+**Memory Model**:
+- `TaggedValue` is 8 bytes, `Copy` — no Rc overhead for common types
+- Pairs, vectors, strings stored in typed arena vectors (cache-friendly)
+- Complex objects use `HeapObjectData` with `Rc` for shared ownership where needed
+- Environments store `HashMap<String, TaggedValue>` — 8 bytes per binding
 
 ### Environment Model
 
-**Location:** `crates/patina-runtime/src/environment.rs`
+**Location:** `crates/patina-core/src/environment.rs`
 
-Environments implement lexical scoping with parent chains:
+Environments implement lexical scoping with parent chains and scope-set hygiene:
 
 ```rust
 pub struct Environment {
-    bindings: Rc<RefCell<HashMap<String, Value>>>,
+    heap: SharedHeap,
+    bindings: Rc<RefCell<HashMap<String, TaggedValue>>>,
+    scoped_bindings: Rc<RefCell<HashMap<String, Vec<ScopedBinding>>>>,
     parent: Option<Rc<Environment>>,
 }
 ```
@@ -418,11 +402,13 @@ pub struct Environment {
 **Key operations**:
 - `define(name, value)` - Create new binding in current environment
 - `set(name, value)` - Mutate existing binding (searches parent chain)
-- `get(name)` - Lookup variable (searches parent chain)
+- `get(name)` / `get_with_scopes(name, scopes)` - Lookup variable
 - `with_parent(parent)` - Create child environment
 
 **Design**:
-- `Rc<RefCell<HashMap>>` enables mutation required for `set!`
+- `HashMap<String, TaggedValue>` — 8 bytes per binding (vs 64+ with old Value)
+- `scoped_bindings` for hygienic macro bindings (subset matching)
+- Each environment holds a `SharedHeap` reference for TaggedValue interpretation
 - Parent chain implements lexical scoping
 - Global environment initialized with all primitives from loaded libraries
 
@@ -436,12 +422,12 @@ The `Backend` trait enables multiple evaluation strategies:
 pub trait Backend {
     type Error: std::error::Error + Send + Sync + 'static;
 
-    fn eval(&self, expr: &Value, env: &Rc<Environment>)
-        -> Result<Value, Self::Error>;
+    fn eval(&self, expr: TaggedValue, env: &Rc<Environment>)
+        -> Result<TaggedValue, Self::Error>;
 
     fn global_env(&self) -> &Rc<Environment>;
 
-    fn eval_global(&self, expr: &Value) -> Result<Value, Self::Error> {
+    fn eval_global(&self, expr: TaggedValue) -> Result<TaggedValue, Self::Error> {
         let global = self.global_env().clone();
         self.eval(expr, &global)
     }
@@ -450,44 +436,30 @@ pub trait Backend {
 
 **TreeWalker Backend** (`crates/patina-tree-walker/src/backend.rs`):
 
-Implements Backend trait with hybrid evaluation:
-1. **CoreExpr Path** (primary):
-   - Creates macro-aware desugarer with environment
-   - Desugars Value → CoreExpr (expands macros on-demand)
-   - Evaluates CoreExpr with TCO support
-
-2. **Value Path** (fallback):
-   - For forms not yet in CoreExpr: let-syntax, letrec-syntax, expand
-   - Uses legacy `Evaluator::eval_in_env()`
+Implements Backend trait — desugars TaggedValue AST → CoreExpr, then evaluates:
+1. Creates macro-aware desugarer with environment
+2. Desugars TaggedValue → CoreExpr (expands macros on-demand)
+3. Evaluates CoreExpr with TCO support (trampoline)
 
 **Evaluation Result** (for TCO):
 ```rust
 pub enum EvalResult {
-    Value(Value),                              // Final result
-    TailCall { expr: Value, env: Rc<Environment> },  // Continue trampolining
-    TailCallPrimitive { proc: Value, args: Vec<Value> },  // Optimized primitive call
+    Tagged(TaggedValue),  // Final result
+    TailCallPrimitive {   // Optimized tail call to primitive
+        proc: TaggedValue,
+        args: Vec<TaggedValue>,
+    },
 }
 ```
 
-### Special Forms Registry
+### Special Forms
 
-**Location:** `crates/patina-tree-walker/src/eval/special_forms/mod.rs`
+All special forms are now handled directly in the CoreExpr evaluator (`core_eval.rs`). The legacy `SpecialForm` trait and `SpecialFormRegistry` have been removed.
 
-Special forms are registered in a dynamic registry:
-
-```rust
-pub trait SpecialForm {
-    fn name(&self) -> &'static str;
-    fn help(&self) -> &'static str;
-    fn eval(&self, evaluator: &Evaluator, args: &Value, env: &Rc<Environment>,
-            in_tail_position: bool) -> Result<EvalResult, EvalError>;
-    fn validate_syntax(&self, args: &Value) -> Result<(), EvalError>;
-}
-```
-
-**Registered Special Forms**:
-- `quote`, `if`, `define`, `set!`, `lambda`, `begin`
-- `define-syntax`, `let-syntax`, `letrec-syntax`
+**Special forms handled by CoreExpr**:
+- `quote`, `quasiquote`, `if`, `define`, `set!`, `lambda`, `begin`
+- `define-syntax` (via `DefineSyntax` CoreExpr variant)
+- `import` (via `Import` CoreExpr variant)
 - `expand` (debugging extension)
 
 **Note**: Most "special forms" users think of (let, cond, case, do, and, or, case-lambda) are actually **macros** defined in Scheme (`lib/scheme/base/*.scm`, `lib/scheme/case-lambda.sld`), not special forms.
@@ -534,7 +506,7 @@ primitives/
 - No renaming needed - scopes provide discrimination
 
 **Macro Expansion Integration**:
-- Macros stored as `Value::Macro(Rc<CompiledMacro>)` (type-safe, no `dyn Any`)
+- Macros stored as `HeapObjectData::Macro(Rc<CompiledMacro>)` on the heap
 - Desugarer checks environment for macro bindings
 - When found, calls macro expander with flip-scope hygiene
 - Expands recursively until a special form or application remains
@@ -600,7 +572,13 @@ cargo run
 ### Testing
 
 ```bash
-# Run ALL tests (~1400 tests across workspace)
+# Routine verification (preferred — fast, covers R7RS compliance)
+cargo build --release && ./scripts/run_chibi_tests.sh
+
+# Run ALL Rust tests without doc-tests (slower, use when changing Rust internals)
+cargo test --all --lib --tests
+
+# Run ALL tests including doc-tests (slowest, rarely needed)
 cargo test
 
 # Run only integration tests (patina-tests crate)
@@ -721,9 +699,11 @@ See Development Commands section above for test commands.
 - **Scheme library**: Create `lib/scheme/<name>.sld` defining exports and includes
 - **Scheme implementations**: Create `lib/scheme/<name>/<file>.scm` for macros and derived procedures
 
-**Value types**:
-- Extend `Value` enum in `crates/patina-runtime/src/value/mod.rs`
-- Implement `std::fmt::Display` for new variants
+**Heap object types**:
+- Add new variant to `HeapObjectData` enum in `crates/patina-core/src/heap/mod.rs`
+- Add corresponding `HeapObjectType` variant
+- Add type predicate method (`is_*`) and accessor method (`get_*`) on `Heap`
+- Add display support in `crates/patina-core/src/debug_format.rs`
 - Add support in parser if needed (`crates/patina-frontend/src/parser/mod.rs`)
 
 **CoreExpr forms**:
@@ -765,10 +745,12 @@ Use appropriate error types for each layer:
 
 ### Memory Management
 
-- Use `Rc<T>` for immutable shared data (symbols, strings, pairs)
-- Use `Rc<RefCell<T>>` when interior mutability is needed (environments, vectors)
-- Avoid unnecessary `clone()`; prefer sharing via `Rc`
-- All `Value` operations work with `Rc` to minimize copying
+- `TaggedValue` is 8 bytes, `Copy` — passed by value, no allocation for fixnums/bools/chars/null
+- Heap uses arena allocation: separate `Vec` per type (pairs, vectors, strings, objects)
+- `SharedHeap = Rc<RefCell<Heap>>` — shared across evaluator, environments, closures
+- `Rc<T>` used inside `HeapObjectData` for types that need shared ownership (Procedure, Port, etc.)
+- `Rc<RefCell<T>>` for mutable shared data (record fields, promise state, parameter values)
+- **Borrow discipline**: Use `heap.borrow()` (not `borrow_mut()`) for read-only operations like `try_pair()`, `car()`, `cdr()`, type predicates
 
 ## Implementation Status
 
@@ -882,12 +864,12 @@ use patina_runtime::Backend;
 // Create backend
 let backend = TreeWalker::new();
 
-// Evaluate expression
-let result = backend.eval_global(&expr).unwrap();
+// Evaluate expression (TaggedValue in, TaggedValue out)
+let result = backend.eval_global(expr).unwrap();
 
 // Custom environment
 let custom_env = Rc::new(Environment::with_parent(backend.global_env().clone()));
-let result = backend.eval(&expr, &custom_env).unwrap();
+let result = backend.eval(expr, &custom_env).unwrap();
 ```
 
 ## Tips for Claude Code
@@ -902,7 +884,7 @@ let result = backend.eval(&expr, &custom_env).unwrap();
 
 5. **Library organization**: New primitives should be added to the appropriate library builder in `patina-runtime/src/stdlib/`, not just registered globally.
 
-6. **CoreExpr vs Value**: The CoreExpr path is now primary. Forms that aren't in CoreExpr use the fallback Value evaluator.
+6. **TaggedValue architecture**: All values are `TaggedValue` (8 bytes, `Copy`). Heap objects use `HeapObjectData`. The old `Value` enum has been completely removed.
 
 7. **Macros vs special forms**: Most things users think of as "special forms" (let, cond, case) are actually macros. Only add special forms when absolutely necessary.
 

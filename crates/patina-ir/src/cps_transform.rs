@@ -35,9 +35,9 @@
 //!
 //! Here `k` is the continuation passed in from the enclosing context.
 
+use patina_core::TaggedValue;
 use patina_core::cps_expr::{ContVar, CpsExpr, CpsParam};
 use patina_core::scope::ScopeSet;
-use patina_core::value::Value;
 use patina_core::{CoreExpr, Formals, Symbol};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -106,7 +106,7 @@ impl CpsTransformer {
             // These don't need CPS transformation - just pass to continuation
             CoreExpr::Literal(v) => CpsExpr::Continue {
                 cont: k.clone(),
-                value: Rc::new(CpsExpr::Literal(v.clone())),
+                value: Rc::new(CpsExpr::Literal(*v)),
             },
 
             CoreExpr::Var { name, scopes } => CpsExpr::Continue {
@@ -119,7 +119,7 @@ impl CpsTransformer {
 
             CoreExpr::Quote(v) => CpsExpr::Continue {
                 cont: k.clone(),
-                value: Rc::new(CpsExpr::Literal(v.clone())),
+                value: Rc::new(CpsExpr::Literal(*v)),
             },
 
             CoreExpr::Lambda {
@@ -220,7 +220,7 @@ impl CpsTransformer {
                         value: Rc::new(cps_value),
                         cont: Rc::new(CpsExpr::Continue {
                             cont: k.clone(),
-                            value: Rc::new(CpsExpr::Literal(Rc::new(Value::Unspecified))),
+                            value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
                         }),
                     }
                 } else {
@@ -236,7 +236,7 @@ impl CpsTransformer {
                         }),
                         cont: Rc::new(CpsExpr::Continue {
                             cont: k.clone(),
-                            value: Rc::new(CpsExpr::Literal(Rc::new(Value::Unspecified))),
+                            value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
                         }),
                     };
 
@@ -260,7 +260,7 @@ impl CpsTransformer {
                         value: Rc::new(cps_value),
                         cont: Rc::new(CpsExpr::Continue {
                             cont: k.clone(),
-                            value: Rc::new(CpsExpr::Literal(Rc::new(Value::Unspecified))),
+                            value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
                         }),
                     }
                 } else {
@@ -275,7 +275,7 @@ impl CpsTransformer {
                         }),
                         cont: Rc::new(CpsExpr::Continue {
                             cont: k.clone(),
-                            value: Rc::new(CpsExpr::Literal(Rc::new(Value::Unspecified))),
+                            value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
                         }),
                     };
 
@@ -293,7 +293,7 @@ impl CpsTransformer {
                 // Quasiquote is evaluated at runtime, so we pass the template
                 // to the CPS evaluator which will process unquote/unquote-splicing
                 CpsExpr::Quasiquote {
-                    template: template.clone(),
+                    template: *template,
                     cont: k.clone(),
                 }
             }
@@ -369,12 +369,12 @@ impl CpsTransformer {
     /// Transform a trivial expression (must be trivial!)
     fn transform_trivial(&self, expr: &CoreExpr) -> CpsExpr {
         match expr {
-            CoreExpr::Literal(v) => CpsExpr::Literal(v.clone()),
+            CoreExpr::Literal(v) => CpsExpr::Literal(*v),
             CoreExpr::Var { name, scopes } => CpsExpr::Var {
                 name: name.clone(),
                 scopes: scopes.clone(),
             },
-            CoreExpr::Quote(v) => CpsExpr::Literal(v.clone()),
+            CoreExpr::Quote(v) => CpsExpr::Literal(*v),
             CoreExpr::Lambda {
                 params,
                 body,
@@ -435,7 +435,7 @@ impl CpsTransformer {
             // Empty sequence returns unspecified
             CpsExpr::Continue {
                 cont: k.clone(),
-                value: Rc::new(CpsExpr::Literal(Rc::new(Value::Unspecified))),
+                value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
             }
         } else if exprs.len() == 1 {
             // Single expression - tail position
@@ -582,7 +582,7 @@ mod tests {
     use super::*;
 
     fn make_literal(n: i64) -> CoreExpr {
-        CoreExpr::Literal(Rc::new(Value::Integer(n)))
+        CoreExpr::Literal(TaggedValue::fixnum(n))
     }
 
     fn make_var(name: &str) -> CoreExpr {
@@ -619,7 +619,7 @@ mod tests {
 
         // (if #t 1 2)
         let expr = CoreExpr::If {
-            test: Rc::new(CoreExpr::Literal(Rc::new(Value::Boolean(true)))),
+            test: Rc::new(CoreExpr::Literal(TaggedValue::TRUE)),
             then: Rc::new(make_literal(1)),
             else_: Rc::new(make_literal(2)),
         };

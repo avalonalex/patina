@@ -4,22 +4,21 @@
 //! for Rust libraries, Scheme libraries (.sld files), and mixed libraries.
 
 use patina_interpreter::TreeWalkInterpreter;
-use patina_runtime::{Environment, Library, LibraryError, Value};
+use patina_runtime::{Environment, Library, LibraryError};
 use std::rc::Rc;
 
 /// Test builder for a simple math library
 fn build_simple_math(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
-    use std::cell::RefCell;
+    let mut heap = env.heap().borrow_mut();
 
-    // Add some simple math functions
-    env.define("pi".to_string(), Value::Real(std::f64::consts::PI));
-    env.define("e".to_string(), Value::Real(std::f64::consts::E));
-    env.define(
-        "description".to_string(),
-        Value::String(Rc::new(RefCell::new(
-            "Simple math constants".chars().collect(),
-        ))),
-    );
+    let pi_tv = heap.alloc_real(std::f64::consts::PI);
+    let e_tv = heap.alloc_real(std::f64::consts::E);
+    let desc_tv = heap.alloc_string("Simple math constants".to_string());
+    drop(heap);
+
+    env.define("pi".to_string(), pi_tv);
+    env.define("e".to_string(), e_tv);
+    env.define("description".to_string(), desc_tv);
 
     // Export only the constants
     vec!["pi".to_string(), "e".to_string()]
@@ -50,11 +49,13 @@ fn test_rust_library_builder() {
     assert!(env.get("description").is_some()); // Private, not exported
 
     // Verify pi value
-    if let Some(Value::Real(pi)) = env.get("pi") {
-        assert!((pi - std::f64::consts::PI).abs() < 1e-10);
-    } else {
-        panic!("pi should be a Real value");
-    }
+    let tv = env.get("pi").expect("pi should be defined");
+    let pi = env
+        .heap()
+        .borrow()
+        .get_real(tv)
+        .expect("pi should be a Real value");
+    assert!((pi - std::f64::consts::PI).abs() < 1e-10);
 }
 
 #[test]
@@ -62,14 +63,20 @@ fn test_library_with_exports() {
     let mut lib = Library::new(vec!["test".to_string()]);
 
     // Add exports
-    lib.export("foo".to_string(), Value::Integer(42));
-    lib.export("bar".to_string(), Value::Boolean(true));
+    lib.export_tagged("foo".to_string(), patina_core::TaggedValue::fixnum(42));
+    lib.export_tagged("bar".to_string(), patina_core::TaggedValue::TRUE);
 
     // Verify
     assert!(lib.exports_identifier("foo"));
     assert!(lib.exports_identifier("bar"));
-    assert_eq!(lib.get_export("foo").unwrap().to_string(), "42");
-    assert_eq!(lib.get_export("bar").unwrap().to_string(), "#t");
+    assert_eq!(
+        lib.get_export_tagged("foo"),
+        Some(patina_core::TaggedValue::fixnum(42))
+    );
+    assert_eq!(
+        lib.get_export_tagged("bar"),
+        Some(patina_core::TaggedValue::TRUE)
+    );
 }
 
 #[test]
@@ -128,10 +135,10 @@ fn test_library_value_type() {
 
     // library? predicate should work
     let result = interp.eval_str("(library? 42)").unwrap();
-    assert_eq!(result.to_string(), "#f");
+    assert_eq!(result, patina_core::TaggedValue::FALSE);
 
     let result = interp.eval_str("(library? \"hello\")").unwrap();
-    assert_eq!(result.to_string(), "#f");
+    assert_eq!(result, patina_core::TaggedValue::FALSE);
 
     // Note: We can't easily create Library values from Scheme yet,
     // but the predicate is registered and works

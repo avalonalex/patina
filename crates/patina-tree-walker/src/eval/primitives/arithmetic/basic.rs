@@ -5,31 +5,46 @@
 //! - Subtraction (-)
 //! - Multiplication (*)
 //! - Division (/)
+//!
+//! All operations use Heap arithmetic methods which have built-in fixnum fast paths
+//! and handle overflow with automatic BigInt promotion.
 
 use super::helpers::numeric_err;
 use crate::eval::Evaluator;
 use crate::eval::error::EvalError;
-use patina_runtime::value::Value;
+use patina_core::TaggedValue;
 
 /// (+) or (+ z1 z2 ...) - Addition
 /// Returns the sum of its arguments. With no arguments, returns 0.
-pub(super) fn add(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+///
+/// Uses Heap::numeric_add which has built-in fixnum fast path and BigInt overflow handling.
+pub(super) fn add(evaluator: &Evaluator, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
-        return Ok(Value::Integer(0));
+        return Ok(TaggedValue::fixnum(0));
     }
 
-    let mut result = args[0].clone();
+    let heap = evaluator.global_env.heap();
+    let mut heap_mut = heap.borrow_mut();
+
+    let mut acc = args[0];
     for arg in &args[1..] {
-        result = result.numeric_add(arg).map_err(|e| numeric_err(e, "+"))?;
+        acc = heap_mut
+            .numeric_add(acc, *arg)
+            .map_err(|e| numeric_err(e, "+"))?;
     }
 
-    Ok(result)
+    Ok(acc)
 }
 
 /// (-) or (- z1 z2 ...) - Subtraction
 /// With one argument, returns its negation.
 /// With multiple arguments, subtracts subsequent from the first.
-pub(super) fn subtract(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+///
+/// Uses Heap::numeric_sub/numeric_neg which have built-in fixnum fast paths.
+pub(super) fn subtract(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),
@@ -37,37 +52,61 @@ pub(super) fn subtract(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value
         });
     }
 
+    let heap = evaluator.global_env.heap();
+    let mut heap_mut = heap.borrow_mut();
+
     if args.len() == 1 {
-        return args[0].numeric_neg().map_err(|e| numeric_err(e, "-"));
+        // Negation: (- x) = -x
+        let result = heap_mut
+            .numeric_neg(args[0])
+            .map_err(|e| numeric_err(e, "-"))?;
+        return Ok(result);
     }
 
-    let mut result = args[0].clone();
+    let mut acc = args[0];
     for arg in &args[1..] {
-        result = result.numeric_sub(arg).map_err(|e| numeric_err(e, "-"))?;
+        acc = heap_mut
+            .numeric_sub(acc, *arg)
+            .map_err(|e| numeric_err(e, "-"))?;
     }
 
-    Ok(result)
+    Ok(acc)
 }
 
 /// (*) or (* z1 z2 ...) - Multiplication
 /// Returns the product of its arguments. With no arguments, returns 1.
-pub(super) fn multiply(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+///
+/// Uses Heap::numeric_mul which has built-in fixnum fast path and BigInt overflow handling.
+pub(super) fn multiply(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
-        return Ok(Value::Integer(1));
+        return Ok(TaggedValue::fixnum(1));
     }
 
-    let mut result = args[0].clone();
+    let heap = evaluator.global_env.heap();
+    let mut heap_mut = heap.borrow_mut();
+
+    let mut acc = args[0];
     for arg in &args[1..] {
-        result = result.numeric_mul(arg).map_err(|e| numeric_err(e, "*"))?;
+        acc = heap_mut
+            .numeric_mul(acc, *arg)
+            .map_err(|e| numeric_err(e, "*"))?;
     }
 
-    Ok(result)
+    Ok(acc)
 }
 
 /// (/) or (/ z1 z2 ...) - Division
 /// With one argument, returns its reciprocal.
 /// With multiple arguments, divides the first by subsequent arguments.
-pub(super) fn divide(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+///
+/// Uses Heap::numeric_div. Note: Division typically produces rationals.
+pub(super) fn divide(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),
@@ -75,17 +114,24 @@ pub(super) fn divide(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, 
         });
     }
 
+    let heap = evaluator.global_env.heap();
+    let mut heap_mut = heap.borrow_mut();
+
     if args.len() == 1 {
         // (/ x) = 1/x
-        return Value::Integer(1)
-            .numeric_div(&args[0])
-            .map_err(|e| numeric_err(e, "/"));
+        let one = TaggedValue::fixnum(1);
+        let result = heap_mut
+            .numeric_div(one, args[0])
+            .map_err(|e| numeric_err(e, "/"))?;
+        return Ok(result);
     }
 
-    let mut result = args[0].clone();
+    let mut acc = args[0];
     for arg in &args[1..] {
-        result = result.numeric_div(arg).map_err(|e| numeric_err(e, "/"))?;
+        acc = heap_mut
+            .numeric_div(acc, *arg)
+            .map_err(|e| numeric_err(e, "/"))?;
     }
 
-    Ok(result)
+    Ok(acc)
 }

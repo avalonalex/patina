@@ -21,7 +21,7 @@
 //! use patina_runtime::Backend;
 //!
 //! let backend = TreeWalker::new();
-//! let result = backend.eval_global(&expr)?;
+//! let result = backend.eval_global(expr)?;
 //! ```
 
 pub mod backend;

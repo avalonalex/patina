@@ -2,8 +2,8 @@
 //!
 //! Internal primitives for (scheme eval).
 
+use crate::Arity;
 use crate::environment::Environment;
-use crate::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
 /// Build the (patina internal eval) library
@@ -18,14 +18,7 @@ pub fn build_internal_eval(_name: Vec<String>, env: Rc<Environment>) -> Vec<Stri
 
     let mut exports = Vec::new();
     for (name, arity) in &primitives {
-        env.define(
-            name.to_string(),
-            Value::Procedure(Rc::new(Procedure::Primitive {
-                name,
-                arity: arity.clone(),
-                library: library_name.clone(),
-            })),
-        );
+        env.define_primitive(name, arity.clone(), library_name.clone());
         exports.push(name.to_string());
     }
 

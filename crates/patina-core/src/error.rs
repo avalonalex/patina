@@ -2,24 +2,57 @@
 //!
 //! This module provides a consistent error handling foundation across all Patina components.
 //! It defines:
+//! - `ExceptionKind`: R7RS exception classification
 //! - `ErrorKind`: Classification of all possible errors
 //! - `SourceLocation`: Source file location for error reporting
 //! - `ErrorDetail`: Rich error context including location and irritants
-//!
-//! ## Error Categories
-//!
-//! Errors are divided into two categories:
-//!
-//! 1. **Scheme-catchable** - Can be caught by `guard` or `with-exception-handler`
-//!    - Type, Arity, Domain, Bounds, Lookup, Application, FileIO, Read, Syntax, User
-//!
-//! 2. **Rust-only** - Implementation errors that cannot be caught in Scheme
-//!    - Internal (interpreter bugs), ControlFlow (continuation mechanics)
 
 use std::fmt;
 use std::rc::Rc;
 
-use crate::value::{ExceptionKind, ExceptionObject, Value};
+use crate::tagged_value::TaggedValue;
+
+// =============================================================================
+// Exception Types (R7RS Section 6.11)
+// =============================================================================
+
+/// The kind of exception
+///
+/// R7RS defines specific predicates for different exception types:
+/// - `error-object?` - any error object created by `error`
+/// - `file-error?` - I/O errors related to files
+/// - `read-error?` - errors during parsing/reading
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExceptionKind {
+    /// Generic error created by `(error message irritant ...)`
+    Error,
+    /// File I/O error (maps from EvalError::IOError)
+    /// Satisfies `file-error?` predicate
+    FileError,
+    /// Read/parse error (maps from parse errors)
+    /// Satisfies `read-error?` predicate
+    ReadError,
+    /// User-defined exception kind
+    Custom(String),
+}
+
+/// Exception object for R7RS exception handling
+///
+/// Created by the `error` procedure or by converting internal errors.
+/// Can be caught by `guard` or `with-exception-handler`.
+#[derive(Debug, Clone)]
+pub struct ExceptionObject {
+    /// The kind of exception (error, file-error, read-error, etc.)
+    pub kind: ExceptionKind,
+    /// The error message string
+    pub message: String,
+    /// Additional values related to the error ("irritants" in R7RS terminology)
+    pub irritants: Vec<TaggedValue>,
+}
+
+// =============================================================================
+// Source Location
+// =============================================================================
 
 /// Source location for error reporting
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,29 +105,15 @@ impl fmt::Display for SourceLocation {
     }
 }
 
+// =============================================================================
+// Error Classification
+// =============================================================================
+
 /// Classification of errors
 ///
 /// This enum determines:
 /// 1. Whether the error is catchable in Scheme (`guard`, `with-exception-handler`)
 /// 2. Which R7RS predicate matches (`error-object?`, `file-error?`, `read-error?`)
-///
-/// ## Catchable Errors (become Scheme exceptions)
-///
-/// - `Type`: Type mismatch (expected X, got Y)
-/// - `Arity`: Wrong number of arguments
-/// - `Domain`: Domain error (division by zero, invalid argument value)
-/// - `Bounds`: Index/key out of bounds
-/// - `Lookup`: Variable not found
-/// - `Application`: Tried to call non-procedure
-/// - `FileIO`: File I/O error - maps to `file-error?` predicate
-/// - `Read`: Read/parse error - maps to `read-error?` predicate
-/// - `Syntax`: Syntax error (macro expansion, invalid special form)
-/// - `User`: User-raised error via `(error ...)`
-///
-/// ## Non-Catchable Errors (stay in Rust)
-///
-/// - `Internal`: Internal interpreter bug - should never happen
-/// - `ControlFlow`: Control flow mechanism (continuation escape), not a real error
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorKind {
     // === Catchable errors (become Scheme exceptions) ===
@@ -176,12 +195,16 @@ impl fmt::Display for ErrorKind {
     }
 }
 
+// =============================================================================
+// Error Detail
+// =============================================================================
+
 /// Detailed error information that can be converted to Scheme exception
 ///
 /// This struct captures all relevant context for an error:
 /// - The kind of error (for classification)
 /// - Human-readable message
-/// - Related values (irritants in R7RS terminology)
+/// - Related values (irritants in R7RS terminology) as TaggedValues
 /// - Source location (if available)
 #[derive(Debug, Clone)]
 pub struct ErrorDetail {
@@ -190,7 +213,7 @@ pub struct ErrorDetail {
     /// Human-readable message
     pub message: String,
     /// Values related to the error (irritants in R7RS)
-    pub irritants: Vec<Value>,
+    pub irritants: Vec<TaggedValue>,
     /// Where the error occurred
     pub location: Option<SourceLocation>,
 }
@@ -207,13 +230,13 @@ impl ErrorDetail {
     }
 
     /// Add an irritant value
-    pub fn with_irritant(mut self, value: Value) -> Self {
+    pub fn with_irritant(mut self, value: TaggedValue) -> Self {
         self.irritants.push(value);
         self
     }
 
     /// Add multiple irritant values
-    pub fn with_irritants(mut self, values: Vec<Value>) -> Self {
+    pub fn with_irritants(mut self, values: Vec<TaggedValue>) -> Self {
         self.irritants = values;
         self
     }
@@ -235,20 +258,6 @@ impl ErrorDetail {
         self.kind.is_catchable()
     }
 
-    /// Convert to Scheme exception object
-    pub fn to_exception(&self) -> ExceptionObject {
-        ExceptionObject {
-            kind: self.kind.to_exception_kind(),
-            message: self.format_message(),
-            irritants: self.irritants.clone(),
-        }
-    }
-
-    /// Convert to Scheme exception Value
-    pub fn to_exception_value(&self) -> Value {
-        Value::Exception(Rc::new(self.to_exception()))
-    }
-
     /// Format message with location if available
     pub fn format_message(&self) -> String {
         match &self.location {
@@ -257,19 +266,20 @@ impl ErrorDetail {
         }
     }
 
-    /// Format irritants for display
+    /// Format irritants for display using TaggedValue's Display impl.
+    /// For full-fidelity formatting of heap objects, use datum_writer with a Heap reference.
     pub fn format_irritants(&self) -> String {
         self.irritants
             .iter()
-            .map(|v| format!("{}", v))
+            .map(|tv| format!("{}", tv))
             .collect::<Vec<_>>()
             .join(" ")
     }
 
     // === Convenience constructors ===
 
-    /// Create a type error
-    pub fn type_error(message: impl Into<String>, got: Value) -> Self {
+    /// Create a type error with a TaggedValue irritant
+    pub fn type_error(message: impl Into<String>, got: TaggedValue) -> Self {
         Self::new(ErrorKind::Type, message).with_irritant(got)
     }
 
@@ -279,7 +289,7 @@ impl ErrorDetail {
             ErrorKind::Arity,
             format!("expected {} arguments, got {}", expected, actual),
         )
-        .with_irritant(Value::Integer(actual as i64))
+        .with_irritant(TaggedValue::fixnum(actual as i64))
     }
 
     /// Create a domain error (e.g., division by zero)
@@ -293,22 +303,20 @@ impl ErrorDetail {
             ErrorKind::Bounds,
             format!("index {} out of bounds for length {}", index, len),
         )
-        .with_irritants(vec![Value::Integer(index), Value::Integer(len as i64)])
+        .with_irritants(vec![
+            TaggedValue::fixnum(index),
+            TaggedValue::fixnum(len as i64),
+        ])
     }
 
     /// Create a lookup error (undefined variable)
     pub fn lookup_error(name: &str) -> Self {
         Self::new(ErrorKind::Lookup, format!("undefined variable: {}", name))
-            .with_irritant(Value::symbol(name))
     }
 
     /// Create an application error (not a procedure)
-    pub fn application_error(value: &Value) -> Self {
-        Self::new(
-            ErrorKind::Application,
-            format!("not a procedure: {}", value),
-        )
-        .with_irritant(value.clone())
+    pub fn application_error(desc: &str) -> Self {
+        Self::new(ErrorKind::Application, format!("not a procedure: {}", desc))
     }
 
     /// Create a file I/O error
@@ -327,7 +335,7 @@ impl ErrorDetail {
     }
 
     /// Create a user error (from Scheme's `error` procedure)
-    pub fn user_error(message: impl Into<String>, irritants: Vec<Value>) -> Self {
+    pub fn user_error(message: impl Into<String>, irritants: Vec<TaggedValue>) -> Self {
         Self::new(ErrorKind::User, message).with_irritants(irritants)
     }
 
@@ -391,13 +399,13 @@ mod tests {
     }
 
     #[test]
-    fn test_error_detail_to_exception() {
-        let err = ErrorDetail::type_error("expected number", Value::Boolean(true));
-        let exc = err.to_exception();
+    fn test_error_detail_type_error() {
+        let err = ErrorDetail::type_error("expected number", TaggedValue::TRUE);
 
-        assert_eq!(exc.kind, ExceptionKind::Error);
-        assert!(exc.message.contains("expected number"));
-        assert_eq!(exc.irritants.len(), 1);
+        assert_eq!(err.kind, ErrorKind::Type);
+        assert!(err.message.contains("expected number"));
+        assert_eq!(err.irritants.len(), 1);
+        assert_eq!(err.irritants[0], TaggedValue::TRUE);
     }
 
     #[test]

@@ -9,31 +9,30 @@ mod primitives;
 pub use cps_eval::{CpsEvaluator, eval_cps};
 pub use error::EvalError;
 
+// Re-export datum writer functions for use by interpreter crate
+pub use primitives::io::datum_writer::{format_display_tagged, format_write_tagged};
+
 use debug::DebugConfig;
 use patina_runtime::environment::Environment;
 use patina_runtime::library_loader::LibraryLoaderRegistry;
 use patina_runtime::library_registry::LibraryRegistry;
-use patina_runtime::value::Value;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-/// Result of evaluation step in the trampoline
+/// Result of evaluation step
 ///
-/// The trampoline pattern enables tail call optimization by converting
-/// recursive calls into an iterative loop. Instead of making recursive
-/// calls that grow the stack, tail positions return `TailCall` which
-/// tells the trampoline to continue with the next computation.
+/// Primitives return `Tagged` for final values, or `TailCallPrimitive`
+/// to participate in tail call optimization (used by `call-with-values`).
 #[derive(Debug)]
 pub enum EvalResult {
-    /// Final value - evaluation complete
-    Value(Value),
-    /// Tail call - continue trampolining with this expression and environment
-    TailCall { expr: Value, env: Rc<Environment> },
+    /// Final value as TaggedValue
+    Tagged(patina_core::TaggedValue),
     /// Tail call to a primitive procedure with already-evaluated arguments
-    /// This enables primitives like call-with-values to participate in tail call optimization
-    /// The procedure and arguments are already evaluated, so we just need to apply them
-    TailCallPrimitive { proc: Value, args: Vec<Value> },
+    TailCallPrimitive {
+        proc: patina_core::TaggedValue,
+        args: Vec<patina_core::TaggedValue>,
+    },
 }
 
 pub struct Evaluator {
@@ -296,8 +295,8 @@ impl Evaluator {
             .borrow()
             .get(&["scheme".to_string(), "base".to_string()])
         {
-            for (name, value) in lib.exports.iter() {
-                self.global_env.define(name.clone(), value.clone());
+            for (name, tv) in lib.exports_iter_tagged() {
+                self.global_env.define(name.clone(), tv);
             }
         }
 
@@ -307,8 +306,8 @@ impl Evaluator {
             .borrow()
             .get(&["patina".to_string(), "debug".to_string()])
         {
-            for (name, value) in lib.exports.iter() {
-                self.global_env.define(name.clone(), value.clone());
+            for (name, tv) in lib.exports_iter_tagged() {
+                self.global_env.define(name.clone(), tv);
             }
         }
 
@@ -318,8 +317,8 @@ impl Evaluator {
             .borrow()
             .get(&["chibi".to_string(), "test".to_string()])
         {
-            for (name, value) in lib.exports.iter() {
-                self.global_env.define(name.clone(), value.clone());
+            for (name, tv) in lib.exports_iter_tagged() {
+                self.global_env.define(name.clone(), tv);
             }
         }
     }
@@ -389,8 +388,8 @@ impl Evaluator {
         // Create an evaluation environment that has access to (scheme base) primitives
         // The extras file needs these for macro definitions (display, write, newline, etc.)
         let eval_env = {
-            // Start with library environment as base
-            let env = Rc::new(Environment::new());
+            // Start with library environment as base, sharing global heap for TaggedValue compatibility
+            let env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
 
             // Import all (scheme base) exports if this isn't (scheme base) itself
             let is_scheme_base = name == ["scheme".to_string(), "base".to_string()];
@@ -399,8 +398,8 @@ impl Evaluator {
                 if let Some(scheme_base) = registry.get(&["scheme".to_string(), "base".to_string()])
                 {
                     // Add all (scheme base) exports to the evaluation environment
-                    for (export_name, value) in &scheme_base.exports {
-                        env.define(export_name.clone(), value.clone());
+                    for (export_name, tv) in scheme_base.exports_iter_tagged() {
+                        env.define(export_name.clone(), tv);
                     }
                 }
             }
@@ -414,7 +413,10 @@ impl Evaluator {
         };
 
         // Parse and evaluate all expressions in the evaluation environment
-        let mut parser = match patina_frontend::Parser::new(&extras_content) {
+        // Use shared heap for parser allocations
+        let heap = self.global_env.heap();
+        let mut parser = match patina_frontend::Parser::new_with_heap(&extras_content, heap.clone())
+        {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
@@ -431,9 +433,9 @@ impl Evaluator {
 
         loop {
             match parser.parse() {
-                Ok(expr) => {
-                    // Desugar to CoreExpr
-                    let core_expr = match desugarer.desugar(&expr) {
+                Ok(tagged) => {
+                    // Desugar TaggedValue to CoreExpr - desugar_tagged manages heap borrows internally
+                    let core_expr = match desugarer.desugar_tagged(tagged, heap) {
                         Ok(ce) => ce,
                         Err(e) => {
                             tracing::warn!(
@@ -527,9 +529,14 @@ impl Evaluator {
         };
 
         // Try simple loaders first (Rust libraries)
+        // Pass the global heap so library environments share the same heap for TaggedValue compatibility
         let lib_result = {
             let loaders = self.loader_registry.borrow();
-            loaders.try_simple_load(name, &search_paths)?
+            loaders.try_simple_load_with_heap(
+                name,
+                &search_paths,
+                self.global_env.heap().clone(),
+            )?
         };
 
         let (lib, loaded_via_rust) = if let Some(lib) = lib_result {
@@ -547,7 +554,12 @@ impl Evaluator {
 
             let parsed = {
                 let loaders = self.loader_registry.borrow();
-                loaders.try_parse_with_library_checker(name, &search_paths, &can_load_library)?
+                loaders.try_parse_with_heap_and_library_checker(
+                    name,
+                    &search_paths,
+                    self.global_env.heap().clone(),
+                    &can_load_library,
+                )?
             };
 
             if let Some(parsed) = parsed {
@@ -586,7 +598,7 @@ impl Evaluator {
                     // Clear and re-export everything
                     library.exports.clear();
                     for (binding_name, value) in all_bindings {
-                        library.export(binding_name, value);
+                        library.export_tagged(binding_name, value);
                     }
                 }
             }
@@ -639,8 +651,8 @@ impl Evaluator {
     ) -> Result<patina_runtime::Library, patina_runtime::LibraryError> {
         use patina_runtime::library_loader::ExportSpec;
 
-        // Create a fresh environment for this library
-        let lib_env = Rc::new(Environment::new());
+        // Create a fresh environment for this library, sharing global heap for TaggedValue compatibility
+        let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
 
         // Step 1: Resolve imports
         for import_set in &parsed.imports {
@@ -651,19 +663,19 @@ impl Evaluator {
         // Use CPS evaluation so that all lambdas become CpsLambdas, enabling
         // proper continuation support throughout the codebase.
         let desugarer = patina_frontend::Desugarer::with_env(lib_env.clone());
-        for expr in &parsed.body {
-            // Desugar to CoreExpr
-            let core_expr =
-                desugarer
-                    .desugar(expr)
-                    .map_err(|e| patina_runtime::LibraryError::ParseError {
-                        file: parsed
-                            .source
-                            .as_ref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default(),
-                        message: format!("Failed to desugar expression: {}", e),
-                    })?;
+        let shared_heap = lib_env.heap().clone();
+        for tv in &parsed.body {
+            // Desugar TaggedValue to CoreExpr
+            let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
+                patina_runtime::LibraryError::ParseError {
+                    file: parsed
+                        .source
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    message: format!("Failed to desugar expression: {}", e),
+                }
+            })?;
 
             // Evaluate using CPS evaluator
             eval_cps(&core_expr, lib_env.clone(), self).map_err(|e| {
@@ -689,7 +701,7 @@ impl Evaluator {
                 ExportSpec::Identifier(name) => {
                     // Export with same name
                     if let Some(value) = lib_env.get(name) {
-                        library.export(name.clone(), value);
+                        library.export_tagged(name.clone(), value);
                     } else {
                         return Err(patina_runtime::LibraryError::ParseError {
                             file: library
@@ -705,7 +717,7 @@ impl Evaluator {
                 ExportSpec::Rename { internal, external } => {
                     // Export with different name
                     if let Some(value) = lib_env.get(internal) {
-                        library.export(external.clone(), value);
+                        library.export_tagged(external.clone(), value);
                     } else {
                         return Err(patina_runtime::LibraryError::ParseError {
                             file: library
@@ -738,8 +750,8 @@ impl Evaluator {
                 let imported_lib = self.load_library(lib_name)?;
 
                 // Import all exports into this library's environment
-                for (name, value) in &imported_lib.exports {
-                    lib_env.define(name.clone(), value.clone());
+                for (name, value) in imported_lib.exports_iter_tagged() {
+                    lib_env.define(name.clone(), value);
                 }
                 Ok(())
             }
@@ -750,7 +762,8 @@ impl Evaluator {
             } => {
                 // Import only specific identifiers
                 // First process the inner import set to get the bindings
-                let temp_env = Rc::new(Environment::new());
+                // Use shared heap for TaggedValue compatibility
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_set(import_set, &temp_env)?;
 
                 // Then import only the specified identifiers
@@ -772,7 +785,8 @@ impl Evaluator {
                 identifiers,
             } => {
                 // Import all except specific identifiers
-                let temp_env = Rc::new(Environment::new());
+                // Use shared heap for TaggedValue compatibility
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_set(import_set, &temp_env)?;
 
                 let exclude: HashSet<_> = identifiers.iter().collect();
@@ -789,7 +803,8 @@ impl Evaluator {
 
             ImportSet::Prefix { import_set, prefix } => {
                 // Import with prefix: foo → prefix:foo
-                let temp_env = Rc::new(Environment::new());
+                // Use shared heap for TaggedValue compatibility
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_set(import_set, &temp_env)?;
 
                 // Import all bindings with the prefix added
@@ -806,7 +821,8 @@ impl Evaluator {
                 renames,
             } => {
                 // Import with renames: old-name → new-name
-                let temp_env = Rc::new(Environment::new());
+                // Use shared heap for TaggedValue compatibility
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_set(import_set, &temp_env)?;
 
                 // Apply renames
@@ -846,8 +862,8 @@ impl Evaluator {
 
                 // Import all exports into the current environment
                 for export_name in lib.export_names() {
-                    if let Some(value) = lib.get_export(export_name) {
-                        env.define(export_name.to_string(), value.clone());
+                    if let Some(value) = lib.get_export_tagged(export_name) {
+                        env.define(export_name.to_string(), value);
                     }
                 }
                 Ok(())
@@ -858,7 +874,8 @@ impl Evaluator {
                 identifiers,
             } => {
                 // First process the nested import set into a temporary environment
-                let temp_env = Rc::new(Environment::new());
+                // Use shared heap for TaggedValue compatibility
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_for_eval(import_set, &temp_env)?;
 
                 // Then import only the specified identifiers
@@ -876,7 +893,8 @@ impl Evaluator {
                 identifiers,
             } => {
                 // Process nested import set into temp environment
-                let temp_env = Rc::new(Environment::new());
+                // Use shared heap for TaggedValue compatibility
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_for_eval(import_set, &temp_env)?;
 
                 // Import all except specified identifiers
@@ -891,7 +909,8 @@ impl Evaluator {
 
             ImportSet::Prefix { import_set, prefix } => {
                 // Process nested import set into temp environment
-                let temp_env = Rc::new(Environment::new());
+                // Use shared heap for TaggedValue compatibility
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_for_eval(import_set, &temp_env)?;
 
                 // Import all with prefix
@@ -907,7 +926,8 @@ impl Evaluator {
                 renames,
             } => {
                 // Process nested import set into temp environment
-                let temp_env = Rc::new(Environment::new());
+                // Use shared heap for TaggedValue compatibility
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_for_eval(import_set, &temp_env)?;
 
                 // Build rename map

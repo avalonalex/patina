@@ -3,8 +3,8 @@
 //! This module contains all the debug printing logic for macro expansion,
 //! keeping it separate from the core expansion algorithm.
 
-use patina_runtime::debug_format::format_with_scopes;
-use patina_runtime::{CompiledRule, MatchEnv, PVRef, ScopeId, Value};
+use patina_core::{SharedHeap, TaggedValue, format_tagged_with_scopes};
+use patina_runtime::{CompiledRule, MatchEnv, PVRef, ScopeId};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -41,19 +41,29 @@ impl DebugContext {
         macro_scope: ScopeId,
         definition_scopes: &patina_runtime::ScopeSet,
         rules: &[CompiledRule],
-        args: &Value,
+        args: TaggedValue,
+        heap: &SharedHeap,
     ) {
         if !self.is_active() {
             return;
         }
 
+        let heap_ref = heap.borrow();
         println!("[MACRO] ========================================");
         println!("[MACRO] Expanding macro: {}", macro_name);
         println!("[MACRO]   Fresh macro scope: {}", macro_scope);
         println!("[MACRO]   Definition scopes: {}", definition_scopes);
 
         self.log_macro_rules(rules);
-        self.log_input(args);
+
+        println!(
+            "[MACRO]   Input (normal):      {}",
+            patina_core::format_tagged(args, &heap_ref)
+        );
+        println!(
+            "[MACRO]   Input (with scopes): {}",
+            format_tagged_with_scopes(args, &heap_ref)
+        );
 
         println!("[MACRO]   Trying {} rule(s):", rules.len());
     }
@@ -75,27 +85,27 @@ impl DebugContext {
         println!("[MACRO]   ");
     }
 
-    /// Log the input arguments
-    fn log_input(&self, args: &Value) {
-        println!("[MACRO]   Input (normal):      {}", args);
-        println!(
-            "[MACRO]   Input (with scopes): {}",
-            format_with_scopes(args)
-        );
-    }
-
     /// Log the result of flipping scopes on input
-    pub fn log_input_flip(&self, macro_scope: ScopeId, flipped_args: &Value) {
+    pub fn log_input_flip(
+        &self,
+        macro_scope: ScopeId,
+        flipped_args: TaggedValue,
+        heap: &SharedHeap,
+    ) {
         if !self.debug_enabled {
             return;
         }
 
+        let heap_ref = heap.borrow();
         println!("[MACRO]   ");
         println!(
             "[MACRO]   After input flip (scope {} toggled):",
             macro_scope
         );
-        println!("[MACRO]     {}", format_with_scopes(flipped_args));
+        println!(
+            "[MACRO]     {}",
+            format_tagged_with_scopes(flipped_args, &heap_ref)
+        );
     }
 
     /// Log the start of trying a rule
@@ -140,39 +150,57 @@ impl DebugContext {
     fn log_pattern_bindings(&self, match_env: &MatchEnv, pvar_names: &HashMap<PVRef, Rc<str>>) {
         println!("[MACRO]   === Pattern variable bindings ===");
         for (pvref, name) in pvar_names {
-            if let Some(value) = match_env.get(*pvref, &[]) {
-                println!("[MACRO]     {} = {}", name, format_with_scopes(&value));
+            // Note: match_env.get() returns TaggedValue, show debug representation
+            if let Some(tv) = match_env.get(*pvref, &[]) {
+                println!("[MACRO]     {} = {:?}", name, tv);
             }
         }
     }
 
     /// Log the expanded result before output flip
-    pub fn log_before_output_flip(&self, expanded: &Value) {
+    pub fn log_before_output_flip(&self, expanded: TaggedValue, heap: &SharedHeap) {
         if !self.debug_enabled {
             return;
         }
 
+        let heap_ref = heap.borrow();
         println!("[MACRO]   ");
         println!("[MACRO]   Before output flip:");
-        println!("[MACRO]     {}", format_with_scopes(expanded));
+        println!(
+            "[MACRO]     {}",
+            format_tagged_with_scopes(expanded, &heap_ref)
+        );
     }
 
     /// Log the final result after output flip
-    pub fn log_expansion_complete(&self, macro_name: &str, macro_scope: ScopeId, result: &Value) {
+    pub fn log_expansion_complete(
+        &self,
+        macro_name: &str,
+        macro_scope: ScopeId,
+        result: TaggedValue,
+        heap: &SharedHeap,
+    ) {
         if !self.is_active() {
             return;
         }
 
+        let heap_ref = heap.borrow();
         println!("[MACRO]   ");
         println!(
             "[MACRO]   After output flip (scope {} toggled):",
             macro_scope
         );
-        println!("[MACRO]     (with scopes) {}", format_with_scopes(result));
+        println!(
+            "[MACRO]     (with scopes) {}",
+            format_tagged_with_scopes(result, &heap_ref)
+        );
         println!("[MACRO] ");
         println!("[MACRO] ========================================");
         println!("[MACRO] Expansion of '{}' complete!", macro_name);
-        println!("[MACRO] Result: {}", result);
+        println!(
+            "[MACRO] Result: {}",
+            patina_core::format_tagged(result, &heap_ref)
+        );
         println!("[MACRO] ========================================");
         println!("[MACRO] ");
     }
@@ -204,7 +232,8 @@ pub fn record_expansion_step(
     macro_name: &Rc<str>,
     rule_idx: usize,
     num_rules: usize,
-    args: &Value,
+    args: TaggedValue,
+    heap: &SharedHeap,
 ) {
     if !should_trace {
         return;
@@ -213,6 +242,11 @@ pub fn record_expansion_step(
     use crate::error::ExpansionStep;
     use crate::tracer::MacroTracer;
 
-    let step = ExpansionStep::new(macro_name.clone(), rule_idx, num_rules, format!("{}", args));
+    let step = ExpansionStep::new(
+        macro_name.clone(),
+        rule_idx,
+        num_rules,
+        patina_core::format_tagged(args, &heap.borrow()),
+    );
     MacroTracer::record_step(step);
 }

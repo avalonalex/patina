@@ -1200,7 +1200,8 @@ mod tests {
         use std::fs;
 
         // Create a temp file path
-        let temp_path = "/tmp/patina_test_port.txt";
+        let temp_path = std::env::temp_dir().join("patina_test_port.txt");
+        let temp_path = temp_path.to_str().unwrap();
 
         // Write to file
         {
@@ -1238,17 +1239,18 @@ mod tests {
     fn test_file_port_display() {
         use std::fs;
 
-        let temp_path = "/tmp/patina_test_display.txt";
+        let temp_path = std::env::temp_dir().join("patina_test_display.txt");
+        let temp_path = temp_path.to_str().unwrap();
 
         // Create the file
         let port = Port::open_output_file(temp_path).unwrap();
         let display = format!("{}", port);
         assert!(display.contains("output"));
-        assert!(display.contains(temp_path));
+        assert!(display.contains("patina_test_display.txt"));
 
         // Cleanup
         drop(port);
-        fs::remove_file(temp_path).unwrap();
+        let _ = fs::remove_file(temp_path);
     }
 
     #[test]

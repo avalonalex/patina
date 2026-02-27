@@ -31,7 +31,8 @@ mod tests;
 
 use super::utils::ELLIPSIS;
 use crate::error::MacroError;
-use patina_runtime::{Environment, LiteralBinding, PVRef, ScopeSet, Value};
+use patina_core::{SharedHeap, TaggedValue};
+use patina_runtime::{Environment, LiteralBinding, PVRef, Pattern, ScopeSet, Template};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -78,6 +79,9 @@ pub struct Compiler {
 
     /// Maximum ellipsis level seen so far
     pub(super) max_level: usize,
+
+    /// Shared heap for converting Value literals to TaggedValue at compile time
+    pub(super) heap: SharedHeap,
 }
 
 impl Compiler {
@@ -136,7 +140,7 @@ impl Compiler {
     /// # Arguments
     /// - `literals`: List of literal identifier names
     /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
-    pub fn new(literals: Vec<Rc<str>>, ellipsis: Option<Rc<str>>) -> Self {
+    pub fn new(literals: Vec<Rc<str>>, ellipsis: Option<Rc<str>>, heap: SharedHeap) -> Self {
         let empty_shadowed = std::collections::HashSet::new();
         let literal_bindings =
             Self::resolve_literal_bindings(&literals, None, &ScopeSet::new(), &empty_shadowed);
@@ -149,6 +153,7 @@ impl Compiler {
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
+            heap,
         }
     }
 
@@ -162,6 +167,7 @@ impl Compiler {
         literals: Vec<Rc<str>>,
         ellipsis: Option<Rc<str>>,
         env: Rc<Environment>,
+        heap: SharedHeap,
     ) -> Self {
         let definition_scopes = ScopeSet::new();
         let empty_shadowed = std::collections::HashSet::new();
@@ -180,6 +186,7 @@ impl Compiler {
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
+            heap,
         }
     }
 
@@ -198,6 +205,7 @@ impl Compiler {
         ellipsis: Option<Rc<str>>,
         env: Rc<Environment>,
         scopes: ScopeSet,
+        heap: SharedHeap,
     ) -> Self {
         let empty_shadowed = std::collections::HashSet::new();
         let literal_bindings =
@@ -211,6 +219,7 @@ impl Compiler {
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
+            heap,
         }
     }
 
@@ -235,6 +244,7 @@ impl Compiler {
         env: Rc<Environment>,
         scopes: ScopeSet,
         shadowed_names: &std::collections::HashSet<Rc<str>>,
+        heap: SharedHeap,
     ) -> Self {
         let literal_bindings =
             Self::resolve_literal_bindings(&literals, Some(&env), &scopes, shadowed_names);
@@ -247,21 +257,32 @@ impl Compiler {
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
+            heap,
         }
+    }
+
+    /// Create a literal pattern from a TaggedValue
+    pub(super) fn make_literal_pattern(&self, form: TaggedValue) -> Pattern {
+        Pattern::Literal(form)
+    }
+
+    /// Create a literal template from a TaggedValue
+    pub(super) fn make_literal_template(&self, form: TaggedValue) -> Template {
+        Template::Literal(form)
     }
 
     /// Compile a complete macro definition
     ///
     /// # Arguments
     /// - `name`: Macro name
-    /// - `rules`: List of (pattern, template) pairs as S-expressions
+    /// - `rules`: List of (pattern, template) pairs as TaggedValues
     ///
     /// # Returns
     /// Compiled macro with all rules in PVREF form
     pub fn compile_macro(
         &mut self,
         name: Rc<str>,
-        rules: Vec<(Value, Value)>,
+        rules: Vec<(TaggedValue, TaggedValue)>,
     ) -> Result<CompiledMacro, MacroError> {
         let mut compiled_rules = Vec::new();
         let mut max_pvars = 0;
@@ -275,8 +296,8 @@ impl Compiler {
             // R7RS: The first element of each pattern is the macro keyword placeholder
             // and should be ignored (treated as wildcard). This is true even if the
             // symbol appears in the literals list (e.g., when _ is in literals).
-            let pattern = self.compile_rule_pattern(&pat_form, 0)?;
-            let template = self.compile_template(&tmpl_form, 0)?;
+            let pattern = self.compile_rule_pattern(pat_form, 0)?;
+            let template = self.compile_template(tmpl_form, 0)?;
 
             // Build reverse mapping: PVREF -> name (for debug output)
             let pvar_names: HashMap<PVRef, Rc<str>> = self
@@ -310,6 +331,7 @@ impl Compiler {
             rules: compiled_rules,
             max_pvars,
             definition_scopes: self.definition_scopes.clone(),
+            heap: self.heap.clone(),
         })
     }
 }

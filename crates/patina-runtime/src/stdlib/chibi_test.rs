@@ -8,8 +8,8 @@
 //! - test-end: End a test suite
 //! - test: Run a single test (implemented as syntax)
 
+use crate::Arity;
 use crate::environment::Environment;
-use crate::value::{Arity, Procedure, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -39,48 +39,14 @@ pub fn build_chibi_test_primitives(_name: Vec<String>, env: Rc<Environment>) -> 
         "primitives".to_string(),
     ];
 
-    // test-begin: Start a test suite
-    env.define(
-        "test-begin".to_string(),
-        Value::Procedure(Rc::new(Procedure::Primitive {
-            name: "test-begin",
-            arity: Arity::Exact(1),
-            library: library_name.clone(),
-        })),
+    env.define_primitive("test-begin", Arity::Exact(1), library_name.clone());
+    env.define_primitive("test-end", Arity::Min(0), library_name.clone());
+    env.define_primitive(
+        "test-increment-passed",
+        Arity::Exact(0),
+        library_name.clone(),
     );
-
-    // test-end: End a test suite
-    env.define(
-        "test-end".to_string(),
-        Value::Procedure(Rc::new(Procedure::Primitive {
-            name: "test-end",
-            arity: Arity::Min(0),
-            library: library_name.clone(),
-        })),
-    );
-
-    // test-increment-passed: Increment passed count (internal)
-    env.define(
-        "test-increment-passed".to_string(),
-        Value::Procedure(Rc::new(Procedure::Primitive {
-            name: "test-increment-passed",
-            arity: Arity::Exact(0),
-            library: library_name.clone(),
-        })),
-    );
-
-    // test-increment-failed: Increment failed count (internal)
-    env.define(
-        "test-increment-failed".to_string(),
-        Value::Procedure(Rc::new(Procedure::Primitive {
-            name: "test-increment-failed",
-            arity: Arity::Exact(0),
-            library: library_name.clone(),
-        })),
-    );
-
-    // Note: 'test' is defined as a macro in bootstrap.scm and is globally available
-    // We don't need to export it from this library since it's already available
+    env.define_primitive("test-increment-failed", Arity::Exact(0), library_name);
 
     vec![
         "test-begin".to_string(),
@@ -152,7 +118,7 @@ pub fn test_increment_error() {
 
 /// Record a test result
 #[allow(dead_code)]
-pub fn record_test(passed: bool, expr_str: &str, expected: &Value, actual: &Value) {
+pub fn record_test(passed: bool, expr_str: &str, expected: &str, actual: &str) {
     TEST_STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.tests_run += 1;

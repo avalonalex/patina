@@ -20,8 +20,8 @@ pub mod tracer;
 // Re-export main types at crate level
 pub use error::{ExpansionStep, MacroError};
 pub use macro_expander::{
-    CompiledMacro, CompiledMacroExpander, CompiledRule, Compiler, ExpandError, Expander,
-    ExpansionResult, Identifier, MacroExpander, MatchError, Matcher, Pattern, Template,
-    TestExpander, expand_macro, expand_macro_with_shadowed,
+    CompiledMacro, CompiledRule, Compiler, ExpandError, Expander, Identifier, MatchError, Matcher,
+    ParsedSyntaxRules, Pattern, SyntaxRulesParseError, Template, TestExpander,
+    expand_macro_with_shadowed_tagged, parse_syntax_rules,
 };
 pub use tracer::MacroTracer;

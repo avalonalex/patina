@@ -43,5 +43,5 @@ fn test_chibi_test_basic_functionality() {
     );
 
     assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(result.unwrap().to_string(), "#t");
+    assert_eq!(result.unwrap(), patina_core::TaggedValue::TRUE);
 }

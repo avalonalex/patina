@@ -3,8 +3,8 @@
 //! Internal primitives used by the define-record-type macro.
 //! These are not directly exported to users.
 
+use crate::Arity;
 use crate::environment::Environment;
-use crate::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
 /// Build the (patina internal records) library
@@ -33,14 +33,7 @@ pub fn build_internal_records(_name: Vec<String>, env: Rc<Environment>) -> Vec<S
     ];
 
     for (name, arity) in &primitives {
-        env.define(
-            name.to_string(),
-            Value::Procedure(Rc::new(Procedure::Primitive {
-                name,
-                arity: arity.clone(),
-                library: library_name.clone(),
-            })),
-        );
+        env.define_primitive(name, arity.clone(), library_name.clone());
     }
 
     primitives

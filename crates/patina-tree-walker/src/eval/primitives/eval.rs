@@ -10,44 +10,38 @@ use super::super::Evaluator;
 use super::super::cps_eval::eval_cps;
 use super::super::error::EvalError;
 use super::registry::{PrimitiveFn, PrimitiveRegistry};
+use patina_core::TaggedValue;
 use patina_frontend::Desugarer;
+use patina_runtime::Arity;
 use patina_runtime::environment::Environment;
-use patina_runtime::value::{Arity, Procedure, Value};
 use std::rc::Rc;
 
-/// Extract library name from a value like (scheme base) or a quoted list
-///
-/// Handles both:
-/// - Direct list: (scheme base) when args are already evaluated
-/// - The list structure from a quoted expression
-fn extract_library_name(value: &Value) -> Result<Vec<String>, EvalError> {
+/// Extract library name from a TaggedValue list like (scheme base)
+fn extract_library_name_tagged(
+    tv: TaggedValue,
+    heap: &patina_core::Heap,
+) -> Result<Vec<String>, EvalError> {
     let mut result = Vec::new();
-    let mut current = value.clone();
+    let mut current = tv;
 
-    loop {
-        match current {
-            Value::Null => break,
-            Value::Pair(pair) => {
-                let (car, cdr) = pair.borrow().clone();
-                match car {
-                    Value::Symbol(s) => result.push(s.to_string()),
-                    Value::Identifier(id) => result.push(id.name.to_string()),
-                    _ => {
-                        return Err(EvalError::TypeError(format!(
-                            "environment: library name component must be a symbol, got {}",
-                            car.type_name()
-                        )));
-                    }
-                }
-                current = cdr;
-            }
-            _ => {
+    while !current.is_null() {
+        if !current.is_pair() {
+            return Err(EvalError::TypeError(format!(
+                "environment: expected a proper list for library name, got {}",
+                heap.type_name(current)
+            )));
+        }
+        let car = heap.car(current);
+        match heap.get_symbol_or_identifier_name(car) {
+            Some(name) => result.push(name.to_string()),
+            None => {
                 return Err(EvalError::TypeError(format!(
-                    "environment: expected a proper list for library name, got {}",
-                    current.type_name()
+                    "environment: library name component must be a symbol, got {}",
+                    heap.type_name(car)
                 )));
             }
         }
+        current = heap.cdr(current);
     }
 
     if result.is_empty() {
@@ -63,50 +57,49 @@ fn extract_library_name(value: &Value) -> Result<Vec<String>, EvalError> {
 ///
 /// Creates an immutable environment from the given import sets.
 /// Each argument should be a quoted list like '(scheme base).
-fn primitive_environment(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    // Create a fresh empty environment
-    let env = Rc::new(Environment::new());
+fn primitive_environment(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    let heap = evaluator.global_env.heap();
+
+    // Extract library names from tagged args
+    let lib_names: Vec<Vec<String>> = {
+        let heap_ref = heap.borrow();
+        args.iter()
+            .map(|tv| extract_library_name_tagged(*tv, &heap_ref))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    // Create a fresh empty environment sharing the global heap for TaggedValue compatibility
+    let env = Rc::new(Environment::with_heap(evaluator.global_env.heap().clone()));
 
     // Process each import set argument
-    for arg in args {
-        let lib_name = extract_library_name(&arg)?;
-
+    for lib_name in lib_names {
         // Load the library
         let library = evaluator.load_library(&lib_name).map_err(|e| {
             EvalError::InternalError(format!("environment: cannot load library: {}", e))
         })?;
 
         // Install exports into the new environment
-        for (name, value) in &library.exports {
-            env.define(name.clone(), value.clone());
+        for (name, tv) in library.exports_iter_tagged() {
+            env.define(name.clone(), tv);
         }
     }
 
     // Return as immutable environment specifier
-    Ok(Value::EnvironmentSpecifier {
-        env,
-        mutable: false,
-    })
+    Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
 }
 
-/// Check if a value represents a definition form
-fn is_definition(expr: &Value) -> bool {
-    match expr {
-        Value::Pair(pair) => {
-            let (car, _) = &*pair.borrow();
-            match car {
-                Value::Symbol(s) => {
-                    let name = s.as_ref();
-                    name == "define" || name == "define-values" || name == "define-syntax"
-                }
-                Value::Identifier(id) => {
-                    let name = id.name.as_ref();
-                    name == "define" || name == "define-values" || name == "define-syntax"
-                }
-                _ => false,
-            }
-        }
-        _ => false,
+/// Check if a tagged value represents a definition form
+fn is_definition_tagged(tv: TaggedValue, heap: &patina_core::Heap) -> bool {
+    if !tv.is_pair() {
+        return false;
+    }
+    let car = heap.car(tv);
+    match heap.get_symbol_or_identifier_name(car) {
+        Some(name) => name == "define" || name == "define-values" || name == "define-syntax",
+        None => false,
     }
 }
 
@@ -117,33 +110,40 @@ fn is_definition(expr: &Value) -> bool {
 ///
 /// Uses CPS evaluation to ensure proper continuation support for lambdas
 /// created during evaluation.
-fn primitive_eval(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 2, "eval")?;
+fn primitive_eval(evaluator: &Evaluator, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+    if args.len() != 2 {
+        return Err(EvalError::WrongArity {
+            expected: "eval expects 2 arguments".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    let expr = &args[0];
-    let env_spec = &args[1];
+    let heap = evaluator.global_env.heap();
 
-    // Extract environment from specifier
-    let (env, mutable) = match env_spec {
-        Value::EnvironmentSpecifier { env, mutable } => (env.clone(), *mutable),
-        _ => {
-            return Err(EvalError::TypeError(format!(
-                "eval: expected environment, got {}",
-                env_spec.type_name()
-            )));
+    // Extract environment from specifier (using heap method, no Value conversion)
+    let (env, mutable) = {
+        let heap_ref = heap.borrow();
+        match heap_ref.get_environment_specifier(args[1]) {
+            Some((env, mutable)) => (env.clone(), mutable),
+            None => {
+                return Err(EvalError::TypeError(format!(
+                    "eval: expected environment, got {}",
+                    heap_ref.type_name(args[1])
+                )));
+            }
         }
     };
 
     // Check if this is a definition
-    if is_definition(expr) && !mutable {
+    if is_definition_tagged(args[0], &heap.borrow()) && !mutable {
         return Err(EvalError::InvalidSyntax(
             "eval: cannot define in immutable environment".to_string(),
         ));
     }
 
-    // Desugar the expression with macro-aware desugarer
+    // Desugar the expression with macro-aware desugarer (tagged path)
     let desugarer = Desugarer::with_env(env.clone());
-    let core_expr = desugarer.desugar(expr).map_err(|e| {
+    let core_expr = desugarer.desugar_tagged(args[0], heap).map_err(|e| {
         EvalError::InternalError(format!("eval: failed to desugar expression: {}", e))
     })?;
 
@@ -394,17 +394,25 @@ const R5RS_PROCEDURES: &[&str] = &[
 ///
 /// Returns an environment with only the R5RS syntactic keywords.
 /// Currently only version 5 is supported.
-fn primitive_null_environment(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "null-environment")?;
+fn primitive_null_environment(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "null-environment expects 1 argument".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    let version = match &args[0] {
-        Value::Integer(n) => *n,
-        _ => {
-            return Err(EvalError::TypeError(format!(
-                "null-environment: expected integer version, got {}",
-                args[0].type_name()
-            )));
-        }
+    let version = if args[0].is_fixnum() {
+        args[0].as_fixnum_unchecked()
+    } else {
+        let heap = evaluator.global_env.heap();
+        return Err(EvalError::TypeError(format!(
+            "null-environment: expected integer version, got {}",
+            heap.borrow().type_name(args[0])
+        )));
     };
 
     if version != 5 {
@@ -414,9 +422,9 @@ fn primitive_null_environment(evaluator: &Evaluator, args: Vec<Value>) -> Result
         )));
     }
 
-    // Create environment with only syntactic keywords
+    // Create environment with only syntactic keywords, sharing global heap for TaggedValue compatibility
     // These are macros defined in (scheme base), so we need to get them from there
-    let env = Rc::new(Environment::new());
+    let env = Rc::new(Environment::with_heap(evaluator.global_env.heap().clone()));
 
     // Load scheme base to get the macros
     let base_lib = evaluator
@@ -425,17 +433,15 @@ fn primitive_null_environment(evaluator: &Evaluator, args: Vec<Value>) -> Result
 
     // Install only the syntactic keywords
     for name in R5RS_SYNTAX {
-        if let Some(value) = base_lib.exports.get(*name) {
-            env.define(name.to_string(), value.clone());
+        if let Some(tv) = base_lib.get_export_tagged(name) {
+            env.define(name.to_string(), tv);
         }
         // Some syntactic keywords are special forms handled by the evaluator
         // and don't need to be in the environment (if, lambda, quote, etc.)
     }
 
-    Ok(Value::EnvironmentSpecifier {
-        env,
-        mutable: false,
-    })
+    let heap = evaluator.global_env.heap();
+    Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
 }
 
 /// (scheme-report-environment version) → environment-specifier
@@ -444,18 +450,23 @@ fn primitive_null_environment(evaluator: &Evaluator, args: Vec<Value>) -> Result
 /// Currently only version 5 is supported.
 fn primitive_scheme_report_environment(
     evaluator: &Evaluator,
-    args: Vec<Value>,
-) -> Result<Value, EvalError> {
-    evaluator.check_arity_exact(&args, 1, "scheme-report-environment")?;
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "scheme-report-environment expects 1 argument".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    let version = match &args[0] {
-        Value::Integer(n) => *n,
-        _ => {
-            return Err(EvalError::TypeError(format!(
-                "scheme-report-environment: expected integer version, got {}",
-                args[0].type_name()
-            )));
-        }
+    let version = if args[0].is_fixnum() {
+        args[0].as_fixnum_unchecked()
+    } else {
+        let heap = evaluator.global_env.heap();
+        return Err(EvalError::TypeError(format!(
+            "scheme-report-environment: expected integer version, got {}",
+            heap.borrow().type_name(args[0])
+        )));
     };
 
     if version != 5 {
@@ -465,8 +476,8 @@ fn primitive_scheme_report_environment(
         )));
     }
 
-    // Create environment with all R5RS bindings
-    let env = Rc::new(Environment::new());
+    // Create environment with all R5RS bindings, sharing global heap for TaggedValue compatibility
+    let env = Rc::new(Environment::with_heap(evaluator.global_env.heap().clone()));
 
     // Load scheme base
     let base_lib = evaluator
@@ -475,15 +486,15 @@ fn primitive_scheme_report_environment(
 
     // Install syntactic keywords
     for name in R5RS_SYNTAX {
-        if let Some(value) = base_lib.exports.get(*name) {
-            env.define(name.to_string(), value.clone());
+        if let Some(tv) = base_lib.get_export_tagged(name) {
+            env.define(name.to_string(), tv);
         }
     }
 
     // Install procedures
     for name in R5RS_PROCEDURES {
-        if let Some(value) = base_lib.exports.get(*name) {
-            env.define(name.to_string(), value.clone());
+        if let Some(tv) = base_lib.get_export_tagged(name) {
+            env.define(name.to_string(), tv);
         }
     }
 
@@ -494,8 +505,8 @@ fn primitive_scheme_report_environment(
         for name in &[
             "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "sqrt",
         ] {
-            if let Some(value) = inexact_lib.exports.get(*name) {
-                env.define(name.to_string(), value.clone());
+            if let Some(tv) = inexact_lib.get_export_tagged(name) {
+                env.define(name.to_string(), tv);
             }
         }
     }
@@ -511,45 +522,29 @@ fn primitive_scheme_report_environment(
             "magnitude",
             "angle",
         ] {
-            if let Some(value) = complex_lib.exports.get(*name) {
-                env.define(name.to_string(), value.clone());
+            if let Some(tv) = complex_lib.get_export_tagged(name) {
+                env.define(name.to_string(), tv);
             }
         }
     }
 
     // Add the R5RS-specific aliases
     // exact->inexact is an alias for inexact
-    if let Some(inexact) = base_lib.exports.get("inexact") {
-        env.define("exact->inexact".to_string(), inexact.clone());
+    if let Some(tv) = base_lib.get_export_tagged("inexact") {
+        env.define("exact->inexact".to_string(), tv);
     }
     // inexact->exact is an alias for exact
-    if let Some(exact) = base_lib.exports.get("exact") {
-        env.define("inexact->exact".to_string(), exact.clone());
+    if let Some(tv) = base_lib.get_export_tagged("exact") {
+        env.define("inexact->exact".to_string(), tv);
     }
 
     // Add null-environment and scheme-report-environment themselves
     let r5rs_lib = vec!["scheme".to_string(), "r5rs".to_string()];
-    env.define(
-        "null-environment".to_string(),
-        Value::Procedure(Rc::new(Procedure::Primitive {
-            name: "null-environment",
-            arity: Arity::Exact(1),
-            library: r5rs_lib.clone(),
-        })),
-    );
-    env.define(
-        "scheme-report-environment".to_string(),
-        Value::Procedure(Rc::new(Procedure::Primitive {
-            name: "scheme-report-environment",
-            arity: Arity::Exact(1),
-            library: r5rs_lib,
-        })),
-    );
+    env.define_primitive("null-environment", Arity::Exact(1), r5rs_lib.clone());
+    env.define_primitive("scheme-report-environment", Arity::Exact(1), r5rs_lib);
 
-    Ok(Value::EnvironmentSpecifier {
-        env,
-        mutable: false,
-    })
+    let heap = evaluator.global_env.heap();
+    Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
 }
 
 /// Register eval primitives
@@ -557,38 +552,38 @@ pub fn register(registry: &mut PrimitiveRegistry) {
     use super::super::EvalResult;
 
     // environment - create environment from import sets
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.eval",
         "environment",
         Arity::Min(0),
         "Creates an immutable environment from the given import sets.",
-        |eval, args, _tail| primitive_environment(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| primitive_environment(eval, args).map(EvalResult::Tagged),
     ));
 
     // eval - evaluate expression in environment
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.eval",
         "eval",
         Arity::Exact(2),
         "Evaluates an expression in the specified environment.",
-        |eval, args, _tail| primitive_eval(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| primitive_eval(eval, args).map(EvalResult::Tagged),
     ));
 
     // null-environment - R5RS environment with only syntactic keywords
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.r5rs",
         "null-environment",
         Arity::Exact(1),
         "Returns an environment with only the R5RS syntactic keywords.",
-        |eval, args, _tail| primitive_null_environment(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| primitive_null_environment(eval, args).map(EvalResult::Tagged),
     ));
 
     // scheme-report-environment - R5RS environment with all bindings
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.r5rs",
         "scheme-report-environment",
         Arity::Exact(1),
         "Returns an environment with all R5RS bindings.",
-        |eval, args, _tail| primitive_scheme_report_environment(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| primitive_scheme_report_environment(eval, args).map(EvalResult::Tagged),
     ));
 }

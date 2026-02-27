@@ -153,8 +153,8 @@ impl Repl {
                     match self.interpreter.eval_str(line) {
                         Ok(result) => {
                             // Don't print #<unspecified> values (from define, set!, etc.)
-                            if !matches!(result, patina_runtime::Value::Unspecified) {
-                                println!("{}", result);
+                            if result != patina_core::TaggedValue::UNSPECIFIED {
+                                println!("{}", self.interpreter.display_tagged(result));
                             } else {
                                 // Force a flush by writing empty string to stderr
                                 // This works around rustyline stdout buffering issue

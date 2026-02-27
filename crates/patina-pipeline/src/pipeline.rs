@@ -1,15 +1,13 @@
 //! Core pipeline trait and types
 
 use crate::error::PipelineResult;
-use patina_runtime::{Environment, Value};
+use patina_core::TaggedValue;
+use patina_runtime::Environment;
 use std::rc::Rc;
 
 /// Evaluation strategy for the pipeline
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvaluationStrategy {
-    /// Direct evaluation of Value AST (tree-walker)
-    Direct,
-
     /// Desugar to CoreExpr IR before evaluation
     CoreExpr,
 
@@ -36,7 +34,7 @@ pub trait Pipeline {
     ///
     /// # Returns
     /// The result of evaluating the expression
-    fn eval(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<Value>;
+    fn eval(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue>;
 
     /// Evaluate a Scheme program (multiple expressions)
     ///
@@ -46,7 +44,7 @@ pub trait Pipeline {
     ///
     /// # Returns
     /// The result of the last expression
-    fn eval_program(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<Value>;
+    fn eval_program(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue>;
 
     /// Get the evaluation strategy used by this pipeline
     fn strategy(&self) -> EvaluationStrategy;

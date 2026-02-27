@@ -73,8 +73,8 @@ mod wind;
 
 use crate::eval::error::EvalError;
 use patina_core::Environment;
+use patina_core::TaggedValue;
 use patina_core::cps_expr::CpsExpr;
-use patina_core::value::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 use tracing::debug;
@@ -108,7 +108,9 @@ impl<'a> CpsEvaluator<'a> {
     ///
     /// Uses a trampoline pattern to avoid Rust stack overflow on deep recursion.
     /// All CPS evaluation steps are processed iteratively in a single loop.
-    pub fn eval(&self, expr: &CpsExpr) -> Result<Value, EvalError> {
+    ///
+    /// Returns TaggedValue for efficient storage and to avoid Value round-trips.
+    pub fn eval(&self, expr: &CpsExpr) -> Result<TaggedValue, EvalError> {
         self.eval_in_env(expr, self.evaluator.global_env.clone())
     }
 
@@ -117,7 +119,13 @@ impl<'a> CpsEvaluator<'a> {
     /// Like `eval`, but allows specifying the environment to use.
     /// This is needed for library loading where definitions should
     /// go into the library's environment, not the global environment.
-    pub fn eval_in_env(&self, expr: &CpsExpr, env: Rc<Environment>) -> Result<Value, EvalError> {
+    ///
+    /// Returns TaggedValue for efficient storage and to avoid Value round-trips.
+    pub fn eval_in_env(
+        &self,
+        expr: &CpsExpr,
+        env: Rc<Environment>,
+    ) -> Result<TaggedValue, EvalError> {
         let cont_env = HashMap::new();
         let prompt_stack = Vec::new();
         let dynamic_winds = Vec::new();
@@ -227,21 +235,25 @@ impl<'a> CpsEvaluator<'a> {
                 Ok(step) => current_step = step,
                 Err(EvalError::ContinuationEscape) => {
                     // A continuation escaped from apply_from_direct
-                    if let Some((value, k)) = take_pending_escape() {
+                    if let Some((value_tagged, k)) = take_pending_escape() {
                         debug!(
                             target: "patina_tree_walker::eval::cps_eval",
-                            escaped_value = %value,
+                            escaped_value = ?value_tagged,
                             "Continuation escape"
                         );
 
                         // Check if this is a special DynamicWindCleanup continuation
+                        let heap = self.evaluator.global_env.heap();
+                        let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
                         let is_dw_cleanup = matches!(
                             k.body.as_ref(),
                             CpsExpr::Halt(inner) if matches!(
                                 inner.as_ref(),
-                                CpsExpr::Literal(v) if matches!(v.as_ref(), Value::Symbol(s) if s.as_ref() == "__dynamic_wind_cleanup__")
+                                CpsExpr::Literal(v) if *v == marker
                             )
                         );
+
+                        // value_tagged is already a TaggedValue - no conversion needed
 
                         if is_dw_cleanup {
                             // Reconstruct the DynamicWindCleanup continuation
@@ -250,7 +262,7 @@ impl<'a> CpsEvaluator<'a> {
                                 self.restore_cont_bindings(&k.captured_cont_bindings);
                             current_step = self.invoke_continuation_step(
                                 new_cont,
-                                value,
+                                value_tagged,
                                 k.env.clone(),
                                 restored_cont_env,
                                 Vec::new(),
@@ -269,7 +281,7 @@ impl<'a> CpsEvaluator<'a> {
                             };
                             current_step = self.invoke_continuation_step(
                                 new_cont,
-                                value,
+                                value_tagged,
                                 k.env.clone(),
                                 restored_cont_env,
                                 Vec::new(),
@@ -304,24 +316,26 @@ impl<'a> CpsEvaluator<'a> {
 /// * `evaluator` - The evaluator instance (wrapped in Rc for sharing)
 ///
 /// # Returns
-/// The result of evaluating the expression
+/// The result of evaluating the expression as TaggedValue
 pub fn eval_cps(
     expr: &patina_core::CoreExpr,
     env: Rc<Environment>,
     evaluator: &super::Evaluator,
-) -> Result<Value, EvalError> {
+) -> Result<TaggedValue, EvalError> {
     use patina_core::CoreExpr;
     use patina_ir::CpsTransformer;
 
     // Handle Import specially - it's a side-effect that modifies the environment
     // and doesn't need CPS transformation
     if let CoreExpr::Import { import_sets } = expr {
-        for import_set_expr in import_sets {
-            let import_set = patina_frontend::LibraryDefinition::parse_import_set(import_set_expr)
-                .map_err(|e| EvalError::InvalidSyntax(format!("Invalid import set: {}", e)))?;
+        let heap = evaluator.global_env.heap();
+        for import_set in import_sets {
+            let import_set =
+                patina_frontend::LibraryDefinition::parse_import_set_tagged(*import_set, heap)
+                    .map_err(|e| EvalError::InvalidSyntax(format!("Invalid import set: {}", e)))?;
             evaluator.process_import_for_eval(&import_set, &env)?;
         }
-        return Ok(Value::Unspecified);
+        return Ok(TaggedValue::UNSPECIFIED);
     }
 
     // Transform CoreExpr to CpsExpr
@@ -337,19 +351,11 @@ pub fn eval_cps(
 mod tests {
     use super::*;
     use patina_core::ScopeSet;
+    use patina_core::TaggedValue;
     use patina_core::cps_expr::CpsPrimitive;
 
     fn make_test_evaluator() -> super::super::Evaluator {
         super::super::Evaluator::new()
-    }
-
-    /// Helper to check if two Values are equal (since Value doesn't impl PartialEq)
-    fn values_equal(a: &Value, b: &Value) -> bool {
-        match (a, b) {
-            (Value::Integer(x), Value::Integer(y)) => x == y,
-            (Value::Boolean(x), Value::Boolean(y)) => x == y,
-            _ => false,
-        }
     }
 
     #[test]
@@ -358,9 +364,9 @@ mod tests {
         let cps_eval = CpsEvaluator::new(&evaluator);
 
         // CPS: (halt 42)
-        let expr = CpsExpr::Halt(Rc::new(CpsExpr::Literal(Rc::new(Value::Integer(42)))));
+        let expr = CpsExpr::Halt(Rc::new(CpsExpr::Literal(TaggedValue::fixnum(42))));
         let result = cps_eval.eval(&expr).unwrap();
-        assert!(values_equal(&result, &Value::Integer(42)));
+        assert_eq!(result.as_fixnum(), Some(42));
     }
 
     #[test]
@@ -368,7 +374,7 @@ mod tests {
         let evaluator = make_test_evaluator();
         evaluator
             .global_env
-            .define("x".to_string(), Value::Integer(10));
+            .define("x".to_string(), TaggedValue::fixnum(10));
         let cps_eval = CpsEvaluator::new(&evaluator);
 
         // CPS: (halt x)
@@ -377,7 +383,7 @@ mod tests {
             scopes: ScopeSet::new(),
         }));
         let result = cps_eval.eval(&expr).unwrap();
-        assert!(values_equal(&result, &Value::Integer(10)));
+        assert_eq!(result.as_fixnum(), Some(10));
     }
 
     #[test]
@@ -396,14 +402,14 @@ mod tests {
             body: Rc::new(CpsExpr::PrimOp {
                 op: CpsPrimitive::Add,
                 args: vec![
-                    CpsExpr::Literal(Rc::new(Value::Integer(1))),
-                    CpsExpr::Literal(Rc::new(Value::Integer(2))),
+                    CpsExpr::Literal(TaggedValue::fixnum(1)),
+                    CpsExpr::Literal(TaggedValue::fixnum(2)),
                 ],
                 cont: Rc::from("k"),
             }),
         };
 
         let result = cps_eval.eval(&halt_cont).unwrap();
-        assert!(values_equal(&result, &Value::Integer(3)));
+        assert_eq!(result.as_fixnum(), Some(3));
     }
 }

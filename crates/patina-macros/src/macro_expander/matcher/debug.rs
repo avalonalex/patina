@@ -22,7 +22,11 @@ pub fn print_bindings(
         for pv in sorted_pvrefs {
             if let Some(value) = env.get_raw(*pv) {
                 let name = &names[pv];
-                println!("[MACRO]       {} = {}", name, match_value_to_string(value));
+                println!(
+                    "[MACRO]       {} = {}",
+                    name,
+                    match_value_to_string(&value, env)
+                );
             }
         }
     } else {
@@ -35,7 +39,7 @@ pub fn print_bindings(
                         "[MACRO]       var#{}@L{} = {}",
                         i,
                         level,
-                        match_value_to_string(value)
+                        match_value_to_string(&value, env)
                     );
                 }
             }
@@ -44,12 +48,22 @@ pub fn print_bindings(
 }
 
 /// Convert a match value to a readable string
-pub fn match_value_to_string(mv: &MatchValue) -> String {
+///
+/// Since Branch now stores an index into MatchEnv's branches storage,
+/// we need access to the env to resolve branch contents.
+pub fn match_value_to_string(mv: &MatchValue, env: &MatchEnv) -> String {
     match mv {
-        MatchValue::Leaf(v) => format!("{}", v),
-        MatchValue::Branch(values) => {
-            let items: Vec<String> = values.iter().map(match_value_to_string).collect();
-            format!("[{}]", items.join(", "))
+        MatchValue::Leaf(tv) => format!("{:?}", tv),
+        MatchValue::Branch(branch_idx) => {
+            if let Some(values) = env.branches().get(*branch_idx) {
+                let items: Vec<String> = values
+                    .iter()
+                    .map(|v| match_value_to_string(v, env))
+                    .collect();
+                format!("[{}]", items.join(", "))
+            } else {
+                format!("[invalid branch #{}]", branch_idx)
+            }
         }
     }
 }

@@ -178,12 +178,15 @@ fn test_library_with_imports() {
     );
 
     // Verify the computed value is correct (100 + 10 = 110)
-    match lib.env.get("computed-value") {
-        Some(patina_runtime::Value::Integer(n)) => {
-            assert_eq!(n, 110, "computed-value should be 110 (base-value + 10)");
-        }
-        other => panic!("computed-value should be 110, got {:?}", other),
-    }
+    let tv = lib
+        .env
+        .get("computed-value")
+        .expect("computed-value should be defined");
+    assert_eq!(
+        tv.as_fixnum(),
+        Some(110),
+        "computed-value should be 110 (base-value + 10)"
+    );
 }
 
 #[test]
@@ -276,12 +279,12 @@ fn test_import_modifiers() {
         .load_library(&["test".to_string(), "only-test".to_string()])
         .expect("Failed to load library with 'only' modifier");
 
-    match lib.env.get("result") {
-        Some(patina_runtime::Value::Integer(n)) => {
-            assert_eq!(n, 3, "result should be 3 (foo + bar = 1 + 2)");
-        }
-        other => panic!("result should be 3, got {:?}", other),
-    }
+    let tv = lib.env.get("result").expect("result should be defined");
+    assert_eq!(
+        tv.as_fixnum(),
+        Some(3),
+        "result should be 3 (foo + bar = 1 + 2)"
+    );
 
     // Test 'except' modifier
     fs::write(
@@ -299,12 +302,12 @@ fn test_import_modifiers() {
         .load_library(&["test".to_string(), "except-test".to_string()])
         .expect("Failed to load library with 'except' modifier");
 
-    match lib.env.get("result") {
-        Some(patina_runtime::Value::Integer(n)) => {
-            assert_eq!(n, 3, "result should be 3 (foo + bar = 1 + 2)");
-        }
-        other => panic!("result should be 3, got {:?}", other),
-    }
+    let tv = lib.env.get("result").expect("result should be defined");
+    assert_eq!(
+        tv.as_fixnum(),
+        Some(3),
+        "result should be 3 (foo + bar = 1 + 2)"
+    );
 
     // Test 'prefix' modifier
     fs::write(
@@ -322,12 +325,12 @@ fn test_import_modifiers() {
         .load_library(&["test".to_string(), "prefix-test".to_string()])
         .expect("Failed to load library with 'prefix' modifier");
 
-    match lib.env.get("result") {
-        Some(patina_runtime::Value::Integer(n)) => {
-            assert_eq!(n, 3, "result should be 3 (src:foo + src:bar = 1 + 2)");
-        }
-        other => panic!("result should be 3, got {:?}", other),
-    }
+    let tv = lib.env.get("result").expect("result should be defined");
+    assert_eq!(
+        tv.as_fixnum(),
+        Some(3),
+        "result should be 3 (src:foo + src:bar = 1 + 2)"
+    );
 
     // Test 'rename' modifier
     fs::write(
@@ -345,12 +348,12 @@ fn test_import_modifiers() {
         .load_library(&["test".to_string(), "rename-test".to_string()])
         .expect("Failed to load library with 'rename' modifier");
 
-    match lib.env.get("result") {
-        Some(patina_runtime::Value::Integer(n)) => {
-            assert_eq!(n, 3, "result should be 3 (first + second = 1 + 2)");
-        }
-        other => panic!("result should be 3, got {:?}", other),
-    }
+    let tv = lib.env.get("result").expect("result should be defined");
+    assert_eq!(
+        tv.as_fixnum(),
+        Some(3),
+        "result should be 3 (first + second = 1 + 2)"
+    );
 }
 
 // ============================================================================
@@ -405,19 +408,16 @@ fn test_include_order_matters() {
     // Verify the export exists
     assert!(lib.exports_identifier("result"));
 
-    // Get the value of result from the library environment
-    let result_value = lib
+    // result should be 42 (set by included file)
+    let tv = lib
         .env
         .get("result")
         .expect("result should be defined in library");
-
-    // result should be 42 (set by included file)
-    match result_value {
-        patina_runtime::Value::Integer(n) => {
-            assert_eq!(n, 42, "result should be 42, set by included file");
-        }
-        _ => panic!("result should be an integer"),
-    }
+    assert_eq!(
+        tv.as_fixnum(),
+        Some(42),
+        "result should be 42, set by included file"
+    );
 }
 
 #[test]
@@ -507,13 +507,8 @@ fn test_include_ci_folds_identifiers() {
     assert_eq!(lib.export_names().len(), 2);
 
     // Verify my-const has correct value
-    let const_val = lib.env.get("my-const").expect("my-const should be defined");
-    match const_val {
-        patina_runtime::Value::Integer(n) => {
-            assert_eq!(n, 42, "my-const should be 42");
-        }
-        _ => panic!("my-const should be an integer"),
-    }
+    let tv = lib.env.get("my-const").expect("my-const should be defined");
+    assert_eq!(tv.as_fixnum(), Some(42), "my-const should be 42");
 }
 
 #[test]
@@ -699,13 +694,8 @@ fn test_include_library_declarations_begin() {
     assert!(lib.exports_identifier("get-x"), "Should export get-x");
 
     // Verify x has correct value
-    let x_val = lib.env.get("x").expect("x should be defined");
-    match x_val {
-        patina_runtime::Value::Integer(n) => {
-            assert_eq!(n, 100, "x should be 100");
-        }
-        _ => panic!("x should be an integer"),
-    }
+    let tv = lib.env.get("x").expect("x should be defined");
+    assert_eq!(tv.as_fixnum(), Some(100), "x should be 100");
 }
 
 #[test]
@@ -761,14 +751,10 @@ fn test_include_library_declarations_multiple_files() {
     assert_eq!(lib.export_names().len(), 2);
 
     // Verify values
-    match lib.env.get("foo") {
-        Some(patina_runtime::Value::Integer(n)) => assert_eq!(n, 42),
-        _ => panic!("foo should be 42"),
-    }
-    match lib.env.get("bar") {
-        Some(patina_runtime::Value::Integer(n)) => assert_eq!(n, 99),
-        _ => panic!("bar should be 99"),
-    }
+    let tv = lib.env.get("foo").expect("foo should be defined");
+    assert_eq!(tv.as_fixnum(), Some(42));
+    let tv = lib.env.get("bar").expect("bar should be defined");
+    assert_eq!(tv.as_fixnum(), Some(99));
 }
 
 #[test]
@@ -821,10 +807,11 @@ fn test_include_library_declarations_nested() {
         "Should export deep-value"
     );
 
-    match lib.env.get("deep-value") {
-        Some(patina_runtime::Value::Integer(n)) => assert_eq!(n, 999),
-        _ => panic!("deep-value should be 999"),
-    }
+    let tv = lib
+        .env
+        .get("deep-value")
+        .expect("deep-value should be defined");
+    assert_eq!(tv.as_fixnum(), Some(999));
 }
 
 // ============================================================================
@@ -866,17 +853,17 @@ fn test_cond_expand_library_check_available() {
     assert!(lib.exports_identifier("result"), "Should export result");
 
     // Verify the correct branch was taken
-    let result_val = lib.env.get("result").expect("result should be defined");
-    match result_val {
-        patina_runtime::Value::Symbol(s) => {
-            assert_eq!(
-                s.as_ref(),
-                "base-available",
-                "(library (scheme base)) should be true"
-            );
-        }
-        _ => panic!("result should be a symbol"),
-    }
+    let tv = lib.env.get("result").expect("result should be defined");
+    let heap = lib.env.heap();
+    let name = heap
+        .borrow()
+        .get_symbol_name(tv)
+        .map(|s| s.to_string())
+        .expect("result should be a symbol");
+    assert_eq!(
+        name, "base-available",
+        "(library (scheme base)) should be true"
+    );
 }
 
 #[test]
@@ -913,17 +900,17 @@ fn test_cond_expand_library_check_unavailable() {
     assert!(lib.exports_identifier("result"), "Should export result");
 
     // Verify the else branch was taken
-    let result_val = lib.env.get("result").expect("result should be defined");
-    match result_val {
-        patina_runtime::Value::Symbol(s) => {
-            assert_eq!(
-                s.as_ref(),
-                "correctly-not-found",
-                "Non-existent library should not be found"
-            );
-        }
-        _ => panic!("result should be a symbol"),
-    }
+    let tv = lib.env.get("result").expect("result should be defined");
+    let heap = lib.env.heap();
+    let name = heap
+        .borrow()
+        .get_symbol_name(tv)
+        .map(|s| s.to_string())
+        .expect("result should be a symbol");
+    assert_eq!(
+        name, "correctly-not-found",
+        "Non-existent library should not be found"
+    );
 }
 
 #[test]
@@ -971,15 +958,15 @@ fn test_cond_expand_library_check_sld_library() {
     assert!(lib.exports_identifier("result"), "Should export result");
 
     // Verify (test helper) was found
-    let result_val = lib.env.get("result").expect("result should be defined");
-    match result_val {
-        patina_runtime::Value::Symbol(s) => {
-            assert_eq!(
-                s.as_ref(),
-                "helper-available",
-                "(library (test helper)) should be found"
-            );
-        }
-        _ => panic!("result should be a symbol"),
-    }
+    let tv = lib.env.get("result").expect("result should be defined");
+    let heap = lib.env.heap();
+    let name = heap
+        .borrow()
+        .get_symbol_name(tv)
+        .map(|s| s.to_string())
+        .expect("result should be a symbol");
+    assert_eq!(
+        name, "helper-available",
+        "(library (test helper)) should be found"
+    );
 }

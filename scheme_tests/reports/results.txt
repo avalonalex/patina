@@ -1561,7 +1561,7 @@ Testing:
 (char-alphabetic? #\a)
 
 Testing: 
-(char-alphabetic? #\ )
+(char-alphabetic? #\space)
 
 Testing: 
 (char-numeric? #\0)
@@ -1573,14 +1573,13 @@ Testing:
 (char-numeric? #\a)
 
 Testing: 
-(char-whitespace? #\ )
+(char-whitespace? #\space)
 
 Testing: 
-(char-whitespace? #\	)
+(char-whitespace? #\tab)
 
 Testing: 
-(char-whitespace? #\
-)
+(char-whitespace? #\newline)
 
 Testing: 
 (char-whitespace? #\_)
@@ -1631,7 +1630,7 @@ Testing:
 (char-numeric? #\๐)
 
 Testing: 
-(char-whitespace? #\ )
+(char-whitespace? #\x1680)
 
 Testing: 
 (digit-value #\0)
@@ -2225,10 +2224,10 @@ Tests run: 43, Passed: 43, Failed: 0
 
 Running test suite: 6.9 Bytevectors
 Testing: 
-(bytevector? #u8([]))
+(bytevector? #u8())
 
 Testing: 
-(bytevector? #u8([0, 1, 2]))
+(bytevector? #u8(0 1 2))
 
 Testing: 
 (bytevector? #())
@@ -2267,31 +2266,31 @@ Testing:
 (let ((bv (bytevector 0 1 2))) (bytevector-u8-set! bv 1 255) bv)
 
 Testing: 
-(bytevector-copy #u8([]))
+(bytevector-copy #u8())
 
 Testing: 
-(bytevector-copy #u8([0, 1, 2]))
+(bytevector-copy #u8(0 1 2))
 
 Testing: 
-(bytevector-copy #u8([0, 1, 2]) 1)
+(bytevector-copy #u8(0 1 2) 1)
 
 Testing: 
-(bytevector-copy #u8([0, 1, 2]) 1 2)
+(bytevector-copy #u8(0 1 2) 1 2)
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 1 #u8([6, 7, 8, 9, 10]) 0 2) bv)
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 1 #u8(6 7 8 9 10) 0 2) bv)
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8([6, 7, 8, 9, 10])) bv)
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8(6 7 8 9 10)) bv)
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8([6, 7, 8, 9, 10]) 2) bv)
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 0 #u8(6 7 8 9 10) 2) bv)
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8([6, 7, 8, 9, 10]) 0 3) bv)
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8(6 7 8 9 10) 0 3) bv)
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8([6, 7, 8, 9, 10]) 2 3) bv)
+(let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 2 #u8(6 7 8 9 10) 2 3) bv)
 
 Testing: 
 (let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 1 bv 0 2) bv)
@@ -2300,34 +2299,34 @@ Testing:
 (let ((bv (bytevector 1 2 3 4 5))) (bytevector-copy! bv 3 bv 0 2) bv)
 
 Testing: 
-(bytevector-append #u8([]))
+(bytevector-append #u8())
 
 Testing: 
-(bytevector-append #u8([]) #u8([]))
+(bytevector-append #u8() #u8())
 
 Testing: 
-(bytevector-append #u8([]) #u8([0, 1, 2]))
+(bytevector-append #u8() #u8(0 1 2))
 
 Testing: 
-(bytevector-append #u8([0, 1, 2]) #u8([]))
+(bytevector-append #u8(0 1 2) #u8())
 
 Testing: 
-(bytevector-append #u8([0, 1, 2]) #u8([3, 4]))
+(bytevector-append #u8(0 1 2) #u8(3 4))
 
 Testing: 
-(bytevector-append #u8([0, 1, 2]) #u8([3, 4]) #u8([5]))
+(bytevector-append #u8(0 1 2) #u8(3 4) #u8(5))
 
 Testing: 
-(utf8->string #u8([65, 66, 67]))
+(utf8->string #u8(65 66 67))
 
 Testing: 
-(utf8->string #u8([0, 65, 66, 67]) 1)
+(utf8->string #u8(0 65 66 67) 1)
 
 Testing: 
-(utf8->string #u8([0, 65, 66, 67, 0]) 1 4)
+(utf8->string #u8(0 65 66 67 0) 1 4)
 
 Testing: 
-(utf8->string #u8([0, 206, 187, 0]) 1 3)
+(utf8->string #u8(0 206 187 0) 1 3)
 
 Testing: 
 (string->utf8 "ABC")
@@ -2462,7 +2461,7 @@ Testing:
 (read-error? (guard (exn (else exn)) (read (open-input-string ")"))))
 
 Testing: 
-(read-error? (guard (exn (else exn)) (read (open-input-string """))))
+(read-error? (guard (exn (else exn)) (read (open-input-string "\""))))
 
 Testing: 
 (test-exception-handler-1 5)
@@ -2561,7 +2560,7 @@ Testing:
 (textual-port? (open-output-string))
 
 Testing: 
-(binary-port? (open-input-bytevector #u8([0, 1, 2])))
+(binary-port? (open-input-bytevector #u8(0 1 2)))
 
 Testing: 
 (binary-port? (open-output-bytevector))
@@ -2612,9 +2611,7 @@ Testing:
 (read-line (open-input-string "abc"))
 
 Testing: 
-(read-line (open-input-string "abc
-def
-"))
+(read-line (open-input-string "abc\ndef\n"))
 
 Testing: 
 (eof-object? (read-string 3 (open-input-string "")))
@@ -2623,9 +2620,7 @@ Testing:
 (read-string 3 (open-input-string "abcd"))
 
 Testing: 
-(read-string 3 (open-input-string "abc
-def
-"))
+(read-string 3 (open-input-string "abc\ndef\n"))
 
 Testing: 
 c0
@@ -2652,9 +2647,7 @@ Testing:
 (let ((out (open-output-string))) (display #\a out) (display "b" out) (display #\c out) (get-output-string out))
 
 Testing: 
-(let* ((out (open-output-string)) (r (begin (newline out) (get-output-string out)))) (or (equal? r "
-") (equal? r "
-")))
+(let* ((out (open-output-string)) (r (begin (newline out) (get-output-string out)))) (or (equal? r "\n") (equal? r "\r\n")))
 
 Testing: 
 (let ((out (open-output-string))) (write-string "abc def" out) (get-output-string out))
@@ -2669,52 +2662,52 @@ Testing:
 (let ((out (open-output-string))) (flush-output-port out) (get-output-string out))
 
 Testing: 
-(eof-object? (read-u8 (open-input-bytevector #u8([]))))
+(eof-object? (read-u8 (open-input-bytevector #u8())))
 
 Testing: 
-(read-u8 (open-input-bytevector #u8([1, 2, 3])))
+(read-u8 (open-input-bytevector #u8(1 2 3)))
 
 Testing: 
-(eof-object? (read-bytevector 3 (open-input-bytevector #u8([]))))
+(eof-object? (read-bytevector 3 (open-input-bytevector #u8())))
 
 Testing: 
-(u8-ready? (open-input-bytevector #u8([1])))
+(u8-ready? (open-input-bytevector #u8(1)))
 
 Testing: 
-(read-bytevector 3 (open-input-bytevector #u8([1])))
+(read-bytevector 3 (open-input-bytevector #u8(1)))
 
 Testing: 
-(read-bytevector 3 (open-input-bytevector #u8([1, 2])))
+(read-bytevector 3 (open-input-bytevector #u8(1 2)))
 
 Testing: 
-(read-bytevector 3 (open-input-bytevector #u8([1, 2, 3])))
+(read-bytevector 3 (open-input-bytevector #u8(1 2 3)))
 
 Testing: 
-(read-bytevector 3 (open-input-bytevector #u8([1, 2, 3, 4])))
+(read-bytevector 3 (open-input-bytevector #u8(1 2 3 4)))
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (eof-object? (read-bytevector! bv (open-input-bytevector #u8([])))))
+(let ((bv (bytevector 1 2 3 4 5))) (eof-object? (read-bytevector! bv (open-input-bytevector #u8()))))
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8([6, 7, 8, 9, 10])) 0 5) bv)
+(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8(6 7 8 9 10)) 0 5) bv)
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8([6, 7, 8, 9, 10])) 0 3) bv)
+(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8(6 7 8 9 10)) 0 3) bv)
 
 Testing: 
-(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8([6, 7, 8, 9, 10])) 3 4) bv)
+(let ((bv (bytevector 1 2 3 4 5))) (read-bytevector! bv (open-input-bytevector #u8(6 7 8 9 10)) 3 4) bv)
 
 Testing: 
 (let ((out (open-output-bytevector))) (write-u8 1 out) (write-u8 2 out) (write-u8 3 out) (get-output-bytevector out))
 
 Testing: 
-(let ((out (open-output-bytevector))) (write-bytevector #u8([1, 2, 3, 4, 5]) out) (get-output-bytevector out))
+(let ((out (open-output-bytevector))) (write-bytevector #u8(1 2 3 4 5) out) (get-output-bytevector out))
 
 Testing: 
-(let ((out (open-output-bytevector))) (write-bytevector #u8([1, 2, 3, 4, 5]) out 2) (get-output-bytevector out))
+(let ((out (open-output-bytevector))) (write-bytevector #u8(1 2 3 4 5) out 2) (get-output-bytevector out))
 
 Testing: 
-(let ((out (open-output-bytevector))) (write-bytevector #u8([1, 2, 3, 4, 5]) out 2 4) (get-output-bytevector out))
+(let ((out (open-output-bytevector))) (write-bytevector #u8(1 2 3 4 5) out 2 4) (get-output-bytevector out))
 
 Testing: 
 (let ((out (open-output-bytevector))) (flush-output-port out) (get-output-bytevector out))
@@ -2754,7 +2747,7 @@ Testing:
 (read2 (open-input-string "#f 7"))
 
 Testing: 
-(read2 (open-input-string "#false"8""))
+(read2 (open-input-string "#false\"8\""))
 
 Testing: 
 (read (open-input-string "()"))
@@ -2811,7 +2804,7 @@ Testing:
 (read (open-input-string "ABC"))
 
 Testing: 
-(read (open-input-string "|H\x65;llo|"))
+(read (open-input-string "|H\\x65;llo|"))
 
 Testing: 
 (read (open-input-string "#!fold-case ABC"))
@@ -2823,8 +2816,7 @@ Testing:
 (read (open-input-string "#; abc def"))
 
 Testing: 
-(read (open-input-string "; abc 
-def"))
+(read (open-input-string "; abc \ndef"))
 
 Testing: 
 (read (open-input-string "#| abc |# def"))
@@ -2833,8 +2825,7 @@ Testing:
 (read (open-input-string "#| abc #| def |# |# ghi"))
 
 Testing: 
-(read (open-input-string "#; ; abc
- def ghi"))
+(read (open-input-string "#; ; abc\n def ghi"))
 
 Testing: 
 (read (open-input-string "(#;sqrt abs -16)"))
@@ -2852,108 +2843,94 @@ Testing:
 (read (open-input-string "(a . b #;c)"))
 
 Testing: 
-(read (open-input-string "#\a"))
+(read (open-input-string "#\\a"))
 
 Testing: 
-(read (open-input-string "#\space"))
+(read (open-input-string "#\\space"))
 
 Testing: 
-(char->integer (read (open-input-string "#\null")))
+(char->integer (read (open-input-string "#\\null")))
 
 Testing: 
-(char->integer (read (open-input-string "#\alarm")))
+(char->integer (read (open-input-string "#\\alarm")))
 
 Testing: 
-(char->integer (read (open-input-string "#\backspace")))
+(char->integer (read (open-input-string "#\\backspace")))
 
 Testing: 
-(char->integer (read (open-input-string "#\tab")))
+(char->integer (read (open-input-string "#\\tab")))
 
 Testing: 
-(char->integer (read (open-input-string "#\newline")))
+(char->integer (read (open-input-string "#\\newline")))
 
 Testing: 
-(char->integer (read (open-input-string "#\return")))
+(char->integer (read (open-input-string "#\\return")))
 
 Testing: 
-(char->integer (read (open-input-string "#\delete")))
+(char->integer (read (open-input-string "#\\delete")))
 
 Testing: 
-(char->integer (read (open-input-string "#\escape")))
+(char->integer (read (open-input-string "#\\escape")))
 
 Testing: 
-(char->integer (read (open-input-string "#\λ")))
+(char->integer (read (open-input-string "#\\λ")))
 
 Testing: 
-(char->integer (read (open-input-string "#\x03BB")))
+(char->integer (read (open-input-string "#\\x03BB")))
 
 Testing: 
-(read (open-input-string ""abc""))
+(read (open-input-string "\"abc\""))
 
 Testing: 
-(read (open-input-string ""abc" "def""))
+(read (open-input-string "\"abc\" \"def\""))
 
 Testing: 
-(read (open-input-string ""ABC""))
+(read (open-input-string "\"ABC\""))
 
 Testing: 
-(read (open-input-string ""H\x65;llo""))
+(read (open-input-string "\"H\\x65;llo\""))
 
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\a"")) 0))
+(char->integer (string-ref (read (open-input-string "\"\\a\"")) 0))
 
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\b"")) 0))
+(char->integer (string-ref (read (open-input-string "\"\\b\"")) 0))
 
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\t"")) 0))
+(char->integer (string-ref (read (open-input-string "\"\\t\"")) 0))
 
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\n"")) 0))
+(char->integer (string-ref (read (open-input-string "\"\\n\"")) 0))
 
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\r"")) 0))
+(char->integer (string-ref (read (open-input-string "\"\\r\"")) 0))
 
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\""")) 0))
+(char->integer (string-ref (read (open-input-string "\"\\\"\"")) 0))
 
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\|"")) 0))
+(char->integer (string-ref (read (open-input-string "\"\\|\"")) 0))
 
 Testing: 
-(read (open-input-string ""line 1
-line 2
-""))
+(read (open-input-string "\"line 1\nline 2\n\""))
 
 Testing: 
-(read (open-input-string ""line 1\
-continued
-""))
+(read (open-input-string "\"line 1\\\ncontinued\n\""))
 
 Testing: 
-(read (open-input-string ""line 1\ 
-continued
-""))
+(read (open-input-string "\"line 1\\ \ncontinued\n\""))
 
 Testing: 
-(read (open-input-string ""line 1\
- continued
-""))
+(read (open-input-string "\"line 1\\\n continued\n\""))
 
 Testing: 
-(read (open-input-string ""line 1\ 	 
- 	 continued
-""))
+(read (open-input-string "\"line 1\\ \t \n \t continued\n\""))
 
 Testing: 
-(read (open-input-string ""line 1\ 	 
- 	 
-
-line 3
-""))
+(read (open-input-string "\"line 1\\ \t \n \t \n\nline 3\n\""))
 
 Testing: 
-(char->integer (string-ref (read (open-input-string ""\x03BB;"")) 0))
+(char->integer (string-ref (read (open-input-string "\"\\x03BB;\"")) 0))
 
 Testing: 
 (get-output-string out)

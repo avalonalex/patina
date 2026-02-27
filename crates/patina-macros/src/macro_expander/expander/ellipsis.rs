@@ -2,11 +2,13 @@
 //!
 //! This module handles the complex ellipsis expansion logic, including
 //! single ellipsis (`x ...`) and double ellipsis (`x ... ...`) from SRFI-149.
+//! All methods return TaggedValue directly.
 
 use super::Expander;
 use super::error::ExpandError;
 use crate::macro_expander::Template;
-use patina_runtime::{MatchEnv, MatchValue, PVRef, Value};
+use patina_core::TaggedValue;
+use patina_runtime::{MatchEnv, MatchValue, PVRef};
 
 /// Context for ellipsis expansion operations
 ///
@@ -56,7 +58,7 @@ impl Expander {
         &self,
         ctx: &EllipsisContext<'_>,
         nesting: u8,
-    ) -> Result<Value, ExpandError> {
+    ) -> Result<TaggedValue, ExpandError> {
         if nesting == 1 {
             // Single ellipsis - standard iteration
             self.expand_single_ellipsis(ctx)
@@ -74,7 +76,10 @@ impl Expander {
     }
 
     /// Expand a single ellipsis template (nesting = 1)
-    fn expand_single_ellipsis(&self, ctx: &EllipsisContext<'_>) -> Result<Value, ExpandError> {
+    fn expand_single_ellipsis(
+        &self,
+        ctx: &EllipsisContext<'_>,
+    ) -> Result<TaggedValue, ExpandError> {
         // Determine iteration count from the first variable
         // Note: For nested ellipsis patterns like ((item ...) ...), the variable
         // may be at a deeper level than this ellipsis. We use get_iteration_count_at_level
@@ -114,8 +119,8 @@ impl Expander {
             result.push(value);
         }
 
-        // Convert result vec to Scheme list
-        Ok(self.vec_to_list(result))
+        // Convert result vec to Scheme list (TaggedValue)
+        Ok(self.vec_to_list_tagged(result))
     }
 
     /// Expand a double ellipsis template (nesting = 2)
@@ -151,7 +156,10 @@ impl Expander {
     /// Input: ((i 0 (+ i 1)) (j 10))
     /// step values: Branch([Branch([Leaf((+ i 1))]), Branch([])])
     /// Output: (loop (+ i 1) j)
-    fn expand_double_ellipsis(&self, ctx: &EllipsisContext<'_>) -> Result<Value, ExpandError> {
+    fn expand_double_ellipsis(
+        &self,
+        ctx: &EllipsisContext<'_>,
+    ) -> Result<TaggedValue, ExpandError> {
         self.validate_double_ellipsis_level(ctx.level)?;
 
         let outer_count =
@@ -160,7 +168,7 @@ impl Expander {
 
         let all_results = self.expand_nested_iterations(ctx, outer_count, max_var_level)?;
 
-        Ok(self.vec_to_list(all_results))
+        Ok(self.vec_to_list_tagged(all_results))
     }
 
     /// Validate that level is appropriate for double ellipsis
@@ -203,7 +211,7 @@ impl Expander {
         ctx: &EllipsisContext<'_>,
         outer_count: usize,
         max_var_level: usize,
-    ) -> Result<Vec<Value>, ExpandError> {
+    ) -> Result<Vec<TaggedValue>, ExpandError> {
         let mut all_results = Vec::new();
 
         for outer_idx in 0..outer_count {
@@ -239,7 +247,7 @@ impl Expander {
         &self,
         ctx: &EllipsisContext<'_>,
         outer_indices: &[usize],
-    ) -> Result<Vec<Value>, ExpandError> {
+    ) -> Result<Vec<TaggedValue>, ExpandError> {
         let inner_count = self.get_inner_iteration_count(ctx.vars, ctx.env, outer_indices)?;
         let var_level = self.get_inner_var_level(ctx.vars, ctx.level);
         let max_var_level = self.get_max_var_level(ctx.vars);
@@ -315,8 +323,13 @@ impl Expander {
                 break;
             }
             match current {
-                MatchValue::Branch(items) => {
-                    current = items
+                MatchValue::Branch(branch_idx) => {
+                    let items = env.branches().get(branch_idx).ok_or_else(|| {
+                        ExpandError::UndefinedVariable {
+                            pvref: format!("{:?}", pvref),
+                        }
+                    })?;
+                    current = *items
                         .get(idx)
                         .ok_or_else(|| ExpandError::UndefinedVariable {
                             pvref: format!("{:?}", pvref),
@@ -334,7 +347,14 @@ impl Expander {
 
         // Current should be a Branch at target_level
         match current {
-            MatchValue::Branch(items) => Ok(items.len()),
+            MatchValue::Branch(branch_idx) => {
+                let items = env.branches().get(branch_idx).ok_or_else(|| {
+                    ExpandError::UndefinedVariable {
+                        pvref: format!("{:?}", pvref),
+                    }
+                })?;
+                Ok(items.len())
+            }
             MatchValue::Leaf(_) => Err(ExpandError::LevelMismatch {
                 pvref: format!("{:?}", pvref),
                 template_level: target_level,
@@ -372,8 +392,13 @@ impl Expander {
             }
             let idx = indices[level_idx];
             match current {
-                MatchValue::Branch(items) => {
-                    current = items
+                MatchValue::Branch(branch_idx) => {
+                    let items = env.branches().get(branch_idx).ok_or_else(|| {
+                        ExpandError::UndefinedVariable {
+                            pvref: format!("{:?}", pvref),
+                        }
+                    })?;
+                    current = *items
                         .get(idx)
                         .ok_or_else(|| ExpandError::UndefinedVariable {
                             pvref: format!("{:?}", pvref),
@@ -392,7 +417,14 @@ impl Expander {
         // Now current should be at the level just above where we're iterating
         // It should be a Branch
         match current {
-            MatchValue::Branch(items) => Ok(items.len()),
+            MatchValue::Branch(branch_idx) => {
+                let items = env.branches().get(branch_idx).ok_or_else(|| {
+                    ExpandError::UndefinedVariable {
+                        pvref: format!("{:?}", pvref),
+                    }
+                })?;
+                Ok(items.len())
+            }
             MatchValue::Leaf(_) => Err(ExpandError::LevelMismatch {
                 pvref: format!("{:?}", pvref),
                 template_level: pvref.level(),

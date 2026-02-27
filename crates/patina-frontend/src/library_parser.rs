@@ -13,7 +13,8 @@
 //! ```
 
 use crate::ParseError;
-use patina_runtime::Value;
+use crate::cond_expand::{parse_library_name_tagged, tagged_list_to_vec};
+use patina_core::{SharedHeap, TaggedValue};
 
 // Re-export library types from runtime (they moved there to fix dependency issues)
 pub use patina_runtime::library_loader::{ExportSpec, ImportSet};
@@ -26,7 +27,10 @@ pub use patina_runtime::library_loader::{ExportSpec, ImportSet};
 #[derive(Debug, Clone)]
 pub enum BodyElement {
     /// Inline code from `(begin expr1 expr2 ...)`
-    Begin(Vec<Value>),
+    ///
+    /// Expressions are stored as TaggedValues on a shared heap provided
+    /// during library definition parsing.
+    Begin(Vec<TaggedValue>),
 
     /// Files to include: `(include "file1.scm" "file2.scm" ...)`
     /// The bool indicates case-insensitive mode (include-ci)
@@ -66,15 +70,14 @@ pub struct LibraryDefinition {
 }
 
 impl LibraryDefinition {
-    /// Parse a define-library form from a Value
+    /// Parse a define-library form from a TaggedValue
     ///
     /// Expects a list: (define-library <name> <declaration>*)
     ///
     /// Note: This method cannot check `(library <name>)` requirements in cond-expand.
-    /// Use `from_value_with_library_checker` if you need library availability checks.
-    pub fn from_value(value: &Value) -> Result<Self, ParseError> {
-        // Default: no library checker available
-        Self::from_value_with_library_checker(value, &|_| false)
+    /// Use `from_tagged_with_library_checker` if you need library availability checks.
+    pub fn from_tagged(tv: TaggedValue, heap: &SharedHeap) -> Result<Self, ParseError> {
+        Self::from_tagged_with_library_checker(tv, heap, &|_| false)
     }
 
     /// Parse a define-library form with a library availability checker.
@@ -82,13 +85,15 @@ impl LibraryDefinition {
     /// The `can_load_library` callback is used for `(library <name>)` requirements
     /// in cond-expand clauses. It should return true if the named library can be loaded.
     ///
+    /// The `heap` is used to store begin body expressions as TaggedValues.
+    ///
     /// Expects a list: (define-library <name> <declaration>*)
-    pub fn from_value_with_library_checker(
-        value: &Value,
+    pub fn from_tagged_with_library_checker(
+        tv: TaggedValue,
+        heap: &SharedHeap,
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<Self, ParseError> {
-        // Must be a list starting with 'define-library
-        let list = Self::expect_list(value)?;
+        let list = tagged_list_to_vec(tv, heap)?;
 
         if list.is_empty() {
             return Err(ParseError::InvalidSyntax(
@@ -97,7 +102,7 @@ impl LibraryDefinition {
         }
 
         // First element must be the symbol 'define-library
-        Self::expect_symbol(&list[0], "define-library")?;
+        Self::expect_symbol_tagged(list[0], heap, "define-library")?;
 
         if list.len() < 2 {
             return Err(ParseError::InvalidSyntax(
@@ -106,20 +111,21 @@ impl LibraryDefinition {
         }
 
         // Second element is the library name
-        let name = Self::parse_library_name(&list[1])?;
+        let name = parse_library_name_tagged(list[1], heap)?;
 
         // Rest are declarations
         let mut exports = Vec::new();
         let mut imports = Vec::new();
         let mut body_elements = Vec::new();
 
-        for decl in &list[2..] {
-            Self::parse_declaration(
+        for &decl in &list[2..] {
+            Self::parse_declaration_tagged(
                 decl,
                 &mut exports,
                 &mut imports,
                 &mut body_elements,
                 can_load_library,
+                heap,
             )?;
         }
 
@@ -131,45 +137,16 @@ impl LibraryDefinition {
         })
     }
 
-    /// Parse a library name: (scheme base) → ["scheme", "base"]
-    ///
-    /// R7RS §5.6: Library names are lists of identifiers and exact non-negative integers.
-    /// Examples: (scheme base), (srfi 1), (srfi 1 lists)
-    fn parse_library_name(value: &Value) -> Result<Vec<String>, ParseError> {
-        let list = Self::expect_list(value)?;
-
-        if list.is_empty() {
-            return Err(ParseError::InvalidSyntax(
-                "Library name cannot be empty".to_string(),
-            ));
-        }
-
-        let mut name = Vec::new();
-        for part in list {
-            match &part {
-                Value::Symbol(s) => name.push(s.to_string()),
-                Value::Integer(n) if *n >= 0 => name.push(n.to_string()),
-                _ => {
-                    return Err(ParseError::InvalidSyntax(format!(
-                        "Library name parts must be identifiers or non-negative integers, got: {}",
-                        part
-                    )));
-                }
-            }
-        }
-
-        Ok(name)
-    }
-
-    /// Parse a library declaration
-    fn parse_declaration(
-        value: &Value,
+    /// Parse a library declaration from a TaggedValue
+    fn parse_declaration_tagged(
+        tv: TaggedValue,
         exports: &mut Vec<ExportSpec>,
         imports: &mut Vec<ImportSet>,
         body_elements: &mut Vec<BodyElement>,
         can_load_library: &dyn Fn(&[String]) -> bool,
+        heap: &SharedHeap,
     ) -> Result<(), ParseError> {
-        let list = Self::expect_list(value)?;
+        let list = tagged_list_to_vec(tv, heap)?;
 
         if list.is_empty() {
             return Err(ParseError::InvalidSyntax(
@@ -178,30 +155,32 @@ impl LibraryDefinition {
         }
 
         // First element determines the type
-        if let Value::Symbol(keyword) = &list[0] {
-            match keyword.as_ref() {
+        let keyword = {
+            let h = heap.borrow();
+            h.get_symbol_name(list[0]).map(|s| s.to_string())
+        };
+
+        if let Some(keyword) = keyword {
+            match keyword.as_str() {
                 "export" => {
-                    // (export spec1 spec2 ...)
-                    for spec_value in &list[1..] {
-                        exports.push(Self::parse_export_spec(spec_value)?);
+                    for &spec in &list[1..] {
+                        exports.push(Self::parse_export_spec_tagged(spec, heap)?);
                     }
                     Ok(())
                 }
                 "import" => {
-                    // (import set1 set2 ...)
-                    for set_value in &list[1..] {
-                        imports.push(Self::parse_import_set(set_value)?);
+                    for &set in &list[1..] {
+                        imports.push(Self::parse_import_set_tagged(set, heap)?);
                     }
                     Ok(())
                 }
                 "begin" => {
-                    // (begin expr1 expr2 ...)
+                    // Begin body exprs are already TaggedValues on the heap
                     body_elements.push(BodyElement::Begin(list[1..].to_vec()));
                     Ok(())
                 }
                 "include" => {
-                    // (include "file1.scm" "file2.scm" ...)
-                    let paths = Self::parse_include_paths(&list[1..])?;
+                    let paths = Self::parse_include_paths_tagged(&list[1..], heap)?;
                     body_elements.push(BodyElement::Include {
                         paths,
                         case_insensitive: false,
@@ -209,30 +188,23 @@ impl LibraryDefinition {
                     Ok(())
                 }
                 "include-ci" => {
-                    // (include-ci "file1.scm" "file2.scm" ...)
-                    let paths = Self::parse_include_paths(&list[1..])?;
+                    let paths = Self::parse_include_paths_tagged(&list[1..], heap)?;
                     body_elements.push(BodyElement::Include {
                         paths,
                         case_insensitive: true,
                     });
                     Ok(())
                 }
-                "cond-expand" => {
-                    // (cond-expand clause1 clause2 ...)
-                    // Each clause is (<feature-requirement> <declaration>*)
-                    // or (else <declaration>*)
-                    Self::parse_cond_expand(
-                        &list[1..],
-                        exports,
-                        imports,
-                        body_elements,
-                        can_load_library,
-                    )
-                }
+                "cond-expand" => Self::parse_cond_expand_tagged(
+                    &list[1..],
+                    exports,
+                    imports,
+                    body_elements,
+                    can_load_library,
+                    heap,
+                ),
                 "include-library-declarations" => {
-                    // (include-library-declarations "file1.scm" "file2.scm" ...)
-                    // The file contents are spliced as library declarations
-                    let paths = Self::parse_include_paths(&list[1..])?;
+                    let paths = Self::parse_include_paths_tagged(&list[1..], heap)?;
                     body_elements.push(BodyElement::IncludeLibraryDeclarations { paths });
                     Ok(())
                 }
@@ -248,49 +220,42 @@ impl LibraryDefinition {
         }
     }
 
-    /// Parse include file paths from a list of string values
-    fn parse_include_paths(values: &[Value]) -> Result<Vec<String>, ParseError> {
+    /// Parse include file paths from a slice of TaggedValues
+    fn parse_include_paths_tagged(
+        values: &[TaggedValue],
+        heap: &SharedHeap,
+    ) -> Result<Vec<String>, ParseError> {
         if values.is_empty() {
             return Err(ParseError::InvalidSyntax(
                 "include requires at least one filename".to_string(),
             ));
         }
 
+        let h = heap.borrow();
         let mut paths = Vec::new();
-        for value in values {
-            match value {
-                Value::String(s) => {
-                    // Convert Vec<char> back to String for file path
-                    let path: String = s.borrow().iter().collect();
-                    paths.push(path);
-                }
-                _ => {
-                    return Err(ParseError::InvalidSyntax(format!(
-                        "include filename must be a string, got: {}",
-                        value
-                    )));
-                }
+        for &tv in values {
+            if let Some(s) = h.get_string_contents(tv) {
+                paths.push(s);
+            } else {
+                return Err(ParseError::InvalidSyntax(format!(
+                    "include filename must be a string, got: {}",
+                    h.type_name(tv)
+                )));
             }
         }
         Ok(paths)
     }
 
-    /// Parse cond-expand declaration in library context
-    ///
-    /// R7RS §5.6.1: The cond-expand library declaration provides for
-    /// conditionally including library declarations.
-    ///
-    /// Syntax: (cond-expand <clause>+)
-    /// where <clause> is (<feature-requirement> <declaration>*)
-    ///                or (else <declaration>*)
-    fn parse_cond_expand(
-        clauses: &[Value],
+    /// Parse cond-expand declaration in library context (tagged version)
+    fn parse_cond_expand_tagged(
+        clauses: &[TaggedValue],
         exports: &mut Vec<ExportSpec>,
         imports: &mut Vec<ImportSet>,
         body_elements: &mut Vec<BodyElement>,
         can_load_library: &dyn Fn(&[String]) -> bool,
+        heap: &SharedHeap,
     ) -> Result<(), ParseError> {
-        use crate::cond_expand::evaluate_feature_requirement;
+        use crate::cond_expand::evaluate_feature_requirement_tagged;
         use patina_runtime::default_features;
 
         if clauses.is_empty() {
@@ -301,8 +266,8 @@ impl LibraryDefinition {
 
         let features = default_features();
 
-        for clause in clauses {
-            let clause_list = Self::expect_list(clause)?;
+        for &clause in clauses {
+            let clause_list = tagged_list_to_vec(clause, heap)?;
 
             if clause_list.is_empty() {
                 return Err(ParseError::InvalidSyntax(
@@ -311,124 +276,149 @@ impl LibraryDefinition {
             }
 
             // Check for else clause
-            let is_else = matches!(&clause_list[0], Value::Symbol(s) if s.as_ref() == "else");
+            let is_else = {
+                let h = heap.borrow();
+                h.get_symbol_name(clause_list[0]) == Some("else")
+            };
 
             let matches = if is_else {
                 true
             } else {
-                // Evaluate the feature requirement
-                evaluate_feature_requirement(&clause_list[0], &features, can_load_library)?
+                evaluate_feature_requirement_tagged(
+                    clause_list[0],
+                    heap,
+                    &features,
+                    can_load_library,
+                )?
             };
 
             if matches {
-                // Splice in the matching declarations
-                for decl in &clause_list[1..] {
-                    Self::parse_declaration(
+                for &decl in &clause_list[1..] {
+                    Self::parse_declaration_tagged(
                         decl,
                         exports,
                         imports,
                         body_elements,
                         can_load_library,
+                        heap,
                     )?;
                 }
-                return Ok(()); // Stop after first match
+                return Ok(());
             }
         }
 
-        // No clause matched - R7RS says this is an error if no else clause
-        // But many implementations just continue silently. We'll do the same.
         Ok(())
     }
 
-    /// Parse an export spec
-    fn parse_export_spec(value: &Value) -> Result<ExportSpec, ParseError> {
-        match value {
-            Value::Symbol(id) => Ok(ExportSpec::Identifier(id.to_string())),
-            Value::Pair(_) => {
-                // (rename internal external)
-                let list = Self::expect_list(value)?;
-
-                if list.len() != 3 {
-                    return Err(ParseError::InvalidSyntax(
-                        "rename export requires exactly 3 elements".to_string(),
-                    ));
-                }
-
-                Self::expect_symbol(&list[0], "rename")?;
-
-                let internal = if let Value::Symbol(s) = &list[1] {
-                    s.to_string()
-                } else {
-                    return Err(ParseError::InvalidSyntax(
-                        "rename internal name must be a symbol".to_string(),
-                    ));
-                };
-
-                let external = if let Value::Symbol(s) = &list[2] {
-                    s.to_string()
-                } else {
-                    return Err(ParseError::InvalidSyntax(
-                        "rename external name must be a symbol".to_string(),
-                    ));
-                };
-
-                Ok(ExportSpec::Rename { internal, external })
+    /// Parse an export spec from a TaggedValue
+    fn parse_export_spec_tagged(
+        tv: TaggedValue,
+        heap: &SharedHeap,
+    ) -> Result<ExportSpec, ParseError> {
+        // Check if it's a simple symbol
+        {
+            let h = heap.borrow();
+            if let Some(name) = h.get_symbol_name(tv) {
+                return Ok(ExportSpec::Identifier(name.to_string()));
             }
-            _ => Err(ParseError::InvalidSyntax(format!(
-                "Invalid export spec: {}",
-                value
-            ))),
+            if tv.is_pair() {
+                // fall through to list parsing below
+            } else {
+                return Err(ParseError::InvalidSyntax(format!(
+                    "Invalid export spec: {}",
+                    h.type_name(tv)
+                )));
+            }
         }
+
+        // (rename internal external)
+        let list = tagged_list_to_vec(tv, heap)?;
+
+        if list.len() != 3 {
+            return Err(ParseError::InvalidSyntax(
+                "rename export requires exactly 3 elements".to_string(),
+            ));
+        }
+
+        Self::expect_symbol_tagged(list[0], heap, "rename")?;
+
+        let h = heap.borrow();
+        let internal = h
+            .get_symbol_name(list[1])
+            .ok_or_else(|| {
+                ParseError::InvalidSyntax("rename internal name must be a symbol".to_string())
+            })?
+            .to_string();
+
+        let external = h
+            .get_symbol_name(list[2])
+            .ok_or_else(|| {
+                ParseError::InvalidSyntax("rename external name must be a symbol".to_string())
+            })?
+            .to_string();
+
+        Ok(ExportSpec::Rename { internal, external })
     }
 
-    /// Parse an import set
-    pub fn parse_import_set(value: &Value) -> Result<ImportSet, ParseError> {
-        match value {
-            Value::Pair(_) => {
-                let list = Self::expect_list(value)?;
-
-                if list.is_empty() {
-                    return Err(ParseError::InvalidSyntax("Empty import set".to_string()));
-                }
-
-                // Check if it's a library name or an import modifier
-                if let Value::Symbol(first) = &list[0] {
-                    match first.as_ref() {
-                        "only" => Self::parse_only_import(&list),
-                        "except" => Self::parse_except_import(&list),
-                        "prefix" => Self::parse_prefix_import(&list),
-                        "rename" => Self::parse_rename_import(&list),
-                        _ => {
-                            // It's a library name
-                            Self::parse_library_name(value).map(ImportSet::Library)
-                        }
-                    }
-                } else {
-                    // Not a symbol, try to parse as library name
-                    Self::parse_library_name(value).map(ImportSet::Library)
-                }
+    /// Parse an import set from a TaggedValue
+    pub fn parse_import_set_tagged(
+        tv: TaggedValue,
+        heap: &SharedHeap,
+    ) -> Result<ImportSet, ParseError> {
+        {
+            let h = heap.borrow();
+            if !tv.is_pair() {
+                return Err(ParseError::InvalidSyntax(format!(
+                    "Invalid import set: {}",
+                    h.type_name(tv)
+                )));
             }
-            _ => Err(ParseError::InvalidSyntax(format!(
-                "Invalid import set: {}",
-                value
-            ))),
         }
+
+        let list = tagged_list_to_vec(tv, heap)?;
+
+        if list.is_empty() {
+            return Err(ParseError::InvalidSyntax("Empty import set".to_string()));
+        }
+
+        // Check if first element is a modifier keyword
+        let first_sym = {
+            let h = heap.borrow();
+            h.get_symbol_name(list[0]).map(|s| s.to_string())
+        };
+
+        if let Some(ref first) = first_sym {
+            match first.as_str() {
+                "only" => return Self::parse_only_import_tagged(&list, heap),
+                "except" => return Self::parse_except_import_tagged(&list, heap),
+                "prefix" => return Self::parse_prefix_import_tagged(&list, heap),
+                "rename" => return Self::parse_rename_import_tagged(&list, heap),
+                _ => {}
+            }
+        }
+
+        // It's a library name
+        parse_library_name_tagged(tv, heap).map(ImportSet::Library)
     }
 
     /// Parse (only <import-set> id1 id2 ...)
-    fn parse_only_import(list: &[Value]) -> Result<ImportSet, ParseError> {
+    fn parse_only_import_tagged(
+        list: &[TaggedValue],
+        heap: &SharedHeap,
+    ) -> Result<ImportSet, ParseError> {
         if list.len() < 3 {
             return Err(ParseError::InvalidSyntax(
                 "only requires at least one identifier".to_string(),
             ));
         }
 
-        let import_set = Box::new(Self::parse_import_set(&list[1])?);
+        let import_set = Box::new(Self::parse_import_set_tagged(list[1], heap)?);
+        let h = heap.borrow();
         let mut identifiers = Vec::new();
 
-        for id_value in &list[2..] {
-            if let Value::Symbol(id) = id_value {
-                identifiers.push(id.to_string());
+        for &id_tv in &list[2..] {
+            if let Some(name) = h.get_symbol_name(id_tv) {
+                identifiers.push(name.to_string());
             } else {
                 return Err(ParseError::InvalidSyntax(
                     "only identifiers must be symbols".to_string(),
@@ -443,19 +433,23 @@ impl LibraryDefinition {
     }
 
     /// Parse (except <import-set> id1 id2 ...)
-    fn parse_except_import(list: &[Value]) -> Result<ImportSet, ParseError> {
+    fn parse_except_import_tagged(
+        list: &[TaggedValue],
+        heap: &SharedHeap,
+    ) -> Result<ImportSet, ParseError> {
         if list.len() < 3 {
             return Err(ParseError::InvalidSyntax(
                 "except requires at least one identifier".to_string(),
             ));
         }
 
-        let import_set = Box::new(Self::parse_import_set(&list[1])?);
+        let import_set = Box::new(Self::parse_import_set_tagged(list[1], heap)?);
+        let h = heap.borrow();
         let mut identifiers = Vec::new();
 
-        for id_value in &list[2..] {
-            if let Value::Symbol(id) = id_value {
-                identifiers.push(id.to_string());
+        for &id_tv in &list[2..] {
+            if let Some(name) = h.get_symbol_name(id_tv) {
+                identifiers.push(name.to_string());
             } else {
                 return Err(ParseError::InvalidSyntax(
                     "except identifiers must be symbols".to_string(),
@@ -470,38 +464,43 @@ impl LibraryDefinition {
     }
 
     /// Parse (prefix <import-set> prefix-id)
-    fn parse_prefix_import(list: &[Value]) -> Result<ImportSet, ParseError> {
+    fn parse_prefix_import_tagged(
+        list: &[TaggedValue],
+        heap: &SharedHeap,
+    ) -> Result<ImportSet, ParseError> {
         if list.len() != 3 {
             return Err(ParseError::InvalidSyntax(
                 "prefix requires exactly 2 arguments".to_string(),
             ));
         }
 
-        let import_set = Box::new(Self::parse_import_set(&list[1])?);
-        let prefix = if let Value::Symbol(p) = &list[2] {
-            p.to_string()
-        } else {
-            return Err(ParseError::InvalidSyntax(
-                "prefix must be a symbol".to_string(),
-            ));
+        let import_set = Box::new(Self::parse_import_set_tagged(list[1], heap)?);
+        let prefix = {
+            let h = heap.borrow();
+            h.get_symbol_name(list[2])
+                .ok_or_else(|| ParseError::InvalidSyntax("prefix must be a symbol".to_string()))?
+                .to_string()
         };
 
         Ok(ImportSet::Prefix { import_set, prefix })
     }
 
     /// Parse (rename <import-set> (old1 new1) (old2 new2) ...)
-    fn parse_rename_import(list: &[Value]) -> Result<ImportSet, ParseError> {
+    fn parse_rename_import_tagged(
+        list: &[TaggedValue],
+        heap: &SharedHeap,
+    ) -> Result<ImportSet, ParseError> {
         if list.len() < 3 {
             return Err(ParseError::InvalidSyntax(
                 "rename requires at least one rename pair".to_string(),
             ));
         }
 
-        let import_set = Box::new(Self::parse_import_set(&list[1])?);
+        let import_set = Box::new(Self::parse_import_set_tagged(list[1], heap)?);
         let mut renames = Vec::new();
 
-        for pair_value in &list[2..] {
-            let pair = Self::expect_list(pair_value)?;
+        for &pair_tv in &list[2..] {
+            let pair = tagged_list_to_vec(pair_tv, heap)?;
 
             if pair.len() != 2 {
                 return Err(ParseError::InvalidSyntax(
@@ -509,21 +508,20 @@ impl LibraryDefinition {
                 ));
             }
 
-            let old = if let Value::Symbol(s) = &pair[0] {
-                s.to_string()
-            } else {
-                return Err(ParseError::InvalidSyntax(
-                    "rename old name must be a symbol".to_string(),
-                ));
-            };
+            let h = heap.borrow();
+            let old = h
+                .get_symbol_name(pair[0])
+                .ok_or_else(|| {
+                    ParseError::InvalidSyntax("rename old name must be a symbol".to_string())
+                })?
+                .to_string();
 
-            let new = if let Value::Symbol(s) = &pair[1] {
-                s.to_string()
-            } else {
-                return Err(ParseError::InvalidSyntax(
-                    "rename new name must be a symbol".to_string(),
-                ));
-            };
+            let new = h
+                .get_symbol_name(pair[1])
+                .ok_or_else(|| {
+                    ParseError::InvalidSyntax("rename new name must be a symbol".to_string())
+                })?
+                .to_string();
 
             renames.push((old, new));
         }
@@ -534,44 +532,27 @@ impl LibraryDefinition {
         })
     }
 
-    /// Helper: expect a list and return its elements
-    fn expect_list(value: &Value) -> Result<Vec<Value>, ParseError> {
-        let mut items = Vec::new();
-        let mut current = value.clone();
-
-        loop {
-            match current {
-                Value::Null => return Ok(items),
-                Value::Pair(pair) => {
-                    let borrowed = pair.borrow();
-                    items.push(borrowed.0.clone());
-                    current = borrowed.1.clone();
-                }
-                _ => {
-                    return Err(ParseError::InvalidSyntax(format!(
-                        "Expected proper list, got improper list ending with: {}",
-                        current
-                    )));
-                }
-            }
-        }
-    }
-
-    /// Helper: expect a specific symbol
-    fn expect_symbol(value: &Value, expected: &str) -> Result<(), ParseError> {
-        if let Value::Symbol(s) = value {
-            if s.as_ref() == expected {
+    /// Helper: expect a specific symbol in a TaggedValue
+    fn expect_symbol_tagged(
+        tv: TaggedValue,
+        heap: &SharedHeap,
+        expected: &str,
+    ) -> Result<(), ParseError> {
+        let h = heap.borrow();
+        if let Some(name) = h.get_symbol_name(tv) {
+            if name == expected {
                 Ok(())
             } else {
                 Err(ParseError::InvalidSyntax(format!(
                     "Expected '{}', got '{}'",
-                    expected, s
+                    expected, name
                 )))
             }
         } else {
             Err(ParseError::InvalidSyntax(format!(
                 "Expected symbol '{}', got: {}",
-                expected, value
+                expected,
+                h.type_name(tv)
             )))
         }
     }
@@ -580,33 +561,55 @@ impl LibraryDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
-    fn symbol(s: &str) -> Value {
-        Value::symbol(s)
+    fn test_heap() -> SharedHeap {
+        patina_core::new_shared_heap()
     }
 
-    fn list(items: Vec<Value>) -> Value {
-        items.into_iter().rev().fold(Value::Null, |acc, item| {
-            Value::Pair(Rc::new(RefCell::new((item, acc))))
-        })
+    fn sym(s: &str, heap: &SharedHeap) -> TaggedValue {
+        heap.borrow_mut().intern_symbol(s)
+    }
+
+    fn fixnum(n: i64) -> TaggedValue {
+        TaggedValue::fixnum(n)
+    }
+
+    fn str_val(s: &str, heap: &SharedHeap) -> TaggedValue {
+        heap.borrow_mut().alloc_string(s.to_string())
+    }
+
+    fn list(items: Vec<TaggedValue>, heap: &SharedHeap) -> TaggedValue {
+        let mut result = TaggedValue::NULL;
+        for item in items.into_iter().rev() {
+            result = heap.borrow_mut().alloc_pair(item, result);
+        }
+        result
     }
 
     #[test]
     fn test_parse_simple_library() {
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![symbol("export"), symbol("foo"), symbol("bar")]),
-            list(vec![
-                symbol("import"),
-                list(vec![symbol("scheme"), symbol("base")]),
-            ]),
-            list(vec![symbol("begin")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![sym("export", &heap), sym("foo", &heap), sym("bar", &heap)],
+                    &heap,
+                ),
+                list(
+                    vec![
+                        sym("import", &heap),
+                        list(vec![sym("scheme", &heap), sym("base", &heap)], &heap),
+                    ],
+                    &heap,
+                ),
+                list(vec![sym("begin", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
 
         assert_eq!(parsed.name, vec!["test", "lib"]);
         assert_eq!(parsed.exports.len(), 2);
@@ -615,13 +618,17 @@ mod tests {
 
     #[test]
     fn test_parse_export_rename() {
-        let export_spec = list(vec![
-            symbol("rename"),
-            symbol("internal-name"),
-            symbol("external-name"),
-        ]);
+        let heap = test_heap();
+        let export_spec = list(
+            vec![
+                sym("rename", &heap),
+                sym("internal-name", &heap),
+                sym("external-name", &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::parse_export_spec(&export_spec).unwrap();
+        let parsed = LibraryDefinition::parse_export_spec_tagged(export_spec, &heap).unwrap();
 
         assert_eq!(
             parsed,
@@ -634,14 +641,18 @@ mod tests {
 
     #[test]
     fn test_parse_import_only() {
-        let import_set = list(vec![
-            symbol("only"),
-            list(vec![symbol("scheme"), symbol("base")]),
-            symbol("car"),
-            symbol("cdr"),
-        ]);
+        let heap = test_heap();
+        let import_set = list(
+            vec![
+                sym("only", &heap),
+                list(vec![sym("scheme", &heap), sym("base", &heap)], &heap),
+                sym("car", &heap),
+                sym("cdr", &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::parse_import_set(&import_set).unwrap();
+        let parsed = LibraryDefinition::parse_import_set_tagged(import_set, &heap).unwrap();
 
         match parsed {
             ImportSet::Only { identifiers, .. } => {
@@ -653,13 +664,17 @@ mod tests {
 
     #[test]
     fn test_parse_import_prefix() {
-        let import_set = list(vec![
-            symbol("prefix"),
-            list(vec![symbol("scheme"), symbol("base")]),
-            symbol("scheme:"),
-        ]);
+        let heap = test_heap();
+        let import_set = list(
+            vec![
+                sym("prefix", &heap),
+                list(vec![sym("scheme", &heap), sym("base", &heap)], &heap),
+                sym("scheme:", &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::parse_import_set(&import_set).unwrap();
+        let parsed = LibraryDefinition::parse_import_set_tagged(import_set, &heap).unwrap();
 
         match parsed {
             ImportSet::Prefix { prefix, .. } => {
@@ -673,85 +688,105 @@ mod tests {
     // Integer Library Names (R7RS §5.6)
     // =========================================================================
 
-    fn integer(n: i64) -> Value {
-        Value::Integer(n)
-    }
-
     #[test]
     fn test_parse_library_name_with_integer() {
-        // (srfi 1) - standard SRFI naming
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("srfi"), integer(1)]),
-            list(vec![symbol("export"), symbol("foo")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("srfi", &heap), fixnum(1)], &heap),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.name, vec!["srfi", "1"]);
     }
 
     #[test]
     fn test_parse_library_name_integer_in_middle() {
-        // (srfi 1 lists) - integer in the middle
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("srfi"), integer(1), symbol("lists")]),
-            list(vec![symbol("export"), symbol("foo")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(
+                    vec![sym("srfi", &heap), fixnum(1), sym("lists", &heap)],
+                    &heap,
+                ),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.name, vec!["srfi", "1", "lists"]);
     }
 
     #[test]
     fn test_parse_library_name_multiple_integers() {
-        // (lib 1 2 3) - multiple integers
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("lib"), integer(1), integer(2), integer(3)]),
-            list(vec![symbol("export"), symbol("foo")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(
+                    vec![sym("lib", &heap), fixnum(1), fixnum(2), fixnum(3)],
+                    &heap,
+                ),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.name, vec!["lib", "1", "2", "3"]);
     }
 
     #[test]
     fn test_parse_library_name_zero() {
-        // (lib 0) - zero is valid non-negative integer
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("lib"), integer(0)]),
-            list(vec![symbol("export"), symbol("foo")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("lib", &heap), fixnum(0)], &heap),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.name, vec!["lib", "0"]);
     }
 
     #[test]
     fn test_parse_library_name_large_integer() {
-        // (srfi 125) - common SRFI numbers
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("srfi"), integer(125)]),
-            list(vec![symbol("export"), symbol("foo")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("srfi", &heap), fixnum(125)], &heap),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.name, vec!["srfi", "125"]);
     }
 
     #[test]
     fn test_parse_library_name_negative_integer_rejected() {
-        // (test -1) - negative integers should be rejected per R7RS
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), integer(-1)]),
-            list(vec![symbol("export"), symbol("foo")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), fixnum(-1)], &heap),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let result = LibraryDefinition::from_value(&lib_def);
+        let result = LibraryDefinition::from_tagged(lib_def, &heap);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -763,10 +798,10 @@ mod tests {
 
     #[test]
     fn test_parse_import_set_with_integer() {
-        // (import (srfi 1)) - integer in import
-        let import_set = list(vec![symbol("srfi"), integer(1)]);
+        let heap = test_heap();
+        let import_set = list(vec![sym("srfi", &heap), fixnum(1)], &heap);
 
-        let parsed = LibraryDefinition::parse_import_set(&import_set).unwrap();
+        let parsed = LibraryDefinition::parse_import_set_tagged(import_set, &heap).unwrap();
 
         match parsed {
             ImportSet::Library(name) => {
@@ -778,14 +813,17 @@ mod tests {
 
     #[test]
     fn test_parse_import_only_with_integer_library() {
-        // (only (srfi 1) xcons) - integer library with only modifier
-        let import_set = list(vec![
-            symbol("only"),
-            list(vec![symbol("srfi"), integer(1)]),
-            symbol("xcons"),
-        ]);
+        let heap = test_heap();
+        let import_set = list(
+            vec![
+                sym("only", &heap),
+                list(vec![sym("srfi", &heap), fixnum(1)], &heap),
+                sym("xcons", &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::parse_import_set(&import_set).unwrap();
+        let parsed = LibraryDefinition::parse_import_set_tagged(import_set, &heap).unwrap();
 
         match parsed {
             ImportSet::Only {
@@ -808,21 +846,23 @@ mod tests {
     // Include Declaration (R7RS §5.6.1)
     // =========================================================================
 
-    fn string(s: &str) -> Value {
-        Value::String(Rc::new(RefCell::new(s.chars().collect())))
-    }
-
     #[test]
     fn test_parse_include_single_file() {
-        // (include "impl.scm")
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![symbol("export"), symbol("foo")]),
-            list(vec![symbol("include"), string("impl.scm")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                list(
+                    vec![sym("include", &heap), str_val("impl.scm", &heap)],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.name, vec!["test", "lib"]);
         assert_eq!(parsed.body_elements.len(), 1);
 
@@ -840,19 +880,25 @@ mod tests {
 
     #[test]
     fn test_parse_include_multiple_files() {
-        // (include "a.scm" "b.scm" "c.scm")
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("include"),
-                string("a.scm"),
-                string("b.scm"),
-                string("c.scm"),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("include", &heap),
+                        str_val("a.scm", &heap),
+                        str_val("b.scm", &heap),
+                        str_val("c.scm", &heap),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
 
         match &parsed.body_elements[0] {
             BodyElement::Include { paths, .. } => {
@@ -871,14 +917,20 @@ mod tests {
 
     #[test]
     fn test_parse_include_with_subdirectory() {
-        // (include "1/predicates.scm") - SRFI-1 pattern
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("srfi"), integer(1)]),
-            list(vec![symbol("include"), string("1/predicates.scm")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("srfi", &heap), fixnum(1)], &heap),
+                list(
+                    vec![sym("include", &heap), str_val("1/predicates.scm", &heap)],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
 
         match &parsed.body_elements[0] {
             BodyElement::Include { paths, .. } => {
@@ -890,14 +942,20 @@ mod tests {
 
     #[test]
     fn test_parse_include_ci() {
-        // (include-ci "legacy.scm")
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![symbol("include-ci"), string("legacy.scm")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![sym("include-ci", &heap), str_val("legacy.scm", &heap)],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
 
         match &parsed.body_elements[0] {
             BodyElement::Include {
@@ -913,14 +971,17 @@ mod tests {
 
     #[test]
     fn test_parse_include_empty_rejected() {
-        // (include) - no files specified
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![symbol("include")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(vec![sym("include", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let result = LibraryDefinition::from_value(&lib_def);
+        let result = LibraryDefinition::from_tagged(lib_def, &heap);
         assert!(result.is_err());
         assert!(
             result
@@ -932,67 +993,83 @@ mod tests {
 
     #[test]
     fn test_parse_include_non_string_rejected() {
-        // (include foo) - symbol instead of string
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![symbol("include"), symbol("foo")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(vec![sym("include", &heap), sym("foo", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let result = LibraryDefinition::from_value(&lib_def);
+        let result = LibraryDefinition::from_tagged(lib_def, &heap);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("must be a string"));
     }
 
     #[test]
     fn test_parse_mixed_begin_and_include() {
-        // Library with both begin and include declarations
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![symbol("export"), symbol("foo")]),
-            list(vec![symbol("begin"), symbol("expr1")]),
-            list(vec![symbol("include"), string("impl.scm")]),
-            list(vec![symbol("begin"), symbol("expr2")]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                list(vec![sym("begin", &heap), sym("expr1", &heap)], &heap),
+                list(
+                    vec![sym("include", &heap), str_val("impl.scm", &heap)],
+                    &heap,
+                ),
+                list(vec![sym("begin", &heap), sym("expr2", &heap)], &heap),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.body_elements.len(), 3);
 
-        // First: begin
         assert!(matches!(&parsed.body_elements[0], BodyElement::Begin(_)));
-        // Second: include
         assert!(matches!(
             &parsed.body_elements[1],
             BodyElement::Include { .. }
         ));
-        // Third: begin
         assert!(matches!(&parsed.body_elements[2], BodyElement::Begin(_)));
     }
 
     #[test]
     fn test_parse_body_elements_order_preserved() {
-        // R7RS: expressions from begin/include are processed in order
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("order")]),
-            list(vec![symbol("begin"), symbol("first")]),
-            list(vec![symbol("include"), string("second.scm")]),
-            list(vec![symbol("begin"), symbol("third")]),
-            list(vec![
-                symbol("include"),
-                string("fourth.scm"),
-                string("fifth.scm"),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("order", &heap)], &heap),
+                list(vec![sym("begin", &heap), sym("first", &heap)], &heap),
+                list(
+                    vec![sym("include", &heap), str_val("second.scm", &heap)],
+                    &heap,
+                ),
+                list(vec![sym("begin", &heap), sym("third", &heap)], &heap),
+                list(
+                    vec![
+                        sym("include", &heap),
+                        str_val("fourth.scm", &heap),
+                        str_val("fifth.scm", &heap),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.body_elements.len(), 4);
 
         // Verify order is preserved
+        let h = heap.borrow();
         match &parsed.body_elements[0] {
             BodyElement::Begin(exprs) => {
-                assert!(matches!(&exprs[0], Value::Symbol(s) if s.as_ref() == "first"));
+                assert_eq!(h.get_symbol_name(exprs[0]), Some("first"));
             }
             _ => panic!("Expected Begin"),
         }
@@ -1006,7 +1083,7 @@ mod tests {
 
         match &parsed.body_elements[2] {
             BodyElement::Begin(exprs) => {
-                assert!(matches!(&exprs[0], Value::Symbol(s) if s.as_ref() == "third"));
+                assert_eq!(h.get_symbol_name(exprs[0]), Some("third"));
             }
             _ => panic!("Expected Begin"),
         }
@@ -1027,205 +1104,321 @@ mod tests {
 
     #[test]
     fn test_cond_expand_simple_feature() {
-        // (cond-expand (r7rs (export foo)))
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    symbol("r7rs"),
-                    list(vec![symbol("export"), symbol("foo")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                sym("r7rs", &heap),
+                                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.exports.len(), 1);
         assert!(matches!(&parsed.exports[0], ExportSpec::Identifier(s) if s == "foo"));
     }
 
     #[test]
     fn test_cond_expand_patina_feature() {
-        // (cond-expand (patina (export bar)))
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    symbol("patina"),
-                    list(vec![symbol("export"), symbol("bar")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                sym("patina", &heap),
+                                list(vec![sym("export", &heap), sym("bar", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.exports.len(), 1);
         assert!(matches!(&parsed.exports[0], ExportSpec::Identifier(s) if s == "bar"));
     }
 
     #[test]
     fn test_cond_expand_else_clause() {
-        // (cond-expand (nonexistent (export bad)) (else (export good)))
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    symbol("nonexistent"),
-                    list(vec![symbol("export"), symbol("bad")]),
-                ]),
-                list(vec![
-                    symbol("else"),
-                    list(vec![symbol("export"), symbol("good")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                sym("nonexistent", &heap),
+                                list(vec![sym("export", &heap), sym("bad", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                        list(
+                            vec![
+                                sym("else", &heap),
+                                list(vec![sym("export", &heap), sym("good", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.exports.len(), 1);
         assert!(matches!(&parsed.exports[0], ExportSpec::Identifier(s) if s == "good"));
     }
 
     #[test]
     fn test_cond_expand_no_match() {
-        // (cond-expand (nonexistent (export foo))) - no match, no else
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    symbol("nonexistent"),
-                    list(vec![symbol("export"), symbol("foo")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                sym("nonexistent", &heap),
+                                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
-        assert_eq!(parsed.exports.len(), 0); // No exports since clause didn't match
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
+        assert_eq!(parsed.exports.len(), 0);
     }
 
     #[test]
     fn test_cond_expand_multiple_declarations() {
-        // (cond-expand (r7rs (export foo) (export bar)))
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    symbol("r7rs"),
-                    list(vec![symbol("export"), symbol("foo")]),
-                    list(vec![symbol("export"), symbol("bar")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                sym("r7rs", &heap),
+                                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                                list(vec![sym("export", &heap), sym("bar", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.exports.len(), 2);
     }
 
     #[test]
     fn test_cond_expand_and_requirement() {
-        // (cond-expand ((and r7rs patina) (export foo)))
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    list(vec![symbol("and"), symbol("r7rs"), symbol("patina")]),
-                    list(vec![symbol("export"), symbol("foo")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                list(
+                                    vec![
+                                        sym("and", &heap),
+                                        sym("r7rs", &heap),
+                                        sym("patina", &heap),
+                                    ],
+                                    &heap,
+                                ),
+                                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.exports.len(), 1);
     }
 
     #[test]
     fn test_cond_expand_or_requirement() {
-        // (cond-expand ((or nonexistent r7rs) (export foo)))
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    list(vec![symbol("or"), symbol("nonexistent"), symbol("r7rs")]),
-                    list(vec![symbol("export"), symbol("foo")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                list(
+                                    vec![
+                                        sym("or", &heap),
+                                        sym("nonexistent", &heap),
+                                        sym("r7rs", &heap),
+                                    ],
+                                    &heap,
+                                ),
+                                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.exports.len(), 1);
     }
 
     #[test]
     fn test_cond_expand_not_requirement() {
-        // (cond-expand ((not nonexistent) (export foo)))
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    list(vec![symbol("not"), symbol("nonexistent")]),
-                    list(vec![symbol("export"), symbol("foo")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                list(vec![sym("not", &heap), sym("nonexistent", &heap)], &heap),
+                                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.exports.len(), 1);
     }
 
     #[test]
     fn test_cond_expand_with_begin() {
-        // (cond-expand (r7rs (begin (define x 1))))
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![symbol("export"), symbol("x")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    symbol("r7rs"),
-                    list(vec![
-                        symbol("begin"),
-                        list(vec![symbol("define"), symbol("x"), integer(1)]),
-                    ]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(vec![sym("export", &heap), sym("x", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                sym("r7rs", &heap),
+                                list(
+                                    vec![
+                                        sym("begin", &heap),
+                                        list(
+                                            vec![sym("define", &heap), sym("x", &heap), fixnum(1)],
+                                            &heap,
+                                        ),
+                                    ],
+                                    &heap,
+                                ),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.body_elements.len(), 1);
         assert!(matches!(&parsed.body_elements[0], BodyElement::Begin(_)));
     }
 
     #[test]
     fn test_cond_expand_with_include() {
-        // (cond-expand (r7rs (include "impl.scm")))
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![symbol("export"), symbol("foo")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    symbol("r7rs"),
-                    list(vec![symbol("include"), string("impl.scm")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                sym("r7rs", &heap),
+                                list(
+                                    vec![sym("include", &heap), str_val("impl.scm", &heap)],
+                                    &heap,
+                                ),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.body_elements.len(), 1);
         match &parsed.body_elements[0] {
             BodyElement::Include { paths, .. } => {
@@ -1237,25 +1430,36 @@ mod tests {
 
     #[test]
     fn test_cond_expand_first_match_wins() {
-        // (cond-expand (r7rs (export first)) (patina (export second)))
-        // Both match, but first should win
-        let lib_def = list(vec![
-            symbol("define-library"),
-            list(vec![symbol("test"), symbol("lib")]),
-            list(vec![
-                symbol("cond-expand"),
-                list(vec![
-                    symbol("r7rs"),
-                    list(vec![symbol("export"), symbol("first")]),
-                ]),
-                list(vec![
-                    symbol("patina"),
-                    list(vec![symbol("export"), symbol("second")]),
-                ]),
-            ]),
-        ]);
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                list(
+                    vec![
+                        sym("cond-expand", &heap),
+                        list(
+                            vec![
+                                sym("r7rs", &heap),
+                                list(vec![sym("export", &heap), sym("first", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                        list(
+                            vec![
+                                sym("patina", &heap),
+                                list(vec![sym("export", &heap), sym("second", &heap)], &heap),
+                            ],
+                            &heap,
+                        ),
+                    ],
+                    &heap,
+                ),
+            ],
+            &heap,
+        );
 
-        let parsed = LibraryDefinition::from_value(&lib_def).unwrap();
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap).unwrap();
         assert_eq!(parsed.exports.len(), 1);
         assert!(matches!(&parsed.exports[0], ExportSpec::Identifier(s) if s == "first"));
     }

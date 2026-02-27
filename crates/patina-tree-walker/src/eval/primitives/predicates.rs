@@ -1,266 +1,324 @@
 //! Type predicate primitives (R7RS Section 6.x)
 //!
 //! Implements type checking predicates for all Scheme types.
-//!
-//! INSTRUCTIONS: Move from primitives.rs:
-//! - primitive_number_p()
-//! - primitive_integer_p()
-//! - primitive_boolean_p()
-//! - primitive_string_p()
-//! - primitive_symbol_p()
-//! - primitive_null_p()
-//! - primitive_pair_p()
-//! - primitive_list_p()
-//! - primitive_exact_p()
-//! - primitive_inexact_p()
-//! - primitive_boolean_equal()
-//! - primitive_procedure_p()
-//! - primitive_char_p()
-//! - primitive_vector_p()
+//! Uses Heap methods directly on TaggedValue for efficient type checking
+//! without conversion to Value.
 
 use super::super::Evaluator;
 use super::super::error::EvalError;
-use patina_runtime::value::Value;
+use patina_core::TaggedValue;
 
-/// Helper to check if an imaginary part is exact zero (not inexact 0.0)
-fn is_exact_zero(v: &Value) -> bool {
-    match v {
-        Value::Integer(n) => *n == 0,
-        Value::BigInteger(n) => n.sign() == num_bigint::Sign::NoSign,
-        Value::Rational(r) => {
-            use num_traits::Zero;
-            r.is_zero()
-        }
-        // Inexact 0.0 is NOT exact zero
-        Value::Real(_) => false,
-        _ => false,
+pub(super) fn rational_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
     }
+
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(
+        heap.borrow().is_rational_r7rs(args[0]),
+    ))
 }
 
-/// Helper to check if real part is finite
-fn is_finite(v: &Value) -> bool {
-    match v {
-        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => true,
-        Value::Real(f) => f.is_finite(),
-        _ => false,
+pub(super) fn real_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
     }
+
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(heap.borrow().is_real_r7rs(args[0])))
 }
 
-/// Helper to check if value is an integer (exact or inexact)
-fn is_integer_value(v: &Value) -> bool {
-    match v {
-        Value::Integer(_) | Value::BigInteger(_) => true,
-        Value::Rational(r) => {
-            use num_traits::One;
-            r.denom() == &num_bigint::BigInt::one()
-        }
-        Value::Real(f) => f.is_finite() && f.trunc() == *f,
-        _ => false,
+pub(super) fn complex_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
     }
+
+    // R7RS: All numbers are complex numbers
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(heap.borrow().is_number(args[0])))
 }
 
-pub(super) fn number_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| {
-        matches!(
-            v,
-            Value::Integer(_)
-                | Value::BigInteger(_)
-                | Value::Rational(_)
-                | Value::Real(_)
-                | Value::Complex(_)
-        )
-    })
-}
-
-pub(super) fn integer_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| match v {
-        Value::Integer(_) | Value::BigInteger(_) => true,
-        // R7RS: inexact integers like 4.0 are also integers
-        Value::Real(r) => r.is_finite() && r.trunc() == *r,
-        // R7RS: Complex with exact zero imaginary and integer real part is an integer
-        Value::Complex(parts) => {
-            let (ref real, ref imag) = **parts;
-            is_exact_zero(imag) && is_integer_value(real)
-        }
-        _ => false,
-    })
-}
-
-pub(super) fn rational_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| match v {
-        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) => true,
-        // R7RS: finite inexact reals are also rationals
-        Value::Real(r) => r.is_finite(),
-        // R7RS: Complex with exact zero imaginary and finite real part is rational
-        Value::Complex(parts) => {
-            let (ref real, ref imag) = **parts;
-            is_exact_zero(imag) && is_finite(real)
-        }
-        _ => false,
-    })
-}
-
-pub(super) fn real_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| match v {
-        Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_) | Value::Real(_) => true,
-        // R7RS: Complex numbers with EXACT zero imaginary part are real
-        // -2.5+0i (exact zero imag) -> real
-        // -2.5+0.0i (inexact zero imag) -> NOT real
-        Value::Complex(parts) => {
-            let (_, ref imag) = **parts;
-            is_exact_zero(imag)
-        }
-        _ => false,
-    })
-}
-
-pub(super) fn complex_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| {
-        matches!(
-            v,
-            Value::Integer(_)
-                | Value::BigInteger(_)
-                | Value::Rational(_)
-                | Value::Real(_)
-                | Value::Complex(_)
-        )
-    })
-}
-
-pub(super) fn boolean_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Boolean(_)))
-}
-
-pub(super) fn string_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::String(_)))
-}
-
-pub(super) fn symbol_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Symbol(_)))
-}
-
-pub(super) fn null_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Null))
-}
-
-pub(super) fn pair_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Pair(_)))
-}
-
-pub(super) fn list_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    use std::rc::Rc;
-
-    evaluator.check_arity_exact(&args, 1, "list?")?;
-
-    let mut slow = args[0].clone();
-    let mut fast = args[0].clone();
-
-    loop {
-        match fast.clone() {
-            Value::Null => return Ok(Value::Boolean(true)),
-            Value::Pair(pair1) => {
-                fast = pair1.borrow().1.clone();
-                match fast.clone() {
-                    Value::Null => return Ok(Value::Boolean(true)),
-                    Value::Pair(pair2) => {
-                        fast = pair2.borrow().1.clone();
-                        if let Value::Pair(slow_pair) = slow.clone() {
-                            slow = slow_pair.borrow().1.clone();
-                        }
-                        // Use pointer equality to detect cycles, not structural equality
-                        if let (Value::Pair(slow_ptr), Value::Pair(fast_ptr)) = (&slow, &fast)
-                            && Rc::ptr_eq(slow_ptr, fast_ptr)
-                        {
-                            return Ok(Value::Boolean(false));
-                        }
-                    }
-                    _ => return Ok(Value::Boolean(false)),
-                }
-            }
-            _ => return Ok(Value::Boolean(false)),
-        }
+pub(super) fn symbol_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
     }
+
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(heap.borrow().is_symbol(args[0])))
 }
 
-pub(super) fn exact_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| {
-        matches!(
-            v,
-            Value::Integer(_) | Value::BigInteger(_) | Value::Rational(_)
-        )
-    })
+pub(super) fn list_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(heap.borrow().is_list(args[0])))
 }
 
-pub(super) fn inexact_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| match v {
-        Value::Real(_) => true,
-        Value::Complex(parts) => {
-            // Complex is inexact if either part is inexact
-            let (ref r, ref i) = **parts;
-            matches!(r, Value::Real(_)) || matches!(i, Value::Real(_))
-        }
-        _ => false,
-    })
+pub(super) fn inexact_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(
+        heap.borrow().is_inexact_number(args[0]),
+    ))
 }
 
-pub(super) fn boolean_equal(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.check_arity_min(&args, 2, "boolean=?")?;
+pub(super) fn boolean_equal(
+    _evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "at least 2".to_string(),
+            actual: args.len(),
+        });
+    }
 
-    // First, check that all arguments are booleans
-    for arg in &args {
-        if !matches!(arg, Value::Boolean(_)) {
+    // Check that first argument is a boolean
+    if !args[0].is_boolean() {
+        return Err(EvalError::TypeError(
+            "boolean=? expects all arguments to be booleans".to_string(),
+        ));
+    }
+    let first_val = args[0].as_bool_unchecked();
+
+    // Check that all remaining values are booleans and equal to the first
+    for arg in &args[1..] {
+        if !arg.is_boolean() {
             return Err(EvalError::TypeError(
                 "boolean=? expects all arguments to be booleans".to_string(),
             ));
         }
-    }
-
-    // Extract first boolean value
-    let first_val = match &args[0] {
-        Value::Boolean(b) => *b,
-        _ => unreachable!(), // Already checked above
-    };
-
-    // Check that all remaining values are equal to the first
-    for arg in &args[1..] {
-        match arg {
-            Value::Boolean(b) => {
-                if *b != first_val {
-                    return Ok(Value::Boolean(false));
-                }
-            }
-            _ => unreachable!(), // Already checked above
+        if arg.as_bool_unchecked() != first_val {
+            return Ok(TaggedValue::FALSE);
         }
     }
 
-    Ok(Value::Boolean(true))
+    Ok(TaggedValue::TRUE)
 }
 
-pub(super) fn procedure_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
+pub(super) fn procedure_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Fast path: closures have their own tag
+    if args[0].is_closure() {
+        return Ok(TaggedValue::TRUE);
+    }
+
+    // Check heap for procedures and continuations
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
     // R7RS: Continuations captured by call/cc satisfy procedure?
-    evaluator.make_type_predicate(args, |v| {
-        matches!(v, Value::Procedure(_) | Value::Continuation(_))
-    })
+    let is_proc = heap_ref.is_procedure(args[0]) || heap_ref.is_continuation(args[0]);
+    Ok(TaggedValue::boolean(is_proc))
 }
 
-pub(super) fn char_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Character(_)))
+// ===== TaggedValue predicates with fast paths =====
+
+/// (null? obj) - Fast path using TaggedValue
+pub(super) fn null_p(
+    _evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    Ok(TaggedValue::boolean(args[0].is_null()))
 }
 
-pub(super) fn vector_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| matches!(v, Value::Vector(_)))
+/// (pair? obj) - Check for pair (native or boxed)
+pub(super) fn pair_p(
+    _evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    Ok(TaggedValue::boolean(args[0].is_pair()))
 }
 
-pub(super) fn exact_integer_p(evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    evaluator.make_type_predicate(args, |v| match v {
-        Value::Integer(_) | Value::BigInteger(_) => true,
-        Value::Rational(r) => {
-            // A rational is an exact integer if its denominator is 1
-            use num_bigint::BigInt;
-            r.denom() == &BigInt::from(1)
-        }
-        _ => false,
-    })
+/// (boolean? obj) - Fast path using TaggedValue
+pub(super) fn boolean_p(
+    _evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    Ok(TaggedValue::boolean(args[0].is_boolean()))
+}
+
+/// (char? obj) - Fast path using TaggedValue
+pub(super) fn char_p(
+    _evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    Ok(TaggedValue::boolean(args[0].is_char()))
+}
+
+/// (string? obj) - Check for string (native heap string)
+pub(super) fn string_p(
+    _evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    Ok(TaggedValue::boolean(args[0].is_string()))
+}
+
+/// (vector? obj) - Check for vector (native heap vector)
+pub(super) fn vector_p(
+    _evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    Ok(TaggedValue::boolean(args[0].is_vector()))
+}
+
+/// (integer? obj) - Fast path for fixnums
+pub(super) fn integer_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(heap.borrow().is_integer_r7rs(args[0])))
+}
+
+/// (exact-integer? obj) - Fast path for fixnums
+pub(super) fn exact_integer_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // exact-integer? is true for exact numbers that are also integers
+    // This is fixnum, BigInt, or Rational with denominator 1
+    let heap = evaluator.global_env.heap();
+    let heap_ref = heap.borrow();
+    let is_exact_int = heap_ref.is_exact_number(args[0]) && heap_ref.is_integer_r7rs(args[0]);
+    Ok(TaggedValue::boolean(is_exact_int))
+}
+
+/// (exact? obj) - Fast path for fixnums
+pub(super) fn exact_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(heap.borrow().is_exact_number(args[0])))
+}
+
+/// (number? obj) - Fast path for fixnums
+pub(super) fn number_p(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Fast path: fixnums are numbers
+    if args[0].is_fixnum() {
+        return Ok(TaggedValue::TRUE);
+    }
+
+    // Check heap for other numeric types
+    let heap = evaluator.global_env.heap();
+    Ok(TaggedValue::boolean(heap.borrow().is_number(args[0])))
 }
 
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
@@ -268,151 +326,151 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use super::registry::PrimitiveFn;
     use patina_runtime::Arity;
 
-    // Numeric type predicates
-    registry.register(PrimitiveFn::new(
+    // Numeric type predicates (with TaggedValue fast paths)
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "number?",
         Arity::Exact(1),
         "Returns #t if obj is a number.",
-        |eval, args, _tail| number_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| number_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "complex?",
         Arity::Exact(1),
         "Returns #t if obj is a complex number.",
-        |eval, args, _tail| complex_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| complex_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "real?",
         Arity::Exact(1),
         "Returns #t if obj is a real number.",
-        |eval, args, _tail| real_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| real_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "rational?",
         Arity::Exact(1),
         "Returns #t if obj is a rational number.",
-        |eval, args, _tail| rational_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| rational_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "integer?",
         Arity::Exact(1),
         "Returns #t if obj is an integer.",
-        |eval, args, _tail| integer_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| integer_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "exact-integer?",
         Arity::Exact(1),
         "Returns #t if obj is an exact integer.",
-        |eval, args, _tail| exact_integer_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| exact_integer_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "exact?",
         Arity::Exact(1),
         "Returns #t if obj is an exact number.",
-        |eval, args, _tail| exact_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| exact_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "inexact?",
         Arity::Exact(1),
         "Returns #t if obj is an inexact number.",
-        |eval, args, _tail| inexact_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| inexact_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    // Data type predicates
-    registry.register(PrimitiveFn::new(
+    // Data type predicates (with TaggedValue fast paths)
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "boolean?",
         Arity::Exact(1),
         "Returns #t if obj is a boolean.",
-        |eval, args, _tail| boolean_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| boolean_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "string?",
         Arity::Exact(1),
         "Returns #t if obj is a string.",
-        |eval, args, _tail| string_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| string_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "symbol?",
         Arity::Exact(1),
         "Returns #t if obj is a symbol.",
-        |eval, args, _tail| symbol_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| symbol_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "char?",
         Arity::Exact(1),
         "Returns #t if obj is a character.",
-        |eval, args, _tail| char_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| char_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "vector?",
         Arity::Exact(1),
         "Returns #t if obj is a vector.",
-        |eval, args, _tail| vector_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| vector_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "procedure?",
         Arity::Exact(1),
         "Returns #t if obj is a procedure.",
-        |eval, args, _tail| procedure_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| procedure_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    // List predicates
-    registry.register(PrimitiveFn::new(
+    // List predicates (with TaggedValue fast paths)
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "null?",
         Arity::Exact(1),
         "Returns #t if obj is the empty list.",
-        |eval, args, _tail| null_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| null_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "pair?",
         Arity::Exact(1),
         "Returns #t if obj is a pair.",
-        |eval, args, _tail| pair_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| pair_p(eval, args).map(EvalResult::Tagged),
     ));
 
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "list?",
         Arity::Exact(1),
         "Returns #t if obj is a list.",
-        |eval, args, _tail| list_p(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| list_p(eval, args).map(EvalResult::Tagged),
     ));
 
     // Boolean equality
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "boolean=?",
         Arity::Min(2),
         "Returns #t if all arguments are booleans and are all equal.",
-        |eval, args, _tail| boolean_equal(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| boolean_equal(eval, args).map(EvalResult::Tagged),
     ));
 }

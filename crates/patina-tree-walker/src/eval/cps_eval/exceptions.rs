@@ -15,8 +15,8 @@
 use super::CpsEvaluator;
 use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
+use patina_core::DynamicWindRecord;
 use patina_core::ExceptionKind;
-use patina_core::value::{DynamicWindRecord, Value};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -43,20 +43,18 @@ impl<'a> CpsEvaluator<'a> {
         }
 
         // Convert EvalError to exception kind and message
-        let (exception_kind, message, irritants) = match &err {
+        // Note: irritants are not used for runtime errors but kept for API compatibility
+        let (exception_kind, message): (ExceptionKind, String) = match &err {
             // Lookup errors
             EvalError::UndefinedVariable(name) => (
                 ExceptionKind::Error,
                 format!("Undefined variable: {}", name),
-                vec![],
             ),
 
             // Application errors
-            EvalError::NotAProcedure(desc) => (
-                ExceptionKind::Error,
-                format!("Not a procedure: {}", desc),
-                vec![],
-            ),
+            EvalError::NotAProcedure(desc) => {
+                (ExceptionKind::Error, format!("Not a procedure: {}", desc))
+            }
 
             // Arity errors
             EvalError::WrongArity { expected, actual } => (
@@ -65,19 +63,16 @@ impl<'a> CpsEvaluator<'a> {
                     "Wrong number of arguments: expected {}, got {}",
                     expected, actual
                 ),
-                vec![],
             ),
 
             // Type errors
-            EvalError::TypeError(msg) => (ExceptionKind::Error, msg.clone(), vec![]),
+            EvalError::TypeError(msg) => (ExceptionKind::Error, msg.clone()),
 
             // Domain errors
-            EvalError::DivisionByZero => {
-                (ExceptionKind::Error, "Division by zero".to_string(), vec![])
-            }
+            EvalError::DivisionByZero => (ExceptionKind::Error, "Division by zero".to_string()),
 
             // Bounds errors
-            EvalError::IndexOutOfBounds(msg) => (ExceptionKind::Error, msg.clone(), vec![]),
+            EvalError::IndexOutOfBounds(msg) => (ExceptionKind::Error, msg.clone()),
 
             // I/O errors - classify as file-error when appropriate
             EvalError::IOError(msg) => {
@@ -92,7 +87,7 @@ impl<'a> CpsEvaluator<'a> {
                 } else {
                     ExceptionKind::Error
                 };
-                (kind, msg.clone(), vec![])
+                (kind, msg.clone())
             }
 
             // Syntax/read errors
@@ -102,7 +97,7 @@ impl<'a> CpsEvaluator<'a> {
                 } else {
                     ExceptionKind::Error
                 };
-                (kind, msg.clone(), vec![])
+                (kind, msg.clone())
             }
 
             // Already a Scheme exception - use its kind
@@ -110,7 +105,7 @@ impl<'a> CpsEvaluator<'a> {
                 kind,
                 message,
                 irritants_display: _,
-            } => (kind.clone(), message.clone(), vec![]),
+            } => (kind.clone(), message.clone()),
 
             // Internal errors and continuation escapes are not catchable
             // (handled by is_catchable() check above)
@@ -121,12 +116,16 @@ impl<'a> CpsEvaluator<'a> {
 
         // If there are exception handlers, route through them
         if let Some(handler_entry) = exception_handlers.last().cloned() {
-            // Create exception object
-            let exception = Value::Exception(Rc::new(patina_core::ExceptionObject {
-                kind: exception_kind,
-                message,
-                irritants,
-            }));
+            let exception_tagged = self
+                .evaluator
+                .global_env
+                .heap()
+                .borrow_mut()
+                .alloc_exception(
+                    exception_kind,
+                    message,
+                    vec![], // No irritants for runtime errors
+                );
 
             // Pop the handler (it's been invoked)
             let new_handlers = exception_handlers[..exception_handlers.len() - 1].to_vec();
@@ -135,14 +134,15 @@ impl<'a> CpsEvaluator<'a> {
             // Runtime errors are non-continuable (only user-raised exceptions can be continuable)
             let raise_return_cont = ContValue::RaiseHandlerReturn {
                 continuable: false,
-                original_exception: Some(exception.clone()),
+                original_exception: Some(exception_tagged),
                 original_cont: Box::new(cont),
             };
 
+            // Handler is already TaggedValue - use directly for ApplyProc.proc
             // Call the handler with the exception
             Ok(StepResult::ApplyProc {
                 proc: handler_entry.handler,
-                args: vec![exception],
+                args: vec![exception_tagged],
                 cont: raise_return_cont,
                 env: self.evaluator.global_env.clone(),
                 cont_env,

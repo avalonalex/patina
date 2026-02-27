@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use patina_interpreter::{TreeWalkInterpreter, Value};
+use patina_interpreter::TreeWalkInterpreter;
 
 /// Assert that evaluating a Scheme expression produces the expected result
 pub fn assert_eval_to(expr: &str, expected: &str) {
@@ -14,7 +14,7 @@ pub fn assert_eval_to(expr: &str, expected: &str) {
         .eval_str(expr)
         .unwrap_or_else(|e| panic!("Failed to evaluate '{}': {}", expr, e));
 
-    let result_str = format!("{}", result);
+    let result_str = interp.display_tagged(result);
 
     assert_eq!(
         result_str, expected,
@@ -36,29 +36,13 @@ pub fn assert_eval_error(expr: &str) {
     );
 }
 
-/// Assert that evaluating a Scheme expression produces a specific value type
-pub fn assert_eval_type(expr: &str, type_check: impl Fn(&Value) -> bool, type_name: &str) {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-    let result = interp
-        .eval_str(expr)
-        .unwrap_or_else(|e| panic!("Failed to evaluate '{}': {}", expr, e));
-
-    assert!(
-        type_check(&result),
-        "Expected {} for '{}', but got: {}",
-        type_name,
-        expr,
-        result
-    );
-}
-
 /// Evaluate multiple expressions in sequence, return last result
 pub fn eval_program(code: &str) -> String {
     let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp
         .eval_program(code)
         .unwrap_or_else(|e| panic!("Failed to evaluate program: {}", e));
-    format!("{}", result)
+    interp.display_tagged(result)
 }
 
 /// Assert that a multi-expression program produces expected result
@@ -91,7 +75,7 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
         .eval_program(&code)
         .unwrap_or_else(|e| panic!("Failed to evaluate '{}': {}", expr, e));
 
-    let result_str = format!("{}", result);
+    let result_str = interp.display_tagged(result);
 
     assert_eq!(
         result_str, expected,
@@ -109,7 +93,7 @@ pub fn assert_program_eval_to_with_cps(code: &str, expected: &str, use_cps: bool
     let result = interp
         .eval_program(code)
         .unwrap_or_else(|e| panic!("Failed to evaluate program: {}", e));
-    let result_str = format!("{}", result);
+    let result_str = interp.display_tagged(result);
     assert_eq!(
         result_str, expected,
         "\nProgram:\n{}\nExpected: {}\nGot: {}",

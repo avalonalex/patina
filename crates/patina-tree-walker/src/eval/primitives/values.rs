@@ -6,14 +6,16 @@
 
 use super::super::Evaluator;
 use super::super::error::EvalError;
-use patina_runtime::value::Value;
+use patina_core::TaggedValue;
 
-pub(super) fn values(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, EvalError> {
-    // values accepts any number of arguments (0 or more), so no arity check needed
+pub(super) fn values(
+    evaluator: &Evaluator,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
     match args.len() {
-        0 => Ok(Value::Unspecified),
-        1 => Ok(args.into_iter().next().unwrap()),
-        _ => Ok(Value::Values(args)),
+        1 => Ok(args[0]),
+        0 => Ok(TaggedValue::UNSPECIFIED),
+        _ => Ok(evaluator.global_env.heap().borrow_mut().alloc_values(args)),
     }
 }
 
@@ -28,7 +30,7 @@ pub(super) fn values(_evaluator: &Evaluator, args: Vec<Value>) -> Result<Value, 
 /// Per R7RS Section 3.5: "the second argument passed to call-with-values must be called via a tail call"
 pub(super) fn call_with_values(
     evaluator: &Evaluator,
-    args: Vec<Value>,
+    args: Vec<TaggedValue>,
     in_tail_position: bool,
 ) -> Result<super::super::EvalResult, EvalError> {
     if args.len() != 2 {
@@ -38,14 +40,14 @@ pub(super) fn call_with_values(
         });
     }
 
-    let producer = &args[0];
-    let consumer = &args[1];
+    let producer = args[0];
+    let consumer = args[1];
 
     // Call producer with no arguments to get values
     // Producer is NOT in tail position
-    let produced = match evaluator.apply(producer.clone(), vec![], false)? {
-        super::super::EvalResult::Value(v) => v,
-        _ => {
+    let produced_tv = match evaluator.apply(producer, vec![], false)? {
+        super::super::EvalResult::Tagged(tv) => tv,
+        super::super::EvalResult::TailCallPrimitive { .. } => {
             return Err(EvalError::InternalError(
                 "Unexpected tail call from producer in call-with-values".to_string(),
             ));
@@ -53,23 +55,27 @@ pub(super) fn call_with_values(
     };
 
     // Unpack multiple values if present, otherwise use single value
-    let consumer_args = match produced {
-        Value::Values(vals) => vals,
-        other => vec![other],
+    let heap = evaluator.global_env.heap();
+    let consumer_args: Vec<TaggedValue> = {
+        let heap_ref = heap.borrow();
+        if let Some(vals) = heap_ref.get_values(produced_tv) {
+            vals.to_vec()
+        } else {
+            vec![produced_tv]
+        }
     };
 
     // Call consumer with the produced values
     // Consumer IS in tail position when call-with-values is
     if in_tail_position {
         // Return TailCallPrimitive to trampoline
-        // The trampoline will re-apply this, maintaining the current environment
         Ok(super::super::EvalResult::TailCallPrimitive {
-            proc: consumer.clone(),
+            proc: consumer,
             args: consumer_args,
         })
     } else {
         // Not in tail position - apply directly
-        evaluator.apply(consumer.clone(), consumer_args, false)
+        evaluator.apply(consumer, consumer_args, false)
     }
 }
 
@@ -79,16 +85,16 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // values - Return multiple values
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "values",
         Arity::Min(0),
         "Returns all of its arguments as multiple values.",
-        |eval, args, _tail| values(eval, args).map(EvalResult::Value),
+        |eval, args, _tail| values(eval, args).map(EvalResult::Tagged),
     ));
 
     // call-with-values - Call producer and consumer (supports TCO)
-    registry.register(PrimitiveFn::new(
+    registry.register(PrimitiveFn::new_tagged(
         "scheme.base",
         "call-with-values",
         Arity::Exact(2),

@@ -2,13 +2,13 @@
 //!
 //! These tests verify the public API provided by the main `patina` crate
 
-use patina_interpreter::{TreeWalkInterpreter, Value};
+use patina_interpreter::{TaggedValue, TreeWalkInterpreter};
 
 #[test]
 fn test_interpreter_basic_arithmetic() {
     let interp = TreeWalkInterpreter::new_tree_walker();
     let result = interp.eval_str("(+ 1 2 3)").unwrap();
-    assert!(matches!(result, Value::Integer(6)));
+    assert_eq!(result.as_fixnum(), Some(6));
 }
 
 #[test]
@@ -16,7 +16,7 @@ fn test_interpreter_define_and_use() {
     let interp = TreeWalkInterpreter::new_tree_walker();
     interp.eval_str("(define x 42)").unwrap();
     let result = interp.eval_str("x").unwrap();
-    assert!(matches!(result, Value::Integer(42)));
+    assert_eq!(result.as_fixnum(), Some(42));
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn test_eval_program() {
         "#,
         )
         .unwrap();
-    assert!(matches!(result, Value::Integer(30)));
+    assert_eq!(result.as_fixnum(), Some(30));
 }
 
 #[test]
@@ -55,19 +55,19 @@ fn test_macro_when() {
     // Test single body
     let result = interp.eval_str("(test-when #t 42)");
     match &result {
-        Ok(val) => println!("when macro result: {}", val),
+        Ok(val) => println!("when macro result: {}", interp.display_tagged(*val)),
         Err(e) => panic!("when macro expansion error: {}", e),
     }
     let result = result.unwrap();
-    assert!(matches!(result, Value::Integer(42)));
+    assert_eq!(result.as_fixnum(), Some(42));
 
     // Test multiple body forms
     let result = interp.eval_str("(test-when #t 1 2 3)").unwrap();
-    assert!(matches!(result, Value::Integer(3)));
+    assert_eq!(result.as_fixnum(), Some(3));
 
     // Test false condition
     let result = interp.eval_str("(test-when #f 42)").unwrap();
-    assert!(matches!(result, Value::Unspecified));
+    assert_eq!(result, TaggedValue::UNSPECIFIED);
 }
 
 #[test]
@@ -88,11 +88,11 @@ fn test_macro_unless() {
 
     // Test with false condition (should execute)
     let result = interp.eval_str("(test-unless #f 42)").unwrap();
-    assert!(matches!(result, Value::Integer(42)));
+    assert_eq!(result.as_fixnum(), Some(42));
 
     // Test with true condition (should not execute)
     let result = interp.eval_str("(test-unless #t 42)").unwrap();
-    assert!(matches!(result, Value::Unspecified));
+    assert_eq!(result, TaggedValue::UNSPECIFIED);
 }
 
 #[test]
@@ -115,5 +115,5 @@ fn test_gcd_with_let_values() {
         )
         .unwrap();
 
-    assert_eq!(format!("{}", result), "6");
+    assert_eq!(result.as_fixnum(), Some(6));
 }

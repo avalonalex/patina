@@ -14,7 +14,7 @@ fn test_current_second_returns_inexact() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     let result = interp.eval_str("(inexact? (current-second))").unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -23,7 +23,7 @@ fn test_current_second_is_positive() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     let result = interp.eval_str("(> (current-second) 0)").unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn test_current_second_is_after_2020() {
 
     // 2020-01-01 00:00:00 UTC = 1577836800
     let result = interp.eval_str("(> (current-second) 1577836800)").unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -50,7 +50,7 @@ fn test_current_second_increases() {
             "#,
         )
         .unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 // ============================================================================
@@ -63,7 +63,7 @@ fn test_current_jiffy_returns_exact() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     let result = interp.eval_str("(exact? (current-jiffy))").unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn test_current_jiffy_is_integer() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     let result = interp.eval_str("(integer? (current-jiffy))").unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn test_current_jiffy_is_non_negative() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     let result = interp.eval_str("(>= (current-jiffy) 0)").unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn test_current_jiffy_increases() {
             "#,
         )
         .unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 // ============================================================================
@@ -111,7 +111,7 @@ fn test_jiffies_per_second_returns_exact() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     let result = interp.eval_str("(exact? (jiffies-per-second))").unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn test_jiffies_per_second_is_integer() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     let result = interp.eval_str("(integer? (jiffies-per-second))").unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn test_jiffies_per_second_is_positive() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     let result = interp.eval_str("(> (jiffies-per-second) 0)").unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn test_jiffies_per_second_is_constant() {
     let result = interp
         .eval_str("(= (jiffies-per-second) (jiffies-per-second))")
         .unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn test_jiffies_per_second_value() {
     interp.eval_str("(import (scheme time))").unwrap();
 
     let result = interp.eval_str("(jiffies-per-second)").unwrap();
-    assert_eq!(result.to_string(), "1000000");
+    assert_eq!(interp.display_tagged(result), "1000000");
 }
 
 // ============================================================================
@@ -181,5 +181,5 @@ fn test_time_length_example() {
             "#,
         )
         .unwrap();
-    assert_eq!(result.to_string(), "#t");
+    assert_eq!(interp.display_tagged(result), "#t");
 }
