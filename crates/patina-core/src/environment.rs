@@ -95,16 +95,22 @@ impl Environment {
     ///
     /// Consolidates the common pattern of creating a `Procedure::Primitive`
     /// and converting it to TaggedValue for storage.
+    ///
+    /// The `library` parameter (e.g., `["scheme", "base"]`) is joined with "."
+    /// and combined with `name` to produce a `qualified_name` (e.g., `"scheme.base/+"`).
+    /// This qualified name is computed once here at init time, avoiding repeated
+    /// `format!()` allocations on every primitive call.
     pub fn define_primitive(
         &self,
         name: &'static str,
         arity: crate::procedure::Arity,
         library: Vec<String>,
     ) {
+        let qualified_name: Rc<str> = Rc::from(format!("{}/{}", library.join("."), name));
         let proc = Rc::new(crate::procedure::Procedure::Primitive {
             name,
             arity,
-            library,
+            qualified_name,
         });
         let tv = self.heap.borrow_mut().alloc_procedure(proc);
         self.define(name.to_string(), tv);

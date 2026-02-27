@@ -114,8 +114,19 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         HeapObjectData::Procedure(p) => {
             use crate::procedure::Procedure;
             match p.as_ref() {
-                Procedure::Primitive { name, library, .. } => {
-                    write!(buf, "#<procedure:{}:{}>", library.join("."), name).unwrap()
+                Procedure::Primitive { qualified_name, .. } => {
+                    // qualified_name is "library/name", display as "library:name"
+                    if let Some(pos) = qualified_name.find('/') {
+                        write!(
+                            buf,
+                            "#<procedure:{}:{}>",
+                            &qualified_name[..pos],
+                            &qualified_name[pos + 1..]
+                        )
+                        .unwrap()
+                    } else {
+                        write!(buf, "#<procedure:{}>", qualified_name).unwrap()
+                    }
                 }
                 Procedure::CpsLambda { .. } => buf.push_str("#<procedure>"),
             }

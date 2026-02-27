@@ -714,20 +714,19 @@ impl<'a> CpsEvaluator<'a> {
         // IMPORTANT: Wrap primitive calls to catch I/O and read errors
         // and route them through the CPS exception handler stack.
         //
-        // Extract the qualified name from the primitive procedure
-        let (name, library) = match p.as_ref() {
-            Procedure::Primitive { name, library, .. } => (*name, library),
+        // Extract pre-computed qualified name from the primitive procedure
+        let qualified_name = match p.as_ref() {
+            Procedure::Primitive { qualified_name, .. } => qualified_name.as_ref(),
             _ => {
                 return Err(EvalError::TypeError(
                     "apply_other_primitive called with non-primitive procedure".to_string(),
                 ));
             }
         };
-        let qualified_name = format!("{}/{}", library.join("."), name);
 
-        // Call the primitive using the registry's apply_tagged method
+        // Use pre-computed qualified name — no format!() allocation needed
         let prim_result = self.evaluator.primitive_registry.apply_tagged(
-            &qualified_name,
+            qualified_name,
             args,
             self.evaluator,
             false,
@@ -835,80 +834,35 @@ impl<'a> CpsEvaluator<'a> {
         op: &CpsPrimitive,
         args: Vec<TaggedValue>,
     ) -> Result<TaggedValue, EvalError> {
-        // Map CpsPrimitive to the corresponding primitive name and delegate
-        let name = match op {
-            CpsPrimitive::Add => "+",
-            CpsPrimitive::Sub => "-",
-            CpsPrimitive::Mul => "*",
-            CpsPrimitive::Div => "/",
-            CpsPrimitive::Quotient => "quotient",
-            CpsPrimitive::Remainder => "remainder",
-            CpsPrimitive::Modulo => "modulo",
-            CpsPrimitive::NumEq => "=",
-            CpsPrimitive::Lt => "<",
-            CpsPrimitive::Gt => ">",
-            CpsPrimitive::Lte => "<=",
-            CpsPrimitive::Gte => ">=",
-            CpsPrimitive::Cons => "cons",
-            CpsPrimitive::Car => "car",
-            CpsPrimitive::Cdr => "cdr",
-            CpsPrimitive::List => "list",
-            CpsPrimitive::IsNull => "null?",
-            CpsPrimitive::IsPair => "pair?",
-            CpsPrimitive::IsNumber => "number?",
-            CpsPrimitive::IsBoolean => "boolean?",
-            CpsPrimitive::IsString => "string?",
-            CpsPrimitive::IsSymbol => "symbol?",
-            CpsPrimitive::IsProcedure => "procedure?",
-            CpsPrimitive::IsContinuation => "continuation?",
-            CpsPrimitive::IsPromptTag => "prompt-tag?",
-            CpsPrimitive::Eq => "eq?",
-            CpsPrimitive::Eqv => "eqv?",
-            CpsPrimitive::Equal => "equal?",
-            CpsPrimitive::MakeVector => "make-vector",
-            CpsPrimitive::VectorRef => "vector-ref",
-            CpsPrimitive::VectorSet => "vector-set!",
-            CpsPrimitive::VectorLength => "vector-length",
-            CpsPrimitive::MakeString => "make-string",
-            CpsPrimitive::StringRef => "string-ref",
-            CpsPrimitive::StringLength => "string-length",
-            CpsPrimitive::Display => "display",
-            CpsPrimitive::Newline => "newline",
-        };
-
         let heap = self.evaluator.global_env.heap();
 
-        // Special handling for primitives that may not exist in the global env
+        // Special handling for primitives that don't go through the registry
         match op {
             CpsPrimitive::IsContinuation => {
-                // continuation? is a new predicate
                 if args.len() != 1 {
                     return Err(EvalError::WrongArity {
                         expected: "1".to_string(),
                         actual: args.len(),
                     });
                 }
-                // Use heap's is_continuation directly - no conversion needed
                 return Ok(TaggedValue::boolean(heap.borrow().is_continuation(args[0])));
             }
             CpsPrimitive::IsPromptTag => {
-                // prompt-tag? is a new predicate
                 if args.len() != 1 {
                     return Err(EvalError::WrongArity {
                         expected: "1".to_string(),
                         actual: args.len(),
                     });
                 }
-                // Use heap's is_prompt_tag directly - no conversion needed
                 return Ok(TaggedValue::boolean(heap.borrow().is_prompt_tag(args[0])));
             }
             _ => {}
         }
 
-        // CPS primitives are all from scheme.base
-        let qualified_name = format!("scheme.base/{}", name);
+        // Use pre-computed static qualified name — zero allocation
+        let qualified_name = op.qualified_name().unwrap();
         let prim_result = self.evaluator.primitive_registry.apply_tagged(
-            &qualified_name,
+            qualified_name,
             args,
             self.evaluator,
             false,
@@ -919,8 +873,8 @@ impl<'a> CpsEvaluator<'a> {
                 super::super::EvalResult::Tagged(tv) => Ok(tv),
                 super::super::EvalResult::TailCallPrimitive { .. } => {
                     Err(EvalError::InternalError(format!(
-                        "Primitive {} returned unexpected result",
-                        name
+                        "Primitive {:?} returned unexpected result",
+                        op
                     )))
                 }
             },

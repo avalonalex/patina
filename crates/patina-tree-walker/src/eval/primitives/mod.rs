@@ -63,9 +63,13 @@ impl Evaluator {
         args: Vec<TaggedValue>,
         in_tail_position: bool,
     ) -> Result<super::EvalResult, EvalError> {
-        // Extract name and library from the primitive
-        let (name, library) = match proc {
-            Procedure::Primitive { name, library, .. } => (*name, library),
+        // Extract pre-computed qualified name from the primitive
+        let (name, qualified_name) = match proc {
+            Procedure::Primitive {
+                name,
+                qualified_name,
+                ..
+            } => (*name, qualified_name.as_ref()),
             _ => {
                 return Err(EvalError::TypeError(
                     "apply_primitive_tagged called with non-primitive procedure".to_string(),
@@ -73,12 +77,9 @@ impl Evaluator {
             }
         };
 
-        // Build qualified name using the procedure's library namespace
-        let qualified_name = format!("{}/{}", library.join("."), name);
-
-        // Apply the primitive via TaggedValue interface
+        // Use pre-computed qualified name — no format!() allocation needed
         self.primitive_registry
-            .apply_tagged(&qualified_name, args, self, in_tail_position)
+            .apply_tagged(qualified_name, args, self, in_tail_position)
             .map_err(|e| {
                 // If the error is "primitive not found", give a clearer message
                 if e.to_string().contains("not found") {

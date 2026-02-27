@@ -372,6 +372,57 @@ pub enum CpsPrimitive {
     IsPromptTag,
 }
 
+impl CpsPrimitive {
+    /// Get the pre-computed qualified name for registry lookup.
+    ///
+    /// All CPS primitives are from "scheme.base", so the qualified name
+    /// is always "scheme.base/<name>". Returns `&'static str` — zero allocation.
+    ///
+    /// Returns `None` for primitives that are handled specially (IsContinuation,
+    /// IsPromptTag) and don't go through the registry.
+    pub fn qualified_name(&self) -> Option<&'static str> {
+        match self {
+            CpsPrimitive::Add => Some("scheme.base/+"),
+            CpsPrimitive::Sub => Some("scheme.base/-"),
+            CpsPrimitive::Mul => Some("scheme.base/*"),
+            CpsPrimitive::Div => Some("scheme.base//"),
+            CpsPrimitive::Quotient => Some("scheme.base/quotient"),
+            CpsPrimitive::Remainder => Some("scheme.base/remainder"),
+            CpsPrimitive::Modulo => Some("scheme.base/modulo"),
+            CpsPrimitive::NumEq => Some("scheme.base/="),
+            CpsPrimitive::Lt => Some("scheme.base/<"),
+            CpsPrimitive::Gt => Some("scheme.base/>"),
+            CpsPrimitive::Lte => Some("scheme.base/<="),
+            CpsPrimitive::Gte => Some("scheme.base/>="),
+            CpsPrimitive::Cons => Some("scheme.base/cons"),
+            CpsPrimitive::Car => Some("scheme.base/car"),
+            CpsPrimitive::Cdr => Some("scheme.base/cdr"),
+            CpsPrimitive::List => Some("scheme.base/list"),
+            CpsPrimitive::IsNull => Some("scheme.base/null?"),
+            CpsPrimitive::IsPair => Some("scheme.base/pair?"),
+            CpsPrimitive::IsNumber => Some("scheme.base/number?"),
+            CpsPrimitive::IsBoolean => Some("scheme.base/boolean?"),
+            CpsPrimitive::IsString => Some("scheme.base/string?"),
+            CpsPrimitive::IsSymbol => Some("scheme.base/symbol?"),
+            CpsPrimitive::IsProcedure => Some("scheme.base/procedure?"),
+            CpsPrimitive::Eq => Some("scheme.base/eq?"),
+            CpsPrimitive::Eqv => Some("scheme.base/eqv?"),
+            CpsPrimitive::Equal => Some("scheme.base/equal?"),
+            CpsPrimitive::MakeVector => Some("scheme.base/make-vector"),
+            CpsPrimitive::VectorRef => Some("scheme.base/vector-ref"),
+            CpsPrimitive::VectorSet => Some("scheme.base/vector-set!"),
+            CpsPrimitive::VectorLength => Some("scheme.base/vector-length"),
+            CpsPrimitive::MakeString => Some("scheme.base/make-string"),
+            CpsPrimitive::StringRef => Some("scheme.base/string-ref"),
+            CpsPrimitive::StringLength => Some("scheme.base/string-length"),
+            CpsPrimitive::Display => Some("scheme.base/display"),
+            CpsPrimitive::Newline => Some("scheme.base/newline"),
+            // Special-cased primitives handled before registry lookup
+            CpsPrimitive::IsContinuation | CpsPrimitive::IsPromptTag => None,
+        }
+    }
+}
+
 impl CpsExpr {
     /// Check if this is a trivial expression (no control effects)
     pub fn is_trivial(&self) -> bool {

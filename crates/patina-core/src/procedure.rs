@@ -20,7 +20,9 @@ pub enum Procedure {
     Primitive {
         name: &'static str,
         arity: Arity,
-        library: Vec<String>, // Library namespace, e.g., ["scheme", "base"]
+        /// Pre-computed "library/name" key for PrimitiveRegistry lookup.
+        /// Computed once at registration time to avoid format!() on every call.
+        qualified_name: Rc<str>,
     },
 
     /// CPS-style lambda - for use with CPS evaluator
