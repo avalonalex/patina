@@ -6,14 +6,13 @@
 //! - Continuation binding capture and restore
 
 use super::CpsEvaluator;
-use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult};
+use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::CpsExpr;
 use patina_core::heap::SharedHeap;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{CpsContinuation, DynamicWindRecord};
 use patina_core::{Environment, ScopeSet};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -22,7 +21,7 @@ impl<'a> CpsEvaluator<'a> {
     /// When call/cc captures the current continuation, we need to serialize
     /// the cont_env so it can be restored when the continuation is invoked.
     pub(super) fn capture_cont_bindings(
-        cont_env: &HashMap<Rc<str>, ContValue>,
+        cont_env: &ContEnv,
         dynamic_winds: &[DynamicWindRecord],
         heap: &SharedHeap,
     ) -> Vec<(Rc<str>, Rc<CpsContinuation>)> {
@@ -87,17 +86,12 @@ impl<'a> CpsEvaluator<'a> {
                             }
                             ContValue::DynamicWindCleanup { .. } => {
                                 // Nested DynamicWindCleanup - recursively capture
-                                if let Some((_, k)) = Self::capture_cont_bindings(
-                                    &std::iter::once((
-                                        Rc::from("__inner__") as Rc<str>,
-                                        original_cont.as_ref().clone(),
-                                    ))
-                                    .collect(),
-                                    dynamic_winds,
-                                    heap,
-                                )
-                                .into_iter()
-                                .next()
+                                let temp_env = ContEnv::new()
+                                    .insert(Rc::from("__inner__"), original_cont.as_ref().clone());
+                                if let Some((_, k)) =
+                                    Self::capture_cont_bindings(&temp_env, dynamic_winds, heap)
+                                        .into_iter()
+                                        .next()
                                 {
                                     vec![(Rc::from("__dw_original__"), k)]
                                 } else {
@@ -170,46 +164,45 @@ impl<'a> CpsEvaluator<'a> {
     pub(super) fn restore_cont_bindings(
         &self,
         captured: &[(Rc<str>, Rc<CpsContinuation>)],
-    ) -> HashMap<Rc<str>, ContValue> {
-        captured
-            .iter()
-            .filter(|(name, _)| {
-                // Skip the special __dw_* bindings used to store DynamicWindCleanup state
-                !name.starts_with("__dw_")
-            })
-            .filter_map(|(name, k)| {
-                // Check if this is a serialized DynamicWindCleanup
-                let heap = self.evaluator.global_env.heap();
-                let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
-                let is_dw_cleanup = matches!(
-                    k.body.as_ref(),
-                    CpsExpr::Halt(inner) if matches!(
-                        inner.as_ref(),
-                        CpsExpr::Literal(v) if *v == marker
-                    )
-                );
+    ) -> ContEnv {
+        let mut env = ContEnv::new();
+        for (name, k) in captured {
+            // Skip the special __dw_* bindings used to store DynamicWindCleanup state
+            if name.starts_with("__dw_") {
+                continue;
+            }
 
-                if is_dw_cleanup {
-                    // Restore as DynamicWindCleanup
-                    match self.restore_dynamic_wind_cleanup(k) {
-                        Ok(cont) => Some((name.clone(), cont)),
-                        Err(_) => None,
-                    }
-                } else {
-                    // Restore as Local with recursively restored cont_env
-                    let restored_nested = self.restore_cont_bindings(&k.captured_cont_bindings);
-                    Some((
-                        name.clone(),
-                        ContValue::Local {
-                            param: k.param.clone(),
-                            body: k.body.clone(),
-                            env: k.env.clone(),
-                            cont_env: restored_nested,
-                        },
-                    ))
+            // Check if this is a serialized DynamicWindCleanup
+            let heap = self.evaluator.global_env.heap();
+            let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
+            let is_dw_cleanup = matches!(
+                k.body.as_ref(),
+                CpsExpr::Halt(inner) if matches!(
+                    inner.as_ref(),
+                    CpsExpr::Literal(v) if *v == marker
+                )
+            );
+
+            let cont = if is_dw_cleanup {
+                // Restore as DynamicWindCleanup
+                match self.restore_dynamic_wind_cleanup(k) {
+                    Ok(cont) => cont,
+                    Err(_) => continue,
                 }
-            })
-            .collect()
+            } else {
+                // Restore as Local with recursively restored cont_env
+                let restored_nested = self.restore_cont_bindings(&k.captured_cont_bindings);
+                ContValue::Local {
+                    param: k.param.clone(),
+                    body: k.body.clone(),
+                    env: k.env.clone(),
+                    cont_env: restored_nested,
+                }
+            };
+
+            env = env.insert(name.clone(), cont);
+        }
+        env
     }
 
     /// Restore a DynamicWindCleanup continuation from captured bindings
@@ -307,7 +300,7 @@ impl<'a> CpsEvaluator<'a> {
     pub(super) fn reify_continuation(
         &self,
         cont: &ContValue,
-        cont_env: &HashMap<Rc<str>, ContValue>,
+        cont_env: &ContEnv,
         dynamic_winds: &[DynamicWindRecord],
     ) -> Rc<CpsContinuation> {
         let heap = self.evaluator.global_env.heap();
@@ -442,7 +435,7 @@ impl<'a> CpsEvaluator<'a> {
     pub(super) fn reify_continuation_tagged(
         &self,
         cont: &ContValue,
-        cont_env: &HashMap<Rc<str>, ContValue>,
+        cont_env: &ContEnv,
         dynamic_winds: &[DynamicWindRecord],
     ) -> TaggedValue {
         let k = self.reify_continuation(cont, cont_env, dynamic_winds);
@@ -462,7 +455,7 @@ impl<'a> CpsEvaluator<'a> {
         cont: ContValue,
         value: TaggedValue,
         _env: Rc<Environment>,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,

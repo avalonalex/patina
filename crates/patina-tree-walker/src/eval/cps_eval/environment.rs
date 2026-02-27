@@ -6,13 +6,12 @@
 //! - Trivial expression evaluation
 
 use super::CpsEvaluator;
-use super::types::ContValue;
+use super::types::ContEnv;
 use crate::eval::error::EvalError;
 use patina_core::Procedure;
 use patina_core::cps_expr::{CpsExpr, CpsParam};
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{Environment, ScopeSet, ScopedParam};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -24,7 +23,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         expr: &CpsExpr,
         env: &Rc<Environment>,
-        cont_env: &HashMap<Rc<str>, ContValue>,
+        cont_env: &ContEnv,
     ) -> Result<TaggedValue, EvalError> {
         match expr {
             CpsExpr::Literal(v) => Ok(*v),

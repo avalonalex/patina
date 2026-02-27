@@ -15,7 +15,8 @@
       "Bash(__NEW_LINE_de05aada80a23c3e__ echo \"=== Value::LabelPlaceholder usage ===\")",
       "Bash(__NEW_LINE_c1e9fd24aae90ba6__ echo \"=== Value::Library usage ===\")",
       "Bash(__NEW_LINE_9a048d997f9d74ca__ echo \"=== Value::EnvironmentSpecifier usage ===\")",
-      "Bash(samply record:*)"
+      "Bash(samply record:*)",
+      "Bash(cargo bench:*)"
     ],
     "deny": [],
     "ask": []

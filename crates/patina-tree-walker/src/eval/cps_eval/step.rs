@@ -4,13 +4,12 @@
 //! all CpsExpr forms, returning a StepResult for the trampoline loop.
 
 use super::CpsEvaluator;
-use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult};
+use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::DynamicWindRecord;
 use patina_core::Environment;
 use patina_core::cps_expr::CpsExpr;
 use patina_core::tagged_value::TaggedValue;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -23,7 +22,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         expr: &CpsExpr,
         env: Rc<Environment>,
-        mut cont_env: HashMap<Rc<str>, ContValue>,
+        mut cont_env: ContEnv,
         mut prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -120,7 +119,7 @@ impl<'a> CpsEvaluator<'a> {
                         env: current_env.clone(),
                         cont_env: cont_env.clone(),
                     };
-                    cont_env.insert(name.clone(), cont);
+                    cont_env = cont_env.insert(name.clone(), cont);
                     current_expr = body.as_ref().clone();
                 }
 

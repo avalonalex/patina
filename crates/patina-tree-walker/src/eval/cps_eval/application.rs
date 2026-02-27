@@ -5,13 +5,14 @@
 //! `call-with-values`, `force`, `dynamic-wind`, and exception handling.
 
 use super::CpsEvaluator;
-use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape};
+use super::types::{
+    ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape,
+};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::CpsPrimitive;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{DynamicWindRecord, Procedure};
 use patina_core::{Environment, ScopeSet};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -23,7 +24,7 @@ impl<'a> CpsEvaluator<'a> {
         args: Vec<TaggedValue>,
         cont: ContValue,
         _env: Rc<Environment>,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -33,7 +34,7 @@ impl<'a> CpsEvaluator<'a> {
         // Helper closure to route catchable errors through exception handlers
         let route_error = |err: EvalError,
                            cont: ContValue,
-                           cont_env: HashMap<Rc<str>, ContValue>,
+                           cont_env: ContEnv,
                            prompt_stack: Vec<PromptFrame>,
                            dynamic_winds: Vec<DynamicWindRecord>,
                            exception_handlers: Vec<ExceptionHandler>| {
@@ -154,8 +155,7 @@ impl<'a> CpsEvaluator<'a> {
                     // Only bind the continuation parameter - don't carry over stale continuations
                     // from the caller. The lambda body's let-cont expressions will create new
                     // local continuations as needed.
-                    let mut new_cont_env = HashMap::new();
-                    new_cont_env.insert(cont_param.clone(), cont);
+                    let new_cont_env = ContEnv::new().insert(cont_param.clone(), cont);
 
                     // Return Continue step instead of recursive call
                     Ok(StepResult::Continue {
@@ -312,7 +312,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -355,7 +355,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -383,7 +383,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -439,7 +439,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -500,7 +500,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -567,7 +567,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -642,7 +642,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -702,7 +702,7 @@ impl<'a> CpsEvaluator<'a> {
         p: Rc<Procedure>,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -776,7 +776,7 @@ impl<'a> CpsEvaluator<'a> {
         converter: Option<TaggedValue>,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,

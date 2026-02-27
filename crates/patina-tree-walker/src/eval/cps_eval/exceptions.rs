@@ -13,12 +13,10 @@
 //! runtime errors using `guard` or `with-exception-handler`.
 
 use super::CpsEvaluator;
-use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult};
+use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::DynamicWindRecord;
 use patina_core::ExceptionKind;
-use std::collections::HashMap;
-use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
     /// Route catchable errors through CPS exception handlers
@@ -32,7 +30,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         err: EvalError,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,

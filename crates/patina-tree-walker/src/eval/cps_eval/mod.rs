@@ -53,7 +53,7 @@
 //! # Module Organization
 //!
 //! - `mod.rs` - CpsEvaluator struct, entry points, trampoline loop
-//! - `types.rs` - ContValue, StepResult, PromptFrame, ExceptionHandler
+//! - `types.rs` - ContEnv, ContValue, StepResult, PromptFrame, ExceptionHandler
 //! - `environment.rs` - Variable lookup, closure creation
 //! - `step.rs` - eval_one_step (main dispatch)
 //! - `application.rs` - apply_cps_step (procedure application)
@@ -75,11 +75,10 @@ use crate::eval::error::EvalError;
 use patina_core::Environment;
 use patina_core::TaggedValue;
 use patina_core::cps_expr::CpsExpr;
-use std::collections::HashMap;
 use std::rc::Rc;
 use tracing::debug;
 
-use types::{ContValue, StepResult, take_pending_escape};
+use types::{ContEnv, ContValue, StepResult, take_pending_escape};
 
 /// CPS Evaluator state
 ///
@@ -126,7 +125,7 @@ impl<'a> CpsEvaluator<'a> {
         expr: &CpsExpr,
         env: Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
-        let cont_env = HashMap::new();
+        let cont_env = ContEnv::new();
         let prompt_stack = Vec::new();
         let dynamic_winds = Vec::new();
         let exception_handlers = Vec::new();

@@ -6,12 +6,11 @@
 //! - Creating delimited continuations
 
 use super::CpsEvaluator;
-use super::types::{ContValue, ExceptionHandler, PromptFrame, StepResult};
+use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::CpsExpr;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{CpsContinuation, DynamicWindRecord};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -58,7 +57,7 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         value_tagged: TaggedValue,
         cont: ContValue,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -167,7 +166,7 @@ impl<'a> CpsEvaluator<'a> {
         args: Vec<TaggedValue>,
     ) -> Result<TaggedValue, EvalError> {
         let env = self.evaluator.global_env.clone();
-        let cont_env = HashMap::new();
+        let cont_env = ContEnv::new();
         let prompt_stack = Vec::new();
         let dynamic_winds = Vec::new();
         let exception_handlers = Vec::new();

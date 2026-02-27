@@ -1,6 +1,7 @@
 //! Type definitions for CPS evaluation
 //!
 //! This module contains the core type definitions used throughout the CPS evaluator:
+//! - `ContEnv` - Persistent linked-list environment for continuation bindings
 //! - `ContValue` - Continuation values (local, captured, special continuations)
 //! - `StepResult` - Trampoline step results
 //! - `PromptFrame` - Prompt frames for delimited continuations
@@ -11,7 +12,7 @@ use patina_core::cps_expr::{CpsExpr, PromptTag};
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{CpsContinuation, DynamicWindRecord};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::fmt;
 use std::rc::Rc;
 
 // Thread-local storage for continuation escapes.
@@ -28,6 +29,107 @@ pub(super) fn set_pending_escape(value: TaggedValue, cont: Rc<CpsContinuation>) 
 pub(super) fn take_pending_escape() -> Option<(TaggedValue, Rc<CpsContinuation>)> {
     PENDING_ESCAPE.with(|cell| cell.borrow_mut().take())
 }
+
+// ==================== ContEnv ====================
+
+/// Persistent linked-list environment for continuation bindings.
+///
+/// Optimized for the CPS evaluator's access pattern:
+/// - O(1) snapshot (clone) — just an Rc increment
+/// - O(1) insert (prepend) — allocates one small node
+/// - O(n) lookup — linear scan, but n is typically ≤ 5
+///
+/// This replaces `HashMap<Rc<str>, ContValue>` which was responsible for
+/// ~48% of CPU time due to clone/drop/malloc/free cycles on every CPS step.
+/// For small n, linear scan outperforms HashMap (no hashing, no bucket allocation).
+#[derive(Clone)]
+pub(super) struct ContEnv(Rc<ContEnvNode>);
+
+enum ContEnvNode {
+    Empty,
+    Entry {
+        name: Rc<str>,
+        value: ContValue,
+        rest: Rc<ContEnvNode>,
+    },
+}
+
+impl ContEnv {
+    /// Create an empty continuation environment.
+    pub fn new() -> Self {
+        ContEnv(Rc::new(ContEnvNode::Empty))
+    }
+
+    /// Look up a continuation by name. Returns the most recently inserted
+    /// binding for the given name (shadowing earlier bindings).
+    pub fn get(&self, key: &str) -> Option<&ContValue> {
+        let mut current: &ContEnvNode = &self.0;
+        loop {
+            match current {
+                ContEnvNode::Empty => return None,
+                ContEnvNode::Entry { name, value, rest } => {
+                    if name.as_ref() == key {
+                        return Some(value);
+                    }
+                    current = rest;
+                }
+            }
+        }
+    }
+
+    /// Insert a new binding, returning a new ContEnv that shadows
+    /// any existing binding with the same name.
+    /// The original ContEnv is unchanged (persistent/functional).
+    pub fn insert(&self, name: Rc<str>, value: ContValue) -> ContEnv {
+        ContEnv(Rc::new(ContEnvNode::Entry {
+            name,
+            value,
+            rest: Rc::clone(&self.0),
+        }))
+    }
+
+    /// Iterate over all bindings (may include shadowed entries).
+    /// Yields entries from most-recently-inserted to oldest.
+    pub fn iter(&self) -> ContEnvIter<'_> {
+        ContEnvIter { current: &self.0 }
+    }
+}
+
+impl fmt::Debug for ContEnv {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ContEnv{{")?;
+        let mut first = true;
+        for (name, _) in self.iter() {
+            if !first {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", name)?;
+            first = false;
+        }
+        write!(f, "}}")
+    }
+}
+
+/// Iterator over ContEnv bindings.
+pub(super) struct ContEnvIter<'a> {
+    current: &'a ContEnvNode,
+}
+
+impl<'a> Iterator for ContEnvIter<'a> {
+    type Item = (&'a Rc<str>, &'a ContValue);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current {
+            ContEnvNode::Empty => None,
+            ContEnvNode::Entry { name, value, rest } => {
+                self.current = rest;
+                Some((name, value))
+            }
+        }
+    }
+}
+
+// ==================== PromptFrame ====================
 
 /// A prompt frame on the meta-continuation stack
 #[derive(Debug, Clone)]
@@ -50,6 +152,8 @@ pub(super) struct ExceptionHandler {
     pub handler: TaggedValue,
 }
 
+// ==================== ContValue ====================
+
 /// Continuation values used during CPS evaluation
 ///
 /// Continuations can be either:
@@ -58,17 +162,16 @@ pub(super) struct ExceptionHandler {
 /// - The halt continuation (program end)
 /// - Special continuations for CPS-aware primitives
 #[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
 pub(super) enum ContValue {
     /// A local continuation defined by LetCont
     Local {
         param: Rc<str>,
         body: Rc<CpsExpr>,
         env: Rc<Environment>,
-        /// The continuation environment at the point where this continuation was defined
+        /// The continuation environment at the point where this continuation was defined.
         /// This is needed because the continuation body may reference other continuations
         /// that were in scope when the let-cont was evaluated.
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
     },
     /// A captured first-class continuation (used when re-invoking serialized continuations)
     /// Currently only matched, not constructed - will be used when continuation serialization is implemented
@@ -132,6 +235,8 @@ pub(super) enum ContValue {
     },
 }
 
+// ==================== StepResult ====================
+
 /// Result of a single evaluation step (for trampoline)
 ///
 /// The CPS evaluator processes expressions one step at a time.
@@ -144,7 +249,7 @@ pub(super) enum StepResult {
     Continue {
         expr: CpsExpr,
         env: Rc<Environment>,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -154,7 +259,7 @@ pub(super) enum StepResult {
         cont: ContValue,
         value: TaggedValue,
         env: Rc<Environment>,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
@@ -165,7 +270,7 @@ pub(super) enum StepResult {
         args: Vec<TaggedValue>,
         cont: ContValue,
         env: Rc<Environment>,
-        cont_env: HashMap<Rc<str>, ContValue>,
+        cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
