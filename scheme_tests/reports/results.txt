@@ -2506,6 +2506,18 @@ Testing:
 value
 
 Testing: 
+(get-output-string out)
+
+Testing: 
+value
+
+Testing: 
+(get-output-string out)
+
+Testing: 
+value
+
+Testing: 
 (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'a 42))))
 
 Testing: 
@@ -2514,7 +2526,7 @@ Testing:
 Testing: 
 (guard (condition ((assq 'c condition) 'caught-c) ((assq 'd condition) 'caught-d)) (list (sqrt 8) (guard (condition ((assq 'a condition) => cdr) ((assq 'b condition))) (raise (list (cons 'd 24))))))
 
-Tests run: 26, Passed: 26, Failed: 0
+Tests run: 30, Passed: 30, Failed: 0
 
 Running test suite: 6.12 Environments and evaluation
 Testing: 

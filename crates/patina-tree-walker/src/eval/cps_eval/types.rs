@@ -150,6 +150,9 @@ pub(super) struct PromptFrame {
 pub(super) struct ExceptionHandler {
     /// The handler procedure as TaggedValue (lambda (condition) ...)
     pub handler: TaggedValue,
+    /// The dynamic winds active when this handler was installed.
+    /// Used by `raise` to unwind dynamic-wind after-thunks before invoking the handler.
+    pub dynamic_winds: Vec<DynamicWindRecord>,
 }
 
 // ==================== ContValue ====================
@@ -232,6 +235,8 @@ pub(super) enum ContValue {
         original_exception: Option<TaggedValue>,
         /// For continuable: the continuation to continue with
         original_cont: Box<ContValue>,
+        /// The handler that was popped, so it can be re-pushed after continuable raise
+        popped_handler: Option<ExceptionHandler>,
     },
 }
 

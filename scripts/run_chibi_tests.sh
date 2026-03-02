@@ -51,25 +51,48 @@ echo ""
 echo -e "${GREEN}Generating compatibility report...${NC}"
 
 # Count test results from output
-# Only count "Tests run:" lines that immediately follow "Running test suite:" lines
-# This avoids double-counting from nested test sections (parent sections print cumulative totals)
+# Strategy: track each section and its "Tests run:" line. For sections that contain
+# subsections (like 6.13 Input and output), the parent emits a cumulative total after
+# the subsections. We detect parent sections by checking if another "Running test suite:"
+# appears before the first "Tests run:" for a section.
+#
+# We use the LAST "Tests run:" line before each new "Running test suite:" or EOF.
+# For leaf sections this is the only line; for parent sections this is the cumulative total.
+# We skip the top-level "R7RS" section to avoid double-counting.
 COUNTS=$(awk '
     /^Running test suite:/ {
-        saw_suite = 1
+        # Emit pending counts from previous section (if any)
+        if (section != "" && section != "R7RS" && have_counts) {
+            total += last_total
+            passed += last_passed
+            failed += last_failed
+            errors += last_errors
+        }
+        section = $0
+        sub(/^Running test suite: /, "", section)
+        have_counts = 0
     }
-    /^Tests run:/ && saw_suite == 1 {
+    /^Tests run:/ {
         line = $0
         gsub(/,/, "", line)
         split(line, parts)
+        last_total = 0; last_passed = 0; last_failed = 0; last_errors = 0
         for (i = 1; i <= length(parts); i++) {
-            if (parts[i] == "run:") total += parts[i+1]
-            if (parts[i] == "Passed:") passed += parts[i+1]
-            if (parts[i] == "Failed:") failed += parts[i+1]
-            if (parts[i] == "Errors:") errors += parts[i+1]
+            if (parts[i] == "run:") last_total = parts[i+1]+0
+            if (parts[i] == "Passed:") last_passed = parts[i+1]+0
+            if (parts[i] == "Failed:") last_failed = parts[i+1]+0
+            if (parts[i] == "Errors:") last_errors = parts[i+1]+0
         }
-        saw_suite = 0
+        have_counts = 1
     }
     END {
+        # Emit last section
+        if (section != "" && section != "R7RS" && have_counts) {
+            total += last_total
+            passed += last_passed
+            failed += last_failed
+            errors += last_errors
+        }
         print passed+0, failed+0, total+0, errors+0
     }
 ' "$RESULTS_FILE")

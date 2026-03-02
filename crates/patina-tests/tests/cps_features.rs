@@ -97,7 +97,6 @@ fn test_raise_continuable_handler_return() {
 }
 
 #[test]
-#[ignore] // BUG: Handler is popped after first raise-continuable, second raise is unhandled
 fn test_raise_continuable_multiple_times() {
     // Multiple raise-continuable in sequence
     // This test reveals that the exception handler is consumed after the first
@@ -180,7 +179,6 @@ fn test_dynamic_wind_nested_three_levels() {
 }
 
 #[test]
-#[ignore] // BUG: After thunk not run when exception is raised in body
 fn test_dynamic_wind_with_exception() {
     // Exception raised inside dynamic-wind still runs after thunk
     // This test reveals that when an exception is raised inside dynamic-wind body,
@@ -202,11 +200,8 @@ fn test_dynamic_wind_with_exception() {
 }
 
 #[test]
-#[ignore] // BUG: After thunk not run when escaping via call/cc
 fn test_dynamic_wind_callcc_exit() {
     // Exiting via call/cc should run after thunks
-    // This test reveals that the after thunk is NOT executed when
-    // escaping a dynamic-wind via call/cc.
     // R7RS requires after thunk to run on continuation escape.
     assert_program_eval_to(
         r#"
@@ -443,7 +438,6 @@ fn test_exception_in_dynamic_wind_before() {
 }
 
 #[test]
-#[ignore] // BUG: After thunk not run when exception propagates (same as test_dynamic_wind_with_exception)
 fn test_exception_in_dynamic_wind_body_after_runs() {
     // Exception in body still runs after thunk
     // This test reveals the same bug as test_dynamic_wind_with_exception
@@ -461,10 +455,11 @@ fn test_exception_in_dynamic_wind_body_after_runs() {
 }
 
 #[test]
-#[ignore] // BUG: After thunk not run when escaping via call/cc (same as test_dynamic_wind_callcc_exit)
 fn test_callcc_escape_runs_dynamic_wind_after() {
-    // Escaping via call/cc runs after thunks
-    // See test_dynamic_wind_callcc_exit for details
+    // (escape (reverse log)) evaluates (reverse log) BEFORE the escape triggers
+    // the after-thunk, so the returned value is (before) not (before after).
+    // The after-thunk still runs (mutating log), but the escape value is already computed.
+    // Verified against chibi-scheme: returns (before).
     assert_program_eval_to(
         r#"
         (let ((log '()))
@@ -475,7 +470,7 @@ fn test_callcc_escape_runs_dynamic_wind_after() {
                 (lambda () (escape (reverse log)))
                 (lambda () (set! log (cons 'after log)))))))
         "#,
-        "(before after)",
+        "(before)",
     );
 }
 
@@ -530,12 +525,10 @@ fn test_error_object_predicate_false() {
 // =============================================================================
 
 #[test]
-#[ignore] // BUG: Before/after thunks not run on continuation re-entry
 fn test_callcc_across_dynamic_wind_boundary() {
-    // Continuation captured inside dynamic-wind, invoked outside
-    // This test reveals that when re-entering a continuation that was
-    // captured inside dynamic-wind, the before/after thunks are not run.
-    // R7RS requires them to run on every entry/exit.
+    // Original test had wrong expectation: (eq? (car log) 'in) is always false
+    // after normal dynamic-wind exit (log = (out in), car = 'out), so re-entry
+    // never happened. Verified against chibi-scheme: returns (done in out).
     assert_program_eval_to(
         r#"
         (let ((k #f)
@@ -550,32 +543,46 @@ fn test_callcc_across_dynamic_wind_boundary() {
               (k 'second)
               (cons 'done (reverse log))))
         "#,
-        "(done in out in out)",
+        "(done in out)",
     );
 }
 
 #[test]
-#[ignore] // BUG: Complex interaction between continuations and exception handlers
-fn test_exception_with_stored_continuation() {
-    // Exception handler uses stored continuation
-    // This test reveals issues with scope/binding when combining
-    // stored continuations with exception handlers.
+fn test_callcc_reentry_replays_wind_thunks() {
+    // Re-entering a continuation captured inside dynamic-wind must replay
+    // before-thunks. Verified against chibi-scheme: returns 3.
     assert_program_eval_to(
         r#"
-        (let ((k #f))
-          (call-with-current-continuation
-            (lambda (escape)
-              (with-exception-handler
-                (lambda (e)
-                  (if k
-                      (k (list 'resumed e))
-                      (escape (list 'first e))))
-                (lambda ()
-                  (call-with-current-continuation
-                    (lambda (c) (set! k c)))
-                  (raise 'error))))))
+        (let ((k #f)
+              (count 0))
+          (dynamic-wind
+            (lambda () (set! count (+ count 1)))
+            (lambda ()
+              (call-with-current-continuation
+                (lambda (c) (set! k c))))
+            (lambda () #f))
+          (if (< count 3)
+              (k #f)
+              count))
         "#,
-        "(first error)",
+        "3",
+    );
+}
+
+#[test]
+fn test_exception_with_stored_continuation() {
+    // Exception handler uses escape continuation on first raise.
+    // Original test was an infinite loop (verified against chibi-scheme: hangs).
+    // Replaced with a terminating test of the same pattern.
+    assert_program_eval_to(
+        r#"
+        (call-with-current-continuation
+          (lambda (escape)
+            (with-exception-handler
+              (lambda (e) (escape (list 'caught e)))
+              (lambda () (raise 'error)))))
+        "#,
+        "(caught error)",
     );
 }
 

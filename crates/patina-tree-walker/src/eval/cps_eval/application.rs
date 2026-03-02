@@ -477,8 +477,12 @@ impl<'a> CpsEvaluator<'a> {
             original_cont: Box::new(cont),
         };
 
-        // Push the exception handler onto the stack
-        let new_handler = ExceptionHandler { handler }; // TaggedValue
+        // Push the exception handler onto the stack, capturing current dynamic winds
+        // so that `raise` can unwind back to this point before invoking the handler
+        let new_handler = ExceptionHandler {
+            handler,
+            dynamic_winds: dynamic_winds.clone(),
+        };
         let mut new_exception_handlers = exception_handlers;
         new_exception_handlers.push(new_handler);
 
@@ -517,9 +521,14 @@ impl<'a> CpsEvaluator<'a> {
         let exception_tagged = args[0];
 
         if let Some(handler_entry) = exception_handlers.last().cloned() {
-            // Pop this handler (one-shot semantics)
+            // Pop this handler (one-shot semantics for handler invocation)
             let mut new_handlers = exception_handlers;
             new_handlers.pop();
+
+            // Unwind dynamic-wind after-thunks back to the handler's installation point
+            // R7RS §6.10: after-thunks must run before control leaves the dynamic extent
+            self.run_wind_handlers(&dynamic_winds, &handler_entry.dynamic_winds)?;
+            let handler_winds = handler_entry.dynamic_winds.clone();
 
             // Create continuation for when handler returns
             let handler_return_cont = ContValue::RaiseHandlerReturn {
@@ -530,10 +539,15 @@ impl<'a> CpsEvaluator<'a> {
                     Some(exception_tagged)
                 },
                 original_cont: Box::new(cont),
+                popped_handler: if continuable {
+                    Some(handler_entry.clone())
+                } else {
+                    None
+                },
             };
 
             // Handler is already TaggedValue - use directly for ApplyProc.proc
-            // Call handler with exception
+            // Call handler with the dynamic winds restored to the handler's installation point
             Ok(StepResult::ApplyProc {
                 proc: handler_entry.handler,
                 args: vec![exception_tagged],
@@ -541,7 +555,7 @@ impl<'a> CpsEvaluator<'a> {
                 env: self.evaluator.global_env.clone(),
                 cont_env,
                 prompt_stack,
-                dynamic_winds,
+                dynamic_winds: handler_winds,
                 exception_handlers: new_handlers,
             })
         } else {
@@ -607,6 +621,7 @@ impl<'a> CpsEvaluator<'a> {
                 continuable: false,
                 original_exception: Some(exception_tagged),
                 original_cont: Box::new(cont),
+                popped_handler: None,
             };
 
             // Handler is already TaggedValue - use directly for ApplyProc.proc

@@ -128,16 +128,21 @@ impl<'a> CpsEvaluator<'a> {
             // Pop the handler (it's been invoked)
             let new_handlers = exception_handlers[..exception_handlers.len() - 1].to_vec();
 
+            // Unwind dynamic-wind after-thunks back to the handler's installation point
+            self.run_wind_handlers(&dynamic_winds, &handler_entry.dynamic_winds)?;
+            let handler_winds = handler_entry.dynamic_winds.clone();
+
             // Create continuation for when handler returns
             // Runtime errors are non-continuable (only user-raised exceptions can be continuable)
             let raise_return_cont = ContValue::RaiseHandlerReturn {
                 continuable: false,
                 original_exception: Some(exception_tagged),
                 original_cont: Box::new(cont),
+                popped_handler: None,
             };
 
             // Handler is already TaggedValue - use directly for ApplyProc.proc
-            // Call the handler with the exception
+            // Call the handler with the dynamic winds restored to handler's installation point
             Ok(StepResult::ApplyProc {
                 proc: handler_entry.handler,
                 args: vec![exception_tagged],
@@ -145,7 +150,7 @@ impl<'a> CpsEvaluator<'a> {
                 env: self.evaluator.global_env.clone(),
                 cont_env,
                 prompt_stack,
-                dynamic_winds,
+                dynamic_winds: handler_winds,
                 exception_handlers: new_handlers,
             })
         } else {

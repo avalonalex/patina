@@ -404,12 +404,19 @@ impl<'a> CpsEvaluator<'a> {
                 })
             }
 
+            ContValue::ExceptionHandlerCleanup { original_cont } => {
+                // ExceptionHandlerCleanup just pops an exception handler and forwards
+                // the value to original_cont. When captured by call/cc, we need to
+                // preserve the original_cont chain. Since exception handlers are managed
+                // separately (not in the continuation), we can simply reify original_cont.
+                self.reify_continuation(original_cont, cont_env, dynamic_winds)
+            }
+
             // Other special continuations that need similar treatment
             ContValue::CallWithValuesConsumer { .. }
             | ContValue::ForceCache { .. }
             | ContValue::DynamicWindSetup { .. }
             | ContValue::DynamicWindAfterDone { .. }
-            | ContValue::ExceptionHandlerCleanup { .. }
             | ContValue::RaiseHandlerReturn { .. } => {
                 // For now, these return a placeholder. They could be enhanced similarly.
                 // TODO: Implement proper capture for these special continuations
@@ -688,9 +695,16 @@ impl<'a> CpsEvaluator<'a> {
                 continuable,
                 original_exception,
                 original_cont,
+                popped_handler,
             } => {
                 if continuable {
                     // Handler returned from raise-continuable
+                    // Re-push the handler so it remains active for the rest of the
+                    // thunk's dynamic extent (R7RS §6.11)
+                    let mut restored_handlers = exception_handlers;
+                    if let Some(handler) = popped_handler {
+                        restored_handlers.push(handler);
+                    }
                     // Use handler's return value as result
                     Ok(StepResult::InvokeContinuation {
                         cont: *original_cont,
@@ -699,7 +713,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env,
                         prompt_stack,
                         dynamic_winds,
-                        exception_handlers,
+                        exception_handlers: restored_handlers,
                     })
                 } else {
                     // Handler returned from non-continuable raise
@@ -728,6 +742,7 @@ impl<'a> CpsEvaluator<'a> {
                             continuable: false,
                             original_exception: Some(secondary_exception_tagged),
                             original_cont,
+                            popped_handler: None,
                         };
 
                         // Handler is already TaggedValue - use directly for ApplyProc.proc

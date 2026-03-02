@@ -1,16 +1,16 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2026-02-27 14:30:03
+**Generated:** 2026-03-01 09:54:33
 **Test Suite:** chibi-scheme r7rs-tests.scm
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1159 | 100.0% |
+| ✅ Passed | 1163 | 100.0% |
 | ❌ Failed | 0 | 0.0% |
 | ⚠️ Error (crashed) | 0 | 0.0% |
-| **Total** | **1159** | **100%** |
+| **Total** | **1163** | **100%** |
 
 **Note:** "Error" means the test crashed before assertions could run (usually missing features like call/cc, guard).
 
@@ -32,7 +32,7 @@
 | ✅ | 6.8 Vectors | 43 | 43 | 0 | 0 |
 | ✅ | 6.9 Bytevectors | 39 | 39 | 0 | 0 |
 | ✅ | 6.10 Control Features | 34 | 34 | 0 | 0 |
-| ✅ | 6.11 Exceptions | 26 | 26 | 0 | 0 |
+| ✅ | 6.11 Exceptions | 30 | 30 | 0 | 0 |
 | ✅ | 6.12 Environments and evaluation | 5 | 5 | 0 | 0 |
 | ✅ | Read syntax | 93 | 93 | 0 | 0 |
 | ✅ | Numeric syntax | 220 | 220 | 0 | 0 |

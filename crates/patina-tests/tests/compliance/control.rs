@@ -157,11 +157,9 @@ fn test_raise_continuable_basic() {
 }
 
 #[test]
-#[ignore] // TODO: Fix nested exception handler with continuation escape
 fn test_with_exception_handler_nested() {
-    // Nested handlers - inner handler catches exception
-    // Note: This test currently fails due to a subtle interaction between
-    // continuation capture and exception handler cleanup. The basic case works.
+    // Nested handlers - inner handler catches exception.
+    // Fixed by properly reifying ExceptionHandlerCleanup in call/cc capture.
     assert_program_eval_to_with_cps(
         r#"
         (call-with-current-continuation
