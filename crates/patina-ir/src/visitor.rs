@@ -13,10 +13,10 @@ use patina_core::{CoreExpr, Formals, Symbol};
 ///     type Output = CoreExpr;
 ///
 ///     fn visit_expr(&mut self, expr: &CoreExpr) -> CoreExpr {
-///         match expr {
-///             CoreExpr::App { func, args } if is_add(func) && all_literals(args) => {
+///         match &expr.kind {
+///             CoreExprKind::App { func, args } if is_add(func) && all_literals(args) => {
 ///                 // Fold (+ 1 2) to 3
-///                 CoreExpr::Literal(eval_add(args))
+///                 CoreExpr::new(CoreExprKind::Literal(eval_add(args)))
 ///             }
 ///             _ => self.visit_children(expr)
 ///         }

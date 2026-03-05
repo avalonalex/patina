@@ -11,10 +11,10 @@ pub mod cps_transform;
 pub mod visitor;
 
 // Re-export core IR types from patina-core
-pub use patina_core::{CoreExpr, Formals, ScopedParam, Symbol};
+pub use patina_core::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
 
 // Re-export CPS types from patina-core
-pub use patina_core::{CpsExpr, CpsParam, CpsPrimitive, PromptTag};
+pub use patina_core::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
 
 // Local types
 pub use cps_transform::CpsTransformer;

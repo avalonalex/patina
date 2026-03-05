@@ -36,7 +36,9 @@
 //! Here `k` is the continuation passed in from the enclosing context.
 
 use patina_core::TaggedValue;
-use patina_core::cps_expr::{ContVar, CpsExpr, CpsParam};
+use patina_core::core_expr::CoreExprKind;
+use patina_core::cps_expr::{ContVar, CpsExpr, CpsExprKind, CpsParam};
+use patina_core::error::SourceLocation;
 use patina_core::scope::ScopeSet;
 use patina_core::{CoreExpr, Formals, Symbol};
 use std::rc::Rc;
@@ -86,43 +88,43 @@ impl CpsTransformer {
         let result_var = self.gensym_var();
 
         // Create: (let-cont ((halt_k (result) (halt result))) <transformed-expr>)
-        CpsExpr::LetCont {
+        CpsExpr::new(CpsExprKind::LetCont {
             name: halt_cont.clone(),
             param: result_var.clone(),
-            cont_body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Var {
+            cont_body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
                 name: result_var,
                 scopes: ScopeSet::new(),
             }))),
             body: Rc::new(self.transform(expr, &halt_cont)),
-        }
+        })
     }
 
     /// Transform an expression with a given continuation
     ///
     /// The continuation `k` will receive the result of evaluating `expr`.
     pub fn transform(&self, expr: &CoreExpr, k: &ContVar) -> CpsExpr {
-        match expr {
+        match &expr.kind {
             // ==================== Trivial expressions ====================
             // These don't need CPS transformation - just pass to continuation
-            CoreExpr::Literal(v) => CpsExpr::Continue {
+            CoreExprKind::Literal(v) => CpsExpr::new(CpsExprKind::Continue {
                 cont: k.clone(),
-                value: Rc::new(CpsExpr::Literal(*v)),
-            },
+                value: CpsExpr::rc(CpsExprKind::Literal(*v)),
+            }),
 
-            CoreExpr::Var { name, scopes } => CpsExpr::Continue {
+            CoreExprKind::Var { name, scopes } => CpsExpr::new(CpsExprKind::Continue {
                 cont: k.clone(),
-                value: Rc::new(CpsExpr::Var {
+                value: CpsExpr::rc(CpsExprKind::Var {
                     name: name.clone(),
                     scopes: scopes.clone(),
                 }),
-            },
+            }),
 
-            CoreExpr::Quote(v) => CpsExpr::Continue {
+            CoreExprKind::Quote(v) => CpsExpr::new(CpsExprKind::Continue {
                 cont: k.clone(),
-                value: Rc::new(CpsExpr::Literal(*v)),
-            },
+                value: CpsExpr::rc(CpsExprKind::Literal(*v)),
+            }),
 
-            CoreExpr::Lambda {
+            CoreExprKind::Lambda {
                 params,
                 body,
                 binding_scope,
@@ -136,9 +138,9 @@ impl CpsTransformer {
 
                 let (cps_params, cps_variadic) = self.transform_formals(params);
 
-                CpsExpr::Continue {
+                CpsExpr::new(CpsExprKind::Continue {
                     cont: k.clone(),
-                    value: Rc::new(CpsExpr::Lambda {
+                    value: CpsExpr::rc(CpsExprKind::Lambda {
                         params: cps_params,
                         variadic: cps_variadic,
                         cont_param,
@@ -146,11 +148,11 @@ impl CpsTransformer {
                         // Preserve binding_scope for hygiene
                         binding_scope: *binding_scope,
                     }),
-                }
+                })
             }
 
             // ==================== Serious expressions ====================
-            CoreExpr::If { test, then, else_ } => {
+            CoreExprKind::If { test, then, else_ } => {
                 // Transform: (if test then else)
                 // Into: transform test, then branch on result
 
@@ -160,11 +162,11 @@ impl CpsTransformer {
                     let cps_then = self.transform(then, k);
                     let cps_else = self.transform(else_, k);
 
-                    CpsExpr::If {
+                    CpsExpr::new(CpsExprKind::If {
                         test: Rc::new(cps_test),
                         consequent: Rc::new(cps_then),
                         alternate: Rc::new(cps_else),
-                    }
+                    })
                 } else {
                     // Need to evaluate test first
                     let test_var = self.gensym_var();
@@ -173,139 +175,138 @@ impl CpsTransformer {
                     let cps_then = self.transform(then, k);
                     let cps_else = self.transform(else_, k);
 
-                    let if_expr = CpsExpr::If {
-                        test: Rc::new(CpsExpr::Var {
+                    let if_expr = CpsExpr::new(CpsExprKind::If {
+                        test: CpsExpr::rc(CpsExprKind::Var {
                             name: test_var.clone(),
                             scopes: ScopeSet::new(),
                         }),
                         consequent: Rc::new(cps_then),
                         alternate: Rc::new(cps_else),
-                    };
+                    });
 
-                    CpsExpr::LetCont {
+                    CpsExpr::new(CpsExprKind::LetCont {
                         name: test_cont.clone(),
                         param: test_var,
                         cont_body: Rc::new(if_expr),
                         body: Rc::new(self.transform(test, &test_cont)),
-                    }
+                    })
                 }
             }
 
-            CoreExpr::Begin(exprs) => self.transform_sequence(exprs, k),
+            CoreExprKind::Begin(exprs) => self.transform_sequence(exprs, k),
 
-            CoreExpr::App { func, args } => {
+            CoreExprKind::App { func, args } => {
                 // Check if this is a call/cc application
                 if self.is_callcc(func) && args.len() == 1 {
                     return self.transform_callcc(&args[0], k);
                 }
-                self.transform_app(func, args, k)
+                self.transform_app(func, args, k, expr.source.clone())
             }
 
-            CoreExpr::Apply { func, args } => {
+            CoreExprKind::Apply { func, args } => {
                 // Apply is like App but last arg is a list to splice
                 // For now, transform similarly and let runtime handle it
-                // TODO: Handle apply specially in CPS evaluator
-                self.transform_apply(func, args, k)
+                self.transform_apply(func, args, k, expr.source.clone())
             }
 
-            CoreExpr::Set { var, scopes, value } => {
+            CoreExprKind::Set { var, scopes, value } => {
                 // Transform: (set! var value)
                 // Into: evaluate value, do set!, continue with unspecified
 
                 if self.is_trivial(value) {
                     let cps_value = self.transform_trivial(value);
-                    CpsExpr::Set {
+                    CpsExpr::new(CpsExprKind::Set {
                         var: var.clone(),
                         scopes: scopes.clone(),
                         value: Rc::new(cps_value),
-                        cont: Rc::new(CpsExpr::Continue {
+                        cont: CpsExpr::rc(CpsExprKind::Continue {
                             cont: k.clone(),
-                            value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
+                            value: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
                         }),
-                    }
+                    })
                 } else {
                     let val_var = self.gensym_var();
                     let val_cont = self.gensym_cont();
 
-                    let set_expr = CpsExpr::Set {
+                    let set_expr = CpsExpr::new(CpsExprKind::Set {
                         var: var.clone(),
                         scopes: scopes.clone(),
-                        value: Rc::new(CpsExpr::Var {
+                        value: CpsExpr::rc(CpsExprKind::Var {
                             name: val_var.clone(),
                             scopes: ScopeSet::new(),
                         }),
-                        cont: Rc::new(CpsExpr::Continue {
+                        cont: CpsExpr::rc(CpsExprKind::Continue {
                             cont: k.clone(),
-                            value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
+                            value: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
                         }),
-                    };
+                    });
 
-                    CpsExpr::LetCont {
+                    CpsExpr::new(CpsExprKind::LetCont {
                         name: val_cont.clone(),
                         param: val_var,
                         cont_body: Rc::new(set_expr),
                         body: Rc::new(self.transform(value, &val_cont)),
-                    }
+                    })
                 }
             }
 
-            CoreExpr::Define { name, value } => {
+            CoreExprKind::Define { name, value } => {
                 // Transform: (define name value)
                 // Into: evaluate value, do define, continue with unspecified
 
                 if self.is_trivial(value) {
                     let cps_value = self.transform_trivial(value);
-                    CpsExpr::Define {
+                    CpsExpr::new(CpsExprKind::Define {
                         name: name.clone(),
                         value: Rc::new(cps_value),
-                        cont: Rc::new(CpsExpr::Continue {
+                        cont: CpsExpr::rc(CpsExprKind::Continue {
                             cont: k.clone(),
-                            value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
+                            value: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
                         }),
-                    }
+                    })
                 } else {
                     let val_var = self.gensym_var();
                     let val_cont = self.gensym_cont();
 
-                    let def_expr = CpsExpr::Define {
+                    let def_expr = CpsExpr::new(CpsExprKind::Define {
                         name: name.clone(),
-                        value: Rc::new(CpsExpr::Var {
+                        value: CpsExpr::rc(CpsExprKind::Var {
                             name: val_var.clone(),
                             scopes: ScopeSet::new(),
                         }),
-                        cont: Rc::new(CpsExpr::Continue {
+                        cont: CpsExpr::rc(CpsExprKind::Continue {
                             cont: k.clone(),
-                            value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
+                            value: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
                         }),
-                    };
+                    });
 
-                    CpsExpr::LetCont {
+                    CpsExpr::new(CpsExprKind::LetCont {
                         name: val_cont.clone(),
                         param: val_var,
                         cont_body: Rc::new(def_expr),
                         body: Rc::new(self.transform(value, &val_cont)),
-                    }
+                    })
                 }
             }
 
             // Quasiquote template - needs runtime evaluation for unquote/unquote-splicing
-            CoreExpr::Quasiquote(template) => {
+            CoreExprKind::Quasiquote(template) => {
                 // Quasiquote is evaluated at runtime, so we pass the template
                 // to the CPS evaluator which will process unquote/unquote-splicing
-                CpsExpr::Quasiquote {
+                CpsExpr::new(CpsExprKind::Quasiquote {
                     template: *template,
                     cont: k.clone(),
-                }
+                })
             }
 
-            CoreExpr::Import { .. } => {
+            CoreExprKind::Import { .. } => {
                 // Import is a compile-time construct, shouldn't appear here
                 panic!("Import should be handled before CPS transform")
             }
 
             // Note: Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
             // It expands to regular code before CPS transform.
-            CoreExpr::Expand { .. } => {
+            CoreExprKind::Expand { .. } => {
                 // Expand is a debugging form, skip CPS transform
                 panic!("Expand should be handled before CPS transform")
             }
@@ -315,18 +316,18 @@ impl CpsTransformer {
     /// Check if an expression is trivial (no control effects)
     fn is_trivial(&self, expr: &CoreExpr) -> bool {
         matches!(
-            expr,
-            CoreExpr::Literal(_)
-                | CoreExpr::Var { .. }
-                | CoreExpr::Quote(_)
-                | CoreExpr::Lambda { .. }
+            &expr.kind,
+            CoreExprKind::Literal(_)
+                | CoreExprKind::Var { .. }
+                | CoreExprKind::Quote(_)
+                | CoreExprKind::Lambda { .. }
         )
     }
 
     /// Check if an expression is a call/cc reference
     fn is_callcc(&self, expr: &CoreExpr) -> bool {
-        match expr {
-            CoreExpr::Var { name, .. } => {
+        match &expr.kind {
+            CoreExprKind::Var { name, .. } => {
                 name.as_ref() == "call/cc" || name.as_ref() == "call-with-current-continuation"
             }
             _ => false,
@@ -340,42 +341,42 @@ impl CpsTransformer {
         if self.is_trivial(proc) {
             // Proc is trivial - can inline
             let cps_proc = self.transform_trivial(proc);
-            CpsExpr::CallCC {
+            CpsExpr::new(CpsExprKind::CallCC {
                 proc: Rc::new(cps_proc),
                 cont: k.clone(),
-            }
+            })
         } else {
             // Proc is not trivial - need to evaluate it first
             let proc_var = self.gensym("proc");
             let proc_cont = self.gensym_cont();
 
-            let callcc_expr = CpsExpr::CallCC {
-                proc: Rc::new(CpsExpr::Var {
+            let callcc_expr = CpsExpr::new(CpsExprKind::CallCC {
+                proc: CpsExpr::rc(CpsExprKind::Var {
                     name: proc_var.clone(),
                     scopes: ScopeSet::new(),
                 }),
                 cont: k.clone(),
-            };
+            });
 
-            CpsExpr::LetCont {
+            CpsExpr::new(CpsExprKind::LetCont {
                 name: proc_cont.clone(),
                 param: proc_var,
                 cont_body: Rc::new(callcc_expr),
                 body: Rc::new(self.transform(proc, &proc_cont)),
-            }
+            })
         }
     }
 
     /// Transform a trivial expression (must be trivial!)
     fn transform_trivial(&self, expr: &CoreExpr) -> CpsExpr {
-        match expr {
-            CoreExpr::Literal(v) => CpsExpr::Literal(*v),
-            CoreExpr::Var { name, scopes } => CpsExpr::Var {
+        match &expr.kind {
+            CoreExprKind::Literal(v) => CpsExpr::new(CpsExprKind::Literal(*v)),
+            CoreExprKind::Var { name, scopes } => CpsExpr::new(CpsExprKind::Var {
                 name: name.clone(),
                 scopes: scopes.clone(),
-            },
-            CoreExpr::Quote(v) => CpsExpr::Literal(*v),
-            CoreExpr::Lambda {
+            }),
+            CoreExprKind::Quote(v) => CpsExpr::new(CpsExprKind::Literal(*v)),
+            CoreExprKind::Lambda {
                 params,
                 body,
                 binding_scope,
@@ -384,17 +385,17 @@ impl CpsTransformer {
                 let cps_body = self.transform_body(body, &cont_param);
                 let (cps_params, cps_variadic) = self.transform_formals(params);
 
-                CpsExpr::Lambda {
+                CpsExpr::new(CpsExprKind::Lambda {
                     params: cps_params,
                     variadic: cps_variadic,
                     cont_param,
                     body: Rc::new(cps_body),
                     binding_scope: *binding_scope,
-                }
+                })
             }
             _ => panic!(
                 "transform_trivial called on non-trivial expression: {:?}",
-                expr.kind()
+                expr.expr_kind()
             ),
         }
     }
@@ -433,10 +434,10 @@ impl CpsTransformer {
     fn transform_sequence(&self, exprs: &[CoreExpr], k: &ContVar) -> CpsExpr {
         if exprs.is_empty() {
             // Empty sequence returns unspecified
-            CpsExpr::Continue {
+            CpsExpr::new(CpsExprKind::Continue {
                 cont: k.clone(),
-                value: Rc::new(CpsExpr::Literal(TaggedValue::UNSPECIFIED)),
-            }
+                value: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
+            })
         } else if exprs.len() == 1 {
             // Single expression - tail position
             self.transform(&exprs[0], k)
@@ -451,17 +452,23 @@ impl CpsTransformer {
 
             let rest_expr = self.transform_sequence(rest, k);
 
-            CpsExpr::LetCont {
+            CpsExpr::new(CpsExprKind::LetCont {
                 name: rest_cont.clone(),
                 param: ignore_var,
                 cont_body: Rc::new(rest_expr),
                 body: Rc::new(self.transform(first, &rest_cont)),
-            }
+            })
         }
     }
 
     /// Transform function application
-    fn transform_app(&self, func: &CoreExpr, args: &[CoreExpr], k: &ContVar) -> CpsExpr {
+    fn transform_app(
+        &self,
+        func: &CoreExpr,
+        args: &[CoreExpr],
+        k: &ContVar,
+        source: Option<SourceLocation>,
+    ) -> CpsExpr {
         // Collect all expressions to evaluate: func, then args
         let mut all_exprs: Vec<&CoreExpr> = vec![func];
         all_exprs.extend(args.iter());
@@ -478,31 +485,42 @@ impl CpsTransformer {
             .collect();
 
         // Build the application expression
-        let func_var = CpsExpr::Var {
+        let func_var = CpsExpr::new(CpsExprKind::Var {
             name: names[0].clone(),
             scopes: ScopeSet::new(),
-        };
+        });
 
         let arg_vars: Vec<CpsExpr> = names[1..]
             .iter()
-            .map(|n| CpsExpr::Var {
-                name: n.clone(),
-                scopes: ScopeSet::new(),
+            .map(|n| {
+                CpsExpr::new(CpsExprKind::Var {
+                    name: n.clone(),
+                    scopes: ScopeSet::new(),
+                })
             })
             .collect();
 
-        let app = CpsExpr::App {
-            func: Rc::new(func_var),
-            args: arg_vars,
-            cont: k.clone(),
-        };
+        let app = CpsExpr::with_opt_source(
+            CpsExprKind::App {
+                func: Rc::new(func_var),
+                args: arg_vars,
+                cont: k.clone(),
+            },
+            source,
+        );
 
         // Build let-cont chain from inside out
         self.transform_args_then(&all_exprs, &names, app)
     }
 
     /// Transform apply
-    fn transform_apply(&self, func: &CoreExpr, args: &[CoreExpr], k: &ContVar) -> CpsExpr {
+    fn transform_apply(
+        &self,
+        func: &CoreExpr,
+        args: &[CoreExpr],
+        k: &ContVar,
+        source: Option<SourceLocation>,
+    ) -> CpsExpr {
         // Transform apply like app but generate CpsExpr::Apply
         // This preserves the "flatten last arg" semantics for the CPS evaluator
 
@@ -510,21 +528,26 @@ impl CpsTransformer {
         let func_name = self.gensym_var();
         let arg_names: Vec<Symbol> = args.iter().map(|_| self.gensym_var()).collect();
 
-        // The final apply expression
-        let apply_expr = CpsExpr::Apply {
-            func: Rc::new(CpsExpr::Var {
-                name: func_name.clone(),
-                scopes: ScopeSet::new(),
-            }),
-            args: arg_names
-                .iter()
-                .map(|n| CpsExpr::Var {
-                    name: n.clone(),
+        // The final apply expression, stamping the call-site source
+        let apply_expr = CpsExpr::with_opt_source(
+            CpsExprKind::Apply {
+                func: CpsExpr::rc(CpsExprKind::Var {
+                    name: func_name.clone(),
                     scopes: ScopeSet::new(),
-                })
-                .collect(),
-            cont: k.clone(),
-        };
+                }),
+                args: arg_names
+                    .iter()
+                    .map(|n| {
+                        CpsExpr::new(CpsExprKind::Var {
+                            name: n.clone(),
+                            scopes: ScopeSet::new(),
+                        })
+                    })
+                    .collect(),
+                cont: k.clone(),
+            },
+            source,
+        );
 
         // Build up let-bindings for func and all args
         let all_exprs: Vec<&CoreExpr> = std::iter::once(func).chain(args.iter()).collect();
@@ -544,6 +567,10 @@ impl CpsTransformer {
             return final_expr;
         }
 
+        // Propagate the call-site source to LetVal wrappers so that errors
+        // during argument evaluation carry the application's source location.
+        let call_source = final_expr.source.clone();
+
         // Work backwards to build nested let-conts
         let mut result = final_expr;
 
@@ -551,22 +578,25 @@ impl CpsTransformer {
             if self.is_trivial(expr) {
                 // Trivial - just let-bind it
                 let cps_value = self.transform_trivial(expr);
-                result = CpsExpr::LetVal {
-                    name: name.clone(),
-                    value: Rc::new(cps_value),
-                    body: Rc::new(result),
-                };
+                result = CpsExpr::with_opt_source(
+                    CpsExprKind::LetVal {
+                        name: name.clone(),
+                        value: Rc::new(cps_value),
+                        body: Rc::new(result),
+                    },
+                    call_source.clone(),
+                );
             } else {
                 // Non-trivial - need continuation
                 let cont_name = self.gensym_cont();
                 let transformed = self.transform(expr, &cont_name);
 
-                result = CpsExpr::LetCont {
+                result = CpsExpr::new(CpsExprKind::LetCont {
                     name: cont_name,
                     param: name.clone(),
                     cont_body: Rc::new(result),
                     body: Rc::new(transformed),
-                };
+                });
             }
         }
 
@@ -582,14 +612,14 @@ mod tests {
     use super::*;
 
     fn make_literal(n: i64) -> CoreExpr {
-        CoreExpr::Literal(TaggedValue::fixnum(n))
+        CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(n)))
     }
 
     fn make_var(name: &str) -> CoreExpr {
-        CoreExpr::Var {
+        CoreExpr::new(CoreExprKind::Var {
             name: name.into(),
             scopes: ScopeSet::new(),
-        }
+        })
     }
 
     #[test]
@@ -600,7 +630,7 @@ mod tests {
 
         // Should produce: (let-cont ((k_0 (v_1) (halt v_1))) (k_0 42))
         println!("CPS: {}", cps);
-        assert!(matches!(cps, CpsExpr::LetCont { .. }));
+        assert!(matches!(cps.kind, CpsExprKind::LetCont { .. }));
     }
 
     #[test]
@@ -610,7 +640,7 @@ mod tests {
         let cps = transformer.transform_toplevel(&expr);
 
         println!("CPS: {}", cps);
-        assert!(matches!(cps, CpsExpr::LetCont { .. }));
+        assert!(matches!(cps.kind, CpsExprKind::LetCont { .. }));
     }
 
     #[test]
@@ -618,23 +648,23 @@ mod tests {
         let transformer = CpsTransformer::new();
 
         // (if #t 1 2)
-        let expr = CoreExpr::If {
-            test: Rc::new(CoreExpr::Literal(TaggedValue::TRUE)),
+        let expr = CoreExpr::new(CoreExprKind::If {
+            test: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::TRUE))),
             then: Rc::new(make_literal(1)),
             else_: Rc::new(make_literal(2)),
-        };
+        });
 
         let cps = transformer.transform_toplevel(&expr);
         println!("CPS: {}", cps);
 
         // Should have an if in the output
         fn has_if(e: &CpsExpr) -> bool {
-            match e {
-                CpsExpr::If { .. } => true,
-                CpsExpr::LetCont {
+            match &e.kind {
+                CpsExprKind::If { .. } => true,
+                CpsExprKind::LetCont {
                     cont_body, body, ..
                 } => has_if(cont_body) || has_if(body),
-                CpsExpr::LetVal { body, .. } => has_if(body),
+                CpsExprKind::LetVal { body, .. } => has_if(body),
                 _ => false,
             }
         }
@@ -646,21 +676,21 @@ mod tests {
         let transformer = CpsTransformer::new();
 
         // (lambda (x) x)
-        let expr = CoreExpr::Lambda {
+        let expr = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![patina_core::ScopedParam::simple("x".into())]),
             body: vec![make_var("x")],
             binding_scope: None,
-        };
+        });
 
         let cps = transformer.transform_toplevel(&expr);
         println!("CPS: {}", cps);
 
         // Should produce a lambda with cont parameter
         fn has_lambda(e: &CpsExpr) -> bool {
-            match e {
-                CpsExpr::Lambda { .. } => true,
-                CpsExpr::Continue { value, .. } => has_lambda(value),
-                CpsExpr::LetCont {
+            match &e.kind {
+                CpsExprKind::Lambda { .. } => true,
+                CpsExprKind::Continue { value, .. } => has_lambda(value),
+                CpsExprKind::LetCont {
                     cont_body, body, ..
                 } => has_lambda(cont_body) || has_lambda(body),
                 _ => false,
@@ -674,22 +704,22 @@ mod tests {
         let transformer = CpsTransformer::new();
 
         // (f x)
-        let expr = CoreExpr::App {
+        let expr = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(make_var("f")),
             args: vec![make_var("x")],
-        };
+        });
 
         let cps = transformer.transform_toplevel(&expr);
         println!("CPS: {}", cps);
 
         // Should have an application
         fn has_app(e: &CpsExpr) -> bool {
-            match e {
-                CpsExpr::App { .. } => true,
-                CpsExpr::LetCont {
+            match &e.kind {
+                CpsExprKind::App { .. } => true,
+                CpsExprKind::LetCont {
                     cont_body, body, ..
                 } => has_app(cont_body) || has_app(body),
-                CpsExpr::LetVal { body, .. } => has_app(body),
+                CpsExprKind::LetVal { body, .. } => has_app(body),
                 _ => false,
             }
         }
@@ -701,13 +731,17 @@ mod tests {
         let transformer = CpsTransformer::new();
 
         // (begin 1 2 3)
-        let expr = CoreExpr::Begin(vec![make_literal(1), make_literal(2), make_literal(3)]);
+        let expr = CoreExpr::new(CoreExprKind::Begin(vec![
+            make_literal(1),
+            make_literal(2),
+            make_literal(3),
+        ]));
 
         let cps = transformer.transform_toplevel(&expr);
         println!("CPS: {}", cps);
 
         // Should sequence the expressions
-        assert!(matches!(cps, CpsExpr::LetCont { .. }));
+        assert!(matches!(cps.kind, CpsExprKind::LetCont { .. }));
     }
 
     #[test]
@@ -715,31 +749,29 @@ mod tests {
         let transformer = CpsTransformer::new();
 
         // (call/cc (lambda (k) 42))
-        // This tests that call/cc is properly transformed
-        // call/cc is represented as (call/cc proc), i.e., an App with call/cc as the function
         let lambda_body = make_literal(42);
-        let lambda = CoreExpr::Lambda {
+        let lambda = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![patina_core::ScopedParam::simple("k".into())]),
             body: vec![lambda_body],
             binding_scope: None,
-        };
+        });
 
-        let expr = CoreExpr::App {
+        let expr = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(make_var("call/cc")),
             args: vec![lambda],
-        };
+        });
 
         let cps = transformer.transform_toplevel(&expr);
         println!("CPS for call/cc: {}", cps);
 
-        // Should produce a CpsExpr::CallCC
+        // Should produce a CpsExprKind::CallCC
         fn has_callcc(e: &CpsExpr) -> bool {
-            match e {
-                CpsExpr::CallCC { .. } => true,
-                CpsExpr::LetCont {
+            match &e.kind {
+                CpsExprKind::CallCC { .. } => true,
+                CpsExprKind::LetCont {
                     cont_body, body, ..
                 } => has_callcc(cont_body) || has_callcc(body),
-                CpsExpr::LetVal { body, .. } => has_callcc(body),
+                CpsExprKind::LetVal { body, .. } => has_callcc(body),
                 _ => false,
             }
         }
@@ -751,34 +783,31 @@ mod tests {
         let transformer = CpsTransformer::new();
 
         // (call/cc (lambda (exit) (exit 99)))
-        // The continuation 'exit' is invoked, which should escape
-        let exit_call = CoreExpr::App {
+        let exit_call = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(make_var("exit")),
             args: vec![make_literal(99)],
-        };
-        let lambda = CoreExpr::Lambda {
+        });
+        let lambda = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![patina_core::ScopedParam::simple("exit".into())]),
             body: vec![exit_call],
             binding_scope: None,
-        };
+        });
 
-        let expr = CoreExpr::App {
+        let expr = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(make_var("call/cc")),
             args: vec![lambda],
-        };
+        });
 
         let cps = transformer.transform_toplevel(&expr);
         println!("CPS for call/cc with escape: {}", cps);
 
-        // The transformation should be valid (no panic)
-        // The structure should include CallCC
         fn has_callcc(e: &CpsExpr) -> bool {
-            match e {
-                CpsExpr::CallCC { .. } => true,
-                CpsExpr::LetCont {
+            match &e.kind {
+                CpsExprKind::CallCC { .. } => true,
+                CpsExprKind::LetCont {
                     cont_body, body, ..
                 } => has_callcc(cont_body) || has_callcc(body),
-                CpsExpr::LetVal { body, .. } => has_callcc(body),
+                CpsExprKind::LetVal { body, .. } => has_callcc(body),
                 _ => false,
             }
         }
@@ -790,39 +819,37 @@ mod tests {
         let transformer = CpsTransformer::new();
 
         // (+ 1 (call/cc (lambda (k) (k 2))))
-        // This tests call/cc in a non-tail position
-        let k_call = CoreExpr::App {
+        let k_call = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(make_var("k")),
             args: vec![make_literal(2)],
-        };
-        let lambda = CoreExpr::Lambda {
+        });
+        let lambda = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![patina_core::ScopedParam::simple("k".into())]),
             body: vec![k_call],
             binding_scope: None,
-        };
-        let callcc = CoreExpr::App {
+        });
+        let callcc = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(make_var("call/cc")),
             args: vec![lambda],
-        };
+        });
 
         // (+ 1 <callcc>) - represented as App with + variable
-        let add = CoreExpr::App {
+        let add = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(make_var("+")),
             args: vec![make_literal(1), callcc],
-        };
+        });
 
         let cps = transformer.transform_toplevel(&add);
         println!("CPS for nested call/cc: {}", cps);
 
-        // Should produce valid CPS with CallCC
         fn has_callcc(e: &CpsExpr) -> bool {
-            match e {
-                CpsExpr::CallCC { .. } => true,
-                CpsExpr::LetCont {
+            match &e.kind {
+                CpsExprKind::CallCC { .. } => true,
+                CpsExprKind::LetCont {
                     cont_body, body, ..
                 } => has_callcc(cont_body) || has_callcc(body),
-                CpsExpr::LetVal { body, .. } => has_callcc(body),
-                CpsExpr::PrimOp { .. } => false,
+                CpsExprKind::LetVal { body, .. } => has_callcc(body),
+                CpsExprKind::PrimOp { .. } => false,
                 _ => false,
             }
         }

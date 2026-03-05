@@ -42,6 +42,7 @@
 //! - **User continuations**: Captured by `call/cc` or `shift`. These are
 //!   first-class values that can be stored and invoked.
 
+use crate::error::SourceLocation;
 use crate::scope::ScopeSet;
 use crate::tagged_value::TaggedValue;
 use std::rc::Rc;
@@ -87,7 +88,60 @@ impl std::fmt::Display for PromptTag {
     }
 }
 
-/// CPS Expression - every sub-expression has explicit continuation
+/// CPS Expression wrapper with optional source location
+///
+/// This struct wraps a `CpsExprKind` with an optional source location,
+/// enabling error messages to include file/line/column information.
+#[derive(Debug, Clone)]
+pub struct CpsExpr {
+    /// The expression kind
+    pub kind: CpsExprKind,
+    /// Source location (populated in Phase 2)
+    pub source: Option<SourceLocation>,
+}
+
+impl CpsExpr {
+    /// Create a new CpsExpr with no source location
+    pub fn new(kind: CpsExprKind) -> Self {
+        Self { kind, source: None }
+    }
+
+    /// Create a new CpsExpr with a source location
+    pub fn with_source(kind: CpsExprKind, source: SourceLocation) -> Self {
+        Self {
+            kind,
+            source: Some(source),
+        }
+    }
+
+    /// Create a new CpsExpr with an optional source location
+    pub fn with_opt_source(kind: CpsExprKind, source: Option<SourceLocation>) -> Self {
+        Self { kind, source }
+    }
+
+    /// Create a new Rc<CpsExpr> with no source location
+    pub fn rc(kind: CpsExprKind) -> Rc<Self> {
+        Rc::new(Self::new(kind))
+    }
+
+    /// Check if this is a trivial expression (no control effects)
+    pub fn is_trivial(&self) -> bool {
+        self.kind.is_trivial()
+    }
+
+    /// Get a human-readable description of the expression type
+    pub fn expr_kind(&self) -> &'static str {
+        self.kind.expr_kind()
+    }
+}
+
+impl std::fmt::Display for CpsExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.kind, f)
+    }
+}
+
+/// CPS Expression Kind - every sub-expression has explicit continuation
 ///
 /// In CPS, there are two kinds of expressions:
 /// - **Trivial expressions**: Evaluate immediately without control effects
@@ -95,7 +149,7 @@ impl std::fmt::Display for PromptTag {
 /// - **Serious expressions**: May have control effects (applications, if).
 ///   These take an explicit continuation.
 #[derive(Debug, Clone)]
-pub enum CpsExpr {
+pub enum CpsExprKind {
     // ==================== Trivial Expressions ====================
     // These evaluate immediately and don't invoke continuations directly.
     // They're used as arguments to serious expressions.
@@ -423,57 +477,57 @@ impl CpsPrimitive {
     }
 }
 
-impl CpsExpr {
+impl CpsExprKind {
     /// Check if this is a trivial expression (no control effects)
     pub fn is_trivial(&self) -> bool {
         matches!(
             self,
-            CpsExpr::Literal(_)
-                | CpsExpr::Var { .. }
-                | CpsExpr::ContRef(_)
-                | CpsExpr::Lambda { .. }
+            CpsExprKind::Literal(_)
+                | CpsExprKind::Var { .. }
+                | CpsExprKind::ContRef(_)
+                | CpsExprKind::Lambda { .. }
         )
     }
 
     /// Get a human-readable description of the expression type
-    pub fn kind(&self) -> &'static str {
+    pub fn expr_kind(&self) -> &'static str {
         match self {
-            CpsExpr::Literal(_) => "literal",
-            CpsExpr::Var { .. } => "var",
-            CpsExpr::ContRef(_) => "cont-ref",
-            CpsExpr::Lambda { .. } => "lambda",
-            CpsExpr::LetVal { .. } => "let-val",
-            CpsExpr::LetCont { .. } => "let-cont",
-            CpsExpr::App { .. } => "app",
-            CpsExpr::Apply { .. } => "apply",
-            CpsExpr::Continue { .. } => "continue",
-            CpsExpr::If { .. } => "if",
-            CpsExpr::Set { .. } => "set!",
-            CpsExpr::Define { .. } => "define",
-            CpsExpr::CallCC { .. } => "call/cc",
-            CpsExpr::Prompt { .. } => "prompt",
-            CpsExpr::Control { .. } => "control",
-            CpsExpr::Abort { .. } => "abort",
-            CpsExpr::Quasiquote { .. } => "quasiquote",
-            CpsExpr::PrimOp { .. } => "prim-op",
-            CpsExpr::Halt(_) => "halt",
+            CpsExprKind::Literal(_) => "literal",
+            CpsExprKind::Var { .. } => "var",
+            CpsExprKind::ContRef(_) => "cont-ref",
+            CpsExprKind::Lambda { .. } => "lambda",
+            CpsExprKind::LetVal { .. } => "let-val",
+            CpsExprKind::LetCont { .. } => "let-cont",
+            CpsExprKind::App { .. } => "app",
+            CpsExprKind::Apply { .. } => "apply",
+            CpsExprKind::Continue { .. } => "continue",
+            CpsExprKind::If { .. } => "if",
+            CpsExprKind::Set { .. } => "set!",
+            CpsExprKind::Define { .. } => "define",
+            CpsExprKind::CallCC { .. } => "call/cc",
+            CpsExprKind::Prompt { .. } => "prompt",
+            CpsExprKind::Control { .. } => "control",
+            CpsExprKind::Abort { .. } => "abort",
+            CpsExprKind::Quasiquote { .. } => "quasiquote",
+            CpsExprKind::PrimOp { .. } => "prim-op",
+            CpsExprKind::Halt(_) => "halt",
         }
     }
 }
 
-impl std::fmt::Display for CpsExpr {
+impl std::fmt::Display for CpsExprKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CpsExpr::Literal(v) => write!(f, "{}", v),
-            CpsExpr::Var { name, scopes } => {
+            CpsExprKind::Literal(v) => write!(f, "{}", v),
+            CpsExprKind::Var { name, scopes } => {
                 if scopes.is_empty() {
                     write!(f, "{}", name)
                 } else {
                     write!(f, "{}@{}", name, scopes)
                 }
             }
-            CpsExpr::ContRef(k) => write!(f, "#{}", k),
-            CpsExpr::Lambda {
+            CpsExprKind::ContRef(k) => write!(f, "#{}", k),
+            CpsExprKind::Lambda {
                 params,
                 variadic,
                 cont_param,
@@ -495,10 +549,10 @@ impl std::fmt::Display for CpsExpr {
                 }
                 write!(f, ") #{} {})", cont_param, body)
             }
-            CpsExpr::LetVal { name, value, body } => {
+            CpsExprKind::LetVal { name, value, body } => {
                 write!(f, "(let-val ({} {}) {})", name, value, body)
             }
-            CpsExpr::LetCont {
+            CpsExprKind::LetCont {
                 name,
                 param,
                 cont_body,
@@ -510,61 +564,61 @@ impl std::fmt::Display for CpsExpr {
                     name, param, cont_body, body
                 )
             }
-            CpsExpr::App { func, args, cont } => {
+            CpsExprKind::App { func, args, cont } => {
                 write!(f, "({}", func)?;
                 for arg in args {
                     write!(f, " {}", arg)?;
                 }
                 write!(f, " #{})", cont)
             }
-            CpsExpr::Apply { func, args, cont } => {
+            CpsExprKind::Apply { func, args, cont } => {
                 write!(f, "(apply {}", func)?;
                 for arg in args {
                     write!(f, " {}", arg)?;
                 }
                 write!(f, " #{})", cont)
             }
-            CpsExpr::Continue { cont, value } => {
+            CpsExprKind::Continue { cont, value } => {
                 write!(f, "(#{} {})", cont, value)
             }
-            CpsExpr::If {
+            CpsExprKind::If {
                 test,
                 consequent,
                 alternate,
             } => {
                 write!(f, "(if {} {} {})", test, consequent, alternate)
             }
-            CpsExpr::Set {
+            CpsExprKind::Set {
                 var, value, cont, ..
             } => {
                 write!(f, "(set! {} {} {})", var, value, cont)
             }
-            CpsExpr::Define { name, value, cont } => {
+            CpsExprKind::Define { name, value, cont } => {
                 write!(f, "(define {} {} {})", name, value, cont)
             }
-            CpsExpr::CallCC { proc, cont } => {
+            CpsExprKind::CallCC { proc, cont } => {
                 write!(f, "(call/cc {} #{})", proc, cont)
             }
-            CpsExpr::Prompt { tag, body, cont } => {
+            CpsExprKind::Prompt { tag, body, cont } => {
                 write!(f, "(prompt {} {} #{})", tag, body, cont)
             }
-            CpsExpr::Control { tag, proc } => {
+            CpsExprKind::Control { tag, proc } => {
                 write!(f, "(control {} {})", tag, proc)
             }
-            CpsExpr::Abort { tag, value } => {
+            CpsExprKind::Abort { tag, value } => {
                 write!(f, "(abort {} {})", tag, value)
             }
-            CpsExpr::Quasiquote { template, cont } => {
+            CpsExprKind::Quasiquote { template, cont } => {
                 write!(f, "(quasiquote {} #{})", template, cont)
             }
-            CpsExpr::PrimOp { op, args, cont } => {
+            CpsExprKind::PrimOp { op, args, cont } => {
                 write!(f, "({:?}", op)?;
                 for arg in args {
                     write!(f, " {}", arg)?;
                 }
                 write!(f, " #{})", cont)
             }
-            CpsExpr::Halt(v) => write!(f, "(halt {})", v),
+            CpsExprKind::Halt(v) => write!(f, "(halt {})", v),
         }
     }
 }
@@ -586,26 +640,26 @@ mod tests {
 
     #[test]
     fn test_cps_expr_is_trivial() {
-        let lit = CpsExpr::Literal(TaggedValue::fixnum(42));
+        let lit = CpsExpr::new(CpsExprKind::Literal(TaggedValue::fixnum(42)));
         assert!(lit.is_trivial());
 
-        let var = CpsExpr::Var {
+        let var = CpsExpr::new(CpsExprKind::Var {
             name: "x".into(),
             scopes: ScopeSet::new(),
-        };
+        });
         assert!(var.is_trivial());
 
-        let cont_ref = CpsExpr::ContRef("k".into());
+        let cont_ref = CpsExpr::new(CpsExprKind::ContRef("k".into()));
         assert!(cont_ref.is_trivial());
 
-        let app = CpsExpr::App {
-            func: Rc::new(CpsExpr::Var {
+        let app = CpsExpr::new(CpsExprKind::App {
+            func: CpsExpr::rc(CpsExprKind::Var {
                 name: "f".into(),
                 scopes: ScopeSet::new(),
             }),
             args: vec![],
             cont: "k".into(),
-        };
+        });
         assert!(!app.is_trivial());
     }
 }

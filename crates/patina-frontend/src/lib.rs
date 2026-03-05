@@ -21,11 +21,13 @@ pub mod lexer;
 pub mod library_parser;
 pub mod macro_expander;
 pub mod parser;
+pub mod source_map;
 
 // Re-export main types
 pub use cond_expand::evaluate_feature_requirement_tagged;
 pub use desugarer::{DesugarError, Desugarer};
 pub use error::FrontendError;
-pub use lexer::{LexError, Lexer, Token};
+pub use lexer::{LexError, Lexer, Spanned, Token};
 pub use library_parser::{BodyElement, ExportSpec, ImportSet, LibraryDefinition};
 pub use parser::{ParseError, Parser};
+pub use source_map::SourceMap;

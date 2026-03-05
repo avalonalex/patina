@@ -62,11 +62,23 @@ pub enum LexError {
     InvalidNumber(String),
 }
 
+/// A token with its source position
+#[derive(Debug, Clone)]
+pub struct Spanned {
+    pub token: Token,
+    pub line: u32,
+    pub column: u32,
+}
+
 pub struct Lexer {
     input: Vec<char>,
     position: usize,
     /// Whether to fold identifiers to lowercase (R7RS #!fold-case directive)
     fold_case: bool,
+    /// Current line number (1-based)
+    line: u32,
+    /// Current column number (1-based)
+    column: u32,
 }
 
 impl Lexer {
@@ -75,6 +87,8 @@ impl Lexer {
             input: input.chars().collect(),
             position: 0,
             fold_case: false,
+            line: 1,
+            column: 1,
         }
     }
 
@@ -87,12 +101,32 @@ impl Lexer {
             input: input.chars().collect(),
             position: 0,
             fold_case: true,
+            line: 1,
+            column: 1,
         }
     }
 
-    pub fn next_token(&mut self) -> Result<Token, LexError> {
+    /// Lex the next token, returning just the Token without position info.
+    /// Convenience method for tests and callers that don't need source positions.
+    pub fn next_token_kind(&mut self) -> Result<Token, LexError> {
+        self.next_token().map(|s| s.token)
+    }
+
+    pub fn next_token(&mut self) -> Result<Spanned, LexError> {
         self.skip_whitespace_and_comments()?;
 
+        let line = self.line;
+        let column = self.column;
+
+        let token = self.lex_token()?;
+        Ok(Spanned {
+            token,
+            line,
+            column,
+        })
+    }
+
+    fn lex_token(&mut self) -> Result<Token, LexError> {
         if self.is_at_end() {
             return Ok(Token::Eof);
         }
@@ -155,7 +189,25 @@ impl Lexer {
     }
 
     fn advance(&mut self) {
+        if self.position < self.input.len() {
+            if self.input[self.position] == '\n' {
+                self.line += 1;
+                self.column = 1;
+            } else {
+                self.column += 1;
+            }
+        }
         self.position += 1;
+    }
+
+    /// Current line number (1-based)
+    pub fn current_line(&self) -> u32 {
+        self.line
+    }
+
+    /// Current column number (1-based)
+    pub fn current_column(&self) -> u32 {
+        self.column
     }
 
     fn is_at_end(&self) -> bool {
@@ -550,18 +602,21 @@ impl Lexer {
         match directive.to_lowercase().as_str() {
             "fold-case" => {
                 self.fold_case = true;
-                // Directive consumed, get next token
-                self.next_token()
+                // Directive consumed, skip whitespace and get next token
+                self.skip_whitespace_and_comments()?;
+                self.lex_token()
             }
             "no-fold-case" => {
                 self.fold_case = false;
-                // Directive consumed, get next token
-                self.next_token()
+                // Directive consumed, skip whitespace and get next token
+                self.skip_whitespace_and_comments()?;
+                self.lex_token()
             }
             _ => {
                 // Unknown directive - R7RS says implementations may support others
                 // For now, just ignore unknown directives and continue
-                self.next_token()
+                self.skip_whitespace_and_comments()?;
+                self.lex_token()
             }
         }
     }
@@ -698,14 +753,20 @@ mod tests {
     #[test]
     fn test_basic_tokens() {
         let mut lexer = Lexer::new("(+ 1 2)");
-        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("+".to_string())
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::Number("1".to_string()));
-        assert_eq!(lexer.next_token().unwrap(), Token::Number("2".to_string()));
-        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("1".to_string())
+        );
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("2".to_string())
+        );
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
     }
 
     #[test]
@@ -713,25 +774,25 @@ mod tests {
         // R7RS reserves [ ] { } for future extensions
         let mut lexer = Lexer::new("[");
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::ReservedCharacter('['))
         ));
 
         let mut lexer = Lexer::new("]");
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::ReservedCharacter(']'))
         ));
 
         let mut lexer = Lexer::new("{");
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::ReservedCharacter('{'))
         ));
 
         let mut lexer = Lexer::new("}");
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::ReservedCharacter('}'))
         ));
     }
@@ -740,7 +801,7 @@ mod tests {
     fn test_vertical_bar_identifier_basic() {
         let mut lexer = Lexer::new("|hello world|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("hello world".to_string())
         );
     }
@@ -750,7 +811,7 @@ mod tests {
         // R7RS: || is a valid identifier
         let mut lexer = Lexer::new("||");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("".to_string())
         );
     }
@@ -759,7 +820,7 @@ mod tests {
     fn test_vertical_bar_identifier_with_special_chars() {
         let mut lexer = Lexer::new("|(hello world!)|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("(hello world!)".to_string())
         );
     }
@@ -769,35 +830,35 @@ mod tests {
         // Test \| escape
         let mut lexer = Lexer::new("|foo\\|bar|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("foo|bar".to_string())
         );
 
         // Test \t escape
         let mut lexer = Lexer::new("|\\t\\t|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("\t\t".to_string())
         );
 
         // Test \n escape
         let mut lexer = Lexer::new("|foo\\nbar|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("foo\nbar".to_string())
         );
 
         // Test \a (alarm) escape
         let mut lexer = Lexer::new("|\\a|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("\u{0007}".to_string())
         );
 
         // Test \b (backspace) escape
         let mut lexer = Lexer::new("|\\b|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("\u{0008}".to_string())
         );
     }
@@ -807,21 +868,21 @@ mod tests {
         // R7RS example: |H\x65;llo| == Hello
         let mut lexer = Lexer::new("|H\\x65;llo|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("Hello".to_string())
         );
 
         // R7RS example: |\x3BB;| == λ
         let mut lexer = Lexer::new("|\\x3BB;|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("λ".to_string())
         );
 
         // R7RS example: |\x9;\x9;| == two tabs
         let mut lexer = Lexer::new("|\\x9;\\x9;|");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("\t\t".to_string())
         );
     }
@@ -830,7 +891,7 @@ mod tests {
     fn test_vertical_bar_identifier_unterminated() {
         let mut lexer = Lexer::new("|hello");
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::UnterminatedVerticalBarIdentifier)
         ));
     }
@@ -839,7 +900,7 @@ mod tests {
     fn test_vertical_bar_identifier_invalid_escape() {
         let mut lexer = Lexer::new("|foo\\q|");
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::InvalidEscapeInIdentifier(_))
         ));
     }
@@ -847,54 +908,69 @@ mod tests {
     #[test]
     fn test_vertical_bar_identifier_in_expression() {
         let mut lexer = Lexer::new("(|foo bar| |hello world|)");
-        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("foo bar".to_string())
         );
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("hello world".to_string())
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
     }
 
     #[test]
     fn test_block_comment_basic() {
         let mut lexer = Lexer::new("#| this is a comment |# 42");
-        assert_eq!(lexer.next_token().unwrap(), Token::Number("42".to_string()));
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("42".to_string())
+        );
     }
 
     #[test]
     fn test_block_comment_nested() {
         let mut lexer = Lexer::new("#| outer #| inner |# outer |# 42");
-        assert_eq!(lexer.next_token().unwrap(), Token::Number("42".to_string()));
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("42".to_string())
+        );
     }
 
     #[test]
     fn test_block_comment_with_code() {
         let mut lexer = Lexer::new("(+ #| comment |# 1 2)");
-        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("+".to_string())
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::Number("1".to_string()));
-        assert_eq!(lexer.next_token().unwrap(), Token::Number("2".to_string()));
-        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("1".to_string())
+        );
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("2".to_string())
+        );
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
     }
 
     #[test]
     fn test_block_comment_multiline() {
         let mut lexer = Lexer::new("#|\nline 1\nline 2\n|# 42");
-        assert_eq!(lexer.next_token().unwrap(), Token::Number("42".to_string()));
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("42".to_string())
+        );
     }
 
     #[test]
     fn test_block_comment_unterminated() {
         let mut lexer = Lexer::new("#| this is unterminated");
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::UnterminatedBlockComment)
         ));
     }
@@ -903,7 +979,7 @@ mod tests {
     fn test_block_comment_unterminated_nested() {
         let mut lexer = Lexer::new("#| outer #| inner |# outer");
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::UnterminatedBlockComment)
         ));
     }
@@ -912,7 +988,7 @@ mod tests {
     fn test_decimal_point_number() {
         // R7RS: Numbers can start with a decimal point (e.g., .3 is 0.3)
         let mut lexer = Lexer::new(".3");
-        let token = lexer.next_token().unwrap();
+        let token = lexer.next_token_kind().unwrap();
         assert!(
             matches!(token, Token::Number(ref s) if s == ".3"),
             "Expected Number('.3'), got {:?}",
@@ -924,30 +1000,36 @@ mod tests {
     fn test_decimal_point_number_in_expression() {
         // Test that .1, .2, .3 are all parsed as numbers in an expression
         let mut lexer = Lexer::new("(+ .1 .2 .3)");
-        assert!(matches!(lexer.next_token().unwrap(), Token::LeftParen));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Identifier(s) if s == "+"));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == ".1"));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == ".2"));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == ".3"));
-        assert!(matches!(lexer.next_token().unwrap(), Token::RightParen));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::LeftParen));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "+"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == ".1"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == ".2"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == ".3"));
+        assert!(matches!(
+            lexer.next_token_kind().unwrap(),
+            Token::RightParen
+        ));
     }
 
     #[test]
     fn test_dot_vs_decimal_number() {
         // A lone dot followed by whitespace/delimiter is Token::Dot
         let mut lexer = Lexer::new("(a . b)");
-        assert!(matches!(lexer.next_token().unwrap(), Token::LeftParen));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Identifier(s) if s == "a"));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Dot));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Identifier(s) if s == "b"));
-        assert!(matches!(lexer.next_token().unwrap(), Token::RightParen));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::LeftParen));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "a"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Dot));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "b"));
+        assert!(matches!(
+            lexer.next_token_kind().unwrap(),
+            Token::RightParen
+        ));
     }
 
     #[test]
     fn test_negative_decimal_point_number() {
         // R7RS: -.1 should parse as -0.1, not as a symbol
         let mut lexer = Lexer::new("-.1");
-        let token = lexer.next_token().unwrap();
+        let token = lexer.next_token_kind().unwrap();
         assert!(
             matches!(token, Token::Number(ref s) if s == "-.1"),
             "Expected Number('-.1'), got {:?}",
@@ -959,7 +1041,7 @@ mod tests {
     fn test_positive_decimal_point_number() {
         // +.5 should parse as +0.5
         let mut lexer = Lexer::new("+.5");
-        let token = lexer.next_token().unwrap();
+        let token = lexer.next_token_kind().unwrap();
         assert!(
             matches!(token, Token::Number(ref s) if s == "+.5"),
             "Expected Number('+.5'), got {:?}",
@@ -971,11 +1053,14 @@ mod tests {
     fn test_negative_decimal_in_expression() {
         // Test -.1 in an expression
         let mut lexer = Lexer::new("(+ -.1 -.2)");
-        assert!(matches!(lexer.next_token().unwrap(), Token::LeftParen));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Identifier(s) if s == "+"));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == "-.1"));
-        assert!(matches!(lexer.next_token().unwrap(), Token::Number(s) if s == "-.2"));
-        assert!(matches!(lexer.next_token().unwrap(), Token::RightParen));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::LeftParen));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "+"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "-.1"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "-.2"));
+        assert!(matches!(
+            lexer.next_token_kind().unwrap(),
+            Token::RightParen
+        ));
     }
 
     // ========== String Escape Sequence Tests ==========
@@ -984,7 +1069,7 @@ mod tests {
     fn test_string_basic_escapes() {
         let mut lexer = Lexer::new(r#""hello\nworld""#);
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::String("hello\nworld".to_string())
         );
     }
@@ -993,7 +1078,7 @@ mod tests {
     fn test_string_all_mnemonic_escapes() {
         // R7RS mnemonic escapes: \a \b \t \n \r \\ \" \|
         let mut lexer = Lexer::new(r#""\a\b\t\n\r\\\""|""#);
-        let token = lexer.next_token().unwrap();
+        let token = lexer.next_token_kind().unwrap();
         match token {
             Token::String(s) => {
                 assert_eq!(s, "\u{0007}\u{0008}\t\n\r\\\"");
@@ -1006,7 +1091,10 @@ mod tests {
     fn test_string_hex_escape_basic() {
         // \x41; is 'A' (ASCII 65)
         let mut lexer = Lexer::new(r#""\x41;""#);
-        assert_eq!(lexer.next_token().unwrap(), Token::String("A".to_string()));
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::String("A".to_string())
+        );
     }
 
     #[test]
@@ -1014,7 +1102,7 @@ mod tests {
         // "a\x41;b" should be "aAb"
         let mut lexer = Lexer::new(r#""a\x41;b""#);
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::String("aAb".to_string())
         );
     }
@@ -1023,14 +1111,17 @@ mod tests {
     fn test_string_hex_escape_unicode() {
         // \x3BB; is Greek lowercase lambda (λ)
         let mut lexer = Lexer::new(r#""\x3BB;""#);
-        assert_eq!(lexer.next_token().unwrap(), Token::String("λ".to_string()));
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::String("λ".to_string())
+        );
     }
 
     #[test]
     fn test_string_hex_escape_combining_char() {
         // \x0307; is combining dot above - used in İ case folding
         let mut lexer = Lexer::new(r#""i\x0307;""#);
-        let token = lexer.next_token().unwrap();
+        let token = lexer.next_token_kind().unwrap();
         match token {
             Token::String(s) => {
                 assert_eq!(s.len(), 3); // 'i' (1 byte) + combining dot (2 bytes in UTF-8)
@@ -1047,7 +1138,7 @@ mod tests {
     fn test_string_hex_escape_missing_semicolon() {
         let mut lexer = Lexer::new(r#""\x41""#);
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::InvalidEscapeInString(_))
         ));
     }
@@ -1056,7 +1147,7 @@ mod tests {
     fn test_string_hex_escape_invalid_hex() {
         let mut lexer = Lexer::new(r#""\xGG;""#);
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::InvalidEscapeInString(_))
         ));
     }
@@ -1066,7 +1157,7 @@ mod tests {
         // U+D800 is a surrogate, not a valid Unicode scalar value
         let mut lexer = Lexer::new(r#""\xD800;""#);
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::InvalidEscapeInString(_))
         ));
     }
@@ -1077,7 +1168,7 @@ mod tests {
         let input = "\"hello\\\n    world\"";
         let mut lexer = Lexer::new(input);
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::String("helloworld".to_string())
         );
     }
@@ -1087,7 +1178,7 @@ mod tests {
         // \q is not a valid escape sequence
         let mut lexer = Lexer::new(r#""\q""#);
         assert!(matches!(
-            lexer.next_token(),
+            lexer.next_token_kind(),
             Err(LexError::InvalidEscapeInString(_))
         ));
     }
@@ -1098,7 +1189,7 @@ mod tests {
     fn test_fold_case_directive() {
         // #!fold-case causes identifiers to be lowercased
         let mut lexer = Lexer::new("#!fold-case ABC");
-        let token = lexer.next_token().unwrap();
+        let token = lexer.next_token_kind().unwrap();
         assert_eq!(token, Token::Identifier("abc".to_string()));
     }
 
@@ -1106,7 +1197,7 @@ mod tests {
     fn test_no_fold_case_directive() {
         // #!no-fold-case preserves case (this is the default)
         let mut lexer = Lexer::new("#!no-fold-case ABC");
-        let token = lexer.next_token().unwrap();
+        let token = lexer.next_token_kind().unwrap();
         assert_eq!(token, Token::Identifier("ABC".to_string()));
     }
 
@@ -1114,7 +1205,7 @@ mod tests {
     fn test_fold_case_then_no_fold_case() {
         // #!fold-case followed by #!no-fold-case should preserve case
         let mut lexer = Lexer::new("#!fold-case #!no-fold-case ABC");
-        let token = lexer.next_token().unwrap();
+        let token = lexer.next_token_kind().unwrap();
         assert_eq!(token, Token::Identifier("ABC".to_string()));
     }
 
@@ -1123,11 +1214,11 @@ mod tests {
         // #!fold-case affects all subsequent identifiers
         let mut lexer = Lexer::new("#!fold-case ABC DEF");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("abc".to_string())
         );
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("def".to_string())
         );
     }
@@ -1136,19 +1227,22 @@ mod tests {
     fn test_fold_case_in_list() {
         // #!fold-case works inside lists
         let mut lexer = Lexer::new("(#!fold-case ABC)");
-        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("abc".to_string())
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
     }
 
     #[test]
     fn test_fold_case_preserves_numbers() {
         // Numbers are not affected by fold-case (they're not identifiers)
         let mut lexer = Lexer::new("#!fold-case 42");
-        assert_eq!(lexer.next_token().unwrap(), Token::Number("42".to_string()));
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("42".to_string())
+        );
     }
 
     #[test]
@@ -1156,7 +1250,7 @@ mod tests {
         // Strings are not affected by fold-case
         let mut lexer = Lexer::new("#!fold-case \"ABC\"");
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::String("ABC".to_string())
         );
     }
@@ -1165,65 +1259,65 @@ mod tests {
     #[test]
     fn test_datum_label_basic() {
         let mut lexer = Lexer::new("#0=");
-        assert_eq!(lexer.next_token().unwrap(), Token::DatumLabel(0));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::DatumLabel(0));
     }
 
     #[test]
     fn test_datum_ref_basic() {
         let mut lexer = Lexer::new("#0#");
-        assert_eq!(lexer.next_token().unwrap(), Token::DatumRef(0));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::DatumRef(0));
     }
 
     #[test]
     fn test_datum_label_multi_digit() {
         let mut lexer = Lexer::new("#123=");
-        assert_eq!(lexer.next_token().unwrap(), Token::DatumLabel(123));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::DatumLabel(123));
     }
 
     #[test]
     fn test_datum_ref_multi_digit() {
         let mut lexer = Lexer::new("#42#");
-        assert_eq!(lexer.next_token().unwrap(), Token::DatumRef(42));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::DatumRef(42));
     }
 
     #[test]
     fn test_datum_label_in_list() {
         let mut lexer = Lexer::new("(#0=(a b) #0#)");
-        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
-        assert_eq!(lexer.next_token().unwrap(), Token::DatumLabel(0));
-        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::DatumLabel(0));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("a".to_string())
         );
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("b".to_string())
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
-        assert_eq!(lexer.next_token().unwrap(), Token::DatumRef(0));
-        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::DatumRef(0));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
     }
 
     #[test]
     fn test_datum_label_cyclic() {
         // #0=(a b c . #0#)
         let mut lexer = Lexer::new("#0=(a . #0#)");
-        assert_eq!(lexer.next_token().unwrap(), Token::DatumLabel(0));
-        assert_eq!(lexer.next_token().unwrap(), Token::LeftParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::DatumLabel(0));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
-            lexer.next_token().unwrap(),
+            lexer.next_token_kind().unwrap(),
             Token::Identifier("a".to_string())
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::Dot);
-        assert_eq!(lexer.next_token().unwrap(), Token::DatumRef(0));
-        assert_eq!(lexer.next_token().unwrap(), Token::RightParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Dot);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::DatumRef(0));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
     }
 
     #[test]
     fn test_datum_label_invalid_no_terminator() {
         // #0 without = or # is invalid
         let mut lexer = Lexer::new("#0 ");
-        assert!(lexer.next_token().is_err());
+        assert!(lexer.next_token_kind().is_err());
     }
 }

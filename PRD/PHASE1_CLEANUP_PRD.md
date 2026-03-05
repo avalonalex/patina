@@ -34,61 +34,28 @@ All 8 originally-ignored tests resolved. 0 ignored tests remain.
 
 ---
 
-## Priority 2: Source Location Tracking
+## Priority 2: Source Location Tracking — COMPLETE ✅
 
-### Problem
+All 5 phases implemented (2026-03-03 through 2026-03-05). Errors now show caret-style context with macro expansion chains in both REPL and script mode.
 
-All error messages lack source location information:
-
+**Example output:**
 ```
-Error: Unbound variable: x
+Error: Undefined variable: y
+  at <repl-1>:1:15
+   1 | (let ((x 1)) (+ x y))
+     ^^^^^^^^^^^^^^^^^^^^^
+  macro expansion: let
 ```
 
-This makes debugging non-trivial programs extremely difficult, and will be a major pain point during VM development.
+### What Was Delivered
 
-### Current State
+- **Phase 1** — CoreExpr/CpsExpr wrapper structs with `source: Option<SourceLocation>`; lexer line/col tracking; `SourceMap` side-table
+- **Phase 2** — Parser records list/vector/quote positions; desugarer populates `CoreExpr.source`; `eval_with_source_map` on TreeWalker
+- **Phase 3** — `EvalError::WithLocation`; CPS stamps source on `App`/`LetVal` nodes; `format_eval_error_with_source()`
+- **Phase 4** — Gauche-style expansion chain tracking; `SourceMap::expansion_records`; `stamp_expansion_source()` in desugarer
+- **Phase 5** — `eval_str/program_with_source_name()` APIs; REPL `<repl-N>` counter; script mode filename threading; `format_interpreter_error()`
 
-Infrastructure partially exists:
-- `SourceLocation` struct in `patina-core/src/error.rs` — fully defined with `source`, `line`, `column`, `length`
-- `ErrorDetail` has `location: Option<SourceLocation>` field with builder methods
-- `CoreExpr` has **no** source location fields yet
-- Lexer does **not** track line/column positions
-- A detailed 6-phase plan exists in `PRD/phase1/SOURCE_INFO_PLAN.md`
-
-### Scope
-
-Implement Phases 1–3 of `SOURCE_INFO_PLAN.md` (the high-value portion):
-
-**Phase 1 — Non-breaking foundation:**
-- Add `source: Option<SourceLocation>` to `CoreExpr` variants
-- Make the lexer track line/column positions in tokens
-- Add a `SourceMap` side-table mapping AST nodes to source positions
-
-**Phase 2 — Parser/desugarer wiring:**
-- Parser populates `SourceMap` during parsing
-- Desugarer reads `SourceMap` to populate `CoreExpr` source fields
-
-**Phase 3 — Error integration:**
-- Wire `SourceLocation` into `EvalError` at key evaluation points
-- Pretty-print errors with source context (file, line, column)
-- REPL shows location in error display
-
-Phases 4–6 (macro expansion tracking, stack traces) are deferred to post-VM.
-
-### Open Question
-
-The existing `SOURCE_INFO_PLAN.md` references `CpsExpr` extensively. The current architecture uses `CoreExpr` for both direct and CPS evaluation. The plan should be reconciled — likely just dropping `CpsExpr` references and applying all changes to `CoreExpr` only.
-
-### Success Criteria
-
-- Error messages include file:line:column for evaluation errors originating from source code
-- REPL errors show line/column within the input
-- Script mode errors show filename:line:column
-- No measurable performance regression (source tracking is `Option<SourceLocation>`, which is zero-cost when `None`)
-
-### Effort Estimate
-
-3–5 days for Phases 1–3.
+**Archived:** `PRD/ARCHIVE/source_info_2026_03/SOURCE_INFO_PLAN.md`
 
 ---
 
@@ -195,7 +162,8 @@ The following are explicitly **not** in scope for this cleanup:
 | Delimited continuations (`call-with-continuation-prompt`) | The full prompt-based continuation system is designed in the VM spec. Fixing the existing `call/cc` + `dynamic-wind` bugs (Priority 1) is sufficient for Phase 1. |
 | `(scheme load)` library | Rarely used, not part of standard test suites. |
 | `unwrap()` audit | Investigation showed only 2 production `unwrap()` calls in parser and lexer, both guarded by preceding checks. The 101/83 counts reported earlier were dominated by test code. Not a real risk. |
-| Source info Phases 4–6 | Macro expansion source tracking, stack traces, and advanced REPL integration can wait until after the VM backend proves the Phase 1–3 foundation works. |
+| Source info Phase 6 (stack traces) | Call-stack tracking with definition-site locations deferred to post-VM. |
+| Source info Phase 4b (L3/Racket-style) | Identifier-level origin tracking deferred; L2 (Gauche-style) implemented in Phase 4 gives the majority of the user-visible improvement. |
 
 ---
 
@@ -226,7 +194,7 @@ Priority 5 (Docs) ── anytime ───────────────�
 | Metric | Current | Target |
 |--------|---------|--------|
 | Ignored tests | 0 (was 8) | 0 ✅ |
-| Error messages with source locations | 0% | >90% of eval errors |
+| Error messages with source locations | 0% (was) | >90% of eval errors ✅ |
 | Benchmark baseline recorded | Partial (Dec 2025) | Complete, committed |
 | IR visitor coverage | 5/13 variants | 13/13 variants |
 | Stale documentation | 3 files | 0 files |

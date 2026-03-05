@@ -13,7 +13,9 @@
 
 use crate::eval::{EvalError, Evaluator, eval_cps};
 use patina_core::TaggedValue;
+use patina_frontend::SourceMap;
 use patina_runtime::{Backend, Environment};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// Tree-walking interpreter backend
@@ -82,6 +84,28 @@ impl TreeWalker {
     /// to other backends.
     pub fn evaluator(&self) -> &Evaluator {
         &self.evaluator
+    }
+
+    /// Evaluate an expression with source map support
+    ///
+    /// The source map provides source positions recorded by the parser,
+    /// which are attached to CoreExpr nodes during desugaring.
+    pub fn eval_with_source_map(
+        &self,
+        expr: TaggedValue,
+        env: &Rc<Environment>,
+        source_map: &Rc<RefCell<SourceMap>>,
+    ) -> Result<TaggedValue, EvalError> {
+        use patina_frontend::Desugarer;
+
+        let internal_heap = self.evaluator.global_env.heap();
+        let desugarer = Desugarer::with_env_and_source_map(env.clone(), source_map.clone());
+
+        let core_expr = desugarer.desugar_tagged(expr, internal_heap).map_err(|e| {
+            EvalError::InternalError(format!("Failed to desugar expression: {}", e))
+        })?;
+
+        eval_cps(&core_expr, env.clone(), &self.evaluator)
     }
 }
 

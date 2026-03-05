@@ -4,7 +4,7 @@ mod validator;
 
 use self::highlighter::SchemeHighlighter;
 use self::validator::SchemeValidator;
-use patina_interpreter::TreeWalkInterpreter;
+use patina_interpreter::{TreeWalkInterpreter, format_interpreter_error};
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::{CompletionType, Config, EditMode, Editor};
@@ -12,6 +12,7 @@ use rustyline::{CompletionType, Config, EditMode, Editor};
 pub struct Repl {
     editor: Editor<SchemeHelper, FileHistory>,
     interpreter: TreeWalkInterpreter,
+    expr_counter: u32,
 }
 
 use rustyline::Context;
@@ -107,6 +108,7 @@ impl Repl {
         Ok(Repl {
             editor,
             interpreter,
+            expr_counter: 0,
         })
     }
 
@@ -150,7 +152,11 @@ impl Repl {
                     let _ = self.editor.add_history_entry(line);
 
                     // Evaluate using interpreter (which handles parsing internally)
-                    match self.interpreter.eval_str(line) {
+                    self.expr_counter += 1;
+                    let source_name = format!("<repl-{}>", self.expr_counter);
+                    let (eval_result, source_map) =
+                        self.interpreter.eval_str_with_source_name(line, &source_name);
+                    match eval_result {
                         Ok(result) => {
                             // Don't print #<unspecified> values (from define, set!, etc.)
                             if result != patina_core::TaggedValue::UNSPECIFIED {
@@ -161,7 +167,10 @@ impl Repl {
                                 eprint!("");
                             }
                         }
-                        Err(e) => eprintln!("Error: {}", e),
+                        Err(e) => eprintln!(
+                            "Error: {}",
+                            format_interpreter_error(&e, &source_map.borrow())
+                        ),
                     }
                 }
                 Err(ReadlineError::Interrupted) => {

@@ -105,6 +105,13 @@ impl<'a> CpsEvaluator<'a> {
                 irritants_display: _,
             } => (kind.clone(), message.clone()),
 
+            // Located error: include location in exception message
+            EvalError::WithLocation { error, location } => {
+                let detail = error.to_error_detail();
+                let msg = format!("{} at {}", detail.message, location);
+                (detail.kind.to_exception_kind(), msg)
+            }
+
             // Internal errors and continuation escapes are not catchable
             // (handled by is_catchable() check above)
             EvalError::InternalError(_) | EvalError::ContinuationEscape => {

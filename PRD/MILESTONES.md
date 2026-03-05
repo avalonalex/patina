@@ -2,6 +2,32 @@
 
 Major accomplishments and project milestones.
 
+## 2026-03-05: Rich Error Messages with Source Tracking (All 5 Phases Complete)
+
+**Caret-style errors with macro expansion chains in REPL and script mode.**
+
+Source information now flows end-to-end: parser → SourceMap → desugarer → CoreExpr → CPS IR → evaluator → error formatter → user.
+
+**What users see now:**
+```
+Error: Undefined variable: y
+  at <repl-1>:1:15
+   1 | (let ((x 1)) (+ x y))
+     ^^^^^^^^^^^^^^^^^^^^^
+  macro expansion: let
+```
+
+**Phases completed:**
+- Phase 1: CoreExpr/CpsExpr wrapper structs with `source` field; lexer line/col tracking; SourceMap foundation
+- Phase 2: Parser records positions; desugarer populates CoreExpr.source; tracked eval API
+- Phase 3: `EvalError::WithLocation`; CPS stamps source on App/LetVal nodes; `format_eval_error_with_source()`
+- Phase 4: Gauche-style expansion chain tracking; `SourceMap::expansion_records`; `stamp_expansion_source()`
+- Phase 5: `eval_str/program_with_source_name()` APIs; REPL `<repl-N>` counter; script mode filename threading
+
+**Archived:** `PRD/ARCHIVE/source_info_2026_03/SOURCE_INFO_PLAN.md`
+
+---
+
 ## 2025-12-08: R7RS Library System 100% Complete
 
 **Full R7RS Library Compliance**

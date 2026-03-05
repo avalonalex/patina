@@ -8,7 +8,7 @@
 use super::CpsEvaluator;
 use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
-use patina_core::cps_expr::CpsExpr;
+use patina_core::cps_expr::{CpsExpr, CpsExprKind};
 use patina_core::heap::SharedHeap;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{CpsContinuation, DynamicWindRecord};
@@ -107,7 +107,7 @@ impl<'a> CpsEvaluator<'a> {
                         bindings.push((
                             Rc::from("__dw_after__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(*after)), // already TaggedValue
+                                body: CpsExpr::rc(CpsExprKind::Literal(*after)), // already TaggedValue
                                 param: Rc::from("__unused__"),
                                 env: Rc::new(Environment::new()),
                                 prompt_tag: None,
@@ -118,7 +118,7 @@ impl<'a> CpsEvaluator<'a> {
                         bindings.push((
                             Rc::from("__dw_wind_id__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(TaggedValue::fixnum(
+                                body: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::fixnum(
                                     *wind_id as i64,
                                 ))),
                                 param: Rc::from("__unused__"),
@@ -135,7 +135,9 @@ impl<'a> CpsEvaluator<'a> {
                             name.clone(),
                             Rc::new(CpsContinuation {
                                 // Special marker body
-                                body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(marker)))),
+                                body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(
+                                    CpsExprKind::Literal(marker),
+                                ))),
                                 param: Rc::from("__dw_value__"),
                                 env: Rc::new(Environment::new()),
                                 prompt_tag: None,
@@ -176,10 +178,10 @@ impl<'a> CpsEvaluator<'a> {
             let heap = self.evaluator.global_env.heap();
             let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
             let is_dw_cleanup = matches!(
-                k.body.as_ref(),
-                CpsExpr::Halt(inner) if matches!(
-                    inner.as_ref(),
-                    CpsExpr::Literal(v) if *v == marker
+                &k.body.as_ref().kind,
+                CpsExprKind::Halt(inner) if matches!(
+                    &inner.as_ref().kind,
+                    CpsExprKind::Literal(v) if *v == marker
                 )
             );
 
@@ -223,7 +225,7 @@ impl<'a> CpsEvaluator<'a> {
             .find(|(name, _)| name.as_ref() == "__dw_after__")
             .and_then(|(_, cont)| {
                 // The after thunk is stored in the body as a Literal (already TaggedValue)
-                if let CpsExpr::Literal(v) = cont.body.as_ref() {
+                if let CpsExprKind::Literal(v) = &cont.body.as_ref().kind {
                     Some(*v) // Return TaggedValue directly
                 } else {
                     None
@@ -239,7 +241,7 @@ impl<'a> CpsEvaluator<'a> {
             .iter()
             .find(|(name, _)| name.as_ref() == "__dw_wind_id__")
             .and_then(|(_, cont)| {
-                if let CpsExpr::Literal(v) = cont.body.as_ref() {
+                if let CpsExprKind::Literal(v) = &cont.body.as_ref().kind {
                     if v.is_fixnum() {
                         Some(v.as_fixnum_unchecked() as u64)
                     } else {
@@ -262,10 +264,10 @@ impl<'a> CpsEvaluator<'a> {
             .map(|(_, cont)| {
                 // Recursively restore if the original was also special
                 let is_dw_cleanup = matches!(
-                    cont.body.as_ref(),
-                    CpsExpr::Halt(inner) if matches!(
-                        inner.as_ref(),
-                        CpsExpr::Literal(v) if *v == marker
+                    &cont.body.as_ref().kind,
+                    CpsExprKind::Halt(inner) if matches!(
+                        &inner.as_ref().kind,
+                        CpsExprKind::Literal(v) if *v == marker
                     )
                 );
                 if is_dw_cleanup {
@@ -328,7 +330,7 @@ impl<'a> CpsEvaluator<'a> {
             ContValue::Halt => {
                 // Halt continuation - create a special marker
                 Rc::new(CpsContinuation {
-                    body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Var {
+                    body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
                         name: Rc::from("__halt_value__"),
                         scopes: ScopeSet::new(),
                     }))),
@@ -361,7 +363,7 @@ impl<'a> CpsEvaluator<'a> {
                 // as a special structure.
                 Rc::new(CpsContinuation {
                     // Special marker body that indicates this is a DynamicWindCleanup wrapper
-                    body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(marker)))),
+                    body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Literal(marker)))),
                     param: Rc::from("__dw_value__"),
                     env: self.evaluator.global_env.clone(),
                     prompt_tag: None,
@@ -375,7 +377,7 @@ impl<'a> CpsEvaluator<'a> {
                         bindings.push((
                             Rc::from("__dw_after__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(*after)), // already TaggedValue
+                                body: CpsExpr::rc(CpsExprKind::Literal(*after)), // already TaggedValue
                                 param: Rc::from("__unused__"),
                                 env: self.evaluator.global_env.clone(),
                                 prompt_tag: None,
@@ -387,7 +389,7 @@ impl<'a> CpsEvaluator<'a> {
                         bindings.push((
                             Rc::from("__dw_wind_id__"),
                             Rc::new(CpsContinuation {
-                                body: Rc::new(CpsExpr::Literal(TaggedValue::fixnum(
+                                body: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::fixnum(
                                     *wind_id as i64,
                                 ))),
                                 param: Rc::from("__unused__"),
@@ -421,7 +423,7 @@ impl<'a> CpsEvaluator<'a> {
                 // For now, these return a placeholder. They could be enhanced similarly.
                 // TODO: Implement proper capture for these special continuations
                 Rc::new(CpsContinuation {
-                    body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(
+                    body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Literal(
                         TaggedValue::UNSPECIFIED,
                     )))),
                     param: Rc::from("__special__"),

@@ -37,8 +37,8 @@ pub use compiled_macro::{
     CompiledMacro, CompiledRule, Identifier, LiteralBinding, Pattern, Template,
 };
 pub use continuation::{CpsContinuation, DynamicWindRecord};
-pub use core_expr::{CoreExpr, Formals, LambdaBody, ScopedParam, Symbol};
-pub use cps_expr::{CpsExpr, CpsParam, CpsPrimitive, PromptTag};
+pub use core_expr::{CoreExpr, CoreExprKind, Formals, LambdaBody, ScopedParam, Symbol};
+pub use cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
 pub use environment::{Environment, ScopedBinding};
 pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};
 pub use heap::PromiseState;

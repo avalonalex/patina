@@ -8,7 +8,7 @@
 
 use patina_core::{SharedHeap, TaggedValue};
 use patina_frontend::{Desugarer, Parser};
-use patina_ir::CoreExpr;
+use patina_ir::CoreExprKind;
 
 /// Helper: Parse code string to TaggedValue, returning the heap for desugar_tagged
 fn parse_tv(code: &str) -> (TaggedValue, SharedHeap) {
@@ -218,7 +218,7 @@ fn test_desugarer_returns_unspecified_for_define_syntax() {
 
     // Should be Literal(Unspecified) - macro is compiled at desugar time
     assert!(
-        matches!(&result, CoreExpr::Literal(val) if *val == TaggedValue::UNSPECIFIED),
+        matches!(&result.kind, CoreExprKind::Literal(val) if *val == TaggedValue::UNSPECIFIED),
         "Expected Literal(Unspecified), got {:?}",
         result
     );

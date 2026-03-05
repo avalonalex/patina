@@ -1,3 +1,4 @@
+use crate::error::SourceLocation;
 use crate::scope::{ScopeId, ScopeSet};
 use crate::tagged_value::TaggedValue;
 use std::rc::Rc;
@@ -66,12 +67,80 @@ pub enum Formals {
     },
 }
 
+/// Core expression with optional source location
+///
+/// This wrapper struct pairs a `CoreExprKind` (the expression variant) with
+/// an optional `SourceLocation` for error reporting. All source fields are
+/// currently `None` — population happens in Phase 2.
+#[derive(Debug, Clone)]
+pub struct CoreExpr {
+    /// The expression variant
+    pub kind: CoreExprKind,
+    /// Source location (populated in Phase 2)
+    pub source: Option<SourceLocation>,
+}
+
+impl CoreExpr {
+    /// Create a new CoreExpr with no source location
+    pub fn new(kind: CoreExprKind) -> Self {
+        Self { kind, source: None }
+    }
+
+    /// Create a new CoreExpr with a source location
+    pub fn with_source(kind: CoreExprKind, source: SourceLocation) -> Self {
+        Self {
+            kind,
+            source: Some(source),
+        }
+    }
+
+    /// Create a new CoreExpr with an optional source location
+    pub fn with_opt_source(kind: CoreExprKind, source: Option<SourceLocation>) -> Self {
+        Self { kind, source }
+    }
+
+    /// Create an Rc<CoreExpr> with no source location
+    pub fn rc(kind: CoreExprKind) -> Rc<Self> {
+        Rc::new(Self::new(kind))
+    }
+
+    /// Check if this expression is in tail position
+    pub fn is_tail_position(&self) -> bool {
+        self.kind.is_tail_position()
+    }
+
+    /// Get a human-readable description of the expression type
+    pub fn expr_kind(&self) -> &'static str {
+        self.kind.expr_kind()
+    }
+
+    /// Map a function over all immediate children of this expression
+    ///
+    /// This is useful for implementing recursive transformations in compiler passes.
+    /// Preserves the source location of this node on the rebuilt expression.
+    pub fn map_children<F>(&self, f: F) -> CoreExpr
+    where
+        F: Fn(&CoreExpr) -> CoreExpr,
+    {
+        CoreExpr {
+            kind: self.kind.map_children_inner(&f),
+            source: self.source.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for CoreExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.kind, f)
+    }
+}
+
 /// Core Scheme expressions after macro expansion and desugaring
 ///
 /// This is the minimal IR that backends must handle.
 /// All macros and derived forms are eliminated by the frontend.
 #[derive(Debug, Clone)]
-pub enum CoreExpr {
+pub enum CoreExprKind {
     /// Literal values: numbers, booleans, strings, etc.
     /// Example: 42, #t, "hello"
     /// Uses TaggedValue (8 bytes) for compact representation
@@ -165,111 +234,109 @@ pub enum CoreExpr {
     },
 }
 
-impl CoreExpr {
+impl CoreExprKind {
     /// Check if this expression is in tail position
     pub fn is_tail_position(&self) -> bool {
         matches!(
             self,
-            CoreExpr::If { .. } | CoreExpr::Begin(_) | CoreExpr::App { .. }
+            CoreExprKind::If { .. } | CoreExprKind::Begin(_) | CoreExprKind::App { .. }
         )
     }
 
     /// Get a human-readable description of the expression type
-    pub fn kind(&self) -> &'static str {
+    pub fn expr_kind(&self) -> &'static str {
         match self {
-            CoreExpr::Literal(_) => "literal",
-            CoreExpr::Var { .. } => "variable",
-            CoreExpr::Quote(_) => "quote",
-            CoreExpr::Quasiquote(_) => "quasiquote",
-            CoreExpr::Lambda { .. } => "lambda",
-            CoreExpr::If { .. } => "if",
-            CoreExpr::Set { .. } => "set!",
-            CoreExpr::Begin(_) => "begin",
-            CoreExpr::Define { .. } => "define",
-            CoreExpr::Import { .. } => "import",
-            CoreExpr::Expand { .. } => "expand",
-            CoreExpr::App { .. } => "application",
-            CoreExpr::Apply { .. } => "apply",
+            CoreExprKind::Literal(_) => "literal",
+            CoreExprKind::Var { .. } => "variable",
+            CoreExprKind::Quote(_) => "quote",
+            CoreExprKind::Quasiquote(_) => "quasiquote",
+            CoreExprKind::Lambda { .. } => "lambda",
+            CoreExprKind::If { .. } => "if",
+            CoreExprKind::Set { .. } => "set!",
+            CoreExprKind::Begin(_) => "begin",
+            CoreExprKind::Define { .. } => "define",
+            CoreExprKind::Import { .. } => "import",
+            CoreExprKind::Expand { .. } => "expand",
+            CoreExprKind::App { .. } => "application",
+            CoreExprKind::Apply { .. } => "apply",
         }
     }
 
-    /// Map a function over all immediate children of this expression
-    ///
-    /// This is useful for implementing recursive transformations in compiler passes.
-    pub fn map_children<F>(&self, f: F) -> CoreExpr
+    /// Map a function over all immediate children (internal helper)
+    fn map_children_inner<F>(&self, f: &F) -> CoreExprKind
     where
         F: Fn(&CoreExpr) -> CoreExpr,
     {
         match self {
-            CoreExpr::Literal(_)
-            | CoreExpr::Var { .. }
-            | CoreExpr::Quote(_)
-            | CoreExpr::Quasiquote(_) => self.clone(),
+            CoreExprKind::Literal(_)
+            | CoreExprKind::Var { .. }
+            | CoreExprKind::Quote(_)
+            | CoreExprKind::Quasiquote(_) => self.clone(),
 
-            CoreExpr::Lambda {
+            CoreExprKind::Lambda {
                 params,
                 body,
                 binding_scope,
-            } => CoreExpr::Lambda {
+            } => CoreExprKind::Lambda {
                 params: params.clone(),
-                body: body.iter().map(&f).collect(),
+                body: body.iter().map(f).collect(),
                 binding_scope: *binding_scope,
             },
 
-            CoreExpr::If { test, then, else_ } => CoreExpr::If {
+            CoreExprKind::If { test, then, else_ } => CoreExprKind::If {
                 test: Rc::new(f(test)),
                 then: Rc::new(f(then)),
                 else_: Rc::new(f(else_)),
             },
 
-            CoreExpr::Set { var, scopes, value } => CoreExpr::Set {
+            CoreExprKind::Set { var, scopes, value } => CoreExprKind::Set {
                 var: var.clone(),
                 scopes: scopes.clone(),
                 value: Rc::new(f(value)),
             },
 
-            CoreExpr::Begin(exprs) => CoreExpr::Begin(exprs.iter().map(&f).collect()),
+            CoreExprKind::Begin(exprs) => CoreExprKind::Begin(exprs.iter().map(f).collect()),
 
-            CoreExpr::Define { name, value } => CoreExpr::Define {
+            CoreExprKind::Define { name, value } => CoreExprKind::Define {
                 name: name.clone(),
                 value: Rc::new(f(value)),
             },
 
-            CoreExpr::Import { import_sets } => CoreExpr::Import {
+            CoreExprKind::Import { import_sets } => CoreExprKind::Import {
                 import_sets: import_sets.clone(),
             },
 
-            CoreExpr::Expand { expr } => CoreExpr::Expand {
+            CoreExprKind::Expand { expr } => CoreExprKind::Expand {
                 expr: Rc::new(f(expr)),
             },
 
-            CoreExpr::App { func, args } => CoreExpr::App {
+            CoreExprKind::App { func, args } => CoreExprKind::App {
                 func: Rc::new(f(func)),
-                args: args.iter().map(&f).collect(),
+                args: args.iter().map(f).collect(),
             },
 
-            CoreExpr::Apply { func, args } => CoreExpr::Apply {
+            CoreExprKind::Apply { func, args } => CoreExprKind::Apply {
                 func: Rc::new(f(func)),
-                args: args.iter().map(&f).collect(),
+                args: args.iter().map(f).collect(),
             },
         }
     }
 }
 
-impl std::fmt::Display for CoreExpr {
+impl std::fmt::Display for CoreExprKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CoreExpr::Literal(v) => write!(f, "{}", v),
-            CoreExpr::Var { name, scopes } => {
+            CoreExprKind::Literal(v) => write!(f, "{}", v),
+            CoreExprKind::Var { name, scopes } => {
                 if scopes.is_empty() {
                     write!(f, "{}", name)
                 } else {
                     write!(f, "{}@{}", name, scopes)
                 }
             }
-            CoreExpr::Quote(v) => write!(f, "'{}", v),
-            CoreExpr::Quasiquote(v) => write!(f, "`{}", v),
-            CoreExpr::Lambda { params, .. } => {
+            CoreExprKind::Quote(v) => write!(f, "'{}", v),
+            CoreExprKind::Quasiquote(v) => write!(f, "`{}", v),
+            CoreExprKind::Lambda { params, .. } => {
                 write!(f, "(lambda ")?;
                 match params {
                     Formals::Fixed(ps) => {
@@ -296,44 +363,44 @@ impl std::fmt::Display for CoreExpr {
                 }
                 write!(f, " ...)")
             }
-            CoreExpr::If { test, then, else_ } => {
+            CoreExprKind::If { test, then, else_ } => {
                 write!(f, "(if {} {} {})", test, then, else_)
             }
-            CoreExpr::Set { var, scopes, value } => {
+            CoreExprKind::Set { var, scopes, value } => {
                 if scopes.is_empty() {
                     write!(f, "(set! {} {})", var, value)
                 } else {
                     write!(f, "(set! {}@{} {})", var, scopes, value)
                 }
             }
-            CoreExpr::Begin(exprs) => {
+            CoreExprKind::Begin(exprs) => {
                 write!(f, "(begin")?;
                 for expr in exprs {
                     write!(f, " {}", expr)?;
                 }
                 write!(f, ")")
             }
-            CoreExpr::Define { name, value } => {
+            CoreExprKind::Define { name, value } => {
                 write!(f, "(define {} {})", name, value)
             }
-            CoreExpr::Import { import_sets } => {
+            CoreExprKind::Import { import_sets } => {
                 write!(f, "(import")?;
                 for import_set in import_sets {
                     write!(f, " {}", import_set)?;
                 }
                 write!(f, ")")
             }
-            CoreExpr::Expand { expr } => {
+            CoreExprKind::Expand { expr } => {
                 write!(f, "(expand {})", expr)
             }
-            CoreExpr::App { func, args } => {
+            CoreExprKind::App { func, args } => {
                 write!(f, "({}", func)?;
                 for arg in args {
                     write!(f, " {}", arg)?;
                 }
                 write!(f, ")")
             }
-            CoreExpr::Apply { func, args } => {
+            CoreExprKind::Apply { func, args } => {
                 write!(f, "(apply {}", func)?;
                 for arg in args {
                     write!(f, " {}", arg)?;

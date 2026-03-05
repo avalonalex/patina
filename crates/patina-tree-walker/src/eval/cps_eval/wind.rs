@@ -8,7 +8,7 @@
 use super::CpsEvaluator;
 use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
-use patina_core::cps_expr::CpsExpr;
+use patina_core::cps_expr::{CpsExpr, CpsExprKind};
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{CpsContinuation, DynamicWindRecord};
 use std::rc::Rc;
@@ -130,7 +130,7 @@ impl<'a> CpsEvaluator<'a> {
         // TODO: Implement proper delimited continuation capture
         // For now, return a placeholder
         Rc::new(CpsContinuation {
-            body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Literal(
+            body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Literal(
                 patina_core::TaggedValue::UNSPECIFIED,
             )))),
             param: Rc::from("__delimited__"),

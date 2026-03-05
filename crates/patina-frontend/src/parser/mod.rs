@@ -1,11 +1,15 @@
 use crate::lexer::{LexError, Lexer, Token};
+use crate::source_map::SourceMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
+use patina_core::error::SourceLocation;
 use patina_core::heap::HeapObjectData;
 use patina_core::{SharedHeap, TaggedValue};
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -33,11 +37,19 @@ pub enum ParseError {
 pub struct Parser {
     lexer: Lexer,
     current_token: Token,
+    /// Line of the current token (1-based)
+    current_token_line: u32,
+    /// Column of the current token (1-based)
+    current_token_column: u32,
     /// Shared heap for allocating pairs, vectors, strings, etc.
     heap: SharedHeap,
     /// Datum labels for shared/cyclic structure support (R7RS Section 2.4)
     /// Maps label number to the labelled value
     labels: HashMap<usize, TaggedValue>,
+    /// Optional source map for recording source positions of parsed forms
+    source_map: Option<Rc<RefCell<SourceMap>>>,
+    /// Name of the source being parsed (e.g., file path, "<repl>", "<eval>")
+    source_name: Rc<str>,
 }
 
 impl Parser {
@@ -45,12 +57,16 @@ impl Parser {
     /// This is the preferred constructor when a heap is available.
     pub fn new_with_heap(input: &str, heap: SharedHeap) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(input);
-        let current_token = lexer.next_token()?;
+        let spanned = lexer.next_token()?;
         Ok(Parser {
             lexer,
-            current_token,
+            current_token: spanned.token,
+            current_token_line: spanned.line,
+            current_token_column: spanned.column,
             heap,
             labels: HashMap::new(),
+            source_map: None,
+            source_name: Rc::from("<unknown>"),
         })
     }
 
@@ -59,6 +75,32 @@ impl Parser {
     pub fn new(input: &str) -> Result<Self, ParseError> {
         let heap = patina_core::new_shared_heap();
         Self::new_with_heap(input, heap)
+    }
+
+    /// Create a new parser with source map tracking.
+    ///
+    /// Source positions of list forms, vectors, and quote abbreviations are
+    /// recorded in the source map, keyed by the TaggedValue's raw bits.
+    pub fn new_with_source_map(
+        input: &str,
+        heap: SharedHeap,
+        source_name: Rc<str>,
+        source_map: Rc<RefCell<SourceMap>>,
+    ) -> Result<Self, ParseError> {
+        // Store source text for caret-style error display
+        source_map.borrow_mut().set_source_text(input.to_string());
+        let mut lexer = Lexer::new(input);
+        let spanned = lexer.next_token()?;
+        Ok(Parser {
+            lexer,
+            current_token: spanned.token,
+            current_token_line: spanned.line,
+            current_token_column: spanned.column,
+            heap,
+            labels: HashMap::new(),
+            source_map: Some(source_map),
+            source_name,
+        })
     }
 
     /// Create a parser with case-folding enabled and the given heap.
@@ -70,12 +112,16 @@ impl Parser {
         heap: SharedHeap,
     ) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new_case_insensitive(input);
-        let current_token = lexer.next_token()?;
+        let spanned = lexer.next_token()?;
         Ok(Parser {
             lexer,
-            current_token,
+            current_token: spanned.token,
+            current_token_line: spanned.line,
+            current_token_column: spanned.column,
             heap,
             labels: HashMap::new(),
+            source_map: None,
+            source_name: Rc::from("<unknown>"),
         })
     }
 
@@ -90,8 +136,19 @@ impl Parser {
         &self.heap
     }
 
+    /// Record a source location for a TaggedValue in the source map (if present)
+    fn record_source(&self, tv: TaggedValue, line: u32, col: u32) {
+        if let Some(ref sm) = self.source_map {
+            sm.borrow_mut()
+                .record(tv, SourceLocation::new(self.source_name.clone(), line, col));
+        }
+    }
+
     fn advance(&mut self) -> Result<(), ParseError> {
-        self.current_token = self.lexer.next_token()?;
+        let spanned = self.lexer.next_token()?;
+        self.current_token = spanned.token;
+        self.current_token_line = spanned.line;
+        self.current_token_column = spanned.column;
         Ok(())
     }
 
@@ -158,28 +215,44 @@ impl Parser {
                 Ok(val)
             }
             Token::Quote => {
+                let abbr_line = self.current_token_line;
+                let abbr_col = self.current_token_column;
                 self.advance()?;
                 let quoted = self.parse_expr()?;
                 let quote_sym = self.heap.borrow_mut().intern_symbol("quote");
-                Ok(self.make_list(vec![quote_sym, quoted]))
+                let result = self.make_list(vec![quote_sym, quoted]);
+                self.record_source(result, abbr_line, abbr_col);
+                Ok(result)
             }
             Token::Quasiquote => {
+                let abbr_line = self.current_token_line;
+                let abbr_col = self.current_token_column;
                 self.advance()?;
                 let quoted = self.parse_expr()?;
                 let sym = self.heap.borrow_mut().intern_symbol("quasiquote");
-                Ok(self.make_list(vec![sym, quoted]))
+                let result = self.make_list(vec![sym, quoted]);
+                self.record_source(result, abbr_line, abbr_col);
+                Ok(result)
             }
             Token::Unquote => {
+                let abbr_line = self.current_token_line;
+                let abbr_col = self.current_token_column;
                 self.advance()?;
                 let quoted = self.parse_expr()?;
                 let sym = self.heap.borrow_mut().intern_symbol("unquote");
-                Ok(self.make_list(vec![sym, quoted]))
+                let result = self.make_list(vec![sym, quoted]);
+                self.record_source(result, abbr_line, abbr_col);
+                Ok(result)
             }
             Token::UnquoteSplicing => {
+                let abbr_line = self.current_token_line;
+                let abbr_col = self.current_token_column;
                 self.advance()?;
                 let quoted = self.parse_expr()?;
                 let sym = self.heap.borrow_mut().intern_symbol("unquote-splicing");
-                Ok(self.make_list(vec![sym, quoted]))
+                let result = self.make_list(vec![sym, quoted]);
+                self.record_source(result, abbr_line, abbr_col);
+                Ok(result)
             }
             Token::LeftParen => self.parse_list(),
             Token::VectorOpen => self.parse_vector(),
@@ -282,6 +355,9 @@ impl Parser {
     }
 
     fn parse_list(&mut self) -> Result<TaggedValue, ParseError> {
+        // Capture position of the opening `(`
+        let open_line = self.current_token_line;
+        let open_col = self.current_token_column;
         self.advance()?; // consume (
 
         let mut elements = Vec::new();
@@ -311,14 +387,19 @@ impl Parser {
         }
         self.advance()?; // consume )
 
-        if let Some(tail) = dotted_tail {
-            Ok(self.make_dotted_list(elements, tail))
+        let result = if let Some(tail) = dotted_tail {
+            self.make_dotted_list(elements, tail)
         } else {
-            Ok(self.make_list(elements))
-        }
+            self.make_list(elements)
+        };
+        self.record_source(result, open_line, open_col);
+        Ok(result)
     }
 
     fn parse_vector(&mut self) -> Result<TaggedValue, ParseError> {
+        // Capture position of the opening `#(`
+        let open_line = self.current_token_line;
+        let open_col = self.current_token_column;
         self.advance()?; // consume #(
 
         let mut elements = Vec::new();
@@ -332,7 +413,9 @@ impl Parser {
 
         self.advance()?; // consume )
         // Allocate vector on heap
-        Ok(self.heap.borrow_mut().alloc_vector(elements))
+        let result = self.heap.borrow_mut().alloc_vector(elements);
+        self.record_source(result, open_line, open_col);
+        Ok(result)
     }
 
     fn parse_bytevector(&mut self) -> Result<TaggedValue, ParseError> {
@@ -1820,5 +1903,109 @@ mod tests {
             inner2.raw(),
             "Nested shared structure should use same heap pointer"
         );
+    }
+
+    #[test]
+    fn test_source_map_list() {
+        let heap = patina_core::new_shared_heap();
+        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+        let mut parser =
+            Parser::new_with_source_map("(+ 1 2)", heap.clone(), Rc::from("test.scm"), sm.clone())
+                .unwrap();
+        let result = parser.parse().unwrap();
+        let loc = sm.borrow().get(result).cloned();
+        assert!(loc.is_some(), "list form should have source location");
+        let loc = loc.unwrap();
+        assert_eq!(loc.line, 1);
+        assert_eq!(loc.column, 1);
+        assert_eq!(&*loc.source, "test.scm");
+    }
+
+    #[test]
+    fn test_source_map_nested_lists() {
+        let heap = patina_core::new_shared_heap();
+        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+        let mut parser = Parser::new_with_source_map(
+            "(define (f x) (+ x 1))",
+            heap.clone(),
+            Rc::from("test.scm"),
+            sm.clone(),
+        )
+        .unwrap();
+        let result = parser.parse().unwrap();
+        // Outer list starts at column 1
+        let loc = sm.borrow().get(result).cloned().unwrap();
+        assert_eq!(loc.line, 1);
+        assert_eq!(loc.column, 1);
+
+        // Find inner (+ x 1) — it's the third element: (define (f x) (+ x 1))
+        let heap_ref = heap.borrow();
+        let cdr1 = heap_ref.cdr(result); // ((f x) (+ x 1))
+        let cdr2 = heap_ref.cdr(cdr1); // ((+ x 1))
+        let inner = heap_ref.car(cdr2); // (+ x 1)
+        drop(heap_ref);
+        let inner_loc = sm.borrow().get(inner).cloned().unwrap();
+        assert_eq!(inner_loc.line, 1);
+        assert_eq!(inner_loc.column, 15); // position of `(` in `(+ x 1)`
+    }
+
+    #[test]
+    fn test_source_map_quote_abbreviation() {
+        let heap = patina_core::new_shared_heap();
+        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+        let mut parser =
+            Parser::new_with_source_map("'(1 2 3)", heap.clone(), Rc::from("test.scm"), sm.clone())
+                .unwrap();
+        let result = parser.parse().unwrap();
+        // The quote abbreviation should record position of the `'`
+        let loc = sm.borrow().get(result).cloned();
+        assert!(loc.is_some(), "quote form should have source location");
+        let loc = loc.unwrap();
+        assert_eq!(loc.line, 1);
+        assert_eq!(loc.column, 1);
+    }
+
+    #[test]
+    fn test_source_map_vector() {
+        let heap = patina_core::new_shared_heap();
+        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+        let mut parser =
+            Parser::new_with_source_map("#(1 2 3)", heap.clone(), Rc::from("test.scm"), sm.clone())
+                .unwrap();
+        let result = parser.parse().unwrap();
+        let loc = sm.borrow().get(result).cloned();
+        assert!(loc.is_some(), "vector should have source location");
+        let loc = loc.unwrap();
+        assert_eq!(loc.line, 1);
+        assert_eq!(loc.column, 1);
+    }
+
+    #[test]
+    fn test_source_map_multiline() {
+        let heap = patina_core::new_shared_heap();
+        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+        let mut parser = Parser::new_with_source_map(
+            "(define x 1)\n(+ x 2)",
+            heap.clone(),
+            Rc::from("test.scm"),
+            sm.clone(),
+        )
+        .unwrap();
+        let expr1 = parser.parse().unwrap();
+        let expr2 = parser.parse().unwrap();
+        let loc1 = sm.borrow().get(expr1).cloned().unwrap();
+        let loc2 = sm.borrow().get(expr2).cloned().unwrap();
+        assert_eq!(loc1.line, 1);
+        assert_eq!(loc1.column, 1);
+        assert_eq!(loc2.line, 2);
+        assert_eq!(loc2.column, 1);
+    }
+
+    #[test]
+    fn test_no_source_map_backward_compat() {
+        // Without source map, everything still works
+        let mut parser = Parser::new("(+ 1 2)").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(result.is_pair());
     }
 }

@@ -74,7 +74,7 @@ mod wind;
 use crate::eval::error::EvalError;
 use patina_core::Environment;
 use patina_core::TaggedValue;
-use patina_core::cps_expr::CpsExpr;
+use patina_core::cps_expr::{CpsExpr, CpsExprKind};
 use std::rc::Rc;
 use tracing::debug;
 
@@ -245,10 +245,10 @@ impl<'a> CpsEvaluator<'a> {
                         let heap = self.evaluator.global_env.heap();
                         let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
                         let is_dw_cleanup = matches!(
-                            k.body.as_ref(),
-                            CpsExpr::Halt(inner) if matches!(
-                                inner.as_ref(),
-                                CpsExpr::Literal(v) if *v == marker
+                            &k.body.as_ref().kind,
+                            CpsExprKind::Halt(inner) if matches!(
+                                &inner.as_ref().kind,
+                                CpsExprKind::Literal(v) if *v == marker
                             )
                         );
 
@@ -321,12 +321,12 @@ pub fn eval_cps(
     env: Rc<Environment>,
     evaluator: &super::Evaluator,
 ) -> Result<TaggedValue, EvalError> {
-    use patina_core::CoreExpr;
+    use patina_core::CoreExprKind;
     use patina_ir::CpsTransformer;
 
     // Handle Import specially - it's a side-effect that modifies the environment
     // and doesn't need CPS transformation
-    if let CoreExpr::Import { import_sets } = expr {
+    if let CoreExprKind::Import { import_sets } = &expr.kind {
         let heap = evaluator.global_env.heap();
         for import_set in import_sets {
             let import_set =
@@ -363,7 +363,9 @@ mod tests {
         let cps_eval = CpsEvaluator::new(&evaluator);
 
         // CPS: (halt 42)
-        let expr = CpsExpr::Halt(Rc::new(CpsExpr::Literal(TaggedValue::fixnum(42))));
+        let expr = CpsExpr::new(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Literal(
+            TaggedValue::fixnum(42),
+        ))));
         let result = cps_eval.eval(&expr).unwrap();
         assert_eq!(result.as_fixnum(), Some(42));
     }
@@ -377,10 +379,10 @@ mod tests {
         let cps_eval = CpsEvaluator::new(&evaluator);
 
         // CPS: (halt x)
-        let expr = CpsExpr::Halt(Rc::new(CpsExpr::Var {
+        let expr = CpsExpr::new(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
             name: Rc::from("x"),
             scopes: ScopeSet::new(),
-        }));
+        })));
         let result = cps_eval.eval(&expr).unwrap();
         assert_eq!(result.as_fixnum(), Some(10));
     }
@@ -391,22 +393,22 @@ mod tests {
         let cps_eval = CpsEvaluator::new(&evaluator);
 
         // CPS: (let-cont ((k result) (halt result)) (+ 1 2 k))
-        let halt_cont = CpsExpr::LetCont {
+        let halt_cont = CpsExpr::new(CpsExprKind::LetCont {
             name: Rc::from("k"),
             param: Rc::from("result"),
-            cont_body: Rc::new(CpsExpr::Halt(Rc::new(CpsExpr::Var {
+            cont_body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
                 name: Rc::from("result"),
                 scopes: ScopeSet::new(),
             }))),
-            body: Rc::new(CpsExpr::PrimOp {
+            body: CpsExpr::rc(CpsExprKind::PrimOp {
                 op: CpsPrimitive::Add,
                 args: vec![
-                    CpsExpr::Literal(TaggedValue::fixnum(1)),
-                    CpsExpr::Literal(TaggedValue::fixnum(2)),
+                    CpsExpr::new(CpsExprKind::Literal(TaggedValue::fixnum(1))),
+                    CpsExpr::new(CpsExprKind::Literal(TaggedValue::fixnum(2))),
                 ],
                 cont: Rc::from("k"),
             }),
-        };
+        });
 
         let result = cps_eval.eval(&halt_cont).unwrap();
         assert_eq!(result.as_fixnum(), Some(3));

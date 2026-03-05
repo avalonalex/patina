@@ -57,6 +57,11 @@ pub type HeapIndex = u32;
 pub struct TaggedValue(u64);
 
 impl TaggedValue {
+    /// Access the raw bits for use as a hash key (e.g., in SourceMap)
+    pub fn raw_bits(self) -> u64 {
+        self.0
+    }
+
     // =========================================================================
     // Tag Constants
     // =========================================================================

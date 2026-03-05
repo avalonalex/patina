@@ -427,14 +427,14 @@ pub fn eval_quasiquote_in_env(
 mod tests {
     use super::*;
     use patina_core::TaggedValue;
-    use patina_ir::{CoreExpr, Formals, ScopedParam};
+    use patina_ir::{CoreExpr, CoreExprKind, Formals, ScopedParam};
     use patina_runtime::ScopeSet;
 
     #[test]
     fn test_eval_literal() {
         let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
-        let expr = CoreExpr::Literal(TaggedValue::fixnum(42));
+        let expr = CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(42)));
 
         let result = eval_cps(&expr, env, &evaluator).unwrap();
         assert_eq!(result, TaggedValue::fixnum(42));
@@ -443,10 +443,10 @@ mod tests {
     #[test]
     fn test_eval_quote() {
         let evaluator = crate::eval::Evaluator::new();
-        let env = evaluator.global_env.clone(); // Use evaluator's env to share the heap
+        let env = evaluator.global_env.clone();
         let heap = evaluator.global_env.heap();
         let sym = heap.borrow_mut().intern_symbol("x");
-        let expr = CoreExpr::Quote(sym);
+        let expr = CoreExpr::new(CoreExprKind::Quote(sym));
 
         let result = eval_cps(&expr, env, &evaluator).unwrap();
         assert!(heap.borrow().is_symbol(result));
@@ -458,10 +458,10 @@ mod tests {
         let env = Rc::new(Environment::new());
         env.define("x".to_string(), TaggedValue::fixnum(42));
 
-        let expr = CoreExpr::Var {
+        let expr = CoreExpr::new(CoreExprKind::Var {
             name: Rc::from("x"),
             scopes: ScopeSet::new(),
-        };
+        });
         let result = eval_cps(&expr, env, &evaluator).unwrap();
         assert_eq!(result, TaggedValue::fixnum(42));
     }
@@ -470,10 +470,10 @@ mod tests {
     fn test_eval_variable_unbound() {
         let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
-        let expr = CoreExpr::Var {
+        let expr = CoreExpr::new(CoreExprKind::Var {
             name: Rc::from("undefined"),
             scopes: ScopeSet::new(),
-        };
+        });
 
         let result = eval_cps(&expr, env, &evaluator);
         assert!(result.is_err());
@@ -483,11 +483,11 @@ mod tests {
     fn test_eval_if_true() {
         let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
-        let expr = CoreExpr::If {
-            test: Rc::new(CoreExpr::Literal(TaggedValue::TRUE)),
-            then: Rc::new(CoreExpr::Literal(TaggedValue::fixnum(1))),
-            else_: Rc::new(CoreExpr::Literal(TaggedValue::fixnum(2))),
-        };
+        let expr = CoreExpr::new(CoreExprKind::If {
+            test: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::TRUE))),
+            then: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(1)))),
+            else_: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(2)))),
+        });
 
         let result = eval_cps(&expr, env, &evaluator).unwrap();
         assert_eq!(result, TaggedValue::fixnum(1));
@@ -497,11 +497,11 @@ mod tests {
     fn test_eval_if_false() {
         let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
-        let expr = CoreExpr::If {
-            test: Rc::new(CoreExpr::Literal(TaggedValue::FALSE)),
-            then: Rc::new(CoreExpr::Literal(TaggedValue::fixnum(1))),
-            else_: Rc::new(CoreExpr::Literal(TaggedValue::fixnum(2))),
-        };
+        let expr = CoreExpr::new(CoreExprKind::If {
+            test: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::FALSE))),
+            then: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(1)))),
+            else_: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(2)))),
+        });
 
         let result = eval_cps(&expr, env, &evaluator).unwrap();
         assert_eq!(result, TaggedValue::fixnum(2));
@@ -511,15 +511,16 @@ mod tests {
     fn test_eval_define() {
         let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
-        let expr = CoreExpr::Define {
+        let expr = CoreExpr::new(CoreExprKind::Define {
             name: Rc::from("x"),
-            value: Rc::new(CoreExpr::Literal(TaggedValue::fixnum(42))),
-        };
+            value: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(
+                42,
+            )))),
+        });
 
         let result = eval_cps(&expr, env.clone(), &evaluator).unwrap();
         assert_eq!(result, TaggedValue::UNSPECIFIED);
 
-        // Check that variable was defined
         let x_val = env.get(&Rc::from("x")).unwrap();
         assert_eq!(x_val, TaggedValue::fixnum(42));
     }
@@ -530,16 +531,17 @@ mod tests {
         let env = Rc::new(Environment::new());
         env.define("x".to_string(), TaggedValue::fixnum(1));
 
-        let expr = CoreExpr::Set {
+        let expr = CoreExpr::new(CoreExprKind::Set {
             var: Rc::from("x"),
             scopes: ScopeSet::new(),
-            value: Rc::new(CoreExpr::Literal(TaggedValue::fixnum(42))),
-        };
+            value: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(
+                42,
+            )))),
+        });
 
         let result = eval_cps(&expr, env.clone(), &evaluator).unwrap();
         assert_eq!(result, TaggedValue::UNSPECIFIED);
 
-        // Check that variable was updated
         let x_val = env.get(&Rc::from("x")).unwrap();
         assert_eq!(x_val, TaggedValue::fixnum(42));
     }
@@ -548,11 +550,11 @@ mod tests {
     fn test_eval_begin() {
         let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
-        let expr = CoreExpr::Begin(vec![
-            CoreExpr::Literal(TaggedValue::fixnum(1)),
-            CoreExpr::Literal(TaggedValue::fixnum(2)),
-            CoreExpr::Literal(TaggedValue::fixnum(3)),
-        ]);
+        let expr = CoreExpr::new(CoreExprKind::Begin(vec![
+            CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(1))),
+            CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(2))),
+            CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(3))),
+        ]));
 
         let result = eval_cps(&expr, env, &evaluator).unwrap();
         assert_eq!(result, TaggedValue::fixnum(3));
@@ -562,17 +564,16 @@ mod tests {
     fn test_eval_lambda() {
         let evaluator = crate::eval::Evaluator::new();
         let env = Rc::new(Environment::new());
-        let expr = CoreExpr::Lambda {
+        let expr = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![ScopedParam::simple(Rc::from("x"))]),
-            body: vec![CoreExpr::Var {
+            body: vec![CoreExpr::new(CoreExprKind::Var {
                 name: Rc::from("x"),
                 scopes: ScopeSet::new(),
-            }],
+            })],
             binding_scope: None,
-        };
+        });
 
         let result = eval_cps(&expr, env, &evaluator).unwrap();
-        // Should return a procedure - check it's an object on the heap
         assert!(
             evaluator
                 .global_env

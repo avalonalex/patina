@@ -9,7 +9,7 @@ use super::CpsEvaluator;
 use super::types::ContEnv;
 use crate::eval::error::EvalError;
 use patina_core::Procedure;
-use patina_core::cps_expr::{CpsExpr, CpsParam};
+use patina_core::cps_expr::{CpsExpr, CpsExprKind, CpsParam};
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{Environment, ScopeSet, ScopedParam};
 use std::rc::Rc;
@@ -25,12 +25,12 @@ impl<'a> CpsEvaluator<'a> {
         env: &Rc<Environment>,
         cont_env: &ContEnv,
     ) -> Result<TaggedValue, EvalError> {
-        match expr {
-            CpsExpr::Literal(v) => Ok(*v),
+        match &expr.kind {
+            CpsExprKind::Literal(v) => Ok(*v),
 
-            CpsExpr::Var { name, scopes } => self.lookup_var_tagged(name, scopes, env),
+            CpsExprKind::Var { name, scopes } => self.lookup_var_tagged(name, scopes, env),
 
-            CpsExpr::ContRef(k) => {
+            CpsExprKind::ContRef(k) => {
                 let cont = cont_env
                     .get(k)
                     .ok_or_else(|| EvalError::UndefinedVariable(k.to_string()))?;
@@ -38,7 +38,7 @@ impl<'a> CpsEvaluator<'a> {
                 Ok(self.reify_continuation_tagged(cont, cont_env, &[]))
             }
 
-            CpsExpr::Lambda {
+            CpsExprKind::Lambda {
                 params,
                 variadic,
                 cont_param,
@@ -55,7 +55,7 @@ impl<'a> CpsEvaluator<'a> {
 
             _ => Err(EvalError::InternalError(format!(
                 "Non-trivial expression in trivial position: {}",
-                expr.kind()
+                expr.expr_kind()
             ))),
         }
     }

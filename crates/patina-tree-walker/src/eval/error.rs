@@ -14,6 +14,7 @@
 //!   - `InternalError`: Interpreter bugs
 //!   - `ContinuationEscape`: Control flow mechanism
 
+use patina_core::error::SourceLocation;
 use patina_core::{ErrorDetail, ErrorKind, ExceptionKind};
 use patina_frontend::FrontendError;
 use thiserror::Error;
@@ -63,15 +64,53 @@ pub enum EvalError {
         message: String,
         irritants_display: String, // Serialized display of irritants
     },
+
+    /// An error with an attached source location.
+    ///
+    /// Wraps another EvalError with a source position so that error messages
+    /// can report "at source:line:col". Created by `err.at(loc)` or `err.at_opt(loc)`.
+    #[error("{error}\n  at {location}")]
+    WithLocation {
+        #[source]
+        error: Box<EvalError>,
+        location: SourceLocation,
+    },
 }
 
 impl EvalError {
+    /// Wrap this error with a source location.
+    pub fn at(self, loc: SourceLocation) -> Self {
+        EvalError::WithLocation {
+            error: Box::new(self),
+            location: loc,
+        }
+    }
+
+    /// Wrap this error with a source location if one is available.
+    pub fn at_opt(self, loc: Option<SourceLocation>) -> Self {
+        match loc {
+            Some(loc) => self.at(loc),
+            None => self,
+        }
+    }
+
+    /// Return the source location attached to this error, if any.
+    pub fn source_location(&self) -> Option<&SourceLocation> {
+        match self {
+            EvalError::WithLocation { location, .. } => Some(location),
+            _ => None,
+        }
+    }
+
     /// Check if this error can be caught by Scheme exception handlers
     pub fn is_catchable(&self) -> bool {
-        !matches!(
-            self,
-            EvalError::InternalError(_) | EvalError::ContinuationEscape
-        )
+        match self {
+            EvalError::WithLocation { error, .. } => error.is_catchable(),
+            _ => !matches!(
+                self,
+                EvalError::InternalError(_) | EvalError::ContinuationEscape
+            ),
+        }
     }
 
     /// Convert this error to an ErrorKind for classification
@@ -92,6 +131,7 @@ impl EvalError {
                 ExceptionKind::ReadError => ErrorKind::Read,
                 _ => ErrorKind::User,
             },
+            EvalError::WithLocation { error, .. } => error.to_error_kind(),
         }
     }
 
@@ -117,6 +157,9 @@ impl EvalError {
                     detail.message = format!("{} [{}]", message, irritants_display);
                 }
                 detail
+            }
+            EvalError::WithLocation { error, location } => {
+                error.to_error_detail().with_location(location.clone())
             }
             _ => ErrorDetail::new(kind, self.to_string()),
         }

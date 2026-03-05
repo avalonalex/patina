@@ -72,10 +72,44 @@ mod utils;
 
 pub use error::{DesugarError, Result};
 
+use crate::source_map::SourceMap;
+use patina_core::error::SourceLocation;
 use patina_core::{SharedHeap, TaggedValue};
-use patina_ir::CoreExpr;
+use patina_ir::{CoreExpr, CoreExprKind};
 use patina_runtime::{Environment, ScopeId, ScopeSet};
+use std::cell::RefCell;
 use std::rc::Rc;
+
+/// Walk a freshly-expanded pair tree and stamp each unrecorded pair with the call-site source.
+///
+/// Pairs from the original user source are already recorded by the parser; this only
+/// stamps new template-created pairs. Bounded by depth to avoid runaway recursion.
+fn stamp_expansion_source(
+    tv: TaggedValue,
+    source: &SourceLocation,
+    source_map: &Rc<RefCell<SourceMap>>,
+    heap: &SharedHeap,
+    depth: u32,
+) {
+    const MAX_DEPTH: u32 = 64;
+    if depth > MAX_DEPTH || !tv.is_pair() {
+        return;
+    }
+
+    {
+        let mut sm = source_map.borrow_mut();
+        if sm.get(tv).is_none() {
+            sm.record(tv, source.clone());
+        }
+    }
+
+    // Extract car/cdr without holding SourceMap borrow
+    let pair = heap.borrow().try_pair(tv);
+    if let Some((car, cdr)) = pair {
+        stamp_expansion_source(car, source, source_map, heap, depth + 1);
+        stamp_expansion_source(cdr, source, source_map, heap, depth + 1);
+    }
+}
 
 /// Desugarer converts Value (surface syntax) to CoreExpr (core IR)
 ///
@@ -110,6 +144,9 @@ pub struct Desugarer {
     /// Names that are shadowed by local bindings (lambda parameters)
     /// These should not be treated as macro calls
     shadowed_names: std::collections::HashSet<Rc<str>>,
+
+    /// Optional source map for looking up source positions of parsed forms
+    source_map: Option<Rc<RefCell<SourceMap>>>,
 }
 
 impl Desugarer {
@@ -121,6 +158,7 @@ impl Desugarer {
             env: None,
             current_scopes: ScopeSet::new(),
             shadowed_names: std::collections::HashSet::new(),
+            source_map: None,
         }
     }
 
@@ -136,6 +174,23 @@ impl Desugarer {
             env: Some(env),
             current_scopes: ScopeSet::new(),
             shadowed_names: std::collections::HashSet::new(),
+            source_map: None,
+        }
+    }
+
+    /// Create a new desugarer with environment and source map
+    ///
+    /// The source map is used to look up source positions recorded by the parser.
+    /// These positions are attached to the resulting CoreExpr nodes.
+    pub fn with_env_and_source_map(
+        env: Rc<Environment>,
+        source_map: Rc<RefCell<SourceMap>>,
+    ) -> Self {
+        Self {
+            env: Some(env),
+            current_scopes: ScopeSet::new(),
+            shadowed_names: std::collections::HashSet::new(),
+            source_map: Some(source_map),
         }
     }
 
@@ -147,6 +202,7 @@ impl Desugarer {
             env: Some(env),
             current_scopes: scopes,
             shadowed_names: std::collections::HashSet::new(),
+            source_map: None,
         }
     }
 
@@ -166,6 +222,7 @@ impl Desugarer {
             env: self.env.clone(),
             current_scopes: new_scopes,
             shadowed_names: self.shadowed_names.clone(),
+            source_map: self.source_map.clone(),
         };
         (desugarer, scope)
     }
@@ -186,6 +243,7 @@ impl Desugarer {
             env: self.env.clone(),
             current_scopes: new_scopes,
             shadowed_names: shadowed,
+            source_map: self.source_map.clone(),
         }
     }
 
@@ -202,7 +260,15 @@ impl Desugarer {
             env: Some(env),
             current_scopes: scopes,
             shadowed_names: self.shadowed_names.clone(),
+            source_map: self.source_map.clone(),
         }
+    }
+
+    /// Look up the source location for a TaggedValue in the source map
+    fn lookup_source(&self, tv: TaggedValue) -> Option<SourceLocation> {
+        self.source_map
+            .as_ref()
+            .and_then(|sm| sm.borrow().get(tv).cloned())
     }
 
     /// Desugar a TaggedValue (surface syntax) to CoreExpr (core IR)
@@ -224,22 +290,22 @@ impl Desugarer {
     ) -> Result<CoreExpr> {
         // Immediate values - no heap access needed
         if tagged.is_fixnum() {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if tagged.is_char() {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if tagged == TaggedValue::TRUE || tagged == TaggedValue::FALSE {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if tagged == TaggedValue::NULL {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if tagged == TaggedValue::UNSPECIFIED {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if tagged == TaggedValue::EOF {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
 
         // For heap-dependent operations, borrow the heap
@@ -247,40 +313,40 @@ impl Desugarer {
 
         // Symbol - variable reference without scopes
         if let Some(name) = heap.get_symbol_name(tagged) {
-            return Ok(CoreExpr::Var {
+            return Ok(CoreExpr::new(CoreExprKind::Var {
                 name: Rc::from(name),
                 scopes: ScopeSet::new(),
-            });
+            }));
         }
 
         // Identifier - variable reference with scopes (for hygiene)
         if let Some((name, scopes)) = utils::get_identifier_info(tagged, &heap) {
-            return Ok(CoreExpr::Var { name, scopes });
+            return Ok(CoreExpr::new(CoreExprKind::Var { name, scopes }));
         }
 
         // Native heap types - self-evaluating literals
         // String - native heap strings now support mutation directly
         if tagged.is_string() {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if tagged.is_vector() {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         // Numeric types stored natively on heap
         if heap.is_complex(tagged) {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if heap.is_real(tagged) {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if heap.is_bigint(tagged) {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if heap.is_rational(tagged) {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if heap.is_bytevector(tagged) {
-            return Ok(CoreExpr::Literal(tagged));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
 
         // Pair - special form or application
@@ -288,7 +354,14 @@ impl Desugarer {
             // Drop the borrow before calling desugar_list_tagged
             // (it will manage its own borrows)
             drop(heap);
-            return self.desugar_list_tagged(tagged, shared_heap);
+            let source = self.lookup_source(tagged);
+            let mut expr = self.desugar_list_tagged(tagged, shared_heap)?;
+            // Attach source location from the source map if available
+            // and the desugared result doesn't already have one
+            if expr.source.is_none() {
+                expr.source = source;
+            }
+            return Ok(expr);
         }
 
         // All valid AST types should be handled above
@@ -349,6 +422,9 @@ impl Desugarer {
         // - Accepts TaggedValue input directly
         // - Returns TaggedValue output directly
         if let Some(compiled_macro) = macro_to_expand {
+            // Save call-site source location before expansion
+            let call_site_source = self.lookup_source(list);
+
             let expanded_tagged = patina_macros::expand_macro_with_shadowed_tagged(
                 &compiled_macro,
                 list, // Pass TaggedValue directly
@@ -358,8 +434,20 @@ impl Desugarer {
             )
             .map_err(|e| DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e)))?;
 
+            // Phase 4: stamp expanded pairs + record macro expansion chain
+            if let (Some(src), Some(sm)) = (&call_site_source, &self.source_map) {
+                stamp_expansion_source(expanded_tagged, src, sm, shared_heap, 0);
+                sm.borrow_mut()
+                    .record_expansion(src, compiled_macro.name.to_string());
+            }
+
             // Result is already TaggedValue - continue desugaring
-            return self.desugar_tagged(expanded_tagged, shared_heap);
+            let mut expr = self.desugar_tagged(expanded_tagged, shared_heap)?;
+            // Use call-site source as fallback if the expanded form has no source
+            if expr.source.is_none() {
+                expr.source = call_site_source;
+            }
+            return Ok(expr);
         }
 
         // Check if it's a core special form
@@ -454,11 +542,11 @@ impl Desugarer {
             Some(binding_scope) // Use fresh scope for all
         };
 
-        Ok(CoreExpr::Lambda {
+        Ok(CoreExpr::new(CoreExprKind::Lambda {
             params,
             body,
             binding_scope,
-        })
+        }))
     }
 
     /// Desugar a body that may contain internal define-syntax forms (TaggedValue version)
@@ -515,7 +603,8 @@ impl Desugarer {
                 let desugared = current_desugarer.desugar_tagged(*tv, shared_heap)?;
 
                 // Filter out Literal(Unspecified) from macro definitions
-                if !matches!(&desugared, CoreExpr::Literal(v) if *v == TaggedValue::UNSPECIFIED) {
+                if !matches!(&desugared.kind, CoreExprKind::Literal(v) if *v == TaggedValue::UNSPECIFIED)
+                {
                     body_exprs.push(desugared);
                 }
             }
@@ -592,21 +681,21 @@ impl Desugarer {
             2 => {
                 let test = self.desugar_tagged(args_vec[0], shared_heap)?;
                 let then = self.desugar_tagged(args_vec[1], shared_heap)?;
-                Ok(CoreExpr::If {
+                Ok(CoreExpr::new(CoreExprKind::If {
                     test: Rc::new(test),
                     then: Rc::new(then),
-                    else_: Rc::new(CoreExpr::Literal(TaggedValue::UNSPECIFIED)),
-                })
+                    else_: CoreExpr::rc(CoreExprKind::Literal(TaggedValue::UNSPECIFIED)),
+                }))
             }
             3 => {
                 let test = self.desugar_tagged(args_vec[0], shared_heap)?;
                 let then = self.desugar_tagged(args_vec[1], shared_heap)?;
                 let else_ = self.desugar_tagged(args_vec[2], shared_heap)?;
-                Ok(CoreExpr::If {
+                Ok(CoreExpr::new(CoreExprKind::If {
                     test: Rc::new(test),
                     then: Rc::new(then),
                     else_: Rc::new(else_),
-                })
+                }))
             }
             _ => Err(DesugarError::WrongArgCount {
                 form: "if".to_string(),
@@ -644,11 +733,11 @@ impl Desugarer {
 
         let value = self.desugar_tagged(args_vec[1], shared_heap)?;
 
-        Ok(CoreExpr::Set {
+        Ok(CoreExpr::new(CoreExprKind::Set {
             var: name,
             scopes,
             value: Rc::new(value),
-        })
+        }))
     }
 
     /// Desugar define using TaggedValue
@@ -691,14 +780,14 @@ impl Desugarer {
                 .map(|tv| body_desugarer.desugar_tagged(*tv, shared_heap))
                 .collect::<Result<Vec<_>>>()?;
 
-            return Ok(CoreExpr::Define {
+            return Ok(CoreExpr::new(CoreExprKind::Define {
                 name,
-                value: Rc::new(CoreExpr::Lambda {
+                value: CoreExpr::rc(CoreExprKind::Lambda {
                     params,
                     body,
                     binding_scope: Some(binding_scope),
                 }),
-            });
+            }));
         }
 
         // Simple variable define: (define name value)
@@ -726,10 +815,10 @@ impl Desugarer {
         let value_tv = args_vec[1];
         let value = self.desugar_tagged(value_tv, shared_heap)?;
 
-        Ok(CoreExpr::Define {
+        Ok(CoreExpr::new(CoreExprKind::Define {
             name,
             value: Rc::new(value),
-        })
+        }))
     }
 
     /// Desugar begin using TaggedValue
@@ -742,7 +831,9 @@ impl Desugarer {
 
         if exprs.is_empty() {
             // (begin) with no body is valid in Scheme, returns unspecified
-            return Ok(CoreExpr::Literal(TaggedValue::UNSPECIFIED));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                TaggedValue::UNSPECIFIED,
+            )));
         }
 
         let body: Vec<CoreExpr> = exprs
@@ -750,7 +841,7 @@ impl Desugarer {
             .map(|tv| self.desugar_tagged(*tv, shared_heap))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(CoreExpr::Begin(body))
+        Ok(CoreExpr::new(CoreExprKind::Begin(body)))
     }
 
     /// Desugar apply using TaggedValue
@@ -775,10 +866,10 @@ impl Desugarer {
             .map(|tv| self.desugar_tagged(*tv, shared_heap))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(CoreExpr::Apply {
+        Ok(CoreExpr::new(CoreExprKind::Apply {
             func: Rc::new(func),
             args: operands,
-        })
+        }))
     }
 
     /// Desugar application using TaggedValue
@@ -795,10 +886,10 @@ impl Desugarer {
             .map(|tv| self.desugar_tagged(*tv, shared_heap))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(CoreExpr::App {
+        Ok(CoreExpr::new(CoreExprKind::App {
             func: Rc::new(func),
             args: operands,
-        })
+        }))
     }
 
     /// Desugar quote using TaggedValue: (quote datum) → Quote(datum)
@@ -818,7 +909,7 @@ impl Desugarer {
             });
         }
         let datum = utils::strip_identifiers_tagged(args_vec[0], shared_heap);
-        Ok(CoreExpr::Quote(datum))
+        Ok(CoreExpr::new(CoreExprKind::Quote(datum)))
     }
 
     /// Desugar quasiquote using TaggedValue: (quasiquote template) → Quasiquote(template)
@@ -835,7 +926,7 @@ impl Desugarer {
                 got: args_vec.len(),
             });
         }
-        Ok(CoreExpr::Quasiquote(args_vec[0]))
+        Ok(CoreExpr::new(CoreExprKind::Quasiquote(args_vec[0])))
     }
 
     /// Desugar define-syntax using TaggedValue
@@ -888,7 +979,9 @@ impl Desugarer {
         let tv = env.heap().borrow_mut().alloc_macro(Rc::new(compiled_macro));
         env.define(name.to_string(), tv);
 
-        Ok(CoreExpr::Literal(TaggedValue::UNSPECIFIED))
+        Ok(CoreExpr::new(CoreExprKind::Literal(
+            TaggedValue::UNSPECIFIED,
+        )))
     }
 
     /// Desugar import using TaggedValue: (import import-set ...) → Import { import_sets }
@@ -905,7 +998,7 @@ impl Desugarer {
             ));
         }
 
-        Ok(CoreExpr::Import { import_sets })
+        Ok(CoreExpr::new(CoreExprKind::Import { import_sets }))
     }
 
     /// Desugar expand using TaggedValue: (expand expr) → Expand { expr }
@@ -923,9 +1016,9 @@ impl Desugarer {
             });
         }
 
-        Ok(CoreExpr::Expand {
+        Ok(CoreExpr::new(CoreExprKind::Expand {
             expr: Rc::new(self.desugar_tagged(args_vec[0], shared_heap)?),
-        })
+        }))
     }
 
     /// Desugar let-syntax using TaggedValue
@@ -1051,14 +1144,14 @@ impl Desugarer {
                 &definition_scopes,
             )?;
 
-            Ok(CoreExpr::App {
-                func: Rc::new(CoreExpr::Lambda {
+            Ok(CoreExpr::new(CoreExprKind::App {
+                func: CoreExpr::rc(CoreExprKind::Lambda {
                     params: patina_ir::Formals::Fixed(vec![]),
                     body: desugared_body,
                     binding_scope: Some(ScopeId::fresh()),
                 }),
                 args: vec![],
-            })
+            }))
         } else {
             let desugared_body = self.desugar_body_tagged(
                 &body_desugarer,
@@ -1070,7 +1163,7 @@ impl Desugarer {
             if desugared_body.len() == 1 {
                 Ok(desugared_body.into_iter().next().unwrap())
             } else {
-                Ok(CoreExpr::Begin(desugared_body))
+                Ok(CoreExpr::new(CoreExprKind::Begin(desugared_body)))
             }
         }
     }
@@ -1178,7 +1271,9 @@ impl Desugarer {
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
         if body.is_empty() {
-            return Ok(CoreExpr::Literal(TaggedValue::UNSPECIFIED));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                TaggedValue::UNSPECIFIED,
+            )));
         }
 
         let desugared: Vec<CoreExpr> = body
@@ -1189,7 +1284,7 @@ impl Desugarer {
         if desugared.len() == 1 {
             Ok(desugared.into_iter().next().unwrap())
         } else {
-            Ok(CoreExpr::Begin(desugared))
+            Ok(CoreExpr::new(CoreExprKind::Begin(desugared)))
         }
     }
 
@@ -1379,7 +1474,7 @@ mod tests {
         let desugarer = Desugarer::new();
         let tagged = TaggedValue::fixnum(42);
         let result = desugarer.desugar_tagged(tagged, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 42);
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1391,7 +1486,7 @@ mod tests {
         let heap = test_heap();
         let desugarer = Desugarer::new();
         let result = desugarer.desugar_tagged(TaggedValue::TRUE, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert_eq!(v, TaggedValue::TRUE);
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1404,7 +1499,7 @@ mod tests {
         let desugarer = Desugarer::new();
         let tagged = heap.borrow_mut().alloc_string("hello".to_string());
         let result = desugarer.desugar_tagged(tagged, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert!(!v.is_immediate());
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1417,7 +1512,7 @@ mod tests {
         let desugarer = Desugarer::new();
         let tagged = TaggedValue::character('a');
         let result = desugarer.desugar_tagged(tagged, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert!(v.is_char() && v.as_char_unchecked() == 'a');
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1434,7 +1529,7 @@ mod tests {
         let desugarer = Desugarer::new();
         let x = sym(&heap, "x");
         let result = desugarer.desugar_tagged(x, &heap).unwrap();
-        if let CoreExpr::Var { name, scopes } = result {
+        if let CoreExprKind::Var { name, scopes } = result.kind {
             assert_eq!(name.as_ref(), "x");
             assert!(scopes.is_empty());
         } else {
@@ -1452,7 +1547,7 @@ mod tests {
         let desugarer = Desugarer::new();
         let list = make_list(&heap, &[sym(&heap, "quote"), sym(&heap, "x")]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Quote(val) = result {
+        if let CoreExprKind::Quote(val) = result.kind {
             assert!(!val.is_immediate());
         } else {
             panic!("Expected Quote, got {:?}", result);
@@ -1473,7 +1568,7 @@ mod tests {
         );
         let list = make_list(&heap, &[sym(&heap, "quote"), inner]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        assert!(matches!(result, CoreExpr::Quote(_)));
+        assert!(matches!(&result.kind, CoreExprKind::Quote(_)));
     }
 
     // =========================================================================
@@ -1489,7 +1584,7 @@ mod tests {
         let body = make_list(&heap, &[sym(&heap, "+"), sym(&heap, "x"), sym(&heap, "y")]);
         let list = make_list(&heap, &[sym(&heap, "lambda"), params, body]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Lambda { params, body, .. } = result {
+        if let CoreExprKind::Lambda { params, body, .. } = result.kind {
             assert!(matches!(params, Formals::Fixed(_)));
             assert_eq!(body.len(), 1);
         } else {
@@ -1505,7 +1600,7 @@ mod tests {
         let body = make_list(&heap, &[sym(&heap, "car"), sym(&heap, "args")]);
         let list = make_list(&heap, &[sym(&heap, "lambda"), sym(&heap, "args"), body]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Lambda { params, body, .. } = result {
+        if let CoreExprKind::Lambda { params, body, .. } = result.kind {
             assert!(matches!(params, Formals::Variadic(_)));
             assert_eq!(body.len(), 1);
         } else {
@@ -1525,7 +1620,7 @@ mod tests {
         let formals = heap.borrow_mut().alloc_pair(x, y_rest);
         let list = make_list(&heap, &[sym(&heap, "lambda"), formals, sym(&heap, "x")]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Lambda { params, .. } = result {
+        if let CoreExprKind::Lambda { params, .. } = result.kind {
             assert!(matches!(params, Formals::Mixed { .. }));
         } else {
             panic!("Expected Lambda, got {:?}", result);
@@ -1551,13 +1646,13 @@ mod tests {
             ],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::If { test, then, else_ } = result {
-            assert!(matches!(&*test, CoreExpr::Literal(v) if *v == TaggedValue::TRUE));
+        if let CoreExprKind::If { test, then, else_ } = result.kind {
+            assert!(matches!(&test.kind, CoreExprKind::Literal(v) if *v == TaggedValue::TRUE));
             assert!(
-                matches!(&*then, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
+                matches!(&then.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
             );
             assert!(
-                matches!(&*else_, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 2)
+                matches!(&else_.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 2)
             );
         } else {
             panic!("Expected If, got {:?}", result);
@@ -1574,12 +1669,14 @@ mod tests {
             &[sym(&heap, "if"), TaggedValue::TRUE, TaggedValue::fixnum(1)],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::If { test, then, else_ } = result {
-            assert!(matches!(&*test, CoreExpr::Literal(v) if *v == TaggedValue::TRUE));
+        if let CoreExprKind::If { test, then, else_ } = result.kind {
+            assert!(matches!(&test.kind, CoreExprKind::Literal(v) if *v == TaggedValue::TRUE));
             assert!(
-                matches!(&*then, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
+                matches!(&then.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
             );
-            assert!(matches!(&*else_, CoreExpr::Literal(v) if *v == TaggedValue::UNSPECIFIED));
+            assert!(
+                matches!(&else_.kind, CoreExprKind::Literal(v) if *v == TaggedValue::UNSPECIFIED)
+            );
         } else {
             panic!("Expected If, got {:?}", result);
         }
@@ -1599,11 +1696,11 @@ mod tests {
             &[sym(&heap, "set!"), sym(&heap, "x"), TaggedValue::fixnum(42)],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Set { var, scopes, value } = result {
+        if let CoreExprKind::Set { var, scopes, value } = result.kind {
             assert_eq!(var.as_ref(), "x");
             assert!(scopes.is_empty());
             assert!(
-                matches!(&*value, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
+                matches!(&value.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
             );
         } else {
             panic!("Expected Set, got {:?}", result);
@@ -1645,10 +1742,10 @@ mod tests {
             ],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Define { name, value } = result {
+        if let CoreExprKind::Define { name, value } = result.kind {
             assert_eq!(name.as_ref(), "x");
             assert!(
-                matches!(&*value, CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
+                matches!(&value.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
             );
         } else {
             panic!("Expected Define, got {:?}", result);
@@ -1667,9 +1764,9 @@ mod tests {
         let body = make_list(&heap, &[sym(&heap, "+"), sym(&heap, "x"), sym(&heap, "y")]);
         let list = make_list(&heap, &[sym(&heap, "define"), name_params, body]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Define { name, value } = result {
+        if let CoreExprKind::Define { name, value } = result.kind {
             assert_eq!(name.as_ref(), "add");
-            assert!(matches!(*value, CoreExpr::Lambda { .. }));
+            assert!(matches!(&value.kind, CoreExprKind::Lambda { .. }));
         } else {
             panic!("Expected Define, got {:?}", result);
         }
@@ -1688,9 +1785,9 @@ mod tests {
             &[sym(&heap, "define"), name_params, sym(&heap, "args")],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Define { name, value } = result {
+        if let CoreExprKind::Define { name, value } = result.kind {
             assert_eq!(name.as_ref(), "f");
-            if let CoreExpr::Lambda { params, .. } = &*value {
+            if let CoreExprKind::Lambda { params, .. } = &value.kind {
                 assert!(matches!(params, Formals::Variadic(_)));
             } else {
                 panic!("Expected Lambda, got {:?}", value);
@@ -1717,9 +1814,9 @@ mod tests {
             &[sym(&heap, "define"), name_params, sym(&heap, "rest")],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Define { name, value } = result {
+        if let CoreExprKind::Define { name, value } = result.kind {
             assert_eq!(name.as_ref(), "f");
-            if let CoreExpr::Lambda { params, .. } = &*value {
+            if let CoreExprKind::Lambda { params, .. } = &value.kind {
                 if let Formals::Mixed { fixed, rest } = params {
                     assert_eq!(fixed.len(), 2);
                     assert_eq!(fixed[0].name.as_ref(), "x");
@@ -1747,10 +1844,10 @@ mod tests {
         // (begin 42)
         let list = make_list(&heap, &[sym(&heap, "begin"), TaggedValue::fixnum(42)]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Begin(exprs) = result {
+        if let CoreExprKind::Begin(exprs) = result.kind {
             assert_eq!(exprs.len(), 1);
             assert!(
-                matches!(&exprs[0], CoreExpr::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
+                matches!(&exprs[0].kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
             );
         } else {
             panic!("Expected Begin, got {:?}", result);
@@ -1772,7 +1869,7 @@ mod tests {
             ],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Begin(exprs) = result {
+        if let CoreExprKind::Begin(exprs) = result.kind {
             assert_eq!(exprs.len(), 3);
         } else {
             panic!("Expected Begin, got {:?}", result);
@@ -1786,7 +1883,7 @@ mod tests {
         // (begin) → #<unspecified>
         let list = make_list(&heap, &[sym(&heap, "begin")]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert_eq!(v, TaggedValue::UNSPECIFIED);
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1811,8 +1908,8 @@ mod tests {
             ],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::App { func, args } = result {
-            assert!(matches!(*func, CoreExpr::Var { .. }));
+        if let CoreExprKind::App { func, args } = result.kind {
+            assert!(matches!(&func.kind, CoreExprKind::Var { .. }));
             assert_eq!(args.len(), 2);
         } else {
             panic!("Expected App, got {:?}", result);
@@ -1828,8 +1925,8 @@ mod tests {
         let lambda = make_list(&heap, &[sym(&heap, "lambda"), params, sym(&heap, "x")]);
         let list = make_list(&heap, &[lambda, TaggedValue::fixnum(42)]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::App { func, args } = result {
-            assert!(matches!(*func, CoreExpr::Lambda { .. }));
+        if let CoreExprKind::App { func, args } = result.kind {
+            assert!(matches!(&func.kind, CoreExprKind::Lambda { .. }));
             assert_eq!(args.len(), 1);
         } else {
             panic!("Expected App, got {:?}", result);
@@ -1861,7 +1958,7 @@ mod tests {
         let clause = make_list(&heap, &[sym(&heap, "r7rs"), TaggedValue::fixnum(42)]);
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 42);
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1877,7 +1974,7 @@ mod tests {
         let clause = make_list(&heap, &[sym(&heap, "patina"), quoted]);
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        assert!(matches!(result, CoreExpr::Quote(_)));
+        assert!(matches!(&result.kind, CoreExprKind::Quote(_)));
     }
 
     #[test]
@@ -1889,7 +1986,7 @@ mod tests {
         let c2 = make_list(&heap, &[sym(&heap, "else"), TaggedValue::fixnum(99)]);
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), c1, c2]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 99);
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1921,7 +2018,7 @@ mod tests {
         let clause = make_list(&heap, &[req, TaggedValue::fixnum(100)]);
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 100);
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1944,7 +2041,7 @@ mod tests {
         let clause = make_list(&heap, &[req, TaggedValue::fixnum(200)]);
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 200);
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1960,7 +2057,7 @@ mod tests {
         let clause = make_list(&heap, &[req, TaggedValue::fixnum(300)]);
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 300);
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -1983,7 +2080,7 @@ mod tests {
         );
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Begin(exprs) = result {
+        if let CoreExprKind::Begin(exprs) = result.kind {
             assert_eq!(exprs.len(), 3);
         } else {
             panic!("Expected Begin, got {:?}", result);
@@ -2000,7 +2097,7 @@ mod tests {
         let c3 = make_list(&heap, &[sym(&heap, "else"), TaggedValue::fixnum(3)]);
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), c1, c2, c3]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 1);
         } else {
             panic!("Expected Literal, got {:?}", result);
@@ -2029,7 +2126,7 @@ mod tests {
         let clause = make_list(&heap, &[sym(&heap, "r7rs")]);
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExpr::Literal(v) = result {
+        if let CoreExprKind::Literal(v) = result.kind {
             assert_eq!(v, TaggedValue::UNSPECIFIED);
         } else {
             panic!("Expected Literal(Unspecified), got {:?}", result);

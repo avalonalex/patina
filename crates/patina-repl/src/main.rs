@@ -1,4 +1,4 @@
-use patina_interpreter::TreeWalkInterpreter;
+use patina_interpreter::{TreeWalkInterpreter, format_interpreter_error};
 use patina_repl::Repl;
 use std::env;
 use std::fs;
@@ -64,18 +64,14 @@ fn run_script(filename: &str) {
     let is_test_file = filename.contains("test") || code.contains("test-begin");
 
     if is_test_file {
-        // Use resilient mode for test files - continue on errors
-        interp.eval_program_resilient(&code);
+        interp.eval_program_resilient_with_source_name(&code, filename);
         process::exit(0);
     } else {
-        // Use strict mode for regular scripts - stop on first error
-        match interp.eval_program(&code) {
-            Ok(_) => {
-                // Script completed successfully
-                process::exit(0);
-            }
+        let (result, source_map) = interp.eval_program_with_source_name(&code, filename);
+        match result {
+            Ok(_) => process::exit(0),
             Err(e) => {
-                eprintln!("Error: {}", e);
+                eprintln!("Error: {}", format_interpreter_error(&e, &source_map.borrow()));
                 process::exit(1);
             }
         }

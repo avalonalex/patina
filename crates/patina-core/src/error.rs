@@ -8,7 +8,7 @@
 //! - `ErrorDetail`: Rich error context including location and irritants
 
 use std::fmt;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::tagged_value::TaggedValue;
 
@@ -58,7 +58,7 @@ pub struct ExceptionObject {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
     /// Source file, "<repl>", or "<string>"
-    pub source: Rc<str>,
+    pub source: Arc<str>,
     /// 1-indexed line number
     pub line: u32,
     /// 1-indexed column number
@@ -69,9 +69,9 @@ pub struct SourceLocation {
 
 impl SourceLocation {
     /// Create a new source location
-    pub fn new(source: impl Into<Rc<str>>, line: u32, column: u32) -> Self {
+    pub fn new(source: impl AsRef<str>, line: u32, column: u32) -> Self {
         Self {
-            source: source.into(),
+            source: Arc::from(source.as_ref()),
             line,
             column,
             length: None,
@@ -79,9 +79,9 @@ impl SourceLocation {
     }
 
     /// Create a source location with a span length
-    pub fn with_length(source: impl Into<Rc<str>>, line: u32, column: u32, length: u32) -> Self {
+    pub fn with_length(source: impl AsRef<str>, line: u32, column: u32, length: u32) -> Self {
         Self {
-            source: source.into(),
+            source: Arc::from(source.as_ref()),
             line,
             column,
             length: Some(length),
