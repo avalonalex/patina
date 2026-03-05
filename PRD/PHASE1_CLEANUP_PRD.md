@@ -100,32 +100,18 @@ From the December 2025 run: `fib(25)` took **2.94s**. Historical profiling showe
 
 ---
 
-## Priority 4: IR Visitor Completeness
+## Priority 4: IR Visitor Completeness — COMPLETE ✅
 
-### Problem
+`ExprVisitor` in `patina-ir/src/visitor.rs` now covers all 13 `CoreExprKind` variants with a working default-dispatch design.
 
-The `ExprVisitor` trait in `patina-ir/src/visitor.rs` is a skeleton. It has 5 `unimplemented!()` default methods and covers only 5 of 13 `CoreExpr` variants. The VM compiler will need to traverse `CoreExpr` for:
-- Free variable analysis (determines closure captures)
-- Constant folding
-- Tail position marking
-- Bytecode compilation
+### What Was Delivered
 
-### Scope
-
-1. Add visitor methods for all 13 `CoreExpr` variants
-2. Implement default dispatch in `visit_expr` that routes to per-variant methods
-3. Add a `walk_children` utility for default recursive traversal
-4. Replace `unimplemented!()` with proper panicking messages or make methods required
-
-### Success Criteria
-
-- `ExprVisitor` covers all `CoreExpr` variants
-- Default `visit_expr` implementation dispatches correctly
-- At least one test pass (e.g., a simple expression counter) validates the visitor works
-
-### Effort Estimate
-
-1–2 days.
+- Dropped the generic `Output` associated type — the trait is now a pure walk/analysis visitor (side effects via `&mut self`); transforms use `CoreExpr::map_children`
+- `visit_expr` has a default that calls `walk_expr` (dispatch to per-variant methods)
+- `walk_expr` matches all 13 variants and routes to the correct `visit_*` method
+- Leaf nodes (`visit_literal`, `visit_var`, `visit_quote`, `visit_quasiquote`, `visit_import`) default to no-op
+- Interior nodes (`visit_lambda`, `visit_if`, `visit_set`, `visit_begin`, `visit_define`, `visit_expand`, `visit_app`, `visit_apply`) default to recursing into children
+- 5 new tests: node counter, nested define counter, free-variable collector (simple + nested lambda), default walk over all 13 variants without panicking
 
 ---
 
@@ -196,5 +182,5 @@ Priority 5 (Docs) ── anytime ───────────────�
 | Ignored tests | 0 (was 8) | 0 ✅ |
 | Error messages with source locations | 0% (was) | >90% of eval errors ✅ |
 | Benchmark baseline recorded | Partial (Dec 2025) | Complete, committed |
-| IR visitor coverage | 5/13 variants | 13/13 variants |
+| IR visitor coverage | 5/13 variants (was) | 13/13 variants ✅ |
 | Stale documentation | 3 files | 0 files |
