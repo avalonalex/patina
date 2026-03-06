@@ -154,8 +154,9 @@ impl Repl {
                     // Evaluate using interpreter (which handles parsing internally)
                     self.expr_counter += 1;
                     let source_name = format!("<repl-{}>", self.expr_counter);
-                    let (eval_result, source_map) =
-                        self.interpreter.eval_str_with_source_name(line, &source_name);
+                    let (eval_result, source_map) = self
+                        .interpreter
+                        .eval_str_with_source_name(line, &source_name);
                     match eval_result {
                         Ok(result) => {
                             // Don't print #<unspecified> values (from define, set!, etc.)

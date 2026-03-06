@@ -125,10 +125,21 @@ impl PrimitiveFn {
 /// looked up by either qualified or unqualified names.
 ///
 /// Primitives can be registered at initialization time or dynamically at runtime.
+///
+/// ## Performance note
+///
+/// Variable lookup yields a `Procedure::Primitive { qualified_name, .. }` where
+/// `qualified_name` is from the internal library system (e.g. `"patina.internal.numbers/+"`)
+/// which differs from the registry key (e.g. `"scheme.base/+"`). The `name_index` maps
+/// each short name to its canonical qualified name for O(1) fallback lookup without
+/// scanning all 300+ entries.
 pub struct PrimitiveRegistry {
     /// Map from fully qualified name (library/name) to primitive function
     /// Example: "scheme.base/+" -> PrimitiveFn { ... }
     primitives: HashMap<String, PrimitiveFn>,
+    /// O(1) index: short name -> canonical qualified name.
+    /// First registration for a given name wins (earlier registrations shadow later ones).
+    name_index: HashMap<&'static str, String>,
 }
 
 impl PrimitiveRegistry {
@@ -136,6 +147,7 @@ impl PrimitiveRegistry {
     pub fn new() -> Self {
         PrimitiveRegistry {
             primitives: HashMap::new(),
+            name_index: HashMap::new(),
         }
     }
 
@@ -146,6 +158,10 @@ impl PrimitiveRegistry {
     /// This enables primitive overriding for testing or customization.
     pub fn register(&mut self, primitive: PrimitiveFn) {
         let qualified_name = primitive.qualified_name();
+        // Index the short name for O(1) fallback lookup. First registration wins.
+        self.name_index
+            .entry(primitive.name)
+            .or_insert_with(|| qualified_name.clone());
         self.primitives.insert(qualified_name, primitive);
     }
 
@@ -164,7 +180,7 @@ impl PrimitiveRegistry {
         self.primitives.get(qualified_name)
     }
 
-    /// Get a primitive by unqualified name (searches all libraries)
+    /// Get a primitive by unqualified name (O(1) via name_index)
     ///
     /// This searches for any primitive with the given short name, regardless of
     /// which library it's registered under. Useful for internal libraries that
@@ -172,20 +188,8 @@ impl PrimitiveRegistry {
     ///
     /// Example: `registry.get_by_name("+")` finds "scheme.base/+"
     pub fn get_by_name(&self, name: &str) -> Option<&PrimitiveFn> {
-        // We need to match "library/name" where name is exactly what we're looking for.
-        // We can't just use ends_with because "/" is also a valid primitive name,
-        // and "floor/" would incorrectly match when searching for "/".
-        self.primitives
-            .iter()
-            .find(|(qualified_name, _)| {
-                // Split on the first "/" to get library and primitive name
-                if let Some(pos) = qualified_name.find('/') {
-                    &qualified_name[pos + 1..] == name
-                } else {
-                    false
-                }
-            })
-            .map(|(_, prim)| prim)
+        let qn = self.name_index.get(name)?;
+        self.primitives.get(qn.as_str())
     }
 
     /// Get a primitive by unqualified name from a specific library
@@ -265,20 +269,21 @@ impl PrimitiveRegistry {
         primitive.call_tagged(evaluator, args, in_tail)
     }
 
-    /// Internal helper to look up a primitive by qualified or unqualified name
+    /// Internal helper to look up a primitive by qualified or unqualified name.
+    ///
+    /// Fast path: qualified name matches the registry key directly.
+    /// Fallback: extract the short name and use the O(1) name_index.
     fn lookup_primitive(&self, qualified_name: &str) -> Result<&PrimitiveFn, EvalError> {
-        // First try qualified name lookup
+        // Fast path: qualified name matches (e.g. "scheme.base/+")
         if let Some(prim) = self.get(qualified_name) {
             return Ok(prim);
         }
 
-        // Fall back to unqualified name lookup
-        // Extract the name part from "library/name" using the first "/" as separator.
-        // This correctly handles cases like "/" being the primitive name (library// is the qualified form).
-        let name = if let Some(pos) = qualified_name.find('/') {
-            &qualified_name[pos + 1..]
-        } else {
-            qualified_name
+        // Fallback: extract "name" from "library/name" and use the O(1) name_index.
+        // split_once is used to correctly handle "/" as a primitive name (stored as "scheme.base//").
+        let name = match qualified_name.split_once('/') {
+            Some((_, n)) => n,
+            None => qualified_name,
         };
         self.get_by_name(name)
             .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))

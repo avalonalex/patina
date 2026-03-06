@@ -2,6 +2,51 @@
 
 Major accomplishments and project milestones.
 
+## 2026-03-05: O(1) Primitive Dispatch Fix (57% speedup)
+
+**Root cause found and fixed: 296-entry linear scan on every primitive call.**
+
+The `PrimitiveRegistry` stored primitives under `"scheme.base/+"` but the environment's
+`Procedure::Primitive` used `"patina.internal.numbers/+"`. Every call to `+`, `-`, `<` missed
+the HashMap and triggered a full linear scan of all 296 primitives, each calling `find('/')`
+via `memchr_aligned`. For `fib(25)` with ~720K dispatches: ~213M `memchr` calls = 34.9% of CPU.
+
+**Fix:** Added `name_index: HashMap<&'static str, String>` to `PrimitiveRegistry`. `get_by_name()`
+is now O(1). Discovered via `cargo flamegraph` — `PrimitiveRegistry::apply_tagged` was 58.66% of time.
+
+**Results (Apple M1 Max):**
+
+| Benchmark | Before | After | Improvement |
+|-----------|--------|-------|-------------|
+| `fib(25)` | 1.92s | 832ms | **-57%** |
+| `tak(18,12,6)` | 402ms | 300ms | **-25%** |
+| `primes(1000)` | 458ms | 130ms | **-72%** |
+| `nqueens(8)` | 629ms | 270ms | **-57%** |
+| `deriv/1000_iter` | 879ms | 388ms | **-56%** |
+
+All 38 benchmarks improved 17–72%. New baseline committed.
+
+---
+
+## 2026-03-05: Benchmark Baseline Established (Phase 1 Cleanup Complete)
+
+**First full tree-walker benchmark baseline recorded — 38 benchmarks across 4 categories.**
+
+All Phase 1 cleanup items complete (Priorities 1–5). Phase 2 (VM backend) can now begin.
+
+**Baseline highlights (Apple M1 Max, release build):**
+- `r7rs/fib/25`: 1.92s — key regression target for VM (was 0.92s pre-TaggedValue migration)
+- `r7rs/tak/18_12_6`: 402ms
+- `r7rs/nqueens/10`: 14.0s
+- `continuations/callcc/simple`: 4.34µs
+- `data/vectors/make_1000`: 7.51µs (fast path)
+
+**Benchmark infrastructure:** `crates/patina-tests/benches/scheme_benchmarks.rs`, `scripts/run_benchmarks.sh`
+
+**Baseline committed:** `benchmark_reports/performance.md`, `benchmark_reports/history.csv`
+
+---
+
 ## 2026-03-05: Rich Error Messages with Source Tracking (All 5 Phases Complete)
 
 **Caret-style errors with macro expansion chains in REPL and script mode.**

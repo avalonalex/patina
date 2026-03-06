@@ -71,7 +71,10 @@ fn run_script(filename: &str) {
         match result {
             Ok(_) => process::exit(0),
             Err(e) => {
-                eprintln!("Error: {}", format_interpreter_error(&e, &source_map.borrow()));
+                eprintln!(
+                    "Error: {}",
+                    format_interpreter_error(&e, &source_map.borrow())
+                );
                 process::exit(1);
             }
         }

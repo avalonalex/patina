@@ -59,44 +59,37 @@ Error: Undefined variable: y
 
 ---
 
-## Priority 3: Benchmark Baseline
+## Priority 3: Benchmark Baseline — COMPLETE ✅
 
-### Problem
+**38 benchmarks across 4 categories committed as official tree-walker baseline (2026-03-05).**
 
-The VM backend's primary motivation is performance. Without a solid tree-walker baseline, there's no way to measure improvement. Current benchmark data is from December 2025 (commit `90cc977`) and only partially captured.
+### What Was Delivered
 
-### Current State
+- Full benchmark suite run on commit `76e9e1e` (source-info branch, main-equivalent) with 20 samples
+- Fixed over-long inputs: `ack(3,8/9)` → `ack(3,4/6)` (was 19s/sample); `nqueens(11)` dropped (was several seconds/sample)
+- All 38 results committed to `benchmark_reports/performance.md` and `benchmark_reports/history.csv`
+- Platform: Apple M1 Max, Rust 1.93.1, release build
 
-Benchmark infrastructure exists and works:
-- Criterion benchmarks in `crates/patina-tests/benches/scheme_benchmarks.rs`
-- 4 benchmark groups: r7rs (7 programs), continuations (3), data structures (2), numeric (3)
-- Script at `scripts/run_benchmarks.sh` generates reports
-- Partial historical data in `benchmark_reports/` (only `sum` tracked, from Dec 2025)
+### Key Baseline Numbers
 
-### Scope
+| Benchmark | Tree-Walker Baseline |
+|-----------|---------------------|
+| `r7rs/fib/25` | 1.92s |
+| `r7rs/tak/18_12_6` | 402ms |
+| `r7rs/ack/3/6` | 1.02s |
+| `r7rs/nqueens/10` | 14.0s |
+| `r7rs/deriv/1000_iter` | 879ms |
+| `continuations/callcc/simple` | 4.34µs |
+| `data/lists/map_1000` | 52.6ms |
+| `numeric/sum_10000` | 66.8ms |
 
-1. Run the full benchmark suite on current `main` with standard settings (20 samples)
-2. Record all results as the official tree-walker baseline
-3. Commit the baseline report to the repo
-4. Consider adding 2–3 additional benchmarks that stress areas the VM should improve:
-   - Deep recursion (e.g., `fib(30)`) — measures call overhead
-   - Tight arithmetic loop — measures dispatch overhead
-   - List processing (map/filter over large lists) — measures allocation pressure
-5. Document the baseline in `MILESTONES.md`
+Note: `fib(25)` baseline is 1.92s (was 0.92s pre-TaggedValue migration in Dec 2025). The VM target should beat this significantly.
 
-### Known Data Point
+### Success Criteria — Met
 
-From the December 2025 run: `fib(25)` took **2.94s**. Historical profiling showed `fib(25)` at ~0.92s before the TaggedValue migration. This regression should be investigated — it may indicate an optimization opportunity in the tree-walker worth addressing, or it may reflect measurement differences.
-
-### Success Criteria
-
-- Full benchmark results committed and reproducible
-- Baseline numbers documented for all benchmark programs
-- Clear methodology for comparing VM results against baseline
-
-### Effort Estimate
-
-1 day for running benchmarks, recording, and committing. 1–2 additional days if adding new benchmark programs.
+- ✅ Full benchmark results committed and reproducible
+- ✅ Baseline numbers documented for all benchmark programs
+- ✅ Clear methodology: `./scripts/run_benchmarks.sh` generates reproducible reports
 
 ---
 
@@ -169,6 +162,6 @@ Priority 5 (Docs) ── anytime ───────────────�
 |--------|---------|--------|
 | Ignored tests | 0 (was 8) | 0 ✅ |
 | Error messages with source locations | 0% (was) | >90% of eval errors ✅ |
-| Benchmark baseline recorded | Partial (Dec 2025) | Complete, committed |
+| Benchmark baseline recorded | Partial (Dec 2025) | Complete, committed ✅ |
 | IR visitor coverage | 5/13 variants (was) | 13/13 variants ✅ |
 | Stale documentation | 3 files (was) | 0 files ✅ |

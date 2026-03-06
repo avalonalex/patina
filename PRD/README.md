@@ -17,7 +17,7 @@ Hardening the foundation before starting Phase 2. See `PHASE1_CLEANUP_PRD.md` fo
 
 - ✅ Priority 1: Continuation and dynamic-wind correctness (0 ignored tests)
 - ✅ Priority 2: Source location tracking (rich caret-style errors in REPL and scripts)
-- ☐ Priority 3: Benchmark baseline
+- ✅ Priority 3: Benchmark baseline
 - ✅ Priority 4: IR visitor completeness (ExprVisitor covers all 13 CoreExprKind variants)
 - ☐ Priority 5: Stale documentation
 

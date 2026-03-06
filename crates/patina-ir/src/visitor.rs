@@ -175,7 +175,7 @@ pub trait ExprVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use patina_core::{CoreExpr, CoreExprKind, Formals, ScopedParam, ScopeSet, TaggedValue};
+    use patina_core::{CoreExpr, CoreExprKind, Formals, ScopeSet, ScopedParam, TaggedValue};
     use std::collections::HashSet;
 
     // ── helpers ──────────────────────────────────────────────────────────
@@ -316,7 +316,10 @@ mod tests {
     #[test]
     fn test_free_vars_nested_lambda() {
         // (lambda (x) (lambda (y) (+ x y z)))  →  free: {+, z}
-        let inner = lambda(vec!["y"], vec![app(var("+"), vec![var("x"), var("y"), var("z")])]);
+        let inner = lambda(
+            vec!["y"],
+            vec![app(var("+"), vec![var("x"), var("y"), var("z")])],
+        );
         let outer = lambda(vec!["x"], vec![inner]);
         let mut collector = FreeVarCollector::new();
         collector.visit_expr(&outer);

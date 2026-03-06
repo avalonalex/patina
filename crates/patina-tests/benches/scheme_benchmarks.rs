@@ -82,8 +82,8 @@ fn bench_ack(c: &mut Criterion) {
     let interp = make_interpreter();
     load_program(&interp, "ack.scm");
 
-    // ack(3, n) - different n values
-    for n in [6, 8, 9] {
+    // ack(3, n) - ack(3,8)=19s/sample and ack(3,9)=85s/sample are too slow for a baseline run
+    for n in [4, 6] {
         group.bench_with_input(BenchmarkId::new("3", n), &n, |b, &n| {
             b.iter(|| eval(&interp, &format!("(ack 3 {})", n)))
         });
@@ -141,8 +141,8 @@ fn bench_nqueens(c: &mut Criterion) {
     let interp = make_interpreter();
     load_program(&interp, "nqueens.scm");
 
-    // Different board sizes
-    for n in [8, 10, 11] {
+    // n=11 takes several seconds per sample; keep to 8 and 10 for a manageable baseline run
+    for n in [8, 10] {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             b.iter(|| eval(&interp, &format!("(nqueens {})", n)))
         });

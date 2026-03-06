@@ -427,10 +427,11 @@ impl Interpreter<TreeWalker> {
         let heap = self.backend.global_env().heap();
         let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
-        let mut parser = match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
-            Ok(p) => p,
-            Err(e) => return (Err(e.into()), source_map),
-        };
+        let mut parser =
+            match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
+                Ok(p) => p,
+                Err(e) => return (Err(e.into()), source_map),
+            };
         let expr = match parser.parse() {
             Ok(e) => e,
             Err(e) => return (Err(e.into()), source_map),
@@ -457,10 +458,11 @@ impl Interpreter<TreeWalker> {
         let heap = self.backend.global_env().heap();
         let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
-        let mut parser = match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
-            Ok(p) => p,
-            Err(e) => return (Err(e.into()), source_map),
-        };
+        let mut parser =
+            match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
+                Ok(p) => p,
+                Err(e) => return (Err(e.into()), source_map),
+            };
         let global = self.backend.global_env().clone();
         loop {
             match parser.parse() {
@@ -482,7 +484,11 @@ impl Interpreter<TreeWalker> {
     }
 
     /// Evaluate a program resiliently with a named source; prints rich errors and continues.
-    pub fn eval_program_resilient_with_source_name(&self, input: &str, source_name: &str) -> TaggedValue {
+    pub fn eval_program_resilient_with_source_name(
+        &self,
+        input: &str,
+        source_name: &str,
+    ) -> TaggedValue {
         let mut result = TaggedValue::UNSPECIFIED;
         let heap = self.backend.global_env().heap();
         let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));

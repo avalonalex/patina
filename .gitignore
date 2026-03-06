@@ -5,5 +5,5 @@ Cargo.lock
 *~
 .patina_history
 
-# Benchmark reports (machine-specific)
-/benchmark_reports
+# Benchmark reports - tracked for baseline history
+# /benchmark_reports
