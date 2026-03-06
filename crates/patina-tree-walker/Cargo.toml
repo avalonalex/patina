@@ -11,6 +11,7 @@ patina-frontend = { path = "../patina-frontend" }
 patina-macros = { path = "../patina-macros" }
 patina-ir = { path = "../patina-ir" }
 patina-core = { path = "../patina-core" }
+patina-primitives = { path = "../patina-primitives" }
 
 # Numeric dependencies (needed by primitives)
 num-bigint = { workspace = true }

@@ -560,8 +560,8 @@ impl<'a> CpsEvaluator<'a> {
             })
         } else {
             // No handler - propagate to Rust level
-            use crate::eval::primitives::io::datum_writer::format_display_tagged;
             use patina_core::ExceptionKind;
+            use patina_primitives::primitives::io::datum_writer::format_display_tagged;
             let heap = self.evaluator.global_env.heap();
             let exception_str = format_display_tagged(exception_tagged, heap);
             let msg = if continuable {
@@ -638,8 +638,8 @@ impl<'a> CpsEvaluator<'a> {
             })
         } else {
             // No handler - propagate to Rust level
-            use crate::eval::primitives::io::datum_writer::format_display_tagged;
             use patina_core::ExceptionKind;
+            use patina_primitives::primitives::io::datum_writer::format_display_tagged;
             let irritants_display = irritants_tagged
                 .iter()
                 .map(|tv| format_display_tagged(*tv, heap))
@@ -740,24 +740,13 @@ impl<'a> CpsEvaluator<'a> {
         };
 
         // Use pre-computed qualified name — no format!() allocation needed
-        let prim_result = self.evaluator.primitive_registry.apply_tagged(
-            qualified_name,
-            args,
-            self.evaluator,
-            false,
-        );
+        let prim_result =
+            self.evaluator
+                .primitive_registry
+                .apply_tagged(qualified_name, args, self.evaluator);
 
         match prim_result {
-            Ok(eval_result) => {
-                let result_tagged = match eval_result {
-                    super::super::EvalResult::Tagged(tv) => tv,
-                    super::super::EvalResult::TailCallPrimitive { .. } => {
-                        return Err(EvalError::InternalError(
-                            "Primitive returned tail call".to_string(),
-                        ));
-                    }
-                };
-
+            Ok(result_tagged) => {
                 // Return InvokeContinuation step instead of recursive call
                 Ok(StepResult::InvokeContinuation {
                     cont,
@@ -876,24 +865,8 @@ impl<'a> CpsEvaluator<'a> {
 
         // Use pre-computed static qualified name — zero allocation
         let qualified_name = op.qualified_name().unwrap();
-        let prim_result = self.evaluator.primitive_registry.apply_tagged(
-            qualified_name,
-            args,
-            self.evaluator,
-            false,
-        );
-
-        match prim_result {
-            Ok(eval_result) => match eval_result {
-                super::super::EvalResult::Tagged(tv) => Ok(tv),
-                super::super::EvalResult::TailCallPrimitive { .. } => {
-                    Err(EvalError::InternalError(format!(
-                        "Primitive {:?} returned unexpected result",
-                        op
-                    )))
-                }
-            },
-            Err(e) => Err(e),
-        }
+        self.evaluator
+            .primitive_registry
+            .apply_tagged(qualified_name, args, self.evaluator)
     }
 }

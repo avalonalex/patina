@@ -65,11 +65,14 @@ macro_rules! trace_warn {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DebugStage {
+    #[allow(dead_code)]
     Lex,
+    #[allow(dead_code)]
     Parse,
     Eval,
     Apply,
     Env,
+    #[allow(dead_code)]
     Expand,
 }
 
@@ -89,11 +92,13 @@ impl DebugConfig {
     }
 
     /// Enable a specific debug stage
+    #[allow(dead_code)]
     pub fn enable(&self, stage: DebugStage) {
         self.enabled_stages.borrow_mut().insert(stage);
     }
 
     /// Disable a specific debug stage
+    #[allow(dead_code)]
     pub fn disable(&self, stage: DebugStage) {
         self.enabled_stages.borrow_mut().remove(&stage);
     }
@@ -104,11 +109,13 @@ impl DebugConfig {
     }
 
     /// Disable all debug stages
+    #[allow(dead_code)]
     pub fn clear(&self) {
         self.enabled_stages.borrow_mut().clear();
     }
 
     /// Enable all debug stages
+    #[allow(dead_code)]
     pub fn enable_all(&self) {
         let mut stages = self.enabled_stages.borrow_mut();
         stages.insert(DebugStage::Lex);

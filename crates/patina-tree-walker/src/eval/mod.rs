@@ -1,5 +1,6 @@
 // Module declarations
 mod application;
+mod apply_context_impl;
 mod cps_eval;
 mod debug;
 mod error;
@@ -10,7 +11,9 @@ pub use cps_eval::{CpsEvaluator, eval_cps};
 pub use error::EvalError;
 
 // Re-export datum writer functions for use by interpreter crate
-pub use primitives::io::datum_writer::{format_display_tagged, format_write_tagged};
+pub use patina_primitives::primitives::io::datum_writer::{
+    format_display_tagged, format_write_tagged,
+};
 
 use debug::DebugConfig;
 use patina_runtime::environment::Environment;
@@ -42,8 +45,8 @@ pub struct Evaluator {
     pub(crate) library_registry: RefCell<LibraryRegistry>,
     /// Registry of library loaders (Rust, Scheme, etc.)
     pub(crate) loader_registry: RefCell<LibraryLoaderRegistry>,
-    /// Registry of primitive procedures
-    pub(crate) primitive_registry: primitives::PrimitiveRegistry,
+    /// Registry of primitive procedures (shared across all backends via patina-primitives)
+    pub(crate) primitive_registry: patina_primitives::PrimitiveRegistry,
     // Note: special_form_registry removed - all special forms now in CoreExpr!
 }
 
@@ -52,7 +55,7 @@ impl Evaluator {
         let global_env = Rc::new(Environment::new());
 
         // Create primitive registry and register all primitives
-        let mut primitive_registry = primitives::PrimitiveRegistry::new();
+        let mut primitive_registry = patina_primitives::PrimitiveRegistry::new();
         Self::register_all_primitives(&mut primitive_registry);
 
         // Note: Primitives are now installed via library loading rather than

@@ -7,6 +7,7 @@ members = [
     "crates/patina-frontend",
     "crates/patina-macros",
     "crates/patina-pipeline",
+    "crates/patina-primitives",
     "crates/patina-tree-walker",
     "crates/patina-interpreter",
     "crates/patina-repl",

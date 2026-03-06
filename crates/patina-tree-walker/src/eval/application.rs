@@ -26,7 +26,7 @@ impl Evaluator {
 
         // Debug trace entry
         if self.debug.is_enabled(super::debug::DebugStage::Apply) {
-            use crate::eval::primitives::io::datum_writer::format_display_tagged;
+            use patina_primitives::primitives::io::datum_writer::format_display_tagged;
             let proc_str = format_display_tagged(proc, heap);
             let args_str = args
                 .iter()
@@ -141,7 +141,7 @@ impl Evaluator {
             self.debug.dedent();
             match &result {
                 Ok(super::EvalResult::TailCallPrimitive { proc, args }) => {
-                    use crate::eval::primitives::io::datum_writer::format_display_tagged;
+                    use patina_primitives::primitives::io::datum_writer::format_display_tagged;
                     let proc_str = format_display_tagged(*proc, heap);
                     let args_str = args
                         .iter()
