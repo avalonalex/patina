@@ -11,15 +11,15 @@ Strategic planning, design documents, and roadmaps for Patina's development phas
 
 See `PRD/MILESTONES.md` for full history.
 
-## Phase 1 Cleanup (Active)
+## Phase 1 Cleanup — COMPLETE ✅
 
-Hardening the foundation before starting Phase 2. See `PHASE1_CLEANUP_PRD.md` for status.
+All 5 priorities done. Archived at `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md`.
 
 - ✅ Priority 1: Continuation and dynamic-wind correctness (0 ignored tests)
 - ✅ Priority 2: Source location tracking (rich caret-style errors in REPL and scripts)
-- ✅ Priority 3: Benchmark baseline
+- ✅ Priority 3: Benchmark baseline (38 benchmarks; O(1) primitive dispatch fix: -57% fib)
 - ✅ Priority 4: IR visitor completeness (ExprVisitor covers all 13 CoreExprKind variants)
-- ☐ Priority 5: Stale documentation
+- ✅ Priority 5: Stale documentation
 
 ## Development Phases
 
@@ -53,14 +53,10 @@ miniKanren embedding.
 ```
 PRD/
 ├── MILESTONES.md                       # Achievement history
-├── PHASE1_CLEANUP_PRD.md               # Cleanup work tracker
-├── phase1/
-│   ├── DELIMITED_CONTINUATIONS_DESIGN.md
-│   ├── GC_DESIGN.md
-│   └── CLONE_OPTIMIZATION_ANALYSIS.md
-└── phase2/
-    ├── SYNTAX_CASE_DESIGN.md
-    └── R7RS_LARGE_STATUS.md
+├── phase2/
+│   ├── VM_BACKEND_DESIGN.md            # (to be created) VM backend design
+│   ├── SYNTAX_CASE_DESIGN.md
+│   └── R7RS_LARGE_STATUS.md
 ```
 
 ## Archive
@@ -68,5 +64,6 @@ PRD/
 Completed research and historical documents in `PRD/ARCHIVE/`. Key references:
 - `ARCHIVE/numeric_research/NUMERIC_SUMMARY.md` — canonical numeric tower guide
 - `ARCHIVE/source_info_2026_03/SOURCE_INFO_PLAN.md` — source tracking implementation
+- `ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` — Phase 1 cleanup tracker
 - `ARCHIVE/core_ir_migration_2025_11/` — CoreExpr migration
 - `ARCHIVE/macro_research/` — syntax-rules hygiene research

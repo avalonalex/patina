@@ -1,8 +1,19 @@
 # Patina VM Specification (Draft v0.1)
 
-**Status:** Draft Design
+**Status:** Draft Design — see [VM_DECISIONS.md](./VM_DECISIONS.md) for all settled decisions
 **Target:** Phase 2 Implementation
-**Design Goal:** Flexible architecture supporting incremental addition of advanced features
+
+## Settled Decisions (summary — VM_DECISIONS.md is authoritative)
+
+| Decision | Choice |
+|----------|--------|
+| Machine type | **Register machine** |
+| Value representation | **NaN-boxed `VmVal`** (floats immediate; VM-internal, separate from `TaggedValue`) |
+| Float encoding | **Immediate via NaN-boxing** (no heap allocation for floats) |
+| Delimited continuations | **SRFI-226** (Final 2023): `CallWithPrompt` / `AbortToPrompt` / `CaptureComposable` |
+| GC | **Tracing (rust-gc)** in Phase 2B; arena/Rc acceptable for Phase 2A |
+| Primitives | **`patina-primitives` crate** extracted before VM code |
+| JIT | Reserved ISA space (`profile_id`); **not implemented in Phase 2** |
 
 ---
 
@@ -181,37 +192,55 @@ pub enum Opcode {
     Return { value: Register },
 
     // ─────────────────────────────────────────────────────
-    // Delimited Continuations (Primitive for all control effects)
+    // Delimited Continuations — SRFI-226 (Final 2023)
+    // All control effects (call/cc, exceptions, generators) unify here.
+    // See VM_CALLCC_DESIGN.md §7 for detailed semantics.
     // ─────────────────────────────────────────────────────
-    Reset {
-        prompt_tag: PromptTag,
-        body: Label,
-        cleanup: Option<Label>,  // For dynamic-wind
+
+    /// Establish a prompt tagged with `tag`, call `body` thunk.
+    /// If body returns normally → dst. If AbortToPrompt fires → handler called.
+    /// Maps to SRFI-226's call-with-continuation-prompt.
+    CallWithPrompt {
+        body: Register,
+        prompt_tag: Register,
+        handler: Register,
+        dst: Register,
     },
 
-    Shift {
-        prompt_tag: PromptTag,
-        continuation_var: Register,
-        body: Label
+    /// Abort to the nearest matching prompt. Bundles intervening frames into
+    /// a VmDelimitedContinuation passed to the prompt's handler.
+    /// Maps to SRFI-226's abort-current-continuation.
+    AbortToPrompt {
+        prompt_tag: Register,
+        value: Register,
     },
 
+    /// Capture frames from current depth to the nearest matching prompt as a
+    /// VmDelimitedContinuation (composable — does NOT unwind; execution continues).
+    /// Maps to SRFI-226's call-with-composable-continuation.
+    CaptureComposable {
+        dst: Register,
+        prompt_tag: Register,
+    },
+
+    /// Invoke a captured continuation (composable or non-composable).
+    /// Composable: appends captured frames. Non-composable: replaces entire stack.
     InvokeContinuation {
         continuation: Register,
         value: Register,
-        dst: Register
+        dst: Register,
     },
 
     // ─────────────────────────────────────────────────────
-    // High-Level Control (desugar to Reset/Shift)
+    // High-Level Control (desugar to SRFI-226 primitives above)
     // ─────────────────────────────────────────────────────
-    Try { body: Label, handler: Label, exception_var: Register },
-    Raise { value: Register },
 
-    Yield { value: Register },  // For generators
+    // call/cc: compiler emits CaptureComposable at default prompt + MarkNonComposable
+    // Exceptions: CallWithPrompt with exception-prompt-tag / AbortToPrompt
+    // Generators: CaptureComposable with a generator-specific prompt tag
+
+    Yield { value: Register },   // Generator yield (sugar over CaptureComposable)
     Resume { generator: Register, dst: Register },
-
-    // Full continuation (desugars to top-level reset/shift)
-    CallCC { func: Register, dst: Register },
 
     // ─────────────────────────────────────────────────────
     // Guards (for speculative optimization)
