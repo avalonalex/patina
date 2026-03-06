@@ -115,25 +115,13 @@ From the December 2025 run: `fib(25)` took **2.94s**. Historical profiling showe
 
 ---
 
-## Priority 5: Update Stale Documentation
+## Priority 5: Update Stale Documentation — COMPLETE ✅
 
-### Problem
+### What Was Done
 
-Several documents are significantly out of date:
-
-- `PRD/README.md` — Still says Phase 1 is "47% complete" and lists `let/let*` as in progress
-- `PRD/MILESTONES.md` — Narrative stops at December 2025; doesn't reflect 100% chibi compliance
-- `docs/FEATURE_STATUS.md` — Referenced in `CLAUDE.md` but the file was archived; no active replacement exists
-
-### Scope
-
-1. Update `PRD/README.md` to reflect current project state (Phase 1 complete, Phase 2 planned)
-2. Add milestone entries to `MILESTONES.md` for: 100% chibi compliance, TaggedValue migration, benchmark infrastructure, current state
-3. Either restore `docs/FEATURE_STATUS.md` with current status or remove the reference from `CLAUDE.md`
-
-### Effort Estimate
-
-1–2 hours.
+- **`CLAUDE.md`**: Reduced from 892 → 147 lines per Anthropic's recommendations. Removed sections Claude can infer from source (deep-dive architecture, API signatures, code snippets). Kept: commands, file locations, non-obvious rules (RefCell discipline, TaggedValue Copy, Arc vs Rc, macros-vs-forms), feature recipes, error type table. Removed stale references to `DefineSyntax` CoreExpr variant (deleted 2025-12-01), `SpecialFormRegistry` (removed), `docs/FEATURE_STATUS.md` (archived), `SOURCE_INFO_PLAN.md` (archived 2026-03-05).
+- **`PRD/README.md`**: Full rewrite — was "47% complete / let in progress", now reflects Phase 1 complete, Phase 2 (VM) next, with correct phase numbering. Removed dead links.
+- **`PRD/MILESTONES.md`**: Removed stale "Future Milestones", "Metrics Tracking", and "Archive" sections from November 2025 (showing items long completed as pending). Historical entries preserved.
 
 ---
 
@@ -183,4 +171,4 @@ Priority 5 (Docs) ── anytime ───────────────�
 | Error messages with source locations | 0% (was) | >90% of eval errors ✅ |
 | Benchmark baseline recorded | Partial (Dec 2025) | Complete, committed |
 | IR visitor coverage | 5/13 variants (was) | 13/13 variants ✅ |
-| Stale documentation | 3 files | 0 files |
+| Stale documentation | 3 files (was) | 0 files ✅ |

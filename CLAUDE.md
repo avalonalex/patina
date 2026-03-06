@@ -1,130 +1,32 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-Patina is a Scheme R7RS-small interpreter written in Rust. This is an educational project with ambitious goals: implementing a full R7RS-compliant Scheme interpreter, then building a bytecode VM for performance, adding syntax-case for procedural macros, and ultimately extending with gradual typing, reactive concurrency, and logic programming. Currently in Phase 1 (basic R7RS compliance).
+Patina is an R7RS-small Scheme interpreter written in Rust. Phase 1 (tree-walker interpreter) is **complete**: 1159/1159 chibi R7RS tests pass, ~1400 internal tests pass. Phase 2 (VM backend) is next.
 
-**Architecture:** Modular workspace with 10 crates supporting multiple backends (tree-walker implemented, VM and JIT planned). Features a sophisticated dual-loader library system and CoreExpr IR-based evaluation pipeline.
+All runtime values are `TaggedValue` — NaN-boxed 8-byte `Copy` types. No `Value` enum exists (fully removed). Macros and derived forms (`let`, `cond`, `do`, etc.) are implemented in Scheme (`lib/scheme/base/*.scm`), not as special forms.
 
 ## Workspace Structure
 
-Patina uses a Rust workspace with 10 crates organized by concern:
-
 ```
-patina/ (workspace root)
-├── Cargo.toml              # Workspace configuration
-├── lib/                    # Scheme standard library
-│   └── scheme/             # R7RS library implementations (.sld files)
-│       ├── base.sld        # (scheme base) library definition
-│       ├── base/           # Base library Scheme code (macros, derived forms)
-│       │   ├── binding.scm     # let, let*, letrec, etc.
-│       │   ├── conditionals.scm # cond, case, when, unless
-│       │   ├── iteration.scm   # do loop
-│       │   ├── lists.scm       # caar, cadr, not, zero?, etc.
-│       │   ├── numbers.scm     # number utilities
-│       │   └── records.scm     # define-record-type macro
-│       ├── char.sld, complex.sld, cxr.sld, eval.sld, file.sld
-│       ├── inexact.sld, lazy.sld, process-context.sld, r5rs.sld
-│       ├── read.sld, time.sld, write.sld, case-lambda.sld
-│       └── lazy/promises.scm   # Lazy evaluation support
-│
+patina/
+├── lib/scheme/             # R7RS .sld library files + .scm macro implementations
 └── crates/
-    ├── patina-core/        # TaggedValue, Heap, Environment, CoreExpr
-    ├── patina-runtime/     # Backend trait, Library system, re-exports patina-core
-    ├── patina-ir/          # CoreExpr IR utilities (visitor, CPS transform)
-    ├── patina-frontend/    # Lexer, Parser, Desugarer
-    ├── patina-macros/      # Macro expansion (syntax-rules with scope sets hygiene)
-    ├── patina-pipeline/    # Pipeline orchestration (pluggable strategies)
-    ├── patina-tree-walker/ # Tree-walking interpreter backend
-    ├── patina-interpreter/ # High-level Interpreter API
-    ├── patina-repl/        # Rich terminal REPL
-    └── patina-tests/       # All integration & compliance tests (~1400 tests)
+    ├── patina-core/        # TaggedValue, Heap, Environment, CoreExpr, CpsExpr, scope sets
+    ├── patina-runtime/     # Backend trait, LibraryRegistry, internal stdlib primitives
+    ├── patina-ir/          # ExprVisitor, CPS transform, re-exports CoreExpr types
+    ├── patina-frontend/    # Lexer, Parser, Desugarer, SourceMap
+    ├── patina-macros/      # syntax-rules with Racket-style scope-set hygiene
+    ├── patina-pipeline/    # StandardPipeline orchestration
+    ├── patina-tree-walker/ # Tree-walking Backend (CPS evaluator, primary backend)
+    ├── patina-interpreter/ # High-level Interpreter<B: Backend> API
+    ├── patina-repl/        # rustyline REPL + script runner binary
+    └── patina-tests/       # ~1400 integration and compliance tests
 ```
 
-### Crate Responsibilities
-
-**patina-core** (`crates/patina-core/src/`)
-- `TaggedValue`: NaN-boxed 8-byte value representation (all Scheme types)
-- `Heap`, `SharedHeap`: Arena-based typed storage for heap objects
-- `HeapObjectData`: Enum for heap-allocated objects (BigInt, Symbol, Procedure, etc.)
-- `Environment`: Lexical scoping with parent chains and scope-set hygiene
-- `CoreExpr`, `Formals`: Core IR types
-- `Procedure`, `Arity`: Procedure representation
-
-**patina-runtime** (`crates/patina-runtime/src/`)
-- Re-exports all types from `patina-core`
-- `Backend` trait: abstraction for multiple evaluation strategies
-- Library system: `LibraryRegistry`, `LibraryLoaderRegistry`, `RustLibraryLoader`
-- Internal primitive modules: `stdlib/internal_*.rs` (numbers, lists, strings, etc.)
-
-**patina-ir** (`crates/patina-ir/src/`)
-- `CoreExpr` enum: 9 core forms + 4 additional forms
-- Minimal IR for backend evaluation
-- Foundation for future nanopass architecture
-
-**patina-frontend** (`crates/patina-frontend/src/`)
-- `lexer/`: Tokenizes Scheme source
-- `parser/`: Builds AST (as TaggedValue list structure) from tokens
-- `desugarer/`: Converts macro-expanded AST to CoreExpr IR
-  - **Macro-aware**: Expands macros on-demand during desugaring
-  - Checks environment for macro bindings
-  - No separate pre-expansion phase needed
-
-**patina-macros** (`crates/patina-macros/src/`)
-- Hygienic macro expansion (syntax-rules)
-- Racket-style scope sets hygiene (based on "Binding as Sets of Scopes", Flatt 2016)
-- Flip-scope algorithm for distinguishing use-site vs introduced identifiers
-- Pattern matching and template expansion
-- Full ellipsis support including nested (`... ...`) and escaping (`(... template)`)
-- Separated into own crate for modularity
-- **See `docs/MACRO_SYSTEM.md` for comprehensive architecture documentation**
-
-**patina-pipeline** (`crates/patina-pipeline/src/`)
-- Pipeline orchestration with pluggable evaluation strategies
-- `Pipeline` trait: eval(), eval_program(), strategy()
-- `StandardPipeline`: Default parse → eval pipeline
-- `EvaluationStrategy` enum: Direct, CoreExpr, Bytecode (future), Jit (future)
-
-**patina-tree-walker** (`crates/patina-tree-walker/src/eval/`)
-- Implements `Backend` trait from patina-runtime
-- `TreeWalker`: Wraps Evaluator and implements Backend trait
-- `Evaluator`: Core evaluation engine with registries
-  - `global_env`: Global environment with all primitives
-  - `library_registry`: Manages loaded libraries
-  - `loader_registry`: Coordinates multiple library loaders
-  - `primitive_registry`: Registry of primitive procedures
-  - `special_form_registry`: Registry of special forms
-- `core_eval.rs`: CoreExpr evaluator (primary path)
-- `mod.rs`: Legacy Value evaluator (fallback for let-syntax)
-- `special_forms/`: All special form implementations
-- `application.rs`: Procedure application logic
-- `primitives/`: All built-in procedures organized by category
-
-**patina-interpreter** (`crates/patina-interpreter/src/`)
-- High-level `Interpreter<B: Backend>` API (generic over backends)
-- `TreeWalkInterpreter`: Type alias for `Interpreter<TreeWalker>`
-- `SimpleInterpreter`: Simpler non-generic API using StandardPipeline
-- Methods: `eval_str()`, `eval_program()`, `eval_program_resilient()`
-- Backend-agnostic interface for easy backend swapping
-
-**patina-repl** (`crates/patina-repl/src/`)
-- Rich terminal REPL with rustyline
-- Syntax highlighting, history, multi-line input
-- Binary executable: `target/release/patina`
-- Script mode: `patina script.scm`
-- REPL mode: `patina` (interactive)
-
-**patina-tests** (`crates/patina-tests/tests/`)
-- R7RS compliance tests organized by category
-- Integration tests (library loading, CoreExpr integration)
-- API tests (interpreter_api.rs)
-- Record type tests, eval tests, I/O tests
-- Total: ~1400 tests passing
-
-### Dependency Flow
-
+**Dependency flow:**
 ```
 patina-repl → patina-interpreter → patina-tree-walker → patina-runtime → patina-core
                                  ↗  patina-frontend    ↗                ↗
@@ -134,758 +36,112 @@ patina-repl → patina-interpreter → patina-tree-walker → patina-runtime →
 patina-tests → patina-interpreter
 ```
 
-## Documentation Organization
-
-**Important**: Use the following directories for different types of documentation:
-
-- **IMPORTANT** - Do not create markdown files unless the user explicitly states to do so. You may offer to create markdown files, but only do so with explicit user approval. Integrate any necessary notes as comments within the relevant code files, and keep comments succinct and on point.
-
-### 📁 Active Documentation (Frequently Updated)
-
-- **`PRD/`** - Strategic planning and design documents
-  - **`MILESTONES.md`** - ⭐ Historical achievements and progress milestones (keep updated)
-  - **`phase1/`** - Current phase planning
-    - **`DELIMITED_CONTINUATIONS_DESIGN.md`** - Delimited continuations design
-    - **`GC_DESIGN.md`** - Garbage collection design
-    - **`CLONE_OPTIMIZATION_ANALYSIS.md`** - Value cloning optimization analysis
-    - **`SOURCE_INFO_PLAN.md`** - Source location tracking plan
-  - **`phase2/`** - Future enhancements
-    - **`SYNTAX_CASE_DESIGN.md`** - ⭐ syntax-case implementation design (future macro system)
-    - **`R7RS_LARGE_STATUS.md`** - R7RS-large editions tracking (Red, Tangerine, etc.)
-  - **`ARCHIVE/numeric_research/NUMERIC_SUMMARY.md`** - ⭐ **CANONICAL** guide for numeric tower implementation
-
-- **`docs/`** - Documentation for completed features
-  - **`MACRO_SYSTEM.md`** - ⭐ Comprehensive macro system architecture
-  - **`TEST_ORGANIZATION.md`** - ⭐ Test structure and running tests
-  - **`reference_impls/`** - Reference implementation notes (Chibi, Chez, Gauche, Koka)
-
-### 🗄️ Archived Documentation (Read-Only Reference)
-
-- **`PRD/ARCHIVE/`** - Completed research and historical docs (see `PRD/ARCHIVE/README.md`)
-  - `core_ir_migration_2025_11/` - CoreExpr migration work (✅ COMPLETE 2025-11-23)
-  - `macro_research/` - Macro system research (✅ COMPLETE 2025-11-08)
-  - `numeric_research/` - Numeric tower research (✅ 94% COMPLETE 2025-11-04)
-  - `completed_features/` - Implementation docs for finished features (do loop, macros)
-  - `historical/` - Resolved bugs and historical issues
-
-**Note:** Consult archive only for historical context or when implementing related future features. Always use active docs above as primary source of truth.
-
-- **`spec/`** - Official R7RS specification (DO NOT add additional documentation here)
-
-## Library System Architecture
-
-Patina features a sophisticated **R7RS-compliant library system** with `.sld` (Scheme Library Definition) files that combine Rust primitives with Scheme-implemented macros and derived procedures.
-
-### Library Organization
-
-**All R7RS libraries use `.sld` files** in `lib/scheme/`:
-- Each library has a `.sld` file defining exports and includes
-- Primitives are provided via internal Rust modules (`patina.internal.*`)
-- Macros and derived procedures are implemented in Scheme (`.scm` files)
-- Full support for `include`, `include-ci`, `include-library-declarations`, and `cond-expand`
-
-**Example: `(scheme base)` structure**:
-```
-lib/scheme/
-├── base.sld              # Library definition with exports
-└── base/                 # Scheme implementations
-    ├── binding.scm       # let, let*, letrec, letrec*, let-values
-    ├── conditionals.scm  # cond, case, when, unless, and, or
-    ├── iteration.scm     # do loop
-    ├── lists.scm         # caar, cadr, not, zero?, positive?, negative?
-    ├── numbers.scm       # exact, inexact predicates
-    └── records.scm       # define-record-type macro
-```
-
-**Internal Rust Modules** (`crates/patina-runtime/src/stdlib/`):
-- `internal_numbers.rs` - Numeric primitives (+, -, *, /, etc.)
-- `internal_lists.rs` - List primitives (cons, car, cdr, etc.)
-- `internal_strings.rs` - String primitives
-- `internal_chars.rs` - Character primitives
-- `internal_vectors.rs` - Vector primitives
-- `internal_bytevectors.rs` - Bytevector primitives
-- `internal_io.rs` - I/O primitives (ports, read, write)
-- `internal_control.rs` - Control flow (apply, values)
-- `internal_errors.rs` - Error handling primitives
-- `internal_records.rs` - Record type primitives
-- `internal_eval.rs` - eval, environment primitives
-- `internal_lazy.rs` - delay/force primitives
-- `internal_time.rs` - Time primitives
-- `internal_system.rs` - Process context primitives
-- `internal_predicates.rs` - Type predicates
-- `internal_params.rs` - Parameter objects
-
-### Library Infrastructure
-
-**LibraryRegistry** (`patina-runtime/src/library_registry.rs`)
-- Manages loaded libraries with caching
-- Tracks library search paths
-- Detects circular dependencies
-- Thread-safe with RefCell for interior mutability
-
-**LibraryLoaderRegistry** (`patina-runtime/src/library_loader.rs`)
-- Coordinates multiple loaders with priority order
-- RustLibraryLoader (highest priority) → SchemeLibraryLoader
-- Extensible: new loaders can be registered
-
-**RustLibraryLoader** (`patina-runtime/src/library_loader.rs`)
-- Simple hash map of library name → builder function
-- Builder functions return `LibraryBuilder` with exports
-- Zero overhead: just function calls
-
-**SchemeLibraryLoader** (`patina-tree-walker/src/library_support.rs`)
-- Parses `.sld` files (R7RS library definition format)
-- **Stateless design**: Only parses, doesn't evaluate
-- Eliminates circular dependencies (loader doesn't need evaluator)
-- Searches configured library search paths
-
-### Library Loading Flow
-
-```
-1. User code: (import (scheme char))
-2. LibraryLoaderRegistry checks RustLibraryLoader first
-3. RustLibraryLoader checks for internal primitives (patina.internal.*)
-4. SchemeLibraryLoader finds and parses lib/scheme/char.sld
-5. Library evaluates: imports internal primitives, includes Scheme code
-6. Library registered in LibraryRegistry for caching
-7. Exports installed into current environment
-```
-
-### Current Library Status
-
-**Fully Implemented R7RS Libraries** (all 15 R7RS-small libraries):
-- `(scheme base)` - Core primitives + macros (let, cond, case, do, define-record-type, etc.)
-- `(scheme case-lambda)` - Multi-arity procedures (SRFI-16 macro)
-- `(scheme char)` - Character operations (char-alphabetic?, char-upcase, etc.)
-- `(scheme complex)` - Complex number operations (make-rectangular, magnitude, angle)
-- `(scheme cxr)` - Extended car/cdr (caaar through cddddr)
-- `(scheme eval)` - Runtime evaluation (eval, environment, scheme-report-environment)
-- `(scheme file)` - File I/O (open-input-file, call-with-input-file, etc.)
-- `(scheme inexact)` - Inexact arithmetic (exp, log, sin, cos, sqrt, etc.)
-- `(scheme lazy)` - Lazy evaluation (delay, force, delay-force, make-promise)
-- `(scheme process-context)` - Process info (command-line, exit, get-environment-variable)
-- `(scheme r5rs)` - R5RS compatibility layer
-- `(scheme read)` - Input operations (read)
-- `(scheme time)` - Time operations (current-second, current-jiffy, jiffies-per-second)
-- `(scheme write)` - Output operations (write, display, write-shared, write-simple)
-
-**Not Yet Implemented**:
-- `(scheme load)` - File loading (load procedure)
-
-## Architecture Deep Dive
-
-### Evaluation Pipeline
-
-The current evaluation pipeline uses **CoreExpr IR** with **macro-aware desugaring**:
-
-```
-Source Code
-    ↓
-[Lexer] → Tokens
-    ↓
-[Parser] → TaggedValue list structure (homoiconic, heap-allocated)
-    ↓
-[Backend.eval()]
-    ↓
-[Desugarer with env] → Checks for macros, expands on-demand
-    ↓
-[CoreExpr IR] → Core forms (Literal, Var, Quote, Lambda, If, Set, Define, Begin, App, ...)
-    ↓
-[CoreExpr Evaluator] → TaggedValue result
-```
-
-**Key Innovation: Macro-Aware Desugaring**
-
-The desugarer receives an `Environment` and checks for macro bindings:
-1. When encountering a form, checks if it's a macro in the environment
-2. If macro: Expands it and desugars the result
-3. If special form: Desugars according to CoreExpr rules
-4. If application: Desugars operator and operands
-
-**Benefits**:
-- No separate macro expansion phase needed
-- Desugarer always works with the current macro environment
-- Macros are expanded at the right time (after parsing, during desugaring)
-- Clean separation: macro expander handles expansion, desugarer handles traversal
-
-### CoreExpr IR
-
-**Location:** `crates/patina-core/src/core_expr.rs` (re-exported via `patina-ir`)
-
-CoreExpr is a minimal intermediate representation:
-
-```rust
-pub enum CoreExpr {
-    Literal(TaggedValue),            // Self-evaluating values (8 bytes)
-    Var { name: Symbol, scopes: ScopeSet },  // Variable reference (with hygiene)
-    Quote(TaggedValue),              // Literal data
-    Quasiquote(TaggedValue),         // Template with unquote
-    Lambda {                         // Function abstraction
-        params: Formals,             // Fixed, Variadic, or Mixed
-        body: Vec<CoreExpr>,
-        binding_scope: Option<ScopeId>,
-    },
-    If { test, then, else_: Rc<CoreExpr> },  // Conditional
-    Set { var, scopes, value: Rc<CoreExpr> }, // Assignment
-    Begin(Vec<CoreExpr>),            // Sequencing
-    Define { name, value: Rc<CoreExpr> },    // Top-level binding
-    Import { import_sets: Vec<TaggedValue> }, // Library imports
-    App { func: Rc<CoreExpr>, args: Vec<CoreExpr> }, // Application
-    Expand { expr: Rc<CoreExpr> },   // Debug: show macro expansion
-    // ... also Apply, CallCC, DynamicWind, CallWithValues, WithExceptionHandler
-}
-```
-
-**Design Philosophy**:
-- Minimal set of forms that cannot be expressed as macros
-- All derived forms (let, cond, and, or, case, do, etc.) are macros
-- Uses `TaggedValue` (8 bytes) for literals and quoted data
-- `Rc<CoreExpr>` for shared branches (TCO-friendly)
-- Foundation for future optimizations and alternative backends
-
-**Not in CoreExpr**: The desugarer does NOT handle derived forms like `let`, `cond`, `and`, `or`, etc. These are **already macros** defined in `lib/scheme/base/*.scm`. The macro expander transforms them before the desugarer sees them.
-
-### TaggedValue Representation
-
-**Location:** `crates/patina-core/src/tagged_value.rs`
-
-All Scheme values are represented as `TaggedValue` — a NaN-boxed `u64` (8 bytes, `Copy`):
-
-**Tag encoding** (low 3 bits):
-- `000` TAG_FIXNUM — 61-bit signed integer (immediate, no heap)
-- `001` TAG_SPECIAL — #t, #f, (), eof, unspecified (immediate constants)
-- `010` TAG_CHAR — Unicode codepoint (immediate)
-- `011` TAG_PAIR — Cons cell (heap index)
-- `100` TAG_VECTOR — Mutable vector (heap index)
-- `101` TAG_STRING — Mutable string as Vec\<char\> (heap index)
-- `110` TAG_CLOSURE — Reserved for VM closures (heap index)
-- `111` TAG_OBJECT — All other types via `HeapObjectData` (heap index)
-
-**Heap Object Types** (`HeapObjectData` enum, for TAG_OBJECT):
-- Numeric: BigInt, Rational, Real(f64), Complex { real, imag }
-- Data: Symbol(Rc\<str\>), Bytevector(Vec\<u8\>), Values(Vec\<TaggedValue\>)
-- Procedure(Rc\<Procedure\>), Continuation(Rc\<CpsContinuation\>)
-- Port(Rc\<Port\>), Macro(Rc\<CompiledMacro\>)
-- Identifier { name, scopes } — hygienic identifiers
-- Record { record_type, fields }, RecordType(Rc\<RecordTypeDescriptor\>)
-- Parameter { values, converter }, Promise(Rc\<RefCell\<PromiseState\>\>)
-- Library(Rc\<Library\>), EnvironmentSpecifier, PromptTag, Exception
-
-**Heap Architecture** (`crates/patina-core/src/heap/mod.rs`):
-- Arena-based typed storage: separate `Vec` for pairs, vectors, strings, objects
-- `SharedHeap = Rc<RefCell<Heap>>` — shared across evaluator, environments, closures
-- Free lists for each type (future GC support)
-- Symbol interning via hash map
-- Key methods: `try_pair()`, `try_vector_len()`, `try_vector_to_vec()`, `type_name()`
-
-**Memory Model**:
-- `TaggedValue` is 8 bytes, `Copy` — no Rc overhead for common types
-- Pairs, vectors, strings stored in typed arena vectors (cache-friendly)
-- Complex objects use `HeapObjectData` with `Rc` for shared ownership where needed
-- Environments store `HashMap<String, TaggedValue>` — 8 bytes per binding
-
-### Environment Model
-
-**Location:** `crates/patina-core/src/environment.rs`
-
-Environments implement lexical scoping with parent chains and scope-set hygiene:
-
-```rust
-pub struct Environment {
-    heap: SharedHeap,
-    bindings: Rc<RefCell<HashMap<String, TaggedValue>>>,
-    scoped_bindings: Rc<RefCell<HashMap<String, Vec<ScopedBinding>>>>,
-    parent: Option<Rc<Environment>>,
-}
-```
-
-**Key operations**:
-- `define(name, value)` - Create new binding in current environment
-- `set(name, value)` - Mutate existing binding (searches parent chain)
-- `get(name)` / `get_with_scopes(name, scopes)` - Lookup variable
-- `with_parent(parent)` - Create child environment
-
-**Design**:
-- `HashMap<String, TaggedValue>` — 8 bytes per binding (vs 64+ with old Value)
-- `scoped_bindings` for hygienic macro bindings (subset matching)
-- Each environment holds a `SharedHeap` reference for TaggedValue interpretation
-- Parent chain implements lexical scoping
-- Global environment initialized with all primitives from loaded libraries
-
-### Backend Abstraction
-
-**Location:** `crates/patina-runtime/src/backend.rs`
-
-The `Backend` trait enables multiple evaluation strategies:
-
-```rust
-pub trait Backend {
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    fn eval(&self, expr: TaggedValue, env: &Rc<Environment>)
-        -> Result<TaggedValue, Self::Error>;
-
-    fn global_env(&self) -> &Rc<Environment>;
-
-    fn eval_global(&self, expr: TaggedValue) -> Result<TaggedValue, Self::Error> {
-        let global = self.global_env().clone();
-        self.eval(expr, &global)
-    }
-}
-```
-
-**TreeWalker Backend** (`crates/patina-tree-walker/src/backend.rs`):
-
-Implements Backend trait — desugars TaggedValue AST → CoreExpr, then evaluates:
-1. Creates macro-aware desugarer with environment
-2. Desugars TaggedValue → CoreExpr (expands macros on-demand)
-3. Evaluates CoreExpr with TCO support (trampoline)
-
-**Evaluation Result** (for TCO):
-```rust
-pub enum EvalResult {
-    Tagged(TaggedValue),  // Final result
-    TailCallPrimitive {   // Optimized tail call to primitive
-        proc: TaggedValue,
-        args: Vec<TaggedValue>,
-    },
-}
-```
-
-### Special Forms
-
-All special forms are now handled directly in the CoreExpr evaluator (`core_eval.rs`). The legacy `SpecialForm` trait and `SpecialFormRegistry` have been removed.
-
-**Special forms handled by CoreExpr**:
-- `quote`, `quasiquote`, `if`, `define`, `set!`, `lambda`, `begin`
-- `define-syntax` (via `DefineSyntax` CoreExpr variant)
-- `import` (via `Import` CoreExpr variant)
-- `expand` (debugging extension)
-
-**Note**: Most "special forms" users think of (let, cond, case, do, and, or, case-lambda) are actually **macros** defined in Scheme (`lib/scheme/base/*.scm`, `lib/scheme/case-lambda.sld`), not special forms.
-
-### Primitives Organization
-
-**Location:** `crates/patina-tree-walker/src/eval/primitives/`
-
-Primitives are organized by category:
-
-```
-primitives/
-├── mod.rs              # Registry and installation
-├── arithmetic.rs       # +, -, *, /, quotient, remainder, modulo
-├── comparison.rs       # =, <, >, <=, >=
-├── lists.rs           # cons, car, cdr, list, append, length, reverse
-├── vectors.rs         # vector, vector-ref, vector-set!, make-vector
-├── strings.rs         # string-append, string-length, substring
-├── chars.rs           # char=?, char<?, char-upcase, char-downcase
-├── predicates.rs      # null?, pair?, number?, string?, symbol?
-├── equivalence.rs     # eq?, eqv?, equal?
-├── conversion.rs      # number->string, string->number, symbol->string
-├── io.rs             # display, write, newline, read
-└── control.rs        # apply, call-with-values, values
-```
-
-**Primitive Registry** (`PrimitiveRegistry`):
-- Tracks which primitives belong to which library
-- Enables selective export during library loading
-- Pattern: `registry.register(library_name, primitive_name, function)`
-
-### Macro System
-
-**Location:** `crates/patina-macros/` (separate crate)
-
-**Hygiene Algorithm**: Racket-style scope sets (based on "Binding as Sets of Scopes", Flatt 2016)
-- `Identifier { name, scopes }` stores hygiene context via scope sets
-- Each macro expansion creates a fresh scope
-- **Flip-scope algorithm**:
-  1. Before pattern matching: flip macro_scope on INPUT (adds scope to use-site identifiers)
-  2. After template expansion: flip macro_scope on OUTPUT (removes from use-site, adds to introduced)
-- Lookup uses subset matching: binding with `binding.scopes ⊆ reference.scopes` wins
-- Most specific (largest scope set) binding shadows less specific ones
-- No renaming needed - scopes provide discrimination
-
-**Macro Expansion Integration**:
-- Macros stored as `HeapObjectData::Macro(Rc<CompiledMacro>)` on the heap
-- Desugarer checks environment for macro bindings
-- When found, calls macro expander with flip-scope hygiene
-- Expands recursively until a special form or application remains
-
-**Core Macros** (in `lib/scheme/base/*.scm`):
-- Binding (`binding.scm`): `let`, `let*`, `letrec`, `letrec*`, `let-values`, `let*-values`
-- Conditionals (`conditionals.scm`): `cond`, `case`, `when`, `unless`, `and`, `or`
-- Iteration (`iteration.scm`): `do` (with helper for optional step)
-- Records (`records.scm`): `define-record-type`
-- Lists (`lists.scm`): `caar`, `cadr`, `not`, `zero?`, `positive?`, `negative?`
-
-## Reference Implementations
-
-### Chibi-scheme (Primary R7RS Reference)
-
-**Location:** `~/Project/reference/chibi-scheme`
-
-**Key files to reference:**
-- `tests/r7rs-tests.scm` - Comprehensive R7RS test suite (2516 lines covering entire spec)
-- `lib/init-7.scm` - Core R7RS procedures implemented in Scheme on top of primitives
-- `eval.c` - Core evaluator implementation in C
-- `lib/scheme/base.sld` - R7RS base library definition
-
-**Use chibi-scheme to:**
-1. Understand how features should work, borrow interpreter implementation when needed
-2. Test Patina's output against chibi's output for compatibility
-3. Reference the comprehensive test suite for validation
-
-**Documentation:** See `docs/reference_impls/CHIBI_REFERENCE.md` for detailed notes
-
-### Other Reference Implementations
-
-**Chez Scheme:** See `docs/reference_impls/CHEZ_REFERENCE.md` for notes on Chez implementation patterns
-
-### R7RS Specification
-
-**Location:** `spec/r7rs-small-spec/`
-
-The official R7RS-small specification LaTeX source, useful for understanding precise language semantics and requirements.
-
 ## Development Commands
 
-### Building and Running
-
 ```bash
-# Build the workspace
+# Build
 cargo build --release
 
-# Run the REPL
+# Run REPL / script
 cargo run --release
-# Binary location: ./target/release/patina
-
-# Run a Scheme script
 ./target/release/patina script.scm
 
-# Build specific crate
-cargo build --package patina-frontend
-
-# Run in debug mode (faster compile, slower execution)
-cargo run
-```
-
-### Testing
-
-```bash
 # Routine verification (preferred — fast, covers R7RS compliance)
 cargo build --release && ./scripts/run_chibi_tests.sh
 
-# Run ALL Rust tests without doc-tests (slower, use when changing Rust internals)
+# All Rust tests (no doc-tests)
 cargo test --all --lib --tests
 
-# Run ALL tests including doc-tests (slowest, rarely needed)
-cargo test
-
-# Run only integration tests (patina-tests crate)
+# Integration tests only
 cargo test --package patina-tests
 
-# Run specific test suite
-cargo test --package patina-tests --test scheme_base
-cargo test --package patina-tests --test interpreter_api
-
-# Run specific crate's unit tests
+# Specific crate
 cargo test --package patina-frontend
-cargo test --package patina-runtime
 
-# Run specific category
-cargo test --package patina-tests primitives::
-cargo test --package patina-tests numbers::
-
-# Run tests verbosely
-cargo test -- --nocapture
-
-# Skip chibi comparison tests (if chibi not installed)
-SKIP_CHIBI_TESTS=1 cargo test
-```
-
-### R7RS Compliance Testing
-
-Run the comprehensive chibi-scheme r7rs test suite to check compliance:
-
-```bash
-# Run chibi-scheme's r7rs-tests.scm and generate compatibility report
-./scripts/run_chibi_tests.sh
-
-# View the report
-cat scheme_tests/reports/compatibility.md
-
-# View detailed results
-cat scheme_tests/reports/results.txt
-```
-
-This runs the complete chibi-scheme R7RS test suite (~2500 lines) and generates:
-- **Compatibility report** with pass/fail statistics
-- **Detailed test output** showing what works and what doesn't
-
-**Current status**:
-- ✅ 1159/1159 tests passing (100%)
-- Phase 1 complete, now in cleanup phase before Phase 2 (VM backend)
-
-### Code Quality
-
-```bash
-# Check for errors without building
-cargo check
-
-# Check specific crate
-cargo check --package patina-tree-walker
-
-# Run the linter
+# Lint / format
 cargo clippy --all-targets --all-features -- -D warnings
-
-# Format code
 cargo fmt
-
-# Check formatting without making changes
-cargo fmt -- --check
 ```
 
-## Testing Strategy
+## Documentation
 
-**See `docs/TEST_ORGANIZATION.md` for comprehensive testing documentation.**
+**Do not create new markdown files without user approval.**
 
-### Test Organization
+**Active planning docs:**
+- `PRD/MILESTONES.md` — project history and achievements
+- `PRD/PHASE1_CLEANUP_PRD.md` — Phase 1 cleanup tracker (Priorities 1–5 status)
+- `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`, `GC_DESIGN.md`, `CLONE_OPTIMIZATION_ANALYSIS.md`
+- `PRD/phase2/SYNTAX_CASE_DESIGN.md`, `PRD/phase2/R7RS_LARGE_STATUS.md`
+- `PRD/ARCHIVE/numeric_research/NUMERIC_SUMMARY.md` — canonical numeric tower guide
 
-**Unit Tests** - In component crates with `#[cfg(test)]`:
-- `patina-frontend`: Lexer, parser, macro patterns
-- `patina-runtime`: Environment operations, library loading
-- `patina-macros`: Macro expansion, hygiene
-- `patina-ir`: CoreExpr construction
-- `patina-tree-walker`: Evaluator components
+**Feature docs:**
+- `docs/MACRO_SYSTEM.md` — macro system architecture (scope sets, flip-scope algorithm)
+- `docs/TEST_ORGANIZATION.md` — test structure and categories
+- `docs/reference_impls/` — notes on Chibi, Chez, Gauche reference implementations
 
-**Integration Tests** - In `crates/patina-tests/tests/`:
-- `compliance/` - R7RS compliance tests organized by category (lists, strings, numbers, etc.)
-- `scheme_eval.rs` - (scheme eval) tests
-- `record_types.rs` - define-record-type tests
-- `sld_file_loading.rs` - Library loading and .sld parsing tests
-- `interpreter_api.rs` - API tests
-- `conversion.rs` - Type conversion tests
-- `verify_bigint_promotion.rs` - Numeric tower promotion tests
+**Reference implementations:** chibi-scheme at `~/Project/reference/chibi-scheme`
+- `tests/r7rs-tests.scm` — comprehensive R7RS test suite
+- `lib/init-7.scm` — R7RS procedures implemented in Scheme
 
-**Test Utilities** (`crates/patina-tests/tests/common/mod.rs`):
+## Architecture: Critical Rules
+
+**TaggedValue is `Copy`** — 8 bytes, never allocates for fixnum/bool/char/null. Never wrap in `Box` or `Rc`. The old `Value` enum is gone completely.
+
+**RefCell borrow discipline** — never hold `borrow_mut()` across any call that might also borrow. Extract to a `let` first:
 ```rust
-assert_eval_to(expr, expected)           // Test expression evaluation
-assert_program_eval_to(code, expected)   // Test multi-expression programs
-assert_eval_error(expr)                  // Test error cases
+// WRONG — borrow_mut() lives through the if-let body:
+if let Some(v) = heap.borrow_mut().method() { heap.borrow()... }
+// CORRECT:
+let v = heap.borrow_mut().method();
+if let Some(v) = v { heap.borrow()... }
 ```
 
-### Running Tests
+**`SourceLocation::source` is `Arc<str>`** (not `Rc`) — required by `Backend::Error: Send + Sync + 'static`.
 
-**Total: ~1400 tests passing**
+**Macros vs special forms** — `let`, `cond`, `case`, `do`, `and`, `or`, `when`, `unless`, `case-lambda`, `define-record-type` are macros in `lib/scheme/base/*.scm` and `.sld` files. The CoreExpr IR has 13 variants: `Literal`, `Var`, `Quote`, `Quasiquote`, `Lambda`, `If`, `Set`, `Begin`, `Define`, `Import`, `Expand`, `App`, `Apply`. `define-syntax` is compiled during desugaring — there is no `DefineSyntax` CoreExpr variant.
 
-See Development Commands section above for test commands.
+**Library primitives** must be registered in both the primitive registry AND the library builder in `patina-runtime/src/stdlib/internal_<name>.rs`.
 
-## Code Organization Principles
+**Error formatting** — use `format_interpreter_error(&e, &source_map.borrow())` (from `patina-interpreter`) rather than `e.to_string()` to get caret-style source context and macro expansion chain.
 
-### When Adding Features
+## When Adding Features
 
-**New primitives**:
-1. Add implementation in `crates/patina-tree-walker/src/eval/primitives/<category>.rs`
+**New primitive:**
+1. Implement in `crates/patina-tree-walker/src/eval/primitives/<category>.rs`
 2. Register in `primitives/mod.rs::install_primitives()`
-3. Add to appropriate library builder in `crates/patina-runtime/src/stdlib/<library>.rs`
+3. Export from library builder in `crates/patina-runtime/src/stdlib/internal_<name>.rs`
 
-**New special forms**:
-1. Create implementation in `crates/patina-tree-walker/src/eval/special_forms/<name>.rs`
-2. Implement `SpecialForm` trait
-3. Register in `special_forms/mod.rs::build_registry()`
+**New Scheme library:**
+- Internal Rust primitives: `crates/patina-runtime/src/stdlib/internal_<name>.rs`
+- Library definition: `lib/scheme/<name>.sld`
+- Scheme implementations: `lib/scheme/<name>/<file>.scm`
 
-**New libraries**:
-- **Internal primitives**: Create `crates/patina-runtime/src/stdlib/internal_<name>.rs` and register
-- **Scheme library**: Create `lib/scheme/<name>.sld` defining exports and includes
-- **Scheme implementations**: Create `lib/scheme/<name>/<file>.scm` for macros and derived procedures
+**New heap object type:**
+1. Add variant to `HeapObjectData` in `crates/patina-core/src/heap/mod.rs`
+2. Add type predicate + accessor on `Heap`
+3. Add display in `crates/patina-core/src/debug_format.rs`
 
-**Heap object types**:
-- Add new variant to `HeapObjectData` enum in `crates/patina-core/src/heap/mod.rs`
-- Add corresponding `HeapObjectType` variant
-- Add type predicate method (`is_*`) and accessor method (`get_*`) on `Heap`
-- Add display support in `crates/patina-core/src/debug_format.rs`
-- Add support in parser if needed (`crates/patina-frontend/src/parser/mod.rs`)
+**New CoreExpr form** (rare — prefer macros):
+1. Extend `CoreExprKind` in `patina-core/src/core_expr.rs`
+2. Add desugaring in `patina-frontend/src/desugarer/mod.rs`
+3. Add evaluation in `patina-tree-walker/src/eval/core_eval.rs`
+4. Add visitor method to `ExprVisitor` in `patina-ir/src/visitor.rs`
 
-**CoreExpr forms**:
-- Extend `CoreExpr` enum in `crates/patina-ir/src/lib.rs`
-- Add desugaring logic in `crates/patina-frontend/src/desugarer/mod.rs`
-- Add evaluation logic in `crates/patina-tree-walker/src/eval/core_eval.rs`
+## Error Types by Layer
 
-**Parser features**:
-- Extend lexer in `crates/patina-frontend/src/lexer/mod.rs`
-- Extend parser in `crates/patina-frontend/src/parser/mod.rs`
+| Layer | Type | Crate |
+|-------|------|-------|
+| Lexer | `LexError` | patina-frontend |
+| Parser | `ParseError` | patina-frontend |
+| Desugarer | `DesugarError` | patina-frontend |
+| Evaluator | `EvalError` | patina-tree-walker |
+| Interpreter | `InterpreterError<E>` | patina-interpreter |
 
-### Error Handling
+## Current Status and Future Phases
 
-Use appropriate error types for each layer:
-- **Lexer**: `LexError` (in patina-frontend)
-- **Parser**: `ParseError` (in patina-frontend)
-- **Desugarer**: `DesugarError` (in patina-frontend)
-- **Evaluator**: `EvalError` (in patina-tree-walker)
-- **Runtime**: `RuntimeError` (in patina-runtime)
-- **Interpreter API**: `InterpreterError<E>` (generic over backend error)
-- **Pipeline**: `PipelineError` (in patina-pipeline)
+**Phase 1 complete** — 100% R7RS compliance. Cleanup tracked in `PRD/PHASE1_CLEANUP_PRD.md`.
 
-### Module Organization
-
-**Evaluator** (in `patina-tree-walker/src/eval/`):
-- `mod.rs` - Core evaluation logic, registries, initialization
-- `core_eval.rs` - CoreExpr evaluation (primary path)
-- `error.rs` - Error type definitions
-- `special_forms/` - All special form implementations
-- `application.rs` - Procedure application logic
-- `primitives/` - All primitive implementations organized by category
-- `debug.rs` - Debug tracing support
-
-**Keep module boundaries clean:**
-- Use `pub(crate)` for internal APIs within a crate
-- Use `pub(super)` for module-private functions
-- Only expose what's needed at crate boundaries
-- Avoid circular dependencies (use traits for abstraction)
-
-### Memory Management
-
-- `TaggedValue` is 8 bytes, `Copy` — passed by value, no allocation for fixnums/bools/chars/null
-- Heap uses arena allocation: separate `Vec` per type (pairs, vectors, strings, objects)
-- `SharedHeap = Rc<RefCell<Heap>>` — shared across evaluator, environments, closures
-- `Rc<T>` used inside `HeapObjectData` for types that need shared ownership (Procedure, Port, etc.)
-- `Rc<RefCell<T>>` for mutable shared data (record fields, promise state, parameter values)
-- **Borrow discipline**: Use `heap.borrow()` (not `borrow_mut()`) for read-only operations like `try_pair()`, `car()`, `cdr()`, type predicates
-
-## Implementation Status
-
-See `docs/FEATURE_STATUS.md` for detailed test-by-test compliance matrix (canonical source).
-
-**Currently Implemented:**
-- Core special forms (quote, if, define, set!, lambda, begin, define-syntax)
-- Full numeric tower (integers, bignums, rationals, reals, complex)
-- List operations (cons, car, cdr, list, append, map, for-each, etc.)
-- String operations (string-append, string-length, substring, etc.)
-- Vector operations (vector, vector-ref, vector-set!, make-vector, etc.)
-- Bytevector operations (bytevector, bytevector-u8-ref, etc.)
-- Character operations (char-alphabetic?, char-upcase, etc.)
-- Type predicates and equality (number?, string?, eq?, eqv?, equal?, etc.)
-- Tail call optimization (via trampoline pattern)
-- Hygienic macros (syntax-rules with scope sets hygiene)
-- Multiple values (values, call-with-values)
-- R7RS library system (import, .sld files, cond-expand, include)
-- CoreExpr IR evaluation (primary path)
-- Full I/O system (ports, read, write, file I/O)
-- Record types (define-record-type)
-- Lazy evaluation (delay, force, delay-force, make-promise)
-- Runtime evaluation (eval, environment, scheme-report-environment)
-- All 14 of 15 R7RS-small standard libraries
-
-**Not Yet Implemented:**
-- `(scheme load)` library
-
-**Current Compliance:**
-- **Internal tests**: ~1400 passing (patina-tests crate)
-- **Chibi r7rs-tests.scm**: 1159/1159 passing (100%) ✅
-
-## Future Phases
-
-**Phase 2**: Bytecode VM backend
-- Compile CoreExpr to bytecode for 5-10x speedup over tree-walking
-- Essential foundation for performant type checking and macro expansion
-- New crate: `patina-vm/` implementing the `Backend` trait
-- Leverage existing CoreExpr IR as compilation source
-
-**Phase 3**: syntax-case (procedural macros)
-- Full syntax-case with `syntax->datum`, `datum->syntax`
-- Builds on existing scope-set hygiene infrastructure
-- Enables compile-time type annotation processing
-- See `PRD/phase2/SYNTAX_CASE_DESIGN.md` for design
-
-**Phase 4**: Gradual typing (Typed Racket-style)
-- Type inference and checking at compile time
-- Contracts at typed/untyped boundaries
-- Requires VM (performance) and syntax-case (annotations)
-
-**Phase 5**: Reactive streams (Project Reactor-style)
-**Phase 6**: miniKanren logic programming
-
-The workspace structure supports this evolution:
-- Multiple backends: Add `patina-vm/`, `patina-jit/` alongside `patina-tree-walker/`
-- All backends implement same Backend trait for `patina-interpreter`
-- Tests automatically run against all backends
-- See `PRD/MULTI_BACKEND_STRATEGY.md` for details
-
-## Notebook Mode (Future Feature)
-
-The project has extensive design docs for a terminal-based notebook interface with S-expression format (see `PRD/future/phase4/`). This is not yet implemented but is a key future direction. The design emphasizes:
-- S-expression notebook format (`.scm.nb`) - notebooks as valid Scheme programs
-- Three-tier system integration: native Scheme commands, table-based commands, shell fallback
-- Cell-based editing with dependency tracking
-
-## API Quick Reference
-
-### High-Level API (Recommended)
-
-```rust
-use patina_interpreter::TreeWalkInterpreter;
-
-// Create interpreter
-let interp = TreeWalkInterpreter::new_tree_walker();
-
-// Evaluate single expression
-let result = interp.eval_str("(+ 1 2 3)").unwrap();
-
-// Evaluate program (multiple expressions)
-let result = interp.eval_program("(define x 10) (+ x 5)").unwrap();
-
-// Resilient mode (continues on errors, for test suites)
-let result = interp.eval_program_resilient(code);
-
-// Access underlying evaluator
-let eval = interp.evaluator();
-let env = eval.global_env.clone();
-```
-
-### Pipeline API (Flexible)
-
-```rust
-use patina_pipeline::{StandardPipeline, Pipeline};
-
-// Create pipeline
-let pipeline = StandardPipeline::new();
-
-// Evaluate with custom environment
-let env = pipeline.evaluator().global_env.clone();
-let result = pipeline.eval("(+ 1 2)", &env).unwrap();
-```
-
-### Backend API (Low-Level)
-
-```rust
-use patina_tree_walker::TreeWalker;
-use patina_runtime::Backend;
-
-// Create backend
-let backend = TreeWalker::new();
-
-// Evaluate expression (TaggedValue in, TaggedValue out)
-let result = backend.eval_global(expr).unwrap();
-
-// Custom environment
-let custom_env = Rc::new(Environment::with_parent(backend.global_env().clone()));
-let result = backend.eval(expr, &custom_env).unwrap();
-```
-
-## Tips for Claude Code
-
-1. **Check current state first**: This codebase evolves rapidly. Always read the relevant source files before making suggestions.
-
-2. **Follow the architecture**: Respect the crate boundaries and don't mix concerns. Primitives go in tree-walker, types in runtime, parsing in frontend.
-
-3. **Test thoroughly**: Run `cargo test --package patina-tests` after changes. Check that existing tests still pass.
-
-4. **Consult reference implementations**: When unsure about semantics, check chibi-scheme or the R7RS spec.
-
-5. **Library organization**: New primitives should be added to the appropriate library builder in `patina-runtime/src/stdlib/`, not just registered globally.
-
-6. **TaggedValue architecture**: All values are `TaggedValue` (8 bytes, `Copy`). Heap objects use `HeapObjectData`. The old `Value` enum has been completely removed.
-
-7. **Macros vs special forms**: Most things users think of as "special forms" (let, cond, case) are actually macros. Only add special forms when absolutely necessary.
-
-8. **Documentation**: Keep this file updated as the architecture evolves, but don't create new documentation files without asking the user first.
+**Phase 2:** Bytecode VM (`patina-vm/`) — new crate implementing `Backend` trait, compiles `CoreExpr` to bytecode.
+**Phase 3:** `syntax-case` procedural macros — see `PRD/phase2/SYNTAX_CASE_DESIGN.md`.
+**Phase 4:** Gradual typing (Typed Racket-style).
+**Phase 5+:** Reactive streams, miniKanren logic programming.
