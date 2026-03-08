@@ -106,7 +106,7 @@ ERROR_COUNT=$(echo "$COUNTS" | awk '{print $4}')
 TRUE_TOTAL=$TOTAL_COUNT
 
 # Count lines that start with "FAIL:" for detailed failure reporting
-ADDITIONAL_FAILS=$(grep -c "^FAIL:" "$RESULTS_FILE" || echo "0")
+ADDITIONAL_FAILS=$(grep -c "^FAIL:" "$RESULTS_FILE" 2>/dev/null | head -1); ADDITIONAL_FAILS=${ADDITIONAL_FAILS:-0}
 
 # Generate section breakdown
 # Parse "Running test suite: X" followed immediately by "Tests run: ..." lines
