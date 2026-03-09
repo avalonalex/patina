@@ -91,6 +91,8 @@ pub enum HeapObjectType {
     Procedure = 18,
     Values = 19,
     LabelPlaceholder = 20,
+    /// VM bytecode closure (patina-vm Phase 2)
+    VmClosure = 21,
 }
 
 /// State of a promise for lazy evaluation
@@ -150,6 +152,12 @@ pub enum HeapObjectData {
     },
     PromptTag(Rc<crate::cps_expr::PromptTag>),
     LabelPlaceholder(usize),
+    /// A VM bytecode closure: code id + captured free variables.
+    VmClosure {
+        /// Serialised as `u32` to avoid a direct dependency on patina-vm types.
+        code_id: u32,
+        free_vars: Vec<TaggedValue>,
+    },
 }
 
 impl HeapObjectData {
@@ -177,6 +185,7 @@ impl HeapObjectData {
             HeapObjectData::EnvironmentSpecifier { .. } => HeapObjectType::Environment,
             HeapObjectData::PromptTag(_) => HeapObjectType::PromptTag,
             HeapObjectData::LabelPlaceholder(_) => HeapObjectType::LabelPlaceholder,
+            HeapObjectData::VmClosure { .. } => HeapObjectType::VmClosure,
         }
     }
 }
@@ -650,6 +659,64 @@ impl Heap {
         }
     }
 
+    // =========================================================================
+    // VM Closure Operations (patina-vm Phase 2)
+    // =========================================================================
+
+    /// Allocate a VM closure on the heap.
+    ///
+    /// `code_id` is a `u32` (the raw `CodeObjectId(u32)` value) to avoid
+    /// a direct crate dependency on `patina-vm`.
+    pub fn alloc_vm_closure(&mut self, code_id: u32, free_vars: Vec<TaggedValue>) -> TaggedValue {
+        self.alloc_object(HeapObjectData::VmClosure { code_id, free_vars })
+    }
+
+    /// Retrieve the `(code_id, free_vars)` pair from a VM closure pointer.
+    ///
+    /// Returns `None` if `val` is not a `VmClosure` object.
+    pub fn get_vm_closure(&self, val: TaggedValue) -> Option<(u32, Vec<TaggedValue>)> {
+        if !val.is_object() {
+            return None;
+        }
+        match self.get_object(val) {
+            HeapObjectData::VmClosure { code_id, free_vars } => Some((*code_id, free_vars.clone())),
+            _ => None,
+        }
+    }
+
+    /// Read one free-variable slot from a VM closure.
+    ///
+    /// Returns `None` if the heap index does not point to a `VmClosure` or
+    /// the slot is out of range.
+    pub fn get_vm_closure_free_var(
+        &self,
+        heap_index: crate::tagged_value::HeapIndex,
+        slot: usize,
+    ) -> Option<TaggedValue> {
+        match self.objects.get(heap_index as usize)? {
+            HeapObjectData::VmClosure { free_vars, .. } => free_vars.get(slot).copied(),
+            _ => None,
+        }
+    }
+
+    /// Write one free-variable slot in a VM closure (for `set!` on captured vars).
+    ///
+    /// Returns `false` if the heap index or slot is out of range.
+    pub fn set_vm_closure_free_var(
+        &mut self,
+        heap_index: crate::tagged_value::HeapIndex,
+        slot: usize,
+        val: TaggedValue,
+    ) -> bool {
+        match self.objects.get_mut(heap_index as usize) {
+            Some(HeapObjectData::VmClosure { free_vars, .. }) if slot < free_vars.len() => {
+                free_vars[slot] = val;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Allocate a generic object
     fn alloc_object(&mut self, data: HeapObjectData) -> TaggedValue {
         let index = if let Some(free) = self.free_objects.pop() {
@@ -1086,6 +1153,7 @@ impl Heap {
                 HeapObjectData::EnvironmentSpecifier { .. } => "environment",
                 HeapObjectData::PromptTag(_) => "continuation-prompt-tag",
                 HeapObjectData::LabelPlaceholder(_) => "label-placeholder",
+                HeapObjectData::VmClosure { .. } => "procedure",
             }
         } else {
             "unknown"

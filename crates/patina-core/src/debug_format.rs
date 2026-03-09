@@ -152,6 +152,9 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         HeapObjectData::EnvironmentSpecifier { .. } => buf.push_str("#<environment>"),
         HeapObjectData::PromptTag(tag) => write!(buf, "{}", tag).unwrap(),
         HeapObjectData::LabelPlaceholder(n) => write!(buf, "#<label-placeholder:{}>", n).unwrap(),
+        HeapObjectData::VmClosure { code_id, .. } => {
+            write!(buf, "#<procedure:{}>", code_id).unwrap()
+        }
     }
 }
 

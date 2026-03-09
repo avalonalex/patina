@@ -24,16 +24,14 @@ use crate::error::CompileError;
 use crate::types::CodeObject;
 use patina_core::core_expr::CoreExpr;
 
-/// Compile a `CoreExpr` (top-level or lambda body) into a `CodeObject`.
+/// Compile a `CoreExpr` into a `CodeObject` (plus any nested `CodeObject`s).
 ///
-/// This is the main entry point for the compiler pipeline. It runs all 5 passes
-/// in order and returns the resulting `CodeObject` for the top-level scope.
-/// Nested lambdas are compiled recursively inside Pass 5 and embedded as
-/// constants or referenced by `CodeObjectId`.
-pub fn compile(expr: &CoreExpr) -> Result<CodeObject, CompileError> {
+/// Returns `(top_level_code, nested_codes)`. The caller should load all of
+/// them into `VmState::code_store` before executing.
+pub fn compile(expr: &CoreExpr) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
     let analysis = pass1_analysis::Pass1Analysis::run(expr);
     let closed = pass2_closure::Pass2Closure::run(expr, &analysis);
     let tailed = pass3_tail::Pass3Tail::run(&closed);
-    let regged = pass4_registers::Pass4Registers::run(&tailed);
-    pass5_codegen::Pass5Codegen::run(&regged)
+    let allocated = pass4_registers::Pass4Registers::run(&tailed);
+    pass5_codegen::Pass5Codegen::run(&allocated)
 }
