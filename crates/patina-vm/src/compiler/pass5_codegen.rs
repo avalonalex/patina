@@ -199,10 +199,31 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             cg.patch_jump(jump_end, end);
         }
 
-        RegExprKind::SetLocal { src_reg, var_reg } => {
+        RegExprKind::ReadLocalCell { src } => {
+            cg.emit(Instruction::ReadCell {
+                dst: expr.dst,
+                cell: *src,
+            });
+        }
+
+        RegExprKind::ReadClosureCell { slot } => {
+            // Load the cell from the closure slot into dst, then read through it.
+            // We use dst as scratch for the cell pointer itself, then overwrite with content.
+            cg.emit(Instruction::LoadClosure {
+                dst: expr.dst,
+                slot: *slot,
+            });
+            cg.emit(Instruction::ReadCell {
+                dst: expr.dst,
+                cell: expr.dst,
+            });
+        }
+
+        RegExprKind::SetLocal { value, var_reg } => {
+            gen_expr(value, cg)?;
             cg.emit(Instruction::Move {
                 dst: *var_reg,
-                src: *src_reg,
+                src: value.dst,
             });
             cg.emit(Instruction::LoadImmediate {
                 dst: expr.dst,
@@ -210,10 +231,27 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             });
         }
 
-        RegExprKind::SetClosure { slot, value } => {
+        RegExprKind::WriteLocalCell { value, var_reg } => {
             gen_expr(value, cg)?;
-            cg.emit(Instruction::StoreClosure {
+            cg.emit(Instruction::WriteCell {
+                cell: *var_reg,
+                src: value.dst,
+            });
+            cg.emit(Instruction::LoadImmediate {
+                dst: expr.dst,
+                val: TaggedValue::UNSPECIFIED,
+            });
+        }
+
+        RegExprKind::WriteClosureCell { slot, value } => {
+            gen_expr(value, cg)?;
+            // Load cell pointer from closure slot into a scratch reg (expr.dst).
+            cg.emit(Instruction::LoadClosure {
+                dst: expr.dst,
                 slot: *slot,
+            });
+            cg.emit(Instruction::WriteCell {
+                cell: expr.dst,
                 src: value.dst,
             });
             cg.emit(Instruction::LoadImmediate {
@@ -331,6 +369,12 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
 fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), CompileError> {
     let child_id = fresh_code_id();
     let mut child_cg = Codegen::new(child_id, None);
+
+    // Prologue: wrap each boxed param register in a MutableCell.
+    // The param already lives in reg[r]; emit AllocCell r←r to box it in-place.
+    for &reg in &lam.boxed_params {
+        child_cg.emit(Instruction::AllocCell { dst: reg, src: reg });
+    }
 
     // Generate body instructions for the child.
     let body_len = lam.body.len();

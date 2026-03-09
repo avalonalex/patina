@@ -93,6 +93,8 @@ pub enum HeapObjectType {
     LabelPlaceholder = 20,
     /// VM bytecode closure (patina-vm Phase 2)
     VmClosure = 21,
+    /// Mutable cell for captured variables that are `set!` after capture (patina-vm Phase 2)
+    MutableCell = 22,
 }
 
 /// State of a promise for lazy evaluation
@@ -152,6 +154,10 @@ pub enum HeapObjectData {
     },
     PromptTag(Rc<crate::cps_expr::PromptTag>),
     LabelPlaceholder(usize),
+    /// A mutable cell used to box variables that are `set!` after being captured
+    /// by a VM closure. The cell holds the current value and is shared by
+    /// reference among all closures that captured the same binding.
+    MutableCell(RefCell<TaggedValue>),
     /// A VM bytecode closure: code id + captured free variables.
     VmClosure {
         /// Serialised as `u32` to avoid a direct dependency on patina-vm types.
@@ -186,6 +192,7 @@ impl HeapObjectData {
             HeapObjectData::PromptTag(_) => HeapObjectType::PromptTag,
             HeapObjectData::LabelPlaceholder(_) => HeapObjectType::LabelPlaceholder,
             HeapObjectData::VmClosure { .. } => HeapObjectType::VmClosure,
+            HeapObjectData::MutableCell(_) => HeapObjectType::MutableCell,
         }
     }
 }
@@ -657,6 +664,49 @@ impl Heap {
             HeapObjectData::PromptTag(tag) => Some(tag),
             _ => None,
         }
+    }
+
+    // =========================================================================
+    // MutableCell Operations (patina-vm Phase 2 — set! on captured variables)
+    // =========================================================================
+
+    /// Allocate a `MutableCell` containing `val`.
+    pub fn alloc_mutable_cell(&mut self, val: TaggedValue) -> TaggedValue {
+        self.alloc_object(HeapObjectData::MutableCell(RefCell::new(val)))
+    }
+
+    /// Read the value inside a `MutableCell`.
+    ///
+    /// Returns `None` if `ptr` does not point to a `MutableCell`.
+    pub fn read_mutable_cell(&self, ptr: TaggedValue) -> Option<TaggedValue> {
+        if !ptr.is_object() {
+            return None;
+        }
+        match self.get_object(ptr) {
+            HeapObjectData::MutableCell(cell) => Some(*cell.borrow()),
+            _ => None,
+        }
+    }
+
+    /// Write a new value into a `MutableCell`.
+    ///
+    /// Returns `false` if `ptr` does not point to a `MutableCell`.
+    pub fn write_mutable_cell(&self, ptr: TaggedValue, val: TaggedValue) -> bool {
+        if !ptr.is_object() {
+            return false;
+        }
+        match self.get_object(ptr) {
+            HeapObjectData::MutableCell(cell) => {
+                *cell.borrow_mut() = val;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns `true` if `ptr` is a `MutableCell`.
+    pub fn is_mutable_cell(&self, ptr: TaggedValue) -> bool {
+        ptr.is_object() && matches!(self.get_object(ptr), HeapObjectData::MutableCell(_))
     }
 
     // =========================================================================
@@ -1154,6 +1204,7 @@ impl Heap {
                 HeapObjectData::PromptTag(_) => "continuation-prompt-tag",
                 HeapObjectData::LabelPlaceholder(_) => "label-placeholder",
                 HeapObjectData::VmClosure { .. } => "procedure",
+                HeapObjectData::MutableCell(_) => "mutable-cell",
             }
         } else {
             "unknown"

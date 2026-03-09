@@ -17,6 +17,7 @@
 use super::pass2_closure::ClosedExpr;
 use patina_core::core_expr::Symbol;
 use patina_core::tagged_value::TaggedValue;
+use std::collections::HashSet;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TailedExpr — output of Pass 3
@@ -27,12 +28,21 @@ pub enum TailedExpr {
     Literal(TaggedValue),
     Quote(TaggedValue),
     Quasiquote(TaggedValue),
+
     LocalRef(Symbol),
     ClosureRef {
         name: Symbol,
         slot: u16,
     },
     GlobalRef(Symbol),
+
+    /// Read value out of a `MutableCell` held in a local register.
+    ReadLocalCell(Symbol),
+    /// Read value out of a `MutableCell` held in a closure slot.
+    ReadClosureCell {
+        name: Symbol,
+        slot: u16,
+    },
 
     Lambda(Box<TailedLambda>),
 
@@ -46,8 +56,13 @@ pub enum TailedExpr {
         var: Symbol,
         value: Box<TailedExpr>,
     },
-    SetClosure {
+    /// `set!` through a `MutableCell` held in a local register.
+    WriteLocalCell {
         var: Symbol,
+        value: Box<TailedExpr>,
+    },
+    /// `set!` through a `MutableCell` held in a closure slot.
+    WriteClosureCell {
         slot: u16,
         value: Box<TailedExpr>,
     },
@@ -81,6 +96,8 @@ pub struct TailedLambda {
     pub params: Vec<Symbol>,
     pub rest_param: bool,
     pub capture_list: Vec<Symbol>,
+    /// Parameters that must be wrapped in `MutableCell` on entry.
+    pub boxed_params: HashSet<Symbol>,
     pub body: Vec<TailedExpr>,
     pub node_id: super::pass1_analysis::NodeId,
 }
@@ -111,6 +128,12 @@ fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
         },
         ClosedExpr::GlobalRef(s) => TailedExpr::GlobalRef(s.clone()),
 
+        ClosedExpr::ReadLocalCell(s) => TailedExpr::ReadLocalCell(s.clone()),
+        ClosedExpr::ReadClosureCell { name, slot } => TailedExpr::ReadClosureCell {
+            name: name.clone(),
+            slot: *slot,
+        },
+
         ClosedExpr::Lambda(lam) => {
             // Each lambda body is its own tail context — the last expr is tail.
             let body_len = lam.body.len();
@@ -124,6 +147,7 @@ fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
                 params: lam.params.clone(),
                 rest_param: lam.rest_param,
                 capture_list: lam.capture_list.clone(),
+                boxed_params: lam.boxed_params.clone(),
                 body,
                 node_id: lam.node_id,
             }))
@@ -139,8 +163,11 @@ fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
             var: var.clone(),
             value: Box::new(mark(value, false)),
         },
-        ClosedExpr::SetClosure { var, slot, value } => TailedExpr::SetClosure {
+        ClosedExpr::WriteLocalCell { var, value } => TailedExpr::WriteLocalCell {
             var: var.clone(),
+            value: Box::new(mark(value, false)),
+        },
+        ClosedExpr::WriteClosureCell { slot, value } => TailedExpr::WriteClosureCell {
             slot: *slot,
             value: Box::new(mark(value, false)),
         },

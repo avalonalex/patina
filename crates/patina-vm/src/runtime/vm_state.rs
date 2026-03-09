@@ -9,7 +9,9 @@ use crate::types::instruction::Instruction;
 use crate::types::{CallFrame, CodeObjectId};
 use patina_core::environment::Environment;
 use patina_core::heap::{SharedHeap, new_shared_heap};
+use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
+use patina_primitives::PrimitiveRegistry;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -36,10 +38,14 @@ pub struct VmState {
     pub globals: Rc<RefCell<Environment>>,
     /// The heap, shared with `patina-runtime` primitives.
     pub heap: SharedHeap,
+    /// Registry of all primitive procedures.
+    pub primitive_registry: Rc<PrimitiveRegistry>,
 }
 
 impl VmState {
     pub fn new(globals: Rc<RefCell<Environment>>) -> Self {
+        let mut registry = PrimitiveRegistry::new();
+        patina_primitives::register_all(&mut registry);
         Self {
             registers: Vec::new(),
             frames: Vec::new(),
@@ -49,6 +55,28 @@ impl VmState {
             code_store: HashMap::new(),
             globals,
             heap: new_shared_heap(),
+            primitive_registry: Rc::new(registry),
+        }
+    }
+
+    /// Install all registered primitives into the global environment.
+    ///
+    /// Each primitive is stored as a `Procedure::Primitive` heap object so that
+    /// `LoadGlobal` + `Call` can dispatch them via `try_call_primitive`.
+    pub fn install_primitives(&mut self) {
+        let prims: Vec<_> = self
+            .primitive_registry
+            .primitives()
+            .map(|p| (p.name, p.qualified_name(), p.arity.clone()))
+            .collect();
+        for (name, qualified_name, arity) in prims {
+            let proc = Rc::new(Procedure::Primitive {
+                name,
+                arity,
+                qualified_name: Rc::from(qualified_name.as_str()),
+            });
+            let tv = self.heap.borrow_mut().alloc_procedure(proc);
+            self.globals.borrow().define(name.to_string(), tv);
         }
     }
 
@@ -337,13 +365,34 @@ fn run_loop(state: &mut VmState) -> Result<TaggedValue, VmError> {
             Instruction::Call { func, args, dst } => {
                 let func_val = state.reg(func);
                 let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
-                call_closure(state, func_val, &arg_vals, dst)?;
-                // Control transferred to new frame; loop continues.
+                // Try primitive dispatch first (no frame push needed).
+                if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
+                    state.set_reg(dst, result?);
+                } else {
+                    call_closure(state, func_val, &arg_vals, dst)?;
+                    // Control transferred to new frame; loop continues.
+                }
             }
 
             Instruction::TailCall { func, args } => {
                 let func_val = state.reg(func);
                 let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
+
+                // Primitives in tail position: call them, write result to current
+                // frame's return_reg, then simulate a Return.
+                if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
+                    let result = result?;
+                    let frame = state.frames.pop().expect("TailCall with empty stack");
+                    if state.frames.is_empty() {
+                        state.free_top_registers(frame.register_base, frame.num_regs);
+                        return Ok(result);
+                    }
+                    let caller_idx = state.frames.len() - 1;
+                    let return_reg = frame.return_reg;
+                    state.set_reg_in_frame(caller_idx, return_reg, result);
+                    state.free_top_registers(frame.register_base, frame.num_regs);
+                    continue;
+                }
 
                 let (new_code_id, _) = resolve_closure(state, func_val)?;
                 let new_code = state.code_store.get(&new_code_id).cloned().ok_or_else(|| {
@@ -441,6 +490,35 @@ fn run_loop(state: &mut VmState) -> Result<TaggedValue, VmError> {
                 });
             }
 
+            Instruction::AllocCell { dst, src } => {
+                let val = state.reg(src);
+                let cell = state.heap.borrow_mut().alloc_mutable_cell(val);
+                state.set_reg(dst, cell);
+            }
+
+            Instruction::ReadCell { dst, cell } => {
+                let cell_tv = state.reg(cell);
+                let val = state
+                    .heap
+                    .borrow()
+                    .read_mutable_cell(cell_tv)
+                    .ok_or_else(|| VmError::Runtime {
+                        message: "ReadCell: not a MutableCell".into(),
+                    })?;
+                state.set_reg(dst, val);
+            }
+
+            Instruction::WriteCell { cell, src } => {
+                let cell_tv = state.reg(cell);
+                let val = state.reg(src);
+                let ok = state.heap.borrow().write_mutable_cell(cell_tv, val);
+                if !ok {
+                    return Err(VmError::Runtime {
+                        message: "WriteCell: not a MutableCell".into(),
+                    });
+                }
+            }
+
             Instruction::Nop => {}
         }
     }
@@ -492,4 +570,72 @@ fn build_list(state: &mut VmState, items: &[TaggedValue]) -> Result<TaggedValue,
         result = state.heap.borrow_mut().alloc_pair(item, result);
     }
     Ok(result)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VmApplyContext — implements ApplyContext for heap-only primitives
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Minimal `ApplyContext` implementation for the VM.
+///
+/// Heap-only primitives (~290) work fine. Higher-order primitives that call
+/// back via `apply_proc` or `eval_expr` are stubbed — full support in A4+.
+struct VmApplyContext<'a> {
+    heap: &'a SharedHeap,
+}
+
+impl<'a> patina_primitives::ApplyContext for VmApplyContext<'a> {
+    fn heap(&self) -> &SharedHeap {
+        self.heap
+    }
+
+    fn apply_proc(
+        &self,
+        _proc: TaggedValue,
+        _args: Vec<TaggedValue>,
+    ) -> Result<TaggedValue, patina_primitives::EvalError> {
+        Err(patina_primitives::EvalError::InvalidSyntax(
+            "higher-order primitive apply_proc not yet supported in VM (A4+)".into(),
+        ))
+    }
+
+    fn eval_expr(
+        &self,
+        _expr: TaggedValue,
+        _env: &Rc<patina_core::environment::Environment>,
+    ) -> Result<TaggedValue, patina_primitives::EvalError> {
+        Err(patina_primitives::EvalError::InvalidSyntax(
+            "eval not yet supported in VM (A4+)".into(),
+        ))
+    }
+
+    fn load_scheme_library(
+        &self,
+        _name: &[String],
+    ) -> Result<Rc<patina_core::library::Library>, patina_primitives::EvalError> {
+        Err(patina_primitives::EvalError::InvalidSyntax(
+            "load_scheme_library not yet supported in VM (A4+)".into(),
+        ))
+    }
+}
+
+/// Try to call `func_val` as a primitive. Returns `Some(result)` if it was a
+/// primitive, `None` if it's a VM closure (caller should push a frame instead).
+fn try_call_primitive(
+    state: &VmState,
+    func_val: TaggedValue,
+    args: Vec<TaggedValue>,
+) -> Option<Result<TaggedValue, VmError>> {
+    let proc = state.heap.borrow().get_procedure(func_val)?;
+    let Procedure::Primitive { qualified_name, .. } = proc.as_ref() else {
+        return None;
+    };
+    let ctx = VmApplyContext { heap: &state.heap };
+    let result = state
+        .primitive_registry
+        .apply_tagged(qualified_name, args, &ctx)
+        .map_err(|e| VmError::Runtime {
+            message: e.to_string(),
+        });
+    Some(result)
 }

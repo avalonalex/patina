@@ -45,6 +45,18 @@ pub enum Instruction {
     /// `globals[name] ← src`
     StoreGlobal { name: Symbol, src: Reg },
 
+    // ── MutableCell ──────────────────────────────────────────────────────────
+    /// Allocate a `MutableCell` wrapping `reg[src]`, store the heap pointer in `dst`.
+    ///
+    /// Emitted in the lambda prologue for each `boxed_param`.
+    AllocCell { dst: Reg, src: Reg },
+
+    /// `dst ← *reg[cell]`  (read through a `MutableCell` pointer)
+    ReadCell { dst: Reg, cell: Reg },
+
+    /// `*reg[cell] ← reg[src]`  (write through a `MutableCell` pointer)
+    WriteCell { cell: Reg, src: Reg },
+
     // ── Closure Creation ──────────────────────────────────────────────────────
     /// Allocate a `VmClosure { code_id, free_vars: regs.map(|r| reg[r]) }` on
     /// the heap and store the heap pointer in `dst`.

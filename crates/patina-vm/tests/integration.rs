@@ -16,7 +16,9 @@ use std::rc::Rc;
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn fresh_state() -> VmState {
-    VmState::new(Rc::new(RefCell::new(Environment::new())))
+    let mut state = VmState::new(Rc::new(RefCell::new(Environment::new())));
+    state.install_primitives();
+    state
 }
 
 fn run(expr: CoreExpr) -> TaggedValue {
@@ -82,6 +84,14 @@ fn if_(test: CoreExpr, then: CoreExpr, else_: CoreExpr) -> CoreExpr {
 fn define(name: &str, value: CoreExpr) -> CoreExpr {
     CoreExpr::new(CoreExprKind::Define {
         name: Rc::from(name),
+        value: Rc::new(value),
+    })
+}
+
+fn set(name: &str, value: CoreExpr) -> CoreExpr {
+    CoreExpr::new(CoreExprKind::Set {
+        var: Rc::from(name),
+        scopes: Default::default(),
         value: Rc::new(value),
     })
 }
@@ -271,4 +281,83 @@ fn tail_call_self_recursion() {
     let expr = app(outer, vec![inner]);
     let result = run(expr);
     assert_eq!(result.as_fixnum(), Some(42));
+}
+
+#[test]
+fn set_global() {
+    // (begin (define x 1) (set! x 99) x)  →  99
+    let expr = begin(vec![define("x", lit(1)), set("x", lit(99)), var("x")]);
+    let result = run(expr);
+    assert_eq!(result.as_fixnum(), Some(99));
+}
+
+#[test]
+fn mutated_captured_var() {
+    // (lambda (x) (set! x 42) (lambda () x))
+    // ((outer 0))  →  42
+    //
+    // x is mutated AND captured → must be MutableCell-boxed.
+    let inner = lambda(vec![], vec![var("x")]);
+    let outer = lambda(vec!["x"], vec![set("x", lit(42)), inner]);
+    // ((outer 0)) — call inner thunk returned by outer
+    let call_outer = app(outer, vec![lit(0)]);
+    let call_inner = app(call_outer, vec![]);
+    let result = run(call_inner);
+    assert_eq!(result.as_fixnum(), Some(42));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Primitive wiring tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn primitive_addition() {
+    // (+ 3 4)  →  7
+    let expr = app(var("+"), vec![lit(3), lit(4)]);
+    let result = run(expr);
+    assert_eq!(result.as_fixnum(), Some(7));
+}
+
+#[test]
+fn primitive_in_lambda() {
+    // ((lambda (x) (+ x 1)) 41)  →  42
+    let lam = lambda(vec!["x"], vec![app(var("+"), vec![var("x"), lit(1)])]);
+    let expr = app(lam, vec![lit(41)]);
+    let result = run(expr);
+    assert_eq!(result.as_fixnum(), Some(42));
+}
+
+#[test]
+fn primitive_conditional() {
+    // (if (= 1 1) 42 0)  →  42
+    let cond = app(var("="), vec![lit(1), lit(1)]);
+    let expr = if_(cond, lit(42), lit(0));
+    let result = run(expr);
+    assert_eq!(result.as_fixnum(), Some(42));
+}
+
+#[test]
+fn tail_recursive_countdown() {
+    // (define (loop n acc) (if (= n 0) acc (loop (- n 1) (+ acc 1))))
+    // (loop 100 0)  →  100
+    //
+    // Uses proper tail calls + primitives; blows up if TCO is broken.
+    let loop_body = if_(
+        app(var("="), vec![var("n"), lit(0)]),
+        var("acc"),
+        app(
+            var("loop"),
+            vec![
+                app(var("-"), vec![var("n"), lit(1)]),
+                app(var("+"), vec![var("acc"), lit(1)]),
+            ],
+        ),
+    );
+    let loop_fn = lambda(vec!["n", "acc"], vec![loop_body]);
+    let expr = begin(vec![
+        define("loop", loop_fn),
+        app(var("loop"), vec![lit(100), lit(0)]),
+    ]);
+    let result = run(expr);
+    assert_eq!(result.as_fixnum(), Some(100));
 }

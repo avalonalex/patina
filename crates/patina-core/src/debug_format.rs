@@ -155,6 +155,11 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         HeapObjectData::VmClosure { code_id, .. } => {
             write!(buf, "#<procedure:{}>", code_id).unwrap()
         }
+        HeapObjectData::MutableCell(cell) => {
+            buf.push_str("#<cell:");
+            format_tagged_impl(*cell.borrow(), heap, buf, with_scopes);
+            buf.push('>');
+        }
     }
 }
 

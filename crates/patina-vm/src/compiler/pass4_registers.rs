@@ -31,7 +31,7 @@ use super::pass3_tail::{TailedExpr, TailedLambda};
 use crate::compiler::pass1_analysis::NodeId;
 use patina_core::core_expr::Symbol;
 use patina_core::tagged_value::TaggedValue;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RegExpr — output IR of Pass 4
@@ -67,6 +67,15 @@ pub enum RegExprKind {
         name: Symbol,
     },
 
+    /// Read value out of a `MutableCell` held in a local register.
+    ReadLocalCell {
+        src: u16,
+    },
+    /// Read value out of a `MutableCell` held in a closure slot.
+    ReadClosureCell {
+        slot: u16,
+    },
+
     Lambda(Box<RegLambda>),
 
     If {
@@ -76,10 +85,16 @@ pub enum RegExprKind {
     },
 
     SetLocal {
-        src_reg: u16,
+        value: Box<RegExpr>,
         var_reg: u16,
     },
-    SetClosure {
+    /// `set!` through a `MutableCell` held in a local register.
+    WriteLocalCell {
+        value: Box<RegExpr>,
+        var_reg: u16,
+    },
+    /// `set!` through a `MutableCell` held in a closure slot.
+    WriteClosureCell {
         slot: u16,
         value: Box<RegExpr>,
     },
@@ -132,6 +147,8 @@ pub struct RegLambda {
     pub body: Vec<RegExpr>,
     /// How to obtain each captured free variable from the parent frame, in slot order.
     pub captures: Vec<CaptureSource>,
+    /// Registers of params that must be wrapped in `MutableCell` on entry.
+    pub boxed_params: HashSet<u16>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,6 +245,13 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
 
         TailedExpr::GlobalRef(name) => RegExprKind::GlobalRef { name: name.clone() },
 
+        TailedExpr::ReadLocalCell(name) => {
+            let src = alloc.lookup(name).unwrap_or(0);
+            RegExprKind::ReadLocalCell { src }
+        }
+
+        TailedExpr::ReadClosureCell { slot, .. } => RegExprKind::ReadClosureCell { slot: *slot },
+
         TailedExpr::Lambda(lam) => {
             let reg_lam = allocate_lambda(lam, alloc);
             // Reserve scratch regs for MakeClosure capture loads: dst+1..dst+n_captures.
@@ -257,17 +281,27 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
         TailedExpr::SetLocal { var, value } => {
             let var_reg = alloc.lookup(var).unwrap_or(0);
             let tmp = alloc.alloc();
-            let val_reg = allocate(value, tmp, alloc);
+            let val_expr = allocate(value, tmp, alloc);
             RegExprKind::SetLocal {
-                src_reg: val_reg.dst,
+                value: Box::new(val_expr),
                 var_reg,
             }
         }
 
-        TailedExpr::SetClosure { slot, value, .. } => {
+        TailedExpr::WriteLocalCell { var, value } => {
+            let var_reg = alloc.lookup(var).unwrap_or(0);
+            let tmp = alloc.alloc();
+            let val_expr = allocate(value, tmp, alloc);
+            RegExprKind::WriteLocalCell {
+                value: Box::new(val_expr),
+                var_reg,
+            }
+        }
+
+        TailedExpr::WriteClosureCell { slot, value } => {
             let tmp = alloc.alloc();
             let val_reg = allocate(value, tmp, alloc);
-            RegExprKind::SetClosure {
+            RegExprKind::WriteClosureCell {
                 slot: *slot,
                 value: Box::new(val_reg),
             }
@@ -396,6 +430,13 @@ fn allocate_lambda(lam: &TailedLambda, parent_alloc: &RegAlloc) -> RegLambda {
         alloc.bind(name.clone(), reg);
     }
 
+    // Map boxed param names → their register indices.
+    let boxed_params: HashSet<u16> = lam
+        .boxed_params
+        .iter()
+        .filter_map(|name| alloc.lookup(name))
+        .collect();
+
     let num_params = lam.params.len() as u16;
     let n = lam.body.len();
     let mut body: Vec<RegExpr> = Vec::with_capacity(n);
@@ -412,6 +453,7 @@ fn allocate_lambda(lam: &TailedLambda, parent_alloc: &RegAlloc) -> RegLambda {
         num_regs,
         body,
         captures,
+        boxed_params,
     }
 }
 
