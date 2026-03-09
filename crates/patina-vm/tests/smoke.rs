@@ -50,10 +50,9 @@ fn call_frame_is_clone() {
 fn vm_state_basic() {
     use patina_core::environment::Environment;
     use patina_vm::runtime::VmState;
-    use std::cell::RefCell;
     use std::rc::Rc;
 
-    let globals = Rc::new(RefCell::new(Environment::new()));
+    let globals = Rc::new(Environment::new());
     let mut state = VmState::new(globals);
 
     let base = state.alloc_registers(4);

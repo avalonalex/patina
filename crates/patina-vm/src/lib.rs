@@ -20,7 +20,10 @@
 //! - `PRD/phase2/VM_RUNTIME.md` — runtime structures and execution loop
 //! - `PRD/phase2/VM_DECISIONS.md` — all settled design decisions
 
+pub mod backend;
 pub mod compiler;
 pub mod error;
 pub mod runtime;
 pub mod types;
+
+pub use backend::VmBackend;

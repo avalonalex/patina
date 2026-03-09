@@ -16,6 +16,7 @@ once_cell = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+patina-interpreter = { path = "../patina-interpreter" }
 [lib]
 name = "patina_vm"
 path = "src/lib.rs"

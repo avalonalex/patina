@@ -8,11 +8,10 @@ use crate::types::continuation::{DynamicWindRecord, PromptFrame};
 use crate::types::instruction::Instruction;
 use crate::types::{CallFrame, CodeObjectId};
 use patina_core::environment::Environment;
-use patina_core::heap::{SharedHeap, new_shared_heap};
+use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_primitives::PrimitiveRegistry;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -35,7 +34,8 @@ pub struct VmState {
     /// All compiled `CodeObject`s, keyed by id.
     pub code_store: HashMap<CodeObjectId, Rc<CodeObject>>,
     /// Global variable environment, shared with the library loader.
-    pub globals: Rc<RefCell<Environment>>,
+    /// `Environment` has interior mutability, so no outer `RefCell` is needed.
+    pub globals: Rc<Environment>,
     /// The heap, shared with `patina-runtime` primitives.
     pub heap: SharedHeap,
     /// Registry of all primitive procedures.
@@ -43,9 +43,12 @@ pub struct VmState {
 }
 
 impl VmState {
-    pub fn new(globals: Rc<RefCell<Environment>>) -> Self {
+    pub fn new(globals: Rc<Environment>) -> Self {
         let mut registry = PrimitiveRegistry::new();
         patina_primitives::register_all(&mut registry);
+        // Share the heap with the environment so TaggedValue indices produced by
+        // the parser (which also uses global_env().heap()) remain valid.
+        let heap = globals.heap().clone();
         Self {
             registers: Vec::new(),
             frames: Vec::new(),
@@ -54,7 +57,7 @@ impl VmState {
             dynamic_winds: Vec::new(),
             code_store: HashMap::new(),
             globals,
-            heap: new_shared_heap(),
+            heap,
             primitive_registry: Rc::new(registry),
         }
     }
@@ -76,7 +79,7 @@ impl VmState {
                 qualified_name: Rc::from(qualified_name.as_str()),
             });
             let tv = self.heap.borrow_mut().alloc_procedure(proc);
-            self.globals.borrow().define(name.to_string(), tv);
+            self.globals.define(name.to_string(), tv);
         }
     }
 
@@ -306,7 +309,6 @@ fn run_loop(state: &mut VmState) -> Result<TaggedValue, VmError> {
             Instruction::LoadGlobal { dst, name } => {
                 let val = state
                     .globals
-                    .borrow()
                     .get(&name)
                     .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
                 state.set_reg(dst, val);
@@ -318,14 +320,13 @@ fn run_loop(state: &mut VmState) -> Result<TaggedValue, VmError> {
                 // fall back to define. For now, propagate errors.
                 state
                     .globals
-                    .borrow()
                     .set(&name, val)
                     .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
             }
 
             Instruction::Define { name, src } => {
                 let val = state.reg(src);
-                state.globals.borrow().define(name.to_string(), val);
+                state.globals.define(name.to_string(), val);
             }
 
             // ── Closure Creation ────────────────────────────────────────────

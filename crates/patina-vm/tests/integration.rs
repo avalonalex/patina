@@ -8,7 +8,6 @@ use patina_core::environment::Environment;
 use patina_core::tagged_value::TaggedValue;
 use patina_vm::compiler::compile;
 use patina_vm::runtime::{VmState, execute};
-use std::cell::RefCell;
 use std::rc::Rc;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -16,7 +15,7 @@ use std::rc::Rc;
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn fresh_state() -> VmState {
-    let mut state = VmState::new(Rc::new(RefCell::new(Environment::new())));
+    let mut state = VmState::new(Rc::new(Environment::new()));
     state.install_primitives();
     state
 }
