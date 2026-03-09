@@ -24,27 +24,27 @@ and Chez Scheme all use register/slot machines.
 
 ---
 
-## 2. Value Representation: VM-Internal NaN-Boxing (`VmVal`)
+## 2. Value Representation: Unified `TaggedValue` (Phase 2A)
 
-**Decision:** The VM uses its own 64-bit NaN-boxed value type `VmVal`, distinct from
-the tree-walker's `TaggedValue`. Valid IEEE 754 floats are immediate (no heap
-allocation). All other types are encoded in the quiet-NaN space.
+**Decision:** The VM uses `TaggedValue` as its value type — the same type as the
+tree-walker. No separate `VmVal`, no conversion overhead, no boundary cost on
+primitive calls.
 
-```
-VmVal bit layout:
-  - Valid float (non-NaN): stored as-is (64-bit IEEE 754)
-  - NaN-tagged value: high 13 bits = 0x1FFF (quiet NaN prefix)
-      bits[47:45] = type tag (up to 8 types in tagged space)
-      bits[44:0]  = payload (fixnum, char, bool, heap index, etc.)
-```
+**Why:** Chez Scheme (the primary reference implementation) uses a single `ptr` type
+everywhere — both its bytecode VM and native-code compiler manipulate the same 64-bit
+tagged representation. Floats are heap-allocated in Chez too. This is the right
+baseline: one type, shared heap, no conversion.
 
-**Conversion boundary:** The `Backend` trait API uses the shared `TaggedValue`. The
-VM compiler converts `TaggedValue` constants → `VmVal` when building bytecode. The
-result is converted back at `Backend::eval` return time. This keeps the tree-walker's
-`TaggedValue` unchanged.
+The original `VmVal` NaN-boxing idea (LuaJIT/V8 style) trades 61-bit fixnums for
+45-bit fixnums in exchange for immediate floats. That regression is not worth it for
+Phase 2A, and the benefit (float arithmetic without heap allocation) only matters
+inside the VM's hot register loop — which still hits the heap on every
+`patina-primitives` call anyway.
 
-**Why:** Floats are immediate — no allocation on `(+ 1.0 2.0)`. Profiling shows numeric
-benchmarks are heavily float-intensive. This is the approach used by LuaJIT and V8.
+**Deferred optimization (Phase 2B+):** If profiling shows float allocation is a
+measurable bottleneck in the VM execution loop (after benchmarks exist), introduce a
+`VmVal` type with NaN-boxing for the register file only, with conversion at primitive
+call sites. Do not do this speculatively.
 
 ---
 
@@ -195,12 +195,34 @@ same frontend pipeline. It compiles `CoreExpr → bytecode` directly (no CPS tra
 
 ---
 
+## 10. Value Type: `TaggedValue` Throughout (Settled)
+
+**Decision:** The VM uses `TaggedValue` as its internal value type throughout — the
+same type as the tree-walker and all primitives. No separate `VmVal`, no conversion.
+See §2 for full rationale.
+
+---
+
+## 11. String Representation: Fixed-Width Character Array (Settled)
+
+**Decision:** Strings are stored as `Vec<char>` (fixed-width 32-bit Unicode codepoints),
+same as the current tree-walker heap. This gives O(1) `string-ref`/`string-set!` as
+required by R7RS without an index cache.
+
+The external interface is UTF-8 (I/O, display, `symbol->string`, etc.). Internal
+storage is fixed-width for correctness and simplicity.
+
+**Deferred optimizations** (Phase 2B+):
+- Small-string optimization (inline short strings in `VmVal` payload)
+- Latin-1 / compact ASCII representation for ASCII-only strings
+- UTF-8 + sparse index cache for memory-heavy workloads
+
+`STRING_ABSTRACTION_DESIGN.md` has analysis of the trade-offs; revisit after basic VM works.
+
+---
+
 ## Open Questions (Not Yet Decided)
 
 1. **Symbol representation in `VmVal`**: share interning with tree-walker's
    `SharedHeap` symbol table, or maintain a separate VM-local symbol table?
    Shared is simpler; separate is cleaner. Defer decision to implementation.
-
-2. **String representation**: keep `Vec<char>` (R7RS O(1) `string-ref`) or switch
-   to UTF-8 + sparse index cache in VM? `STRING_ABSTRACTION_DESIGN.md` has analysis.
-   Defer to Phase 2B (after basic VM works).
