@@ -16,7 +16,8 @@
       "Bash(__NEW_LINE_c1e9fd24aae90ba6__ echo \"=== Value::Library usage ===\")",
       "Bash(__NEW_LINE_9a048d997f9d74ca__ echo \"=== Value::EnvironmentSpecifier usage ===\")",
       "Bash(samply record:*)",
-      "Bash(cargo bench:*)"
+      "Bash(cargo bench:*)",
+      "Bash(cargo check:*)"
     ],
     "deny": [],
     "ask": []

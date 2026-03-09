@@ -1,0 +1,21 @@
+[package]
+name = "patina-vm"
+version = "0.1.0"
+edition = "2024"
+description = "Register-based bytecode VM backend for Patina Scheme"
+
+[dependencies]
+patina-core = { path = "../patina-core" }
+patina-runtime = { path = "../patina-runtime" }
+patina-frontend = { path = "../patina-frontend" }
+patina-ir = { path = "../patina-ir" }
+patina-primitives = { path = "../patina-primitives" }
+
+thiserror = { workspace = true }
+once_cell = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+[lib]
+name = "patina_vm"
+path = "src/lib.rs"
