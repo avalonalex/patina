@@ -17,7 +17,7 @@ Both share the same `main` branch and the same test suite.
 
 ### Milestones
 
-#### A1 — Crate skeleton
+#### A1 — Crate skeleton ✅
 - Create `crates/patina-vm/` with `Cargo.toml`
 - Define `CodeObject`, `Instruction` enum (from `VM_ISA.md §4`)
 - Define `CallFrame` with `#[derive(Clone)]` — enforce in CI lint
@@ -25,49 +25,90 @@ Both share the same `main` branch and the same test suite.
 - Define `VmContinuation`, `VmDelimitedContinuation`
 - No execution yet — just types compile
 
-#### A2 — Compiler: passes 1–3
+#### A2 — Compiler: passes 1–3 ✅
 - Pass 1: `NodeId` pre-pass + free variable analysis + mutation detection
-- Pass 2: closure conversion → `ClosedExpr`
+- Pass 2: closure conversion → `ClosedExpr` (with MutableCell boxing, global-filtering)
 - Pass 3: tail position marking → `TailExpr`
-- Unit tests for each pass (VM_TESTING.md §3.1)
+- Unit tests for each pass
 
-#### A3 — Compiler: passes 4–5
+#### A3 — Compiler: passes 4–5 ✅
 - Pass 4: register allocation → `RegExpr`
-  - Tail call no-overlap invariant tests
-  - Two-pass top-level define handling
+  - Tail call no-overlap invariant: args materialised into fresh temps
+  - Cell read/write variants for boxed params
 - Pass 5: code generation → `CodeObject`
-  - Label patching
-  - Nested lambda recursion
+  - Label patching, nested lambda recursion
+  - AllocCell prologue for boxed params
+  - TailCall passes `arg_tmps` directly (no pre-move to r0..rn; avoids func clobbering)
 - End-to-end: `CoreExpr → CodeObject` for simple expressions
 
-#### A4 — Execution loop: basics
+#### A4 — Execution loop: basics ✅
 - `LoadImmediate`, `LoadConst`, `Move`, `LoadGlobal`, `StoreGlobal`
 - `LoadClosure`, `StoreClosure`
 - `Jump`, `JumpIf`, `JumpUnless`
 - `Call`, `Return` (non-tail)
-- `CallPrimitive`
 - `Define`
+- Primitive dispatch via `try_call_primitive()` / `VmApplyContext` (heap-only)
+- `install_primitives()` — all patina-primitives wired into globals
 - Can run: `(+ 1 2)`, `(if #t 1 2)`, `(define x 42) x`
 
-#### A5 — Tail calls and closures
-- `TailCall` with frame reuse
-- `MakeClosure`
-- Variadic callee prologue (rest arg collection)
+#### A5 — Tail calls and closures ✅
+- `TailCall` with frame reuse (register window grow if needed)
+- `TailApply` for `apply` in tail position
+- `MakeClosure`, `AllocCell`, `ReadCell`, `WriteCell`
+- Variadic callee prologue (rest arg collection via `build_list`)
 - Can run: fibonacci, map, filter, named-let loops
 
-#### A6 — Continuation machinery
-- `HeapObjectData::PromptTag` (opaque, with monotonic id)
+#### A6 — Continuation machinery ✅
+**ISA instructions:**
 - `CallWithPrompt`, `AbortToPrompt`, `CaptureComposable`, `InvokeContinuation`
-- `run_wind_transition` shared function
 - `ReturnMulti`, `ReceiveValues` + `vm.value_buffer`
-- Continuation unit tests (VM_TESTING.md §3.3)
+
+**Control primitive interception:**
+- `VmControlPrimitive` enum + `vm_control_primitive()` checks qualified name
+- Intercepts in both `Call` and `TailCall` dispatch before `try_call_primitive`
+- `handle_control_primitive()` handles all 6 operators:
+  - `dynamic-wind` — `run_thunk` for before/body/after; detects abort-escaped body
+  - `call-with-continuation-prompt` — pushes `PromptFrame`, calls body
+  - `abort-current-continuation` — captures delimited continuation, runs exit winds, truncates, calls handler
+  - `call/cc` — captures full `VmContinuation` (with `deliver_reg`), calls proc
+  - `values` — writes to `value_buffer`
+  - `call-with-values` — runs producer via `run_thunk`, calls consumer with produced values
+
+**Continuation invocation:**
+- `try_invoke_continuation()` — continuations callable as procedures (e.g. `(k 21)`)
+- Full continuations: restore entire state, deliver to `deliver_reg`
+- Delimited continuations: relocate + append frames, run wind entry thunks
+
+**Infrastructure:**
+- `run_loop_until(state, exit_depth)` — parameterized loop for nested thunk execution
+- `run_thunk()` — synchronous 0-arg closure execution
+- `run_wind_transition()` — before/after thunk transition between wind states
+- `pop_resolved_prompts()` — cleanup prompts on normal Return
+- Heap: `VmContinuationRef(u64)` / `VmDelimitedContinuationRef(u64)` opaque handles
+  with side tables on `VmState` (avoids circular dep with patina-core)
+- TailCall/TailApply: fixed `exit_depth` check (was `is_empty()`)
+- TailCall of control prims: pops frame first, dispatches from parent perspective
+
+**Verified working:**
+- `(call-with-continuation-prompt body tag handler)` — normal return and abort
+- `(abort-current-continuation tag val)` — with handler invocation
+- `(dynamic-wind before body after)` — normal and abort-escaped
+- `(call/cc (lambda (k) ...))` — capture and escape `(k val)`
+- `(values v1 v2 ...)` + `(call-with-values producer consumer)`
+- 24/24 VM tests pass, 1159/1159 chibi tests unaffected, clippy clean
+
+#### A6.5 — REPL improvements ✅ (done alongside A6)
+- Shared `SchemeHelper`, `make_editor()`, `run_repl_loop()` — both REPLs use same editing infra
+- `(vm-compile expr)` — disassemble bytecode without executing
+- `disasm.rs` — pretty-printer for CodeObjects with instruction mnemonics
+- `VmBackend::disasm_source()` — parse → desugar → compile → disassemble pipeline
 
 #### A7 — Backend trait + acceptance
-- Implement `Backend` trait for `VmBackend`
-- Wire into `patina-interpreter`
-- Run `cargo test --package patina-tests --features vm`
+- `VmBackend` already implements `Backend` trait (eval pipeline working)
+- Next: run `cargo test --package patina-tests` against VM backend
 - Triage failures: literals → calls → closures → continuations → libraries
-- **Gate:** all 1400 tests pass
+- Known gaps: `set!` not yet compiled, HO primitives (`map`, `for-each`) stub in `VmApplyContext`
+- **Gate:** all ~1400 tests pass
 
 #### A8 — Chibi tests
 - Run `./scripts/run_chibi_tests.sh` against VM backend

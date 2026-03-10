@@ -231,6 +231,18 @@ impl Pass4Registers {
 
 /// Allocate registers for `expr`, writing result into `dst`.
 fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
+    allocate_ctx(expr, dst, alloc, &[])
+}
+
+/// Core allocator. `own_captures` is the capture list of the immediately
+/// enclosing lambda — needed so nested lambda nodes can resolve which parent
+/// closure slot each free variable comes from.
+fn allocate_ctx(
+    expr: &TailedExpr,
+    dst: u16,
+    alloc: &mut RegAlloc,
+    own_captures: &[Symbol],
+) -> RegExpr {
     let kind = match expr {
         TailedExpr::Literal(v) => RegExprKind::Literal(*v),
         TailedExpr::Quote(v) => RegExprKind::Quote(*v),
@@ -253,7 +265,9 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
         TailedExpr::ReadClosureCell { slot, .. } => RegExprKind::ReadClosureCell { slot: *slot },
 
         TailedExpr::Lambda(lam) => {
-            let reg_lam = allocate_lambda(lam, alloc);
+            // own_captures is the parent lambda's capture list — nested lambdas
+            // use it to resolve ParentClosureSlot sources.
+            let reg_lam = allocate_lambda(lam, alloc, own_captures);
             // Reserve scratch regs for MakeClosure capture loads: dst+1..dst+n_captures.
             let n_captures = reg_lam.captures.len() as u16;
             if n_captures > 0 {
@@ -267,10 +281,10 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
 
         TailedExpr::If { test, then, else_ } => {
             let test_dst = alloc.alloc();
-            let test_reg = allocate(test, test_dst, alloc);
+            let test_reg = allocate_ctx(test, test_dst, alloc, own_captures);
             // Reuse `dst` for both branches.
-            let then_reg = allocate(then, dst, alloc);
-            let else_reg = allocate(else_, dst, alloc);
+            let then_reg = allocate_ctx(then, dst, alloc, own_captures);
+            let else_reg = allocate_ctx(else_, dst, alloc, own_captures);
             RegExprKind::If {
                 test: Box::new(test_reg),
                 then: Box::new(then_reg),
@@ -281,7 +295,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
         TailedExpr::SetLocal { var, value } => {
             let var_reg = alloc.lookup(var).unwrap_or(0);
             let tmp = alloc.alloc();
-            let val_expr = allocate(value, tmp, alloc);
+            let val_expr = allocate_ctx(value, tmp, alloc, own_captures);
             RegExprKind::SetLocal {
                 value: Box::new(val_expr),
                 var_reg,
@@ -291,7 +305,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
         TailedExpr::WriteLocalCell { var, value } => {
             let var_reg = alloc.lookup(var).unwrap_or(0);
             let tmp = alloc.alloc();
-            let val_expr = allocate(value, tmp, alloc);
+            let val_expr = allocate_ctx(value, tmp, alloc, own_captures);
             RegExprKind::WriteLocalCell {
                 value: Box::new(val_expr),
                 var_reg,
@@ -300,7 +314,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
 
         TailedExpr::WriteClosureCell { slot, value } => {
             let tmp = alloc.alloc();
-            let val_reg = allocate(value, tmp, alloc);
+            let val_reg = allocate_ctx(value, tmp, alloc, own_captures);
             RegExprKind::WriteClosureCell {
                 slot: *slot,
                 value: Box::new(val_reg),
@@ -309,7 +323,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
 
         TailedExpr::SetGlobal { var, value } => {
             let tmp = alloc.alloc();
-            let val_reg = allocate(value, tmp, alloc);
+            let val_reg = allocate_ctx(value, tmp, alloc, own_captures);
             RegExprKind::SetGlobal {
                 name: var.clone(),
                 value: Box::new(val_reg),
@@ -324,7 +338,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
                 .map(|(i, e)| {
                     // Only the last expr's result goes to `dst`.
                     let d = if i == n - 1 { dst } else { alloc.alloc() };
-                    allocate(e, d, alloc)
+                    allocate_ctx(e, d, alloc, own_captures)
                 })
                 .collect();
             RegExprKind::Begin(regs)
@@ -332,7 +346,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
 
         TailedExpr::Define { name, value } => {
             let tmp = alloc.alloc();
-            let val_reg = allocate(value, tmp, alloc);
+            let val_reg = allocate_ctx(value, tmp, alloc, own_captures);
             RegExprKind::Define {
                 name: name.clone(),
                 value: Box::new(val_reg),
@@ -345,7 +359,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
             is_tail,
         } => {
             let func_dst = alloc.alloc();
-            let func_reg = allocate(func, func_dst, alloc);
+            let func_reg = allocate_ctx(func, func_dst, alloc, own_captures);
 
             // Evaluate args into fresh temporaries (overlap-safe for TailCall).
             let watermark = alloc.next;
@@ -354,7 +368,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
             for arg in args {
                 let tmp = alloc.alloc();
                 arg_tmps.push(tmp);
-                arg_regs.push(allocate(arg, tmp, alloc));
+                arg_regs.push(allocate_ctx(arg, tmp, alloc, own_captures));
             }
 
             // For non-tail calls, free arg temporaries after the call.
@@ -376,7 +390,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
             is_tail,
         } => {
             let func_dst = alloc.alloc();
-            let func_reg = allocate(func, func_dst, alloc);
+            let func_reg = allocate_ctx(func, func_dst, alloc, own_captures);
 
             let watermark = alloc.next;
             let mut arg_regs: Vec<RegExpr> = Vec::with_capacity(args.len());
@@ -384,7 +398,7 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
             for arg in args {
                 let tmp = alloc.alloc();
                 arg_tmps.push(tmp);
-                arg_regs.push(allocate(arg, tmp, alloc));
+                arg_regs.push(allocate_ctx(arg, tmp, alloc, own_captures));
             }
             if !is_tail {
                 alloc.free_above(watermark);
@@ -406,17 +420,26 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
 ///
 /// `parent_alloc`: the parent frame's register allocator, used to resolve
 /// where each captured free variable currently lives.
-fn allocate_lambda(lam: &TailedLambda, parent_alloc: &RegAlloc) -> RegLambda {
+fn allocate_lambda(
+    lam: &TailedLambda,
+    parent_alloc: &RegAlloc,
+    parent_captures: &[Symbol],
+) -> RegLambda {
     // Resolve capture sources from the parent frame.
+    // A free variable in `lam` may live in:
+    //   1. A local register of the parent (parent_alloc.lookup succeeds).
+    //   2. A closure slot of the parent (parent_captures[i] matches).
+    //   3. A global (fall-through).
     let captures: Vec<CaptureSource> = lam
         .capture_list
         .iter()
         .map(|name| {
             if let Some(reg) = parent_alloc.lookup(name) {
                 CaptureSource::ParentReg(reg)
+            } else if let Some(slot) = parent_captures.iter().position(|n| n == name) {
+                // Variable lives in the parent's own closure (pass-through).
+                CaptureSource::ParentClosureSlot(slot as u16)
             } else {
-                // Not a local in parent → global (cross-frame closure slots
-                // resolved in A3+; for now treat as global lookup).
                 CaptureSource::Global(name.clone())
             }
         })
@@ -440,9 +463,11 @@ fn allocate_lambda(lam: &TailedLambda, parent_alloc: &RegAlloc) -> RegLambda {
     let num_params = lam.params.len() as u16;
     let n = lam.body.len();
     let mut body: Vec<RegExpr> = Vec::with_capacity(n);
+    // Pass this lambda's own capture_list so nested lambdas can resolve
+    // variables that live in this lambda's closure slots.
     for e in lam.body.iter() {
         let d = alloc.alloc();
-        body.push(allocate(e, d, &mut alloc));
+        body.push(allocate_ctx(e, d, &mut alloc, &lam.capture_list));
     }
 
     let num_regs = alloc.num_regs;

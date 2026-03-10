@@ -304,20 +304,13 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             }
             let arg_regs: Vec<u16> = arg_tmps.clone();
             if *is_tail {
-                // Move args to parameter slots r0..r(n-1) before tail call.
-                // Pass 4 guaranteed no overlap between arg_tmps and param slots
-                // when args are materialised into fresh temps beyond r(n-1).
-                for (i, &tmp) in arg_tmps.iter().enumerate() {
-                    if tmp != i as u16 {
-                        cg.emit(Instruction::Move {
-                            dst: i as u16,
-                            src: tmp,
-                        });
-                    }
-                }
+                // The VM's TailCall dispatch reads arg values from `arg_tmps`,
+                // collects them all first, then writes to the new frame's r0..r(n-1).
+                // This means we can pass arg_tmps directly without pre-moving —
+                // and avoids clobbering func.dst if it falls in the param slot range.
                 cg.emit(Instruction::TailCall {
                     func: func.dst,
-                    args: (0..arg_regs.len() as u16).collect(),
+                    args: arg_regs,
                 });
             } else {
                 cg.emit(Instruction::Call {
@@ -339,22 +332,13 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
                 gen_expr(arg, cg)?;
             }
             let arg_regs: Vec<u16> = arg_tmps.clone();
-            // For now lower Apply as a regular Call (full Apply support in A3).
             if *is_tail {
-                for (i, &tmp) in arg_tmps.iter().enumerate() {
-                    if tmp != i as u16 {
-                        cg.emit(Instruction::Move {
-                            dst: i as u16,
-                            src: tmp,
-                        });
-                    }
-                }
-                cg.emit(Instruction::TailCall {
+                cg.emit(Instruction::TailApply {
                     func: func.dst,
-                    args: (0..arg_regs.len() as u16).collect(),
+                    args: arg_regs,
                 });
             } else {
-                cg.emit(Instruction::Call {
+                cg.emit(Instruction::Apply {
                     func: func.dst,
                     args: arg_regs,
                     dst: expr.dst,

@@ -15,9 +15,14 @@ use crate::error::VmError;
 use crate::runtime::{VmState, execute};
 use patina_core::environment::Environment;
 use patina_core::tagged_value::TaggedValue;
-use patina_frontend::Desugarer;
-use patina_runtime::Backend;
+use patina_frontend::{Desugarer, SchemeLibraryLoader};
+use patina_runtime::library_loader::{ExportSpec, ImportSet};
+use patina_runtime::library_registry::LibraryError;
+use patina_runtime::{
+    Backend, Library, LibraryLoaderRegistry, LibraryRegistry, RustLibraryLoader, stdlib,
+};
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,6 +66,8 @@ impl From<patina_frontend::DesugarError> for VmBackendError {
 pub struct VmBackend {
     state: RefCell<VmState>,
     global_env: Rc<Environment>,
+    library_registry: RefCell<LibraryRegistry>,
+    loader_registry: RefCell<LibraryLoaderRegistry>,
 }
 
 impl VmBackend {
@@ -69,9 +76,478 @@ impl VmBackend {
         let global_env = Rc::new(Environment::new());
         let mut state = VmState::new(Rc::clone(&global_env));
         state.install_primitives();
-        VmBackend {
+
+        // Set up library loading infrastructure
+        let library_registry = RefCell::new(LibraryRegistry::with_default_paths());
+        let loader_registry = RefCell::new(LibraryLoaderRegistry::new());
+
+        let backend = VmBackend {
             state: RefCell::new(state),
             global_env,
+            library_registry,
+            loader_registry,
+        };
+
+        // Initialize library loaders
+        backend.init_loaders();
+
+        // Load bootstrap libraries (scheme base, etc.)
+        backend.load_bootstrap();
+
+        backend
+    }
+
+    /// Initialize library loaders (Rust internal libs + Scheme .sld loader).
+    fn init_loaders(&self) {
+        let mut loaders = self.loader_registry.borrow_mut();
+
+        let mut rust_loader = RustLibraryLoader::with_standard_libraries();
+
+        // === Internal libraries (patina internal ...) ===
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "numbers".into()],
+            stdlib::build_internal_numbers,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "lists".into()],
+            stdlib::build_internal_lists,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "chars".into()],
+            stdlib::build_internal_chars,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "strings".into()],
+            stdlib::build_internal_strings,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "vectors".into()],
+            stdlib::build_internal_vectors,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "bytevectors".into()],
+            stdlib::build_internal_bytevectors,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "control".into()],
+            stdlib::build_internal_control,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "errors".into()],
+            stdlib::build_internal_errors,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "io".into()],
+            stdlib::build_internal_io,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "predicates".into()],
+            stdlib::build_internal_predicates,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "records".into()],
+            stdlib::build_internal_records,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "params".into()],
+            stdlib::build_internal_params,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "time".into()],
+            stdlib::build_internal_time,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "system".into()],
+            stdlib::build_internal_system,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "lazy".into()],
+            stdlib::build_internal_lazy,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "eval".into()],
+            stdlib::build_internal_eval,
+        );
+        rust_loader.register(
+            vec!["patina".into(), "internal".into(), "r5rs".into()],
+            stdlib::build_internal_r5rs,
+        );
+
+        // === Test framework ===
+        rust_loader.register(
+            vec!["chibi".into(), "test".into(), "primitives".into()],
+            stdlib::build_chibi_test_primitives,
+        );
+
+        // === Patina extensions ===
+        rust_loader.register(
+            vec!["patina".into(), "debug".into()],
+            stdlib::build_patina_debug,
+        );
+
+        // Add Rust loader first (highest priority)
+        loaders.add_loader(Box::new(rust_loader));
+
+        // Add Scheme loader for .sld files
+        loaders.add_evaluating_loader(Box::new(SchemeLibraryLoader::new()));
+    }
+
+    /// Load bootstrap libraries and import them into the global environment.
+    fn load_bootstrap(&self) {
+        // Load (scheme base)
+        let _ = self.load_library(&["scheme".into(), "base".into()]);
+
+        // Load test framework
+        let _ = self.load_library(&["chibi".into(), "test".into()]);
+
+        // Load Patina debug utilities
+        let _ = self.load_library(&["patina".into(), "debug".into()]);
+
+        // Import (scheme base) into global environment
+        if let Ok(lib) = self.get_loaded_library(&["scheme".into(), "base".into()]) {
+            for (name, value) in lib.exports_iter_tagged() {
+                self.global_env.define(name.clone(), value);
+            }
+        }
+
+        // Import (patina debug) into global environment
+        if let Ok(lib) = self.get_loaded_library(&["patina".into(), "debug".into()]) {
+            for (name, value) in lib.exports_iter_tagged() {
+                self.global_env.define(name.clone(), value);
+            }
+        }
+
+        // Import (chibi test) into global environment
+        if let Ok(lib) = self.get_loaded_library(&["chibi".into(), "test".into()]) {
+            for (name, value) in lib.exports_iter_tagged() {
+                self.global_env.define(name.clone(), value);
+            }
+        }
+    }
+
+    /// Get an already-loaded library by name.
+    fn get_loaded_library(&self, name: &[String]) -> Result<Library, LibraryError> {
+        self.library_registry
+            .borrow()
+            .get(name)
+            .cloned()
+            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))
+    }
+
+    /// Return library search paths from the library registry.
+    fn library_search_paths(&self) -> Vec<std::path::PathBuf> {
+        self.library_registry.borrow().search_paths().to_vec()
+    }
+
+    /// Compile a source string to bytecode and disassemble it to stdout.
+    ///
+    /// Used by the `(vm-compile ...)` REPL special form.
+    pub fn disasm_source(&self, source: &str) -> Result<(), VmBackendError> {
+        use crate::disasm::disassemble;
+        use patina_frontend::Parser;
+
+        let heap = self.global_env.heap().clone();
+        let parsed = Parser::new_with_heap(source, heap.clone())
+            .map_err(|e| VmBackendError::Compile(e.to_string()))?
+            .parse_all()
+            .map_err(|e| VmBackendError::Compile(e.to_string()))?;
+
+        let desugarer = Desugarer::with_env(Rc::clone(&self.global_env));
+        for tv in parsed {
+            let core_expr = desugarer
+                .desugar_tagged(tv, &heap)
+                .map_err(|e| VmBackendError::Desugar(e.to_string()))?;
+
+            let (top, nested) = crate::compiler::compile(&core_expr)
+                .map_err(|e| VmBackendError::Compile(e.to_string()))?;
+
+            // Build a temporary code_store for the disassembler
+            let mut code_store = std::collections::HashMap::new();
+            for co in nested {
+                code_store.insert(co.id, std::rc::Rc::new(co));
+            }
+            disassemble(&top, &code_store);
+        }
+        Ok(())
+    }
+
+    /// Load a library by name (shared heap variant for TaggedValue compatibility).
+    pub fn load_library(&self, name: &[String]) -> Result<Library, LibraryError> {
+        // Check if already loaded
+        {
+            let registry = self.library_registry.borrow();
+            if let Some(lib) = registry.get(name) {
+                return Ok(lib.clone());
+            }
+        }
+
+        // Circular dependency detection
+        {
+            let mut registry = self.library_registry.borrow_mut();
+            registry.begin_loading(name)?;
+        }
+
+        let search_paths = self.library_search_paths();
+        let heap = self.global_env.heap().clone();
+
+        // Try simple (Rust) loaders first
+        let rust_result = {
+            let loaders = self.loader_registry.borrow();
+            loaders.try_simple_load_with_heap(name, &search_paths, heap.clone())?
+        };
+
+        let lib = if let Some(lib) = rust_result {
+            lib
+        } else {
+            // Try evaluating (Scheme .sld) loaders
+            let search_paths_for_checker = search_paths.clone();
+            let can_load_library = |lib_name: &[String]| {
+                let loaders = self.loader_registry.borrow();
+                loaders.can_load_with_paths(lib_name, &search_paths_for_checker)
+            };
+
+            let parsed = {
+                let loaders = self.loader_registry.borrow();
+                loaders.try_parse_with_heap_and_library_checker(
+                    name,
+                    &search_paths,
+                    heap.clone(),
+                    &can_load_library,
+                )?
+            };
+
+            if let Some(parsed) = parsed {
+                self.evaluate_parsed_library(parsed)?
+            } else {
+                self.library_registry.borrow_mut().end_loading(name);
+                return Err(LibraryError::NotFound(name.to_vec()));
+            }
+        };
+
+        // End loading tracking
+        self.library_registry.borrow_mut().end_loading(name);
+
+        // Register the library
+        let _ = self.library_registry.borrow_mut().register(lib);
+
+        // Return from registry
+        self.library_registry
+            .borrow()
+            .get(name)
+            .cloned()
+            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))
+    }
+
+    /// Evaluate a parsed library (from a .sld file) using the VM.
+    fn evaluate_parsed_library(
+        &self,
+        parsed: patina_runtime::library_loader::ParsedLibrary,
+    ) -> Result<Library, LibraryError> {
+        // Create a fresh environment for this library, sharing the global heap
+        // so TaggedValue indices are compatible with the global environment.
+        let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
+
+        // Step 1: Resolve imports into lib_env
+        for import_set in &parsed.imports {
+            self.process_import_set(import_set, &lib_env)?;
+        }
+
+        // Step 2: Create a temporary VmState with lib_env as globals,
+        // then compile + execute each body expression in that environment.
+        let mut tmp_state = VmState::new(lib_env.clone());
+        // Don't call install_primitives() — lib_env already has everything via imports.
+
+        let desugarer = Desugarer::with_env(lib_env.clone());
+        let shared_heap = lib_env.heap().clone();
+
+        for tv in &parsed.body {
+            let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
+                LibraryError::ParseError {
+                    file: parsed
+                        .source
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    message: format!("desugar error: {}", e),
+                }
+            })?;
+
+            let (top, nested) = compile(&core_expr).map_err(|e| LibraryError::ParseError {
+                file: parsed
+                    .source
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                message: format!("compile error: {}", e),
+            })?;
+
+            let top_id = top.id;
+            tmp_state.load(top);
+            tmp_state.load_all(nested);
+
+            execute(&mut tmp_state, top_id).map_err(|e| LibraryError::ParseError {
+                file: parsed
+                    .source
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                message: format!("runtime error: {}", e),
+            })?;
+        }
+
+        // Merge tmp_state code_store into the main state so that closures
+        // defined in the library body (e.g. `map`, `filter`) remain callable
+        // when they are later invoked from global code.
+        {
+            let mut state = self.state.borrow_mut();
+            for (id, co) in tmp_state.code_store {
+                state.code_store.entry(id).or_insert(co);
+            }
+        }
+
+        // Merge all lib_env bindings into global_env.
+        //
+        // Library closures compiled via the VM use `LoadGlobal` for any
+        // binding that isn't a local or captured free-variable (e.g.
+        // `%map-cars`, `%map-cdrs` inside `map`). Those names live in
+        // `lib_env`, not in `global_env`. When those closures later run in
+        // the main VmState (which uses `global_env` as globals), `LoadGlobal`
+        // fails with "unbound variable".
+        //
+        // Merging lib_env → global_env makes all internal library definitions
+        // visible to the closures at runtime.  Only the *exported* names are
+        // part of the public API; the rest are internal helpers and won't
+        // conflict with user code in normal usage.
+        //
+        // We skip macro transformers (HeapObjectData::Macro) because macros
+        // are already imported via the exports (collected in Step 3 below).
+        // More importantly, merging macros here would cause them to be
+        // re-installed into global_env AGAIN by load_bootstrap (which
+        // imports library exports), leading to double-definitions that
+        // confuse the desugarer.
+        for (name, value) in lib_env.bindings() {
+            // Only copy non-macro bindings; macros come via exports
+            let is_macro = {
+                let heap = lib_env.heap().borrow();
+                heap.get_macro(value).is_some()
+            };
+            if !is_macro {
+                self.global_env.define(name, value);
+            }
+        }
+
+        // Step 3: Collect exports from lib_env
+        let mut library = Library::with_env(parsed.name.clone(), lib_env.clone());
+        if let Some(source) = parsed.source {
+            library.set_source(source);
+        }
+
+        for spec in &parsed.exports {
+            match spec {
+                ExportSpec::Identifier(name) => {
+                    if let Some(value) = lib_env.get(name) {
+                        library.export_tagged(name.clone(), value);
+                    } else {
+                        return Err(LibraryError::ParseError {
+                            file: library
+                                .source
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default(),
+                            message: format!("Exported identifier '{}' not defined", name),
+                        });
+                    }
+                }
+                ExportSpec::Rename { internal, external } => {
+                    if let Some(value) = lib_env.get(internal) {
+                        library.export_tagged(external.clone(), value);
+                    } else {
+                        return Err(LibraryError::ParseError {
+                            file: library
+                                .source
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default(),
+                            message: format!("Exported identifier '{}' not defined", internal),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(library)
+    }
+
+    /// Resolve an import set into the given environment.
+    fn process_import_set(
+        &self,
+        import_set: &ImportSet,
+        lib_env: &Rc<Environment>,
+    ) -> Result<(), LibraryError> {
+        match import_set {
+            ImportSet::Library(lib_name) => {
+                let imported_lib = self.load_library(lib_name)?;
+                for (name, value) in imported_lib.exports_iter_tagged() {
+                    lib_env.define(name.clone(), value);
+                }
+                Ok(())
+            }
+            ImportSet::Only {
+                import_set,
+                identifiers,
+            } => {
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
+                self.process_import_set(import_set, &temp_env)?;
+                for id in identifiers {
+                    if let Some(value) = temp_env.get(id) {
+                        lib_env.define(id.clone(), value);
+                    } else {
+                        return Err(LibraryError::ParseError {
+                            file: String::new(),
+                            message: format!("Identifier '{}' not found in import set", id),
+                        });
+                    }
+                }
+                Ok(())
+            }
+            ImportSet::Except {
+                import_set,
+                identifiers,
+            } => {
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
+                self.process_import_set(import_set, &temp_env)?;
+                let exclude: HashSet<_> = identifiers.iter().collect();
+                for (name, value) in temp_env.bindings() {
+                    if !exclude.contains(&name) {
+                        lib_env.define(name, value);
+                    }
+                }
+                Ok(())
+            }
+            ImportSet::Prefix { import_set, prefix } => {
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
+                self.process_import_set(import_set, &temp_env)?;
+                for (name, value) in temp_env.bindings() {
+                    lib_env.define(format!("{}{}", prefix, name), value);
+                }
+                Ok(())
+            }
+            ImportSet::Rename {
+                import_set,
+                renames,
+            } => {
+                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
+                self.process_import_set(import_set, &temp_env)?;
+                let rename_map: std::collections::HashMap<_, _> = renames
+                    .iter()
+                    .map(|(o, n)| (o.clone(), n.clone()))
+                    .collect();
+                for (name, value) in temp_env.bindings() {
+                    let exported_name = rename_map.get(&name).cloned().unwrap_or(name);
+                    lib_env.define(exported_name, value);
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -128,6 +604,11 @@ mod tests {
         let interp = Interpreter::new(backend);
         // Use eval_program to handle multiple top-level expressions.
         interp.eval_program(code).expect("eval failed")
+    }
+
+    #[test]
+    fn let_simple() {
+        assert_eq!(eval("(let ((x 5)) (+ x 1))").as_fixnum(), Some(6));
     }
 
     #[test]

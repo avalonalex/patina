@@ -17,7 +17,14 @@
       "Bash(__NEW_LINE_9a048d997f9d74ca__ echo \"=== Value::EnvironmentSpecifier usage ===\")",
       "Bash(samply record:*)",
       "Bash(cargo bench:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(/tmp/test_proc3.scm:*)",
+      "Bash(/tmp/test_proc4.scm:*)",
+      "Bash(/tmp/test_proc5.scm:*)",
+      "Bash(/tmp/test_capture.scm:*)",
+      "Bash(/tmp/test_capture2.scm:*)",
+      "Bash(/tmp/test_fix.scm:*)",
+      "Bash(/tmp/test_simple.scm:*)"
     ],
     "deny": [],
     "ask": []

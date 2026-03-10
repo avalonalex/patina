@@ -95,6 +95,15 @@ pub enum Instruction {
     /// The runtime performs a simple sequential copy.
     TailCall { func: Reg, args: Vec<Reg> },
 
+    /// `(apply func arg... list)` — non-tail.
+    ///
+    /// The last register in `args` holds a proper list whose elements are
+    /// spread and appended to the preceding argument registers.
+    Apply { func: Reg, args: Vec<Reg>, dst: Reg },
+
+    /// `(apply func arg... list)` — tail position.
+    TailApply { func: Reg, args: Vec<Reg> },
+
     /// Return a single value to the caller.
     ///
     /// Reads `reg[val]`, pops the current frame, and writes the value into the

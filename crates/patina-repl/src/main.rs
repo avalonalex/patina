@@ -1,5 +1,5 @@
 use patina_interpreter::{Backend, Interpreter, TreeWalkInterpreter, format_interpreter_error};
-use patina_repl::Repl;
+use patina_repl::{Repl, make_editor, run_repl_loop};
 use patina_vm::VmBackend;
 use std::env;
 use std::fs;
@@ -121,49 +121,49 @@ fn run_repl() {
 fn run_repl_vm() {
     use patina_core::TaggedValue;
     use patina_core::debug_format::format_tagged;
-    use std::io::{self, BufRead, Write};
 
     let interp = Interpreter::new(VmBackend::new());
     let heap = interp.backend().global_env().heap().clone();
 
     println!("Patina Scheme (VM backend — experimental)");
-    println!("Type (exit) or Ctrl+D to quit.");
+    println!();
+    println!("Features:");
+    println!("  • Multi-line editing with auto-indentation");
+    println!("  • Syntax highlighting");
+    println!("  • (vm-compile <expr>) — disassemble bytecode without executing");
+    println!();
+    println!("Commands:");
+    println!("  (exit) or Ctrl+D to quit");
+    println!("  Ctrl+C to cancel current input");
     println!();
 
-    let stdin = io::stdin();
-    loop {
-        print!("patina/vm> ");
-        let _ = io::stdout().flush();
-
-        let mut line = String::new();
-        match stdin.lock().read_line(&mut line) {
-            Ok(0) => {
-                println!("\nGoodbye!");
-                break;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Read error: {}", e);
-                break;
-            }
+    let mut editor = match make_editor() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Failed to initialize editor: {}", e);
+            process::exit(1);
         }
+    };
 
-        let line = line.trim();
-        if line.is_empty() || line.starts_with(';') {
-            continue;
-        }
-        if line == "(exit)" || line == ",exit" || line == ",quit" {
-            println!("Goodbye!");
-            break;
+    run_repl_loop(&mut editor, "patina/vm> ", |line| {
+        // Special form: (vm-compile <expr>) — compile and disassemble without executing.
+        if let Some(rest) = line.strip_prefix("(vm-compile ") {
+            let inner = rest.trim_end().strip_suffix(')').unwrap_or(rest.trim_end());
+            return match interp.backend().disasm_source(inner) {
+                Ok(()) => None,
+                Err(e) => Some(format!("Error: {}", e)),
+            };
         }
 
         match interp.eval_program(line) {
             Ok(result) => {
                 if result != TaggedValue::UNSPECIFIED {
-                    println!("{}", format_tagged(result, &heap.borrow()));
+                    Some(format_tagged(result, &heap.borrow()))
+                } else {
+                    None
                 }
             }
-            Err(e) => eprintln!("Error: {}", e),
+            Err(e) => Some(format!("Error: {}", e)),
         }
-    }
+    });
 }

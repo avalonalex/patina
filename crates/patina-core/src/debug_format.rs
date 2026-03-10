@@ -160,6 +160,10 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
             format_tagged_impl(*cell.borrow(), heap, buf, with_scopes);
             buf.push('>');
         }
+        HeapObjectData::VmContinuationRef(id) => write!(buf, "#<continuation:{}>", id).unwrap(),
+        HeapObjectData::VmDelimitedContinuationRef(id) => {
+            write!(buf, "#<delimited-continuation:{}>", id).unwrap()
+        }
     }
 }
 

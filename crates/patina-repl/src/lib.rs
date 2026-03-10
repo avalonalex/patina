@@ -11,5 +11,6 @@
 
 pub mod repl;
 
-// Re-export main REPL type
+// Re-export main REPL type and shared editor infrastructure
 pub use repl::Repl;
+pub use repl::{SchemeHelper, make_editor, run_repl_loop};

@@ -95,6 +95,10 @@ pub enum HeapObjectType {
     VmClosure = 21,
     /// Mutable cell for captured variables that are `set!` after capture (patina-vm Phase 2)
     MutableCell = 22,
+    /// Opaque handle to a full VM continuation stored in VmState's side table (Phase 2 A6)
+    VmContinuationRef = 23,
+    /// Opaque handle to a delimited VM continuation stored in VmState's side table (Phase 2 A6)
+    VmDelimitedContinuationRef = 24,
 }
 
 /// State of a promise for lazy evaluation
@@ -164,6 +168,12 @@ pub enum HeapObjectData {
         code_id: u32,
         free_vars: Vec<TaggedValue>,
     },
+    /// Opaque handle to a full VM continuation (call/cc style).
+    /// The actual `VmContinuation` data lives in `VmState::continuation_store`.
+    VmContinuationRef(u64),
+    /// Opaque handle to a delimited VM continuation.
+    /// The actual `VmDelimitedContinuation` data lives in `VmState::delimited_continuation_store`.
+    VmDelimitedContinuationRef(u64),
 }
 
 impl HeapObjectData {
@@ -193,6 +203,10 @@ impl HeapObjectData {
             HeapObjectData::LabelPlaceholder(_) => HeapObjectType::LabelPlaceholder,
             HeapObjectData::VmClosure { .. } => HeapObjectType::VmClosure,
             HeapObjectData::MutableCell(_) => HeapObjectType::MutableCell,
+            HeapObjectData::VmContinuationRef(_) => HeapObjectType::VmContinuationRef,
+            HeapObjectData::VmDelimitedContinuationRef(_) => {
+                HeapObjectType::VmDelimitedContinuationRef
+            }
         }
     }
 }
@@ -767,6 +781,49 @@ impl Heap {
         }
     }
 
+    /// Allocate an opaque handle for a full VM continuation (stored externally in VmState).
+    pub fn alloc_vm_continuation_ref(&mut self, id: u64) -> TaggedValue {
+        self.alloc_object(HeapObjectData::VmContinuationRef(id))
+    }
+
+    /// Get the continuation id from a `VmContinuationRef` TaggedValue.
+    pub fn get_vm_continuation_ref(&self, tv: TaggedValue) -> Option<u64> {
+        if !tv.is_object() {
+            return None;
+        }
+        match self.get_object(tv) {
+            HeapObjectData::VmContinuationRef(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// Allocate an opaque handle for a delimited VM continuation.
+    pub fn alloc_vm_delimited_continuation_ref(&mut self, id: u64) -> TaggedValue {
+        self.alloc_object(HeapObjectData::VmDelimitedContinuationRef(id))
+    }
+
+    /// Get the continuation id from a `VmDelimitedContinuationRef` TaggedValue.
+    pub fn get_vm_delimited_continuation_ref(&self, tv: TaggedValue) -> Option<u64> {
+        if !tv.is_object() {
+            return None;
+        }
+        match self.get_object(tv) {
+            HeapObjectData::VmDelimitedContinuationRef(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// Returns true if `tv` is a VM continuation (full or delimited).
+    pub fn is_vm_continuation(&self, tv: TaggedValue) -> bool {
+        if !tv.is_object() {
+            return false;
+        }
+        matches!(
+            self.get_object(tv),
+            HeapObjectData::VmContinuationRef(_) | HeapObjectData::VmDelimitedContinuationRef(_)
+        )
+    }
+
     /// Allocate a generic object
     fn alloc_object(&mut self, data: HeapObjectData) -> TaggedValue {
         let index = if let Some(free) = self.free_objects.pop() {
@@ -1205,6 +1262,8 @@ impl Heap {
                 HeapObjectData::LabelPlaceholder(_) => "label-placeholder",
                 HeapObjectData::VmClosure { .. } => "procedure",
                 HeapObjectData::MutableCell(_) => "mutable-cell",
+                HeapObjectData::VmContinuationRef(_) => "continuation",
+                HeapObjectData::VmDelimitedContinuationRef(_) => "continuation",
             }
         } else {
             "unknown"

@@ -20,11 +20,29 @@ use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::CmdKind;
 use rustyline::hint::{Hinter, HistoryHinter};
 
-/// Helper that combines all REPL features
-struct SchemeHelper {
+/// Helper that combines all REPL features (syntax highlighting, paren matching, history hints).
+///
+/// This is `pub` so the VM REPL can share the same rustyline helper.
+pub struct SchemeHelper {
     highlighter: SchemeHighlighter,
     validator: SchemeValidator,
     hinter: HistoryHinter,
+}
+
+impl Default for SchemeHelper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SchemeHelper {
+    pub fn new() -> Self {
+        SchemeHelper {
+            highlighter: SchemeHighlighter::new(),
+            validator: SchemeValidator::new(),
+            hinter: HistoryHinter::new(),
+        }
+    }
 }
 
 impl rustyline::Helper for SchemeHelper {}
@@ -70,44 +88,93 @@ impl rustyline::validate::Validator for SchemeHelper {
     }
 }
 
-impl Repl {
-    /// Create a new REPL with full continuation support
-    ///
-    /// The REPL uses CPS evaluation mode which supports first-class
-    /// continuations (call/cc), delimited continuations, dynamic-wind,
-    /// and exception handling.
-    pub fn new() -> rustyline::Result<Self> {
-        let config = Config::builder()
-            .history_ignore_space(true)
-            .completion_type(CompletionType::List)
-            .edit_mode(EditMode::Emacs)
-            .max_history_size(1000)?
-            .build();
+/// Build a shared rustyline editor with the Scheme helper (highlighting, validation, hints).
+///
+/// Used by both the tree-walker REPL and the VM REPL.
+pub fn make_editor() -> rustyline::Result<Editor<SchemeHelper, FileHistory>> {
+    let config = Config::builder()
+        .history_ignore_space(true)
+        .completion_type(CompletionType::List)
+        .edit_mode(EditMode::Emacs)
+        .max_history_size(1000)?
+        .build();
 
-        let helper = SchemeHelper {
-            highlighter: SchemeHighlighter::new(),
-            validator: SchemeValidator::new(),
-            hinter: HistoryHinter::new(),
-        };
+    let mut editor = Editor::with_config(config)?;
+    editor.set_helper(Some(SchemeHelper::new()));
 
-        let mut editor = Editor::with_config(config)?;
-        editor.set_helper(Some(helper));
+    if let Some(mut path) = dirs::home_dir() {
+        path.push(".patina_history");
+        let _ = editor.load_history(&path);
+    }
 
-        // Load history from file
-        let history_path = dirs::home_dir().map(|mut path| {
-            path.push(".patina_history");
-            path
-        });
+    Ok(editor)
+}
 
-        if let Some(ref path) = history_path {
-            let _ = editor.load_history(path);
+/// Run a generic REPL loop using a shared rustyline editor.
+///
+/// `prompt` — the prompt string (e.g. `"patina> "` or `"patina/vm> "`).
+/// `eval`   — called with each non-empty, non-comment line; returns:
+///            - `None` to print nothing (e.g. for `#<unspecified>`)
+///            - `Some(output)` to print a result or error
+///            - returning `Err` (via the closure returning a sentinel) to stop is handled
+///              by the closure itself; use the `bool` return to signal quit.
+///
+/// Returns when the user types `(exit)`, `,exit`, `,quit`, or Ctrl+D.
+pub fn run_repl_loop<F>(editor: &mut Editor<SchemeHelper, FileHistory>, prompt: &str, mut eval: F)
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    use std::io::Write;
+
+    loop {
+        let _ = std::io::stdout().flush();
+
+        match editor.readline(prompt) {
+            Ok(line) => {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with(';') {
+                    continue;
+                }
+                if line == "(exit)" || line == ",exit" || line == ",quit" {
+                    println!("Goodbye!");
+                    break;
+                }
+
+                let _ = editor.add_history_entry(line);
+
+                if let Some(output) = eval(line) {
+                    println!("{}", output);
+                } else {
+                    eprint!(""); // flush workaround
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("Goodbye!");
+                break;
+            }
+            Err(err) => {
+                eprintln!("Error: {:?}", err);
+                break;
+            }
         }
+    }
 
-        let interpreter = TreeWalkInterpreter::new_tree_walker();
+    if let Some(mut path) = dirs::home_dir() {
+        path.push(".patina_history");
+        let _ = editor.save_history(&path);
+    }
+}
 
+impl Repl {
+    /// Create a new REPL with full continuation support.
+    pub fn new() -> rustyline::Result<Self> {
         Ok(Repl {
-            editor,
-            interpreter,
+            editor: make_editor()?,
+            interpreter: TreeWalkInterpreter::new_tree_walker(),
             expr_counter: 0,
         })
     }
@@ -127,73 +194,27 @@ impl Repl {
         println!("  Ctrl+C to cancel current input");
         println!();
 
-        loop {
-            // Flush stdout before readline to ensure display output is visible
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
+        let interp = &self.interpreter;
+        let counter = &mut self.expr_counter;
 
-            let readline = self.editor.readline("patina> ");
-
-            match readline {
-                Ok(line) => {
-                    let line = line.trim();
-
-                    // Skip empty lines and comment-only lines
-                    if line.is_empty() || line.starts_with(';') {
-                        continue;
-                    }
-
-                    if line == "(exit)" || line == ",exit" || line == ",quit" {
-                        println!("Goodbye!");
-                        break;
-                    }
-
-                    // Add to history
-                    let _ = self.editor.add_history_entry(line);
-
-                    // Evaluate using interpreter (which handles parsing internally)
-                    self.expr_counter += 1;
-                    let source_name = format!("<repl-{}>", self.expr_counter);
-                    let (eval_result, source_map) = self
-                        .interpreter
-                        .eval_str_with_source_name(line, &source_name);
-                    match eval_result {
-                        Ok(result) => {
-                            // Don't print #<unspecified> values (from define, set!, etc.)
-                            if result != patina_core::TaggedValue::UNSPECIFIED {
-                                println!("{}", self.interpreter.display_tagged(result));
-                            } else {
-                                // Force a flush by writing empty string to stderr
-                                // This works around rustyline stdout buffering issue
-                                eprint!("");
-                            }
-                        }
-                        Err(e) => eprintln!(
-                            "Error: {}",
-                            format_interpreter_error(&e, &source_map.borrow())
-                        ),
+        run_repl_loop(&mut self.editor, "patina> ", |line| {
+            *counter += 1;
+            let source_name = format!("<repl-{}>", counter);
+            let (eval_result, source_map) = interp.eval_str_with_source_name(line, &source_name);
+            match eval_result {
+                Ok(result) => {
+                    if result != patina_core::TaggedValue::UNSPECIFIED {
+                        Some(interp.display_tagged(result))
+                    } else {
+                        None
                     }
                 }
-                Err(ReadlineError::Interrupted) => {
-                    println!("^C");
-                    continue;
-                }
-                Err(ReadlineError::Eof) => {
-                    println!("Goodbye!");
-                    break;
-                }
-                Err(err) => {
-                    eprintln!("Error: {:?}", err);
-                    break;
-                }
+                Err(e) => Some(format!(
+                    "Error: {}",
+                    format_interpreter_error(&e, &source_map.borrow())
+                )),
             }
-        }
-
-        // Save history
-        if let Some(mut path) = dirs::home_dir() {
-            path.push(".patina_history");
-            let _ = self.editor.save_history(&path);
-        }
+        });
 
         Ok(())
     }

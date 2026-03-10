@@ -59,14 +59,22 @@ pub struct VmDelimitedContinuation {
 
     /// Dynamic-wind records active within the captured slice.
     pub dynamic_winds: Vec<DynamicWindRecord>,
+
+    /// Register snapshot for all frames in this continuation.
+    ///
+    /// Contains `registers[frames[0].register_base .. end]` at capture time.
+    /// On invocation, these values are relocated to a new base in the live
+    /// register array so each frame's `register_base` must be adjusted.
+    pub registers: Vec<patina_core::tagged_value::TaggedValue>,
+
+    /// The `register_base` of `frames[0]` at capture time.
+    /// Used to compute the relocation offset when invoking the continuation.
+    pub base_at_capture: usize,
 }
 
-/// A full (non-delimited) continuation captured by `call/cc` or
-/// `call-with-composable-continuation`.
+/// A full (non-delimited) continuation captured by `call/cc`.
 ///
-/// For `call/cc` (non-composable): the entire call stack at capture time.
-/// For composable: same as `VmDelimitedContinuation` but composed differently
-/// on invocation — modelled uniformly here as a frame snapshot.
+/// Invoking it replaces the entire call stack (non-composable).
 #[derive(Debug, Clone)]
 pub struct VmContinuation {
     /// Full cloned frame stack at capture time.
@@ -75,6 +83,14 @@ pub struct VmContinuation {
     /// Dynamic-wind records active at capture time.
     pub dynamic_winds: Vec<DynamicWindRecord>,
 
-    /// Whether this continuation is composable.
-    pub composable: bool,
+    /// Prompt stack at capture time (for restoring barrier state).
+    pub prompt_stack: Vec<PromptFrame>,
+
+    /// Register snapshot for all live frames (registers[0..end]).
+    pub registers: Vec<patina_core::tagged_value::TaggedValue>,
+
+    /// Register in the top frame where the delivered value should be written
+    /// when the continuation is invoked. This is the `dst` register from the
+    /// `Call call/cc` instruction that captured the continuation.
+    pub deliver_reg: Reg,
 }

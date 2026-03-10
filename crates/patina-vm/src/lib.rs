@@ -22,8 +22,10 @@
 
 pub mod backend;
 pub mod compiler;
+pub mod disasm;
 pub mod error;
 pub mod runtime;
 pub mod types;
 
 pub use backend::VmBackend;
+pub use disasm::disassemble;
