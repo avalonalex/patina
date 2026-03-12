@@ -72,6 +72,24 @@ pub struct VmDelimitedContinuation {
     pub base_at_capture: usize,
 }
 
+/// An installed exception handler (from `with-exception-handler`).
+///
+/// Handlers form a stack on `VmState`. When `raise` is called, the
+/// topmost handler is popped and invoked with the exception object.
+/// When the thunk returns normally, handlers installed at depths >= the
+/// returning frame's depth are popped.
+#[derive(Debug, Clone)]
+pub struct ExceptionHandler {
+    /// The handler procedure: called as `(handler condition)`.
+    pub handler: TaggedValue,
+    /// Dynamic-wind records at the point the handler was installed.
+    /// Used by `raise` to unwind after-thunks before invoking the handler.
+    pub dynamic_winds: Vec<DynamicWindRecord>,
+    /// `VmState::frames.len()` at the time the handler was installed.
+    /// Used to pop the handler when the thunk returns normally.
+    pub stack_depth: usize,
+}
+
 /// A full (non-delimited) continuation captured by `call/cc`.
 ///
 /// Invoking it replaces the entire call stack (non-composable).
@@ -85,6 +103,9 @@ pub struct VmContinuation {
 
     /// Prompt stack at capture time (for restoring barrier state).
     pub prompt_stack: Vec<PromptFrame>,
+
+    /// Exception handler stack at capture time.
+    pub exception_handlers: Vec<ExceptionHandler>,
 
     /// Register snapshot for all live frames (registers[0..end]).
     pub registers: Vec<patina_core::tagged_value::TaggedValue>,

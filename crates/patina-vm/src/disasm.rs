@@ -63,7 +63,11 @@ fn disassemble_one(
     }
 }
 
-fn format_instruction(pc: usize, instr: &Instruction, nested: &mut Vec<CodeObjectId>) -> String {
+pub fn format_instruction(
+    pc: usize,
+    instr: &Instruction,
+    nested: &mut Vec<CodeObjectId>,
+) -> String {
     let _ = pc;
     match instr {
         Instruction::LoadImmediate { dst, val } => {

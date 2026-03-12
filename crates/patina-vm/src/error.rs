@@ -52,4 +52,8 @@ pub enum VmError {
 
     #[error("runtime error: {message}")]
     Runtime { message: String },
+
+    /// A Scheme exception that wasn't caught by any handler.
+    #[error("unhandled exception: {message}")]
+    SchemeException { message: String },
 }

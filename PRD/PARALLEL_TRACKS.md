@@ -103,11 +103,19 @@ Both share the same `main` branch and the same test suite.
 - `disasm.rs` — pretty-printer for CodeObjects with instruction mnemonics
 - `VmBackend::disasm_source()` — parse → desugar → compile → disassemble pipeline
 
-#### A7 — Backend trait + acceptance
-- `VmBackend` already implements `Backend` trait (eval pipeline working)
-- Next: run `cargo test --package patina-tests` against VM backend
-- Triage failures: literals → calls → closures → continuations → libraries
-- Known gaps: `set!` not yet compiled, HO primitives (`map`, `for-each`) stub in `VmApplyContext`
+#### A7 — Backend trait + acceptance (in progress)
+- `VmBackend` implements `Backend` trait (eval pipeline working)
+- Test infrastructure: `cargo test --package patina-tests --features vm-backend`
+- **Quasiquote expansion** ✅ — `quasiquote_expand.rs` compile-time expansion
+- **Import handling** ✅ — `CoreExprKind::Import` intercepted in `Backend::eval()`
+- **VmClosure as procedure** ✅ — `is_procedure()` recognizes VmClosure
+- **Primitive dispatch from control ops** ✅ — `call_any()` for mixed VmClosure/Primitive
+- **Current score:** ~850 pass, ~73 fail (out of ~920 feature-flag-affected tests)
+- **Remaining blockers:**
+  - Exception handling (`with-exception-handler`, `guard`, `raise`) — needs VM integration
+  - Nested dynamic-wind + `set!` — ReadCell mutation analysis bug
+  - Higher-order primitives (`vector-map`, `for-each`) — apply_proc stub
+  - Hygiene + quasiquote in macros — symbol identity mismatch
 - **Gate:** all ~1400 tests pass
 
 #### A8 — Chibi tests

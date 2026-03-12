@@ -10,7 +10,7 @@
 //! `Symbol = Rc<str>` which is not `Send`. We define `VmBackendError` — a
 //! thin wrapper that converts all variable names to `String` on construction.
 
-use crate::compiler::compile;
+use crate::compiler::compile_with_qq;
 use crate::error::VmError;
 use crate::runtime::{VmState, execute};
 use patina_core::environment::Environment;
@@ -95,6 +95,11 @@ impl VmBackend {
         backend.load_bootstrap();
 
         backend
+    }
+
+    /// Enable instruction-level tracing on stderr.
+    pub fn set_trace(&self, enabled: bool) {
+        self.state.borrow_mut().trace = enabled;
     }
 
     /// Initialize library loaders (Rust internal libs + Scheme .sld loader).
@@ -258,7 +263,7 @@ impl VmBackend {
                 .desugar_tagged(tv, &heap)
                 .map_err(|e| VmBackendError::Desugar(e.to_string()))?;
 
-            let (top, nested) = crate::compiler::compile(&core_expr)
+            let (top, nested) = compile_with_qq(&core_expr, &heap, &self.global_env)
                 .map_err(|e| VmBackendError::Compile(e.to_string()))?;
 
             // Build a temporary code_store for the disassembler
@@ -372,14 +377,17 @@ impl VmBackend {
                 }
             })?;
 
-            let (top, nested) = compile(&core_expr).map_err(|e| LibraryError::ParseError {
-                file: parsed
-                    .source
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-                message: format!("compile error: {}", e),
-            })?;
+            let (top, nested) =
+                compile_with_qq(&core_expr, &shared_heap, &lib_env).map_err(|e| {
+                    LibraryError::ParseError {
+                        file: parsed
+                            .source
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                        message: format!("compile error: {}", e),
+                    }
+                })?;
 
             let top_id = top.id;
             tmp_state.load(top);
@@ -571,9 +579,24 @@ impl Backend for VmBackend {
             .desugar_tagged(expr, &heap)
             .map_err(|e| VmBackendError::Desugar(e.to_string()))?;
 
-        // Compile: CoreExpr → CodeObject (5-pass pipeline).
-        let (top, nested) =
-            compile(&core_expr).map_err(|e| VmBackendError::Compile(e.to_string()))?;
+        // Handle Import specially — it's a side-effect that modifies the global
+        // environment and doesn't need compilation/execution.
+        if let patina_core::core_expr::CoreExprKind::Import { import_sets } = &core_expr.kind {
+            for import_set_tv in import_sets {
+                let import_set = patina_frontend::LibraryDefinition::parse_import_set_tagged(
+                    *import_set_tv,
+                    &heap,
+                )
+                .map_err(|e| VmBackendError::Runtime(format!("Invalid import set: {}", e)))?;
+                self.process_import_set(&import_set, &self.global_env)
+                    .map_err(|e| VmBackendError::Runtime(e.to_string()))?;
+            }
+            return Ok(TaggedValue::UNSPECIFIED);
+        }
+
+        // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
+        let (top, nested) = compile_with_qq(&core_expr, &heap, &self.global_env)
+            .map_err(|e| VmBackendError::Compile(e.to_string()))?;
 
         let top_id = top.id;
         let mut state = self.state.borrow_mut();

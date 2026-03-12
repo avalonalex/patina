@@ -19,6 +19,7 @@ pub mod pass2_closure;
 pub mod pass3_tail;
 pub mod pass4_registers;
 pub mod pass5_codegen;
+pub mod quasiquote_expand;
 
 use crate::error::CompileError;
 use crate::types::CodeObject;
@@ -34,4 +35,18 @@ pub fn compile(expr: &CoreExpr) -> Result<(CodeObject, Vec<CodeObject>), Compile
     let tailed = pass3_tail::Pass3Tail::run(&closed);
     let allocated = pass4_registers::Pass4Registers::run(&tailed);
     pass5_codegen::Pass5Codegen::run(&allocated)
+}
+
+/// Compile a `CoreExpr` with quasiquote expansion.
+///
+/// Same as `compile`, but first expands any `Quasiquote` nodes into
+/// equivalent `App` calls (list, cons, append). Requires heap access
+/// to walk TaggedValue templates.
+pub fn compile_with_qq(
+    expr: &CoreExpr,
+    heap: &patina_core::heap::SharedHeap,
+    env: &std::rc::Rc<patina_core::environment::Environment>,
+) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
+    let expanded = quasiquote_expand::expand_quasiquotes(expr, heap, env);
+    compile(&expanded)
 }

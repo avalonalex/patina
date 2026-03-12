@@ -295,4 +295,44 @@ mod tests {
         let entry = info.lambdas.values().next().unwrap();
         assert!(entry.mutated_bindings.contains(&Rc::from("x")));
     }
+
+    #[test]
+    fn triple_nested_set_detected() {
+        // (lambda (log) (lambda () (lambda () (set! log 1) log)))
+        // log should be mutated and captured across three lambda levels.
+        let set_log = CoreExpr::new(CoreExprKind::Set {
+            var: Rc::from("log"),
+            scopes: Default::default(),
+            value: Rc::new(lit(1)),
+        });
+        let inner = lambda(vec![], vec![set_log, var("log")]);
+        let mid = lambda(vec![], vec![inner]);
+        let outer = lambda(vec!["log"], vec![mid]);
+        let info = Pass1Analysis::run(&outer);
+
+        assert!(info.all_mutated.contains(&Rc::from("log")));
+
+        // outer = NodeId(0), mid = NodeId(1), inner = NodeId(2)
+        let outer_info = &info.lambdas[&NodeId(0)];
+        let mid_info = &info.lambdas[&NodeId(1)];
+        let inner_info = &info.lambdas[&NodeId(2)];
+
+        // outer should have log in mutated_bindings (it owns the binding)
+        assert!(
+            outer_info.mutated_bindings.contains(&Rc::from("log")),
+            "outer should record log as mutated binding"
+        );
+
+        // mid captures log (it's free in mid)
+        assert!(
+            mid_info.free_vars.contains(&Rc::from("log")),
+            "mid should have log as free var"
+        );
+
+        // inner captures log (it's free in inner)
+        assert!(
+            inner_info.free_vars.contains(&Rc::from("log")),
+            "inner should have log as free var"
+        );
+    }
 }

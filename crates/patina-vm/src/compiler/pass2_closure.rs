@@ -483,4 +483,95 @@ mod tests {
             ClosedExpr::WriteLocalCell { .. }
         ));
     }
+
+    #[test]
+    fn triple_nested_capture_through_middle() {
+        // (lambda (x) (lambda () (lambda () (set! x 1))))
+        // x is mutated by innermost, should be boxed in outer,
+        // captured as ClosureBoxed in middle AND inner.
+        let set_x = CoreExpr::new(CoreExprKind::Set {
+            var: Rc::from("x"),
+            scopes: Default::default(),
+            value: Rc::new(lit(1)),
+        });
+        let inner = lambda(vec![], vec![set_x]);
+        let mid = lambda(vec![], vec![inner]);
+        let outer = lambda(vec!["x"], vec![mid]);
+
+        let info = Pass1Analysis::run(&outer);
+        let closed = Pass2Closure::run(&outer, &info);
+
+        let ClosedExpr::Lambda(outer_lam) = &closed else {
+            panic!("expected Lambda");
+        };
+        // x is boxed in outer
+        assert!(
+            outer_lam.boxed_params.contains(&Rc::<str>::from("x")),
+            "x should be in outer's boxed_params"
+        );
+
+        // mid should capture x
+        let ClosedExpr::Lambda(mid_lam) = &outer_lam.body[0] else {
+            panic!("expected Lambda for mid, got {:?}", outer_lam.body[0]);
+        };
+        assert!(
+            !mid_lam.capture_list.is_empty(),
+            "mid should capture x, but capture_list is empty"
+        );
+        assert_eq!(
+            mid_lam.capture_list[0].as_ref(),
+            "x",
+            "mid should capture x"
+        );
+    }
+
+    #[test]
+    fn body_thunk_with_app_captures_indirect_free_var() {
+        // (lambda (x) (f (lambda () 'ok) (lambda () (set! x 1)) (lambda () x)))
+        // The body of the outer lambda is App(f, 3 lambdas).
+        // The second and third inner lambdas use x.
+        // Even though the outer lambda's body is not a nested lambda but an App,
+        // x should propagate as a free var when this entire thing is wrapped:
+        //
+        // (lambda (x) (lambda () (f (lambda () 'ok) (lambda () (set! x 1)) (lambda () x))))
+        // The middle (lambda () ...) should capture x.
+        let set_x = CoreExpr::new(CoreExprKind::Set {
+            var: Rc::from("x"),
+            scopes: Default::default(),
+            value: Rc::new(lit(1)),
+        });
+        let lam1 = lambda(vec![], vec![lit(0)]); // (lambda () 'ok)
+        let lam2 = lambda(vec![], vec![set_x]); // (lambda () (set! x 1))
+        let lam3 = lambda(vec![], vec![var("x")]); // (lambda () x)
+        let app = CoreExpr::new(CoreExprKind::App {
+            func: Rc::new(var("f")),
+            args: vec![lam1, lam2, lam3],
+        });
+        // body thunk: (lambda () (f ...))
+        let body_thunk = lambda(vec![], vec![app]);
+        // outer: (lambda (x) body_thunk)
+        let outer = lambda(vec!["x"], vec![body_thunk]);
+
+        let info = Pass1Analysis::run(&outer);
+        let closed = Pass2Closure::run(&outer, &info);
+
+        let ClosedExpr::Lambda(outer_lam) = &closed else {
+            panic!("expected outer Lambda");
+        };
+        // x should be boxed in outer
+        assert!(
+            outer_lam.boxed_params.contains(&Rc::<str>::from("x")),
+            "x should be in outer's boxed_params"
+        );
+
+        // body thunk should capture x
+        let ClosedExpr::Lambda(body_lam) = &outer_lam.body[0] else {
+            panic!("expected body_thunk Lambda, got {:?}", outer_lam.body[0]);
+        };
+        assert!(
+            body_lam.capture_list.contains(&Rc::<str>::from("x")),
+            "body_thunk should capture x (has capture_list: {:?})",
+            body_lam.capture_list
+        );
+    }
 }

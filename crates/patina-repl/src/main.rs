@@ -10,6 +10,8 @@ fn main() {
 
     let mut filename: Option<String> = None;
     let mut use_vm = false;
+    let mut vm_dump = false;
+    let mut vm_trace = false;
 
     for arg in args.iter().skip(1) {
         if arg == "--help" || arg == "-h" {
@@ -17,6 +19,12 @@ fn main() {
             process::exit(0);
         } else if arg == "--vm" {
             use_vm = true;
+        } else if arg == "--vm-dump" {
+            use_vm = true;
+            vm_dump = true;
+        } else if arg == "--vm-trace" {
+            use_vm = true;
+            vm_trace = true;
         } else if !arg.starts_with('-') {
             filename = Some(arg.clone());
         } else {
@@ -27,11 +35,17 @@ fn main() {
     }
 
     if let Some(file) = filename {
-        if use_vm {
+        if vm_dump {
+            dump_bytecode_file(&file);
+        } else if vm_trace {
+            run_script_vm_trace(&file);
+        } else if use_vm {
             run_script_vm(&file);
         } else {
             run_script(&file);
         }
+    } else if vm_dump {
+        dump_bytecode_stdin();
     } else if use_vm {
         run_repl_vm();
     } else {
@@ -43,8 +57,10 @@ fn print_help() {
     eprintln!("Usage: patina [OPTIONS] [FILE]");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --help    Show this help message");
-    eprintln!("  --vm      Use the VM backend (experimental)");
+    eprintln!("  --help     Show this help message");
+    eprintln!("  --vm       Use the VM backend (experimental)");
+    eprintln!("  --vm-dump  Compile to bytecode and disassemble (no execution)");
+    eprintln!("  --vm-trace Execute with instruction-level tracing to stderr");
     eprintln!();
     eprintln!("If FILE is provided, run it as a script.");
     eprintln!("Otherwise, start an interactive REPL.");
@@ -80,6 +96,62 @@ fn run_script(filename: &str) {
                 );
                 process::exit(1);
             }
+        }
+    }
+}
+
+fn dump_bytecode_file(filename: &str) {
+    let code = match fs::read_to_string(filename) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("Error reading file '{}': {}", filename, e);
+            process::exit(1);
+        }
+    };
+    dump_bytecode(&code);
+}
+
+fn dump_bytecode_stdin() {
+    use std::io::Read;
+    let mut code = String::new();
+    std::io::stdin()
+        .read_to_string(&mut code)
+        .unwrap_or_else(|e| {
+            eprintln!("Error reading stdin: {}", e);
+            process::exit(1);
+        });
+    dump_bytecode(&code);
+}
+
+fn dump_bytecode(code: &str) {
+    let backend = VmBackend::new();
+    match backend.disasm_source(code) {
+        Ok(()) => process::exit(0),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            process::exit(1);
+        }
+    }
+}
+
+fn run_script_vm_trace(filename: &str) {
+    let code = match fs::read_to_string(filename) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("Error reading file '{}': {}", filename, e);
+            process::exit(1);
+        }
+    };
+
+    let backend = VmBackend::new();
+    // Enable tracing AFTER bootstrap so we only trace user code
+    backend.set_trace(true);
+    let interp = Interpreter::new(backend);
+    match interp.eval_program(&code) {
+        Ok(_) => process::exit(0),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            process::exit(1);
         }
     }
 }
