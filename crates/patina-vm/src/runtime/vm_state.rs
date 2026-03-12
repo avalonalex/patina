@@ -252,15 +252,19 @@ fn call_closure(
     check_arity(&code.arity, args.len())?;
 
     let base = state.alloc_registers(code.num_regs);
-    // Copy args into the callee's parameter registers.
-    for (i, &arg) in args.iter().enumerate() {
-        state.registers[base + i] = arg;
-    }
-    // For variadic: collect rest args into a list (heap alloc).
+    // For variadic: copy only the fixed args, then collect the rest into a list.
+    // For exact arity: copy all args.
     if let Arity::Variadic(fixed) = &code.arity {
         let fixed = *fixed as usize;
+        for (i, &arg) in args[..fixed].iter().enumerate() {
+            state.registers[base + i] = arg;
+        }
         let rest = build_list(state, &args[fixed..])?;
         state.registers[base + fixed] = rest;
+    } else {
+        for (i, &arg) in args.iter().enumerate() {
+            state.registers[base + i] = arg;
+        }
     }
 
     state.frames.push(CallFrame {
