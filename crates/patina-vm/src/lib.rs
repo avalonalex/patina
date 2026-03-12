@@ -25,7 +25,9 @@ pub mod compiler;
 pub mod disasm;
 pub mod error;
 pub mod runtime;
+pub mod tracer;
 pub mod types;
 
 pub use backend::VmBackend;
 pub use disasm::disassemble;
+pub use tracer::{StepTracer, TracerHandle};

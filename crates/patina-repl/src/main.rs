@@ -135,6 +135,10 @@ fn dump_bytecode(code: &str) {
 }
 
 fn run_script_vm_trace(filename: &str) {
+    use patina_vm::tracer::StepTracer;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     let code = match fs::read_to_string(filename) {
         Ok(content) => content,
         Err(e) => {
@@ -144,13 +148,19 @@ fn run_script_vm_trace(filename: &str) {
     };
 
     let backend = VmBackend::new();
-    // Enable tracing AFTER bootstrap so we only trace user code
-    backend.set_trace(true);
+    // Create a live-printing tracer, enabled AFTER bootstrap
+    let mut tracer = StepTracer::new();
+    tracer.print_live = true;
+    let handle = Rc::new(RefCell::new(tracer));
+    backend.set_tracer(Some(handle.clone()));
     let interp = Interpreter::new(backend);
     match interp.eval_program(&code) {
         Ok(_) => process::exit(0),
         Err(e) => {
             eprintln!("Error: {}", e);
+            // Print trace summary on error
+            let t = handle.borrow();
+            eprintln!("--- Trace: {} events recorded ---", t.len());
             process::exit(1);
         }
     }

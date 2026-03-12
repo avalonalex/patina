@@ -51,8 +51,8 @@ pub struct VmState {
     pub delimited_continuation_store: HashMap<u64, Rc<VmDelimitedContinuation>>,
     /// Monotonically increasing counter for assigning continuation ids.
     pub next_cont_id: u64,
-    /// When true, print every instruction and register changes to stderr.
-    pub trace: bool,
+    /// Structured tracer for instruction-level debugging.
+    pub tracer: Option<crate::tracer::TracerHandle>,
 }
 
 impl VmState {
@@ -76,7 +76,7 @@ impl VmState {
             continuation_store: HashMap::new(),
             delimited_continuation_store: HashMap::new(),
             next_cont_id: 0,
-            trace: false,
+            tracer: None,
         }
     }
 
@@ -333,27 +333,19 @@ fn dispatch_one_instruction(
     state.frames.last_mut().unwrap().pc += 1;
 
     // ── Trace: before instruction ────────────────────────────────────
-    let trace_snapshot = if state.trace {
+    if let Some(tracer) = state.tracer.clone() {
         let f = state.frames.last().unwrap();
-        let base = f.register_base;
-        let end = (base + f.num_regs as usize).min(state.registers.len());
-        let mut dummy = Vec::new();
-        let disasm = crate::disasm::format_instruction(pc, &instr, &mut dummy);
-        eprintln!(
-            "[{:>2}] #{:<4} {:>4}  {}  (base={}, regs={}..{}, arr={})",
-            state.frames.len(),
-            code_id.0,
+        let depth = state.frames.len();
+        tracer.borrow_mut().pre_instruction_with_depth(
+            &state.registers,
+            f,
+            code_id,
             pc,
-            disasm,
-            f.register_base,
-            f.register_base,
-            f.register_base + f.num_regs as usize,
-            state.registers.len(),
+            &instr,
+            &state.heap,
+            depth,
         );
-        Some(state.registers[base..end].to_vec())
-    } else {
-        None
-    };
+    }
 
     match instr {
         // ── Load / Store ────────────────────────────────────────────────
@@ -959,75 +951,14 @@ fn dispatch_one_instruction(
         Instruction::Nop => {}
     }
 
-    // ── Trace: after instruction — show changed registers ────────────
-    if let Some(before) = trace_snapshot
-        && let Some(f) = state.frames.last()
-    {
-        let base = f.register_base;
-        let end = (base + f.num_regs as usize).min(state.registers.len());
-        let after = &state.registers[base..end];
-        for (i, (&old, &new)) in before.iter().zip(after.iter()).enumerate() {
-            if old != new {
-                let new_str = format_trace_value(new, &state.heap);
-                eprintln!("       r{} = {}", i, new_str);
-            }
-        }
-        // New registers (frame grew)
-        for (i, val) in after.iter().enumerate().skip(before.len()) {
-            let new_str = format_trace_value(*val, &state.heap);
-            eprintln!("       r{} = {} (new)", i, new_str);
-        }
+    // ── Trace: after instruction ─────────────────────────────────────
+    if let Some(tracer) = state.tracer.clone() {
+        tracer
+            .borrow_mut()
+            .post_instruction(&state.registers, state.frames.last(), &state.heap);
     }
 
     Ok(None)
-}
-
-fn format_trace_value(tv: TaggedValue, heap: &SharedHeap) -> String {
-    if tv == TaggedValue::UNSPECIFIED {
-        "#<unspecified>".to_string()
-    } else if tv == TaggedValue::NULL {
-        "()".to_string()
-    } else if tv == TaggedValue::TRUE {
-        "#t".to_string()
-    } else if tv == TaggedValue::FALSE {
-        "#f".to_string()
-    } else if let Some(n) = tv.as_fixnum() {
-        format!("{}", n)
-    } else if tv.is_char() {
-        format!("#\\{}", tv.as_char().unwrap_or('?'))
-    } else if tv.is_object() {
-        let h = heap.borrow();
-        let ty = h.get_object_type(tv);
-        match ty {
-            patina_core::heap::HeapObjectType::MutableCell => {
-                let inner = h
-                    .read_mutable_cell(tv)
-                    .map(|v| {
-                        if let Some(n) = v.as_fixnum() {
-                            format!("{}", n)
-                        } else {
-                            format!("{:?}", v)
-                        }
-                    })
-                    .unwrap_or_else(|| "???".to_string());
-                format!("MutableCell({})", inner)
-            }
-            patina_core::heap::HeapObjectType::VmClosure => {
-                if let Some((code_id, fv)) = h.get_vm_closure(tv) {
-                    format!("VmClosure(#{}, {} captures)", code_id, fv.len())
-                } else {
-                    "VmClosure(?)".to_string()
-                }
-            }
-            patina_core::heap::HeapObjectType::Symbol => {
-                let name = h.get_symbol_name(tv).unwrap_or("?");
-                format!("'{}", name)
-            }
-            _ => format!("{:?}({:?})", ty, tv),
-        }
-    } else {
-        format!("{:?}", tv)
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

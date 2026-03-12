@@ -97,9 +97,9 @@ impl VmBackend {
         backend
     }
 
-    /// Enable instruction-level tracing on stderr.
-    pub fn set_trace(&self, enabled: bool) {
-        self.state.borrow_mut().trace = enabled;
+    /// Attach a structured tracer for instruction-level debugging.
+    pub fn set_tracer(&self, tracer: Option<crate::tracer::TracerHandle>) {
+        self.state.borrow_mut().tracer = tracer;
     }
 
     /// Initialize library loaders (Rust internal libs + Scheme .sld loader).
