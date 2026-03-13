@@ -548,10 +548,6 @@ fn test_callcc_across_dynamic_wind_boundary() {
 }
 
 #[test]
-#[cfg_attr(
-    feature = "vm-backend",
-    ignore = "VM: infinite loop from stale exit_depth (PRD/phase2/VM_RUN_THUNK_BUG.md)"
-)]
 fn test_callcc_reentry_replays_wind_thunks() {
     // Re-entering a continuation captured inside dynamic-wind must replay
     // before-thunks. Verified against chibi-scheme: returns 3.

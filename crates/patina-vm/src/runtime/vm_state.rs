@@ -910,9 +910,9 @@ fn dispatch_one_instruction(
                         message: "InvokeContinuation: not a full continuation".into(),
                     })?;
 
-                // Wind transition.
+                // Wind transition (full continuation — force re-enter).
                 let target_winds = cc.dynamic_winds.clone();
-                run_wind_transition(state, &target_winds)?;
+                run_wind_transition(state, &target_winds, true)?;
 
                 // Restore the full state snapshot.
                 state.registers = cc.registers.clone();
@@ -1595,14 +1595,21 @@ fn pop_resolved_winds(state: &mut VmState) -> Result<(), VmError> {
 fn run_wind_transition(
     state: &mut VmState,
     target_winds: &[DynamicWindRecord],
+    force_reenter: bool,
 ) -> Result<(), VmError> {
     // Find the common prefix (matched by `before` thunk identity).
-    let common = state
-        .dynamic_winds
-        .iter()
-        .zip(target_winds.iter())
-        .take_while(|(a, b)| a.before == b.before)
-        .count();
+    // For full call/cc continuations, force_reenter=true means we must exit
+    // all current winds and re-enter all target winds (R7RS semantics).
+    let common = if force_reenter {
+        0
+    } else {
+        state
+            .dynamic_winds
+            .iter()
+            .zip(target_winds.iter())
+            .take_while(|(a, b)| a.before == b.before)
+            .count()
+    };
 
     // Run 'after' thunks for records being exited (innermost first).
     let exit_winds: Vec<_> = state.dynamic_winds[common..]
@@ -1758,7 +1765,7 @@ fn try_invoke_continuation(
     // Full (call/cc) continuation?
     if let Some(cc) = state.get_vm_continuation(func_val) {
         let target_winds = cc.dynamic_winds.clone();
-        run_wind_transition(state, &target_winds)?;
+        run_wind_transition(state, &target_winds, true)?;
         state.registers = cc.registers.clone();
         state.frames = cc.frames.clone();
         state.dynamic_winds = cc.dynamic_winds.clone();

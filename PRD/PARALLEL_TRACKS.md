@@ -117,10 +117,10 @@ Both share the same `main` branch and the same test suite.
 - **Exception handling** ✅ — `with-exception-handler`, `guard`, `raise`, `raise-continuable`, `error` all working; exceptions in dynamic-wind before/body thunks handled correctly
 - **Multiple values display** ✅ — `values` allocates `HeapObjectData::Values` for proper display
 - **Error message formatting** ✅ — "Type error: " prefix stripped in `classify_error` for all error paths
-- **Current score:** 880 pass, 0 fail, 4 ignored (out of 884 feature-flag-affected tests)
+- **Dynamic-wind + call/cc reentry** ✅ — `run_wind_transition` now takes `force_reenter` flag; full continuations always exit/re-enter all winds (R7RS semantics)
+- **Current score:** 901 pass, 0 fail, 4 ignored (out of 905 feature-flag-affected tests)
 - **Remaining (ignored, not blocking):**
-  - `test_callcc_reentry_replays_wind_thunks` — infinite loop from stale `exit_depth` after continuation reentry (see `PRD/phase2/VM_RUN_THUNK_BUG.md`)
-  - 3 other ignored tests (tail recursion depth, scheme-time precision)
+  - 3 ignored tests (tail recursion depth, scheme-time precision, bigint fibonacci)
 - **Gate:** all ~1400 tests pass
 
 #### A8 — Chibi tests
