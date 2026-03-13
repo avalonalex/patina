@@ -707,6 +707,8 @@ fn dispatch_one_instruction(
             pop_resolved_prompts(state);
             // Pop exception handlers whose thunk returned normally.
             pop_exception_handlers(state);
+            // Pop dynamic-wind records whose body returned, running after-thunks.
+            pop_resolved_winds(state)?;
         }
 
         // ── Multiple Values ─────────────────────────────────────────────
@@ -1080,6 +1082,7 @@ fn handle_control_primitive(
             state.dynamic_winds.push(DynamicWindRecord {
                 before: args[0],
                 after: args[2],
+                stack_depth: state.frames.len(),
             });
             let result = run_thunk(state, args[1])?;
             // If the body aborted, the abort already ran exit thunks and
@@ -1534,6 +1537,24 @@ fn pop_exception_handlers(state: &mut VmState) {
     }
 }
 
+/// Pop dynamic-wind records whose body has returned (stack shrank below their
+/// depth), running each after-thunk.  This handles the case where a continuation
+/// invocation resumes inside a dynamic-wind body and the body then returns
+/// normally — the Rust call-stack cleanup in `handle_control_primitive` is no
+/// longer on the stack, so we must do the cleanup here.
+fn pop_resolved_winds(state: &mut VmState) -> Result<(), VmError> {
+    while let Some(dw) = state.dynamic_winds.last() {
+        if dw.stack_depth >= state.frames.len() {
+            let after = dw.after;
+            state.dynamic_winds.pop();
+            run_thunk(state, after)?;
+        } else {
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// Run wind-transition thunks when moving from current dynamic-wind state
 /// to `target_winds`.
 fn run_wind_transition(
@@ -1568,30 +1589,36 @@ fn run_wind_transition(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VmApplyContext — implements ApplyContext for heap-only primitives
+// VmApplyContext — implements ApplyContext with higher-order proc support
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Minimal `ApplyContext` implementation for the VM.
+/// `ApplyContext` implementation for the VM.
 ///
-/// Heap-only primitives (~290) work fine. Higher-order primitives that call
-/// back via `apply_proc` or `eval_expr` are stubbed — full support in A4+.
-struct VmApplyContext<'a> {
-    heap: &'a SharedHeap,
+/// Holds a raw pointer to the `VmState` so that `apply_proc` (which takes
+/// `&self`) can mutably re-enter the VM execution loop.  This is sound because
+/// `apply_proc` is only called synchronously during `try_call_primitive`, which
+/// already has exclusive `&mut VmState` access, and the pointer is never shared
+/// across threads.
+struct VmApplyContext {
+    state: *mut VmState,
 }
 
-impl<'a> patina_primitives::ApplyContext for VmApplyContext<'a> {
+impl patina_primitives::ApplyContext for VmApplyContext {
     fn heap(&self) -> &SharedHeap {
-        self.heap
+        // SAFETY: pointer is valid for the lifetime of the primitive call.
+        unsafe { &(*self.state).heap }
     }
 
     fn apply_proc(
         &self,
-        _proc: TaggedValue,
-        _args: Vec<TaggedValue>,
+        proc: TaggedValue,
+        args: Vec<TaggedValue>,
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
-        Err(patina_primitives::EvalError::InvalidSyntax(
-            "higher-order primitive apply_proc not yet supported in VM (A4+)".into(),
-        ))
+        // SAFETY: we have exclusive access (see struct doc comment).
+        let state = unsafe { &mut *self.state };
+        run_apply_proc(state, proc, &args).map_err(|e| {
+            patina_primitives::EvalError::InternalError(e.to_string())
+        })
     }
 
     fn eval_expr(
@@ -1600,7 +1627,7 @@ impl<'a> patina_primitives::ApplyContext for VmApplyContext<'a> {
         _env: &Rc<patina_core::environment::Environment>,
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
         Err(patina_primitives::EvalError::InvalidSyntax(
-            "eval not yet supported in VM (A4+)".into(),
+            "eval not yet supported in VM".into(),
         ))
     }
 
@@ -1609,9 +1636,35 @@ impl<'a> patina_primitives::ApplyContext for VmApplyContext<'a> {
         _name: &[String],
     ) -> Result<Rc<patina_core::library::Library>, patina_primitives::EvalError> {
         Err(patina_primitives::EvalError::InvalidSyntax(
-            "load_scheme_library not yet supported in VM (A4+)".into(),
+            "load_scheme_library not yet supported in VM".into(),
         ))
     }
+}
+
+/// Apply a procedure (VmClosure or primitive) to args within the VM,
+/// running the execution loop if needed. Used by `VmApplyContext::apply_proc`.
+fn run_apply_proc(
+    state: &mut VmState,
+    proc: TaggedValue,
+    args: &[TaggedValue],
+) -> Result<TaggedValue, VmError> {
+    let depth_before = state.frames.len();
+
+    // Use a scratch return register beyond the current frame's live registers.
+    let return_reg = state.frames.last().map(|f| f.num_regs).unwrap_or(0);
+    if let Some(f) = state.frames.last() {
+        let needed = f.register_base + return_reg as usize + 1;
+        if state.registers.len() < needed {
+            state.registers.resize(needed, TaggedValue::UNSPECIFIED);
+        }
+    }
+
+    if let Some(result) = call_any(state, proc, args, return_reg)? {
+        // Primitive — returned immediately.
+        return Ok(result);
+    }
+    // VM closure was pushed; run until it returns.
+    run_loop_until(state, depth_before)
 }
 
 /// Recognized VM-intercepted control primitives.
@@ -1719,7 +1772,7 @@ fn try_invoke_continuation(
 /// Try to call `func_val` as a primitive. Returns `Some(result)` if it was a
 /// primitive, `None` if it's a VM closure (caller should push a frame instead).
 fn try_call_primitive(
-    state: &VmState,
+    state: &mut VmState,
     func_val: TaggedValue,
     args: Vec<TaggedValue>,
 ) -> Option<Result<TaggedValue, VmError>> {
@@ -1727,7 +1780,9 @@ fn try_call_primitive(
     let Procedure::Primitive { qualified_name, .. } = proc.as_ref() else {
         return None;
     };
-    let ctx = VmApplyContext { heap: &state.heap };
+    let ctx = VmApplyContext {
+        state: state as *mut VmState,
+    };
     let result = state
         .primitive_registry
         .apply_tagged(qualified_name, args, &ctx)

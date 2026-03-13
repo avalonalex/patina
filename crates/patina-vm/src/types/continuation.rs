@@ -41,6 +41,10 @@ pub struct DynamicWindRecord {
     pub before: TaggedValue,
     /// Thunk to call when leaving this dynamic extent.
     pub after: TaggedValue,
+    /// Frame stack depth when this wind was installed.
+    /// Used by `pop_resolved_winds` to detect when the body has returned
+    /// (e.g. after a continuation invocation resumes and completes).
+    pub stack_depth: usize,
 }
 
 /// A captured delimited continuation (created by `AbortToPrompt` or
