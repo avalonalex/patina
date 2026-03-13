@@ -95,7 +95,7 @@ Both share the same `main` branch and the same test suite.
 - `(dynamic-wind before body after)` — normal and abort-escaped
 - `(call/cc (lambda (k) ...))` — capture and escape `(k val)`
 - `(values v1 v2 ...)` + `(call-with-values producer consumer)`
-- 24/24 VM tests pass, 1159/1159 chibi tests unaffected, clippy clean
+- 54/54 VM tests pass, 1163/1163 chibi tests unaffected, clippy clean
 
 #### A6.5 — REPL improvements ✅ (done alongside A6)
 - Shared `SchemeHelper`, `make_editor()`, `run_repl_loop()` — both REPLs use same editing infra
@@ -110,12 +110,17 @@ Both share the same `main` branch and the same test suite.
 - **Import handling** ✅ — `CoreExprKind::Import` intercepted in `Backend::eval()`
 - **VmClosure as procedure** ✅ — `is_procedure()` recognizes VmClosure
 - **Primitive dispatch from control ops** ✅ — `call_any()` for mixed VmClosure/Primitive
-- **Current score:** ~850 pass, ~73 fail (out of ~920 feature-flag-affected tests)
-- **Remaining blockers:**
-  - Exception handling (`with-exception-handler`, `guard`, `raise`) — needs VM integration
-  - Nested dynamic-wind + `set!` — ReadCell mutation analysis bug
-  - Higher-order primitives (`vector-map`, `for-each`) — apply_proc stub
-  - Hygiene + quasiquote in macros — symbol identity mismatch
+- **Higher-order primitives** ✅ — `VmApplyContext` holds `*mut VmState`, `apply_proc` re-enters VM loop via `run_apply_proc()`
+- **Quasiquote hygiene** ✅ — identifiers in qq templates stripped to plain symbols (matches tree-walker)
+- **Continuation escape safety** ✅ — `handle_control_primitive` returns `Option<TaggedValue>` to signal escapes; prevents "no active frame" panics
+- **Dynamic-wind auto-cleanup** ✅ — `DynamicWindRecord::stack_depth` + `pop_resolved_winds()` runs after-thunks on Return when continuation resume completes a wind body
+- **Exception handling** ✅ — `with-exception-handler`, `guard`, `raise`, `raise-continuable`, `error` all working; exceptions in dynamic-wind before/body thunks handled correctly
+- **Multiple values display** ✅ — `values` allocates `HeapObjectData::Values` for proper display
+- **Error message formatting** ✅ — "Type error: " prefix stripped in `classify_error` for all error paths
+- **Current score:** 880 pass, 0 fail, 4 ignored (out of 884 feature-flag-affected tests)
+- **Remaining (ignored, not blocking):**
+  - `test_callcc_reentry_replays_wind_thunks` — infinite loop from stale `exit_depth` after continuation reentry (see `PRD/phase2/VM_RUN_THUNK_BUG.md`)
+  - 3 other ignored tests (tail recursion depth, scheme-time precision)
 - **Gate:** all ~1400 tests pass
 
 #### A8 — Chibi tests

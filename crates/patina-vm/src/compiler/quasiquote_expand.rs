@@ -116,8 +116,24 @@ fn expand_template(
         return CoreExpr::new(CoreExprKind::Quote(template));
     }
 
-    // Symbols and identifiers → quote
-    if heap.borrow().is_symbol(template) || heap.borrow().is_identifier(template) {
+    // Symbols → quote as-is
+    if heap.borrow().is_symbol(template) {
+        return CoreExpr::new(CoreExprKind::Quote(template));
+    }
+
+    // Identifiers → convert to plain symbol (strip scope marks) for consistency
+    // with the tree-walker's quasiquote evaluator, which does the same conversion.
+    // Without this, identifiers inside quasiquote templates retain hygiene marks
+    // and won't be `eq?` to the same-named symbol from a quote.
+    if heap.borrow().is_identifier(template) {
+        let name: Option<String> = heap
+            .borrow()
+            .get_symbol_or_identifier_name(template)
+            .map(String::from);
+        if let Some(name) = name {
+            let sym = heap.borrow_mut().intern_symbol(&name);
+            return CoreExpr::new(CoreExprKind::Quote(sym));
+        }
         return CoreExpr::new(CoreExprKind::Quote(template));
     }
 

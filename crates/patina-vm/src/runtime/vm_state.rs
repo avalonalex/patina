@@ -476,7 +476,10 @@ fn dispatch_one_instruction(
             let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
             // Intercept higher-order control primitives that need VM cooperation.
             if let Some(ctrl) = vm_control_primitive(state, func_val) {
-                handle_control_primitive(state, ctrl, arg_vals, dst, false)?;
+                if let Some(escaped) = handle_control_primitive(state, ctrl, arg_vals, dst, false)?
+                {
+                    return Ok(Some(escaped));
+                }
             } else if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
                 state.set_reg(dst, result?);
             } else if try_invoke_continuation(state, func_val, &arg_vals)? {
@@ -501,7 +504,11 @@ fn dispatch_one_instruction(
                 if state.frames.len() == exit_depth {
                     // At exit depth — use return_reg as dst (not 0, which
                     // could clobber live registers like MutableCell pointers).
-                    handle_control_primitive(state, ctrl, arg_vals, return_reg, false)?;
+                    if let Some(escaped) =
+                        handle_control_primitive(state, ctrl, arg_vals, return_reg, false)?
+                    {
+                        return Ok(Some(escaped));
+                    }
                     // The primitive wrote its result to return_reg. If it
                     // returned immediately (no new frames pushed), return
                     // the value. Otherwise let the loop drive the new frames.
@@ -511,7 +518,11 @@ fn dispatch_one_instruction(
                     }
                     return Ok(None);
                 }
-                handle_control_primitive(state, ctrl, arg_vals, return_reg, false)?;
+                if let Some(escaped) =
+                    handle_control_primitive(state, ctrl, arg_vals, return_reg, false)?
+                {
+                    return Ok(Some(escaped));
+                }
                 // The control primitive has completed. If it left the result
                 // in the caller's register and the depth matches exit_depth,
                 // this run_loop_until should exit — the tail-called thunk
@@ -1061,6 +1072,11 @@ fn run_thunk(state: &mut VmState, thunk: TaggedValue) -> Result<TaggedValue, VmE
 
 /// Handle a VM-intercepted control primitive call.
 ///
+/// Returns `Ok(None)` for normal completion (result written to `dst`).
+/// Returns `Ok(Some(val))` when a continuation escape completed the entire
+/// computation — the caller should propagate this as the final value and
+/// not attempt to access the (now-empty) frame stack.
+///
 /// `is_tail` is currently unused (all are handled as non-tail for A6).
 fn handle_control_primitive(
     state: &mut VmState,
@@ -1068,7 +1084,7 @@ fn handle_control_primitive(
     args: Vec<TaggedValue>,
     dst: u16,
     _is_tail: bool,
-) -> Result<(), VmError> {
+) -> Result<Option<TaggedValue>, VmError> {
     match ctrl {
         VmControlPrimitive::DynamicWind => {
             if args.len() != 3 {
@@ -1077,7 +1093,10 @@ fn handle_control_primitive(
                     got: args.len(),
                 });
             }
-            run_thunk(state, args[0])?;
+            let before_result = run_thunk(state, args[0])?;
+            if state.frames.is_empty() {
+                return Ok(Some(before_result));
+            }
             let wind_depth = state.dynamic_winds.len();
             state.dynamic_winds.push(DynamicWindRecord {
                 before: args[0],
@@ -1085,11 +1104,19 @@ fn handle_control_primitive(
                 stack_depth: state.frames.len(),
             });
             let result = run_thunk(state, args[1])?;
+            // If a continuation escape emptied the frame stack, the result
+            // was already delivered — don't try to write to a dead frame.
+            if state.frames.is_empty() {
+                return Ok(Some(result));
+            }
             // If the body aborted, the abort already ran exit thunks and
             // truncated dynamic_winds. Only do cleanup if our record is still there.
             if state.dynamic_winds.len() > wind_depth {
                 state.dynamic_winds.pop();
                 run_thunk(state, args[2])?;
+            }
+            if state.frames.is_empty() {
+                return Ok(Some(result));
             }
             state.set_reg(dst, result);
         }
@@ -1221,13 +1248,15 @@ fn handle_control_primitive(
 
         VmControlPrimitive::Values => {
             // (values v1 v2 ...) — return multiple values via value_buffer
-            state.value_buffer = args;
-            let primary = state
-                .value_buffer
-                .first()
-                .copied()
-                .unwrap_or(TaggedValue::UNSPECIFIED);
-            state.set_reg(dst, primary);
+            // Also allocate a heap Values object so the display layer can
+            // detect and show all values (matches tree-walker behaviour).
+            state.value_buffer = args.clone();
+            if args.len() == 1 {
+                state.set_reg(dst, args[0]);
+            } else {
+                let vals_tv = state.heap.borrow_mut().alloc_values(args);
+                state.set_reg(dst, vals_tv);
+            }
         }
 
         VmControlPrimitive::CallWithValues => {
@@ -1334,7 +1363,7 @@ fn handle_control_primitive(
             vm_raise_value(state, exception_tv, dst, false)?;
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Implement `raise` / `raise-continuable`.
@@ -1502,7 +1531,13 @@ fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, String) {
             } else {
                 ExceptionKind::Error
             };
-            (kind, message.clone())
+            // Strip "Type error: " prefix if present (primitive errors come
+            // through here via e.to_string() which includes the prefix)
+            let msg = message
+                .strip_prefix("Type error: ")
+                .unwrap_or(message)
+                .to_string();
+            (kind, msg)
         }
         VmError::SchemeException { message } => (ExceptionKind::Error, message.clone()),
         VmError::ContinuationValueMismatch => (
@@ -1616,9 +1651,8 @@ impl patina_primitives::ApplyContext for VmApplyContext {
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
         // SAFETY: we have exclusive access (see struct doc comment).
         let state = unsafe { &mut *self.state };
-        run_apply_proc(state, proc, &args).map_err(|e| {
-            patina_primitives::EvalError::InternalError(e.to_string())
-        })
+        run_apply_proc(state, proc, &args)
+            .map_err(|e| patina_primitives::EvalError::InternalError(e.to_string()))
     }
 
     fn eval_expr(
