@@ -258,16 +258,8 @@ Testing:
 Testing: 
 `(a `(b ,(+ 1 2) ,(foo ,(+ 1 3) d) e) f)
 
-FAIL: `(a `(b ,(+ 1 2) ,(foo ,(+ 1 3) d) e) f)
-  expected: (a `(b ,(+ 1 2) ,(foo 4 d) e) f)
-  but got:  (a `(b ,(+ 1 2) ,(foo 4 d) e) f)
-
 Testing: 
 `(a `(b ,,name1 ,',name2 d) e)
-
-FAIL: `(a `(b ,,name1 ,',name2 d) e)
-  expected: (a `(b ,x ,'y d) e)
-  but got:  (a `(b ,x ,'y d) e)
 
 Testing: 
 `(list ,(+ 1 2) 4)
@@ -314,7 +306,7 @@ Testing:
 Testing: 
 (dead-clause 1 2 3)
 
-Tests run: 74, Passed: 72, Failed: 2
+Tests run: 74, Passed: 74, Failed: 0
 
 Running test suite: 4.3 Macros
 Testing: 

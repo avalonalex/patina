@@ -166,8 +166,13 @@ fn expand_template(
                     // Nested quasiquote: increment depth
                     let (inner, _rest) = pair_parts(cdr, heap);
                     let expanded = expand_template(inner, heap, desugarer, depth + 1);
-                    // Reconstruct (quasiquote <expanded>)
-                    return make_list_call(vec![CoreExpr::new(CoreExprKind::Quote(car)), expanded]);
+                    // Reconstruct (quasiquote <expanded>) using a plain symbol
+                    // (car may be an identifier with scope marks; we need a bare symbol)
+                    let qq_sym = heap.borrow_mut().intern_symbol("quasiquote");
+                    return make_list_call(vec![
+                        CoreExpr::new(CoreExprKind::Quote(qq_sym)),
+                        expanded,
+                    ]);
                 }
 
                 "unquote" => {
@@ -178,8 +183,9 @@ fn expand_template(
                     } else {
                         // Inside nested quasiquote: decrement depth
                         let expanded = expand_template(inner, heap, desugarer, depth - 1);
+                        let uq_sym = heap.borrow_mut().intern_symbol("unquote");
                         return make_list_call(vec![
-                            CoreExpr::new(CoreExprKind::Quote(car)),
+                            CoreExpr::new(CoreExprKind::Quote(uq_sym)),
                             expanded,
                         ]);
                     }
@@ -194,8 +200,9 @@ fn expand_template(
                     } else {
                         let (inner, _rest) = pair_parts(cdr, heap);
                         let expanded = expand_template(inner, heap, desugarer, depth - 1);
+                        let uqs_sym = heap.borrow_mut().intern_symbol("unquote-splicing");
                         return make_list_call(vec![
-                            CoreExpr::new(CoreExprKind::Quote(car)),
+                            CoreExpr::new(CoreExprKind::Quote(uqs_sym)),
                             expanded,
                         ]);
                     }

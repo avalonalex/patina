@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report (VM Backend)
 
-**Generated:** 2026-03-13 19:37:27
+**Generated:** 2026-03-13 21:38:55
 **Test Suite:** chibi-scheme r7rs-tests.scm
 **Backend:** VM (experimental)
 
@@ -8,8 +8,8 @@
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1158 | 99.4% |
-| ❌ Failed | 5 | 0.4% |
+| ✅ Passed | 1160 | 99.6% |
+| ❌ Failed | 3 | 0.3% |
 | ⚠️ Error (crashed) | 2 | 0.2% |
 | **Total** | **1165** | **100%** |
 
@@ -18,7 +18,7 @@
 | Status | Section | Total | Passed | Failed | Errors |
 |--------|---------|-------|--------|--------|--------|
 | ✅ | 4.1 Primitive expression types | 27 | 27 | 0 | 0 |
-| ⚠️ | 4.2 Derived expression types | 74 | 72 | 2 | 0 |
+| ✅ | 4.2 Derived expression types | 74 | 74 | 0 | 0 |
 | ⚠️ | 4.3 Macros | 27 | 23 | 2 | 2 |
 | ✅ | 5 Program structure | 15 | 15 | 0 | 0 |
 | ✅ | 6.1 Equivalence Predicates | 25 | 25 | 0 | 0 |
@@ -44,8 +44,6 @@
 ### Test Failures
 
 ```
-FAIL: `(a `(b ,(+ 1 2) ,(foo ,(+ 1 3) d) e) f)
-FAIL: `(a `(b ,,name1 ,',name2 d) e)
 FAIL: (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
 FAIL: x
 FAIL: (call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
