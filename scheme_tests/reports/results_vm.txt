@@ -2376,10 +2376,6 @@ Testing:
 Testing: 
 (call-with-current-continuation procedure?)
 
-FAIL: (call-with-current-continuation procedure?)
-  expected: #t
-  but got:  #f
-
 Testing: 
 (apply + (list 3 4))
 
@@ -2459,7 +2455,7 @@ Testing:
 Testing: 
 (let ((path '()) (c #f)) (let ((add (lambda (s) (set! path (cons s path))))) (dynamic-wind (lambda () (add 'connect)) (lambda () (add (call-with-current-continuation (lambda (c0) (set! c c0) 'talk1)))) (lambda () (add 'disconnect))) (if (< (length path) 4) (c 'talk2) (reverse path))))
 
-Tests run: 34, Passed: 32, Failed: 2
+Tests run: 34, Passed: 33, Failed: 1
 
 Running test suite: 6.11 Exceptions
 Testing: 

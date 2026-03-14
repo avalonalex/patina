@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report (VM Backend)
 
-**Generated:** 2026-03-13 18:27:44
+**Generated:** 2026-03-13 18:48:50
 **Test Suite:** chibi-scheme r7rs-tests.scm
 **Backend:** VM (experimental)
 
@@ -8,8 +8,8 @@
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1152 | 98.9% |
-| ❌ Failed | 6 | 0.5% |
+| ✅ Passed | 1153 | 99.0% |
+| ❌ Failed | 5 | 0.4% |
 | ⚠️ Error (crashed) | 7 | 0.6% |
 | **Total** | **1165** | **100%** |
 
@@ -30,7 +30,7 @@
 | ✅ | 6.7 Strings | 130 | 130 | 0 | 0 |
 | ✅ | 6.8 Vectors | 43 | 43 | 0 | 0 |
 | ✅ | 6.9 Bytevectors | 39 | 39 | 0 | 0 |
-| ⚠️ | 6.10 Control Features | 34 | 32 | 2 | 0 |
+| ⚠️ | 6.10 Control Features | 34 | 33 | 1 | 0 |
 | ✅ | 6.11 Exceptions | 30 | 30 | 0 | 0 |
 | ❌ | 6.12 Environments and evaluation | 5 | 0 | 0 | 5 |
 | ✅ | Read syntax | 93 | 93 | 0 | 0 |
@@ -48,7 +48,6 @@ FAIL: `(a `(b ,(+ 1 2) ,(foo ,(+ 1 3) d) e) f)
 FAIL: `(a `(b ,,name1 ,',name2 d) e)
 FAIL: (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
 FAIL: x
-FAIL: (call-with-current-continuation procedure?)
 FAIL: (call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
 FAIL: (inexact (eval '(sin 0) (environment '(scheme inexact))))
 FAIL: (let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10))

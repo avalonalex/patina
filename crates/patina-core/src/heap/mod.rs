@@ -936,14 +936,17 @@ impl Heap {
         tv.is_object() && matches!(self.get_object(tv), HeapObjectData::Promise(_))
     }
 
-    /// Check if value is a procedure (native variant, closure, or VM closure)
+    /// Check if value is a procedure (native variant, closure, VM closure, or continuation)
     #[inline]
     pub fn is_procedure(&self, tv: TaggedValue) -> bool {
         tv.is_closure()
             || (tv.is_object()
                 && matches!(
                     self.get_object(tv),
-                    HeapObjectData::Procedure(_) | HeapObjectData::VmClosure { .. }
+                    HeapObjectData::Procedure(_)
+                        | HeapObjectData::VmClosure { .. }
+                        | HeapObjectData::VmContinuationRef(_)
+                        | HeapObjectData::VmDelimitedContinuationRef(_)
                 ))
     }
 
