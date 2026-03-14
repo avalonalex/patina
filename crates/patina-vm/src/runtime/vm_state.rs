@@ -482,6 +482,8 @@ fn dispatch_one_instruction(
                 }
             } else if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
                 state.set_reg(dst, result?);
+            } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+                state.set_reg(dst, result?);
             } else if try_invoke_continuation(state, func_val, &arg_vals)? {
                 // Continuation was invoked — stack has been replaced/appended.
             } else {
@@ -545,6 +547,21 @@ fn dispatch_one_instruction(
             if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
                 let result = result?;
                 let frame = state.frames.pop().expect("TailCall with empty stack");
+                if state.frames.len() == exit_depth {
+                    state.free_top_registers(frame.register_base, frame.num_regs);
+                    return Ok(Some(result));
+                }
+                let caller_idx = state.frames.len() - 1;
+                let return_reg = frame.return_reg;
+                state.set_reg_in_frame(caller_idx, return_reg, result);
+                state.free_top_registers(frame.register_base, frame.num_regs);
+                return Ok(None);
+            }
+
+            // Parameters in tail position: same as primitives.
+            if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+                let result = result?;
+                let frame = state.frames.pop().expect("TailCall param with empty stack");
                 if state.frames.len() == exit_depth {
                     state.free_top_registers(frame.register_base, frame.num_regs);
                     return Ok(Some(result));
@@ -621,6 +638,8 @@ fn dispatch_one_instruction(
             arg_vals.extend(spread);
             if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
                 state.set_reg(dst, result?);
+            } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+                state.set_reg(dst, result?);
             } else {
                 call_closure(state, func_val, &arg_vals, dst)?;
             }
@@ -645,6 +664,23 @@ fn dispatch_one_instruction(
             if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
                 let result = result?;
                 let frame = state.frames.pop().expect("TailApply with empty stack");
+                if state.frames.len() == exit_depth {
+                    state.free_top_registers(frame.register_base, frame.num_regs);
+                    return Ok(Some(result));
+                }
+                let caller_idx = state.frames.len() - 1;
+                let return_reg = frame.return_reg;
+                state.set_reg_in_frame(caller_idx, return_reg, result);
+                state.free_top_registers(frame.register_base, frame.num_regs);
+                return Ok(None);
+            }
+
+            if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+                let result = result?;
+                let frame = state
+                    .frames
+                    .pop()
+                    .expect("TailApply param with empty stack");
                 if state.frames.len() == exit_depth {
                     state.free_top_registers(frame.register_base, frame.num_regs);
                     return Ok(Some(result));
@@ -1009,9 +1045,79 @@ fn call_any(
     if let Some(result) = try_call_primitive(state, func_val, args.to_vec()) {
         return Ok(Some(result?));
     }
+    // Try as parameter
+    if let Some(result) = try_call_parameter(state, func_val, args) {
+        return Ok(Some(result?));
+    }
     // Try as VM closure
     call_closure(state, func_val, args, return_reg)?;
     Ok(None)
+}
+
+/// Try to call a parameter object. Returns `Some(Ok(result))` if `func_val`
+/// is a parameter, `None` otherwise.
+fn try_call_parameter(
+    state: &mut VmState,
+    func_val: TaggedValue,
+    args: &[TaggedValue],
+) -> Option<Result<TaggedValue, VmError>> {
+    let heap = state.heap.borrow();
+    let (values, converter) = heap.get_parameter(func_val)?;
+    drop(heap);
+    match args.len() {
+        0 => {
+            // Get current value (top of stack)
+            let stack = values.borrow();
+            let val = stack.last().copied().unwrap_or(TaggedValue::UNSPECIFIED);
+            Some(Ok(val))
+        }
+        1 => {
+            // Set value (replace top of stack, applying converter if present)
+            let new_val = if let Some(conv) = converter {
+                match call_any_sync(state, conv, &[args[0]]) {
+                    Ok(v) => v,
+                    Err(e) => return Some(Err(e)),
+                }
+            } else {
+                args[0]
+            };
+            let mut stack = values.borrow_mut();
+            if let Some(top) = stack.last_mut() {
+                *top = new_val;
+            }
+            Some(Ok(TaggedValue::UNSPECIFIED))
+        }
+        _ => Some(Err(VmError::ArityMismatch {
+            expected: "0 or 1".into(),
+            got: args.len(),
+        })),
+    }
+}
+
+/// Synchronously call a callable value and return its result.
+/// Used for parameter converters and similar internal callbacks.
+fn call_any_sync(
+    state: &mut VmState,
+    func_val: TaggedValue,
+    args: &[TaggedValue],
+) -> Result<TaggedValue, VmError> {
+    // Try as primitive first
+    if let Some(result) = try_call_primitive(state, func_val, args.to_vec()) {
+        return result;
+    }
+    // Must be a VM closure — use run_thunk-style execution.
+    // Use a return_reg beyond the caller's window to avoid clobbering live regs.
+    let depth_before = state.frames.len();
+    let return_reg = state.frames.last().map(|f| f.num_regs).unwrap_or(0);
+    if let Some(f) = state.frames.last() {
+        let needed = f.register_base + return_reg as usize + 1;
+        if state.registers.len() < needed {
+            state.registers.resize(needed, TaggedValue::UNSPECIFIED);
+        }
+    }
+    call_closure(state, func_val, args, return_reg)?;
+    // run_loop_until returns the value directly from Return instruction dispatch.
+    run_loop_until(state, depth_before)
 }
 
 fn closure_heap_index(val: TaggedValue) -> Option<patina_core::tagged_value::HeapIndex> {
@@ -1271,10 +1377,15 @@ fn handle_control_primitive(
             let consumer = args[1];
             // Run producer (0 args), collect multiple values from value_buffer
             let primary = run_thunk(state, producer)?;
-            let produced_vals = if state.value_buffer.is_empty() {
-                vec![primary]
-            } else {
+            let produced_vals = if !state.value_buffer.is_empty() {
                 std::mem::take(&mut state.value_buffer)
+            } else if let Some(vals) = state.heap.borrow().get_values_as_tagged(primary) {
+                // Primitives like exact-integer-sqrt return a #<values> heap
+                // object directly (without going through the VM's `values`
+                // control intercept), so unpack it here.
+                vals
+            } else {
+                vec![primary]
             };
             // Consumer may be a primitive (e.g. `list`) or a VM closure.
             if let Some(result) = call_any(state, consumer, &produced_vals, dst)? {

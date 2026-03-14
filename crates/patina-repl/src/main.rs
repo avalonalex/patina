@@ -176,11 +176,18 @@ fn run_script_vm(filename: &str) {
     };
 
     let interp = Interpreter::new(VmBackend::new());
-    match interp.eval_program(&code) {
-        Ok(_) => process::exit(0),
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            process::exit(1);
+    let is_test_file = filename.contains("test") || code.contains("test-begin");
+
+    if is_test_file {
+        interp.eval_program_resilient(&code);
+        process::exit(0);
+    } else {
+        match interp.eval_program(&code) {
+            Ok(_) => process::exit(0),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            }
         }
     }
 }

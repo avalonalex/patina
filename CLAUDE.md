@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-Patina is an R7RS-small Scheme interpreter written in Rust. Phase 1 (tree-walker interpreter) is **complete**: 1159/1159 chibi R7RS tests pass, ~1400 internal tests pass. Phase 2 (VM backend) is next.
+Patina is an R7RS-small Scheme interpreter written in Rust. Phase 1 (tree-walker interpreter) is **complete**:1163/1163 chibi R7RS tests pass, ~1400 internal tests pass. Phase 2 (VM backend) is next.
 
 All runtime values are `TaggedValue` — NaN-boxed 8-byte `Copy` types. No `Value` enum exists (fully removed). Macros and derived forms (`let`, `cond`, `do`, etc.) are implemented in Scheme (`lib/scheme/base/*.scm`), not as special forms.
 
