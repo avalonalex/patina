@@ -1,8 +1,8 @@
 # VM Backend: Chibi R7RS Test Failures
 
 **Date:** 2026-03-13
-**Score:** 1152/1165 (98.9%) — 6 FAIL, 7 Error (some errors produce multiple cascading errors in output)
-**Tree-walker baseline:** 1159/1159 (100%)
+**Score:** 1158/1165 (99.4%) — 5 FAIL, 2 Error
+**Tree-walker baseline:** 1163/1163 (100%)
 
 ---
 
@@ -73,16 +73,7 @@ This is the hardest category to fix — may need architectural changes to the co
 
 ---
 
-## Category 3: Continuations and `procedure?` (2 FAIL — section 6.10)
-
-### Failures
-
-```
-FAIL: (call-with-current-continuation procedure?)
-  expected: #t
-  but got:  #f
-```
-R7RS requires continuations to satisfy `procedure?`. VM continuations are stored in side tables on `VmState` (as `VmContinuationRef(u64)` opaque handles), not as heap objects that `Heap::is_procedure()` can recognize.
+## Category 3: compose+values corruption (1 FAIL — section 6.10)
 
 ```
 FAIL: (call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
@@ -92,52 +83,36 @@ FAIL: (call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
 The compose+call-with-values test returns a circular list instead of `(30 0)`. When tested in isolation, this works correctly. The corruption likely comes from a prior test's side effect polluting state (possibly the `letrec-syntax`/`my-or` error above that corrupts bindings).
 
 ### Fix approach
-
-**`procedure?` for continuations:**
-Option A: Add `VmContinuation` / `VmDelimitedContinuation` variants to `HeapObjectData` and store them on the heap (big refactor, removes side tables).
-Option B: Add a VM-specific `procedure?` primitive override that checks both `Heap::is_procedure()` and the VmState side tables. Requires the primitive to have access to VmState.
-Option C: Store a thin wrapper closure on the heap that captures the continuation ref. When called, it dispatches to `try_invoke_continuation`.
-
-**compose corruption:**
 Investigate whether the `letrec-syntax` error 2 tests earlier corrupts shared state (e.g. a global binding or heap object). May resolve itself once macro hygiene is fixed.
 
 ---
 
-## Category 4: `eval` / `environment` / `null-environment` (5 Error + 2 FAIL — section 6.12)
+## ~~Category 4: `eval` / `environment` / `null-environment`~~ ✅ FIXED
 
-### Errors
-```
-Error: Cannot load scheme base: load_scheme_library not yet supported in VM  (x5)
-Error: eval: expected environment, got null  (x5+)
-Error: expected a procedure, got null
-```
+**Fixed 2026-03-13.** All 7 tests now pass (section 6.12: 5/5).
 
-### Failures
-```
-FAIL: (inexact (eval '(sin 0) (environment '(scheme inexact))))
-  expected: 0.0
-  but got:  ()
-
-FAIL: (let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10))
-  expected: 20
-  but got:  ()
-```
-
-### Root cause
-The VM's `eval` primitive works but `environment` and `null-environment` call `load_scheme_library` which is not implemented for the VM backend. The functions return null/error instead of a usable environment object.
-
-### Fix approach
-Implement `load_scheme_library` for VmBackend, or make `environment`/`null-environment` use the existing library registry to construct environment objects without re-loading. The tree-walker already does this — the VM needs equivalent plumbing.
+**What was done:**
+- Changed `VmBackend`'s `library_registry` and `loader_registry` from `RefCell<...>` to `Rc<RefCell<...>>`, shared with `VmState`
+- Added `vm_load_library`, `vm_evaluate_parsed_library`, `vm_process_import_set` free functions in `vm_state.rs` (mirror `VmBackend`'s methods, operate through shared registries)
+- Added `vm_eval_expr` that compiles and executes in a temporary `VmState` (avoids frame conflicts with in-flight execution)
+- Implemented `VmApplyContext::load_scheme_library` and `eval_expr` to delegate to these functions
 
 ---
 
-## Priority Order
+## ~~Category 5: `procedure?` for continuations~~ ✅ FIXED
 
-1. **`eval`/`environment`** (Category 4) — 7 tests, likely straightforward plumbing
-2. **`procedure?` for continuations** (Category 3, first failure) — 1 test, several approaches available
-3. **Nested quasiquote** (Category 1) — 2 tests, localized to `quasiquote_expand.rs`
-4. **Macro hygiene** (Category 2) — 4 tests, hardest fix, may need compiler architecture changes
-5. **compose corruption** (Category 3, second failure) — 1 test, may self-resolve with other fixes
+**Fixed 2026-03-13.** Test `(call-with-current-continuation procedure?)` now passes.
+
+**What was done:**
+- Added `VmContinuationRef(_)` and `VmDelimitedContinuationRef(_)` to `Heap::is_procedure()` match in `patina-core/src/heap/mod.rs`. These heap object variants were already allocated for VM continuations but weren't recognized as procedures.
+
+---
+
+## Priority Order (remaining)
+
+1. **Nested quasiquote** (Category 1) — 2 tests, localized to `quasiquote_expand.rs`
+2. **Macro hygiene** (Category 2) — 4 tests, hardest fix, may need compiler architecture changes
+3. **compose corruption** (Category 3) — 1 test, likely self-resolves with hygiene fix
 
 ---
 

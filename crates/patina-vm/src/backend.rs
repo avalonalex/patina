@@ -66,8 +66,8 @@ impl From<patina_frontend::DesugarError> for VmBackendError {
 pub struct VmBackend {
     state: RefCell<VmState>,
     global_env: Rc<Environment>,
-    library_registry: RefCell<LibraryRegistry>,
-    loader_registry: RefCell<LibraryLoaderRegistry>,
+    library_registry: Rc<RefCell<LibraryRegistry>>,
+    loader_registry: Rc<RefCell<LibraryLoaderRegistry>>,
 }
 
 impl VmBackend {
@@ -77,9 +77,13 @@ impl VmBackend {
         let mut state = VmState::new(Rc::clone(&global_env));
         state.install_primitives();
 
-        // Set up library loading infrastructure
-        let library_registry = RefCell::new(LibraryRegistry::with_default_paths());
-        let loader_registry = RefCell::new(LibraryLoaderRegistry::new());
+        // Set up library loading infrastructure (Rc-shared with VmState)
+        let library_registry = Rc::new(RefCell::new(LibraryRegistry::with_default_paths()));
+        let loader_registry = Rc::new(RefCell::new(LibraryLoaderRegistry::new()));
+
+        // Share registries with VmState so eval primitives can load libraries
+        state.library_registry = Some(Rc::clone(&library_registry));
+        state.loader_registry = Some(Rc::clone(&loader_registry));
 
         let backend = VmBackend {
             state: RefCell::new(state),

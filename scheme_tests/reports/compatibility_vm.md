@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report (VM Backend)
 
-**Generated:** 2026-03-13 18:48:50
+**Generated:** 2026-03-13 19:37:27
 **Test Suite:** chibi-scheme r7rs-tests.scm
 **Backend:** VM (experimental)
 
@@ -8,9 +8,9 @@
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1153 | 99.0% |
+| ✅ Passed | 1158 | 99.4% |
 | ❌ Failed | 5 | 0.4% |
-| ⚠️ Error (crashed) | 7 | 0.6% |
+| ⚠️ Error (crashed) | 2 | 0.2% |
 | **Total** | **1165** | **100%** |
 
 ## Section Breakdown
@@ -32,7 +32,7 @@
 | ✅ | 6.9 Bytevectors | 39 | 39 | 0 | 0 |
 | ⚠️ | 6.10 Control Features | 34 | 33 | 1 | 0 |
 | ✅ | 6.11 Exceptions | 30 | 30 | 0 | 0 |
-| ❌ | 6.12 Environments and evaluation | 5 | 0 | 0 | 5 |
+| ✅ | 6.12 Environments and evaluation | 5 | 5 | 0 | 0 |
 | ✅ | Read syntax | 93 | 93 | 0 | 0 |
 | ✅ | Numeric syntax | 220 | 220 | 0 | 0 |
 | ✅ | 6.14 System interface | 13 | 13 | 0 | 0 |
@@ -49,8 +49,6 @@ FAIL: `(a `(b ,,name1 ,',name2 d) e)
 FAIL: (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
 FAIL: x
 FAIL: (call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
-FAIL: (inexact (eval '(sin 0) (environment '(scheme inexact))))
-FAIL: (let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10))
 ```
 
 ### Errors
@@ -58,17 +56,6 @@ FAIL: (let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10))
 ```
 Error: runtime error: runtime error: Type error: remainder: expected integer, got non-numeric
 Error: runtime error: runtime error: Type error: =: expected number, got non-numeric
-Error: runtime error: runtime error: Internal error: Cannot load scheme base: Invalid syntax: load_scheme_library not yet supported in VM
-Error: runtime error: runtime error: Internal error: Cannot load scheme base: Invalid syntax: load_scheme_library not yet supported in VM
-Error: runtime error: runtime error: Internal error: environment: cannot load library: Invalid syntax: load_scheme_library not yet supported in VM
-Error: runtime error: runtime error: Internal error: environment: cannot load library: Invalid syntax: load_scheme_library not yet supported in VM
-Error: runtime error: runtime error: Internal error: environment: cannot load library: Invalid syntax: load_scheme_library not yet supported in VM
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
-Error: runtime error: type error: expected a procedure, got null
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
 ```
 
 

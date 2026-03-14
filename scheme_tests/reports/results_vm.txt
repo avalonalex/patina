@@ -2554,52 +2554,33 @@ Running test suite: 6.12 Environments and evaluation
 Testing: 
 (eval '(* 7 3) (scheme-report-environment 5))
 
-Error: runtime error: runtime error: Internal error: Cannot load scheme base: Invalid syntax: load_scheme_library not yet supported in VM
 Testing: 
 (let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10))
 
-Error: runtime error: runtime error: Internal error: Cannot load scheme base: Invalid syntax: load_scheme_library not yet supported in VM
 Testing: 
 (eval '(expt 2 10) (environment '(scheme base)))
 
-Error: runtime error: runtime error: Internal error: environment: cannot load library: Invalid syntax: load_scheme_library not yet supported in VM
 Testing: 
 (inexact (eval '(sin 0) (environment '(scheme inexact))))
 
-Error: runtime error: runtime error: Internal error: environment: cannot load library: Invalid syntax: load_scheme_library not yet supported in VM
 Testing: 
 (eval '(+ (expt 2 10) (inexact (sin 0))) (environment '(scheme base) '(scheme inexact)))
 
-Error: runtime error: runtime error: Internal error: environment: cannot load library: Invalid syntax: load_scheme_library not yet supported in VM
-Tests run: 5, Passed: 0, Failed: 0, Errors: 5
+Tests run: 5, Passed: 5, Failed: 0
 
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
 Running test suite: 6.13 Input and output
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
 Testing: 
 (port? (current-input-port))
 
-FAIL: (inexact (eval '(sin 0) (environment '(scheme inexact))))
-  expected: 0.0
-  but got:  ()
-
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
 Testing: 
 (input-port? (current-input-port))
 
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
 Testing: 
 (output-port? (current-output-port))
 
-Error: runtime error: type error: expected a procedure, got null
 Testing: 
 (output-port? (current-error-port))
 
-FAIL: (let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10))
-  expected: 20
-  but got:  ()
-
-Error: runtime error: runtime error: Type error: eval: expected environment, got null
 Testing: 
 (input-port? (open-input-string "abc"))
 
