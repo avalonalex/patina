@@ -14,6 +14,7 @@
 //!
 //! See VM_COMPILER.md for the full specification.
 
+pub mod alpha_rename;
 pub mod pass1_analysis;
 pub mod pass2_closure;
 pub mod pass3_tail;
@@ -30,8 +31,9 @@ use patina_core::core_expr::CoreExpr;
 /// Returns `(top_level_code, nested_codes)`. The caller should load all of
 /// them into `VmState::code_store` before executing.
 pub fn compile(expr: &CoreExpr) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
-    let analysis = pass1_analysis::Pass1Analysis::run(expr);
-    let closed = pass2_closure::Pass2Closure::run(expr, &analysis);
+    let renamed = alpha_rename::alpha_rename(expr);
+    let analysis = pass1_analysis::Pass1Analysis::run(&renamed);
+    let closed = pass2_closure::Pass2Closure::run(&renamed, &analysis);
     let tailed = pass3_tail::Pass3Tail::run(&closed);
     let allocated = pass4_registers::Pass4Registers::run(&tailed);
     pass5_codegen::Pass5Codegen::run(&allocated)

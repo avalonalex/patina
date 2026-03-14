@@ -315,15 +315,9 @@ Testing:
 Testing: 
 (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
 
-FAIL: (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
-  expected: outer
-  but got:  inner
-
 Testing: 
 (letrec-syntax ((my-or (syntax-rules () ((my-or) #f) ((my-or e) e) ((my-or e1 e2 ...) (let ((temp e1)) (if temp temp (my-or e2 ...))))))) (let ((x #f) (y 7) (temp 8) (let odd?) (if even?)) (my-or x (let temp) (if y) y)))
 
-Error: runtime error: runtime error: Type error: remainder: expected integer, got non-numeric
-Error: runtime error: runtime error: Type error: =: expected number, got non-numeric
 Testing: 
 (sequence1 0 1 2 3)
 
@@ -394,7 +388,7 @@ Testing:
 Testing: 
 (elli-lit-1 100)
 
-Tests run: 27, Passed: 23, Failed: 2, Errors: 2
+Tests run: 25, Passed: 24, Failed: 1
 
 Running test suite: 5 Program structure
 Testing: 

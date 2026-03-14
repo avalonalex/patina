@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report (VM Backend)
 
-**Generated:** 2026-03-13 21:38:55
+**Generated:** 2026-03-13 22:10:52
 **Test Suite:** chibi-scheme r7rs-tests.scm
 **Backend:** VM (experimental)
 
@@ -8,10 +8,10 @@
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1160 | 99.6% |
-| ❌ Failed | 3 | 0.3% |
-| ⚠️ Error (crashed) | 2 | 0.2% |
-| **Total** | **1165** | **100%** |
+| ✅ Passed | 1161 | 99.8% |
+| ❌ Failed | 2 | 0.2% |
+| ⚠️ Error (crashed) | 0 | 0.0% |
+| **Total** | **1163** | **100%** |
 
 ## Section Breakdown
 
@@ -19,7 +19,7 @@
 |--------|---------|-------|--------|--------|--------|
 | ✅ | 4.1 Primitive expression types | 27 | 27 | 0 | 0 |
 | ✅ | 4.2 Derived expression types | 74 | 74 | 0 | 0 |
-| ⚠️ | 4.3 Macros | 27 | 23 | 2 | 2 |
+| ⚠️ | 4.3 Macros | 25 | 24 | 1 | 0 |
 | ✅ | 5 Program structure | 15 | 15 | 0 | 0 |
 | ✅ | 6.1 Equivalence Predicates | 25 | 25 | 0 | 0 |
 | ✅ | 6.2 Numbers | 211 | 211 | 0 | 0 |
@@ -44,16 +44,8 @@
 ### Test Failures
 
 ```
-FAIL: (let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))
 FAIL: x
 FAIL: (call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
-```
-
-### Errors
-
-```
-Error: runtime error: runtime error: Type error: remainder: expected integer, got non-numeric
-Error: runtime error: runtime error: Type error: =: expected number, got non-numeric
 ```
 
 
