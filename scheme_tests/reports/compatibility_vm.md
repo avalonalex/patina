@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report (VM Backend)
 
-**Generated:** 2026-03-14 10:47:59
+**Generated:** 2026-03-14 16:00:12
 **Test Suite:** chibi-scheme r7rs-tests.scm
 **Backend:** VM (experimental)
 
@@ -8,8 +8,8 @@
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1162 | 99.9% |
-| ❌ Failed | 1 | 0.1% |
+| ✅ Passed | 1163 | 100.0% |
+| ❌ Failed | 0 | 0.0% |
 | ⚠️ Error (crashed) | 0 | 0.0% |
 | **Total** | **1163** | **100%** |
 
@@ -30,7 +30,7 @@
 | ✅ | 6.7 Strings | 130 | 130 | 0 | 0 |
 | ✅ | 6.8 Vectors | 43 | 43 | 0 | 0 |
 | ✅ | 6.9 Bytevectors | 39 | 39 | 0 | 0 |
-| ⚠️ | 6.10 Control Features | 34 | 33 | 1 | 0 |
+| ✅ | 6.10 Control Features | 34 | 34 | 0 | 0 |
 | ✅ | 6.11 Exceptions | 30 | 30 | 0 | 0 |
 | ✅ | 6.12 Environments and evaluation | 5 | 5 | 0 | 0 |
 | ✅ | Read syntax | 93 | 93 | 0 | 0 |
@@ -40,12 +40,6 @@
 **Legend:** ✅ = All passing, ⚠️ = Partial, ❌ = None passing
 
 ## Failed Tests
-
-### Test Failures
-
-```
-FAIL: (call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
-```
 
 
 ## Full Results

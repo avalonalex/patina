@@ -1710,6 +1710,9 @@ fn handle_control_primitive(
             }
             let producer = args[0];
             let consumer = args[1];
+            // Clear any stale value_buffer before running the producer,
+            // so we only see values produced by this thunk.
+            state.value_buffer.clear();
             // Run producer (0 args), collect multiple values from value_buffer
             let primary = run_thunk(state, producer)?;
             let produced_vals = if !state.value_buffer.is_empty() {

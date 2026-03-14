@@ -1,7 +1,7 @@
 # VM Backend: Chibi R7RS Test Failures
 
-**Date:** 2026-03-13
-**Score:** 1161/1163 (99.8%) — 2 FAIL, 0 Error
+**Date:** 2026-03-14
+**Score:** 1163/1163 (100%) — 0 FAIL, 0 Error ✅
 **Tree-walker baseline:** 1163/1163 (100%)
 
 ---
@@ -16,9 +16,9 @@
 
 ---
 
-## Category 2: ~~Macro Hygiene~~ ✅ MOSTLY FIXED (3 of 4 tests)
+## Category 2: ~~Macro Hygiene~~ ✅ FIXED (4 of 4 tests)
 
-**Fixed 2026-03-13.** Section 4.3 improved from 23/27 to 24/25 (2 tests were errors that no longer count).
+**Fixed 2026-03-13/14.** Section 4.3 now 25/25.
 
 **Root cause:** The VM compiler resolved variables by name only (in Pass 1 and Pass 2), ignoring scope-set information from macro expansion. The tree-walker uses `get_with_scopes()` at runtime with `binding.scopes ⊆ reference.scopes` rules.
 
@@ -28,30 +28,17 @@
 3. Distinguishes "simple" bindings (non-macro params, visible to `env.get()`) from "scoped" bindings (macro-introduced params, only visible to `get_with_scopes()`)
 4. Uses `binding_scope` from Lambda nodes to give non-macro params proper scopes
 
-**Still failing (1 test):**
-```
-FAIL: x
-  expected: 1
-  but got:  2
-```
-Test: `(let () (define x 1) (let-syntax () (define x 2) #f) (test 1 x))`
-
-This is a separate issue: the VM's `Define` instruction always stores to globals. Internal `define` inside `let-syntax` (which desugars to a lambda body) should create a local binding, but the VM makes it global, clobbering the outer `x`. This is a `Define`-scoping issue, not a hygiene issue.
+Internal define scoping (the `(let () (define x 1) (let-syntax () (define x 2) #f) (test 1 x))` test) was fixed separately via compile-time conversion of internal defines to local bindings.
 
 ---
 
-## Category 3: compose+values corruption (1 FAIL — section 6.10)
+## Category 3: ~~compose+values corruption~~ ✅ FIXED (1 test — section 6.10)
 
-```
-FAIL: (call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
-  expected: (30 0)
-  but got:  (#0=(a . #0#))
-```
+**Fixed 2026-03-14.** Section 6.10 now 34/34.
 
-Works correctly in isolation. The corruption comes from a prior test's side effect polluting global state — likely the remaining `define`-scoping issue in Category 2 (the inner `(define x 2)` clobbers a global, which cascades).
+**Root cause:** Stale `value_buffer` from a prior `(values x)` call leaked into `call-with-values`. The VM's `Values` control primitive unconditionally sets `state.value_buffer = args.clone()` — even for single-value calls like `(test '(a . 4) (values x))`. A later `(set-cdr! x x)` mutated the pair into a circular list. When `call-with-values` ran its producer thunk (which returned a `#<values>` heap object from `exact-integer-sqrt`, bypassing the `values` intercept), the stale non-empty `value_buffer` was consumed instead of the actual producer result.
 
-### Fix approach
-Will likely self-resolve once the `Define`-scoping issue is fixed. The internal-define-to-local-binding conversion would prevent global state pollution between tests.
+**Fix:** Clear `state.value_buffer` before running the producer thunk in `CallWithValues`, so only values produced by the current producer are seen.
 
 ---
 
@@ -67,16 +54,6 @@ Will likely self-resolve once the `Define`-scoping issue is fixed. The internal-
 
 ---
 
-## Priority Order (remaining)
-
-1. **Internal define scoping** — 1 test (4.3) + likely fixes 1 cascade test (6.10)
-   - The VM's `Define` instruction stores to globals unconditionally
-   - Internal defines in lambda bodies should create local bindings
-   - May require converting `Define` inside lambda bodies to `SetLocal` or equivalent
-   - This is the root cause of both remaining failures
-
----
-
 ## Summary of Progress
 
 | Date | Score | Fixed |
@@ -86,7 +63,9 @@ Will likely self-resolve once the `Define`-scoping issue is fixed. The internal-
 | 2026-03-13 (procedure?) | +1 test | procedure? for continuations |
 | 2026-03-13 (quasiquote) | +2 tests | nested quasiquote identifier→symbol |
 | 2026-03-13 (hygiene) | +3 tests, -2 errors | alpha_rename pass for scope-set hygiene |
-| **Current** | **1161/1163 (99.8%)** | **2 remaining (both from define-scoping)** |
+| 2026-03-14 (internal defines) | +1 test | internal define scoping (letrec* semantics) |
+| 2026-03-14 (value_buffer) | +1 test | clear stale value_buffer in call-with-values |
+| **Final** | **1163/1163 (100%)** | **All tests passing** ✅ |
 
 ---
 
