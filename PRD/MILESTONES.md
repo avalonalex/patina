@@ -25,6 +25,18 @@ The `patina-vm` crate implements a register-based bytecode VM as a second `Backe
 - internal define scoping with letrec* semantics (+1 test)
 - stale value_buffer fix in call-with-values (+1 test)
 
+**Performance (vs tree-walker):**
+
+| Benchmark | Tree-Walker | VM | Speedup |
+|-----------|------------|-----|---------|
+| fib(25) | 489 ms | 129 ms | **3.8x** |
+| tak(18,12,6) | 177 ms | 39 ms | **4.5x** |
+| nqueens(10) | 3636 ms | 896 ms | **4.1x** |
+| primes(1000) | 75 ms | 17 ms | **4.4x** |
+| ctak(12,8,4) | 9.1 ms | 2.2 ms | **4.1x** |
+
+Average speedup: **~4.2x** across 25 benchmarks (range 2.8–5.8x). No specialized opcodes — baseline register machine only. Full results: `benchmark_reports/vm_comparison.md`.
+
 **Design docs:** `docs/VM_ISA.md`, `docs/VM_COMPILER.md`, `docs/VM_RUNTIME.md`, `docs/VM_DECISIONS.md`
 
 ---
