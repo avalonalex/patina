@@ -357,7 +357,25 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
     // Prologue: wrap each boxed param register in a MutableCell.
     // The param already lives in reg[r]; emit AllocCell r←r to box it in-place.
     for &reg in &lam.boxed_params {
+        // Internal define regs that are boxed: initialize to UNSPECIFIED first,
+        // then AllocCell will box that value.
+        if lam.internal_define_regs.contains(&reg) {
+            child_cg.emit(Instruction::LoadImmediate {
+                dst: reg,
+                val: TaggedValue::UNSPECIFIED,
+            });
+        }
         child_cg.emit(Instruction::AllocCell { dst: reg, src: reg });
+    }
+
+    // Initialize non-boxed internal-define registers to UNSPECIFIED.
+    for &reg in &lam.internal_define_regs {
+        if !lam.boxed_params.contains(&reg) {
+            child_cg.emit(Instruction::LoadImmediate {
+                dst: reg,
+                val: TaggedValue::UNSPECIFIED,
+            });
+        }
     }
 
     // Generate body instructions for the child.

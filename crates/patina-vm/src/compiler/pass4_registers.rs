@@ -147,8 +147,10 @@ pub struct RegLambda {
     pub body: Vec<RegExpr>,
     /// How to obtain each captured free variable from the parent frame, in slot order.
     pub captures: Vec<CaptureSource>,
-    /// Registers of params that must be wrapped in `MutableCell` on entry.
+    /// Registers of params (and internal defines) that must be wrapped in `MutableCell` on entry.
     pub boxed_params: HashSet<u16>,
+    /// Registers allocated for internal define bindings (initialized to UNSPECIFIED).
+    pub internal_define_regs: Vec<u16>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -453,7 +455,15 @@ fn allocate_lambda(
         alloc.bind(name.clone(), reg);
     }
 
-    // Map boxed param names → their register indices.
+    // Allocate registers for internal defines (after params).
+    let mut internal_define_regs = Vec::new();
+    for name in &lam.internal_defines {
+        let reg = alloc.alloc();
+        alloc.bind(name.clone(), reg);
+        internal_define_regs.push(reg);
+    }
+
+    // Map boxed param/internal-define names → their register indices.
     let boxed_params: HashSet<u16> = lam
         .boxed_params
         .iter()
@@ -479,6 +489,7 @@ fn allocate_lambda(
         body,
         captures,
         boxed_params,
+        internal_define_regs,
     }
 }
 

@@ -96,10 +96,12 @@ pub struct TailedLambda {
     pub params: Vec<Symbol>,
     pub rest_param: bool,
     pub capture_list: Vec<Symbol>,
-    /// Parameters that must be wrapped in `MutableCell` on entry.
+    /// Parameters (and internal defines) that must be wrapped in `MutableCell` on entry.
     pub boxed_params: HashSet<Symbol>,
     pub body: Vec<TailedExpr>,
     pub node_id: super::pass1_analysis::NodeId,
+    /// Names introduced by internal `define` forms, treated as local bindings.
+    pub internal_defines: Vec<Symbol>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -150,6 +152,7 @@ fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
                 boxed_params: lam.boxed_params.clone(),
                 body,
                 node_id: lam.node_id,
+                internal_defines: lam.internal_defines.clone(),
             }))
         }
 

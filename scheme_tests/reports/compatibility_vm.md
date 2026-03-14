@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report (VM Backend)
 
-**Generated:** 2026-03-13 22:10:52
+**Generated:** 2026-03-14 10:47:59
 **Test Suite:** chibi-scheme r7rs-tests.scm
 **Backend:** VM (experimental)
 
@@ -8,8 +8,8 @@
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1161 | 99.8% |
-| ❌ Failed | 2 | 0.2% |
+| ✅ Passed | 1162 | 99.9% |
+| ❌ Failed | 1 | 0.1% |
 | ⚠️ Error (crashed) | 0 | 0.0% |
 | **Total** | **1163** | **100%** |
 
@@ -19,7 +19,7 @@
 |--------|---------|-------|--------|--------|--------|
 | ✅ | 4.1 Primitive expression types | 27 | 27 | 0 | 0 |
 | ✅ | 4.2 Derived expression types | 74 | 74 | 0 | 0 |
-| ⚠️ | 4.3 Macros | 25 | 24 | 1 | 0 |
+| ✅ | 4.3 Macros | 25 | 25 | 0 | 0 |
 | ✅ | 5 Program structure | 15 | 15 | 0 | 0 |
 | ✅ | 6.1 Equivalence Predicates | 25 | 25 | 0 | 0 |
 | ✅ | 6.2 Numbers | 211 | 211 | 0 | 0 |
@@ -44,7 +44,6 @@
 ### Test Failures
 
 ```
-FAIL: x
 FAIL: (call-with-values (lambda () ((compose exact-integer-sqrt *) 12 75)) list)
 ```
 

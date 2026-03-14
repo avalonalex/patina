@@ -155,7 +155,37 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
             body,
             binding_scope,
         } => {
-            let bindings = build_bindings(params, *binding_scope, env);
+            let mut bindings = build_bindings(params, *binding_scope, env);
+
+            // Add bindings for internal defines (treated as simple, local bindings).
+            for expr in body.iter() {
+                match &expr.kind {
+                    CoreExprKind::Define { name, .. } => {
+                        let unique_name = env.make_unique_name(name);
+                        bindings.push(Binding {
+                            name: name.clone(),
+                            scopes: ScopeSet::new(),
+                            is_simple: true,
+                            unique_name,
+                        });
+                    }
+                    CoreExprKind::Begin(exprs) => {
+                        for e in exprs {
+                            if let CoreExprKind::Define { name, .. } = &e.kind {
+                                let unique_name = env.make_unique_name(name);
+                                bindings.push(Binding {
+                                    name: name.clone(),
+                                    scopes: ScopeSet::new(),
+                                    is_simple: true,
+                                    unique_name,
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             let renamed_params = build_renamed_formals(params, &bindings);
 
             env.push_frame(bindings);
@@ -179,10 +209,15 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
             CoreExprKind::Begin(exprs.iter().map(|e| rename_expr(e, env)).collect())
         }
 
-        CoreExprKind::Define { name, value } => CoreExprKind::Define {
-            name: name.clone(),
-            value: Rc::new(rename_expr(value, env)),
-        },
+        CoreExprKind::Define { name, value } => {
+            let renamed_name = env
+                .resolve(name, &ScopeSet::new())
+                .unwrap_or_else(|| name.clone());
+            CoreExprKind::Define {
+                name: renamed_name,
+                value: Rc::new(rename_expr(value, env)),
+            }
+        }
 
         CoreExprKind::App { func, args } => CoreExprKind::App {
             func: Rc::new(rename_expr(func, env)),

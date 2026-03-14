@@ -33,6 +33,9 @@ pub struct LambdaInfo {
     /// Variables bound in *this* lambda's scope that are mutated by `set!`
     /// anywhere reachable from this lambda body (including nested lambdas).
     pub mutated_bindings: HashSet<Symbol>,
+    /// Names introduced by internal `define` forms in this lambda's body.
+    /// These behave like `letrec*` bindings scoped to the lambda body.
+    pub internal_defines: Vec<Symbol>,
 }
 
 /// The complete output of Pass 1.
@@ -107,7 +110,21 @@ fn collect(
             *counter += 1;
 
             // Collect the parameter names bound by this lambda.
-            let bound: HashSet<Symbol> = formals_names(params).into_iter().collect();
+            let mut bound: HashSet<Symbol> = formals_names(params).into_iter().collect();
+
+            // Scan body for internal defines — these are `letrec*`-scoped bindings.
+            let internal_defines = collect_internal_define_names(body);
+            for name in &internal_defines {
+                bound.insert(name.clone());
+            }
+
+            // Internal defines are assigned after initialization (letrec* semantics),
+            // so mark them as mutated. This ensures they get MutableCell boxing when
+            // captured by nested lambdas (including their own value expressions,
+            // which is essential for recursive internal defines).
+            for name in &internal_defines {
+                info.all_mutated.insert(name.clone());
+            }
 
             // Extend the outer scope chain with this lambda's bindings.
             let mut chain: Vec<(&NodeId, &HashSet<Symbol>)> = outer_bindings.to_vec();
@@ -132,6 +149,11 @@ fn collect(
             let mut free_sorted = free.clone();
             free_sorted.sort();
             entry.free_vars = free_sorted;
+            entry.internal_defines = internal_defines.clone();
+            // Also mark internal defines in this lambda's own mutated_bindings.
+            for name in &internal_defines {
+                entry.mutated_bindings.insert(name.clone());
+            }
 
             // Return free vars to the caller (they may be free in outer lambdas too).
             free.into_iter().collect()
@@ -175,6 +197,26 @@ fn collect(
 
         CoreExprKind::Import { .. } | CoreExprKind::Expand { .. } => HashSet::new(),
     }
+}
+
+/// Scan the body of a lambda for internal `define` names.
+/// Only considers direct children and one level of `Begin` wrapping.
+fn collect_internal_define_names(body: &[CoreExpr]) -> Vec<Symbol> {
+    let mut names = Vec::new();
+    for expr in body {
+        match &expr.kind {
+            CoreExprKind::Define { name, .. } => names.push(name.clone()),
+            CoreExprKind::Begin(exprs) => {
+                for e in exprs {
+                    if let CoreExprKind::Define { name, .. } = &e.kind {
+                        names.push(name.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 /// Extract all parameter names from a `Formals`.

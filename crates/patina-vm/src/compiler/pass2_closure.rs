@@ -115,13 +115,15 @@ pub struct ClosedLambda {
     /// Variables captured from the enclosing scope, in slot order.
     /// Slot `i` → `capture_list[i]`.
     pub capture_list: Vec<Symbol>,
-    /// Parameters that must be boxed (wrapped in `MutableCell`) on entry
-    /// because they are both mutated and captured.
+    /// Parameters (and internal defines) that must be boxed (wrapped in `MutableCell`)
+    /// on entry because they are both mutated and captured.
     pub boxed_params: HashSet<Symbol>,
     /// Body after closure conversion.
     pub body: Vec<ClosedExpr>,
     /// Monotonic id assigned by Pass 1.
     pub node_id: NodeId,
+    /// Names introduced by internal `define` forms, treated as local bindings.
+    pub internal_defines: Vec<Symbol>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -273,26 +275,26 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
 
             let (param_names, rest_param) = flatten_formals(params);
 
+            // Internal defines from Pass 1.
+            let internal_defines: Vec<Symbol> = lambda_info
+                .map(|i| i.internal_defines.clone())
+                .unwrap_or_default();
+
             // Params that need boxing: mutated AND captured by some nested lambda.
             // We use `all_mutated` as an over-approximation (safe: only costs a box).
             let mutated_params: HashSet<Symbol> = lambda_info
                 .map(|i| i.mutated_bindings.clone())
                 .unwrap_or_default();
-            // A param needs boxing only if it's in the lambda's own mutated set
-            // AND it appears as a free var somewhere (i.e. it will be captured).
-            // Conservative: box any param in `mutated_bindings` that is also captured.
-            let captured_names: HashSet<Symbol> = capture_list.iter().cloned().collect();
-            // Actually: a param is boxed if it's mutated AND it escapes into a nested lambda.
-            // Use mutated_bindings from the lambda's own info.
+            // Box any param or internal define in `mutated_bindings`.
             let boxed_params: HashSet<Symbol> = param_names
                 .iter()
+                .chain(internal_defines.iter())
                 .filter(|n| mutated_params.contains(*n))
                 .cloned()
                 .collect();
-            let _ = captured_names; // Used above for clarity; may use in future.
 
             // Build local locs: param → Local or LocalBoxed.
-            let local_locs: Vec<(Symbol, VarLoc)> = param_names
+            let mut local_locs: Vec<(Symbol, VarLoc)> = param_names
                 .iter()
                 .map(|n| {
                     let loc = if boxed_params.contains(n) {
@@ -304,7 +306,17 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
                 })
                 .collect();
 
-            // Scope chain: closure slots (outer) then params (inner, shadow).
+            // Add internal defines as local bindings too.
+            for name in &internal_defines {
+                let loc = if boxed_params.contains(name) {
+                    VarLoc::LocalBoxed
+                } else {
+                    VarLoc::Local
+                };
+                local_locs.push((name.clone(), loc));
+            }
+
+            // Scope chain: closure slots (outer) then params + internal defines (inner, shadow).
             ctx.scopes.push(closure_locs);
             ctx.scopes.push(local_locs);
             let converted_body: Vec<ClosedExpr> = body.iter().map(|e| convert(e, ctx)).collect();
@@ -318,6 +330,7 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
                 boxed_params,
                 body: converted_body,
                 node_id,
+                internal_defines,
             }))
         }
 
@@ -331,10 +344,23 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
             ClosedExpr::Begin(exprs.iter().map(|e| convert(e, ctx)).collect())
         }
 
-        CoreExprKind::Define { name, value } => ClosedExpr::Define {
-            name: name.clone(),
-            value: Box::new(convert(value, ctx)),
-        },
+        CoreExprKind::Define { name, value } => {
+            let converted_val = convert(value, ctx);
+            match ctx.lookup(name) {
+                VarLoc::Local => ClosedExpr::SetLocal {
+                    var: name.clone(),
+                    value: Box::new(converted_val),
+                },
+                VarLoc::LocalBoxed => ClosedExpr::WriteLocalCell {
+                    var: name.clone(),
+                    value: Box::new(converted_val),
+                },
+                _ => ClosedExpr::Define {
+                    name: name.clone(),
+                    value: Box::new(converted_val),
+                },
+            }
+        }
 
         CoreExprKind::App { func, args } => ClosedExpr::App {
             func: Box::new(convert(func, ctx)),
