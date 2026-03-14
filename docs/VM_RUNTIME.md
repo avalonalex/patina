@@ -1,0 +1,356 @@
+# Patina VM: Runtime Design
+
+**Status:** Implemented — Phase 2A complete
+**See also:** [VM_ISA.md](./VM_ISA.md), [VM_COMPILER.md](./VM_COMPILER.md), [VM_DECISIONS.md](./VM_DECISIONS.md)
+
+---
+
+## 1. Overview
+
+The runtime executes bytecode produced by the compiler. It consists of:
+
+1. **`VmState`** — the complete execution state
+2. **Execution loop** — fetch-decode-execute cycle
+3. **Control primitives** — continuations, exceptions, dynamic-wind, values
+4. **Library loading** — R7RS library support
+
+The runtime reuses `TaggedValue`, `SharedHeap`, and `patina-primitives` directly.
+No value conversion is needed.
+
+---
+
+## 2. Core Data Structures
+
+### 2.1 `CallFrame`
+
+```rust
+#[derive(Clone)]   // ← non-negotiable; required for stack-snapshot continuations
+pub struct CallFrame {
+    pub code_id:       CodeObjectId,    // index into VmState::code_store
+    pub pc:            usize,           // program counter
+    pub register_base: usize,           // offset into VmState::registers
+    pub num_regs:      u16,             // register window size
+    pub closure:       Option<HeapIndex>, // heap index of VmClosure (if any)
+    pub return_reg:    Reg,             // where to write result in caller
+}
+```
+
+Code objects are looked up in `VmState::code_store` by `CodeObjectId`, not
+stored directly in the frame.
+
+### 2.2 `VmState`
+
+The complete runtime state.
+
+```rust
+pub struct VmState {
+    /// Flat register array. Each CallFrame owns a slice via register_base + num_regs.
+    pub registers: Vec<TaggedValue>,
+
+    /// Call stack. frames.last() is the currently executing frame.
+    pub frames: Vec<CallFrame>,
+
+    /// Side channel for multiple return values (values / call-with-values).
+    pub value_buffer: Vec<TaggedValue>,
+
+    /// Prompt stack for delimited continuations.
+    pub prompt_stack: Vec<PromptFrame>,
+
+    /// Dynamic-wind records, outermost first.
+    pub dynamic_winds: Vec<DynamicWindRecord>,
+
+    /// Exception handler stack (with-exception-handler).
+    pub exception_handlers: Vec<ExceptionHandler>,
+
+    /// Compiled code objects, keyed by ID.
+    pub code_store: HashMap<CodeObjectId, Rc<CodeObject>>,
+
+    /// Global environment.
+    pub globals: Rc<Environment>,
+
+    /// Shared heap (pairs, strings, closures, etc.).
+    pub heap: SharedHeap,
+
+    /// Primitive function dispatch.
+    pub primitive_registry: Rc<PrimitiveRegistry>,
+
+    /// Full continuation side table (avoids circular deps with patina-core).
+    pub continuation_store: HashMap<u64, Rc<VmContinuation>>,
+
+    /// Delimited continuation side table.
+    pub delimited_continuation_store: HashMap<u64, Rc<VmDelimitedContinuation>>,
+
+    /// Monotonic counter for continuation IDs.
+    pub next_cont_id: u64,
+
+    /// Optional instruction-level tracer.
+    pub tracer: Option<TracerHandle>,
+
+    /// Library registries for library loading.
+    pub library_registry: Option<Rc<RefCell<LibraryRegistry>>>,
+    pub loader_registry: Option<Rc<RefCell<LibraryLoaderRegistry>>>,
+}
+```
+
+### 2.3 `PromptFrame`
+
+```rust
+#[derive(Clone)]
+pub struct PromptFrame {
+    pub tag:                TaggedValue,
+    pub stack_depth:        usize,
+    pub handler:            TaggedValue,
+    pub dst:                Reg,
+    pub dynamic_wind_depth: usize,
+}
+```
+
+### 2.4 `DynamicWindRecord`
+
+```rust
+#[derive(Clone)]
+pub struct DynamicWindRecord {
+    pub before:      TaggedValue,
+    pub after:       TaggedValue,
+    pub stack_depth: usize,       // frames.len() at installation
+}
+```
+
+### 2.5 `ExceptionHandler`
+
+```rust
+pub struct ExceptionHandler {
+    pub handler:       TaggedValue,
+    pub dynamic_winds: Vec<DynamicWindRecord>,
+    pub stack_depth:   usize,
+}
+```
+
+Pushed by `with-exception-handler`, popped on thunk return. Exception handlers
+are captured/restored by `call/cc`.
+
+### 2.6 Continuation Objects
+
+```rust
+pub struct VmContinuation {
+    pub frames:             Vec<CallFrame>,
+    pub dynamic_winds:      Vec<DynamicWindRecord>,
+    pub prompt_stack:       Vec<PromptFrame>,
+    pub exception_handlers: Vec<ExceptionHandler>,
+    pub registers:          Vec<TaggedValue>,
+    pub deliver_reg:        Reg,    // where to write value on invocation
+}
+
+pub struct VmDelimitedContinuation {
+    pub frames:          Vec<CallFrame>,
+    pub dynamic_winds:   Vec<DynamicWindRecord>,
+    pub registers:       Vec<TaggedValue>,
+    pub base_at_capture: usize,
+}
+```
+
+**Storage:** Continuations are stored in **side tables** on VmState
+(`continuation_store`, `delimited_continuation_store`), not directly on the heap.
+Opaque handles (`VmContinuationRef(u64)`, `VmDelimitedContinuationRef(u64)`)
+are stored as `HeapObjectData` variants. This avoids circular dependencies
+between `patina-core` and `patina-vm`.
+
+---
+
+## 3. Execution Loop
+
+### 3.1 Entry Point
+
+```rust
+pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue, VmError>
+```
+
+Allocates an initial frame and calls `run_loop_until(state, 0)`.
+
+### 3.2 Main Loop
+
+```rust
+fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue, VmError>
+```
+
+Runs `dispatch_one_instruction()` in a loop until `frames.len() == exit_depth`.
+Catchable errors are routed through exception handlers via `vm_raise_value()`.
+
+### 3.3 Instruction Dispatch
+
+```rust
+fn dispatch_one_instruction(
+    state: &mut VmState,
+    exit_depth: usize,
+) -> Result<Option<TaggedValue>, VmError>
+```
+
+Returns `Ok(Some(val))` to exit the loop, `Ok(None)` to continue.
+
+### 3.4 Register Access
+
+```rust
+impl VmState {
+    pub fn reg(&self, r: Reg) -> TaggedValue;
+    pub fn set_reg(&mut self, r: Reg, val: TaggedValue);
+}
+```
+
+Both use `frame.register_base + r` to index into the flat register array.
+
+---
+
+## 4. Call and Return
+
+### 4.1 Call Dispatch Order
+
+When a `Call` or `TailCall` instruction is executed:
+
+1. **VM control primitive check** — `vm_control_primitive()` detects if the
+   function is a known control primitive (continuations, exceptions, values,
+   dynamic-wind). If so, dispatch via `handle_control_primitive()`.
+2. **Primitive call** — `try_call_primitive()` checks if it's a
+   `Procedure::Primitive` on the heap, calls it directly without pushing a frame.
+3. **Parameter call** — `try_call_parameter()` checks if it's a parameter object.
+4. **Continuation call** — `try_invoke_continuation()` checks if it's a
+   continuation object.
+5. **Closure call** — `call_closure()` resolves to `(code_id, free_vars)`,
+   checks arity, pushes a new frame.
+
+### 4.2 `call_closure`
+
+```rust
+fn call_closure(
+    state: &mut VmState,
+    closure_val: TaggedValue,
+    args: &[TaggedValue],
+    return_reg: u16,
+) -> Result<(), VmError>
+```
+
+- Looks up code object in `code_store`
+- Checks arity
+- Allocates register window for new frame
+- Copies args into callee parameter slots
+- Handles variadic rest-arg collection via `build_list()`
+
+### 4.3 Tail Call
+
+For `TailCall`, the current frame is reused:
+- Read all arg values into temporaries first
+- Pop current frame, free registers
+- Push new frame with callee's code
+- Write args to param slots
+
+### 4.4 Return
+
+On `Return { val }`:
+1. Read result value
+2. Pop current frame, free registers
+3. If at exit depth, return result
+4. Write result to caller's `return_reg`
+5. Run cleanup: `pop_resolved_prompts()`, `pop_exception_handlers()`,
+   `pop_resolved_winds()`
+
+### 4.5 Helper Functions
+
+- **`call_any()`** — dispatches to primitive, parameter, or closure; used by
+  control primitives for sub-calls
+- **`call_any_sync()`** — calls and waits for result (primitives return
+  immediately; closures run via `run_loop_until()`)
+- **`run_thunk()`** — calls a 0-arg closure to completion; used by dynamic-wind
+  and wind transitions
+
+---
+
+## 5. Control Primitives
+
+All continuation and exception operations are handled as VM control primitives,
+intercepted at call dispatch time.
+
+### 5.1 `VmControlPrimitive` Enum
+
+| Variant | Scheme form | Behavior |
+|---|---|---|
+| `DynamicWind` | `dynamic-wind` | Push wind record, run body, pop on return |
+| `CallWithContinuationPrompt` | `call-with-continuation-prompt` | Push prompt, run body thunk |
+| `AbortCurrentContinuation` | `abort-current-continuation` | Find prompt, capture delimited cont, unwind, call handler |
+| `CallWithCurrentContinuation` | `call/cc` | Snapshot full stack, deliver to proc |
+| `Values` | `values` | Store in `value_buffer`, return primary value |
+| `CallWithValues` | `call-with-values` | Clear buffer, run producer, unpack values, call consumer |
+| `WithExceptionHandler` | `with-exception-handler` | Push handler, run thunk, pop on return |
+| `Raise` | `raise` | Pop handler, unwind winds, push handler frame |
+| `RaiseContinuable` | `raise-continuable` | Like Raise but handler returns to raise site |
+| `Error` | `error` | Construct error object, then Raise |
+
+### 5.2 Exception Handling
+
+- `ExceptionHandler` stack on VmState, pushed/popped by `WithExceptionHandler`
+- `vm_raise_value()`: pops handler, unwinds dynamic-wind, pushes handler frame
+- `pop_exception_handlers()`: cleanup on normal thunk return
+- Error classification: `classify_error()` maps `VmError` →
+  `ExceptionKind` (FileError, ReadError, etc.)
+- Exception handlers captured/restored by `call/cc`
+
+### 5.3 Dynamic Wind
+
+- Wind records pushed by `DynamicWind` control primitive
+- `run_wind_transition()`: finds common prefix between current and target wind
+  stacks, runs `after` thunks for exiting (innermost first), then `before`
+  thunks for entering (outermost first)
+- `force_reenter` flag: full continuations always exit/re-enter all winds
+
+### 5.4 Values / Call-with-values
+
+- `Values` stores all args in `value_buffer` unconditionally
+- For single value, also writes to `dst` register directly
+- For multiple values, allocates a heap `Values` object for display
+- `CallWithValues` clears stale `value_buffer` before running producer,
+  then unpacks from buffer or from `#<values>` heap object
+
+### 5.5 Continuation Invocation
+
+**Full (call/cc):**
+1. Snapshot frames, registers, winds, prompts, exception handlers
+2. On invocation: run wind transitions, restore entire snapshot
+3. Deliver value to `deliver_reg`
+
+**Delimited (abort/prompt):**
+1. Find matching prompt by tag
+2. Capture frames `[prompt.stack_depth..]`, registers, winds
+3. Run wind exit thunks
+4. Unwind stack to prompt depth
+5. Call handler with `(value, continuation)`
+
+---
+
+## 6. GC Roots
+
+| Location | What it holds |
+|---|---|
+| `vm.registers` | All live register values |
+| Closure `free_vars` (on heap) | Captured variables |
+| `vm.value_buffer` | Multiple-value buffer |
+| `vm.prompt_stack[*].tag/handler` | Prompt tags and handlers |
+| `vm.dynamic_winds[*].before/after` | Wind thunks |
+| `vm.exception_handlers[*].handler` | Exception handlers |
+| `vm.globals` | All global bindings |
+| `vm.continuation_store` | Full continuation snapshots |
+| `vm.delimited_continuation_store` | Delimited continuation snapshots |
+| `CodeObject::constants` | Constant pools |
+
+Phase 2A uses `Rc` — cycles from `set-car!`/`set-cdr!` may leak.
+
+---
+
+## 7. Relationship to Existing Code
+
+| Existing component | VM usage |
+|---|---|
+| `TaggedValue` | Used as-is throughout — no conversion |
+| `SharedHeap` | Shared between tree-walker and VM |
+| `patina-primitives` | Called via `try_call_primitive()` and `CallPrimitive` |
+| `Environment` (globals) | Shared global environment |
+| `SourceLocation` / `SourceMap` | Stored in `CodeObject` for error messages |
+| `CpsExpr` / CPS transform | Not used — VM compiles direct-style |
+| `patina-tree-walker` | Unchanged; VM is an independent `Backend` impl |

@@ -2,6 +2,33 @@
 
 Major accomplishments and project milestones.
 
+## 2026-03-14: VM Backend 100% R7RS Compliance (1163/1163)
+
+**Phase 2A complete — VM backend matches tree-walker at 100% chibi R7RS test pass rate.**
+
+The `patina-vm` crate implements a register-based bytecode VM as a second `Backend` implementation. Both backends now achieve identical R7RS-small compliance.
+
+**Architecture:**
+- Register machine with flat closures and stack-snapshot continuations
+- 2 pre-passes (quasiquote expansion, alpha-rename) + 5-pass compiler pipeline
+- `CoreExpr → CodeObject` compilation, no CPS transform
+- Control primitives (call/cc, dynamic-wind, exceptions, values) intercepted at call dispatch
+- `TaggedValue` throughout — same type as tree-walker, no conversion
+
+**Compiler pipeline:** `quasiquote_expand → alpha_rename → analysis → closure_conversion → tail_marking → register_allocation → codegen`
+
+**Key debugging milestones:**
+- eval/environment/null-environment (+7 tests)
+- procedure? for continuations (+1 test)
+- nested quasiquote identifier→symbol fix (+2 tests)
+- alpha-rename pass for macro hygiene (+3 tests, -2 errors)
+- internal define scoping with letrec* semantics (+1 test)
+- stale value_buffer fix in call-with-values (+1 test)
+
+**Design docs:** `docs/VM_ISA.md`, `docs/VM_COMPILER.md`, `docs/VM_RUNTIME.md`, `docs/VM_DECISIONS.md`
+
+---
+
 ## 2026-03-05: O(1) Primitive Dispatch Fix (57% speedup)
 
 **Root cause found and fixed: 296-entry linear scan on every primitive call.**

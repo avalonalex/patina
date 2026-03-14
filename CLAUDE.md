@@ -79,6 +79,13 @@ cargo fmt
 - `docs/TEST_ORGANIZATION.md` — test structure and categories
 - `docs/reference_impls/` — notes on Chibi, Chez, Gauche reference implementations
 
+**VM backend docs (Phase 2A — complete):**
+- `docs/VM_DECISIONS.md` — settled architecture decisions (master reference)
+- `docs/VM_ISA.md` — instruction set architecture and semantics
+- `docs/VM_COMPILER.md` — 2 pre-passes + 5-pass compiler pipeline
+- `docs/VM_RUNTIME.md` — VmState, execution loop, control primitives
+- `docs/VM_TESTING.md` — testing layers and commands
+
 **Reference implementations:** chibi-scheme at `~/Project/reference/chibi-scheme`
 - `tests/r7rs-tests.scm` — comprehensive R7RS test suite
 - `lib/init-7.scm` — R7RS procedures implemented in Scheme

@@ -6,20 +6,22 @@ Documentation for **completed and implemented features** in Patina.
 
 | Document | Description |
 |----------|-------------|
-| [MACRO_SYSTEM.md](MACRO_SYSTEM.md) | Comprehensive macro system architecture (syntax-rules, hygiene, scope sets) |
+| [MACRO_SYSTEM.md](MACRO_SYSTEM.md) | Macro system architecture (syntax-rules, hygiene, scope sets) |
 | [TEST_ORGANIZATION.md](TEST_ORGANIZATION.md) | Test structure, running tests, and test guidelines |
 | [reference_impls/](reference_impls/) | Notes on reference Scheme implementations (Chibi, Chez, Gauche, Koka) |
 
-## Guidelines
+### VM Backend (Phase 2A — complete)
 
-This directory is for documentation of **implemented features only**.
-
-- **Planning docs** go in `PRD/phase1/` or `PRD/phase2/`
-- **Research docs** go in `PRD/` subdirectories
-- **Outdated docs** get archived to `PRD/ARCHIVE/`
+| Document | Description |
+|----------|-------------|
+| [VM_DECISIONS.md](VM_DECISIONS.md) | Settled architecture decisions (master reference) |
+| [VM_ISA.md](VM_ISA.md) | Instruction set architecture and semantics |
+| [VM_COMPILER.md](VM_COMPILER.md) | 2 pre-passes + 5-pass compiler pipeline |
+| [VM_RUNTIME.md](VM_RUNTIME.md) | VmState, execution loop, control primitives |
+| [VM_TESTING.md](VM_TESTING.md) | Testing layers and commands |
 
 ## Current Status
 
-Patina has achieved **100% R7RS-small compliance** (1159/1159 chibi r7rs-tests.scm passing).
-
-See `scheme_tests/reports/compatibility.md` for the latest test results.
+Both backends achieve **100% R7RS-small compliance**:
+- **Tree-walker:** 1163/1163 chibi r7rs-tests.scm passing
+- **VM backend:** 1163/1163 chibi r7rs-tests.scm passing
