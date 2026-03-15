@@ -1,7 +1,8 @@
-# Patina R7RS Compatibility Report
+# Patina R7RS Compatibility Report (Tree-Walker Backend)
 
-**Generated:** 2026-03-15 11:46:34
+**Generated:** 2026-03-15 11:53:51
 **Test Suite:** chibi-scheme r7rs-tests.scm
+**Backend:** Tree-Walker (CPS)
 
 ## Summary
 
@@ -11,8 +12,6 @@
 | ❌ Failed | 0 | 0.0% |
 | ⚠️ Error (crashed) | 0 | 0.0% |
 | **Total** | **1163** | **100%** |
-
-**Note:** "Error" means the test crashed before assertions could run (usually missing features like call/cc, guard).
 
 ## Section Breakdown
 
@@ -45,20 +44,8 @@
 
 ## Full Results
 
-See [results.txt](./results.txt) for complete test output.
+See [results_tree_walker.txt](./results_tree_walker.txt) for complete test output.
 
-## Notes
+## Comparison with VM
 
-This report tracks Patina's compatibility with the R7RS-small specification
-using the chibi-scheme test suite. The goal is to reach 100% compatibility
-with all R7RS-small features.
-
-### Known Limitations
-
-- `(scheme load)` library not yet implemented
-- See `docs/FEATURE_STATUS.md` for detailed compliance matrix
-
-### Next Steps
-
-See `docs/FEATURE_STATUS.md` for detailed R7RS compliance matrix and
-`PRD/phase1/IMPLEMENTATION_STATUS.md` for roadmap.
+Run `./scripts/run_chibi_tests.sh` to generate the default VM report for comparison.

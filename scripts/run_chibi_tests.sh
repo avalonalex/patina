@@ -39,7 +39,7 @@ echo "Results will be saved to: $RESULTS_FILE"
 echo ""
 
 # Run the tests and capture output
-# CPS evaluation is now the default (full continuation support)
+# VM backend is the default
 if "$PATINA_BIN" "$TEST_FILE" > "$RESULTS_FILE" 2>&1; then
     echo -e "${GREEN}Tests completed successfully${NC}"
 else

@@ -11,21 +11,21 @@ machine-parseable formats.
 
 ```bash
 # Trace every instruction to stderr
-patina --vm-trace script.scm
+patina --trace script.scm
 
 # Combine with dump to see bytecode first, then trace
-patina --vm-dump script.scm      # static disassembly
-patina --vm-trace script.scm     # dynamic execution trace
+patina --dump script.scm      # static disassembly
+patina --trace script.scm     # dynamic execution trace
 ```
 
 ### CLI: Dump bytecode without executing
 
 ```bash
 # From a file
-patina --vm-dump script.scm
+patina --dump script.scm
 
 # From stdin
-echo '(+ 1 2)' | patina --vm-dump
+echo '(+ 1 2)' | patina --dump
 ```
 
 ## Reading the Trace Output
@@ -40,7 +40,7 @@ Each line has the format:
 ### Example: Simple arithmetic
 
 ```
-$ echo '(+ 1 2)' > /tmp/t.scm && patina --vm-trace /tmp/t.scm
+$ echo '(+ 1 2)' > /tmp/t.scm && patina --trace /tmp/t.scm
 
 [0001] D=1 #102 pc=0   LoadGlobal   r1 <- globals[+]  (base=0 regs=4)
        r1[1] = #<prim>  (was ())
@@ -186,7 +186,7 @@ Watchpoint output:
 For programmatic analysis (e.g., piping to `jq` or reading from Claude):
 
 ```bash
-patina --vm-trace script.scm 2>&1 | patina-trace-to-jsonl
+patina --trace script.scm 2>&1 | patina-trace-to-jsonl
 ```
 
 Or use `format_jsonl()` from the library:
@@ -207,7 +207,7 @@ use it:
 ### Step 1: Dump the bytecode
 
 ```bash
-patina --vm-dump failing_test.scm
+patina --dump failing_test.scm
 ```
 
 Identify the CodeObject that holds the MutableCell (look for `AllocCell`).

@@ -12,22 +12,23 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut filename: Option<String> = None;
-    let mut use_vm = false;
-    let mut vm_dump = false;
-    let mut vm_trace = false;
+    let mut use_tree_walker = false;
+    let mut dump = false;
+    let mut trace = false;
 
     for arg in args.iter().skip(1) {
         if arg == "--help" || arg == "-h" {
             print_help();
             process::exit(0);
+        } else if arg == "--tree-walker" {
+            use_tree_walker = true;
+        } else if arg == "--dump" || arg == "--vm-dump" {
+            dump = true;
+        } else if arg == "--trace" || arg == "--vm-trace" {
+            trace = true;
         } else if arg == "--vm" {
-            use_vm = true;
-        } else if arg == "--vm-dump" {
-            use_vm = true;
-            vm_dump = true;
-        } else if arg == "--vm-trace" {
-            use_vm = true;
-            vm_trace = true;
+            // Accept --vm for backwards compatibility (it's now the default).
+            // No-op.
         } else if !arg.starts_with('-') {
             filename = Some(arg.clone());
         } else {
@@ -38,21 +39,21 @@ fn main() {
     }
 
     if let Some(file) = filename {
-        if vm_dump {
+        if dump {
             dump_bytecode_file(&file);
-        } else if vm_trace {
+        } else if trace {
             run_script_vm_trace(&file);
-        } else if use_vm {
-            run_script_vm(&file);
+        } else if use_tree_walker {
+            run_script_tree_walker(&file);
         } else {
-            run_script(&file);
+            run_script_vm(&file);
         }
-    } else if vm_dump {
+    } else if dump {
         dump_bytecode_stdin();
-    } else if use_vm {
-        run_repl_vm();
+    } else if use_tree_walker {
+        run_repl_tree_walker();
     } else {
-        run_repl();
+        run_repl_vm();
     }
 }
 
@@ -60,20 +61,19 @@ fn print_help() {
     eprintln!("Usage: patina [OPTIONS] [FILE]");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --help     Show this help message");
-    eprintln!("  --vm       Use the VM backend (experimental)");
-    eprintln!("  --vm-dump  Compile to bytecode and disassemble (no execution)");
-    eprintln!("  --vm-trace Execute with instruction-level tracing to stderr");
+    eprintln!("  --help         Show this help message");
+    eprintln!("  --tree-walker  Use the tree-walking backend instead of the VM");
+    eprintln!("  --dump         Compile to bytecode and disassemble (no execution)");
+    eprintln!("  --trace        Execute with instruction-level tracing to stderr");
     eprintln!();
     eprintln!("If FILE is provided, run it as a script.");
     eprintln!("Otherwise, start an interactive REPL.");
     eprintln!();
-    eprintln!("Features:");
-    eprintln!("  - Full R7RS continuation support (call/cc, dynamic-wind)");
-    eprintln!("  - Exception handling (guard, raise)");
+    eprintln!("The default backend is the register-based bytecode VM.");
+    eprintln!("Use --tree-walker to switch to the CPS tree-walking interpreter.");
 }
 
-fn run_script(filename: &str) {
+fn run_script_tree_walker(filename: &str) {
     let code = match fs::read_to_string(filename) {
         Ok(content) => content,
         Err(e) => {
@@ -295,7 +295,7 @@ fn eval_program_resilient_vm(
     result
 }
 
-fn run_repl() {
+fn run_repl_tree_walker() {
     match Repl::new() {
         Ok(mut repl) => {
             if let Err(e) = repl.run() {
@@ -318,9 +318,11 @@ fn run_repl_vm() {
     let interp = Interpreter::new(VmBackend::new());
     let heap = interp.backend().global_env().heap().clone();
 
-    println!("Patina Scheme (VM backend)");
+    println!("Patina Scheme R7RS Interpreter");
     println!();
     println!("Features:");
+    println!("  - Full R7RS continuation support (call/cc, dynamic-wind)");
+    println!("  - Exception handling (guard, raise)");
     println!("  - Multi-line editing with auto-indentation");
     println!("  - Syntax highlighting");
     println!("  - (vm-compile <expr>) -- disassemble bytecode without executing");
@@ -338,8 +340,8 @@ fn run_repl_vm() {
         }
     };
 
-    run_repl_loop(&mut editor, "patina/vm> ", |line| {
-        // Special form: (vm-compile <expr>) — compile and disassemble without executing.
+    run_repl_loop(&mut editor, "patina> ", |line| {
+        // Special form: (vm-compile <expr>) -- compile and disassemble without executing.
         if let Some(rest) = line.strip_prefix("(vm-compile ") {
             let inner = rest.trim_end().strip_suffix(')').unwrap_or(rest.trim_end());
             return match interp.backend().disasm_source(inner) {

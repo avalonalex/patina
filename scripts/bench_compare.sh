@@ -47,8 +47,8 @@ run_bench() {
 EOF
 
     local result
-    if [ "$flag" = "--vm" ]; then
-        result=$($PATINA --vm "$tmp" 2>/dev/null)
+    if [ "$flag" = "--tree-walker" ]; then
+        result=$($PATINA --tree-walker "$tmp" 2>/dev/null)
     else
         result=$($PATINA "$tmp" 2>/dev/null)
     fi
@@ -64,8 +64,8 @@ compare() {
 
     printf "%-30s" "$label"
 
-    local tw_ms=$(run_bench "" "$setup" "$expr")
-    local vm_ms=$(run_bench "--vm" "$setup" "$expr")
+    local tw_ms=$(run_bench "--tree-walker" "$setup" "$expr")
+    local vm_ms=$(run_bench "" "$setup" "$expr")
 
     if [ -z "$tw_ms" ] || [ -z "$vm_ms" ]; then
         printf "  ERROR\n"

@@ -15,7 +15,7 @@ Patina is an educational and experimental Scheme interpreter with ambitious goal
 
 Our primary focus is complete conformance to the R7RS-small specification. We validate against the comprehensive [Chibi Scheme](https://github.com/ashinn/chibi-scheme) test suite maintained by Alex Shinn, chairman of the R7RS Small Language committee.
 
-**Current status**: 100% of chibi r7rs-tests.scm passing (1159/1159 tests). Phase 1 complete, now in cleanup phase before Phase 2 (VM backend).
+**Current status**: 100% of chibi r7rs-tests.scm passing (1163/1163 tests) on both backends.
 
 ### Modular Architecture
 
@@ -45,17 +45,18 @@ patina-ir           →  CoreExpr intermediate representation
 patina-macros       →  Hygienic macro expansion (scope sets)
 patina-runtime      →  Core types, Backend trait, Library system
 patina-pipeline     →  Pipeline orchestration
-patina-tree-walker  →  Tree-walking backend (current)
+patina-vm           →  Register-based bytecode VM (default backend)
+patina-tree-walker  →  CPS tree-walking backend (--tree-walker)
 patina-interpreter  →  High-level API
 patina-repl         →  Terminal REPL
 patina-tests        →  Integration tests (~1400 tests)
 ```
 
-### Experimental Goals
+### Future Goals
 
 The architecture is designed to support future exploration:
 
-- Alternative backends (bytecode VM, JIT compilation)
+- `syntax-case` procedural macros
 - Nanopass-style optimization passes
 - Language extensions (gradual typing, reactive concurrency, logic programming)
 
@@ -75,10 +76,17 @@ Patina prioritizes clarity over cleverness:
 ```bash
 # Build and run the REPL
 cargo build --release
-cargo run --release
+./target/release/patina
 
-# Run a Scheme script
+# Run a Scheme script (uses VM backend by default)
 ./target/release/patina script.scm
+
+# Use the tree-walking backend instead
+./target/release/patina --tree-walker script.scm
+
+# Disassemble bytecode / trace execution
+./target/release/patina --dump script.scm
+./target/release/patina --trace script.scm
 
 # Run tests
 cargo test
@@ -170,7 +178,8 @@ patina/
 │   ├── patina-frontend/     # Lexer, Parser, Desugarer
 │   ├── patina-macros/       # Macro expansion
 │   ├── patina-pipeline/     # Pipeline orchestration
-│   ├── patina-tree-walker/  # Tree-walking backend
+│   ├── patina-vm/           # Register-based bytecode VM (default)
+│   ├── patina-tree-walker/  # CPS tree-walking backend
 │   ├── patina-interpreter/  # High-level API
 │   ├── patina-repl/         # Terminal REPL
 │   └── patina-tests/        # Integration tests (~1400 tests)

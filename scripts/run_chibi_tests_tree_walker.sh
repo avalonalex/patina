@@ -1,6 +1,6 @@
 #!/bin/bash
-# Run chibi-scheme r7rs test suite with Patina VM backend
-# Generates compatibility report (parallel to run_chibi_tests.sh for tree-walker)
+# Run chibi-scheme r7rs test suite with Patina tree-walker backend
+# Generates compatibility report (parallel to run_chibi_tests.sh which uses the default VM)
 
 set -e
 
@@ -14,8 +14,8 @@ NC='\033[0m' # No Color
 PATINA_BIN="./target/release/patina"
 TEST_FILE="scheme_tests/chibi/r7rs-tests.scm"
 REPORT_DIR="scheme_tests/reports"
-RESULTS_FILE="${REPORT_DIR}/results_vm.txt"
-COMPAT_REPORT="${REPORT_DIR}/compatibility_vm.md"
+RESULTS_FILE="${REPORT_DIR}/results_tree_walker.txt"
+COMPAT_REPORT="${REPORT_DIR}/compatibility_tree_walker.md"
 
 # Check if binary exists
 if [ ! -f "$PATINA_BIN" ]; then
@@ -33,13 +33,13 @@ fi
 # Create reports directory if it doesn't exist
 mkdir -p "$REPORT_DIR"
 
-echo -e "${GREEN}Running chibi-scheme r7rs test suite (VM backend)...${NC}"
+echo -e "${GREEN}Running chibi-scheme r7rs test suite (tree-walker backend)...${NC}"
 echo "Test file: $TEST_FILE"
 echo "Results will be saved to: $RESULTS_FILE"
 echo ""
 
-# Run the tests with --vm flag and capture output
-if "$PATINA_BIN" --vm "$TEST_FILE" > "$RESULTS_FILE" 2>&1; then
+# Run the tests with --tree-walker flag and capture output
+if "$PATINA_BIN" --tree-walker "$TEST_FILE" > "$RESULTS_FILE" 2>&1; then
     echo -e "${GREEN}Tests completed successfully${NC}"
 else
     echo -e "${YELLOW}Tests completed with errors (exit code: $?)${NC}"
@@ -131,11 +131,11 @@ SECTION_BREAKDOWN=$(awk '
 
 # Generate markdown report
 cat > "$COMPAT_REPORT" << EOF
-# Patina R7RS Compatibility Report (VM Backend)
+# Patina R7RS Compatibility Report (Tree-Walker Backend)
 
 **Generated:** $(date '+%Y-%m-%d %H:%M:%S')
 **Test Suite:** chibi-scheme r7rs-tests.scm
-**Backend:** VM (experimental)
+**Backend:** Tree-Walker (CPS)
 
 ## Summary
 
@@ -183,17 +183,16 @@ cat >> "$COMPAT_REPORT" << EOF
 
 ## Full Results
 
-See [results_vm.txt](./results_vm.txt) for complete test output.
+See [results_tree_walker.txt](./results_tree_walker.txt) for complete test output.
 
-## Comparison with Tree-Walker
+## Comparison with VM
 
-Run \`./scripts/run_chibi_tests.sh\` to generate the tree-walker report for comparison.
-The goal is for the VM backend to reach parity: 1159/1159 tests passing.
+Run \`./scripts/run_chibi_tests.sh\` to generate the default VM report for comparison.
 EOF
 
 echo -e "${GREEN}Report generated: $COMPAT_REPORT${NC}"
 echo ""
-echo "=== Summary (VM Backend) ==="
+echo "=== Summary (Tree-Walker Backend) ==="
 PASS_PCT=$(awk -v p="$PASS_COUNT" -v t="$TRUE_TOTAL" 'BEGIN {printf "%.1f", (p/t)*100}')
 FAIL_PCT=$(awk -v f="$FAIL_COUNT" -v t="$TRUE_TOTAL" 'BEGIN {printf "%.1f", (f/t)*100}')
 ERROR_PCT=$(awk -v e="$ERROR_COUNT" -v t="$TRUE_TOTAL" 'BEGIN {printf "%.1f", (e/t)*100}')

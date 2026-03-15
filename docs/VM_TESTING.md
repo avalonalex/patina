@@ -8,8 +8,8 @@
 
 ```
 Layer 4: R7RS compliance (chibi-scheme r7rs-tests.scm)
-            ↑ ./scripts/run_chibi_tests_vm.sh
-Layer 3: Shared integration tests (tree-walker tests reused on VM)
+            ↑ ./scripts/run_chibi_tests.sh (VM, default)
+Layer 3: Shared integration tests
             ↑ cargo test --package patina-tests --features vm-backend
 Layer 2: VM-specific unit tests
             ↑ cargo test --package patina-vm
@@ -20,11 +20,11 @@ Layer 1: Crate-level unit tests (compiler passes, runtime)
 ## 2. Running Tests
 
 ```bash
-# VM chibi R7RS compliance (primary verification)
-cargo build --release && ./scripts/run_chibi_tests_vm.sh
-
-# Tree-walker chibi R7RS compliance
+# R7RS compliance — VM (default backend, primary verification)
 cargo build --release && ./scripts/run_chibi_tests.sh
+
+# R7RS compliance — tree-walker
+cargo build --release && ./scripts/run_chibi_tests_tree_walker.sh
 
 # VM acceptance (shared integration tests)
 cargo test --package patina-tests --features vm-backend
@@ -43,11 +43,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 ### Layer 4 — R7RS Compliance
 
-`./scripts/run_chibi_tests_vm.sh` runs the chibi `r7rs-tests.scm` suite
-(1163 tests) against the VM backend. This is the primary correctness gate.
-
-The tree-walker is the oracle: any expression where the tree-walker produces
-a result, the VM must produce the same result.
+`./scripts/run_chibi_tests.sh` runs the chibi `r7rs-tests.scm` suite
+(1163 tests) against the VM backend (the default). This is the primary
+correctness gate. `./scripts/run_chibi_tests_tree_walker.sh` runs the same suite
+against the tree-walker backend.
 
 ### Layer 3 — Shared Integration Tests
 

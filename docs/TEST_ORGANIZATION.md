@@ -255,11 +255,11 @@ The macro system has the highest inline test density due to the complexity of pa
 - Feature tests grouped by functionality
 
 ### Scalable for Multi-Backend
-When we add new backends (VM, JIT):
+Backend crates:
 ```
 crates/
-├── patina-tree-walker/    # Tree-walking backend (current)
-├── patina-vm/             # Bytecode VM backend (future)
+├── patina-vm/             # Register-based bytecode VM (default)
+├── patina-tree-walker/    # CPS tree-walking backend (--tree-walker)
 ├── patina-jit/            # JIT compiler backend (future)
 └── patina-tests/          # Tests ALL backends
     └── tests/
