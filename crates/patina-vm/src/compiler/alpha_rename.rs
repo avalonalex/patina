@@ -381,14 +381,16 @@ mod tests {
         let renamed = alpha_rename(&expr);
         match &renamed.kind {
             CoreExprKind::Lambda { body, params, .. } => {
-                let Formals::Fixed(ps) = params else { panic!() };
+                let Formals::Fixed(ps) = params else {
+                    panic!("expected Fixed formals")
+                };
                 let param_name = ps[0].name.as_ref();
                 match &body[0].kind {
                     CoreExprKind::Var { name, .. } => assert_eq!(name.as_ref(), param_name),
-                    _ => panic!(),
+                    _ => panic!("expected Var in body"),
                 }
             }
-            _ => panic!(),
+            _ => panic!("expected Lambda"),
         }
     }
 
@@ -528,10 +530,12 @@ mod tests {
 
         let outer_param = match &renamed.kind {
             CoreExprKind::Lambda { params, .. } => {
-                let Formals::Fixed(ps) = params else { panic!() };
+                let Formals::Fixed(ps) = params else {
+                    panic!("expected Fixed formals")
+                };
                 ps[0].name.to_string()
             }
-            _ => panic!(),
+            _ => panic!("expected Lambda"),
         };
 
         let inner_var = find_inner_body_var(&renamed).unwrap();

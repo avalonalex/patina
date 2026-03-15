@@ -429,12 +429,6 @@ fn make_app(name: &str, args: Vec<CoreExpr>) -> CoreExpr {
     })
 }
 
-/// Build `(cons a b)`.
-#[allow(dead_code)]
-fn make_cons(car: CoreExpr, cdr: CoreExpr) -> CoreExpr {
-    make_app("cons", vec![car, cdr])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

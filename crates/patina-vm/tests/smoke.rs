@@ -59,6 +59,6 @@ fn vm_state_basic() {
     assert_eq!(base, 0);
     assert_eq!(state.registers.len(), 4);
 
-    state.free_top_registers(0, 4);
+    state.free_top_registers(0);
     assert_eq!(state.registers.len(), 0);
 }

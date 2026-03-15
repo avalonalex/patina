@@ -436,7 +436,7 @@ mod tests {
         let info = Pass1Analysis::run(&expr);
         let closed = Pass2Closure::run(&expr, &info);
         let ClosedExpr::Lambda(lam) = closed else {
-            panic!()
+            panic!("expected Lambda")
         };
         assert!(matches!(&lam.body[0], ClosedExpr::LocalRef(n) if n.as_ref() == "x"));
         assert!(lam.capture_list.is_empty());
@@ -450,7 +450,7 @@ mod tests {
         let info = Pass1Analysis::run(&expr);
         let closed = Pass2Closure::run(&expr, &info);
         let ClosedExpr::Lambda(lam) = closed else {
-            panic!()
+            panic!("expected Lambda")
         };
         // y is global — must NOT be in capture_list.
         assert!(
@@ -475,11 +475,11 @@ mod tests {
         let info = Pass1Analysis::run(&outer);
         let closed = Pass2Closure::run(&outer, &info);
         let ClosedExpr::Lambda(outer_lam) = closed else {
-            panic!()
+            panic!("expected Lambda (outer)")
         };
         assert!(outer_lam.capture_list.is_empty());
         let ClosedExpr::Lambda(inner_lam) = &outer_lam.body[0] else {
-            panic!()
+            panic!("expected Lambda (inner)")
         };
         assert!(inner_lam.capture_list.contains(&Rc::<str>::from("x")));
         assert!(matches!(&inner_lam.body[0], ClosedExpr::ClosureRef { .. }));
@@ -499,7 +499,7 @@ mod tests {
         let info = Pass1Analysis::run(&outer);
         let closed = Pass2Closure::run(&outer, &info);
         let ClosedExpr::Lambda(outer_lam) = closed else {
-            panic!()
+            panic!("expected Lambda")
         };
         // x is in outer's boxed_params
         assert!(outer_lam.boxed_params.contains(&Rc::<str>::from("x")));

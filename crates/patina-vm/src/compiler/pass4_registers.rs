@@ -554,13 +554,13 @@ mod tests {
         let expr = lambda(vec!["x"], vec![app(var("f"), vec![var("x"), var("x")])]);
         let regged = pipeline(&expr);
         let RegExprKind::Lambda(lam) = &regged.kind else {
-            panic!();
+            panic!("expected Lambda");
         };
         let RegExprKind::App {
             arg_tmps, is_tail, ..
         } = &lam.body[0].kind
         else {
-            panic!();
+            panic!("expected App in body");
         };
         assert!(*is_tail);
         // Each arg must have a distinct temp register.
@@ -576,10 +576,10 @@ mod tests {
         let outer = lambda(vec!["x"], vec![inner]);
         let regged = pipeline(&outer);
         let RegExprKind::Lambda(outer_lam) = &regged.kind else {
-            panic!();
+            panic!("expected Lambda (outer)");
         };
         let RegExprKind::Lambda(inner_lam) = &outer_lam.body[0].kind else {
-            panic!();
+            panic!("expected Lambda (inner)");
         };
         // inner frame: y=r0, plus result slot
         assert!(inner_lam.num_regs >= 1);

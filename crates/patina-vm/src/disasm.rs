@@ -48,7 +48,7 @@ fn disassemble_one(
     let mut nested_ids: Vec<CodeObjectId> = Vec::new();
 
     for (pc, instr) in co.instructions.iter().enumerate() {
-        let line = format_instruction(pc, instr, &mut nested_ids);
+        let line = format_instruction(instr, &mut nested_ids);
         println!("{}│  {:>4}  {}", indent, pc, line);
     }
 
@@ -63,12 +63,7 @@ fn disassemble_one(
     }
 }
 
-pub fn format_instruction(
-    pc: usize,
-    instr: &Instruction,
-    nested: &mut Vec<CodeObjectId>,
-) -> String {
-    let _ = pc;
+pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -> String {
     match instr {
         Instruction::LoadImmediate { dst, val } => {
             format!("LoadImm      r{} ← {:?}", dst, val)

@@ -349,7 +349,7 @@ impl StepTracer {
         // Emit Instr event
         if self.filter.accepts_code(code_id.0) && self.filter.accepts_kind(TraceEventKind::Instr) {
             let mut dummy = Vec::new();
-            let text = crate::disasm::format_instruction(pc, instr, &mut dummy);
+            let text = crate::disasm::format_instruction(instr, &mut dummy);
             let event = TraceEvent::Instr {
                 step: self.step,
                 depth,

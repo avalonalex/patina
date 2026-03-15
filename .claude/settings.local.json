@@ -25,7 +25,8 @@
       "Bash(/tmp/test_capture2.scm:*)",
       "Bash(/tmp/test_fix.scm:*)",
       "Bash(/tmp/test_simple.scm:*)",
-      "Bash(cargo run:*)"
+      "Bash(cargo run:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []

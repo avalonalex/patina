@@ -281,16 +281,16 @@ mod tests {
         );
         let tailed = pipeline(&expr);
         let TailedExpr::Lambda(lam) = tailed else {
-            panic!();
+            panic!("expected Lambda");
         };
         let TailedExpr::Begin(exprs) = &lam.body[0] else {
-            panic!();
+            panic!("expected Begin");
         };
         let TailedExpr::App { is_tail: t0, .. } = &exprs[0] else {
-            panic!();
+            panic!("expected App at exprs[0]");
         };
         let TailedExpr::App { is_tail: t1, .. } = &exprs[1] else {
-            panic!();
+            panic!("expected App at exprs[1]");
         };
         assert!(!t0);
         assert!(*t1);
@@ -307,16 +307,16 @@ mod tests {
         let expr = lambda(vec![], vec![if_expr]);
         let tailed = pipeline(&expr);
         let TailedExpr::Lambda(lam) = tailed else {
-            panic!();
+            panic!("expected Lambda");
         };
         let TailedExpr::If { then, else_, .. } = &lam.body[0] else {
-            panic!();
+            panic!("expected If");
         };
         let TailedExpr::App { is_tail: t1, .. } = then.as_ref() else {
-            panic!();
+            panic!("expected App in then-branch");
         };
         let TailedExpr::App { is_tail: t2, .. } = else_.as_ref() else {
-            panic!();
+            panic!("expected App in else-branch");
         };
         assert!(*t1);
         assert!(*t2);

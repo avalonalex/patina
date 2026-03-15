@@ -155,7 +155,7 @@ impl VmState {
         base
     }
 
-    pub fn free_top_registers(&mut self, base: usize, _num_regs: u16) {
+    pub fn free_top_registers(&mut self, base: usize) {
         self.registers.truncate(base);
     }
 
@@ -836,7 +836,7 @@ fn dispatch_one_instruction(
             if let Some(ctrl) = vm_control_primitive(state, func_val) {
                 let frame = state.frames.pop().expect("TailCall ctrl with empty stack");
                 let return_reg = frame.return_reg;
-                state.free_top_registers(frame.register_base, frame.num_regs);
+                state.free_top_registers(frame.register_base);
                 // Now at depth N-1. Handle with dst = return_reg (slot in frame N-2).
                 if state.frames.len() == exit_depth {
                     // At exit depth — use return_reg as dst (not 0, which
@@ -883,13 +883,13 @@ fn dispatch_one_instruction(
                 let result = result?;
                 let frame = state.frames.pop().expect("TailCall with empty stack");
                 if state.frames.len() == exit_depth {
-                    state.free_top_registers(frame.register_base, frame.num_regs);
+                    state.free_top_registers(frame.register_base);
                     return Ok(Some(result));
                 }
                 let caller_idx = state.frames.len() - 1;
                 let return_reg = frame.return_reg;
                 state.set_reg_in_frame(caller_idx, return_reg, result);
-                state.free_top_registers(frame.register_base, frame.num_regs);
+                state.free_top_registers(frame.register_base);
                 return Ok(None);
             }
 
@@ -898,13 +898,13 @@ fn dispatch_one_instruction(
                 let result = result?;
                 let frame = state.frames.pop().expect("TailCall param with empty stack");
                 if state.frames.len() == exit_depth {
-                    state.free_top_registers(frame.register_base, frame.num_regs);
+                    state.free_top_registers(frame.register_base);
                     return Ok(Some(result));
                 }
                 let caller_idx = state.frames.len() - 1;
                 let return_reg = frame.return_reg;
                 state.set_reg_in_frame(caller_idx, return_reg, result);
-                state.free_top_registers(frame.register_base, frame.num_regs);
+                state.free_top_registers(frame.register_base);
                 return Ok(None);
             }
 
@@ -1000,13 +1000,13 @@ fn dispatch_one_instruction(
                 let result = result?;
                 let frame = state.frames.pop().expect("TailApply with empty stack");
                 if state.frames.len() == exit_depth {
-                    state.free_top_registers(frame.register_base, frame.num_regs);
+                    state.free_top_registers(frame.register_base);
                     return Ok(Some(result));
                 }
                 let caller_idx = state.frames.len() - 1;
                 let return_reg = frame.return_reg;
                 state.set_reg_in_frame(caller_idx, return_reg, result);
-                state.free_top_registers(frame.register_base, frame.num_regs);
+                state.free_top_registers(frame.register_base);
                 return Ok(None);
             }
 
@@ -1017,13 +1017,13 @@ fn dispatch_one_instruction(
                     .pop()
                     .expect("TailApply param with empty stack");
                 if state.frames.len() == exit_depth {
-                    state.free_top_registers(frame.register_base, frame.num_regs);
+                    state.free_top_registers(frame.register_base);
                     return Ok(Some(result));
                 }
                 let caller_idx = state.frames.len() - 1;
                 let return_reg = frame.return_reg;
                 state.set_reg_in_frame(caller_idx, return_reg, result);
-                state.free_top_registers(frame.register_base, frame.num_regs);
+                state.free_top_registers(frame.register_base);
                 return Ok(None);
             }
 
@@ -1076,7 +1076,7 @@ fn dispatch_one_instruction(
             let frame = state.frames.pop().expect("Return with empty stack");
             if state.frames.len() == exit_depth || state.frames.is_empty() {
                 // Reached target depth (or absolute bottom) — this loop is done.
-                state.free_top_registers(frame.register_base, frame.num_regs);
+                state.free_top_registers(frame.register_base);
                 return Ok(Some(result));
             }
             // Write result into caller's return_reg.
@@ -1084,7 +1084,7 @@ fn dispatch_one_instruction(
             let return_reg = frame.return_reg;
             state.set_reg_in_frame(caller_idx, return_reg, result);
             // Free the callee's register window.
-            state.free_top_registers(frame.register_base, frame.num_regs);
+            state.free_top_registers(frame.register_base);
             // Pop any PromptFrames whose body just returned normally.
             pop_resolved_prompts(state);
             // Pop exception handlers whose thunk returned normally.
@@ -1099,7 +1099,7 @@ fn dispatch_one_instruction(
             let frame = state.frames.pop().expect("ReturnMulti with empty stack");
             state.value_buffer = results.clone();
             if state.frames.is_empty() {
-                state.free_top_registers(frame.register_base, frame.num_regs);
+                state.free_top_registers(frame.register_base);
                 // Return the first value (or unspecified if empty).
                 return Ok(Some(
                     results
@@ -1108,7 +1108,7 @@ fn dispatch_one_instruction(
                         .unwrap_or(TaggedValue::UNSPECIFIED),
                 ));
             }
-            state.free_top_registers(frame.register_base, frame.num_regs);
+            state.free_top_registers(frame.register_base);
         }
 
         Instruction::ReceiveValues { dsts } => {

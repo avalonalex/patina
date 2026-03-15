@@ -45,7 +45,7 @@ struct Codegen {
 }
 
 impl Codegen {
-    fn new(_id: CodeObjectId, name: Option<Symbol>) -> Self {
+    fn new(name: Option<Symbol>) -> Self {
         Self {
             name,
             instructions: Vec::new(),
@@ -109,7 +109,7 @@ impl Pass5Codegen {
     pub fn run(allocated: &AllocatedExpr) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
         let expr = &allocated.expr;
         let id = fresh_code_id();
-        let mut cg = Codegen::new(id, None);
+        let mut cg = Codegen::new(None);
         gen_expr(expr, &mut cg)?;
         // Top-level: emit a Return of the expression's result.
         cg.emit(Instruction::Return { val: expr.dst });
@@ -150,11 +150,11 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
         }
 
         RegExprKind::Quasiquote(_v) => {
-            // TODO(A3): implement quasiquote lowering
-            cg.emit(Instruction::LoadImmediate {
-                dst: expr.dst,
-                val: TaggedValue::UNSPECIFIED,
-            });
+            // Quasiquotes must be expanded before codegen; callers should use
+            // `compile_with_qq` rather than the lower-level `compile` function.
+            return Err(CompileError::Internal(
+                "Quasiquote reached codegen unexpanded; use compile_with_qq".into(),
+            ));
         }
 
         RegExprKind::LocalRef { src } => {
@@ -352,7 +352,7 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
 /// Compile a nested lambda, emit `MakeClosure` into `cg`, result in `dst`.
 fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), CompileError> {
     let child_id = fresh_code_id();
-    let mut child_cg = Codegen::new(child_id, None);
+    let mut child_cg = Codegen::new(None);
 
     // Prologue: wrap each boxed param register in a MutableCell.
     // The param already lives in reg[r]; emit AllocCell r←r to box it in-place.
