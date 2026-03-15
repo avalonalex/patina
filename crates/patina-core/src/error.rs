@@ -99,6 +99,13 @@ impl SourceLocation {
     }
 }
 
+/// Trait for error types that may carry a source location.
+///
+/// Enables generic source-aware error formatting across different backends.
+pub trait HasSourceLocation {
+    fn source_location(&self) -> Option<&SourceLocation>;
+}
+
 impl fmt::Display for SourceLocation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}:{}", self.source, self.line, self.column)

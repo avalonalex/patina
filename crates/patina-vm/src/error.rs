@@ -56,4 +56,46 @@ pub enum VmError {
     /// A Scheme exception that wasn't caught by any handler.
     #[error("unhandled exception: {message}")]
     SchemeException { message: String },
+
+    /// Wraps an inner error with a source location for error reporting.
+    #[error("{error}")]
+    WithLocation {
+        #[source]
+        error: Box<VmError>,
+        location: SourceLocation,
+    },
+}
+
+impl VmError {
+    /// Wrap this error with a source location.
+    pub fn at(self, loc: SourceLocation) -> Self {
+        VmError::WithLocation {
+            error: Box::new(self),
+            location: loc,
+        }
+    }
+
+    /// Wrap this error with a source location if one is available.
+    pub fn at_opt(self, loc: Option<SourceLocation>) -> Self {
+        match loc {
+            Some(loc) => self.at(loc),
+            None => self,
+        }
+    }
+
+    /// Return the source location attached to this error, if any.
+    pub fn source_location(&self) -> Option<&SourceLocation> {
+        match self {
+            VmError::WithLocation { location, .. } => Some(location),
+            _ => None,
+        }
+    }
+
+    /// Get the innermost error, stripping any location wrappers.
+    pub fn inner(&self) -> &VmError {
+        match self {
+            VmError::WithLocation { error, .. } => error.inner(),
+            other => other,
+        }
+    }
 }

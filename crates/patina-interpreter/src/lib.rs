@@ -114,6 +114,44 @@ pub fn format_eval_error_with_source(error: &EvalError, source_map: &SourceMap) 
     }
 }
 
+// Re-export HasSourceLocation from patina-core for convenience.
+pub use patina_core::error::HasSourceLocation;
+
+/// Format any backend error that implements `HasSourceLocation` with source context.
+///
+/// This is the generic version of `format_interpreter_error` that works with
+/// any backend error type (tree-walker, VM, etc.).
+pub fn format_backend_error_with_source<E: std::error::Error + HasSourceLocation>(
+    error: &InterpreterError<E>,
+    source_map: &SourceMap,
+) -> String {
+    match error {
+        InterpreterError::Backend(backend_err) => {
+            if let Some(loc) = backend_err.source_location() {
+                let mut parts = vec![backend_err.to_string()];
+                parts.push(format!("  at {}", loc));
+                if let Some(ctx) = source_map.format_context(loc) {
+                    parts.push(ctx);
+                }
+                if let Some(names) = source_map.get_expansions(loc) {
+                    if names.len() == 1 {
+                        parts.push(format!("  macro expansion: {}", names[0]));
+                    } else {
+                        parts.push(format!(
+                            "  macro expansion chain: {}",
+                            names.join(" \u{2192} ")
+                        ));
+                    }
+                }
+                parts.join("\n")
+            } else {
+                backend_err.to_string()
+            }
+        }
+        other => other.to_string(),
+    }
+}
+
 /// High-level interpreter interface that combines parsing and evaluation
 ///
 /// The interpreter is generic over the backend implementation, allowing

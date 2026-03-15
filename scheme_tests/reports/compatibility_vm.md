@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report (VM Backend)
 
-**Generated:** 2026-03-15 10:22:53
+**Generated:** 2026-03-15 11:32:52
 **Test Suite:** chibi-scheme r7rs-tests.scm
 **Backend:** VM (experimental)
 

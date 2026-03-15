@@ -28,6 +28,7 @@
 
 use super::pass1_analysis::{AnalysisInfo, NodeId};
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, Symbol};
+use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use std::collections::HashSet;
 
@@ -35,8 +36,21 @@ use std::collections::HashSet;
 // ClosedExpr — output IR of Pass 2
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A closure-converted expression with optional source location.
 #[derive(Debug, Clone)]
-pub enum ClosedExpr {
+pub struct ClosedExpr {
+    pub kind: ClosedExprKind,
+    pub source: Option<SourceLocation>,
+}
+
+impl ClosedExpr {
+    fn with_source(kind: ClosedExprKind, source: Option<SourceLocation>) -> Self {
+        Self { kind, source }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ClosedExprKind {
     Literal(TaggedValue),
     Quote(TaggedValue),
     Quasiquote(TaggedValue),
@@ -192,47 +206,48 @@ impl Pass2Closure {
 }
 
 fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
-    match &expr.kind {
-        CoreExprKind::Literal(v) => ClosedExpr::Literal(*v),
-        CoreExprKind::Quote(v) => ClosedExpr::Quote(*v),
-        CoreExprKind::Quasiquote(v) => ClosedExpr::Quasiquote(*v),
+    let source = expr.source.clone();
+    let kind = match &expr.kind {
+        CoreExprKind::Literal(v) => ClosedExprKind::Literal(*v),
+        CoreExprKind::Quote(v) => ClosedExprKind::Quote(*v),
+        CoreExprKind::Quasiquote(v) => ClosedExprKind::Quasiquote(*v),
 
         CoreExprKind::Var { name, .. } => match ctx.lookup(name) {
-            VarLoc::Local => ClosedExpr::LocalRef(name.clone()),
-            VarLoc::LocalBoxed => ClosedExpr::ReadLocalCell(name.clone()),
-            VarLoc::Closure(slot) => ClosedExpr::ClosureRef {
+            VarLoc::Local => ClosedExprKind::LocalRef(name.clone()),
+            VarLoc::LocalBoxed => ClosedExprKind::ReadLocalCell(name.clone()),
+            VarLoc::Closure(slot) => ClosedExprKind::ClosureRef {
                 name: name.clone(),
                 slot,
             },
-            VarLoc::ClosureBoxed(slot) => ClosedExpr::ReadClosureCell {
+            VarLoc::ClosureBoxed(slot) => ClosedExprKind::ReadClosureCell {
                 name: name.clone(),
                 slot,
             },
-            VarLoc::Global => ClosedExpr::GlobalRef(name.clone()),
+            VarLoc::Global => ClosedExprKind::GlobalRef(name.clone()),
         },
 
         CoreExprKind::Set { var, value, .. } => {
             let converted_val = convert(value, ctx);
             match ctx.lookup(var) {
-                VarLoc::Local => ClosedExpr::SetLocal {
+                VarLoc::Local => ClosedExprKind::SetLocal {
                     var: var.clone(),
                     value: Box::new(converted_val),
                 },
-                VarLoc::LocalBoxed => ClosedExpr::WriteLocalCell {
+                VarLoc::LocalBoxed => ClosedExprKind::WriteLocalCell {
                     var: var.clone(),
                     value: Box::new(converted_val),
                 },
-                VarLoc::Closure(_) => ClosedExpr::SetGlobal {
+                VarLoc::Closure(_) => ClosedExprKind::SetGlobal {
                     // Non-boxed closure slot that is set! — treat as global
                     // (shouldn't happen after analysis, but safe fallback).
                     var: var.clone(),
                     value: Box::new(converted_val),
                 },
-                VarLoc::ClosureBoxed(slot) => ClosedExpr::WriteClosureCell {
+                VarLoc::ClosureBoxed(slot) => ClosedExprKind::WriteClosureCell {
                     slot,
                     value: Box::new(converted_val),
                 },
-                VarLoc::Global => ClosedExpr::SetGlobal {
+                VarLoc::Global => ClosedExprKind::SetGlobal {
                     var: var.clone(),
                     value: Box::new(converted_val),
                 },
@@ -323,7 +338,7 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
             ctx.scopes.pop();
             ctx.scopes.pop();
 
-            ClosedExpr::Lambda(Box::new(ClosedLambda {
+            ClosedExprKind::Lambda(Box::new(ClosedLambda {
                 params: param_names,
                 rest_param,
                 capture_list,
@@ -334,48 +349,49 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
             }))
         }
 
-        CoreExprKind::If { test, then, else_ } => ClosedExpr::If {
+        CoreExprKind::If { test, then, else_ } => ClosedExprKind::If {
             test: Box::new(convert(test, ctx)),
             then: Box::new(convert(then, ctx)),
             else_: Box::new(convert(else_, ctx)),
         },
 
         CoreExprKind::Begin(exprs) => {
-            ClosedExpr::Begin(exprs.iter().map(|e| convert(e, ctx)).collect())
+            ClosedExprKind::Begin(exprs.iter().map(|e| convert(e, ctx)).collect())
         }
 
         CoreExprKind::Define { name, value } => {
             let converted_val = convert(value, ctx);
             match ctx.lookup(name) {
-                VarLoc::Local => ClosedExpr::SetLocal {
+                VarLoc::Local => ClosedExprKind::SetLocal {
                     var: name.clone(),
                     value: Box::new(converted_val),
                 },
-                VarLoc::LocalBoxed => ClosedExpr::WriteLocalCell {
+                VarLoc::LocalBoxed => ClosedExprKind::WriteLocalCell {
                     var: name.clone(),
                     value: Box::new(converted_val),
                 },
-                _ => ClosedExpr::Define {
+                _ => ClosedExprKind::Define {
                     name: name.clone(),
                     value: Box::new(converted_val),
                 },
             }
         }
 
-        CoreExprKind::App { func, args } => ClosedExpr::App {
+        CoreExprKind::App { func, args } => ClosedExprKind::App {
             func: Box::new(convert(func, ctx)),
             args: args.iter().map(|a| convert(a, ctx)).collect(),
         },
 
-        CoreExprKind::Apply { func, args } => ClosedExpr::Apply {
+        CoreExprKind::Apply { func, args } => ClosedExprKind::Apply {
             func: Box::new(convert(func, ctx)),
             args: args.iter().map(|a| convert(a, ctx)).collect(),
         },
 
         CoreExprKind::Import { .. } | CoreExprKind::Expand { .. } => {
-            ClosedExpr::Literal(TaggedValue::UNSPECIFIED)
+            ClosedExprKind::Literal(TaggedValue::UNSPECIFIED)
         }
-    }
+    };
+    ClosedExpr::with_source(kind, source)
 }
 
 fn flatten_formals(params: &Formals) -> (Vec<Symbol>, bool) {
@@ -427,7 +443,7 @@ mod tests {
         let expr = lit(7);
         let info = Pass1Analysis::run(&expr);
         let closed = Pass2Closure::run(&expr, &info);
-        assert!(matches!(closed, ClosedExpr::Literal(_)));
+        assert!(matches!(closed.kind, ClosedExprKind::Literal(_)));
     }
 
     #[test]
@@ -435,37 +451,33 @@ mod tests {
         let expr = lambda(vec!["x"], vec![var("x")]);
         let info = Pass1Analysis::run(&expr);
         let closed = Pass2Closure::run(&expr, &info);
-        let ClosedExpr::Lambda(lam) = closed else {
+        let ClosedExprKind::Lambda(lam) = closed.kind else {
             panic!("expected Lambda")
         };
-        assert!(matches!(&lam.body[0], ClosedExpr::LocalRef(n) if n.as_ref() == "x"));
+        assert!(matches!(&lam.body[0].kind, ClosedExprKind::LocalRef(n) if n.as_ref() == "x"));
         assert!(lam.capture_list.is_empty());
     }
 
     #[test]
     fn unbound_free_var_stays_global_not_captured() {
-        // (lambda (x) y)  — y is unbound/global, should NOT be captured.
-        // It should resolve as GlobalRef in the body, not ClosureRef.
         let expr = lambda(vec!["x"], vec![var("y")]);
         let info = Pass1Analysis::run(&expr);
         let closed = Pass2Closure::run(&expr, &info);
-        let ClosedExpr::Lambda(lam) = closed else {
+        let ClosedExprKind::Lambda(lam) = closed.kind else {
             panic!("expected Lambda")
         };
-        // y is global — must NOT be in capture_list.
         assert!(
             lam.capture_list.is_empty(),
             "global var must not be captured"
         );
-        // Body resolves y as GlobalRef.
-        assert!(matches!(&lam.body[0], ClosedExpr::GlobalRef(n) if n.as_ref() == "y"));
+        assert!(matches!(&lam.body[0].kind, ClosedExprKind::GlobalRef(n) if n.as_ref() == "y"));
     }
 
     #[test]
     fn unresolved_var_becomes_global_ref() {
         let info = Pass1Analysis::run(&var("foo"));
         let closed = Pass2Closure::run(&var("foo"), &info);
-        assert!(matches!(closed, ClosedExpr::GlobalRef(n) if n.as_ref() == "foo"));
+        assert!(matches!(closed.kind, ClosedExprKind::GlobalRef(n) if n.as_ref() == "foo"));
     }
 
     #[test]
@@ -474,21 +486,22 @@ mod tests {
         let outer = lambda(vec!["x"], vec![inner]);
         let info = Pass1Analysis::run(&outer);
         let closed = Pass2Closure::run(&outer, &info);
-        let ClosedExpr::Lambda(outer_lam) = closed else {
+        let ClosedExprKind::Lambda(outer_lam) = closed.kind else {
             panic!("expected Lambda (outer)")
         };
         assert!(outer_lam.capture_list.is_empty());
-        let ClosedExpr::Lambda(inner_lam) = &outer_lam.body[0] else {
+        let ClosedExprKind::Lambda(inner_lam) = &outer_lam.body[0].kind else {
             panic!("expected Lambda (inner)")
         };
         assert!(inner_lam.capture_list.contains(&Rc::<str>::from("x")));
-        assert!(matches!(&inner_lam.body[0], ClosedExpr::ClosureRef { .. }));
+        assert!(matches!(
+            &inner_lam.body[0].kind,
+            ClosedExprKind::ClosureRef { .. }
+        ));
     }
 
     #[test]
     fn mutated_captured_param_is_boxed() {
-        // (lambda (x) (set! x 1) (lambda () x))
-        // x is mutated AND captured → should be LocalBoxed in outer, ClosureBoxed in inner.
         let set_x = CoreExpr::new(CoreExprKind::Set {
             var: Rc::from("x"),
             scopes: Default::default(),
@@ -498,23 +511,18 @@ mod tests {
         let outer = lambda(vec!["x"], vec![set_x, inner]);
         let info = Pass1Analysis::run(&outer);
         let closed = Pass2Closure::run(&outer, &info);
-        let ClosedExpr::Lambda(outer_lam) = closed else {
+        let ClosedExprKind::Lambda(outer_lam) = closed.kind else {
             panic!("expected Lambda")
         };
-        // x is in outer's boxed_params
         assert!(outer_lam.boxed_params.contains(&Rc::<str>::from("x")));
-        // set! on x should be WriteLocalCell
         assert!(matches!(
-            &outer_lam.body[0],
-            ClosedExpr::WriteLocalCell { .. }
+            &outer_lam.body[0].kind,
+            ClosedExprKind::WriteLocalCell { .. }
         ));
     }
 
     #[test]
     fn triple_nested_capture_through_middle() {
-        // (lambda (x) (lambda () (lambda () (set! x 1))))
-        // x is mutated by innermost, should be boxed in outer,
-        // captured as ClosureBoxed in middle AND inner.
         let set_x = CoreExpr::new(CoreExprKind::Set {
             var: Rc::from("x"),
             scopes: Default::default(),
@@ -527,17 +535,15 @@ mod tests {
         let info = Pass1Analysis::run(&outer);
         let closed = Pass2Closure::run(&outer, &info);
 
-        let ClosedExpr::Lambda(outer_lam) = &closed else {
+        let ClosedExprKind::Lambda(outer_lam) = &closed.kind else {
             panic!("expected Lambda");
         };
-        // x is boxed in outer
         assert!(
             outer_lam.boxed_params.contains(&Rc::<str>::from("x")),
             "x should be in outer's boxed_params"
         );
 
-        // mid should capture x
-        let ClosedExpr::Lambda(mid_lam) = &outer_lam.body[0] else {
+        let ClosedExprKind::Lambda(mid_lam) = &outer_lam.body[0].kind else {
             panic!("expected Lambda for mid, got {:?}", outer_lam.body[0]);
         };
         assert!(
@@ -553,45 +559,33 @@ mod tests {
 
     #[test]
     fn body_thunk_with_app_captures_indirect_free_var() {
-        // (lambda (x) (f (lambda () 'ok) (lambda () (set! x 1)) (lambda () x)))
-        // The body of the outer lambda is App(f, 3 lambdas).
-        // The second and third inner lambdas use x.
-        // Even though the outer lambda's body is not a nested lambda but an App,
-        // x should propagate as a free var when this entire thing is wrapped:
-        //
-        // (lambda (x) (lambda () (f (lambda () 'ok) (lambda () (set! x 1)) (lambda () x))))
-        // The middle (lambda () ...) should capture x.
         let set_x = CoreExpr::new(CoreExprKind::Set {
             var: Rc::from("x"),
             scopes: Default::default(),
             value: Rc::new(lit(1)),
         });
-        let lam1 = lambda(vec![], vec![lit(0)]); // (lambda () 'ok)
-        let lam2 = lambda(vec![], vec![set_x]); // (lambda () (set! x 1))
-        let lam3 = lambda(vec![], vec![var("x")]); // (lambda () x)
+        let lam1 = lambda(vec![], vec![lit(0)]);
+        let lam2 = lambda(vec![], vec![set_x]);
+        let lam3 = lambda(vec![], vec![var("x")]);
         let app = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(var("f")),
             args: vec![lam1, lam2, lam3],
         });
-        // body thunk: (lambda () (f ...))
         let body_thunk = lambda(vec![], vec![app]);
-        // outer: (lambda (x) body_thunk)
         let outer = lambda(vec!["x"], vec![body_thunk]);
 
         let info = Pass1Analysis::run(&outer);
         let closed = Pass2Closure::run(&outer, &info);
 
-        let ClosedExpr::Lambda(outer_lam) = &closed else {
+        let ClosedExprKind::Lambda(outer_lam) = &closed.kind else {
             panic!("expected outer Lambda");
         };
-        // x should be boxed in outer
         assert!(
             outer_lam.boxed_params.contains(&Rc::<str>::from("x")),
             "x should be in outer's boxed_params"
         );
 
-        // body thunk should capture x
-        let ClosedExpr::Lambda(body_lam) = &outer_lam.body[0] else {
+        let ClosedExprKind::Lambda(body_lam) = &outer_lam.body[0].kind else {
             panic!("expected body_thunk Lambda, got {:?}", outer_lam.body[0]);
         };
         assert!(

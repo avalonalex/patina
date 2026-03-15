@@ -14,8 +14,9 @@
 //!
 //! See VM_COMPILER.md §Pass 3.
 
-use super::pass2_closure::ClosedExpr;
+use super::pass2_closure::{ClosedExpr, ClosedExprKind};
 use patina_core::core_expr::Symbol;
+use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use std::collections::HashSet;
 
@@ -23,8 +24,21 @@ use std::collections::HashSet;
 // TailedExpr — output of Pass 3
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A tail-position-annotated expression with optional source location.
 #[derive(Debug, Clone)]
-pub enum TailedExpr {
+pub struct TailedExpr {
+    pub kind: TailedExprKind,
+    pub source: Option<SourceLocation>,
+}
+
+impl TailedExpr {
+    fn with_source(kind: TailedExprKind, source: Option<SourceLocation>) -> Self {
+        Self { kind, source }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum TailedExprKind {
     Literal(TaggedValue),
     Quote(TaggedValue),
     Quasiquote(TaggedValue),
@@ -119,24 +133,25 @@ impl Pass3Tail {
 }
 
 fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
-    match expr {
-        ClosedExpr::Literal(v) => TailedExpr::Literal(*v),
-        ClosedExpr::Quote(v) => TailedExpr::Quote(*v),
-        ClosedExpr::Quasiquote(v) => TailedExpr::Quasiquote(*v),
-        ClosedExpr::LocalRef(s) => TailedExpr::LocalRef(s.clone()),
-        ClosedExpr::ClosureRef { name, slot } => TailedExpr::ClosureRef {
+    let source = expr.source.clone();
+    let kind = match &expr.kind {
+        ClosedExprKind::Literal(v) => TailedExprKind::Literal(*v),
+        ClosedExprKind::Quote(v) => TailedExprKind::Quote(*v),
+        ClosedExprKind::Quasiquote(v) => TailedExprKind::Quasiquote(*v),
+        ClosedExprKind::LocalRef(s) => TailedExprKind::LocalRef(s.clone()),
+        ClosedExprKind::ClosureRef { name, slot } => TailedExprKind::ClosureRef {
             name: name.clone(),
             slot: *slot,
         },
-        ClosedExpr::GlobalRef(s) => TailedExpr::GlobalRef(s.clone()),
+        ClosedExprKind::GlobalRef(s) => TailedExprKind::GlobalRef(s.clone()),
 
-        ClosedExpr::ReadLocalCell(s) => TailedExpr::ReadLocalCell(s.clone()),
-        ClosedExpr::ReadClosureCell { name, slot } => TailedExpr::ReadClosureCell {
+        ClosedExprKind::ReadLocalCell(s) => TailedExprKind::ReadLocalCell(s.clone()),
+        ClosedExprKind::ReadClosureCell { name, slot } => TailedExprKind::ReadClosureCell {
             name: name.clone(),
             slot: *slot,
         },
 
-        ClosedExpr::Lambda(lam) => {
+        ClosedExprKind::Lambda(lam) => {
             // Each lambda body is its own tail context — the last expr is tail.
             let body_len = lam.body.len();
             let body: Vec<TailedExpr> = lam
@@ -145,7 +160,7 @@ fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
                 .enumerate()
                 .map(|(i, e)| mark(e, i == body_len - 1))
                 .collect();
-            TailedExpr::Lambda(Box::new(TailedLambda {
+            TailedExprKind::Lambda(Box::new(TailedLambda {
                 params: lam.params.clone(),
                 rest_param: lam.rest_param,
                 capture_list: lam.capture_list.clone(),
@@ -156,32 +171,32 @@ fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
             }))
         }
 
-        ClosedExpr::If { test, then, else_ } => TailedExpr::If {
+        ClosedExprKind::If { test, then, else_ } => TailedExprKind::If {
             test: Box::new(mark(test, false)),
             then: Box::new(mark(then, tail)),
             else_: Box::new(mark(else_, tail)),
         },
 
-        ClosedExpr::SetLocal { var, value } => TailedExpr::SetLocal {
+        ClosedExprKind::SetLocal { var, value } => TailedExprKind::SetLocal {
             var: var.clone(),
             value: Box::new(mark(value, false)),
         },
-        ClosedExpr::WriteLocalCell { var, value } => TailedExpr::WriteLocalCell {
+        ClosedExprKind::WriteLocalCell { var, value } => TailedExprKind::WriteLocalCell {
             var: var.clone(),
             value: Box::new(mark(value, false)),
         },
-        ClosedExpr::WriteClosureCell { slot, value } => TailedExpr::WriteClosureCell {
+        ClosedExprKind::WriteClosureCell { slot, value } => TailedExprKind::WriteClosureCell {
             slot: *slot,
             value: Box::new(mark(value, false)),
         },
-        ClosedExpr::SetGlobal { var, value } => TailedExpr::SetGlobal {
+        ClosedExprKind::SetGlobal { var, value } => TailedExprKind::SetGlobal {
             var: var.clone(),
             value: Box::new(mark(value, false)),
         },
 
-        ClosedExpr::Begin(exprs) => {
+        ClosedExprKind::Begin(exprs) => {
             let n = exprs.len();
-            TailedExpr::Begin(
+            TailedExprKind::Begin(
                 exprs
                     .iter()
                     .enumerate()
@@ -190,23 +205,24 @@ fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
             )
         }
 
-        ClosedExpr::Define { name, value } => TailedExpr::Define {
+        ClosedExprKind::Define { name, value } => TailedExprKind::Define {
             name: name.clone(),
             value: Box::new(mark(value, false)),
         },
 
-        ClosedExpr::App { func, args } => TailedExpr::App {
+        ClosedExprKind::App { func, args } => TailedExprKind::App {
             func: Box::new(mark(func, false)),
             args: args.iter().map(|a| mark(a, false)).collect(),
             is_tail: tail,
         },
 
-        ClosedExpr::Apply { func, args } => TailedExpr::Apply {
+        ClosedExprKind::Apply { func, args } => TailedExprKind::Apply {
             func: Box::new(mark(func, false)),
             args: args.iter().map(|a| mark(a, false)).collect(),
             is_tail: tail,
         },
-    }
+    };
+    TailedExpr::with_source(kind, source)
 }
 
 #[cfg(test)]
@@ -257,13 +273,12 @@ mod tests {
 
     #[test]
     fn tail_call_in_lambda_body() {
-        // (lambda () (f 1))  — the app is in tail position
         let expr = lambda(vec![], vec![app(var("f"), vec![lit(1)])]);
         let tailed = pipeline(&expr);
-        let TailedExpr::Lambda(lam) = tailed else {
+        let TailedExprKind::Lambda(lam) = tailed.kind else {
             panic!("expected Lambda");
         };
-        let TailedExpr::App { is_tail, .. } = &lam.body[0] else {
+        let TailedExprKind::App { is_tail, .. } = &lam.body[0].kind else {
             panic!("expected App");
         };
         assert!(*is_tail);
@@ -271,7 +286,6 @@ mod tests {
 
     #[test]
     fn non_tail_call_in_begin() {
-        // (lambda () (begin (f 1) (g 2)))  — only last is tail
         let expr = lambda(
             vec![],
             vec![CoreExpr::new(CoreExprKind::Begin(vec![
@@ -280,16 +294,16 @@ mod tests {
             ]))],
         );
         let tailed = pipeline(&expr);
-        let TailedExpr::Lambda(lam) = tailed else {
+        let TailedExprKind::Lambda(lam) = tailed.kind else {
             panic!("expected Lambda");
         };
-        let TailedExpr::Begin(exprs) = &lam.body[0] else {
+        let TailedExprKind::Begin(exprs) = &lam.body[0].kind else {
             panic!("expected Begin");
         };
-        let TailedExpr::App { is_tail: t0, .. } = &exprs[0] else {
+        let TailedExprKind::App { is_tail: t0, .. } = &exprs[0].kind else {
             panic!("expected App at exprs[0]");
         };
-        let TailedExpr::App { is_tail: t1, .. } = &exprs[1] else {
+        let TailedExprKind::App { is_tail: t1, .. } = &exprs[1].kind else {
             panic!("expected App at exprs[1]");
         };
         assert!(!t0);
@@ -298,7 +312,6 @@ mod tests {
 
     #[test]
     fn if_branches_inherit_tail() {
-        // (lambda () (if #t (f) (g)))  — both branches are tail
         let if_expr = CoreExpr::new(CoreExprKind::If {
             test: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::TRUE))),
             then: Rc::new(app(var("f"), vec![])),
@@ -306,16 +319,16 @@ mod tests {
         });
         let expr = lambda(vec![], vec![if_expr]);
         let tailed = pipeline(&expr);
-        let TailedExpr::Lambda(lam) = tailed else {
+        let TailedExprKind::Lambda(lam) = tailed.kind else {
             panic!("expected Lambda");
         };
-        let TailedExpr::If { then, else_, .. } = &lam.body[0] else {
+        let TailedExprKind::If { then, else_, .. } = &lam.body[0].kind else {
             panic!("expected If");
         };
-        let TailedExpr::App { is_tail: t1, .. } = then.as_ref() else {
+        let TailedExprKind::App { is_tail: t1, .. } = &then.kind else {
             panic!("expected App in then-branch");
         };
-        let TailedExpr::App { is_tail: t2, .. } = else_.as_ref() else {
+        let TailedExprKind::App { is_tail: t2, .. } = &else_.kind else {
             panic!("expected App in else-branch");
         };
         assert!(*t1);

@@ -14,6 +14,7 @@ use crate::compiler::compile_with_qq;
 use crate::error::VmError;
 use crate::runtime::{VmState, execute};
 use patina_core::environment::Environment;
+use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use patina_frontend::{Desugarer, SchemeLibraryLoader};
 use patina_runtime::library_loader::{ExportSpec, ImportSet};
@@ -31,21 +32,46 @@ use std::rc::Rc;
 
 /// Backend-visible error: all variable names converted to `String` so the type
 /// is `Send + Sync + 'static` as required by the `Backend` trait.
+///
+/// Source locations are preserved for error formatting with caret context.
 #[derive(Debug, thiserror::Error)]
 pub enum VmBackendError {
     #[error("compile error: {0}")]
     Compile(String),
 
-    #[error("runtime error: {0}")]
-    Runtime(String),
+    #[error("{message}")]
+    Runtime {
+        message: String,
+        location: Option<SourceLocation>,
+    },
 
     #[error("desugar error: {0}")]
     Desugar(String),
 }
 
+impl VmBackendError {
+    /// Return the source location attached to this error, if any.
+    pub fn source_location(&self) -> Option<&SourceLocation> {
+        match self {
+            VmBackendError::Runtime { location, .. } => location.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+impl patina_core::error::HasSourceLocation for VmBackendError {
+    fn source_location(&self) -> Option<&SourceLocation> {
+        self.source_location()
+    }
+}
+
 impl From<VmError> for VmBackendError {
     fn from(e: VmError) -> Self {
-        VmBackendError::Runtime(e.to_string())
+        let location = e.source_location().cloned();
+        VmBackendError::Runtime {
+            message: e.to_string(),
+            location,
+        }
     }
 }
 
@@ -104,6 +130,56 @@ impl VmBackend {
     /// Attach a structured tracer for instruction-level debugging.
     pub fn set_tracer(&self, tracer: Option<crate::tracer::TracerHandle>) {
         self.state.borrow_mut().tracer = tracer;
+    }
+
+    /// Evaluate an expression with source map support.
+    ///
+    /// The source map provides source positions recorded by the parser,
+    /// which are attached to CoreExpr nodes during desugaring, then
+    /// threaded through the compiler pipeline into CodeObject source maps.
+    pub fn eval_with_source_map(
+        &self,
+        expr: TaggedValue,
+        _env: &Rc<Environment>,
+        source_map: &Rc<RefCell<patina_frontend::SourceMap>>,
+    ) -> Result<TaggedValue, VmBackendError> {
+        let desugarer =
+            Desugarer::with_env_and_source_map(Rc::clone(&self.global_env), source_map.clone());
+        let heap = self.global_env.heap().clone();
+        let core_expr = desugarer
+            .desugar_tagged(expr, &heap)
+            .map_err(|e| VmBackendError::Desugar(e.to_string()))?;
+
+        // Handle Import specially.
+        if let patina_core::core_expr::CoreExprKind::Import { import_sets } = &core_expr.kind {
+            for import_set_tv in import_sets {
+                let import_set = patina_frontend::LibraryDefinition::parse_import_set_tagged(
+                    *import_set_tv,
+                    &heap,
+                )
+                .map_err(|e| VmBackendError::Runtime {
+                    message: format!("Invalid import set: {}", e),
+                    location: None,
+                })?;
+                self.process_import_set(&import_set, &self.global_env)
+                    .map_err(|e| VmBackendError::Runtime {
+                        message: e.to_string(),
+                        location: None,
+                    })?;
+            }
+            return Ok(TaggedValue::UNSPECIFIED);
+        }
+
+        let (top, nested) = compile_with_qq(&core_expr, &heap, &self.global_env)
+            .map_err(|e| VmBackendError::Compile(e.to_string()))?;
+
+        let top_id = top.id;
+        let mut state = self.state.borrow_mut();
+        state.load(top);
+        state.load_all(nested);
+
+        let result = execute(&mut state, top_id)?;
+        Ok(result)
     }
 
     /// Initialize library loaders (Rust internal libs + Scheme .sld loader).
@@ -591,9 +667,15 @@ impl Backend for VmBackend {
                     *import_set_tv,
                     &heap,
                 )
-                .map_err(|e| VmBackendError::Runtime(format!("Invalid import set: {}", e)))?;
+                .map_err(|e| VmBackendError::Runtime {
+                    message: format!("Invalid import set: {}", e),
+                    location: None,
+                })?;
                 self.process_import_set(&import_set, &self.global_env)
-                    .map_err(|e| VmBackendError::Runtime(e.to_string()))?;
+                    .map_err(|e| VmBackendError::Runtime {
+                        message: e.to_string(),
+                        location: None,
+                    })?;
             }
             return Ok(TaggedValue::UNSPECIFIED);
         }

@@ -28,6 +28,6 @@ pub mod runtime;
 pub mod tracer;
 pub mod types;
 
-pub use backend::VmBackend;
+pub use backend::{VmBackend, VmBackendError};
 pub use disasm::disassemble;
 pub use tracer::{StepTracer, TracerHandle};

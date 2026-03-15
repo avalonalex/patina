@@ -27,9 +27,10 @@
 //!
 //! See VM_COMPILER.md §Pass 4.
 
-use super::pass3_tail::{TailedExpr, TailedLambda};
+use super::pass3_tail::{TailedExpr, TailedExprKind, TailedLambda};
 use crate::compiler::pass1_analysis::NodeId;
 use patina_core::core_expr::Symbol;
+use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use std::collections::{HashMap, HashSet};
 
@@ -44,6 +45,8 @@ pub struct RegExpr {
     pub kind: RegExprKind,
     /// The register that will hold this expression's result after it executes.
     pub dst: u16,
+    /// Source location from the original `CoreExpr`, for error reporting.
+    pub source: Option<SourceLocation>,
 }
 
 #[derive(Debug, Clone)]
@@ -245,28 +248,31 @@ fn allocate_ctx(
     alloc: &mut RegAlloc,
     own_captures: &[Symbol],
 ) -> RegExpr {
-    let kind = match expr {
-        TailedExpr::Literal(v) => RegExprKind::Literal(*v),
-        TailedExpr::Quote(v) => RegExprKind::Quote(*v),
-        TailedExpr::Quasiquote(v) => RegExprKind::Quasiquote(*v),
+    let source = expr.source.clone();
+    let kind = match &expr.kind {
+        TailedExprKind::Literal(v) => RegExprKind::Literal(*v),
+        TailedExprKind::Quote(v) => RegExprKind::Quote(*v),
+        TailedExprKind::Quasiquote(v) => RegExprKind::Quasiquote(*v),
 
-        TailedExpr::LocalRef(name) => {
+        TailedExprKind::LocalRef(name) => {
             let src = alloc.lookup(name).unwrap_or(0); // resolved at compile time
             RegExprKind::LocalRef { src }
         }
 
-        TailedExpr::ClosureRef { slot, .. } => RegExprKind::ClosureRef { slot: *slot },
+        TailedExprKind::ClosureRef { slot, .. } => RegExprKind::ClosureRef { slot: *slot },
 
-        TailedExpr::GlobalRef(name) => RegExprKind::GlobalRef { name: name.clone() },
+        TailedExprKind::GlobalRef(name) => RegExprKind::GlobalRef { name: name.clone() },
 
-        TailedExpr::ReadLocalCell(name) => {
+        TailedExprKind::ReadLocalCell(name) => {
             let src = alloc.lookup(name).unwrap_or(0);
             RegExprKind::ReadLocalCell { src }
         }
 
-        TailedExpr::ReadClosureCell { slot, .. } => RegExprKind::ReadClosureCell { slot: *slot },
+        TailedExprKind::ReadClosureCell { slot, .. } => {
+            RegExprKind::ReadClosureCell { slot: *slot }
+        }
 
-        TailedExpr::Lambda(lam) => {
+        TailedExprKind::Lambda(lam) => {
             // own_captures is the parent lambda's capture list — nested lambdas
             // use it to resolve ParentClosureSlot sources.
             let reg_lam = allocate_lambda(lam, alloc, own_captures);
@@ -281,7 +287,7 @@ fn allocate_ctx(
             RegExprKind::Lambda(Box::new(reg_lam))
         }
 
-        TailedExpr::If { test, then, else_ } => {
+        TailedExprKind::If { test, then, else_ } => {
             let test_dst = alloc.alloc();
             let test_reg = allocate_ctx(test, test_dst, alloc, own_captures);
             // Reuse `dst` for both branches.
@@ -294,7 +300,7 @@ fn allocate_ctx(
             }
         }
 
-        TailedExpr::SetLocal { var, value } => {
+        TailedExprKind::SetLocal { var, value } => {
             let var_reg = alloc.lookup(var).unwrap_or(0);
             let tmp = alloc.alloc();
             let val_expr = allocate_ctx(value, tmp, alloc, own_captures);
@@ -304,7 +310,7 @@ fn allocate_ctx(
             }
         }
 
-        TailedExpr::WriteLocalCell { var, value } => {
+        TailedExprKind::WriteLocalCell { var, value } => {
             let var_reg = alloc.lookup(var).unwrap_or(0);
             let tmp = alloc.alloc();
             let val_expr = allocate_ctx(value, tmp, alloc, own_captures);
@@ -314,7 +320,7 @@ fn allocate_ctx(
             }
         }
 
-        TailedExpr::WriteClosureCell { slot, value } => {
+        TailedExprKind::WriteClosureCell { slot, value } => {
             let tmp = alloc.alloc();
             let val_reg = allocate_ctx(value, tmp, alloc, own_captures);
             RegExprKind::WriteClosureCell {
@@ -323,7 +329,7 @@ fn allocate_ctx(
             }
         }
 
-        TailedExpr::SetGlobal { var, value } => {
+        TailedExprKind::SetGlobal { var, value } => {
             let tmp = alloc.alloc();
             let val_reg = allocate_ctx(value, tmp, alloc, own_captures);
             RegExprKind::SetGlobal {
@@ -332,7 +338,7 @@ fn allocate_ctx(
             }
         }
 
-        TailedExpr::Begin(exprs) => {
+        TailedExprKind::Begin(exprs) => {
             let n = exprs.len();
             let regs: Vec<RegExpr> = exprs
                 .iter()
@@ -346,7 +352,7 @@ fn allocate_ctx(
             RegExprKind::Begin(regs)
         }
 
-        TailedExpr::Define { name, value } => {
+        TailedExprKind::Define { name, value } => {
             let tmp = alloc.alloc();
             let val_reg = allocate_ctx(value, tmp, alloc, own_captures);
             RegExprKind::Define {
@@ -355,7 +361,7 @@ fn allocate_ctx(
             }
         }
 
-        TailedExpr::App {
+        TailedExprKind::App {
             func,
             args,
             is_tail,
@@ -386,7 +392,7 @@ fn allocate_ctx(
             }
         }
 
-        TailedExpr::Apply {
+        TailedExprKind::Apply {
             func,
             args,
             is_tail,
@@ -415,7 +421,7 @@ fn allocate_ctx(
         }
     };
 
-    RegExpr { kind, dst }
+    RegExpr { kind, dst, source }
 }
 
 /// Allocate registers for a lambda, starting a fresh frame.

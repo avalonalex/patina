@@ -103,7 +103,15 @@ impl EvalError {
             _ => None,
         }
     }
+}
 
+impl patina_core::error::HasSourceLocation for EvalError {
+    fn source_location(&self) -> Option<&SourceLocation> {
+        self.source_location()
+    }
+}
+
+impl EvalError {
     /// Check if this error can be caught by Scheme exception handlers
     pub fn is_catchable(&self) -> bool {
         match self {

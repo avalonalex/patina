@@ -18,6 +18,7 @@ use crate::error::CompileError;
 use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
 use crate::types::instruction::Instruction;
 use patina_core::core_expr::Symbol;
+use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -42,6 +43,8 @@ struct Codegen {
     /// All nested CodeObjects emitted during this compilation unit.
     /// Returned alongside the top-level CodeObject.
     nested: Vec<CodeObject>,
+    /// Source location map: (pc, source_location).
+    source_map: Vec<(usize, SourceLocation)>,
 }
 
 impl Codegen {
@@ -51,6 +54,7 @@ impl Codegen {
             instructions: Vec::new(),
             constants: Vec::new(),
             nested: Vec::new(),
+            source_map: Vec::new(),
         }
     }
 
@@ -93,6 +97,21 @@ impl Codegen {
         self.constants.push(val);
         idx
     }
+
+    /// Record a source location for the instruction about to be emitted.
+    fn record_source(&mut self, source: &Option<SourceLocation>) {
+        if let Some(loc) = source {
+            let pc = self.current_pc();
+            // Avoid duplicate entries for the same pc.
+            if self
+                .source_map
+                .last()
+                .is_none_or(|(last_pc, _)| *last_pc != pc)
+            {
+                self.source_map.push((pc, loc.clone()));
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,7 +141,7 @@ impl Pass5Codegen {
             // Use the Pass 4 high-water mark so all temps are covered.
             num_regs: allocated.num_regs.max(1),
             arity: Arity::Fixed(0),
-            source_map: vec![],
+            source_map: cg.source_map,
         };
         Ok((code, nested))
     }
@@ -130,6 +149,9 @@ impl Pass5Codegen {
 
 /// Generate instructions for `expr` into `cg`.
 fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
+    // Record source location before emitting instructions for this expression.
+    cg.record_source(&expr.source);
+
     match &expr.kind {
         RegExprKind::Literal(v) => {
             // Immediates inline; heap values go via constant pool.
@@ -304,10 +326,6 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             }
             let arg_regs: Vec<u16> = arg_tmps.clone();
             if *is_tail {
-                // The VM's TailCall dispatch reads arg values from `arg_tmps`,
-                // collects them all first, then writes to the new frame's r0..r(n-1).
-                // This means we can pass arg_tmps directly without pre-moving —
-                // and avoids clobbering func.dst if it falls in the param slot range.
                 cg.emit(Instruction::TailCall {
                     func: func.dst,
                     args: arg_regs,
@@ -401,7 +419,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
         constants: child_cg.constants,
         num_regs: lam.num_regs,
         arity,
-        source_map: vec![],
+        source_map: child_cg.source_map,
     };
 
     // Collect nested from child.

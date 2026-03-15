@@ -1,6 +1,9 @@
-use patina_interpreter::{Backend, Interpreter, TreeWalkInterpreter, format_interpreter_error};
+use patina_interpreter::{
+    Backend, Interpreter, TreeWalkInterpreter, format_backend_error_with_source,
+    format_interpreter_error,
+};
 use patina_repl::{Repl, make_editor, run_repl_loop};
-use patina_vm::VmBackend;
+use patina_vm::{VmBackend, VmBackendError};
 use std::env;
 use std::fs;
 use std::process;
@@ -179,17 +182,117 @@ fn run_script_vm(filename: &str) {
     let is_test_file = filename.contains("test") || code.contains("test-begin");
 
     if is_test_file {
-        interp.eval_program_resilient(&code);
+        eval_program_resilient_vm(&interp, &code, filename);
         process::exit(0);
     } else {
-        match interp.eval_program(&code) {
+        let (result, source_map) = eval_program_vm(&interp, &code, filename);
+        match result {
             Ok(_) => process::exit(0),
             Err(e) => {
-                eprintln!("Error: {}", e);
+                eprintln!(
+                    "Error: {}",
+                    format_backend_error_with_source(&e, &source_map.borrow())
+                );
                 process::exit(1);
             }
         }
     }
+}
+
+/// Evaluate a program with source map support for the VM backend.
+fn eval_program_vm(
+    interp: &Interpreter<VmBackend>,
+    input: &str,
+    source_name: &str,
+) -> (
+    Result<patina_core::TaggedValue, patina_interpreter::InterpreterError<VmBackendError>>,
+    std::rc::Rc<std::cell::RefCell<patina_interpreter::SourceMap>>,
+) {
+    use patina_interpreter::{InterpreterError, ParseError, Parser, SourceMap};
+
+    let mut result = patina_core::TaggedValue::UNSPECIFIED;
+    let heap = interp.backend().global_env().heap();
+    let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
+    let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
+    let mut parser =
+        match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
+            Ok(p) => p,
+            Err(e) => return (Err(e.into()), source_map),
+        };
+    let global = interp.backend().global_env().clone();
+    loop {
+        match parser.parse() {
+            Ok(expr) => {
+                match interp
+                    .backend()
+                    .eval_with_source_map(expr, &global, &source_map)
+                    .map_err(InterpreterError::Backend)
+                {
+                    Ok(val) => result = val,
+                    Err(e) => return (Err(e), source_map),
+                }
+            }
+            Err(ParseError::UnexpectedEof) => break,
+            Err(e) => return (Err(e.into()), source_map),
+        }
+    }
+    (Ok(result), source_map)
+}
+
+/// Evaluate a program resiliently (continue on errors) with source map support.
+fn eval_program_resilient_vm(
+    interp: &Interpreter<VmBackend>,
+    input: &str,
+    source_name: &str,
+) -> patina_core::TaggedValue {
+    use patina_interpreter::{ParseError, Parser, SourceMap};
+    use patina_runtime::stdlib::test_increment_error;
+
+    let mut result = patina_core::TaggedValue::UNSPECIFIED;
+    let heap = interp.backend().global_env().heap();
+    let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
+    let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
+    let mut parser =
+        match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                test_increment_error();
+                return result;
+            }
+        };
+    let global = interp.backend().global_env().clone();
+    loop {
+        match parser.parse() {
+            Ok(expr) => {
+                match interp
+                    .backend()
+                    .eval_with_source_map(expr, &global, &source_map)
+                {
+                    Ok(val) => result = val,
+                    Err(e) => {
+                        if let Some(loc) = e.source_location() {
+                            let mut parts = vec![format!("Error: {}", e)];
+                            parts.push(format!("  at {}", loc));
+                            if let Some(ctx) = source_map.borrow().format_context(loc) {
+                                parts.push(ctx);
+                            }
+                            eprintln!("{}", parts.join("\n"));
+                        } else {
+                            eprintln!("Error: {}", e);
+                        }
+                        test_increment_error();
+                    }
+                }
+            }
+            Err(ParseError::UnexpectedEof) => break,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                test_increment_error();
+            }
+        }
+    }
+    result
 }
 
 fn run_repl() {
@@ -210,16 +313,17 @@ fn run_repl() {
 fn run_repl_vm() {
     use patina_core::TaggedValue;
     use patina_core::debug_format::format_tagged;
+    use patina_interpreter::{ParseError, Parser, SourceMap};
 
     let interp = Interpreter::new(VmBackend::new());
     let heap = interp.backend().global_env().heap().clone();
 
-    println!("Patina Scheme (VM backend — experimental)");
+    println!("Patina Scheme (VM backend)");
     println!();
     println!("Features:");
-    println!("  • Multi-line editing with auto-indentation");
-    println!("  • Syntax highlighting");
-    println!("  • (vm-compile <expr>) — disassemble bytecode without executing");
+    println!("  - Multi-line editing with auto-indentation");
+    println!("  - Syntax highlighting");
+    println!("  - (vm-compile <expr>) -- disassemble bytecode without executing");
     println!();
     println!("Commands:");
     println!("  (exit) or Ctrl+D to quit");
@@ -244,15 +348,45 @@ fn run_repl_vm() {
             };
         }
 
-        match interp.eval_program(line) {
-            Ok(result) => {
-                if result != TaggedValue::UNSPECIFIED {
-                    Some(format_tagged(result, &heap.borrow()))
-                } else {
-                    None
+        // Parse with source map for better error reporting.
+        let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
+        let sname: std::rc::Rc<str> = std::rc::Rc::from("<repl>");
+        let mut parser =
+            match Parser::new_with_source_map(line, heap.clone(), sname, source_map.clone()) {
+                Ok(p) => p,
+                Err(e) => return Some(format!("Error: {}", e)),
+            };
+        let global = interp.backend().global_env().clone();
+        let mut result = TaggedValue::UNSPECIFIED;
+        loop {
+            match parser.parse() {
+                Ok(expr) => {
+                    match interp
+                        .backend()
+                        .eval_with_source_map(expr, &global, &source_map)
+                    {
+                        Ok(val) => result = val,
+                        Err(e) => {
+                            if let Some(loc) = e.source_location() {
+                                let mut parts = vec![format!("Error: {}", e)];
+                                parts.push(format!("  at {}", loc));
+                                if let Some(ctx) = source_map.borrow().format_context(loc) {
+                                    parts.push(ctx);
+                                }
+                                return Some(parts.join("\n"));
+                            }
+                            return Some(format!("Error: {}", e));
+                        }
+                    }
                 }
+                Err(ParseError::UnexpectedEof) => break,
+                Err(e) => return Some(format!("Error: {}", e)),
             }
-            Err(e) => Some(format!("Error: {}", e)),
+        }
+        if result != TaggedValue::UNSPECIFIED {
+            Some(format_tagged(result, &heap.borrow()))
+        } else {
+            None
         }
     });
 }

@@ -623,6 +623,9 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
             Ok(Some(val)) => return Ok(val),
             Ok(None) => continue,
             Err(e) => {
+                // Attach source location from the current frame's code object if available.
+                let e = attach_source_location(state, e);
+
                 // Route catchable errors through exception handlers
                 if is_catchable(&e) && !state.exception_handlers.is_empty() {
                     let (kind, message) = classify_error(&e);
@@ -638,6 +641,26 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
             }
         }
     }
+}
+
+/// Attach a source location to an error if it doesn't already have one.
+/// Looks up the current frame's code object and uses the PC to find the
+/// closest source location from the compiled source map.
+fn attach_source_location(state: &VmState, e: VmError) -> VmError {
+    // Don't double-wrap if already has a location.
+    if e.source_location().is_some() {
+        return e;
+    }
+    if let Some(frame) = state.frames.last()
+        && let Some(code) = state.code_store.get(&frame.code_id)
+    {
+        // PC was already advanced before dispatch, so use pc-1.
+        let pc = frame.pc.saturating_sub(1);
+        if let Some(loc) = code.source_location(pc) {
+            return e.at(loc.clone());
+        }
+    }
+    e
 }
 
 /// Dispatch a single instruction. Returns `Ok(Some(val))` if the loop should
@@ -1936,7 +1959,11 @@ fn maybe_route_error(state: &mut VmState, err: VmError, dst: u16) -> Result<(), 
 /// Classify whether a VmError should be catchable by Scheme exception handlers.
 #[allow(dead_code)]
 fn is_catchable(err: &VmError) -> bool {
-    !matches!(err, VmError::StackOverflow | VmError::Compile(_))
+    match err {
+        VmError::StackOverflow | VmError::Compile(_) => false,
+        VmError::WithLocation { error, .. } => is_catchable(error),
+        _ => true,
+    }
 }
 
 /// Convert a VmError to an ExceptionKind + message for Scheme-level exception objects.
@@ -1993,6 +2020,8 @@ fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, String) {
             ExceptionKind::Error,
             "continuation value mismatch".to_string(),
         ),
+        // Unwrap location wrapper and classify the inner error.
+        VmError::WithLocation { error, .. } => classify_error(error),
         // Non-catchable (shouldn't reach here due to is_catchable check)
         VmError::StackOverflow | VmError::Compile(_) => (ExceptionKind::Error, err.to_string()),
     }
