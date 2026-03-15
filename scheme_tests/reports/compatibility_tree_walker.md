@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report (Tree-Walker Backend)
 
-**Generated:** 2026-03-15 13:15:15
+**Generated:** 2026-03-15 13:25:57
 **Test Suite:** chibi-scheme r7rs-tests.scm
 **Backend:** Tree-Walker (CPS)
 

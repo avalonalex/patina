@@ -98,11 +98,9 @@ The `(scheme r5rs)` library is now complete. It imports from all relevant R7RS l
 
 `write-shared` correctly outputs datum labels for circular and shared structure.
 
-### 4.3 Quoted circular literals — HANGS
+### ~~4.3 Quoted circular literals~~ FIXED
 
-`'#0=(a . #0#)` as a quoted literal in source code causes the writer to loop infinitely when printing the result. The parser creates the circular structure, but the default `display`/`write` (non-shared mode) doesn't detect cycles.
-
-**Effort:** Low-medium. The `write` procedure should detect cycles and either error or fall back to `write-shared` behavior. R7RS says `write` should handle shared structure by using datum labels.
+`'#0=(a . #0#)` as a quoted literal previously caused a stack overflow during desugaring because `strip_identifiers_tagged` walked the circular pair chain without cycle detection. Fixed by adding a `seen` set to track visited addresses. `write` and `display` already handled cycles correctly via `DatumLabelWriter`.
 
 ---
 
@@ -184,11 +182,16 @@ In `(scheme base)` with optional start/end arguments.
 |------|--------|-------------|
 | ~~`(scheme r5rs)` completion~~ | **DONE** | All R5RS identifiers, aliases, imports from 12 libraries |
 
+### ~~Priority 1 — Edge Cases (write cycles)~~ DONE
+
+| Item | Status | Description |
+|------|--------|-------------|
+| ~~`write` cycle detection~~ | **DONE** | `write`/`display` already handled cycles; fixed stack overflow in `strip_identifiers_tagged` for quoted circular literals |
+
 ### Priority 1 — Edge Cases
 
 | Item | Effort | Description |
 |------|--------|-------------|
-| `write` cycle detection | Low-Med | Non-shared `write` should detect and handle cycles |
 | Auxiliary syntax exports (`_`, `...`, `else`, `=>`) | Low | Verify/fix export as proper bindings |
 
 ---

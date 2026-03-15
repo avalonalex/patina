@@ -164,6 +164,15 @@ pub fn get_identifier_info(tv: TaggedValue, heap: &Heap) -> Option<(Rc<str>, Sco
 /// Identifier scopes are only needed during desugaring for binding resolution,
 /// not in quoted output data.
 pub fn strip_identifiers_tagged(tv: TaggedValue, shared_heap: &SharedHeap) -> TaggedValue {
+    let mut seen = std::collections::HashSet::new();
+    strip_identifiers_impl(tv, shared_heap, &mut seen)
+}
+
+fn strip_identifiers_impl(
+    tv: TaggedValue,
+    shared_heap: &SharedHeap,
+    seen: &mut std::collections::HashSet<u64>,
+) -> TaggedValue {
     let heap = shared_heap.borrow();
 
     // Check if it's an identifier (native or boxed) — replace with symbol
@@ -174,14 +183,19 @@ pub fn strip_identifiers_tagged(tv: TaggedValue, shared_heap: &SharedHeap) -> Ta
 
     // Check if it's a pair — recursively strip car and cdr
     if tv.is_pair() {
+        // Cycle detection: if we've already visited this pair, return as-is
+        if !seen.insert(tv.raw_bits()) {
+            return tv;
+        }
+
         let (car, cdr) = match heap.try_pair(tv) {
             Some(pair) => pair,
             None => return tv,
         };
         drop(heap);
 
-        let new_car = strip_identifiers_tagged(car, shared_heap);
-        let new_cdr = strip_identifiers_tagged(cdr, shared_heap);
+        let new_car = strip_identifiers_impl(car, shared_heap, seen);
+        let new_cdr = strip_identifiers_impl(cdr, shared_heap, seen);
 
         // Only allocate a new pair if something changed
         if new_car == car && new_cdr == cdr {
@@ -193,6 +207,10 @@ pub fn strip_identifiers_tagged(tv: TaggedValue, shared_heap: &SharedHeap) -> Ta
 
     // Check if it's a vector — recursively strip elements
     if tv.is_vector() {
+        if !seen.insert(tv.raw_bits()) {
+            return tv;
+        }
+
         let len = heap.vector_len(tv);
         let elements: Vec<TaggedValue> = (0..len).map(|i| heap.vector_ref(tv, i)).collect();
         drop(heap);
@@ -201,7 +219,7 @@ pub fn strip_identifiers_tagged(tv: TaggedValue, shared_heap: &SharedHeap) -> Ta
         let new_elements: Vec<TaggedValue> = elements
             .iter()
             .map(|elem| {
-                let new_elem = strip_identifiers_tagged(*elem, shared_heap);
+                let new_elem = strip_identifiers_impl(*elem, shared_heap, seen);
                 if new_elem != *elem {
                     changed = true;
                 }
