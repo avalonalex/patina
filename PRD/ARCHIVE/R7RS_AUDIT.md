@@ -67,13 +67,13 @@ R7RS specifies `syntax-error` as a syntax form in `(scheme base)`. It should sig
 
 **Status:** IMPLEMENTED. Handled as a special form in the desugarer that immediately raises a compile-time error. Works standalone and inside `syntax-rules` templates (e.g., in `cond` macro for invalid patterns).
 
-### 2.3 Auxiliary syntax exports: `_`, `...`, `else`, `=>`
+### ~~2.3 Auxiliary syntax exports: `else`, `=>`~~ DONE
 
 R7RS requires these to be exported from `(scheme base)` as auxiliary syntax (so that `(import (only (scheme base) else))` works, and so that `syntax-rules` literal matching works correctly with renamed imports).
 
-**Status:** These work implicitly in syntax-rules but may not be exported as proper bindings. Needs verification that `(import (only (scheme base) else))` works.
+**Status:** `else` and `=>` are now defined as variable bindings (`(define else 'else)` etc.) and exported from `(scheme base)`. Selective import like `(import (only (scheme base) else))` works.
 
-**Effort:** Low if already implicit; medium if bindings need to be created.
+**Note on `_` and `...`:** These are NOT exported as bindings because they have built-in special meaning in `syntax-rules` — defining them as variables breaks SRFI-46 custom ellipsis patterns. They are implicitly available in `syntax-rules` contexts. R7RS says "any use as an independent syntactic construct or variable is an error."
 
 ---
 
@@ -182,17 +182,13 @@ In `(scheme base)` with optional start/end arguments.
 |------|--------|-------------|
 | ~~`(scheme r5rs)` completion~~ | **DONE** | All R5RS identifiers, aliases, imports from 12 libraries |
 
-### ~~Priority 1 — Edge Cases (write cycles)~~ DONE
+### ~~Priority 1 — Edge Cases~~ DONE
 
 | Item | Status | Description |
 |------|--------|-------------|
-| ~~`write` cycle detection~~ | **DONE** | `write`/`display` already handled cycles; fixed stack overflow in `strip_identifiers_tagged` for quoted circular literals |
-
-### Priority 1 — Edge Cases
-
-| Item | Effort | Description |
-|------|--------|-------------|
-| Auxiliary syntax exports (`_`, `...`, `else`, `=>`) | Low | Verify/fix export as proper bindings |
+| ~~`write` cycle detection~~ | **DONE** | Fixed stack overflow in `strip_identifiers_tagged` for quoted circular literals |
+| ~~Auxiliary syntax (`else`, `=>`)~~ | **DONE** | Exported as bindings from `(scheme base)` |
+| `_`, `...` | **Intentionally not exported** | Built-in `syntax-rules` meaning; exporting as variables breaks SRFI-46 custom ellipsis |
 
 ---
 

@@ -197,7 +197,20 @@
     define-record-type
     ;; Internal: needed for define-record-type macro expansion
     %make-constructor %define-field-accessors
+
+    ;; === Auxiliary syntax (§4.3.2) ===
+    ;; These must be exported so that (import (only (scheme base) else))
+    ;; works and so syntax-rules literal matching works with renamed imports.
+    ;; R7RS: "Any use as an independent syntactic construct or variable is an error."
+    ;; Note: _ and ... have built-in meaning in syntax-rules and cannot be
+    ;; defined as variables without breaking custom-ellipsis patterns (SRFI-46).
+    else =>
   )
+
+  ;; Auxiliary syntax bindings
+  (begin
+    (define else 'else)
+    (define => '=>))
 
   ;; Include Scheme-defined derived forms (organized by domain)
   (include "base/lists.scm")

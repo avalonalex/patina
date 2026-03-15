@@ -1,8 +1,8 @@
 # Patina: Parallel Development Tracks
 
-**Status:** Track A complete, Track B ready to start
+**Status:** Track A complete, Track B1 complete
 **Created:** 2026-03-08
-**Updated:** 2026-03-14
+**Updated:** 2026-03-15
 
 ---
 
@@ -36,10 +36,22 @@ immediately usable and will also be inherited by the VM.
 **Reference:** `PRD/phase2/R7RS_LARGE_STATUS.md`, chibi-scheme at
 `~/Project/reference/chibi-scheme`
 
-### B1 — Audit: what's missing from R7RS-small
+### B1 — R7RS-small compliance audit ✅ COMPLETE
 
-Walk through the R7RS-small spec and chibi's test suite to identify any gaps.
-Both backends now pass 1163/1163 chibi tests — verify edge cases.
+Full audit against R7RS-small spec (LaTeX source). All gaps found and resolved.
+See `PRD/ARCHIVE/R7RS_AUDIT.md` for the detailed report.
+
+**Completed (2026-03-15):**
+- **`(scheme load)`** — `load` primitive with optional environment arg
+- **`(scheme repl)`** — `interaction-environment` primitive
+- **`(scheme r5rs)`** — complete rewrite: 12 library imports, ~160 exports, `exact->inexact`/`inexact->exact` aliases
+- **`include` / `include-ci`** — expression-level file inclusion in desugarer
+- **`syntax-error`** — compile-time error signaling in desugarer
+- **Auxiliary syntax** — `else` and `=>` exported as bindings from `(scheme base)`
+- **Circular data** — fixed stack overflow in `strip_identifiers_tagged` for quoted circular literals
+- **VM nested `eval`** — fixed missing CodeObject bug when closures from prior evals are called through subsequent evals
+
+**Result:** 16/16 R7RS-small libraries, all procedures, all syntax forms. 1163/1163 chibi tests on both backends.
 
 ### B2 — Priority SRFIs (Scheme-implementable)
 
@@ -87,4 +99,5 @@ Track A and Track B share:
 | Track | Done when |
 |---|---|
 | **Track A** | ✅ Complete — 1163/1163 chibi tests passing |
-| **Track B** | Gap audit complete + priority SRFIs implemented + all new tests pass on both backends |
+| **Track B1** | ✅ Complete — R7RS-small audit: 16/16 libraries, all gaps resolved |
+| **Track B2+** | Priority SRFIs implemented + all new tests pass on both backends |
