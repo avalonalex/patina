@@ -9,7 +9,8 @@ Patina is very close to full R7RS-small compliance. All 1163 chibi R7RS tests pa
 
 **Status by category:**
 - Standard Libraries: **16/16 present** — all R7RS-small libraries implemented
-- `(scheme base)` exports: ~98% complete (missing `include`/`include-ci` at expression level, `syntax-error` as binding)
+- `(scheme base)` exports: ~99% complete (auxiliary syntax `_`, `...`, `else`, `=>` need verification)
+- Expression-level syntax: `include`, `include-ci`, `syntax-error` all implemented
 - `(scheme r5rs)`: Incomplete (missing `exact->inexact`, `inexact->exact`, several re-exports)
 - Lexer/Parser: Datum labels parsed but circular quoted literals hang the writer
 - Proper tail calls: Fully implemented
@@ -43,6 +44,8 @@ All 16 R7RS-small standard libraries are implemented:
 
 - **`(scheme load)`** — `load` primitive reads a file, parses all expressions, and evaluates them sequentially. Supports `(load filename)` and `(load filename environment-specifier)`. Implemented via `ApplyContext::interaction_environment()` on both backends.
 - **`(scheme repl)`** — `interaction-environment` returns a mutable environment specifier for the global/REPL environment. Works with `eval` and `load`.
+- **`include` / `include-ci`** — Expression-level file inclusion. Handled as special forms in the desugarer; reads file contents, parses, and desugars them inline as a `begin` form. Supports absolute and relative paths (resolved relative to the source file). `include-ci` folds case per R7RS.
+- **`syntax-error`** — Compile-time error signaling. Handled as a special form in the desugarer; immediately raises a `DesugarError` with the message and irritants. Works standalone and inside `syntax-rules` templates.
 
 ### Bug fix: VM nested `eval` with closures
 
@@ -50,23 +53,19 @@ Fixed a bug where the VM's `vm_eval_expr` created a temporary `VmState` with an 
 
 ---
 
-## 2. Missing or Incomplete Exports in `(scheme base)`
+## 2. ~~Missing or Incomplete Exports in `(scheme base)`~~ Mostly Complete
 
-### 2.1 `include` / `include-ci` — Library-level only
+### ~~2.1 `include` / `include-ci`~~ DONE
 
 R7RS specifies `include` and `include-ci` as expression-level syntax in `(scheme base)` (Section 4.1.7). They should splice the contents of a file as if they were written inline.
 
-**Status:** Implemented at library-declaration level (in `.sld` files) but NOT at expression level. Using `(include "file.scm")` in program code gives "unbound variable: include".
+**Status:** IMPLEMENTED. Handled as special forms in the desugarer. Reads files, parses all expressions, and desugars them inline. Supports multiple filenames, absolute and relative paths, and `include-ci` folds identifiers to lowercase.
 
-**Effort:** Medium. The desugarer needs to handle `include`/`include-ci` as special forms that read and inline file contents during compilation.
-
-### 2.2 `syntax-error` — Not bound
+### ~~2.2 `syntax-error`~~ DONE
 
 R7RS specifies `syntax-error` as a syntax form in `(scheme base)`. It should signal an error at macro expansion time with the given message and irritants.
 
-**Status:** Used inside macro templates (e.g., in `cond`), but not exported as a binding from `(scheme base)`. Using `(syntax-error "msg")` at top level gives "unbound variable". It appears to work only because `syntax-rules` has hard-coded support for it in template expansion, but it's not available as a standalone form.
-
-**Effort:** Low. Need to handle it in the desugarer/macro expander as a recognized form, and ensure it's exported.
+**Status:** IMPLEMENTED. Handled as a special form in the desugarer that immediately raises a compile-time error. Works standalone and inside `syntax-rules` templates (e.g., in `cond` macro for invalid patterns).
 
 ### 2.3 Auxiliary syntax exports: `_`, `...`, `else`, `=>`
 
@@ -190,14 +189,14 @@ In `(scheme base)` with optional start/end arguments.
 | ~~`(scheme repl)` library~~ | **DONE** | `interaction-environment` primitive + `.sld` |
 | ~~`(scheme load)` library~~ | **DONE** | `load` primitive with optional env arg + `.sld` |
 
-### Priority 1 — Missing Expression-Level Syntax
+### ~~Priority 1 — Missing Expression-Level Syntax~~ DONE
 
-| Item | Effort | Description |
+| Item | Status | Description |
 |------|--------|-------------|
-| `include` / `include-ci` expressions | Medium | Handle in desugarer as special forms |
-| `syntax-error` as exported binding | Low | Handle in macro expander, export from base |
+| ~~`include` / `include-ci` expressions~~ | **DONE** | Handled in desugarer as special forms |
+| ~~`syntax-error` as exported binding~~ | **DONE** | Handled in desugarer, raises compile-time error |
 
-### Priority 2 — Incomplete Libraries
+### Priority 1 — Incomplete Libraries
 
 | Item | Effort | Description |
 |------|--------|-------------|

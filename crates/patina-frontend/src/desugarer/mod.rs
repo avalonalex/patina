@@ -474,6 +474,9 @@ impl Desugarer {
                 "let-syntax" => return self.desugar_let_syntax_tagged(cdr, shared_heap),
                 "letrec-syntax" => return self.desugar_letrec_syntax_tagged(cdr, shared_heap),
                 "cond-expand" => return self.desugar_cond_expand_tagged(cdr, shared_heap),
+                "syntax-error" => return self.desugar_syntax_error_tagged(cdr, shared_heap),
+                "include" => return self.desugar_include_tagged(cdr, shared_heap, false),
+                "include-ci" => return self.desugar_include_tagged(cdr, shared_heap, true),
                 _ => {}
             }
         }
@@ -1286,6 +1289,183 @@ impl Desugarer {
         } else {
             Ok(CoreExpr::new(CoreExprKind::Begin(desugared)))
         }
+    }
+
+    // =========================================================================
+    // syntax-error
+    // =========================================================================
+
+    /// (syntax-error message args ...) — signal a compile-time error
+    ///
+    /// R7RS Section 4.3.1: "It is an error" at macro expansion time.
+    /// The first argument must be a string literal (the message); any remaining
+    /// arguments are irritants displayed alongside it.
+    fn desugar_syntax_error_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let parts = utils::list_to_vec_tagged(args, shared_heap)?;
+
+        if parts.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "syntax-error requires at least a message argument".to_string(),
+            ));
+        }
+
+        // Extract message string
+        let message = {
+            let heap = shared_heap.borrow();
+            heap.get_string_contents(parts[0])
+                .unwrap_or_else(|| patina_core::debug_format::format_tagged(parts[0], &heap))
+        };
+
+        // Format irritants
+        if parts.len() > 1 {
+            let irritants: Vec<String> = {
+                let heap = shared_heap.borrow();
+                parts[1..]
+                    .iter()
+                    .map(|tv| patina_core::debug_format::format_tagged(*tv, &heap))
+                    .collect()
+            };
+            Err(DesugarError::InvalidSyntax(format!(
+                "syntax-error: {} {}",
+                message,
+                irritants.join(" ")
+            )))
+        } else {
+            Err(DesugarError::InvalidSyntax(format!(
+                "syntax-error: {}",
+                message
+            )))
+        }
+    }
+
+    // =========================================================================
+    // include / include-ci
+    // =========================================================================
+
+    /// (include filename ...) or (include-ci filename ...)
+    ///
+    /// R7RS Section 4.1.7: Reads the contents of each file as if by repeated
+    /// applications of `read`, and effectively replaces the include expression
+    /// with a begin expression containing the read expressions.
+    /// include-ci reads as if each file began with `#!fold-case`.
+    fn desugar_include_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+        case_insensitive: bool,
+    ) -> Result<CoreExpr> {
+        let filenames = utils::list_to_vec_tagged(args, shared_heap)?;
+
+        if filenames.is_empty() {
+            return Err(DesugarError::InvalidSyntax(
+                "include requires at least one filename".to_string(),
+            ));
+        }
+
+        // Determine the base directory for resolving relative paths.
+        // We look at the source map to find the current file being compiled.
+        let base_dir = self.resolve_include_base_dir();
+
+        let mut all_exprs: Vec<CoreExpr> = Vec::new();
+
+        for &filename_tv in &filenames {
+            // Extract the filename string
+            let filename = {
+                let heap = shared_heap.borrow();
+                heap.get_string_contents(filename_tv).ok_or_else(|| {
+                    DesugarError::InvalidSyntax(format!(
+                        "include: expected string filename, got {}",
+                        heap.type_name(filename_tv)
+                    ))
+                })?
+            };
+
+            // Resolve the path
+            let path = if let Some(ref base) = base_dir {
+                let p = base.join(&filename);
+                if p.exists() {
+                    p
+                } else {
+                    // Fall back to current directory
+                    std::path::PathBuf::from(&filename)
+                }
+            } else {
+                std::path::PathBuf::from(&filename)
+            };
+
+            // Read the file
+            let content = std::fs::read_to_string(&path).map_err(|e| {
+                DesugarError::InvalidSyntax(format!(
+                    "include: cannot read '{}': {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+
+            // Parse the file contents
+            let mut parser = if case_insensitive {
+                crate::Parser::new_case_insensitive_with_heap(&content, shared_heap.clone())
+            } else {
+                crate::Parser::new_with_heap(&content, shared_heap.clone())
+            }
+            .map_err(|e| {
+                DesugarError::InvalidSyntax(format!(
+                    "include: parse error in '{}': {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+
+            let parsed_exprs = parser.parse_all().map_err(|e| {
+                DesugarError::InvalidSyntax(format!(
+                    "include: parse error in '{}': {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+
+            // Desugar each expression from the included file
+            for expr_tv in parsed_exprs {
+                all_exprs.push(self.desugar_tagged(expr_tv, shared_heap)?);
+            }
+        }
+
+        if all_exprs.is_empty() {
+            Ok(CoreExpr::new(CoreExprKind::Literal(
+                TaggedValue::UNSPECIFIED,
+            )))
+        } else if all_exprs.len() == 1 {
+            Ok(all_exprs.into_iter().next().unwrap())
+        } else {
+            Ok(CoreExpr::new(CoreExprKind::Begin(all_exprs)))
+        }
+    }
+
+    /// Determine the base directory for resolving include paths.
+    ///
+    /// Looks at source locations in the source map to find a file path,
+    /// then uses its parent directory. Falls back to the current working
+    /// directory if no file path is available (e.g., REPL or eval).
+    fn resolve_include_base_dir(&self) -> Option<std::path::PathBuf> {
+        if let Some(ref sm) = self.source_map {
+            let sm_ref = sm.borrow();
+            // Look for any source location that has a real file path
+            for loc in sm_ref.iter_locations() {
+                let s = loc.source.as_ref();
+                if !s.starts_with('<') && !s.is_empty() {
+                    let p = std::path::Path::new(s);
+                    if let Some(parent) = p.parent() {
+                        return Some(parent.to_path_buf());
+                    }
+                }
+            }
+        }
+        // Fall back to current working directory
+        std::env::current_dir().ok()
     }
 
     // =========================================================================

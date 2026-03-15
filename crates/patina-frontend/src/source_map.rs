@@ -90,6 +90,11 @@ impl SourceMap {
             .push(macro_name);
     }
 
+    /// Iterate over all recorded source locations.
+    pub fn iter_locations(&self) -> impl Iterator<Item = &SourceLocation> {
+        self.locations.values()
+    }
+
     /// Return the ordered list of macro names expanded at this location, if any.
     pub fn get_expansions(&self, loc: &SourceLocation) -> Option<&[String]> {
         self.expansion_records
