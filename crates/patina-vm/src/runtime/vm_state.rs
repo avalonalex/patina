@@ -521,6 +521,14 @@ fn vm_eval_expr(
     // Copy the primitive registry so primitives work
     tmp_state.primitive_registry = state.primitive_registry.clone();
 
+    // Copy existing code objects so closures from prior evals are callable
+    for (id, co) in &state.code_store {
+        tmp_state
+            .code_store
+            .entry(*id)
+            .or_insert_with(|| co.clone());
+    }
+
     let result = execute(&mut tmp_state, top_id)?;
 
     // Merge any new code objects back (closures created by eval)
@@ -2158,6 +2166,11 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         vm_load_library(state, name)
             .map(Rc::new)
             .map_err(|e| patina_primitives::EvalError::InternalError(e.to_string()))
+    }
+
+    fn interaction_environment(&self) -> Rc<patina_core::environment::Environment> {
+        // SAFETY: pointer is valid for the lifetime of the primitive call.
+        unsafe { (*self.state).globals.clone() }
     }
 }
 

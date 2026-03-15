@@ -46,4 +46,8 @@ impl ApplyContext for Evaluator {
         self.load_library(name)
             .map_err(|e| EvalError::InternalError(format!("cannot load library: {}", e)))
     }
+
+    fn interaction_environment(&self) -> Rc<Environment> {
+        self.global_env.clone()
+    }
 }

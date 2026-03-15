@@ -20,6 +20,8 @@ fn test_can_load_all_r7rs_libraries() {
         vec!["scheme", "eval"],
         vec!["scheme", "process-context"],
         vec!["scheme", "case-lambda"],
+        vec!["scheme", "load"],
+        vec!["scheme", "repl"],
         vec!["scheme", "r5rs"],
     ];
 

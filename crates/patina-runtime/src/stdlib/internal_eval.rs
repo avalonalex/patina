@@ -14,7 +14,12 @@ pub fn build_internal_eval(_name: Vec<String>, env: Rc<Environment>) -> Vec<Stri
         "eval".to_string(),
     ];
 
-    let primitives = [("eval", Arity::Exact(2)), ("environment", Arity::Min(0))];
+    let primitives = [
+        ("eval", Arity::Exact(2)),
+        ("environment", Arity::Min(0)),
+        ("load", Arity::Range(1, 2)),
+        ("interaction-environment", Arity::Exact(0)),
+    ];
 
     let mut exports = Vec::new();
     for (name, arity) in &primitives {

@@ -1,40 +1,52 @@
 # R7RS-Small Compliance Audit
 
-**Date:** 2026-03-15
+**Date:** 2026-03-15 (updated 2026-03-15)
 **Chibi R7RS Tests:** 1163/1163 (both VM and tree-walker backends)
 
 ## Executive Summary
 
-Patina is very close to full R7RS-small compliance. All 1163 chibi R7RS tests pass on both backends. However, a detailed audit against the R7RS-small specification (LaTeX source) reveals several gaps — mostly missing libraries, unimplemented expression-level forms, and edge cases not covered by the chibi test suite.
+Patina is very close to full R7RS-small compliance. All 1163 chibi R7RS tests pass on both backends. A detailed audit against the R7RS-small specification (LaTeX source) reveals a small number of remaining gaps — mostly expression-level syntax forms, an incomplete compatibility library, and edge cases not covered by the chibi test suite.
 
 **Status by category:**
-- Standard Libraries: 14/16 present (missing `(scheme load)`, `(scheme repl)`)
+- Standard Libraries: **16/16 present** — all R7RS-small libraries implemented
 - `(scheme base)` exports: ~98% complete (missing `include`/`include-ci` at expression level, `syntax-error` as binding)
-- `(scheme r5rs)`: Incomplete (missing `exact->inexact`, `inexact->exact`, `load`, `interaction-environment`, several re-exports)
+- `(scheme r5rs)`: Incomplete (missing `exact->inexact`, `inexact->exact`, several re-exports)
 - Lexer/Parser: Datum labels parsed but circular quoted literals hang the writer
 - Proper tail calls: Fully implemented
 
 ---
 
-## 1. Missing Libraries
+## 1. Libraries — COMPLETE (16/16)
 
-### 1.1 `(scheme load)` — NOT IMPLEMENTED
+All 16 R7RS-small standard libraries are implemented:
 
-R7RS requires this library to export:
-- **`load`** — `(load filename)` and optionally `(load filename environment-specifier)`
+| Library | Status | Notes |
+|---------|--------|-------|
+| `(scheme base)` | **Complete** | 148+ procedures, all syntax forms |
+| `(scheme case-lambda)` | **Complete** | `case-lambda` syntax |
+| `(scheme char)` | **Complete** | 26 procedures |
+| `(scheme complex)` | **Complete** | 6 procedures |
+| `(scheme cxr)` | **Complete** | 24 procedures |
+| `(scheme eval)` | **Complete** | `eval`, `environment` |
+| `(scheme file)` | **Complete** | 10 procedures |
+| `(scheme inexact)` | **Complete** | 12 procedures |
+| `(scheme lazy)` | **Complete** | `delay`, `delay-force`, `force`, `promise?`, `make-promise` |
+| `(scheme load)` | **Complete** | `load` with optional environment argument |
+| `(scheme process-context)` | **Complete** | 5 procedures |
+| `(scheme r5rs)` | **Partial** | See Section 3 for missing re-exports |
+| `(scheme read)` | **Complete** | `read` |
+| `(scheme repl)` | **Complete** | `interaction-environment` |
+| `(scheme time)` | **Complete** | 3 procedures |
+| `(scheme write)` | **Complete** | `write`, `write-shared`, `write-simple`, `display` |
 
-**Status:** No `lib/scheme/load.sld` exists. No `load` primitive is implemented. The name appears in the R5RS binding list but has no backing function.
+### Recently added (2026-03-15)
 
-**Effort:** Medium. Needs a Rust primitive that reads a file, parses it, and evaluates each expression in the given (or current) environment.
+- **`(scheme load)`** — `load` primitive reads a file, parses all expressions, and evaluates them sequentially. Supports `(load filename)` and `(load filename environment-specifier)`. Implemented via `ApplyContext::interaction_environment()` on both backends.
+- **`(scheme repl)`** — `interaction-environment` returns a mutable environment specifier for the global/REPL environment. Works with `eval` and `load`.
 
-### 1.2 `(scheme repl)` — NOT IMPLEMENTED
+### Bug fix: VM nested `eval` with closures
 
-R7RS requires this library to export:
-- **`interaction-environment`** — Returns an environment specifier for the REPL
-
-**Status:** No `lib/scheme/repl.sld` exists. The primitive is referenced in code comments but not registered as a callable function.
-
-**Effort:** Low. The REPL already has an interaction environment internally. Just needs a primitive wrapper + `.sld` file.
+Fixed a bug where the VM's `vm_eval_expr` created a temporary `VmState` with an empty `code_store`, causing closures defined by prior `eval`/`load` calls to be unfindable (error: "missing CodeObject"). The fix copies existing code objects from the parent state into the temporary state before execution.
 
 ---
 
@@ -74,31 +86,22 @@ The `lib/scheme/r5rs.sld` is self-described as a "stub". Missing exports require
 |---|---|
 | `exact->inexact` | R5RS name for `inexact` — needs alias |
 | `inexact->exact` | R5RS name for `exact` — needs alias |
-| `load` | Requires `(scheme load)` implementation first |
-| `interaction-environment` | Requires `(scheme repl)` implementation first |
 | `delay` / `force` | Commented out in .sld — should import from `(scheme lazy)` |
 | `make-rectangular`, `make-polar`, `real-part`, `imag-part`, `magnitude`, `angle` | Complex number ops from `(scheme complex)` |
 | `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sqrt` | Transcendentals from `(scheme inexact)` |
 | `char-alphabetic?`, `char-numeric?`, `char-whitespace?`, `char-upper-case?`, `char-lower-case?`, `char-upcase`, `char-downcase` | From `(scheme char)` |
 | `char-ci=?`, `char-ci<?`, `char-ci>?`, `char-ci<=?`, `char-ci>=?` | From `(scheme char)` |
 | `string-ci=?`, `string-ci<?`, `string-ci>?`, `string-ci<=?`, `string-ci>=?` | From `(scheme char)` |
-| `make-string` | Missing from export list |
-| `string-copy` | Missing from export list |
-| `string-fill!` | Missing from export list |
-| `make-vector` | Missing from export list |
-| `vector-fill!` | Missing from export list |
+| `make-string`, `string-copy`, `string-fill!` | Missing from export list |
+| `make-vector`, `vector-fill!` | Missing from export list |
 | `positive?`, `negative?`, `odd?`, `even?` | Missing from export list |
-| `abs` | Present |
-| `expt` | Missing from export list |
-| `numerator`, `denominator` | Missing from export list |
-| `rationalize` | Missing from export list |
-| `exact?`, `inexact?` | Present |
+| `expt`, `numerator`, `denominator`, `rationalize` | Missing from export list |
 | `write`, `display`, `newline`, `read`, `read-char`, `peek-char`, `write-char` | I/O — need to import from `(scheme read)` and `(scheme write)` |
 | `open-input-file`, `open-output-file`, `close-input-port`, `close-output-port` | File I/O — need import from `(scheme file)` |
-| `current-input-port`, `current-output-port` | Present via `(scheme base)` |
 | `call-with-input-file`, `call-with-output-file`, `with-input-from-file`, `with-output-to-file` | From `(scheme file)` |
-| `eof-object?` | Missing from export list |
-| `dynamic-wind` | Missing from export list |
+| `eof-object?`, `dynamic-wind` | Missing from export list |
+| `load` | Now available — import from `(scheme load)` |
+| `interaction-environment` | Now available — import from `(scheme repl)` |
 
 **Effort:** Medium. Mostly adding imports from other scheme libraries and aliases.
 
@@ -180,27 +183,27 @@ In `(scheme base)` with optional start/end arguments.
 
 ## 8. Summary: Action Items by Priority
 
-### Priority 1 — Missing Libraries (blocks full R7RS claim)
+### ~~Priority 1 — Missing Libraries~~ DONE
 
-| Item | Effort | Description |
+| Item | Status | Description |
 |------|--------|-------------|
-| `(scheme repl)` library | Low | Create `.sld`, implement `interaction-environment` primitive |
-| `(scheme load)` library | Medium | Implement `load` primitive + create `.sld` |
+| ~~`(scheme repl)` library~~ | **DONE** | `interaction-environment` primitive + `.sld` |
+| ~~`(scheme load)` library~~ | **DONE** | `load` primitive with optional env arg + `.sld` |
 
-### Priority 2 — Missing Expression-Level Syntax
+### Priority 1 — Missing Expression-Level Syntax
 
 | Item | Effort | Description |
 |------|--------|-------------|
 | `include` / `include-ci` expressions | Medium | Handle in desugarer as special forms |
 | `syntax-error` as exported binding | Low | Handle in macro expander, export from base |
 
-### Priority 3 — Incomplete Libraries
+### Priority 2 — Incomplete Libraries
 
 | Item | Effort | Description |
 |------|--------|-------------|
 | `(scheme r5rs)` completion | Medium | Add missing re-exports, `exact->inexact`/`inexact->exact` aliases |
 
-### Priority 4 — Edge Cases
+### Priority 3 — Edge Cases
 
 | Item | Effort | Description |
 |------|--------|-------------|
@@ -221,8 +224,10 @@ For context, here is what is fully implemented and tested:
 - All `(scheme file)` procedures (10 total)
 - All `(scheme inexact)` procedures (12 total)
 - All `(scheme lazy)` procedures and syntax (5 total)
+- All `(scheme load)` procedures (`load`)
 - All `(scheme process-context)` procedures (5 total)
 - All `(scheme read)` procedures (`read`)
+- All `(scheme repl)` procedures (`interaction-environment`)
 - All `(scheme time)` procedures (3 total)
 - All `(scheme write)` procedures (4 total)
 - `(scheme case-lambda)` syntax

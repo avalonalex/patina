@@ -1,8 +1,10 @@
-//! Eval primitives (R7RS Section 6.12 - scheme eval)
+//! Eval primitives (R7RS Section 6.12 - scheme eval, scheme load)
 //!
 //! Implements:
 //! - `environment` - Create an environment from import sets
 //! - `eval` - Evaluate an expression in a given environment
+//! - `load` - Load and evaluate a file in the interaction environment
+//! - `interaction-environment` - Return the interaction environment
 //! - `null-environment` - R5RS environment with only syntactic keywords
 //! - `scheme-report-environment` - R5RS environment with all bindings
 
@@ -549,6 +551,99 @@ fn primitive_scheme_report_environment(
     Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
 }
 
+/// (load filename) → unspecified
+/// (load filename environment-specifier) → unspecified
+///
+/// Reads and evaluates all expressions from the given file.
+/// If an environment specifier is given, evaluates in that environment;
+/// otherwise uses the interaction environment.
+fn primitive_load(
+    ctx: &dyn ApplyContext,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(EvalError::WrongArity {
+            expected: "load expects 1 or 2 arguments".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let heap = ctx.heap();
+
+    // Extract filename string
+    let filename = {
+        let heap_ref = heap.borrow();
+        heap_ref.get_string_contents(args[0]).ok_or_else(|| {
+            EvalError::TypeError(format!(
+                "load: expected string filename, got {}",
+                heap_ref.type_name(args[0])
+            ))
+        })?
+    };
+
+    // Get the environment to evaluate in
+    let env = if args.len() == 2 {
+        let heap_ref = heap.borrow();
+        match heap_ref.get_environment_specifier(args[1]) {
+            Some((env, _mutable)) => env.clone(),
+            None => {
+                return Err(EvalError::TypeError(format!(
+                    "load: expected environment, got {}",
+                    heap_ref.type_name(args[1])
+                )));
+            }
+        }
+    } else {
+        ctx.interaction_environment()
+    };
+
+    // Read the file
+    let content = std::fs::read_to_string(&filename)
+        .map_err(|e| EvalError::IOError(format!("load: cannot open '{}': {}", filename, e)))?;
+
+    // Parse and evaluate all expressions
+    let mut parser =
+        patina_frontend::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
+            EvalError::InvalidSyntax(format!("load: parse error in '{}': {}", filename, e))
+        })?;
+
+    loop {
+        match parser.parse() {
+            Ok(expr) => {
+                ctx.eval_expr(expr, &env)?;
+            }
+            Err(patina_frontend::ParseError::UnexpectedEof) => break,
+            Err(e) => {
+                return Err(EvalError::InvalidSyntax(format!(
+                    "load: parse error in '{}': {}",
+                    filename, e
+                )));
+            }
+        }
+    }
+
+    Ok(TaggedValue::UNSPECIFIED)
+}
+
+/// (interaction-environment) → environment-specifier
+///
+/// Returns a mutable environment specifier for the interaction (global) environment.
+fn primitive_interaction_environment(
+    ctx: &dyn ApplyContext,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if !args.is_empty() {
+        return Err(EvalError::WrongArity {
+            expected: "interaction-environment expects 0 arguments".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let env = ctx.interaction_environment();
+    let heap = ctx.heap();
+    Ok(heap.borrow_mut().alloc_environment_specifier(env, true))
+}
+
 /// Register eval primitives
 pub fn register(registry: &mut PrimitiveRegistry) {
     // environment - create environment from import sets
@@ -585,5 +680,23 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         Arity::Exact(1),
         "Returns an environment with all R5RS bindings.",
         |ctx, args| primitive_scheme_report_environment(ctx, args),
+    ));
+
+    // load - read and evaluate a file (scheme load library)
+    registry.register(PrimitiveFn::new_higher_order(
+        "patina.internal.eval",
+        "load",
+        Arity::Range(1, 2),
+        "Reads and evaluates all expressions from a file.",
+        |ctx, args| primitive_load(ctx, args),
+    ));
+
+    // interaction-environment - return the REPL/global environment (scheme repl library)
+    registry.register(PrimitiveFn::new_higher_order(
+        "patina.internal.eval",
+        "interaction-environment",
+        Arity::Exact(0),
+        "Returns the interaction environment.",
+        |ctx, args| primitive_interaction_environment(ctx, args),
     ));
 }

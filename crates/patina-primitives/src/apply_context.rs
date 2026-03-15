@@ -36,4 +36,9 @@ pub trait ApplyContext {
     ///
     /// Used by `environment`, `null-environment`, `scheme-report-environment`.
     fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError>;
+
+    /// Get the interaction (global mutable) environment.
+    ///
+    /// Used by `load` and `interaction-environment`.
+    fn interaction_environment(&self) -> Rc<Environment>;
 }
