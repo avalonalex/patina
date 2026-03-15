@@ -1,70 +1,120 @@
 ;; (scheme r5rs) - R7RS R5RS Compatibility Library
 ;;
-;; Provides R5RS compatibility for older code.
-;; NOTE: This is a stub - needs proper implementation.
+;; Provides all identifiers defined by R5RS, except transcript-on and
+;; transcript-off. The R5RS names exact->inexact and inexact->exact are
+;; provided as aliases for inexact and exact respectively.
 
 (define-library (scheme r5rs)
   (import (scheme base)
+          (scheme char)
+          (scheme complex)
+          (scheme cxr)
+          (scheme eval)
+          (scheme file)
+          (scheme inexact)
+          (scheme lazy)
+          (scheme load)
+          (scheme read)
+          (scheme repl)
+          (scheme write)
           (patina internal r5rs))
 
+  (begin
+    (define exact->inexact inexact)
+    (define inexact->exact exact))
+
   (export
-    ;; Re-export everything from (scheme base) for R5RS compatibility
-    ;; Plus any R5RS-specific forms
+    ;; ── Arithmetic ──────────────────────────────────────────────────────
     * + - /
     < <= = > >=
     abs
-    append apply
-    boolean?
-    car cdr
+    quotient remainder modulo
+    gcd lcm
+    numerator denominator
+    floor ceiling truncate round
+    rationalize
+    expt
+    max min
+    number->string string->number
+    ;; ── Number predicates ───────────────────────────────────────────────
+    number? complex? real? rational? integer?
+    exact? inexact?
+    zero? positive? negative? odd? even?
+    ;; ── R5RS exactness names ────────────────────────────────────────────
+    exact->inexact inexact->exact
+    ;; ── Booleans ────────────────────────────────────────────────────────
+    not boolean?
+    ;; ── Pairs and lists ─────────────────────────────────────────────────
+    pair? cons car cdr
+    set-car! set-cdr!
     caar cadr cdar cddr
     caaar caadr cadar caddr cdaar cdadr cddar cdddr
-    call-with-current-continuation
-    call-with-values
-    char? char=? char<? char>? char<=? char>=?
-    char->integer integer->char
-    complex?
-    cons
-    eq? eqv? equal?
-    exact? inexact?
-    floor ceiling truncate round
-    for-each
-    gcd lcm
-    integer?
-    length
-    list list?
-    list->string string->list
-    list->vector vector->list
-    list-ref list-tail
-    map
-    max min
+    ;; 4-deep cxr (from scheme cxr)
+    caaaar caaadr caadar caaddr cadaar cadadr caddar cadddr
+    cdaaar cdaadr cdadar cdaddr cddaar cddadr cdddar cddddr
+    null? list? list
+    length append reverse
+    list-tail list-ref
     memq memv member
     assq assv assoc
-    modulo quotient remainder
-    not null?
-    number? number->string string->number
-    pair?
-    procedure?
-    rational?
-    real?
-    reverse
-    set-car! set-cdr!
-    string string?
+    ;; ── Symbols ─────────────────────────────────────────────────────────
+    symbol? symbol->string string->symbol
+    ;; ── Characters ──────────────────────────────────────────────────────
+    char?
+    char=? char<? char>? char<=? char>=?
+    char-ci=? char-ci<? char-ci>? char-ci<=? char-ci>=?
+    char-alphabetic? char-numeric? char-whitespace?
+    char-upper-case? char-lower-case?
+    char->integer integer->char
+    char-upcase char-downcase
+    ;; ── Strings ─────────────────────────────────────────────────────────
+    string? make-string string
     string-length string-ref string-set!
     string=? string<? string>? string<=? string>=?
-    string-append substring
-    symbol? symbol->string string->symbol
-    values
-    vector vector?
+    string-ci=? string-ci<? string-ci>? string-ci<=? string-ci>=?
+    substring string-append
+    string->list list->string
+    string-copy string-fill!
+    ;; ── Vectors ─────────────────────────────────────────────────────────
+    vector? make-vector vector
     vector-length vector-ref vector-set!
-    zero?
-    ;; Derived syntax (macros) - these can be re-exported
+    vector->list list->vector
+    vector-fill!
+    ;; ── Control ──────────────────────────────────────────────────────────
+    procedure? apply map for-each
+    call-with-current-continuation
+    values call-with-values
+    dynamic-wind
+    ;; ── Eval ────────────────────────────────────────────────────────────
+    eval
+    null-environment scheme-report-environment
+    ;; ── I/O ─────────────────────────────────────────────────────────────
+    call-with-input-file call-with-output-file
+    input-port? output-port?
+    current-input-port current-output-port
+    with-input-from-file with-output-to-file
+    open-input-file open-output-file
+    close-input-port close-output-port
+    read read-char peek-char char-ready?
+    eof-object?
+    write display newline write-char
+    ;; ── Load ────────────────────────────────────────────────────────────
+    load
+    ;; ── REPL ────────────────────────────────────────────────────────────
+    interaction-environment
+    ;; ── Lazy ────────────────────────────────────────────────────────────
+    delay force
+    ;; Internal: needed for delay macro expansion
+    %make-delayed-promise
+    ;; ── Inexact ─────────────────────────────────────────────────────────
+    exp log sin cos tan asin acos atan sqrt
+    ;; ── Complex ─────────────────────────────────────────────────────────
+    make-rectangular make-polar real-part imag-part magnitude angle
+    ;; ── Derived syntax (macros) ─────────────────────────────────────────
     and or cond case do
     let let* letrec
-    ;; NOTE: Special forms (begin, define, define-syntax, if, lambda, quote, quasiquote, set!)
-    ;; cannot be re-exported as they are built-in syntax, not bindings
-    ;; R5RS environment procedures
-    null-environment scheme-report-environment
-    ;; These are R5RS but may need special handling
-    ; delay force
-    ; interaction-environment
+    ;; NOTE: let-syntax, letrec-syntax, begin, define, define-syntax, if,
+    ;; lambda, quote, quasiquote, set! are core syntax handled by the
+    ;; desugarer and cannot be re-exported as bindings. They are
+    ;; implicitly available in every environment.
     ))

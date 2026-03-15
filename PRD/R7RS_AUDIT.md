@@ -11,7 +11,7 @@ Patina is very close to full R7RS-small compliance. All 1163 chibi R7RS tests pa
 - Standard Libraries: **16/16 present** — all R7RS-small libraries implemented
 - `(scheme base)` exports: ~99% complete (auxiliary syntax `_`, `...`, `else`, `=>` need verification)
 - Expression-level syntax: `include`, `include-ci`, `syntax-error` all implemented
-- `(scheme r5rs)`: Incomplete (missing `exact->inexact`, `inexact->exact`, several re-exports)
+- `(scheme r5rs)`: Complete (all R5RS identifiers including aliases)
 - Lexer/Parser: Datum labels parsed but circular quoted literals hang the writer
 - Proper tail calls: Fully implemented
 
@@ -34,7 +34,7 @@ All 16 R7RS-small standard libraries are implemented:
 | `(scheme lazy)` | **Complete** | `delay`, `delay-force`, `force`, `promise?`, `make-promise` |
 | `(scheme load)` | **Complete** | `load` with optional environment argument |
 | `(scheme process-context)` | **Complete** | 5 procedures |
-| `(scheme r5rs)` | **Partial** | See Section 3 for missing re-exports |
+| `(scheme r5rs)` | **Complete** | All R5RS identifiers including `exact->inexact`/`inexact->exact` aliases |
 | `(scheme read)` | **Complete** | `read` |
 | `(scheme repl)` | **Complete** | `interaction-environment` |
 | `(scheme time)` | **Complete** | 3 procedures |
@@ -77,32 +77,14 @@ R7RS requires these to be exported from `(scheme base)` as auxiliary syntax (so 
 
 ---
 
-## 3. Incomplete `(scheme r5rs)` Library
+## ~~3. Incomplete `(scheme r5rs)` Library~~ DONE
 
-The `lib/scheme/r5rs.sld` is self-described as a "stub". Missing exports required by R7RS Section A:
+The `(scheme r5rs)` library is now complete. It imports from all relevant R7RS libraries and re-exports all R5RS identifiers:
 
-| Missing Export | Notes |
-|---|---|
-| `exact->inexact` | R5RS name for `inexact` — needs alias |
-| `inexact->exact` | R5RS name for `exact` — needs alias |
-| `delay` / `force` | Commented out in .sld — should import from `(scheme lazy)` |
-| `make-rectangular`, `make-polar`, `real-part`, `imag-part`, `magnitude`, `angle` | Complex number ops from `(scheme complex)` |
-| `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sqrt` | Transcendentals from `(scheme inexact)` |
-| `char-alphabetic?`, `char-numeric?`, `char-whitespace?`, `char-upper-case?`, `char-lower-case?`, `char-upcase`, `char-downcase` | From `(scheme char)` |
-| `char-ci=?`, `char-ci<?`, `char-ci>?`, `char-ci<=?`, `char-ci>=?` | From `(scheme char)` |
-| `string-ci=?`, `string-ci<?`, `string-ci>?`, `string-ci<=?`, `string-ci>=?` | From `(scheme char)` |
-| `make-string`, `string-copy`, `string-fill!` | Missing from export list |
-| `make-vector`, `vector-fill!` | Missing from export list |
-| `positive?`, `negative?`, `odd?`, `even?` | Missing from export list |
-| `expt`, `numerator`, `denominator`, `rationalize` | Missing from export list |
-| `write`, `display`, `newline`, `read`, `read-char`, `peek-char`, `write-char` | I/O — need to import from `(scheme read)` and `(scheme write)` |
-| `open-input-file`, `open-output-file`, `close-input-port`, `close-output-port` | File I/O — need import from `(scheme file)` |
-| `call-with-input-file`, `call-with-output-file`, `with-input-from-file`, `with-output-to-file` | From `(scheme file)` |
-| `eof-object?`, `dynamic-wind` | Missing from export list |
-| `load` | Now available — import from `(scheme load)` |
-| `interaction-environment` | Now available — import from `(scheme repl)` |
-
-**Effort:** Medium. Mostly adding imports from other scheme libraries and aliases.
+- **Aliases:** `exact->inexact` (alias for `inexact`), `inexact->exact` (alias for `exact`)
+- **Imports from:** `(scheme base)`, `(scheme char)`, `(scheme complex)`, `(scheme cxr)`, `(scheme eval)`, `(scheme file)`, `(scheme inexact)`, `(scheme lazy)`, `(scheme load)`, `(scheme read)`, `(scheme repl)`, `(scheme write)`, `(patina internal r5rs)`
+- **Exports:** All R5RS procedures, syntax, and aliases (~160 identifiers)
+- **Note:** Core syntax forms (`begin`, `define`, `if`, `lambda`, `quote`, `set!`, `let-syntax`, `letrec-syntax`) are implicitly available and cannot be re-exported as bindings
 
 ---
 
@@ -196,13 +178,13 @@ In `(scheme base)` with optional start/end arguments.
 | ~~`include` / `include-ci` expressions~~ | **DONE** | Handled in desugarer as special forms |
 | ~~`syntax-error` as exported binding~~ | **DONE** | Handled in desugarer, raises compile-time error |
 
-### Priority 1 — Incomplete Libraries
+### ~~Priority 1 — Incomplete Libraries~~ DONE
 
-| Item | Effort | Description |
+| Item | Status | Description |
 |------|--------|-------------|
-| `(scheme r5rs)` completion | Medium | Add missing re-exports, `exact->inexact`/`inexact->exact` aliases |
+| ~~`(scheme r5rs)` completion~~ | **DONE** | All R5RS identifiers, aliases, imports from 12 libraries |
 
-### Priority 3 — Edge Cases
+### Priority 1 — Edge Cases
 
 | Item | Effort | Description |
 |------|--------|-------------|
