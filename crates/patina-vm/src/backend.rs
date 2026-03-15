@@ -282,9 +282,6 @@ impl VmBackend {
         // Load (scheme base)
         let _ = self.load_library(&["scheme".into(), "base".into()]);
 
-        // Load test framework
-        let _ = self.load_library(&["chibi".into(), "test".into()]);
-
         // Load Patina debug utilities
         let _ = self.load_library(&["patina".into(), "debug".into()]);
 
@@ -297,13 +294,6 @@ impl VmBackend {
 
         // Import (patina debug) into global environment
         if let Ok(lib) = self.get_loaded_library(&["patina".into(), "debug".into()]) {
-            for (name, value) in lib.exports_iter_tagged() {
-                self.global_env.define(name.clone(), value);
-            }
-        }
-
-        // Import (chibi test) into global environment
-        if let Ok(lib) = self.get_loaded_library(&["chibi".into(), "test".into()]) {
             for (name, value) in lib.exports_iter_tagged() {
                 self.global_env.define(name.clone(), value);
             }

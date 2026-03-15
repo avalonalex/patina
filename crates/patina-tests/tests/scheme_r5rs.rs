@@ -9,18 +9,12 @@ use common::*;
 
 #[test]
 fn test_exact_to_inexact() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (exact->inexact 3)",
-        "3.0",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (exact->inexact 3)", "3.0");
 }
 
 #[test]
 fn test_inexact_to_exact() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (inexact->exact 3.0)",
-        "3",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (inexact->exact 3.0)", "3");
 }
 
 #[test]
@@ -37,66 +31,42 @@ fn test_exact_to_inexact_rational() {
 
 #[test]
 fn test_r5rs_char_ops() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (char-alphabetic? #\\a)",
-        "#t",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (char-alphabetic? #\\a)", "#t");
 }
 
 #[test]
 fn test_r5rs_char_ci() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (char-ci=? #\\A #\\a)",
-        "#t",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (char-ci=? #\\A #\\a)", "#t");
 }
 
 #[test]
 fn test_r5rs_string_ci() {
-    assert_program_eval_to(
-        r#"(import (scheme r5rs)) (string-ci=? "ABC" "abc")"#,
-        "#t",
-    );
+    assert_program_eval_to(r#"(import (scheme r5rs)) (string-ci=? "ABC" "abc")"#, "#t");
 }
 
 #[test]
 fn test_r5rs_complex() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (make-rectangular 3 4)",
-        "3+4i",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (make-rectangular 3 4)", "3+4i");
 }
 
 #[test]
 fn test_r5rs_inexact_sqrt() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (sqrt 4.0)",
-        "2.0",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (sqrt 4.0)", "2.0");
 }
 
 #[test]
 fn test_r5rs_trig() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (sin 0.0)",
-        "0.0",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (sin 0.0)", "0.0");
 }
 
 #[test]
 fn test_r5rs_delay_force() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (force (delay (+ 1 2)))",
-        "3",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (force (delay (+ 1 2)))", "3");
 }
 
 #[test]
 fn test_r5rs_cxr() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (caaaar '((((42)))))",
-        "42",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (caaaar '((((42)))))", "42");
 }
 
 #[test]
@@ -141,18 +111,12 @@ fn test_r5rs_vector_ops() {
 
 #[test]
 fn test_r5rs_eof() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (eof-object? (eof-object))",
-        "#t",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (eof-object? (eof-object))", "#t");
 }
 
 #[test]
 fn test_r5rs_load() {
-    assert_program_eval_to(
-        "(import (scheme r5rs)) (procedure? load)",
-        "#t",
-    );
+    assert_program_eval_to("(import (scheme r5rs)) (procedure? load)", "#t");
 }
 
 #[test]

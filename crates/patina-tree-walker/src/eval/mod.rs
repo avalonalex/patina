@@ -283,9 +283,6 @@ impl Evaluator {
         // This will load Rust primitives and automatically load base-extras.scm
         let _ = self.load_library(&["scheme".to_string(), "base".to_string()]);
 
-        // Load test framework (test-extras.scm contains the 'test' macro)
-        let _ = self.load_library(&["chibi".to_string(), "test".to_string()]);
-
         // Load Patina debugging utilities
         // Auto-loaded in REPL for convenience (commonly used during development)
         let _ = self.load_library(&["patina".to_string(), "debug".to_string()]);
@@ -308,17 +305,6 @@ impl Evaluator {
             .library_registry
             .borrow()
             .get(&["patina".to_string(), "debug".to_string()])
-        {
-            for (name, tv) in lib.exports_iter_tagged() {
-                self.global_env.define(name.clone(), tv);
-            }
-        }
-
-        // Import (chibi test) into global environment for testing convenience
-        if let Some(lib) = self
-            .library_registry
-            .borrow()
-            .get(&["chibi".to_string(), "test".to_string()])
         {
             for (name, tv) in lib.exports_iter_tagged() {
                 self.global_env.define(name.clone(), tv);
