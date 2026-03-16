@@ -131,15 +131,24 @@
          (test-assert name (not expr)))))
 
     ;; test-error - Assert that expression raises an error
-    ;; Note: This requires guard to be implemented. For now, just passes if the expression errors.
+    ;; Uses guard to catch any error raised by expr.
     (define-syntax test-error
       (syntax-rules ()
         ((test-error expr)
          (test-error #f expr))
         ((test-error name expr)
-         ;; Without guard, we can't catch errors properly
-         ;; For now, we'll just mark these as passed since the test suite
-         ;; uses test-error to test that certain inputs cause errors
-         (begin
-           (test-increment-passed)
-           #t))))))))
+         (guard (exn
+                  (#t
+                   ;; An error was raised — test passes
+                   (test-increment-passed)
+                   #t))
+           ;; If expr returns normally, the test fails
+           expr
+           (test-increment-failed)
+           (display "FAIL: ")
+           (if name
+               (begin (display name) (display " - ")))
+           (write 'expr)
+           (display " => expected error, but returned normally")
+           (newline)
+           #f))))))))

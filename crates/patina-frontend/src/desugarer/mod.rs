@@ -469,7 +469,7 @@ impl Desugarer {
                 "define-syntax" => return self.desugar_define_syntax_tagged(cdr, shared_heap),
                 "import" => return self.desugar_import_tagged(cdr, shared_heap),
                 "begin" => return self.desugar_begin_tagged(cdr, shared_heap),
-                "apply" => return self.desugar_apply_tagged(cdr, shared_heap),
+                "apply" => return self.desugar_apply_tagged(list, cdr, shared_heap),
                 "expand" => return self.desugar_expand_tagged(cdr, shared_heap),
                 "let-syntax" => return self.desugar_let_syntax_tagged(cdr, shared_heap),
                 "letrec-syntax" => return self.desugar_letrec_syntax_tagged(cdr, shared_heap),
@@ -850,17 +850,17 @@ impl Desugarer {
     /// Desugar apply using TaggedValue
     fn desugar_apply_tagged(
         &self,
+        list: TaggedValue,
         args: TaggedValue,
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
         let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
 
         if args_vec.len() < 2 {
-            return Err(DesugarError::WrongArgCount {
-                form: "apply".to_string(),
-                expected: "at least 2".to_string(),
-                got: args_vec.len(),
-            });
+            // Don't reject at compile time — fall through to regular
+            // procedure call so the runtime raises the arity error.
+            // This allows (guard ...) and (test-error ...) to catch it.
+            return self.desugar_app_tagged(list, shared_heap);
         }
 
         let func = self.desugar_tagged(args_vec[0], shared_heap)?;

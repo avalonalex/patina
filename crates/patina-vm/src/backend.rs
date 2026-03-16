@@ -429,8 +429,25 @@ impl VmBackend {
 
         // Step 2: Create a temporary VmState with lib_env as globals,
         // then compile + execute each body expression in that environment.
+        //
+        // Seed lib_env with global_env bindings so that internal helpers
+        // (e.g. %any-null?, %map-cars) referenced by closures from (scheme base)
+        // are available when those closures run in this temp state.
+        for (name, value) in self.global_env.bindings() {
+            if lib_env.get(&name).is_none() {
+                lib_env.define(name, value);
+            }
+        }
         let mut tmp_state = VmState::new(lib_env.clone());
-        // Don't call install_primitives() — lib_env already has everything via imports.
+        // Copy primitive registry so primitives (e.g. %make-record-type) are callable.
+        tmp_state.primitive_registry = self.state.borrow().primitive_registry.clone();
+        // Copy existing code objects so closures from previously loaded libraries are callable.
+        for (id, co) in &self.state.borrow().code_store {
+            tmp_state
+                .code_store
+                .entry(*id)
+                .or_insert_with(|| co.clone());
+        }
 
         let desugarer = Desugarer::with_env(lib_env.clone());
         let shared_heap = lib_env.heap().clone();
