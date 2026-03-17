@@ -29,7 +29,8 @@
       "Bash(wc:*)",
       "Bash(grep:*)",
       "Bash(cat:*)",
-      "WebFetch(domain:r7rs.org)"
+      "WebFetch(domain:r7rs.org)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
