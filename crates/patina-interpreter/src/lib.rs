@@ -333,6 +333,11 @@ impl Interpreter<TreeWalker> {
         Self::new(TreeWalker::new())
     }
 
+    /// Create an interpreter with a custom filesystem.
+    pub fn new_tree_walker_with_fs(fs: std::sync::Arc<dyn patina_core::FileSystem>) -> Self {
+        Self::new(TreeWalker::with_fs(fs))
+    }
+
     /// Create an interpreter from an existing evaluator (TreeWalker-specific)
     ///
     /// This is useful for tests that need to configure the evaluator

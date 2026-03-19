@@ -31,6 +31,7 @@ pub mod pvref;
 pub mod record_type;
 pub mod scope;
 pub mod tagged_value;
+pub mod vfs;
 
 // Re-export main types for convenience
 pub use compiled_macro::{
@@ -53,6 +54,7 @@ pub use scope::{ScopeId, ScopeSet};
 pub use debug_format::{format_tagged, format_tagged_with_scopes};
 pub use heap::{new_shared_heap, Heap, SharedHeap};
 pub use tagged_value::TaggedValue;
+pub use vfs::{FileSystem, MemoryFs, NativeFs, OverlayFs};
 
 #[cfg(test)]
 pub use scope::reset_scope_counter;

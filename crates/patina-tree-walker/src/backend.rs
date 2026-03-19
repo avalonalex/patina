@@ -61,6 +61,13 @@ impl TreeWalker {
         }
     }
 
+    /// Create a tree-walker with a custom filesystem.
+    pub fn with_fs(fs: std::sync::Arc<dyn patina_core::FileSystem>) -> Self {
+        TreeWalker {
+            evaluator: Rc::new(Evaluator::with_fs(fs)),
+        }
+    }
+
     /// Create a tree-walker from an existing evaluator
     ///
     /// This is useful for tests that need to configure the evaluator
@@ -122,7 +129,7 @@ impl Backend for TreeWalker {
         use patina_frontend::Desugarer;
 
         let internal_heap = self.evaluator.global_env.heap();
-        let desugarer = Desugarer::with_env(env.clone());
+        let desugarer = Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone());
 
         let core_expr = desugarer.desugar_tagged(expr, internal_heap).map_err(|e| {
             EvalError::InternalError(format!("Failed to desugar expression: {}", e))

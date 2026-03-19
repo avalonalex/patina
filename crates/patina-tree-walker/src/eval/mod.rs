@@ -22,6 +22,7 @@ use patina_runtime::library_registry::LibraryRegistry;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Result of evaluation step
 ///
@@ -47,25 +48,30 @@ pub struct Evaluator {
     pub(crate) loader_registry: RefCell<LibraryLoaderRegistry>,
     /// Registry of primitive procedures (shared across all backends via patina-primitives)
     pub(crate) primitive_registry: patina_primitives::PrimitiveRegistry,
-    // Note: special_form_registry removed - all special forms now in CoreExpr!
+    /// Virtual filesystem for all file I/O operations
+    pub(crate) fs: Arc<dyn patina_core::FileSystem>,
 }
 
 impl Evaluator {
     pub fn new() -> Self {
+        Self::with_fs(Arc::new(patina_core::NativeFs))
+    }
+
+    /// Create an evaluator with a custom filesystem.
+    ///
+    /// Use this to inject a `MemoryFs` for testing or a WASM-compatible
+    /// filesystem for browser targets.
+    pub fn with_fs(fs: Arc<dyn patina_core::FileSystem>) -> Self {
         let global_env = Rc::new(Environment::new());
 
         // Create primitive registry and register all primitives
         let mut primitive_registry = patina_primitives::PrimitiveRegistry::new();
         Self::register_all_primitives(&mut primitive_registry);
 
-        // Note: Primitives are now installed via library loading rather than
-        // direct installation. The load_bootstrap() call below will load (scheme base)
-        // and import it into the global environment.
-
-        // Note: special_form_registry removed - all special forms now in CoreExpr!
-
         // Create library registries
-        let library_registry = RefCell::new(LibraryRegistry::with_default_paths());
+        let mut lib_registry = LibraryRegistry::with_default_paths();
+        lib_registry.set_fs(fs.clone());
+        let library_registry = RefCell::new(lib_registry);
         let loader_registry = RefCell::new(LibraryLoaderRegistry::new());
 
         let evaluator = Evaluator {
@@ -74,6 +80,7 @@ impl Evaluator {
             library_registry,
             loader_registry,
             primitive_registry,
+            fs,
         };
 
         // Initialize library loaders
@@ -274,8 +281,7 @@ impl Evaluator {
         loaders.add_loader(Box::new(rust_loader));
 
         // Add Scheme loader second (for .sld files)
-        // Note: SchemeLibraryLoader is now stateless and uses EvaluatingLibraryLoader trait
-        loaders.add_evaluating_loader(Box::new(SchemeLibraryLoader::new()));
+        loaders.add_evaluating_loader(Box::new(SchemeLibraryLoader::new(self.fs.clone())));
     }
 
     fn load_bootstrap(&self) {
@@ -345,7 +351,7 @@ impl Evaluator {
         let extras_path = search_paths
             .iter()
             .map(|base| base.join(&relative_path))
-            .find(|path| path.exists());
+            .find(|path| self.fs.file_exists(path));
 
         let extras_path = match extras_path {
             Some(path) => path,
@@ -353,7 +359,7 @@ impl Evaluator {
         };
 
         // Read the extras file
-        let extras_content = match std::fs::read_to_string(&extras_path) {
+        let extras_content = match self.fs.read_to_string(&extras_path) {
             Ok(content) => content,
             Err(_) => return, // Can't read file - silently skip
         };
@@ -418,7 +424,8 @@ impl Evaluator {
         };
 
         // Create desugarer with environment for macro expansion
-        let desugarer = patina_frontend::Desugarer::with_env(eval_env.clone());
+        let desugarer =
+            patina_frontend::Desugarer::with_env(eval_env.clone()).with_fs(self.fs.clone());
 
         loop {
             match parser.parse() {
@@ -651,7 +658,8 @@ impl Evaluator {
         // Step 2: Evaluate library body (definitions only)
         // Use CPS evaluation so that all lambdas become CpsLambdas, enabling
         // proper continuation support throughout the codebase.
-        let desugarer = patina_frontend::Desugarer::with_env(lib_env.clone());
+        let desugarer =
+            patina_frontend::Desugarer::with_env(lib_env.clone()).with_fs(self.fs.clone());
         let shared_heap = lib_env.heap().clone();
         for tv in &parsed.body {
             // Desugar TaggedValue to CoreExpr

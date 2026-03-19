@@ -146,7 +146,7 @@ fn primitive_eval(
     }
 
     // Desugar the expression with macro-aware desugarer (tagged path)
-    let desugarer = Desugarer::with_env(env.clone());
+    let desugarer = Desugarer::with_env(env.clone()).with_fs(ctx.fs().clone());
     let _core_expr = desugarer.desugar_tagged(args[0], heap).map_err(|e| {
         EvalError::InternalError(format!("eval: failed to desugar expression: {}", e))
     })?;
@@ -598,7 +598,9 @@ fn primitive_load(
     };
 
     // Read the file
-    let content = std::fs::read_to_string(&filename)
+    let content = ctx
+        .fs()
+        .read_to_string(std::path::Path::new(&filename))
         .map_err(|e| EvalError::IOError(format!("load: cannot open '{}': {}", filename, e)))?;
 
     // Parse and evaluate all expressions

@@ -14,7 +14,7 @@ use super::ports::{
 use crate::apply_context::ApplyContext;
 use patina_core::{Heap, TaggedValue};
 use patina_runtime::EvalError;
-use patina_runtime::{Port, SharedHeap};
+use patina_runtime::Port;
 
 // =============================================================================
 // TaggedValue extraction helpers
@@ -27,7 +27,7 @@ fn get_string_tv(tv: TaggedValue, heap: &std::cell::Ref<'_, Heap>) -> Option<Str
 
 /// (open-input-file filename) - Opens a file for reading and returns an input port
 pub(super) fn open_input_file(
-    heap: &SharedHeap,
+    ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
@@ -36,11 +36,12 @@ pub(super) fn open_input_file(
             actual: args.len(),
         });
     }
+    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     match get_string_tv(args[0], &heap_ref) {
         Some(path) => {
             drop(heap_ref);
-            let port = Port::open_input_file(&path).map_err(|e| {
+            let port = Port::open_input_file(&path, ctx.fs().as_ref()).map_err(|e| {
                 EvalError::IOError(format!("Cannot open '{}' for reading: {}", path, e))
             })?;
             Ok(heap.borrow_mut().alloc_port(port))
@@ -53,7 +54,7 @@ pub(super) fn open_input_file(
 
 /// (open-output-file filename) - Opens a file for writing and returns an output port
 pub(super) fn open_output_file(
-    heap: &SharedHeap,
+    ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
@@ -62,11 +63,12 @@ pub(super) fn open_output_file(
             actual: args.len(),
         });
     }
+    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     match get_string_tv(args[0], &heap_ref) {
         Some(path) => {
             drop(heap_ref);
-            let port = Port::open_output_file(&path).map_err(|e| {
+            let port = Port::open_output_file(&path, ctx.fs().as_ref()).map_err(|e| {
                 EvalError::IOError(format!("Cannot open '{}' for writing: {}", path, e))
             })?;
             Ok(heap.borrow_mut().alloc_port(port))
@@ -79,7 +81,7 @@ pub(super) fn open_output_file(
 
 /// (open-binary-input-file filename) - Opens a binary file for reading
 pub(super) fn open_binary_input_file(
-    heap: &SharedHeap,
+    ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
@@ -88,11 +90,12 @@ pub(super) fn open_binary_input_file(
             actual: args.len(),
         });
     }
+    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     match get_string_tv(args[0], &heap_ref) {
         Some(path) => {
             drop(heap_ref);
-            let port = Port::open_binary_input_file(&path).map_err(|e| {
+            let port = Port::open_binary_input_file(&path, ctx.fs().as_ref()).map_err(|e| {
                 EvalError::IOError(format!("Cannot open '{}' for binary reading: {}", path, e))
             })?;
             Ok(heap.borrow_mut().alloc_port(port))
@@ -105,7 +108,7 @@ pub(super) fn open_binary_input_file(
 
 /// (open-binary-output-file filename) - Opens a binary file for writing
 pub(super) fn open_binary_output_file(
-    heap: &SharedHeap,
+    ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
@@ -114,11 +117,12 @@ pub(super) fn open_binary_output_file(
             actual: args.len(),
         });
     }
+    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     match get_string_tv(args[0], &heap_ref) {
         Some(path) => {
             drop(heap_ref);
-            let port = Port::open_binary_output_file(&path).map_err(|e| {
+            let port = Port::open_binary_output_file(&path, ctx.fs().as_ref()).map_err(|e| {
                 EvalError::IOError(format!("Cannot open '{}' for binary writing: {}", path, e))
             })?;
             Ok(heap.borrow_mut().alloc_port(port))
@@ -131,7 +135,7 @@ pub(super) fn open_binary_output_file(
 
 /// (file-exists? filename) - Returns #t if file exists
 pub(super) fn file_exists_p(
-    heap: &SharedHeap,
+    ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
@@ -140,9 +144,12 @@ pub(super) fn file_exists_p(
             actual: args.len(),
         });
     }
+    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     match get_string_tv(args[0], &heap_ref) {
-        Some(path) => Ok(TaggedValue::boolean(std::path::Path::new(&path).exists())),
+        Some(path) => Ok(TaggedValue::boolean(
+            ctx.fs().file_exists(std::path::Path::new(&path)),
+        )),
         None => Err(EvalError::TypeError(
             "file-exists? expects a string filename".to_string(),
         )),
@@ -151,7 +158,7 @@ pub(super) fn file_exists_p(
 
 /// (delete-file filename) - Deletes the file
 pub(super) fn delete_file(
-    heap: &SharedHeap,
+    ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
@@ -160,10 +167,12 @@ pub(super) fn delete_file(
             actual: args.len(),
         });
     }
+    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     match get_string_tv(args[0], &heap_ref) {
         Some(path) => {
-            std::fs::remove_file(&path)
+            ctx.fs()
+                .remove_file(std::path::Path::new(&path))
                 .map_err(|e| EvalError::IOError(format!("Cannot delete '{}': {}", path, e)))?;
             Ok(TaggedValue::UNSPECIFIED)
         }
@@ -202,7 +211,7 @@ pub(super) fn call_with_input_file(
     let proc = args[1]; // already TaggedValue
 
     // Open the file
-    let port = Port::open_input_file(&filename)
+    let port = Port::open_input_file(&filename, ctx.fs().as_ref())
         .map_err(|e| EvalError::IOError(format!("Cannot open '{}': {}", filename, e)))?;
 
     // Allocate port on heap as TaggedValue
@@ -247,7 +256,7 @@ pub(super) fn call_with_output_file(
     let proc = args[1]; // already TaggedValue
 
     // Open the file
-    let port = Port::open_output_file(&filename)
+    let port = Port::open_output_file(&filename, ctx.fs().as_ref())
         .map_err(|e| EvalError::IOError(format!("Cannot open '{}': {}", filename, e)))?;
 
     // Allocate port on heap as TaggedValue
@@ -293,7 +302,7 @@ pub(super) fn with_input_from_file(
     let thunk = args[1]; // already TaggedValue
 
     // Open the file
-    let port = Port::open_input_file(&filename)
+    let port = Port::open_input_file(&filename, ctx.fs().as_ref())
         .map_err(|e| EvalError::IOError(format!("Cannot open '{}': {}", filename, e)))?;
 
     // Save the old current-input-port
@@ -344,7 +353,7 @@ pub(super) fn with_output_to_file(
     let thunk = args[1]; // already TaggedValue
 
     // Open the file
-    let port = Port::open_output_file(&filename)
+    let port = Port::open_output_file(&filename, ctx.fs().as_ref())
         .map_err(|e| EvalError::IOError(format!("Cannot open '{}': {}", filename, e)))?;
 
     // Save the old current-output-port

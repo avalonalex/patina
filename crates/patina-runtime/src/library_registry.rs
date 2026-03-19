@@ -7,8 +7,10 @@
 //! - Library loading and caching
 
 use crate::library::Library;
+use patina_core::FileSystem;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Error types for library operations
 #[derive(Debug, Clone)]
@@ -75,7 +77,6 @@ fn format_library_name(name: &[String]) -> String {
 /// - Manage search paths for finding library files
 /// - Detect and prevent circular dependencies
 /// - Provide efficient library lookup
-#[derive(Debug)]
 pub struct LibraryRegistry {
     /// Loaded libraries: library name → Library
     /// Uses Vec<String> as key for library names like (scheme base)
@@ -88,6 +89,9 @@ pub struct LibraryRegistry {
     /// Current loading stack for circular dependency detection
     /// Contains library names currently being loaded
     loading_stack: Vec<Vec<String>>,
+
+    /// Virtual filesystem for file existence checks in `find_library_file`.
+    fs: Arc<dyn FileSystem>,
 }
 
 impl LibraryRegistry {
@@ -97,7 +101,13 @@ impl LibraryRegistry {
             libraries: HashMap::new(),
             search_paths: Vec::new(),
             loading_stack: Vec::new(),
+            fs: Arc::new(patina_core::NativeFs),
         }
+    }
+
+    /// Set the virtual filesystem used for file existence checks.
+    pub fn set_fs(&mut self, fs: Arc<dyn FileSystem>) {
+        self.fs = fs;
     }
 
     /// Create a library registry with default search paths
@@ -248,7 +258,7 @@ impl LibraryRegistry {
             let mut full_path = search_path.clone();
             full_path.push(&file_path);
 
-            if full_path.exists() && full_path.is_file() {
+            if self.fs.is_file(&full_path) {
                 return Some(full_path);
             }
         }

@@ -7,14 +7,14 @@
 //! import resolution and evaluation, eliminating the need for circular references.
 
 use crate::{BodyElement, LibraryDefinition};
-use patina_core::{SharedHeap, TaggedValue};
+use patina_core::{FileSystem, SharedHeap, TaggedValue};
 use patina_runtime::library_loader::{
     EvaluatingLibraryLoader, ExportSpec, ImportSet, ParsedLibrary,
 };
 use patina_runtime::library_registry::LibraryError;
 use std::collections::HashSet;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Result of parsing a single library declaration.
 /// Contains the exports, imports, and body elements from the declaration.
@@ -40,18 +40,14 @@ type ParsedDeclaration = (Vec<ExportSpec>, Vec<ImportSet>, Vec<BodyElement>);
 ///     (define (double x) (* x 2))
 ///     (define (triple x) (* x 3))))
 /// ```
-pub struct SchemeLibraryLoader;
-
-impl SchemeLibraryLoader {
-    /// Create a new Scheme library loader
-    pub fn new() -> Self {
-        Self
-    }
+pub struct SchemeLibraryLoader {
+    fs: Arc<dyn FileSystem>,
 }
 
-impl Default for SchemeLibraryLoader {
-    fn default() -> Self {
-        Self::new()
+impl SchemeLibraryLoader {
+    /// Create a new Scheme library loader with the given filesystem.
+    pub fn new(fs: Arc<dyn FileSystem>) -> Self {
+        Self { fs }
     }
 }
 
@@ -74,7 +70,7 @@ impl SchemeLibraryLoader {
             let mut full_path = search_path.clone();
             full_path.push(&file_path);
 
-            if full_path.exists() && full_path.is_file() {
+            if self.fs.is_file(&full_path) {
                 return Some(full_path);
             }
         }
@@ -108,7 +104,7 @@ impl SchemeLibraryLoader {
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
         // Read the file
-        let content = fs::read_to_string(&path).map_err(|e| {
+        let content = self.fs.read_to_string(&path).map_err(|e| {
             LibraryError::IoError(format!("Failed to read {}: {}", path.display(), e))
         })?;
 
@@ -151,7 +147,7 @@ impl SchemeLibraryLoader {
         // Resolve body elements (expand includes and include-library-declarations)
         let mut included_files = HashSet::new();
         // Add the .sld file itself to prevent self-inclusion
-        if let Ok(canonical) = path.canonicalize() {
+        if let Ok(canonical) = self.fs.canonicalize(&path) {
             included_files.insert(canonical);
         }
 
@@ -221,7 +217,7 @@ impl SchemeLibraryLoader {
                         let file_path = sld_dir.join(include_path);
 
                         // Check file exists
-                        if !file_path.exists() {
+                        if !self.fs.file_exists(&file_path) {
                             return Err(LibraryError::IoError(format!(
                                 "Include file not found: {} (from {})",
                                 file_path.display(),
@@ -230,7 +226,7 @@ impl SchemeLibraryLoader {
                         }
 
                         // Cycle detection using canonical paths
-                        let canonical = file_path.canonicalize().map_err(|e| {
+                        let canonical = self.fs.canonicalize(&file_path).map_err(|e| {
                             LibraryError::IoError(format!(
                                 "Failed to resolve path {}: {}",
                                 file_path.display(),
@@ -260,7 +256,7 @@ impl SchemeLibraryLoader {
                         let file_path = sld_dir.join(include_path);
 
                         // Check file exists
-                        if !file_path.exists() {
+                        if !self.fs.file_exists(&file_path) {
                             return Err(LibraryError::IoError(format!(
                                 "Include-library-declarations file not found: {} (from {})",
                                 file_path.display(),
@@ -269,7 +265,7 @@ impl SchemeLibraryLoader {
                         }
 
                         // Cycle detection using canonical paths
-                        let canonical = file_path.canonicalize().map_err(|e| {
+                        let canonical = self.fs.canonicalize(&file_path).map_err(|e| {
                             LibraryError::IoError(format!(
                                 "Failed to resolve path {}: {}",
                                 file_path.display(),
@@ -319,7 +315,7 @@ impl SchemeLibraryLoader {
         body: &mut Vec<TaggedValue>,
         heap: &SharedHeap,
     ) -> Result<(), LibraryError> {
-        let content = fs::read_to_string(path).map_err(|e| {
+        let content = self.fs.read_to_string(path).map_err(|e| {
             LibraryError::IoError(format!(
                 "Failed to read include-library-declarations file {}: {} (from {})",
                 path.display(),
@@ -457,7 +453,7 @@ impl SchemeLibraryLoader {
         source_file: &Path,
         heap: &SharedHeap,
     ) -> Result<Vec<TaggedValue>, LibraryError> {
-        let content = fs::read_to_string(path).map_err(|e| {
+        let content = self.fs.read_to_string(path).map_err(|e| {
             LibraryError::IoError(format!(
                 "Failed to read include file {}: {} (from {})",
                 path.display(),

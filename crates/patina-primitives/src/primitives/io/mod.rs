@@ -401,7 +401,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // File I/O operations (scheme file library)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_higher_order(
         "scheme.file",
         "open-input-file",
         Arity::Exact(1),
@@ -409,7 +409,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         file::open_input_file,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_higher_order(
         "scheme.file",
         "open-output-file",
         Arity::Exact(1),
@@ -417,7 +417,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         file::open_output_file,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_higher_order(
         "scheme.file",
         "open-binary-input-file",
         Arity::Exact(1),
@@ -425,7 +425,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         file::open_binary_input_file,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_higher_order(
         "scheme.file",
         "open-binary-output-file",
         Arity::Exact(1),
@@ -443,7 +443,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // File utilities (scheme file library)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_higher_order(
         "scheme.file",
         "file-exists?",
         Arity::Exact(1),
@@ -451,7 +451,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         file::file_exists_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_higher_order(
         "scheme.file",
         "delete-file",
         Arity::Exact(1),

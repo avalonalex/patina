@@ -18,6 +18,7 @@ use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VmState
@@ -61,6 +62,8 @@ pub struct VmState {
     /// Shared library loader registry for `load_scheme_library` in eval primitives.
     /// `None` for temporary VmStates created during library loading.
     pub loader_registry: Option<Rc<RefCell<LibraryLoaderRegistry>>>,
+    /// Virtual filesystem for all file I/O operations.
+    pub fs: Arc<dyn patina_core::FileSystem>,
 }
 
 impl VmState {
@@ -87,6 +90,7 @@ impl VmState {
             tracer: None,
             library_registry: None,
             loader_registry: None,
+            fs: Arc::new(patina_core::NativeFs),
         }
     }
 
@@ -315,8 +319,9 @@ fn vm_evaluate_parsed_library(
 
     // Step 2: Create a temporary VmState, compile + execute each body expression
     let mut tmp_state = VmState::new(lib_env.clone());
+    tmp_state.fs = state.fs.clone();
 
-    let desugarer = Desugarer::with_env(lib_env.clone());
+    let desugarer = Desugarer::with_env(lib_env.clone()).with_fs(state.fs.clone());
     let shared_heap = lib_env.heap().clone();
 
     for tv in &parsed.body {
@@ -498,7 +503,7 @@ fn vm_eval_expr(
     expr: TaggedValue,
     env: &Rc<Environment>,
 ) -> Result<TaggedValue, VmError> {
-    let desugarer = Desugarer::with_env(env.clone());
+    let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.globals.heap().clone();
 
     let core_expr = desugarer
@@ -514,6 +519,7 @@ fn vm_eval_expr(
     // Execute in a temporary VmState to avoid corrupting the caller's frames.
     // The env already has the correct bindings (e.g. from environment/null-environment).
     let mut tmp_state = VmState::new(env.clone());
+    tmp_state.fs = state.fs.clone();
     let top_id = top.id;
     tmp_state.load(top);
     tmp_state.load_all(nested);
@@ -2135,6 +2141,11 @@ impl patina_primitives::ApplyContext for VmApplyContext {
     fn heap(&self) -> &SharedHeap {
         // SAFETY: pointer is valid for the lifetime of the primitive call.
         unsafe { &(*self.state).heap }
+    }
+
+    fn fs(&self) -> &Arc<dyn patina_core::FileSystem> {
+        // SAFETY: pointer is valid for the lifetime of the primitive call.
+        unsafe { &(*self.state).fs }
     }
 
     fn apply_proc(

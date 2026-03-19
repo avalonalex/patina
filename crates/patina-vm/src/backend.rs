@@ -99,12 +99,20 @@ pub struct VmBackend {
 impl VmBackend {
     /// Create a new VM backend with a fresh environment and primitive registry.
     pub fn new() -> Self {
+        Self::with_fs(std::sync::Arc::new(patina_core::NativeFs))
+    }
+
+    /// Create a VM backend with a custom filesystem.
+    pub fn with_fs(fs: std::sync::Arc<dyn patina_core::FileSystem>) -> Self {
         let global_env = Rc::new(Environment::new());
         let mut state = VmState::new(Rc::clone(&global_env));
+        state.fs = fs.clone();
         state.install_primitives();
 
         // Set up library loading infrastructure (Rc-shared with VmState)
-        let library_registry = Rc::new(RefCell::new(LibraryRegistry::with_default_paths()));
+        let mut lib_registry = LibraryRegistry::with_default_paths();
+        lib_registry.set_fs(fs);
+        let library_registry = Rc::new(RefCell::new(lib_registry));
         let loader_registry = Rc::new(RefCell::new(LibraryLoaderRegistry::new()));
 
         // Share registries with VmState so eval primitives can load libraries
@@ -274,7 +282,9 @@ impl VmBackend {
         loaders.add_loader(Box::new(rust_loader));
 
         // Add Scheme loader for .sld files
-        loaders.add_evaluating_loader(Box::new(SchemeLibraryLoader::new()));
+        loaders.add_evaluating_loader(Box::new(SchemeLibraryLoader::new(
+            self.state.borrow().fs.clone(),
+        )));
     }
 
     /// Load bootstrap libraries and import them into the global environment.
@@ -327,7 +337,8 @@ impl VmBackend {
             .parse_all()
             .map_err(|e| VmBackendError::Compile(e.to_string()))?;
 
-        let desugarer = Desugarer::with_env(Rc::clone(&self.global_env));
+        let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
+            .with_fs(self.state.borrow().fs.clone());
         for tv in parsed {
             let core_expr = desugarer
                 .desugar_tagged(tv, &heap)
@@ -441,6 +452,8 @@ impl VmBackend {
         let mut tmp_state = VmState::new(lib_env.clone());
         // Copy primitive registry so primitives (e.g. %make-record-type) are callable.
         tmp_state.primitive_registry = self.state.borrow().primitive_registry.clone();
+        // Share VFS with temp state.
+        tmp_state.fs = self.state.borrow().fs.clone();
         // Copy existing code objects so closures from previously loaded libraries are callable.
         for (id, co) in &self.state.borrow().code_store {
             tmp_state
@@ -449,7 +462,8 @@ impl VmBackend {
                 .or_insert_with(|| co.clone());
         }
 
-        let desugarer = Desugarer::with_env(lib_env.clone());
+        let desugarer =
+            Desugarer::with_env(lib_env.clone()).with_fs(self.state.borrow().fs.clone());
         let shared_heap = lib_env.heap().clone();
 
         for tv in &parsed.body {
@@ -660,7 +674,8 @@ impl Backend for VmBackend {
         // Desugar: TaggedValue → CoreExpr.
         // We always evaluate in the global environment; the `env` parameter is
         // ignored for now (same as the tree-walker does for top-level defines).
-        let desugarer = Desugarer::with_env(Rc::clone(&self.global_env));
+        let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
+            .with_fs(self.state.borrow().fs.clone());
         let heap = self.global_env.heap().clone();
         let core_expr = desugarer
             .desugar_tagged(expr, &heap)

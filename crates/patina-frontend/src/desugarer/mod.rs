@@ -147,6 +147,10 @@ pub struct Desugarer {
 
     /// Optional source map for looking up source positions of parsed forms
     source_map: Option<Rc<RefCell<SourceMap>>>,
+
+    /// Virtual filesystem for `include` / `include-ci` forms.
+    /// Defaults to `NativeFs` when not explicitly set.
+    fs: std::sync::Arc<dyn patina_core::FileSystem>,
 }
 
 impl Desugarer {
@@ -159,6 +163,7 @@ impl Desugarer {
             current_scopes: ScopeSet::new(),
             shadowed_names: std::collections::HashSet::new(),
             source_map: None,
+            fs: std::sync::Arc::new(patina_core::NativeFs),
         }
     }
 
@@ -175,6 +180,7 @@ impl Desugarer {
             current_scopes: ScopeSet::new(),
             shadowed_names: std::collections::HashSet::new(),
             source_map: None,
+            fs: std::sync::Arc::new(patina_core::NativeFs),
         }
     }
 
@@ -191,7 +197,14 @@ impl Desugarer {
             current_scopes: ScopeSet::new(),
             shadowed_names: std::collections::HashSet::new(),
             source_map: Some(source_map),
+            fs: std::sync::Arc::new(patina_core::NativeFs),
         }
+    }
+
+    /// Set the virtual filesystem for `include` handling.
+    pub fn with_fs(mut self, fs: std::sync::Arc<dyn patina_core::FileSystem>) -> Self {
+        self.fs = fs;
+        self
     }
 
     /// Create a new desugarer with environment and specific scope set
@@ -203,6 +216,7 @@ impl Desugarer {
             current_scopes: scopes,
             shadowed_names: std::collections::HashSet::new(),
             source_map: None,
+            fs: std::sync::Arc::new(patina_core::NativeFs),
         }
     }
 
@@ -223,6 +237,7 @@ impl Desugarer {
             current_scopes: new_scopes,
             shadowed_names: self.shadowed_names.clone(),
             source_map: self.source_map.clone(),
+            fs: self.fs.clone(),
         };
         (desugarer, scope)
     }
@@ -244,6 +259,7 @@ impl Desugarer {
             current_scopes: new_scopes,
             shadowed_names: shadowed,
             source_map: self.source_map.clone(),
+            fs: self.fs.clone(),
         }
     }
 
@@ -261,6 +277,7 @@ impl Desugarer {
             current_scopes: scopes,
             shadowed_names: self.shadowed_names.clone(),
             source_map: self.source_map.clone(),
+            fs: self.fs.clone(),
         }
     }
 
@@ -1387,7 +1404,7 @@ impl Desugarer {
             // Resolve the path
             let path = if let Some(ref base) = base_dir {
                 let p = base.join(&filename);
-                if p.exists() {
+                if self.fs.file_exists(&p) {
                     p
                 } else {
                     // Fall back to current directory
@@ -1398,7 +1415,7 @@ impl Desugarer {
             };
 
             // Read the file
-            let content = std::fs::read_to_string(&path).map_err(|e| {
+            let content = self.fs.read_to_string(&path).map_err(|e| {
                 DesugarError::InvalidSyntax(format!(
                     "include: cannot read '{}': {}",
                     path.display(),

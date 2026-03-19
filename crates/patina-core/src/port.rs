@@ -8,9 +8,9 @@
 //! This module provides the infrastructure for string ports, stdio ports,
 //! file ports, and (in the future) bytevector ports.
 
+use crate::vfs::{FileSystem, ReadPort, WritePort};
 use std::cell::RefCell;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -92,10 +92,11 @@ pub struct FilePortData {
     pub handle: FileHandle,
 }
 
-/// File handle - either input or output
+/// File handle - either input or output.
+/// Uses trait objects so the underlying stream can come from any `FileSystem` impl.
 pub enum FileHandle {
-    Input(BufReader<File>),
-    Output(BufWriter<File>),
+    Input(Box<dyn ReadPort>),
+    Output(Box<dyn WritePort>),
 }
 
 /// Which standard I/O stream
@@ -182,10 +183,9 @@ impl Port {
         })
     }
 
-    /// Open a file for reading
-    pub fn open_input_file(path: &str) -> io::Result<Rc<Port>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
+    /// Open a file for reading via the given filesystem.
+    pub fn open_input_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
+        let reader = fs.open_read(std::path::Path::new(path))?;
         Ok(Rc::new(Port {
             kind: PortKind::Textual,
             direction: PortDirection::Input,
@@ -196,10 +196,9 @@ impl Port {
         }))
     }
 
-    /// Open a file for writing (creates or truncates)
-    pub fn open_output_file(path: &str) -> io::Result<Rc<Port>> {
-        let file = File::create(path)?;
-        let writer = BufWriter::new(file);
+    /// Open a file for writing (creates or truncates) via the given filesystem.
+    pub fn open_output_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
+        let writer = fs.open_write(std::path::Path::new(path))?;
         Ok(Rc::new(Port {
             kind: PortKind::Textual,
             direction: PortDirection::Output,
@@ -210,10 +209,9 @@ impl Port {
         }))
     }
 
-    /// Open a binary file for reading
-    pub fn open_binary_input_file(path: &str) -> io::Result<Rc<Port>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
+    /// Open a binary file for reading via the given filesystem.
+    pub fn open_binary_input_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
+        let reader = fs.open_read(std::path::Path::new(path))?;
         Ok(Rc::new(Port {
             kind: PortKind::Binary,
             direction: PortDirection::Input,
@@ -224,10 +222,9 @@ impl Port {
         }))
     }
 
-    /// Open a binary file for writing (creates or truncates)
-    pub fn open_binary_output_file(path: &str) -> io::Result<Rc<Port>> {
-        let file = File::create(path)?;
-        let writer = BufWriter::new(file);
+    /// Open a binary file for writing (creates or truncates) via the given filesystem.
+    pub fn open_binary_output_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
+        let writer = fs.open_write(std::path::Path::new(path))?;
         Ok(Rc::new(Port {
             kind: PortKind::Binary,
             direction: PortDirection::Output,
@@ -263,9 +260,16 @@ impl Port {
         self.kind == PortKind::Binary
     }
 
-    /// Close the port
+    /// Close the port. For file output ports, finalizes (flushes) the writer first.
     pub fn close(&self) {
-        *self.data.borrow_mut() = PortData::Closed;
+        let mut data = self.data.borrow_mut();
+        // Finalize write ports before closing
+        if let PortData::File(ref mut fp) = *data {
+            if let FileHandle::Output(ref mut writer) = fp.handle {
+                let _ = writer.finalize();
+            }
+        }
+        *data = PortData::Closed;
     }
 
     /// Read a single character from an input port
@@ -1197,7 +1201,10 @@ mod tests {
 
     #[test]
     fn test_file_port_write_and_read() {
+        use crate::vfs::NativeFs;
         use std::fs;
+
+        let native = NativeFs;
 
         // Create a temp file path
         let temp_path = std::env::temp_dir().join("patina_test_port.txt");
@@ -1205,7 +1212,7 @@ mod tests {
 
         // Write to file
         {
-            let port = Port::open_output_file(temp_path).unwrap();
+            let port = Port::open_output_file(temp_path, &native).unwrap();
             assert!(port.is_output());
             assert!(port.is_textual());
             port.write_string("hello\nworld").unwrap();
@@ -1215,7 +1222,7 @@ mod tests {
 
         // Read from file
         {
-            let port = Port::open_input_file(temp_path).unwrap();
+            let port = Port::open_input_file(temp_path, &native).unwrap();
             assert!(port.is_input());
             assert!(port.is_textual());
 
@@ -1237,13 +1244,16 @@ mod tests {
 
     #[test]
     fn test_file_port_display() {
+        use crate::vfs::NativeFs;
         use std::fs;
+
+        let native = NativeFs;
 
         let temp_path = std::env::temp_dir().join("patina_test_display.txt");
         let temp_path = temp_path.to_str().unwrap();
 
         // Create the file
-        let port = Port::open_output_file(temp_path).unwrap();
+        let port = Port::open_output_file(temp_path, &native).unwrap();
         let display = format!("{}", port);
         assert!(display.contains("output"));
         assert!(display.contains("patina_test_display.txt"));
@@ -1251,6 +1261,34 @@ mod tests {
         // Cleanup
         drop(port);
         let _ = fs::remove_file(temp_path);
+    }
+
+    #[test]
+    fn test_file_port_with_memory_fs() {
+        use crate::vfs::MemoryFs;
+
+        let fs = MemoryFs::new();
+
+        // Write to memory file
+        {
+            let port = Port::open_output_file("/test.txt", &fs).unwrap();
+            port.write_string("hello\nworld").unwrap();
+            port.close();
+        }
+
+        // Read from memory file
+        {
+            let port = Port::open_input_file("/test.txt", &fs).unwrap();
+            assert_eq!(port.read_char().unwrap(), Some('h'));
+            assert_eq!(port.read_char().unwrap(), Some('e'));
+            assert_eq!(port.read_char().unwrap(), Some('l'));
+            assert_eq!(port.read_char().unwrap(), Some('l'));
+            assert_eq!(port.read_char().unwrap(), Some('o'));
+            assert_eq!(port.read_char().unwrap(), Some('\n'));
+
+            let line = port.read_line().unwrap();
+            assert_eq!(line, Some("world".to_string()));
+        }
     }
 
     #[test]

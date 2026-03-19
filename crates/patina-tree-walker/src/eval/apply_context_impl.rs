@@ -4,12 +4,17 @@ use super::{EvalResult, Evaluator};
 use patina_core::TaggedValue;
 use patina_primitives::ApplyContext;
 use patina_runtime::EvalError;
-use patina_runtime::{Environment, Library, SharedHeap};
+use patina_runtime::{Environment, FileSystem, Library, SharedHeap};
 use std::rc::Rc;
+use std::sync::Arc;
 
 impl ApplyContext for Evaluator {
     fn heap(&self) -> &SharedHeap {
         self.global_env.heap()
+    }
+
+    fn fs(&self) -> &Arc<dyn FileSystem> {
+        &self.fs
     }
 
     fn apply_proc(
@@ -34,7 +39,7 @@ impl ApplyContext for Evaluator {
         use super::cps_eval::eval_cps;
         use patina_frontend::Desugarer;
 
-        let desugarer = Desugarer::with_env(env.clone());
+        let desugarer = Desugarer::with_env(env.clone()).with_fs(self.fs.clone());
         let core_expr = desugarer
             .desugar_tagged(expr, self.global_env.heap())
             .map_err(|e| EvalError::InternalError(format!("eval: desugar error: {}", e)))?;

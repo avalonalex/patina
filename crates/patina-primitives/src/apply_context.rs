@@ -5,8 +5,9 @@
 //! use this trait to remain backend-agnostic.
 
 use patina_runtime::EvalError;
-use patina_runtime::{Environment, Library, SharedHeap, TaggedValue};
+use patina_runtime::{Environment, FileSystem, Library, SharedHeap, TaggedValue};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Context for higher-order primitive invocations.
 ///
@@ -15,6 +16,9 @@ use std::rc::Rc;
 pub trait ApplyContext {
     /// Get the shared heap for value allocation
     fn heap(&self) -> &SharedHeap;
+
+    /// Get the virtual filesystem for file I/O operations
+    fn fs(&self) -> &Arc<dyn FileSystem>;
 
     /// Apply a procedure to arguments, returning the result.
     ///
