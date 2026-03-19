@@ -224,6 +224,11 @@ impl<'a> CpsEvaluator<'a> {
                         .collect();
                     let mut arg_tagged = arg_tagged?;
 
+                    let k = cont_env
+                        .get(cont)
+                        .ok_or_else(|| EvalError::UndefinedVariable(cont.to_string()))?
+                        .clone();
+
                     // Flatten the last argument (must be a list)
                     let flat_args: Vec<TaggedValue> = if !arg_tagged.is_empty() {
                         let last_arg = arg_tagged.pop().unwrap();
@@ -239,22 +244,25 @@ impl<'a> CpsEvaluator<'a> {
                                 result.push(car);
                                 current = cdr;
                             } else {
-                                return Err(EvalError::TypeError(format!(
+                                let err = EvalError::TypeError(format!(
                                     "apply: last argument must be a list, got {}",
                                     heap.borrow().type_name(last_arg)
                                 ))
-                                .at_opt(current_expr.source.clone()));
+                                .at_opt(current_expr.source.clone());
+                                return self.maybe_route_error_through_cps(
+                                    err,
+                                    k,
+                                    cont_env,
+                                    prompt_stack,
+                                    current_winds,
+                                    exception_handlers,
+                                );
                             }
                         }
                         result
                     } else {
                         vec![]
                     };
-
-                    let k = cont_env
-                        .get(cont)
-                        .ok_or_else(|| EvalError::UndefinedVariable(cont.to_string()))?
-                        .clone();
 
                     return Ok(StepResult::ApplyProc {
                         proc,

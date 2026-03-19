@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report (Tree-Walker Backend)
 
-**Generated:** 2026-03-19 11:16:10
+**Generated:** 2026-03-19 11:51:19
 **Test Suite:** chibi-scheme r7rs-tests.scm
 **Backend:** Tree-Walker (CPS)
 
@@ -8,9 +8,9 @@
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1159 | 99.7% |
+| ✅ Passed | 1163 | 100.0% |
 | ❌ Failed | 0 | 0.0% |
-| ⚠️ Error (crashed) | 4 | 0.3% |
+| ⚠️ Error (crashed) | 0 | 0.0% |
 | **Total** | **1163** | **100%** |
 
 ## Section Breakdown
@@ -30,7 +30,7 @@
 | ✅ | 6.7 Strings | 130 | 130 | 0 | 0 |
 | ✅ | 6.8 Vectors | 43 | 43 | 0 | 0 |
 | ✅ | 6.9 Bytevectors | 39 | 39 | 0 | 0 |
-| ⚠️ | 6.10 Control Features | 34 | 30 | 0 | 4 |
+| ✅ | 6.10 Control Features | 34 | 34 | 0 | 0 |
 | ✅ | 6.11 Exceptions | 30 | 30 | 0 | 0 |
 | ✅ | 6.12 Environments and evaluation | 5 | 5 | 0 | 0 |
 | ✅ | Read syntax | 93 | 93 | 0 | 0 |
@@ -40,15 +40,6 @@
 **Legend:** ✅ = All passing, ⚠️ = Partial, ❌ = None passing
 
 ## Failed Tests
-
-### Errors
-
-```
-Error: Wrong number of arguments: expected at least 2, got 1
-Error: Type error: apply: last argument must be a list, got integer
-Error: Type error: apply: last argument must be a list, got integer
-Error: Type error: apply: last argument must be a list, got pair
-```
 
 
 ## Full Results

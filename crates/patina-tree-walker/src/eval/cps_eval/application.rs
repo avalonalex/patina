@@ -665,10 +665,18 @@ impl<'a> CpsEvaluator<'a> {
         // (apply proc arg1 ... args)
         // The last argument must be a list
         if args.len() < 2 {
-            return Err(EvalError::WrongArity {
+            let err = EvalError::WrongArity {
                 expected: "at least 2".to_string(),
                 actual: args.len(),
-            });
+            };
+            return self.maybe_route_error_through_cps(
+                err,
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
         }
 
         let heap = self.evaluator.global_env.heap();
@@ -691,10 +699,18 @@ impl<'a> CpsEvaluator<'a> {
                 flat_args_tagged.push(car);
                 current = cdr;
             } else {
-                return Err(EvalError::TypeError(format!(
-                    "apply: expected list as last argument, got {}",
+                let err = EvalError::TypeError(format!(
+                    "apply: last argument must be a list, got {}",
                     heap.borrow().type_name(last_arg)
-                )));
+                ));
+                return self.maybe_route_error_through_cps(
+                    err,
+                    cont,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                );
             }
         }
 
