@@ -162,11 +162,14 @@ pub enum HeapObjectData {
     /// by a VM closure. The cell holds the current value and is shared by
     /// reference among all closures that captured the same binding.
     MutableCell(RefCell<TaggedValue>),
-    /// A VM bytecode closure: code id + captured free variables.
+    /// A VM bytecode closure: code id + captured free variables + globals env.
     VmClosure {
         /// Serialised as `u32` to avoid a direct dependency on patina-vm types.
         code_id: u32,
         free_vars: Vec<TaggedValue>,
+        /// The global environment this closure was compiled against.
+        /// `LoadGlobal`/`StoreGlobal` use this instead of `VmState::globals`.
+        globals: Rc<crate::environment::Environment>,
     },
     /// Opaque handle to a full VM continuation (call/cc style).
     /// The actual `VmContinuation` data lives in `VmState::continuation_store`.
@@ -731,8 +734,17 @@ impl Heap {
     ///
     /// `code_id` is a `u32` (the raw `CodeObjectId(u32)` value) to avoid
     /// a direct crate dependency on `patina-vm`.
-    pub fn alloc_vm_closure(&mut self, code_id: u32, free_vars: Vec<TaggedValue>) -> TaggedValue {
-        self.alloc_object(HeapObjectData::VmClosure { code_id, free_vars })
+    pub fn alloc_vm_closure(
+        &mut self,
+        code_id: u32,
+        free_vars: Vec<TaggedValue>,
+        globals: Rc<crate::environment::Environment>,
+    ) -> TaggedValue {
+        self.alloc_object(HeapObjectData::VmClosure {
+            code_id,
+            free_vars,
+            globals,
+        })
     }
 
     /// Retrieve the `(code_id, free_vars)` pair from a VM closure pointer.
@@ -743,7 +755,20 @@ impl Heap {
             return None;
         }
         match self.get_object(val) {
-            HeapObjectData::VmClosure { code_id, free_vars } => Some((*code_id, free_vars.clone())),
+            HeapObjectData::VmClosure {
+                code_id, free_vars, ..
+            } => Some((*code_id, free_vars.clone())),
+            _ => None,
+        }
+    }
+
+    /// Get the globals environment from a VM closure by heap index.
+    pub fn get_vm_closure_globals(
+        &self,
+        heap_index: crate::tagged_value::HeapIndex,
+    ) -> Option<Rc<crate::environment::Environment>> {
+        match self.objects.get(heap_index as usize)? {
+            HeapObjectData::VmClosure { globals, .. } => Some(globals.clone()),
             _ => None,
         }
     }

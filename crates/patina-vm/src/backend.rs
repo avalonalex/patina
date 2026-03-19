@@ -425,6 +425,11 @@ impl VmBackend {
     }
 
     /// Evaluate a parsed library (from a .sld file) using the VM.
+    ///
+    /// Instead of creating a temporary VmState, we swap the main state's
+    /// globals to `lib_env`, execute body expressions directly, then swap
+    /// back. This ensures continuations, code objects, and closures all
+    /// live in the single real execution context.
     fn evaluate_parsed_library(
         &self,
         parsed: patina_runtime::library_loader::ParsedLibrary,
@@ -438,111 +443,62 @@ impl VmBackend {
             self.process_import_set(import_set, &lib_env)?;
         }
 
-        // Step 2: Create a temporary VmState with lib_env as globals,
-        // then compile + execute each body expression in that environment.
-        //
-        // Seed lib_env with global_env bindings so that internal helpers
-        // (e.g. %any-null?, %map-cars) referenced by closures from (scheme base)
-        // are available when those closures run in this temp state.
-        for (name, value) in self.global_env.bindings() {
-            if lib_env.get(&name).is_none() {
-                lib_env.define(name, value);
-            }
-        }
-        let mut tmp_state = VmState::new(lib_env.clone());
-        // Copy primitive registry so primitives (e.g. %make-record-type) are callable.
-        tmp_state.primitive_registry = self.state.borrow().primitive_registry.clone();
-        // Share VFS with temp state.
-        tmp_state.fs = self.state.borrow().fs.clone();
-        // Copy existing code objects so closures from previously loaded libraries are callable.
-        for (id, co) in &self.state.borrow().code_store {
-            tmp_state
-                .code_store
-                .entry(*id)
-                .or_insert_with(|| co.clone());
-        }
+        // Step 2: Swap globals to lib_env, compile + execute each body
+        // expression in the main VmState, then swap back.
+        // Closures created during execution capture lib_env as their globals
+        // (per-closure environment pointer), so no seeding or merge is needed.
 
         let desugarer =
             Desugarer::with_env(lib_env.clone()).with_fs(self.state.borrow().fs.clone());
         let shared_heap = lib_env.heap().clone();
 
-        for tv in &parsed.body {
-            let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
-                LibraryError::ParseError {
-                    file: parsed
-                        .source
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default(),
-                    message: format!("desugar error: {}", e),
-                }
-            })?;
+        {
+            let mut state = self.state.borrow_mut();
+            let saved_globals = state.globals.clone();
+            state.globals = lib_env.clone();
 
-            let (top, nested) =
-                compile_with_qq(&core_expr, &shared_heap, &lib_env).map_err(|e| {
-                    LibraryError::ParseError {
+            let body_result = (|| -> Result<(), LibraryError> {
+                for tv in &parsed.body {
+                    let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
+                        LibraryError::ParseError {
+                            file: parsed
+                                .source
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default(),
+                            message: format!("desugar error: {}", e),
+                        }
+                    })?;
+
+                    let (top, nested) = compile_with_qq(&core_expr, &shared_heap, &lib_env)
+                        .map_err(|e| LibraryError::ParseError {
+                            file: parsed
+                                .source
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default(),
+                            message: format!("compile error: {}", e),
+                        })?;
+
+                    let top_id = top.id;
+                    state.load(top);
+                    state.load_all(nested);
+
+                    execute(&mut state, top_id).map_err(|e| LibraryError::ParseError {
                         file: parsed
                             .source
                             .as_ref()
                             .map(|p| p.display().to_string())
                             .unwrap_or_default(),
-                        message: format!("compile error: {}", e),
-                    }
-                })?;
+                        message: format!("runtime error: {}", e),
+                    })?;
+                }
+                Ok(())
+            })();
 
-            let top_id = top.id;
-            tmp_state.load(top);
-            tmp_state.load_all(nested);
-
-            execute(&mut tmp_state, top_id).map_err(|e| LibraryError::ParseError {
-                file: parsed
-                    .source
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-                message: format!("runtime error: {}", e),
-            })?;
-        }
-
-        // Merge tmp_state code_store into the main state so that closures
-        // defined in the library body (e.g. `map`, `filter`) remain callable
-        // when they are later invoked from global code.
-        {
-            let mut state = self.state.borrow_mut();
-            for (id, co) in tmp_state.code_store {
-                state.code_store.entry(id).or_insert(co);
-            }
-        }
-
-        // Merge all lib_env bindings into global_env.
-        //
-        // Library closures compiled via the VM use `LoadGlobal` for any
-        // binding that isn't a local or captured free-variable (e.g.
-        // `%map-cars`, `%map-cdrs` inside `map`). Those names live in
-        // `lib_env`, not in `global_env`. When those closures later run in
-        // the main VmState (which uses `global_env` as globals), `LoadGlobal`
-        // fails with "unbound variable".
-        //
-        // Merging lib_env → global_env makes all internal library definitions
-        // visible to the closures at runtime.  Only the *exported* names are
-        // part of the public API; the rest are internal helpers and won't
-        // conflict with user code in normal usage.
-        //
-        // We skip macro transformers (HeapObjectData::Macro) because macros
-        // are already imported via the exports (collected in Step 3 below).
-        // More importantly, merging macros here would cause them to be
-        // re-installed into global_env AGAIN by load_bootstrap (which
-        // imports library exports), leading to double-definitions that
-        // confuse the desugarer.
-        for (name, value) in lib_env.bindings() {
-            // Only copy non-macro bindings; macros come via exports
-            let is_macro = {
-                let heap = lib_env.heap().borrow();
-                heap.get_macro(value).is_some()
-            };
-            if !is_macro {
-                self.global_env.define(name, value);
-            }
+            // Always restore globals, even on error
+            state.globals = saved_globals;
+            body_result?;
         }
 
         // Step 3: Collect exports from lib_env

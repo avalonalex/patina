@@ -1,6 +1,6 @@
 # VM Library Loading Redesign
 
-**Status:** Proposed
+**Status:** Complete (Approach C + B)
 **Created:** 2026-03-15
 **Motivation:** `call/cc` inside library body code doesn't work correctly because library bodies are evaluated in a temporary `VmState` that is discarded after loading.
 

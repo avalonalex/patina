@@ -4,4 +4,4 @@
 
 pub mod vm_state;
 
-pub use vm_state::{VmState, execute};
+pub use vm_state::{VmState, execute, execute_nested};

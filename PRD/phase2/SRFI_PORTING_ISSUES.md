@@ -8,31 +8,19 @@ Seven SRFIs were ported (1, 69, 111, 113, 128, 133, 158). All load and pass basi
 
 ## Issues
 
-### 1. `call/cc` inside library body code is broken on the VM backend
+### 1. ~~`call/cc` inside library body code is broken on the VM backend~~
 
-**Severity:** High — blocks any SRFI that uses `call/cc` during library initialization
-**Affected:** SRFI 1 (`%cars+cdrs`, `%cdrs`, `%cars+cdrs+`), potentially SRFI 158 (coroutine generators)
+**Status:** Fixed — VM library loading redesign (Approach C + B)
 
-The VM evaluates library bodies in a temporary `VmState` that is discarded after loading. When `call/cc` captures a continuation during library loading, the snapshot contains the temp state's frames, registers, and wind records. When the resulting closure is later called from user code in the main `VmState`, the captured continuation is invalid — frames don't match, deliver registers are wrong, and the VM crashes or produces garbage.
+Library bodies now execute directly in the main `VmState` with globals swapping. Continuations captured during library loading are valid main-state continuations. Per-closure environment pointers ensure closures use their own library's globals.
 
-**Current workaround:** `lib/srfi/1/patina-patches.scm` replaces `%cars+cdrs` and friends with versions that avoid `call/cc`.
+**Verify:** Remove `patina-patches.scm` from `lib/srfi/1.sld`, run SRFI 1 test suite.
 
-**Proper fix:** See `PRD/phase2/VM_LIBRARY_LOADING_REDESIGN.md`. Recommended approach: execute library bodies in the main VmState (Approach C: globals swapping), or add per-closure environment pointers (Approach B).
+### 2. ~~Missing global bindings in temporary VmState~~
 
-**How to verify fix:** Remove `patina-patches.scm` from `lib/srfi/1.sld`, run SRFI 1 test suite.
+**Status:** Fixed — per-closure environment pointer (Approach B)
 
-### 2. Missing global bindings in temporary VmState
-
-**Severity:** High — affects any library whose closures reference internal helpers
-**Affected:** Any SRFI importing `(scheme base)` whose closures use internal names like `%any-null?`, `%map-cars`
-
-Library closures compiled with `LoadGlobal` reference helpers defined in `lib_env`. When the closure runs in the temp `VmState` (or later in the main state), `LoadGlobal` fails unless those bindings are present.
-
-**Current workaround:** Copy ALL `global_env` bindings into `lib_env` before creating the temp state, plus copy the primitive registry and existing code objects into it (`backend.rs` lines 432–452).
-
-**Downside:** Pollutes every library's namespace with all global bindings. Not correct R7RS library encapsulation.
-
-**Proper fix:** Same as Issue 1 — `VM_LIBRARY_LOADING_REDESIGN.md` Approach B (per-closure environment pointer) eliminates the need for merging entirely.
+Each `VmClosure` now carries its own `Rc<Environment>` (the globals it was compiled against). `LoadGlobal`/`StoreGlobal` use the closure's environment, not `state.globals`. No more namespace pollution — internal helpers like `%any-null?` are only visible to their own library's closures.
 
 ### 3. Non-R7RS constructs in SRFI reference implementations
 
@@ -94,8 +82,8 @@ SRFI 128 expects an `equal-hash` procedure that isn't part of R7RS-small. Most S
 
 ## Priority Order
 
-1. **Issues 1 & 2** (VM library loading) — These are the same root cause and block correct behavior for any SRFI using `call/cc` or internal helpers during library loading. Fix via `VM_LIBRARY_LOADING_REDESIGN.md`.
+1. ~~**Issues 1 & 2** (VM library loading) — Fixed.~~
 2. **Issue 5** (form-feed in lexer) — Trivial one-line fix, prevents future surprises.
 3. **Issue 7** (equal-hash primitive) — Performance improvement, not blocking.
 4. **Issues 3 & 4** (shims, renames) — Per-SRFI porting work, handle as needed.
-5. **Issue 6** — Already fixed.
+5. ~~**Issue 6** — Already fixed.~~

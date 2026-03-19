@@ -306,6 +306,11 @@ fn vm_load_library(state: &mut VmState, name: &[String]) -> Result<Library, Libr
 /// Evaluate a parsed library (.sld file) using the VM.
 ///
 /// Mirrors `VmBackend::evaluate_parsed_library()`.
+///
+/// Instead of creating a temporary VmState, we swap `state.globals` to the
+/// library's environment, execute body expressions directly in the main
+/// state, then swap back. This ensures continuations, code objects, and
+/// closures all live in the single real execution context.
 fn vm_evaluate_parsed_library(
     state: &mut VmState,
     parsed: patina_runtime::library_loader::ParsedLibrary,
@@ -317,66 +322,61 @@ fn vm_evaluate_parsed_library(
         vm_process_import_set(state, import_set, &lib_env)?;
     }
 
-    // Step 2: Create a temporary VmState, compile + execute each body expression
-    let mut tmp_state = VmState::new(lib_env.clone());
-    tmp_state.fs = state.fs.clone();
+    // Step 2: Swap globals to lib_env, compile + execute each body expression
+    // in the main VmState, then swap back.
+    // Closures created during execution capture lib_env as their globals
+    // (per-closure environment pointer), so no seeding or merge is needed.
+
+    let saved_globals = state.globals.clone();
+    state.globals = lib_env.clone();
 
     let desugarer = Desugarer::with_env(lib_env.clone()).with_fs(state.fs.clone());
     let shared_heap = lib_env.heap().clone();
 
-    for tv in &parsed.body {
-        let core_expr =
-            desugarer
-                .desugar_tagged(*tv, &shared_heap)
-                .map_err(|e| LibraryError::ParseError {
+    let body_result = (|| -> Result<(), LibraryError> {
+        for tv in &parsed.body {
+            let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
+                LibraryError::ParseError {
                     file: parsed
                         .source
                         .as_ref()
                         .map(|p| p.display().to_string())
                         .unwrap_or_default(),
                     message: format!("desugar error: {}", e),
+                }
+            })?;
+
+            let (top, nested) =
+                compile_with_qq(&core_expr, &shared_heap, &lib_env).map_err(|e| {
+                    LibraryError::ParseError {
+                        file: parsed
+                            .source
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                        message: format!("compile error: {}", e),
+                    }
                 })?;
 
-        let (top, nested) = compile_with_qq(&core_expr, &shared_heap, &lib_env).map_err(|e| {
-            LibraryError::ParseError {
+            let top_id = top.id;
+            state.load(top);
+            state.load_all(nested);
+
+            execute_nested(state, top_id).map_err(|e| LibraryError::ParseError {
                 file: parsed
                     .source
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default(),
-                message: format!("compile error: {}", e),
-            }
-        })?;
-
-        let top_id = top.id;
-        tmp_state.load(top);
-        tmp_state.load_all(nested);
-
-        execute(&mut tmp_state, top_id).map_err(|e| LibraryError::ParseError {
-            file: parsed
-                .source
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default(),
-            message: format!("runtime error: {}", e),
-        })?;
-    }
-
-    // Merge tmp_state code_store into main state
-    for (id, co) in tmp_state.code_store {
-        state.code_store.entry(id).or_insert(co);
-    }
-
-    // Merge lib_env bindings into globals (skip macros)
-    for (name, value) in lib_env.bindings() {
-        let is_macro = {
-            let heap = lib_env.heap().borrow();
-            heap.get_macro(value).is_some()
-        };
-        if !is_macro {
-            state.globals.define(name, value);
+                message: format!("runtime error: {}", e),
+            })?;
         }
-    }
+        Ok(())
+    })();
+
+    // Always restore globals, even on error
+    state.globals = saved_globals;
+    body_result?;
 
     // Step 3: Collect exports
     let mut library = Library::with_env(parsed.name.clone(), lib_env.clone());
@@ -495,9 +495,9 @@ fn vm_process_import_set(
 
 /// Evaluate a datum expression in the given environment using the VM.
 ///
-/// Used by the `eval` primitive. Desugars, compiles, and executes the
-/// expression in a temporary VmState that shares the heap with the caller.
-/// This avoids frame-depth conflicts with the caller's in-flight execution.
+/// Used by the `eval` primitive. Swaps `state.globals` to the given
+/// environment, executes in the main VmState using `execute_nested`
+/// (which respects the current frame depth), then restores globals.
 fn vm_eval_expr(
     state: &mut VmState,
     expr: TaggedValue,
@@ -516,33 +516,21 @@ fn vm_eval_expr(
         message: format!("eval: compile error: {}", e),
     })?;
 
-    // Execute in a temporary VmState to avoid corrupting the caller's frames.
-    // The env already has the correct bindings (e.g. from environment/null-environment).
-    let mut tmp_state = VmState::new(env.clone());
-    tmp_state.fs = state.fs.clone();
+    // Swap globals to the eval environment, execute in the main state,
+    // then restore. This keeps continuations and code objects valid.
+    let saved_globals = state.globals.clone();
+    state.globals = env.clone();
+
     let top_id = top.id;
-    tmp_state.load(top);
-    tmp_state.load_all(nested);
+    state.load(top);
+    state.load_all(nested);
 
-    // Copy the primitive registry so primitives work
-    tmp_state.primitive_registry = state.primitive_registry.clone();
+    let result = execute_nested(state, top_id);
 
-    // Copy existing code objects so closures from prior evals are callable
-    for (id, co) in &state.code_store {
-        tmp_state
-            .code_store
-            .entry(*id)
-            .or_insert_with(|| co.clone());
-    }
+    // Always restore globals, even on error
+    state.globals = saved_globals;
 
-    let result = execute(&mut tmp_state, top_id)?;
-
-    // Merge any new code objects back (closures created by eval)
-    for (id, co) in tmp_state.code_store {
-        state.code_store.entry(id).or_insert(co);
-    }
-
-    Ok(result)
+    result
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -574,6 +562,33 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
     });
 
     run_loop_until(state, 0)
+}
+
+/// Execute a code object in the **current** `VmState`, returning to the
+/// caller's frame depth. Unlike `execute` (which always runs until the
+/// frame stack is empty), this variant is safe to call when the state
+/// already has in-flight frames (e.g. during library loading from `eval`).
+pub fn execute_nested(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue, VmError> {
+    let depth_before = state.frames.len();
+    let code = state
+        .code_store
+        .get(&code_id)
+        .cloned()
+        .ok_or_else(|| VmError::Runtime {
+            message: format!("CodeObject {:?} not loaded", code_id),
+        })?;
+
+    let base = state.alloc_registers(code.num_regs);
+    state.frames.push(CallFrame {
+        code_id,
+        pc: 0,
+        register_base: base,
+        num_regs: code.num_regs,
+        closure: None,
+        return_reg: 0,
+    });
+
+    run_loop_until(state, depth_before)
 }
 
 /// Call a closure (heap index) with `args`, returning its result.
@@ -675,6 +690,20 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
         }
     }
     e
+}
+
+/// Get the effective globals environment for the current frame.
+///
+/// If the current frame is executing a closure, returns that closure's
+/// captured globals (the environment it was compiled against). Otherwise
+/// returns `state.globals` (for top-level code).
+fn frame_globals(state: &VmState) -> Rc<Environment> {
+    if let Some(closure_idx) = state.frames.last().and_then(|f| f.closure)
+        && let Some(globals) = state.heap.borrow().get_vm_closure_globals(closure_idx)
+    {
+        return globals;
+    }
+    state.globals.clone()
 }
 
 /// Dispatch a single instruction. Returns `Ok(Some(val))` if the loop should
@@ -787,8 +816,8 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadGlobal { dst, name } => {
-            let val = state
-                .globals
+            let globals = frame_globals(state);
+            let val = globals
                 .get(&name)
                 .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
             state.set_reg(dst, val);
@@ -796,17 +825,16 @@ fn dispatch_one_instruction(
 
         Instruction::StoreGlobal { name, src } => {
             let val = state.reg(src);
-            // set() returns Err if unbound; for set! semantics we could
-            // fall back to define. For now, propagate errors.
-            state
-                .globals
+            let globals = frame_globals(state);
+            globals
                 .set(&name, val)
                 .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
         }
 
         Instruction::Define { name, src } => {
             let val = state.reg(src);
-            state.globals.define(name.to_string(), val);
+            let globals = frame_globals(state);
+            globals.define(name.to_string(), val);
         }
 
         // ── Closure Creation ────────────────────────────────────────────
@@ -816,10 +844,11 @@ fn dispatch_one_instruction(
             free_vars,
         } => {
             let captured: Vec<TaggedValue> = free_vars.iter().map(|&r| state.reg(r)).collect();
+            let globals = frame_globals(state);
             let closure_val = state
                 .heap
                 .borrow_mut()
-                .alloc_vm_closure(child_id.0, captured);
+                .alloc_vm_closure(child_id.0, captured, globals);
             state.set_reg(dst, closure_val);
         }
 
