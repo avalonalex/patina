@@ -789,3 +789,128 @@ fn test_backtracking_pythagorean_triple() {
     let z = value % 10;
     assert_eq!(x * x, y * y + z * z, "Not a valid Pythagorean triple");
 }
+
+// =============================================================================
+// Instruction-level control ops: call-with-values + call/cc
+// (VM-only: the tree-walker has a separate issue with multi-value continuations)
+// =============================================================================
+
+#[test]
+#[cfg(feature = "vm-backend")]
+fn test_callcc_multi_value_through_call_with_values() {
+    // call/cc continuation invoked with multiple values
+    assert_program_eval_to(
+        r#"
+        (call-with-values
+          (lambda ()
+            (call-with-current-continuation
+              (lambda (k) (k 1 2))))
+          (lambda (a b) (list a b)))
+        "#,
+        "(1 2)",
+    );
+}
+
+#[test]
+#[cfg(feature = "vm-backend")]
+fn test_callcc_single_value_through_call_with_values() {
+    assert_program_eval_to(
+        r#"
+        (call-with-values
+          (lambda ()
+            (call-with-current-continuation
+              (lambda (k) (k 42))))
+          (lambda (x) x))
+        "#,
+        "42",
+    );
+}
+
+#[test]
+#[cfg(feature = "vm-backend")]
+fn test_callcc_abort_pattern_through_call_with_values() {
+    // Pattern used by SRFI 1 %cars+cdrs
+    assert_program_eval_to(
+        r#"
+        (call-with-values
+          (lambda ()
+            (call-with-current-continuation
+              (lambda (abort)
+                (abort '() '()))))
+          (lambda (cars cdrs) (list 'cars cars 'cdrs cdrs)))
+        "#,
+        "(cars () cdrs ())",
+    );
+}
+
+// =============================================================================
+// Instruction-level control ops: dynamic-wind + call/cc re-entry
+// =============================================================================
+
+#[test]
+fn test_dynamic_wind_callcc_reentry_delivers_value() {
+    // Continuation captured inside dynamic-wind body, re-invoked with new value
+    assert_program_eval_to(
+        r#"
+        (let ((k #f)
+              (results '()))
+          (let ((val
+                 (dynamic-wind
+                   (lambda () #f)
+                   (lambda ()
+                     (call-with-current-continuation
+                       (lambda (c) (set! k c) 'first)))
+                   (lambda () #f))))
+            (set! results (cons val results))
+            (when (and k (< (length results) 3))
+              (let ((saved k))
+                (set! k #f)
+                (saved 'second))))
+          (reverse results))
+        "#,
+        "(first second)",
+    );
+}
+
+#[test]
+fn test_dynamic_wind_callcc_before_after_run_on_reentry() {
+    // Before/after thunks run on each entry/exit including re-entry
+    assert_program_eval_to(
+        r#"
+        (let ((k #f)
+              (log '()))
+          (dynamic-wind
+            (lambda () (set! log (cons 'in log)))
+            (lambda ()
+              (if (not k)
+                  (call-with-current-continuation
+                    (lambda (c) (set! k c))))
+              'ok)
+            (lambda () (set! log (cons 'out log))))
+          (if (< (length log) 6)
+              (k 'again))
+          (reverse log))
+        "#,
+        "(in out in out in out)",
+    );
+}
+
+#[test]
+fn test_dynamic_wind_callcc_escape_runs_after() {
+    // Escaping from dynamic-wind body via call/cc runs after-thunk
+    assert_program_eval_to(
+        r#"
+        (let ((log '()))
+          (call-with-current-continuation
+            (lambda (escape)
+              (dynamic-wind
+                (lambda () (set! log (cons 'before log)))
+                (lambda ()
+                  (set! log (cons 'body log))
+                  (escape 'done))
+                (lambda () (set! log (cons 'after log))))))
+          (reverse log))
+        "#,
+        "(before body after)",
+    );
+}

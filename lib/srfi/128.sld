@@ -22,31 +22,8 @@
           (scheme case-lambda)
           (scheme char)
           (scheme inexact)
-          (scheme complex))
-
-  ;; Provide a portable equal-hash since we don't have SRFI 69/126/R6RS
-  (begin
-    (define (equal-hash obj)
-      (cond
-        ((null? obj) 0)
-        ((boolean? obj) (if obj 1 0))
-        ((number? obj)
-         (if (exact? obj)
-             (abs (modulo (if (integer? obj) obj (numerator obj)) 536870909))
-             (abs (floor (* obj 536870909)))))
-        ((char? obj) (char->integer obj))
-        ((string? obj)
-         (let loop ((i 0) (h 0))
-           (if (>= i (string-length obj)) (modulo h 536870909)
-               (loop (+ i 1) (+ (* h 31) (char->integer (string-ref obj i)))))))
-        ((symbol? obj) (equal-hash (symbol->string obj)))
-        ((pair? obj)
-         (modulo (+ (* (equal-hash (car obj)) 31) (equal-hash (cdr obj))) 536870909))
-        ((vector? obj)
-         (let loop ((i 0) (h 0))
-           (if (>= i (vector-length obj)) (modulo h 536870909)
-               (loop (+ i 1) (+ (* h 31) (equal-hash (vector-ref obj i)))))))
-        (else 0))))
+          (scheme complex)
+          (only (patina internal predicates) equal-hash))
 
   (include "128/128.body1.scm")
   (include "128/128.body2.scm"))

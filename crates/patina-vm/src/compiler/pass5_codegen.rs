@@ -318,9 +318,86 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             arg_tmps,
             is_tail,
         } => {
-            // Evaluate function.
+            // Recognize (call-with-values producer consumer) and emit
+            // instruction-level sequence instead of a runtime-intercepted Call.
+            // This avoids run_thunk, making call/cc inside the producer safe.
+            if args.len() == 2
+                && let RegExprKind::GlobalRef { name } = &func.kind
+                && name.as_ref() == "call-with-values"
+            {
+                // Evaluate producer and consumer into their temps.
+                gen_expr(&args[0], cg)?;
+                gen_expr(&args[1], cg)?;
+                let producer_reg = arg_tmps[0];
+                let consumer_reg = arg_tmps[1];
+                // Call producer (0 args), result in expr.dst.
+                cg.emit(Instruction::Call {
+                    func: producer_reg,
+                    args: vec![],
+                    dst: expr.dst,
+                });
+                // Call consumer with value_buffer or [producer_result].
+                if *is_tail {
+                    cg.emit(Instruction::TailCallWithValues {
+                        consumer: consumer_reg,
+                        producer_result: expr.dst,
+                    });
+                } else {
+                    cg.emit(Instruction::CallWithValues {
+                        dst: expr.dst,
+                        consumer: consumer_reg,
+                        producer_result: expr.dst,
+                    });
+                }
+                return Ok(());
+            }
+
+            // Recognize (dynamic-wind before body after) and emit
+            // instruction-level sequence to avoid run_thunk for the body.
+            if args.len() == 3
+                && let RegExprKind::GlobalRef { name } = &func.kind
+                && name.as_ref() == "dynamic-wind"
+            {
+                gen_expr(&args[0], cg)?;
+                gen_expr(&args[1], cg)?;
+                gen_expr(&args[2], cg)?;
+                let before_reg = arg_tmps[0];
+                let body_reg = arg_tmps[1];
+                let after_reg = arg_tmps[2];
+                // Call before-thunk (result discarded).
+                cg.emit(Instruction::Call {
+                    func: before_reg,
+                    args: vec![],
+                    dst: expr.dst,
+                });
+                // Push wind record.
+                cg.emit(Instruction::PushWind {
+                    before: before_reg,
+                    after: after_reg,
+                });
+                // Call body-thunk, result in expr.dst.
+                cg.emit(Instruction::Call {
+                    func: body_reg,
+                    args: vec![],
+                    dst: expr.dst,
+                });
+                // Pop wind record (does not call after-thunk).
+                cg.emit(Instruction::PopWind);
+                // Call after-thunk (result discarded, goes into before_reg).
+                cg.emit(Instruction::Call {
+                    func: after_reg,
+                    args: vec![],
+                    dst: before_reg,
+                });
+                // expr.dst still holds body result.
+                if *is_tail {
+                    cg.emit(Instruction::Return { val: expr.dst });
+                }
+                return Ok(());
+            }
+
+            // General case: evaluate function and arguments, emit Call/TailCall.
             gen_expr(func, cg)?;
-            // Evaluate each argument into its temp.
             for arg in args {
                 gen_expr(arg, cg)?;
             }

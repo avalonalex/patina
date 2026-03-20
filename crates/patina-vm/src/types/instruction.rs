@@ -120,6 +120,36 @@ pub enum Instruction {
         dst: Reg,
     },
 
+    // ── call-with-values (instruction-level) ────────────────────────────────
+    /// Call `consumer` with the values produced by a preceding producer call.
+    ///
+    /// If `value_buffer` is non-empty (producer used `values`), pass those as
+    /// args. Otherwise pass `[reg[producer_result]]` as a single arg.
+    /// Non-tail variant: result written to `dst`.
+    CallWithValues {
+        dst: Reg,
+        consumer: Reg,
+        producer_result: Reg,
+    },
+
+    /// Tail-call variant of `CallWithValues`.
+    TailCallWithValues {
+        consumer: Reg,
+        producer_result: Reg,
+    },
+
+    // ── dynamic-wind (instruction-level) ────────────────────────────────────
+    /// Push a dynamic-wind record onto `VmState::dynamic_winds`.
+    ///
+    /// Uses `stack_depth = 0` so `pop_resolved_winds` won't auto-pop it;
+    /// the explicit `PopWind` instruction handles cleanup instead.
+    PushWind { before: Reg, after: Reg },
+
+    /// Pop the top dynamic-wind record from `VmState::dynamic_winds`.
+    /// Does NOT call the after-thunk — that is handled by a separate `Call`
+    /// instruction emitted after `PopWind` in the codegen sequence.
+    PopWind,
+
     // ── Multiple Values ───────────────────────────────────────────────────────
     /// Return multiple values to the caller via `VmState::value_buffer`.
     ReturnMulti { vals: Vec<Reg> },

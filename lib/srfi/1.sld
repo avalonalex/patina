@@ -4,11 +4,13 @@
 ;; Original author: Olin Shivers
 ;; License: MIT (see README.md in this directory)
 ;;
-;; Adapted for R7RS: added shim for check-arg, receive, let-optionals.
+;; Adapted for R7RS: imports (srfi 8) for receive, plus shims for
+;; check-arg, let-optionals, :optional.
 
 (define-library (srfi 1)
   (import (scheme base)
-          (scheme cxr))
+          (scheme cxr)
+          (srfi 8))
 
   ;; Constructors
   (export xcons cons* make-list list-tabulate list-copy
@@ -57,14 +59,6 @@
   ;; reference implementation include, so they are available during
   ;; macro expansion of the included code.
 
-  ;; receive (SRFI 8): bind multiple values
-  (begin
-    (define-syntax receive
-      (syntax-rules ()
-        ((receive formals expr body ...)
-         (call-with-values (lambda () expr)
-           (lambda formals body ...))))))
-
   ;; :optional — extract an optional argument from a rest list
   (begin
     (define-syntax :optional
@@ -99,7 +93,4 @@
           (error "Bad argument" val caller))))
 
   ;; Reference implementation
-  (include "1/srfi-1-reference.scm")
-  ;; Patina-specific patches: replace call/cc-based helpers that interact
-  ;; poorly with the VM's library loading temporary state.
-  (include "1/patina-patches.scm"))
+  (include "1/srfi-1-reference.scm"))

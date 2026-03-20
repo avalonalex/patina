@@ -887,6 +887,15 @@ fn dispatch_one_instruction(
                 state.set_reg(dst, result?);
             } else if try_invoke_continuation(state, func_val, &arg_vals)? {
                 // Continuation was invoked — stack has been replaced/appended.
+                // Safety net: if frames dropped to or below exit_depth, the
+                // continuation escaped past a synchronous run_thunk boundary
+                // (e.g. dynamic-wind body, with-exception-handler thunk, or
+                // indirect call-with-values). Return the primary value so the
+                // enclosing run_loop_until exits correctly.
+                if state.frames.len() <= exit_depth {
+                    let primary = arg_vals.first().copied().unwrap_or(TaggedValue::UNSPECIFIED);
+                    return Ok(Some(primary));
+                }
             } else {
                 call_closure(state, func_val, &arg_vals, dst)?;
             }
@@ -939,7 +948,12 @@ fn dispatch_one_instruction(
 
             // Continuation invocation in tail position.
             if try_invoke_continuation(state, func_val, &arg_vals)? {
-                // Stack replaced — just continue.
+                // Safety net: if frames dropped to or below exit_depth, the
+                // continuation escaped past a synchronous run_thunk boundary.
+                if state.frames.len() <= exit_depth {
+                    let primary = arg_vals.first().copied().unwrap_or(TaggedValue::UNSPECIFIED);
+                    return Ok(Some(primary));
+                }
                 return Ok(None);
             }
 
@@ -1157,6 +1171,84 @@ fn dispatch_one_instruction(
             pop_exception_handlers(state);
             // Pop dynamic-wind records whose body returned, running after-thunks.
             pop_resolved_winds(state)?;
+        }
+
+        // ── call-with-values (instruction-level) ─────────────────────────
+        Instruction::CallWithValues {
+            dst,
+            consumer,
+            producer_result,
+        } => {
+            let consumer_val = state.reg(consumer);
+            let produced_vals = if !state.value_buffer.is_empty() {
+                std::mem::take(&mut state.value_buffer)
+            } else if let Some(vals) =
+                state.heap.borrow().get_values_as_tagged(state.reg(producer_result))
+            {
+                vals
+            } else {
+                vec![state.reg(producer_result)]
+            };
+            if let Some(result) = call_any(state, consumer_val, &produced_vals, dst)? {
+                state.set_reg(dst, result);
+            }
+        }
+
+        Instruction::TailCallWithValues {
+            consumer,
+            producer_result,
+        } => {
+            let consumer_val = state.reg(consumer);
+            let produced_vals = if !state.value_buffer.is_empty() {
+                std::mem::take(&mut state.value_buffer)
+            } else if let Some(vals) =
+                state.heap.borrow().get_values_as_tagged(state.reg(producer_result))
+            {
+                vals
+            } else {
+                vec![state.reg(producer_result)]
+            };
+            // Pop current frame (tail position), then call consumer.
+            let frame = state.frames.pop().expect("TailCallWithValues with empty stack");
+            let return_reg = frame.return_reg;
+            state.free_top_registers(frame.register_base);
+            if state.frames.len() == exit_depth {
+                // At exit depth — call consumer; if it returns immediately,
+                // return the result.
+                if let Some(result) = call_any(state, consumer_val, &produced_vals, return_reg)? {
+                    return Ok(Some(result));
+                }
+                if state.frames.len() == exit_depth {
+                    let result = state.reg(return_reg);
+                    return Ok(Some(result));
+                }
+            } else if let Some(result) =
+                call_any(state, consumer_val, &produced_vals, return_reg)?
+            {
+                let caller_idx = state.frames.len() - 1;
+                state.set_reg_in_frame(caller_idx, return_reg, result);
+            }
+        }
+
+        // ── dynamic-wind (instruction-level) ──────────────────────────
+        Instruction::PushWind { before, after } => {
+            let before_val = state.reg(before);
+            let after_val = state.reg(after);
+            state.dynamic_winds.push(DynamicWindRecord {
+                before: before_val,
+                after: after_val,
+                // stack_depth = 0: sentinel meaning "managed by instruction
+                // sequence, not auto-popped by pop_resolved_winds".
+                stack_depth: 0,
+            });
+        }
+
+        Instruction::PopWind => {
+            // Pop the top wind record. The after-thunk is called by a
+            // separate Call instruction emitted after this in the codegen.
+            if !state.dynamic_winds.is_empty() {
+                state.dynamic_winds.pop();
+            }
         }
 
         // ── Multiple Values ─────────────────────────────────────────────
@@ -2309,6 +2401,13 @@ fn try_invoke_continuation(
             let base = top.register_base;
             state.registers[base + cc.deliver_reg as usize] = deliver_val;
         }
+        // When invoked with multiple values, populate value_buffer so
+        // call-with-values can unpack them.
+        if args.len() > 1 {
+            state.value_buffer = args.to_vec();
+        } else {
+            state.value_buffer.clear();
+        }
         return Ok(true);
     }
 
@@ -2335,6 +2434,12 @@ fn try_invoke_continuation(
                 let caller_base = state.frames[n - 2].register_base;
                 state.registers[caller_base + ret_reg as usize] = deliver_val;
             }
+        }
+        // Populate value_buffer for multi-value delivery
+        if args.len() > 1 {
+            state.value_buffer = args.to_vec();
+        } else {
+            state.value_buffer.clear();
         }
         return Ok(true);
     }

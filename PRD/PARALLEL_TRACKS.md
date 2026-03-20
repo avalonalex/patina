@@ -1,8 +1,8 @@
 # Patina: Parallel Development Tracks
 
-**Status:** Track A complete, Track B1 complete
+**Status:** Track A complete, Track B1 complete, Track B2 complete
 **Created:** 2026-03-08
-**Updated:** 2026-03-15
+**Updated:** 2026-03-19
 
 ---
 
@@ -53,18 +53,23 @@ See `PRD/ARCHIVE/R7RS_AUDIT.md` for the detailed report.
 
 **Result:** 16/16 R7RS-small libraries, all procedures, all syntax forms. 1163/1163 chibi tests on both backends.
 
-### B2 — Priority SRFIs (Scheme-implementable)
+### B2 — Priority SRFIs (Scheme-implementable) ✅ COMPLETE
 
-| SRFI | Library | Why priority |
+| SRFI | Library | Status |
 |---|---|---|
-| SRFI 1 | `(scheme list)` | Red Edition, heavily used |
-| SRFI 111 | `(scheme box)` | Simple, widely used |
-| SRFI 128 | `(scheme comparator)` | Prerequisite for SRFI 113, 125, 132 |
-| SRFI 133 | `(scheme vector)` | Red Edition |
-| SRFI 132 | `(scheme sort)` | Depends on SRFI 128 |
-| SRFI 113 | `(scheme set)` | Depends on SRFI 128 |
-| SRFI 125 | `(scheme hash-table)` | Depends on SRFI 128 |
-| SRFI 158 | `(scheme generator)` | Tangerine Edition |
+| SRFI 1 | `(srfi 1)` | ✅ List library, patches removed |
+| SRFI 8 | `(srfi 8)` | ✅ `receive` — multi-value binding |
+| SRFI 69 | `(srfi 69)` | ✅ Basic hash tables |
+| SRFI 111 | `(srfi 111)` | ✅ Boxes |
+| SRFI 113 | `(srfi 113)` | ✅ Sets and bags |
+| SRFI 128 | `(srfi 128)` | ✅ Comparators, native `equal-hash` |
+| SRFI 132 | `(srfi 132)` | ✅ Sort libraries (pure Scheme merge sort) |
+| SRFI 133 | `(srfi 133)` | ✅ Vector library |
+| SRFI 158 | `(srfi 158)` | ✅ Generators and accumulators |
+
+All SRFI porting issues resolved (see `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`).
+
+**Performance note:** SRFI 132 sort and SRFI 69 hash tables are pure Scheme. Once Rust FFI or specialized VM opcodes are available, these should be replaced with native implementations for production workloads.
 
 ### B3 — Priority SRFIs (require new Rust primitives)
 
@@ -100,4 +105,5 @@ Track A and Track B share:
 |---|---|
 | **Track A** | ✅ Complete — 1163/1163 chibi tests passing |
 | **Track B1** | ✅ Complete — R7RS-small audit: 16/16 libraries, all gaps resolved |
-| **Track B2+** | Priority SRFIs implemented + all new tests pass on both backends |
+| **Track B2** | ✅ Complete — 9 SRFIs implemented, all porting issues resolved |
+| **Track B3+** | Priority SRFIs requiring Rust primitives (SRFI 125, 143, 151) |

@@ -48,6 +48,21 @@ pub(super) fn equal(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
     ))
 }
 
+pub(super) fn equal_hash(
+    heap: &SharedHeap,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let h = heap.borrow().tagged_value_hash(args[0]);
+    // Return as non-negative fixnum (mod a large prime < fixnum max)
+    Ok(TaggedValue::fixnum((h % 536870909) as i64))
+}
+
 pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     use crate::registry::PrimitiveFn;
     use patina_runtime::Arity;
@@ -77,5 +92,14 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         Arity::Exact(2),
         "Returns #t if obj1 and obj2 are structurally equal (deep comparison).",
         equal,
+    ));
+
+    // equal-hash - hash consistent with equal?
+    registry.register(PrimitiveFn::new_heap(
+        "patina.internal.predicates",
+        "equal-hash",
+        Arity::Exact(1),
+        "Returns a non-negative exact integer hash code for obj, consistent with equal?.",
+        equal_hash,
     ));
 }

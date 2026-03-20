@@ -10,6 +10,7 @@
           (scheme write)
           (scheme char)
           (scheme complex)
+          (only (scheme r5rs) inexact->exact exact->inexact)
           (srfi 128)
           (srfi 69))
 

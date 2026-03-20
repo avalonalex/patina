@@ -1749,6 +1749,128 @@ impl Heap {
         self.values_equal(a, b)
     }
 
+    /// Compute a hash for a TaggedValue consistent with `equal?`.
+    ///
+    /// Objects that are `equal?` produce the same hash. Uses a depth limit
+    /// to avoid excessive recursion on deep structures.
+    pub fn tagged_value_hash(&self, tv: TaggedValue) -> u64 {
+        self.tagged_value_hash_depth(tv, 8)
+    }
+
+    fn tagged_value_hash_depth(&self, tv: TaggedValue, depth: u32) -> u64 {
+        // Null
+        if tv.is_null() {
+            return 0x517cc1b727220a95;
+        }
+        // Boolean
+        if tv.is_boolean() {
+            return if tv.is_truthy() {
+                0x9e3779b97f4a7c15
+            } else {
+                0x6c62272e07bb0142
+            };
+        }
+        // Fixnum
+        if tv.is_fixnum() {
+            let mut h = tv.as_fixnum_unchecked() as u64;
+            h = h.wrapping_mul(0x517cc1b727220a95);
+            h ^= h >> 32;
+            return h;
+        }
+        // Char
+        if tv.is_char() {
+            let c = tv.as_char_unchecked() as u64;
+            return c.wrapping_mul(0x9e3779b97f4a7c15);
+        }
+        // String (native)
+        if tv.is_string() {
+            let chars = self.get_string_chars(tv);
+            let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
+            for &c in chars {
+                h ^= c as u64;
+                h = h.wrapping_mul(0x100000001b3); // FNV prime
+            }
+            return h;
+        }
+        // Pair
+        if tv.is_pair() {
+            if depth == 0 {
+                return 0x01000193;
+            }
+            let car = self.car(tv);
+            let cdr = self.cdr(tv);
+            let h1 = self.tagged_value_hash_depth(car, depth - 1);
+            let h2 = self.tagged_value_hash_depth(cdr, depth - 1);
+            return h1.wrapping_mul(31).wrapping_add(h2);
+        }
+        // Vector
+        if tv.is_vector() {
+            if depth == 0 {
+                return 0x811c9dc5;
+            }
+            let len = self.vector_len(tv);
+            let mut h: u64 = len as u64;
+            let limit = len.min(8); // Hash at most 8 elements
+            for i in 0..limit {
+                let elem = self.vector_ref(tv, i);
+                h = h
+                    .wrapping_mul(31)
+                    .wrapping_add(self.tagged_value_hash_depth(elem, depth - 1));
+            }
+            return h;
+        }
+        // Heap objects
+        if tv.is_object() {
+            match self.get_object(tv) {
+                HeapObjectData::BigInt(n) => {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    n.hash(&mut hasher);
+                    return hasher.finish();
+                }
+                HeapObjectData::Rational(r) => {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    r.numer().hash(&mut hasher);
+                    r.denom().hash(&mut hasher);
+                    return hasher.finish();
+                }
+                HeapObjectData::Real(f) => {
+                    if f.is_nan() {
+                        return 0x7ff8000000000000;
+                    }
+                    return f.to_bits();
+                }
+                HeapObjectData::Complex { real, imag } => {
+                    let h1 = self.tagged_value_hash_depth(*real, depth);
+                    let h2 = self.tagged_value_hash_depth(*imag, depth);
+                    return h1.wrapping_mul(31).wrapping_add(h2);
+                }
+                HeapObjectData::Symbol(s) => {
+                    let mut h: u64 = 0xcbf29ce484222325;
+                    for c in s.chars() {
+                        h ^= c as u64;
+                        h = h.wrapping_mul(0x100000001b3);
+                    }
+                    return h;
+                }
+                HeapObjectData::Bytevector(bytes) => {
+                    let mut h: u64 = 0xcbf29ce484222325;
+                    for &b in bytes.iter() {
+                        h ^= b as u64;
+                        h = h.wrapping_mul(0x100000001b3);
+                    }
+                    return h;
+                }
+                _ => {
+                    return tv.heap_index() as u64;
+                }
+            }
+        }
+        // Unspecified, eof, etc.
+        0
+    }
+
     /// Check if a numeric value is finite
     /// Returns None if not a number, Some(true) if finite, Some(false) if infinite/NaN
     #[inline]

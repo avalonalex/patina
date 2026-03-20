@@ -9,9 +9,6 @@
 
 ;; Most if not all of this code is taken from SRFI-114
 
-;; R7RS name is 'exact', not R5RS 'inexact->exact'
-(define %shim-exact exact)
-
 (define string-foldcase string-downcase)
 
 (define (make-comparison=/< = <)
@@ -35,7 +32,7 @@
       (real-comparison (imag-part a) (imag-part b))
       real-result)))
 
-(define (number-hash obj) (%shim-exact (abs obj)))
+(define (number-hash obj) (inexact->exact (abs obj)))
 
 (define number-comparator
   (make-comparator number? = complex-comparison number-hash))

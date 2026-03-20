@@ -217,7 +217,7 @@ impl Lexer {
     fn skip_whitespace_and_comments(&mut self) -> Result<(), LexError> {
         while !self.is_at_end() {
             match self.current_char() {
-                ' ' | '\t' | '\n' | '\r' => self.advance(),
+                ' ' | '\t' | '\n' | '\r' | '\x0C' => self.advance(),
                 ';' => {
                     // Line comment: skip until end of line
                     while !self.is_at_end() && self.current_char() != '\n' {
