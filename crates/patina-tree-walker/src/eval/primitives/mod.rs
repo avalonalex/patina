@@ -24,13 +24,14 @@ impl Evaluator {
         args: Vec<TaggedValue>,
         _in_tail_position: bool,
     ) -> Result<super::EvalResult, EvalError> {
-        // Extract pre-computed qualified name from the primitive
-        let (name, qualified_name) = match proc {
+        // Extract pre-computed qualified name and index cache from the primitive
+        let (name, qualified_name, registry_index) = match proc {
             Procedure::Primitive {
                 name,
                 qualified_name,
+                registry_index,
                 ..
-            } => (*name, qualified_name.as_ref()),
+            } => (*name, qualified_name.as_ref(), registry_index),
             _ => {
                 return Err(EvalError::TypeError(
                     "apply_primitive_tagged called with non-primitive procedure".to_string(),
@@ -40,7 +41,7 @@ impl Evaluator {
 
         // Use the shared patina-primitives registry
         self.primitive_registry
-            .apply_tagged(qualified_name, args, self)
+            .apply_cached(qualified_name, registry_index, args, self)
             .map(super::EvalResult::Tagged)
             .map_err(|e| {
                 if e.to_string().contains("not found") {

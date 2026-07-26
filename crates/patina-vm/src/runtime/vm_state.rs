@@ -101,14 +101,15 @@ impl VmState {
     pub fn install_primitives(&mut self) {
         let prims: Vec<_> = self
             .primitive_registry
-            .primitives()
-            .map(|p| (p.name, p.qualified_name(), p.arity.clone()))
+            .primitives_indexed()
+            .map(|(i, p)| (i, p.name, p.qualified_name(), p.arity.clone()))
             .collect();
-        for (name, qualified_name, arity) in prims {
+        for (index, name, qualified_name, arity) in prims {
             let proc = Rc::new(Procedure::Primitive {
                 name,
                 arity,
                 qualified_name: Rc::from(qualified_name.as_str()),
+                registry_index: std::cell::Cell::new(Some(index)),
             });
             let tv = self.heap.borrow_mut().alloc_procedure(proc);
             self.globals.define(name.to_string(), tv);
@@ -2455,7 +2456,12 @@ fn try_call_primitive(
     args: Vec<TaggedValue>,
 ) -> Option<Result<TaggedValue, VmError>> {
     let proc = state.heap.borrow().get_procedure(func_val)?;
-    let Procedure::Primitive { qualified_name, .. } = proc.as_ref() else {
+    let Procedure::Primitive {
+        qualified_name,
+        registry_index,
+        ..
+    } = proc.as_ref()
+    else {
         return None;
     };
     let ctx = VmApplyContext {
@@ -2463,7 +2469,7 @@ fn try_call_primitive(
     };
     let result = state
         .primitive_registry
-        .apply_tagged(qualified_name, args, &ctx)
+        .apply_cached(qualified_name, registry_index, args, &ctx)
         .map_err(|e| VmError::Runtime {
             message: e.to_string(),
         });

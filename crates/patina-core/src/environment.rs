@@ -111,6 +111,7 @@ impl Environment {
             name,
             arity,
             qualified_name,
+            registry_index: std::cell::Cell::new(None),
         });
         let tv = self.heap.borrow_mut().alloc_procedure(proc);
         self.define(name.to_string(), tv);

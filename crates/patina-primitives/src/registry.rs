@@ -2,6 +2,7 @@
 
 use crate::apply_context::ApplyContext;
 use patina_runtime::{Arity, EvalError, SharedHeap, TaggedValue};
+use std::cell::Cell;
 use std::collections::HashMap;
 
 /// Handler for heap-only primitives (~290 primitives)
@@ -98,72 +99,162 @@ impl PrimitiveFn {
     }
 }
 
+/// Primitive storage is index-addressable: entries live in a `Vec` and the
+/// name maps only translate names to indices. Hot call paths cache the index
+/// (see `Procedure::Primitive::registry_index`) so they dispatch with a
+/// bounds-checked array access instead of hashing the qualified name on
+/// every call. Indices are stable: registration only appends or replaces in
+/// place, never removes or reorders.
 pub struct PrimitiveRegistry {
-    primitives: HashMap<String, PrimitiveFn>,
-    name_index: HashMap<&'static str, String>,
+    entries: Vec<PrimitiveFn>,
+    by_qualified: HashMap<String, usize>,
+    name_index: HashMap<&'static str, usize>,
 }
 
 impl PrimitiveRegistry {
     pub fn new() -> Self {
         PrimitiveRegistry {
-            primitives: HashMap::new(),
+            entries: Vec::new(),
+            by_qualified: HashMap::new(),
             name_index: HashMap::new(),
         }
     }
 
     pub fn register(&mut self, primitive: PrimitiveFn) {
         let qualified_name = primitive.qualified_name();
+        let index = match self.by_qualified.get(&qualified_name) {
+            Some(&existing) => {
+                self.entries[existing] = primitive;
+                existing
+            }
+            None => {
+                self.entries.push(primitive);
+                let index = self.entries.len() - 1;
+                self.by_qualified.insert(qualified_name, index);
+                index
+            }
+        };
         self.name_index
-            .entry(primitive.name)
-            .or_insert_with(|| qualified_name.clone());
-        self.primitives.insert(qualified_name, primitive);
+            .entry(self.entries[index].name)
+            .or_insert(index);
     }
 
     pub fn get(&self, qualified_name: &str) -> Option<&PrimitiveFn> {
-        self.primitives.get(qualified_name)
+        self.by_qualified
+            .get(qualified_name)
+            .map(|&i| &self.entries[i])
     }
 
     pub fn get_by_name(&self, name: &str) -> Option<&PrimitiveFn> {
-        let qn = self.name_index.get(name)?;
-        self.primitives.get(qn.as_str())
+        self.name_index.get(name).map(|&i| &self.entries[i])
     }
 
     pub fn get_from_library(&self, library: &str, name: &str) -> Option<&PrimitiveFn> {
         let qualified = format!("{}/{}", library, name);
-        self.primitives.get(&qualified)
+        self.get(&qualified)
     }
 
     pub fn get_library_primitives(&self, library: &str) -> impl Iterator<Item = &PrimitiveFn> {
-        let prefix = format!("{}/", library);
-        self.primitives.iter().filter_map(move |(qn, pf)| {
-            if qn.starts_with(&prefix) {
-                Some(pf)
-            } else {
-                None
-            }
-        })
+        self.entries.iter().filter(move |pf| pf.library == library)
     }
 
     pub fn contains(&self, qualified_name: &str) -> bool {
-        self.primitives.contains_key(qualified_name)
+        self.by_qualified.contains_key(qualified_name)
     }
 
     pub fn len(&self) -> usize {
-        self.primitives.len()
+        self.entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.primitives.is_empty()
+        self.entries.is_empty()
     }
 
     pub fn list_names(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = self.primitives.keys().map(|s| s.as_str()).collect();
+        let mut names: Vec<&str> = self.by_qualified.keys().map(|s| s.as_str()).collect();
         names.sort();
         names
     }
 
     pub fn primitives(&self) -> impl Iterator<Item = &PrimitiveFn> {
-        self.primitives.values()
+        self.entries.iter()
+    }
+
+    /// Iterate primitives together with their stable registry index
+    pub fn primitives_indexed(&self) -> impl Iterator<Item = (usize, &PrimitiveFn)> {
+        self.entries.iter().enumerate()
+    }
+
+    /// Look up the stable index for a qualified name, falling back to the
+    /// short name (the part after '/') like `apply_tagged` does
+    pub fn resolve_index(&self, qualified_name: &str) -> Option<usize> {
+        if let Some(&i) = self.by_qualified.get(qualified_name) {
+            return Some(i);
+        }
+        let name = match qualified_name.split_once('/') {
+            Some((_, n)) => n,
+            None => qualified_name,
+        };
+        self.name_index.get(name).copied()
+    }
+
+    /// Get a primitive by its stable registry index
+    pub fn get_by_index(&self, index: usize) -> Option<&PrimitiveFn> {
+        self.entries.get(index)
+    }
+
+    /// Apply a primitive by its stable registry index — the hot dispatch
+    /// path, no name hashing involved
+    pub fn apply_by_index(
+        &self,
+        index: usize,
+        args: Vec<TaggedValue>,
+        ctx: &dyn ApplyContext,
+    ) -> Result<TaggedValue, EvalError> {
+        let primitive = self.entries.get(index).ok_or_else(|| {
+            EvalError::InternalError(format!("invalid primitive index {}", index))
+        })?;
+        primitive.check_arity(args.len())?;
+        match &primitive.handler {
+            PrimitiveHandler::Heap(h) => h(ctx.heap(), args),
+            PrimitiveHandler::HigherOrder(h) => h(ctx, args),
+        }
+    }
+
+    /// Apply a primitive through a cached index slot (the one stored on
+    /// `Procedure::Primitive`), resolving the name and filling the slot on
+    /// first use. After the first call, dispatch is a direct array access.
+    pub fn apply_cached(
+        &self,
+        qualified_name: &str,
+        index_cache: &Cell<Option<usize>>,
+        args: Vec<TaggedValue>,
+        ctx: &dyn ApplyContext,
+    ) -> Result<TaggedValue, EvalError> {
+        let index = match index_cache.get() {
+            Some(i) => i,
+            None => {
+                let i = self
+                    .resolve_index(qualified_name)
+                    .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))?;
+                index_cache.set(Some(i));
+                i
+            }
+        };
+        // Split at the FIRST '/', matching resolve_index: the short name may
+        // itself contain '/' (the division primitive is "library//")
+        debug_assert_eq!(
+            self.get_by_index(index).map(|p| p.name),
+            Some(
+                qualified_name
+                    .split_once('/')
+                    .map(|(_, n)| n)
+                    .unwrap_or(qualified_name)
+            ),
+            "stale primitive index cache for {}",
+            qualified_name
+        );
+        self.apply_by_index(index, args, ctx)
     }
 
     /// Apply a primitive by qualified name, using the provided context
@@ -173,24 +264,10 @@ impl PrimitiveRegistry {
         args: Vec<TaggedValue>,
         ctx: &dyn ApplyContext,
     ) -> Result<TaggedValue, EvalError> {
-        let primitive = self.lookup_primitive(qualified_name)?;
-        primitive.check_arity(args.len())?;
-        match &primitive.handler {
-            PrimitiveHandler::Heap(h) => h(ctx.heap(), args),
-            PrimitiveHandler::HigherOrder(h) => h(ctx, args),
-        }
-    }
-
-    fn lookup_primitive(&self, qualified_name: &str) -> Result<&PrimitiveFn, EvalError> {
-        if let Some(prim) = self.get(qualified_name) {
-            return Ok(prim);
-        }
-        let name = match qualified_name.split_once('/') {
-            Some((_, n)) => n,
-            None => qualified_name,
-        };
-        self.get_by_name(name)
-            .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))
+        let index = self
+            .resolve_index(qualified_name)
+            .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))?;
+        self.apply_by_index(index, args, ctx)
     }
 }
 

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::core_expr::ScopedParam;
@@ -23,6 +24,11 @@ pub enum Procedure {
         /// Pre-computed "library/name" key for PrimitiveRegistry lookup.
         /// Computed once at registration time to avoid format!() on every call.
         qualified_name: Rc<str>,
+        /// Cached index into the primitive registry (opaque to this crate).
+        /// Backends resolve it eagerly at install time or lazily on first
+        /// call, so hot call paths dispatch by index instead of hashing the
+        /// qualified name on every call.
+        registry_index: Cell<Option<usize>>,
     },
 
     /// CPS-style lambda - for use with CPS evaluator

@@ -745,9 +745,13 @@ impl<'a> CpsEvaluator<'a> {
         // IMPORTANT: Wrap primitive calls to catch I/O and read errors
         // and route them through the CPS exception handler stack.
         //
-        // Extract pre-computed qualified name from the primitive procedure
-        let qualified_name = match p.as_ref() {
-            Procedure::Primitive { qualified_name, .. } => qualified_name.as_ref(),
+        // Extract pre-computed qualified name and index cache from the primitive
+        let (qualified_name, registry_index) = match p.as_ref() {
+            Procedure::Primitive {
+                qualified_name,
+                registry_index,
+                ..
+            } => (qualified_name.as_ref(), registry_index),
             _ => {
                 return Err(EvalError::TypeError(
                     "apply_other_primitive called with non-primitive procedure".to_string(),
@@ -755,11 +759,13 @@ impl<'a> CpsEvaluator<'a> {
             }
         };
 
-        // Use pre-computed qualified name — no format!() allocation needed
-        let prim_result =
-            self.evaluator
-                .primitive_registry
-                .apply_tagged(qualified_name, args, self.evaluator);
+        // Dispatch through the cached registry index — no name hashing
+        let prim_result = self.evaluator.primitive_registry.apply_cached(
+            qualified_name,
+            registry_index,
+            args,
+            self.evaluator,
+        );
 
         match prim_result {
             Ok(result_tagged) => {
