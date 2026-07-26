@@ -15,6 +15,7 @@ use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -39,7 +40,7 @@ pub struct VmState {
     /// Stack of installed exception handlers (`with-exception-handler`).
     pub exception_handlers: Vec<ExceptionHandler>,
     /// All compiled `CodeObject`s, keyed by id.
-    pub code_store: HashMap<CodeObjectId, Rc<CodeObject>>,
+    pub code_store: FxHashMap<CodeObjectId, Rc<CodeObject>>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     pub globals: Rc<Environment>,
@@ -80,7 +81,7 @@ impl VmState {
             prompt_stack: Vec::new(),
             dynamic_winds: Vec::new(),
             exception_handlers: Vec::new(),
-            code_store: HashMap::new(),
+            code_store: FxHashMap::default(),
             globals,
             heap,
             primitive_registry: Rc::new(registry),
@@ -201,13 +202,7 @@ impl VmState {
     }
 
     pub fn current_code(&self) -> Result<Rc<CodeObject>, VmError> {
-        let id = self.frames.last().expect("no active frame").code_id;
-        self.code_store
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| VmError::Runtime {
-                message: format!("missing CodeObject {:?}", id),
-            })
+        Ok(self.frames.last().expect("no active frame").code.clone())
     }
 }
 
@@ -560,6 +555,7 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
         num_regs: code.num_regs,
         closure: None,
         return_reg: 0,
+        code,
     });
 
     run_loop_until(state, 0)
@@ -587,6 +583,7 @@ pub fn execute_nested(state: &mut VmState, code_id: CodeObjectId) -> Result<Tagg
         num_regs: code.num_regs,
         closure: None,
         return_reg: 0,
+        code,
     });
 
     run_loop_until(state, depth_before)
@@ -639,6 +636,7 @@ fn call_closure(
         num_regs: code.num_regs,
         closure: closure_heap_index(closure_val),
         return_reg,
+        code,
     });
     Ok(())
 }
@@ -713,27 +711,17 @@ fn dispatch_one_instruction(
     state: &mut VmState,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
-    // Fetch current frame state.
-    let (code_id, pc) = {
+    // Fetch current frame state. The frame carries its (immutable) code
+    // object, so no code_store lookup or instruction clone is needed here —
+    // the instruction is borrowed from the frame's Rc for the whole dispatch.
+    let (code, code_id, pc) = {
         let f = state.frames.last().expect("empty frame stack");
-        (f.code_id, f.pc)
+        (f.code.clone(), f.code_id, f.pc)
     };
 
-    let code = state
-        .code_store
-        .get(&code_id)
-        .cloned()
-        .ok_or_else(|| VmError::Runtime {
-            message: format!("missing CodeObject {:?}", code_id),
-        })?;
-
-    let instr = code
-        .instructions
-        .get(pc)
-        .ok_or_else(|| VmError::Runtime {
-            message: format!("PC {} out of bounds in {:?}", pc, code_id),
-        })?
-        .clone();
+    let instr = code.instructions.get(pc).ok_or_else(|| VmError::Runtime {
+        message: format!("PC {} out of bounds in {:?}", pc, code_id),
+    })?;
 
     // Advance PC before dispatch (instructions that jump will overwrite).
     state.frames.last_mut().unwrap().pc += 1;
@@ -747,13 +735,13 @@ fn dispatch_one_instruction(
             f,
             code_id,
             pc,
-            &instr,
+            instr,
             &state.heap,
             depth,
         );
     }
 
-    match instr {
+    match *instr {
         // ── Load / Store ────────────────────────────────────────────────
         Instruction::LoadImmediate { dst, val } => {
             state.set_reg(dst, val);
@@ -816,23 +804,23 @@ fn dispatch_one_instruction(
             }
         }
 
-        Instruction::LoadGlobal { dst, name } => {
+        Instruction::LoadGlobal { dst, ref name } => {
             let globals = frame_globals(state);
             let val = globals
-                .get(&name)
+                .get(name)
                 .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
             state.set_reg(dst, val);
         }
 
-        Instruction::StoreGlobal { name, src } => {
+        Instruction::StoreGlobal { ref name, src } => {
             let val = state.reg(src);
             let globals = frame_globals(state);
             globals
-                .set(&name, val)
+                .set(name, val)
                 .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
         }
 
-        Instruction::Define { name, src } => {
+        Instruction::Define { ref name, src } => {
             let val = state.reg(src);
             let globals = frame_globals(state);
             globals.define(name.to_string(), val);
@@ -842,7 +830,7 @@ fn dispatch_one_instruction(
         Instruction::MakeClosure {
             dst,
             code_id: child_id,
-            free_vars,
+            ref free_vars,
         } => {
             let captured: Vec<TaggedValue> = free_vars.iter().map(|&r| state.reg(r)).collect();
             let globals = frame_globals(state);
@@ -873,7 +861,11 @@ fn dispatch_one_instruction(
         }
 
         // ── Function Calls ──────────────────────────────────────────────
-        Instruction::Call { func, args, dst } => {
+        Instruction::Call {
+            func,
+            ref args,
+            dst,
+        } => {
             let func_val = state.reg(func);
             let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
             // Intercept higher-order control primitives that need VM cooperation.
@@ -906,7 +898,7 @@ fn dispatch_one_instruction(
             }
         }
 
-        Instruction::TailCall { func, args } => {
+        Instruction::TailCall { func, ref args } => {
             let func_val = state.reg(func);
             let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
 
@@ -1037,14 +1029,20 @@ fn dispatch_one_instruction(
                 }
             }
 
-            // Update frame in-place.
+            // Update frame in-place. `code` must be kept in sync with
+            // `code_id` — dispatch fetches instructions from it.
             let frame = state.frames.last_mut().unwrap();
             frame.code_id = new_code_id;
             frame.pc = 0;
             frame.closure = closure_heap_index(func_val);
+            frame.code = new_code;
         }
 
-        Instruction::Apply { func, args, dst } => {
+        Instruction::Apply {
+            func,
+            ref args,
+            dst,
+        } => {
             let func_val = state.reg(func);
             let mut arg_vals: Vec<TaggedValue> = args[..args.len() - 1]
                 .iter()
@@ -1069,7 +1067,7 @@ fn dispatch_one_instruction(
             }
         }
 
-        Instruction::TailApply { func, args } => {
+        Instruction::TailApply { func, ref args } => {
             let func_val = state.reg(func);
             let mut arg_vals: Vec<TaggedValue> = args[..args.len() - 1]
                 .iter()
@@ -1158,6 +1156,7 @@ fn dispatch_one_instruction(
             frame.code_id = new_code_id;
             frame.pc = 0;
             frame.closure = closure_heap_index(func_val);
+            frame.code = new_code;
         }
 
         Instruction::Return { val } => {
@@ -1267,7 +1266,7 @@ fn dispatch_one_instruction(
         }
 
         // ── Multiple Values ─────────────────────────────────────────────
-        Instruction::ReturnMulti { vals } => {
+        Instruction::ReturnMulti { ref vals } => {
             let results: Vec<TaggedValue> = vals.iter().map(|&r| state.reg(r)).collect();
             let frame = state.frames.pop().expect("ReturnMulti with empty stack");
             state.value_buffer = results.clone();
@@ -1284,7 +1283,7 @@ fn dispatch_one_instruction(
             state.free_top_registers(frame.register_base);
         }
 
-        Instruction::ReceiveValues { dsts } => {
+        Instruction::ReceiveValues { ref dsts } => {
             let buf = std::mem::take(&mut state.value_buffer);
             if buf.len() != dsts.len() {
                 return Err(VmError::ContinuationValueMismatch);

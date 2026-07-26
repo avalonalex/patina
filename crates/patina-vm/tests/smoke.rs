@@ -33,6 +33,15 @@ fn variadic_arity_accepts() {
 #[test]
 fn call_frame_is_clone() {
     // CallFrame MUST be Clone — continuations snapshot the entire frame stack.
+    let code = std::rc::Rc::new(CodeObject {
+        id: CodeObjectId(0),
+        name: None,
+        instructions: vec![],
+        constants: vec![],
+        num_regs: 8,
+        arity: Arity::Fixed(0),
+        source_map: vec![],
+    });
     let frame = CallFrame {
         code_id: CodeObjectId(0),
         pc: 42,
@@ -40,6 +49,7 @@ fn call_frame_is_clone() {
         num_regs: 8,
         closure: None,
         return_reg: 3,
+        code,
     };
     let cloned = frame.clone();
     assert_eq!(cloned.pc, 42);

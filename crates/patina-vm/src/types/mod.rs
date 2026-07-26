@@ -14,6 +14,7 @@ pub use instruction::Instruction;
 
 use patina_core::tagged_value::HeapIndex;
 use patina_core::tagged_value::TaggedValue;
+use std::rc::Rc;
 
 /// Register index (frame-relative, u16 allows up to 65535 registers per frame)
 pub type Reg = u16;
@@ -50,6 +51,11 @@ pub struct CallFrame {
     /// Register in the *caller's* frame where `Return` should write its result.
     /// When there is no caller (top-level), this field is unused.
     pub return_reg: Reg,
+    /// The code object this frame executes, resolved once at push time.
+    /// Code objects are immutable after loading, so caching the `Rc` here is
+    /// safe and lets the dispatch loop fetch instructions without a
+    /// `code_store` hash lookup per instruction.
+    pub code: Rc<CodeObject>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
