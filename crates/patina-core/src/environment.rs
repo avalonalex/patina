@@ -1,8 +1,8 @@
 use crate::heap::SharedHeap;
 use crate::scope::ScopeSet;
 use crate::tagged_value::TaggedValue;
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 /// A binding with its associated scope set
@@ -45,10 +45,10 @@ pub struct Environment {
     heap: SharedHeap,
     /// Simple name-based bindings (for built-ins and top-level)
     /// Stores TaggedValue internally for memory efficiency
-    bindings: Rc<RefCell<HashMap<String, TaggedValue>>>,
+    bindings: Rc<RefCell<FxHashMap<String, TaggedValue>>>,
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
-    scoped_bindings: Rc<RefCell<HashMap<String, Vec<ScopedBinding>>>>,
+    scoped_bindings: Rc<RefCell<FxHashMap<String, Vec<ScopedBinding>>>>,
     parent: Option<Rc<Environment>>,
 }
 
@@ -62,8 +62,8 @@ impl Environment {
     pub fn with_heap(heap: SharedHeap) -> Self {
         Environment {
             heap,
-            bindings: Rc::new(RefCell::new(HashMap::new())),
-            scoped_bindings: Rc::new(RefCell::new(HashMap::new())),
+            bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            scoped_bindings: Rc::new(RefCell::new(FxHashMap::default())),
             parent: None,
         }
     }
@@ -72,8 +72,8 @@ impl Environment {
     pub fn with_parent(parent: Rc<Environment>) -> Self {
         Environment {
             heap: parent.heap.clone(),
-            bindings: Rc::new(RefCell::new(HashMap::new())),
-            scoped_bindings: Rc::new(RefCell::new(HashMap::new())),
+            bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            scoped_bindings: Rc::new(RefCell::new(FxHashMap::default())),
             parent: Some(parent),
         }
     }
