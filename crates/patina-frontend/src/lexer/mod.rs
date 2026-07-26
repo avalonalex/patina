@@ -668,12 +668,22 @@ impl Lexer {
             return Err(LexError::InvalidCharacter);
         }
 
+        // R7RS: <character> -> #\<any character>, so the first character
+        // after #\ is always part of the literal even when it is itself a
+        // delimiter (#\(, #\), #\ , #\;). No named (#\space) or hex (#\x41)
+        // literal starts with a delimiter, so a delimiter first character is
+        // always a single-character literal; otherwise keep scanning to
+        // capture a possible multi-character name.
         let start = self.position;
-        while !self.is_at_end()
-            && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')')
-        {
-            self.advance();
+        let first = self.current_char();
+        self.advance();
+        if !first.is_whitespace() && !matches!(first, '(' | ')' | '"' | ';') {
+            while !self.is_at_end()
+                && !self.current_char().is_whitespace()
+                && !matches!(self.current_char(), '(' | ')' | '"' | ';')
+            {
+                self.advance();
+            }
         }
 
         let char_str: String = self.input[start..self.position].iter().collect();
@@ -807,6 +817,81 @@ mod tests {
             Token::Number("2".to_string())
         );
         assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_character_literal_paren_chars() {
+        // R7RS <character> -> #\<any character>: the character may itself
+        // be a delimiter
+        let mut lexer = Lexer::new("#\\(");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('('));
+
+        let mut lexer = Lexer::new("#\\)");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character(')'));
+
+        // In call position, followed by a closing paren
+        let mut lexer = Lexer::new("(list #\\( #\\))");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "list"));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('('));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character(')'));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_character_literal_whitespace_chars() {
+        // #\ followed by a literal space is the space character
+        let mut lexer = Lexer::new("#\\ ");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character(' '));
+
+        // #\ followed by a literal newline is the newline character
+        let mut lexer = Lexer::new("#\\\n42");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('\n'));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "42"));
+
+        // Maze-benchmark style: a list of drawing characters
+        let mut lexer = Lexer::new("(#\\  #\\_ #\\/ #\\\\)");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character(' '));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('_'));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('/'));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('\\'));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_character_literal_other_delimiter_chars() {
+        let mut lexer = Lexer::new("#\\;");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character(';'));
+
+        let mut lexer = Lexer::new("#\\\"");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('"'));
+    }
+
+    #[test]
+    fn test_character_literal_terminated_by_comment_or_string() {
+        // A comment or string directly after the literal delimits it
+        let mut lexer = Lexer::new("#\\a; comment");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('a'));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Eof);
+
+        let mut lexer = Lexer::new("#\\space; comment");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character(' '));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Eof);
+
+        let mut lexer = Lexer::new("#\\a\"s\"");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('a'));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::String(s) if s == "s"));
+    }
+
+    #[test]
+    fn test_character_literal_named_and_hex_still_work() {
+        let mut lexer = Lexer::new("#\\space #\\newline #\\tab #\\x41 #\\x3BB");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character(' '));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('\n'));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('\t'));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('A'));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('λ'));
     }
 
     #[test]
