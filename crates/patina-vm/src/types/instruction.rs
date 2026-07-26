@@ -133,10 +133,7 @@ pub enum Instruction {
     },
 
     /// Tail-call variant of `CallWithValues`.
-    TailCallWithValues {
-        consumer: Reg,
-        producer_result: Reg,
-    },
+    TailCallWithValues { consumer: Reg, producer_result: Reg },
 
     // ── dynamic-wind (instruction-level) ────────────────────────────────────
     /// Push a dynamic-wind record onto `VmState::dynamic_winds`.

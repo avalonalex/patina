@@ -186,13 +186,19 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
             consumer,
             producer_result,
         } => {
-            format!("CallWithValues r{} ← r{}(values-or r{})", dst, consumer, producer_result)
+            format!(
+                "CallWithValues r{} ← r{}(values-or r{})",
+                dst, consumer, producer_result
+            )
         }
         Instruction::TailCallWithValues {
             consumer,
             producer_result,
         } => {
-            format!("TailCallWithValues r{}(values-or r{})", consumer, producer_result)
+            format!(
+                "TailCallWithValues r{}(values-or r{})",
+                consumer, producer_result
+            )
         }
         Instruction::PushWind { before, after } => {
             format!("PushWind      before=r{} after=r{}", before, after)

@@ -97,7 +97,7 @@ impl VmState {
     /// Install all registered primitives into the global environment.
     ///
     /// Each primitive is stored as a `Procedure::Primitive` heap object so that
-    /// `LoadGlobal` + `Call` can dispatch them via `try_call_primitive`.
+    /// `LoadGlobal` + `Call` can dispatch them via `call_primitive_proc`.
     pub fn install_primitives(&mut self) {
         let prims: Vec<_> = self
             .primitive_registry
@@ -882,7 +882,8 @@ fn dispatch_one_instruction(
                 {
                     return Ok(Some(escaped));
                 }
-            } else if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
+            } else if let Some(prim) = primitive_procedure(state, func_val) {
+                let result = call_primitive_proc(state, &prim, arg_vals);
                 state.set_reg(dst, result?);
             } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
                 state.set_reg(dst, result?);
@@ -894,7 +895,10 @@ fn dispatch_one_instruction(
                 // indirect call-with-values). Return the primary value so the
                 // enclosing run_loop_until exits correctly.
                 if state.frames.len() <= exit_depth {
-                    let primary = arg_vals.first().copied().unwrap_or(TaggedValue::UNSPECIFIED);
+                    let primary = arg_vals
+                        .first()
+                        .copied()
+                        .unwrap_or(TaggedValue::UNSPECIFIED);
                     return Ok(Some(primary));
                 }
             } else {
@@ -952,7 +956,10 @@ fn dispatch_one_instruction(
                 // Safety net: if frames dropped to or below exit_depth, the
                 // continuation escaped past a synchronous run_thunk boundary.
                 if state.frames.len() <= exit_depth {
-                    let primary = arg_vals.first().copied().unwrap_or(TaggedValue::UNSPECIFIED);
+                    let primary = arg_vals
+                        .first()
+                        .copied()
+                        .unwrap_or(TaggedValue::UNSPECIFIED);
                     return Ok(Some(primary));
                 }
                 return Ok(None);
@@ -960,8 +967,8 @@ fn dispatch_one_instruction(
 
             // Primitives in tail position: call them, write result to current
             // frame's return_reg, then simulate a Return.
-            if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
-                let result = result?;
+            if let Some(prim) = primitive_procedure(state, func_val) {
+                let result = call_primitive_proc(state, &prim, arg_vals)?;
                 let frame = state.frames.pop().expect("TailCall with empty stack");
                 if state.frames.len() == exit_depth {
                     state.free_top_registers(frame.register_base);
@@ -1052,7 +1059,8 @@ fn dispatch_one_instruction(
                     message: "apply: last argument is not a proper list".into(),
                 })?;
             arg_vals.extend(spread);
-            if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
+            if let Some(prim) = primitive_procedure(state, func_val) {
+                let result = call_primitive_proc(state, &prim, arg_vals);
                 state.set_reg(dst, result?);
             } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
                 state.set_reg(dst, result?);
@@ -1077,8 +1085,8 @@ fn dispatch_one_instruction(
                 })?;
             arg_vals.extend(spread);
 
-            if let Some(result) = try_call_primitive(state, func_val, arg_vals.clone()) {
-                let result = result?;
+            if let Some(prim) = primitive_procedure(state, func_val) {
+                let result = call_primitive_proc(state, &prim, arg_vals)?;
                 let frame = state.frames.pop().expect("TailApply with empty stack");
                 if state.frames.len() == exit_depth {
                     state.free_top_registers(frame.register_base);
@@ -1183,8 +1191,10 @@ fn dispatch_one_instruction(
             let consumer_val = state.reg(consumer);
             let produced_vals = if !state.value_buffer.is_empty() {
                 std::mem::take(&mut state.value_buffer)
-            } else if let Some(vals) =
-                state.heap.borrow().get_values_as_tagged(state.reg(producer_result))
+            } else if let Some(vals) = state
+                .heap
+                .borrow()
+                .get_values_as_tagged(state.reg(producer_result))
             {
                 vals
             } else {
@@ -1202,15 +1212,20 @@ fn dispatch_one_instruction(
             let consumer_val = state.reg(consumer);
             let produced_vals = if !state.value_buffer.is_empty() {
                 std::mem::take(&mut state.value_buffer)
-            } else if let Some(vals) =
-                state.heap.borrow().get_values_as_tagged(state.reg(producer_result))
+            } else if let Some(vals) = state
+                .heap
+                .borrow()
+                .get_values_as_tagged(state.reg(producer_result))
             {
                 vals
             } else {
                 vec![state.reg(producer_result)]
             };
             // Pop current frame (tail position), then call consumer.
-            let frame = state.frames.pop().expect("TailCallWithValues with empty stack");
+            let frame = state
+                .frames
+                .pop()
+                .expect("TailCallWithValues with empty stack");
             let return_reg = frame.return_reg;
             state.free_top_registers(frame.register_base);
             if state.frames.len() == exit_depth {
@@ -1223,8 +1238,7 @@ fn dispatch_one_instruction(
                     let result = state.reg(return_reg);
                     return Ok(Some(result));
                 }
-            } else if let Some(result) =
-                call_any(state, consumer_val, &produced_vals, return_reg)?
+            } else if let Some(result) = call_any(state, consumer_val, &produced_vals, return_reg)?
             {
                 let caller_idx = state.frames.len() - 1;
                 state.set_reg_in_frame(caller_idx, return_reg, result);
@@ -1536,8 +1550,8 @@ fn call_any(
     return_reg: u16,
 ) -> Result<Option<TaggedValue>, VmError> {
     // Try as primitive first
-    if let Some(result) = try_call_primitive(state, func_val, args.to_vec()) {
-        return Ok(Some(result?));
+    if let Some(prim) = primitive_procedure(state, func_val) {
+        return Ok(Some(call_primitive_proc(state, &prim, args.to_vec())?));
     }
     // Try as parameter
     if let Some(result) = try_call_parameter(state, func_val, args) {
@@ -1596,8 +1610,8 @@ fn call_any_sync(
     args: &[TaggedValue],
 ) -> Result<TaggedValue, VmError> {
     // Try as primitive first
-    if let Some(result) = try_call_primitive(state, func_val, args.to_vec()) {
-        return result;
+    if let Some(prim) = primitive_procedure(state, func_val) {
+        return call_primitive_proc(state, &prim, args.to_vec());
     }
     // Must be a VM closure — use run_thunk-style execution.
     // Use a return_reg beyond the caller's window to avoid clobbering live regs.
@@ -1850,10 +1864,11 @@ fn handle_control_primitive(
             // (values v1 v2 ...) — return multiple values via value_buffer
             // Also allocate a heap Values object so the display layer can
             // detect and show all values (matches tree-walker behaviour).
-            state.value_buffer = args.clone();
             if args.len() == 1 {
                 state.set_reg(dst, args[0]);
+                state.value_buffer = args;
             } else {
+                state.value_buffer = args.clone();
                 let vals_tv = state.heap.borrow_mut().alloc_values(args);
                 state.set_reg(dst, vals_tv);
             }
@@ -2252,7 +2267,7 @@ fn run_wind_transition(
 ///
 /// Holds a raw pointer to the `VmState` so that `apply_proc` (which takes
 /// `&self`) can mutably re-enter the VM execution loop.  This is sound because
-/// `apply_proc` is only called synchronously during `try_call_primitive`, which
+/// `apply_proc` is only called synchronously during `call_primitive_proc`, which
 /// already has exclusive `&mut VmState` access, and the pointer is never shared
 /// across threads.
 struct VmApplyContext {
@@ -2450,28 +2465,39 @@ fn try_invoke_continuation(
 
 /// Try to call `func_val` as a primitive. Returns `Some(result)` if it was a
 /// primitive, `None` if it's a VM closure (caller should push a frame instead).
-fn try_call_primitive(
-    state: &mut VmState,
-    func_val: TaggedValue,
-    args: Vec<TaggedValue>,
-) -> Option<Result<TaggedValue, VmError>> {
+/// If `func_val` is a primitive procedure, return it. This is only a type
+/// check — no argument copying — so call sites can hand their argument
+/// vector to `call_primitive_proc` by move exactly when it will be consumed,
+/// instead of cloning it defensively before knowing the callee's kind.
+fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Procedure>> {
     let proc = state.heap.borrow().get_procedure(func_val)?;
+    matches!(proc.as_ref(), Procedure::Primitive { .. }).then_some(proc)
+}
+
+/// Call a primitive procedure (as returned by `primitive_procedure`),
+/// consuming the argument vector.
+fn call_primitive_proc(
+    state: &mut VmState,
+    proc: &Procedure,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, VmError> {
     let Procedure::Primitive {
         qualified_name,
         registry_index,
         ..
-    } = proc.as_ref()
+    } = proc
     else {
-        return None;
+        return Err(VmError::Runtime {
+            message: "call_primitive_proc: not a primitive".into(),
+        });
     };
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
-    let result = state
+    state
         .primitive_registry
         .apply_cached(qualified_name, registry_index, args, &ctx)
         .map_err(|e| VmError::Runtime {
             message: e.to_string(),
-        });
-    Some(result)
+        })
 }
