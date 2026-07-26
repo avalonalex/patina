@@ -51,11 +51,26 @@ pub(super) fn read(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVa
     };
 
     if is_stdin {
-        return read_from_stdin(heap);
+        return read_buffered(&port, heap, || {
+            let stdin = io::stdin();
+            let mut line = String::new();
+            match stdin.lock().read_line(&mut line) {
+                Ok(0) => Ok(None),
+                Ok(_) => Ok(Some(line)),
+                Err(e) => Err(EvalError::IOError(e.to_string())),
+            }
+        });
     }
 
     if is_file {
-        return read_from_file_port(&port, heap);
+        // The pushback buffer was already drained by read_buffered, so
+        // Port::read_line reads from the underlying file here
+        let file_port = port.clone();
+        return read_buffered(&port, heap, move || {
+            file_port
+                .read_line()
+                .map_err(|e| EvalError::IOError(e.to_string()))
+        });
     }
 
     let remaining = remaining.unwrap();
@@ -69,9 +84,13 @@ pub(super) fn read(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVa
 
     match parser.parse() {
         Ok(tv) => {
-            // Calculate bytes consumed by finding how much the parser consumed
-            let consumed = calculate_consumed_bytes(&remaining);
-            port.advance_position(consumed)
+            // Advance the port past exactly what the parser consumed
+            let consumed_bytes: usize = remaining
+                .chars()
+                .take(parser.consumed_end())
+                .map(|c| c.len_utf8())
+                .sum();
+            port.advance_position(consumed_bytes)
                 .map_err(|e| EvalError::IOError(e.to_string()))?;
             Ok(tv)
         }
@@ -80,229 +99,63 @@ pub(super) fn read(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVa
     }
 }
 
-/// Read a complete S-expression from stdin
-/// This accumulates lines until we have a complete expression
-fn read_from_stdin(heap: &SharedHeap) -> Result<TaggedValue, EvalError> {
-    let stdin = io::stdin();
-    let mut handle = stdin.lock();
-    let mut buffer = String::new();
+/// Read one datum from a line-oriented source (stdin or a file port).
+///
+/// Lines are accumulated until they form a complete datum. Any text after
+/// the datum is stored in the port's pushback buffer so the next textual
+/// read — `read`, `read-char`, `read-line`, ... — continues from it instead
+/// of it being lost with the local buffer.
+fn read_buffered(
+    port: &Rc<Port>,
+    heap: &SharedHeap,
+    mut next_line: impl FnMut() -> Result<Option<String>, EvalError>,
+) -> Result<TaggedValue, EvalError> {
+    let mut buffer = port.take_pushback();
 
     loop {
-        let mut line = String::new();
-        match handle.read_line(&mut line) {
-            Ok(0) => {
-                // EOF
+        if !buffer.trim().is_empty() {
+            // Constructor failure means the first token is incomplete
+            // (e.g. an unterminated string) — fall through for more input
+            if let Ok(mut parser) = Parser::new_with_heap(&buffer, heap.clone()) {
+                match parser.parse() {
+                    Ok(tv) => {
+                        port.set_pushback(remainder_after(&buffer, parser.consumed_end()));
+                        return Ok(tv);
+                    }
+                    Err(patina_frontend::ParseError::UnexpectedEof) => {
+                        // Datum incomplete — need more input
+                    }
+                    Err(e) => {
+                        return Err(EvalError::InvalidSyntax(format!("read: {}", e)));
+                    }
+                }
+            }
+        }
+
+        match next_line()? {
+            Some(line) => buffer.push_str(&line),
+            None => {
+                // EOF on the underlying source: parse what is left so a
+                // trailing datum (or error) is surfaced
                 if buffer.trim().is_empty() {
                     return Ok(TaggedValue::EOF);
                 }
-                // Try to parse what we have
-                break;
-            }
-            Ok(_) => {
-                buffer.push_str(&line);
-                // Try to parse - if successful, we're done
-                // If we get UnexpectedEof, we need more input
-                if let Ok(mut parser) = Parser::new_with_heap(&buffer, heap.clone()) {
-                    match parser.parse() {
-                        Ok(tv) => return Ok(tv),
-                        Err(patina_frontend::ParseError::UnexpectedEof) => {
-                            // Need more input
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(EvalError::InvalidSyntax(format!("read: {}", e)));
-                        }
+                let mut parser = Parser::new_with_heap(&buffer, heap.clone())
+                    .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
+                return match parser.parse() {
+                    Ok(tv) => {
+                        port.set_pushback(remainder_after(&buffer, parser.consumed_end()));
+                        Ok(tv)
                     }
-                }
+                    Err(patina_frontend::ParseError::UnexpectedEof) => Ok(TaggedValue::EOF),
+                    Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
+                };
             }
-            Err(e) => return Err(EvalError::IOError(e.to_string())),
         }
-    }
-
-    // Try to parse the accumulated buffer
-    let mut parser = Parser::new_with_heap(&buffer, heap.clone())
-        .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
-
-    match parser.parse() {
-        Ok(tv) => Ok(tv),
-        Err(patina_frontend::ParseError::UnexpectedEof) => Ok(TaggedValue::EOF),
-        Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
     }
 }
 
-/// Read a complete S-expression from a file port
-/// Reads lines until we have a complete expression
-fn read_from_file_port(port: &Rc<Port>, heap: &SharedHeap) -> Result<TaggedValue, EvalError> {
-    let mut buffer = String::new();
-
-    loop {
-        // Read a line from the file
-        match port.read_line() {
-            Ok(None) => {
-                // EOF
-                if buffer.trim().is_empty() {
-                    return Ok(TaggedValue::EOF);
-                }
-                // Try to parse what we have
-                break;
-            }
-            Ok(Some(line)) => {
-                buffer.push_str(&line);
-                // Try to parse - if successful, we're done
-                // If we get UnexpectedEof, we need more input
-                if let Ok(mut parser) = Parser::new_with_heap(&buffer, heap.clone()) {
-                    match parser.parse() {
-                        Ok(tv) => return Ok(tv),
-                        Err(patina_frontend::ParseError::UnexpectedEof) => {
-                            // Need more input
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(EvalError::InvalidSyntax(format!("read: {}", e)));
-                        }
-                    }
-                }
-            }
-            Err(e) => return Err(EvalError::IOError(e.to_string())),
-        }
-    }
-
-    // Try to parse the accumulated buffer
-    let mut parser = Parser::new_with_heap(&buffer, heap.clone())
-        .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
-
-    match parser.parse() {
-        Ok(tv) => Ok(tv),
-        Err(patina_frontend::ParseError::UnexpectedEof) => Ok(TaggedValue::EOF),
-        Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
-    }
-}
-
-/// Calculate how many bytes were consumed to parse a value
-/// This is done by tracking parentheses/brackets and string boundaries
-fn calculate_consumed_bytes(input: &str) -> usize {
-    // Skip leading whitespace
-    let trimmed = input.trim_start();
-    let whitespace_len = input.len() - trimmed.len();
-
-    if trimmed.is_empty() {
-        return input.len();
-    }
-
-    // Find the logical end of the expression
-    // by tracking parentheses/brackets and string boundaries
-    let mut depth = 0;
-    let mut in_string = false;
-    let mut in_line_comment = false;
-    let mut i = 0;
-    let chars: Vec<char> = trimmed.chars().collect();
-
-    while i < chars.len() {
-        let ch = chars[i];
-
-        if in_line_comment {
-            if ch == '\n' {
-                in_line_comment = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_string {
-            if ch == '\\' && i + 1 < chars.len() {
-                i += 2; // Skip escape sequence
-                continue;
-            }
-            if ch == '"' {
-                in_string = false;
-                if depth == 0 {
-                    i += 1;
-                    break;
-                }
-            }
-            i += 1;
-            continue;
-        }
-
-        match ch {
-            ';' => {
-                in_line_comment = true;
-                i += 1;
-            }
-            '"' => {
-                in_string = true;
-                i += 1;
-            }
-            '(' | '[' | '{' => {
-                depth += 1;
-                i += 1;
-            }
-            ')' | ']' | '}' => {
-                depth -= 1;
-                i += 1;
-                if depth == 0 {
-                    break;
-                }
-            }
-            '#' if i + 1 < chars.len() && chars[i + 1] == '(' => {
-                // Vector #(
-                depth += 1;
-                i += 2;
-            }
-            '#' if i + 3 < chars.len()
-                && chars[i + 1] == 'u'
-                && chars[i + 2] == '8'
-                && chars[i + 3] == '(' =>
-            {
-                // Bytevector #u8(
-                depth += 1;
-                i += 4;
-            }
-            '\'' | '`' => {
-                // Quote/quasiquote - need to include the following expression
-                i += 1;
-            }
-            ',' => {
-                // Unquote - may be ,@ or just ,
-                i += 1;
-                if i < chars.len() && chars[i] == '@' {
-                    i += 1;
-                }
-            }
-            _ if ch.is_whitespace() => {
-                if depth == 0 && i > 0 {
-                    // End of atom at top level
-                    break;
-                }
-                i += 1;
-            }
-            _ => {
-                // Part of an atom
-                if depth == 0 {
-                    // Read until delimiter
-                    while i < chars.len() {
-                        let c = chars[i];
-                        if c.is_whitespace()
-                            || c == '('
-                            || c == ')'
-                            || c == '"'
-                            || c == ';'
-                            || c == '\''
-                            || c == '`'
-                            || c == ','
-                        {
-                            break;
-                        }
-                        i += 1;
-                    }
-                    break;
-                }
-                i += 1;
-            }
-        }
-    }
-
-    // Calculate byte offset from character offset
-    let consumed_chars: String = chars[..i].iter().collect();
-    whitespace_len + consumed_chars.len()
+/// Text after the first `consumed_chars` characters of `buffer`
+fn remainder_after(buffer: &str, consumed_chars: usize) -> String {
+    buffer.chars().skip(consumed_chars).collect()
 }

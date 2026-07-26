@@ -136,6 +136,16 @@ impl Parser {
         &self.heap
     }
 
+    /// Char offset just past the last token consumed by the most recent
+    /// `parse()` call. The parser keeps a one-token lookahead, so after
+    /// `parse()` returns a datum this is the end of that datum's final
+    /// token; everything from this offset onward (including whitespace
+    /// before the lookahead token) is unconsumed input. Used by `read` to
+    /// preserve the remainder for subsequent input operations.
+    pub fn consumed_end(&self) -> usize {
+        self.lexer.prev_token_end()
+    }
+
     /// Record a source location for a TaggedValue in the source map (if present)
     fn record_source(&self, tv: TaggedValue, line: u32, col: u32) {
         if let Some(ref sm) = self.source_map {
@@ -1113,6 +1123,37 @@ mod tests {
         let result = parser.parse().unwrap();
         // Should be a pair
         assert!(result.is_pair());
+    }
+
+    #[test]
+    fn test_consumed_end_after_atom() {
+        // "5 40": parsing one datum consumes exactly the "5"; the space
+        // and the "40" remain unconsumed
+        let mut parser = Parser::new("5 40").unwrap();
+        let result = parser.parse().unwrap();
+        assert_eq!(result.as_fixnum_unchecked(), 5);
+        assert_eq!(parser.consumed_end(), 1);
+
+        // A second parse from the same parser picks up the next datum
+        let result = parser.parse().unwrap();
+        assert_eq!(result.as_fixnum_unchecked(), 40);
+        assert_eq!(parser.consumed_end(), 4);
+    }
+
+    #[test]
+    fn test_consumed_end_after_list() {
+        let mut parser = Parser::new("(a b) (c)").unwrap();
+        let result = parser.parse().unwrap();
+        assert!(result.is_pair());
+        assert_eq!(parser.consumed_end(), 5); // just past the closing paren
+    }
+
+    #[test]
+    fn test_consumed_end_with_leading_whitespace_and_comments() {
+        let mut parser = Parser::new("  ; note\n  7 8").unwrap();
+        let result = parser.parse().unwrap();
+        assert_eq!(result.as_fixnum_unchecked(), 7);
+        assert_eq!(parser.consumed_end(), 12); // just past the "7"
     }
 
     #[test]

@@ -79,6 +79,9 @@ pub struct Lexer {
     line: u32,
     /// Current column number (1-based)
     column: u32,
+    /// Char offset just past the end of the token returned by the
+    /// previous `next_token` call (0 before any token is returned)
+    prev_token_end: usize,
 }
 
 impl Lexer {
@@ -89,6 +92,7 @@ impl Lexer {
             fold_case: false,
             line: 1,
             column: 1,
+            prev_token_end: 0,
         }
     }
 
@@ -103,6 +107,7 @@ impl Lexer {
             fold_case: true,
             line: 1,
             column: 1,
+            prev_token_end: 0,
         }
     }
 
@@ -113,6 +118,10 @@ impl Lexer {
     }
 
     pub fn next_token(&mut self) -> Result<Spanned, LexError> {
+        // The current position is exactly the end of the previously
+        // returned token — record it before skipping whitespace so callers
+        // can tell how much input the previous tokens consumed
+        self.prev_token_end = self.position;
         self.skip_whitespace_and_comments()?;
 
         let line = self.line;
@@ -124,6 +133,13 @@ impl Lexer {
             line,
             column,
         })
+    }
+
+    /// Char offset just past the end of the token returned by the previous
+    /// `next_token` call. Used to determine exactly how much input a parse
+    /// consumed.
+    pub fn prev_token_end(&self) -> usize {
+        self.prev_token_end
     }
 
     fn lex_token(&mut self) -> Result<Token, LexError> {
@@ -505,10 +521,14 @@ impl Lexer {
         match self.current_char() {
             't' | 'T' => {
                 self.advance();
+                // R7RS long form #true
+                self.consume_ascii_suffix("rue");
                 Ok(Token::Boolean(true))
             }
             'f' | 'F' => {
                 self.advance();
+                // R7RS long form #false
+                self.consume_ascii_suffix("alse");
                 Ok(Token::Boolean(false))
             }
             '\\' => self.read_character(),
@@ -547,6 +567,26 @@ impl Lexer {
             // R7RS datum labels: #n= (definition) and #n# (reference)
             '0'..='9' => self.read_datum_label(),
             _ => Err(LexError::UnexpectedChar(self.current_char())),
+        }
+    }
+
+    /// If the upcoming characters spell `suffix` (ASCII case-insensitive),
+    /// consume them. Used for the long boolean forms #true and #false, whose
+    /// suffixes must be consumed with the token rather than left in the
+    /// input as a stray identifier.
+    fn consume_ascii_suffix(&mut self, suffix: &str) {
+        let end = self.position + suffix.len();
+        if end > self.input.len() {
+            return;
+        }
+        let matches = self.input[self.position..end]
+            .iter()
+            .zip(suffix.chars())
+            .all(|(c, s)| c.eq_ignore_ascii_case(&s));
+        if matches {
+            for _ in 0..suffix.len() {
+                self.advance();
+            }
         }
     }
 
@@ -795,6 +835,24 @@ mod tests {
             lexer.next_token_kind(),
             Err(LexError::ReservedCharacter('}'))
         ));
+    }
+
+    #[test]
+    fn test_long_boolean_forms() {
+        // R7RS: #true and #false are the long forms of #t and #f; the whole
+        // spelling must be consumed, not just the first two characters
+        let mut lexer = Lexer::new("#true 6");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Boolean(true));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "6"));
+
+        let mut lexer = Lexer::new("#false\"8\"");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Boolean(false));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::String(s) if s == "8"));
+
+        // Short forms unchanged
+        let mut lexer = Lexer::new("#t #f");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Boolean(true));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Boolean(false));
     }
 
     #[test]

@@ -23,6 +23,11 @@ pub struct Port {
     pub direction: PortDirection,
     /// The actual port data (shared, mutable)
     pub data: Rc<RefCell<PortData>>,
+    /// Text already read from the underlying source but not yet consumed
+    /// (e.g. the rest of a line after `read` parses one datum from it).
+    /// Textual input operations drain this before touching the source.
+    /// Shared behind `Rc` so cloned ports stay in sync, like `data`.
+    pushback: Rc<RefCell<String>>,
 }
 
 /// Whether a port operates on characters (textual) or bytes (binary)
@@ -108,131 +113,153 @@ pub enum StdioKind {
 }
 
 impl Port {
+    fn new_port(kind: PortKind, direction: PortDirection, data: PortData) -> Rc<Port> {
+        Rc::new(Port {
+            kind,
+            direction,
+            data: Rc::new(RefCell::new(data)),
+            pushback: Rc::new(RefCell::new(String::new())),
+        })
+    }
+
     /// Create a new input string port
     pub fn new_input_string(content: String) -> Rc<Port> {
-        Rc::new(Port {
-            kind: PortKind::Textual,
-            direction: PortDirection::Input,
-            data: Rc::new(RefCell::new(PortData::String(StringPortData {
+        Self::new_port(
+            PortKind::Textual,
+            PortDirection::Input,
+            PortData::String(StringPortData {
                 content,
                 position: 0,
-            }))),
-        })
+            }),
+        )
     }
 
     /// Create a new output string port
     pub fn new_output_string() -> Rc<Port> {
-        Rc::new(Port {
-            kind: PortKind::Textual,
-            direction: PortDirection::Output,
-            data: Rc::new(RefCell::new(PortData::String(StringPortData {
+        Self::new_port(
+            PortKind::Textual,
+            PortDirection::Output,
+            PortData::String(StringPortData {
                 content: String::new(),
                 position: 0,
-            }))),
-        })
+            }),
+        )
     }
 
     /// Create a new input bytevector port (binary)
     pub fn new_input_bytevector(content: Vec<u8>) -> Rc<Port> {
-        Rc::new(Port {
-            kind: PortKind::Binary,
-            direction: PortDirection::Input,
-            data: Rc::new(RefCell::new(PortData::Bytevector(BytevectorPortData {
+        Self::new_port(
+            PortKind::Binary,
+            PortDirection::Input,
+            PortData::Bytevector(BytevectorPortData {
                 content,
                 position: 0,
-            }))),
-        })
+            }),
+        )
     }
 
     /// Create a new output bytevector port (binary)
     pub fn new_output_bytevector() -> Rc<Port> {
-        Rc::new(Port {
-            kind: PortKind::Binary,
-            direction: PortDirection::Output,
-            data: Rc::new(RefCell::new(PortData::Bytevector(BytevectorPortData {
+        Self::new_port(
+            PortKind::Binary,
+            PortDirection::Output,
+            PortData::Bytevector(BytevectorPortData {
                 content: Vec::new(),
                 position: 0,
-            }))),
-        })
+            }),
+        )
     }
 
     /// Create a stdin port
     pub fn stdin() -> Rc<Port> {
-        Rc::new(Port {
-            kind: PortKind::Textual,
-            direction: PortDirection::Input,
-            data: Rc::new(RefCell::new(PortData::Stdio(StdioKind::Stdin))),
-        })
+        Self::new_port(
+            PortKind::Textual,
+            PortDirection::Input,
+            PortData::Stdio(StdioKind::Stdin),
+        )
     }
 
     /// Create a stdout port
     pub fn stdout() -> Rc<Port> {
-        Rc::new(Port {
-            kind: PortKind::Textual,
-            direction: PortDirection::Output,
-            data: Rc::new(RefCell::new(PortData::Stdio(StdioKind::Stdout))),
-        })
+        Self::new_port(
+            PortKind::Textual,
+            PortDirection::Output,
+            PortData::Stdio(StdioKind::Stdout),
+        )
     }
 
     /// Create a stderr port
     pub fn stderr() -> Rc<Port> {
-        Rc::new(Port {
-            kind: PortKind::Textual,
-            direction: PortDirection::Output,
-            data: Rc::new(RefCell::new(PortData::Stdio(StdioKind::Stderr))),
-        })
+        Self::new_port(
+            PortKind::Textual,
+            PortDirection::Output,
+            PortData::Stdio(StdioKind::Stderr),
+        )
     }
 
     /// Open a file for reading via the given filesystem.
     pub fn open_input_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
         let reader = fs.open_read(std::path::Path::new(path))?;
-        Ok(Rc::new(Port {
-            kind: PortKind::Textual,
-            direction: PortDirection::Input,
-            data: Rc::new(RefCell::new(PortData::File(FilePortData {
+        Ok(Self::new_port(
+            PortKind::Textual,
+            PortDirection::Input,
+            PortData::File(FilePortData {
                 path: PathBuf::from(path),
                 handle: FileHandle::Input(reader),
-            }))),
-        }))
+            }),
+        ))
     }
 
     /// Open a file for writing (creates or truncates) via the given filesystem.
     pub fn open_output_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
         let writer = fs.open_write(std::path::Path::new(path))?;
-        Ok(Rc::new(Port {
-            kind: PortKind::Textual,
-            direction: PortDirection::Output,
-            data: Rc::new(RefCell::new(PortData::File(FilePortData {
+        Ok(Self::new_port(
+            PortKind::Textual,
+            PortDirection::Output,
+            PortData::File(FilePortData {
                 path: PathBuf::from(path),
                 handle: FileHandle::Output(writer),
-            }))),
-        }))
+            }),
+        ))
     }
 
     /// Open a binary file for reading via the given filesystem.
     pub fn open_binary_input_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
         let reader = fs.open_read(std::path::Path::new(path))?;
-        Ok(Rc::new(Port {
-            kind: PortKind::Binary,
-            direction: PortDirection::Input,
-            data: Rc::new(RefCell::new(PortData::File(FilePortData {
+        Ok(Self::new_port(
+            PortKind::Binary,
+            PortDirection::Input,
+            PortData::File(FilePortData {
                 path: PathBuf::from(path),
                 handle: FileHandle::Input(reader),
-            }))),
-        }))
+            }),
+        ))
     }
 
     /// Open a binary file for writing (creates or truncates) via the given filesystem.
     pub fn open_binary_output_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
         let writer = fs.open_write(std::path::Path::new(path))?;
-        Ok(Rc::new(Port {
-            kind: PortKind::Binary,
-            direction: PortDirection::Output,
-            data: Rc::new(RefCell::new(PortData::File(FilePortData {
+        Ok(Self::new_port(
+            PortKind::Binary,
+            PortDirection::Output,
+            PortData::File(FilePortData {
                 path: PathBuf::from(path),
                 handle: FileHandle::Output(writer),
-            }))),
-        }))
+            }),
+        ))
+    }
+
+    /// Take the buffered pushback text, leaving the buffer empty.
+    /// Used by `read` to resume from text it previously buffered.
+    pub fn take_pushback(&self) -> String {
+        std::mem::take(&mut *self.pushback.borrow_mut())
+    }
+
+    /// Store text that was read from the underlying source but not
+    /// consumed. Textual input operations deliver it before reading
+    /// from the source again.
+    pub fn set_pushback(&self, text: String) {
+        *self.pushback.borrow_mut() = text;
     }
 
     /// Check if port is open
@@ -262,6 +289,7 @@ impl Port {
 
     /// Close the port. For file output ports, finalizes (flushes) the writer first.
     pub fn close(&self) {
+        self.pushback.borrow_mut().clear();
         let mut data = self.data.borrow_mut();
         // Finalize write ports before closing
         if let PortData::File(ref mut fp) = *data {
@@ -280,6 +308,15 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             ));
+        }
+
+        // Deliver buffered pushback text before reading the source
+        {
+            let mut pb = self.pushback.borrow_mut();
+            if let Some(ch) = pb.chars().next() {
+                pb.drain(..ch.len_utf8());
+                return Ok(Some(ch));
+            }
         }
 
         let mut data = self.data.borrow_mut();
@@ -588,6 +625,11 @@ impl Port {
             ));
         }
 
+        // Buffered pushback text is delivered first, so peek there first
+        if let Some(ch) = self.pushback.borrow().chars().next() {
+            return Ok(Some(ch));
+        }
+
         let mut data = self.data.borrow_mut();
         match &mut *data {
             PortData::String(s) => {
@@ -649,6 +691,10 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             ));
+        }
+
+        if !self.pushback.borrow().is_empty() {
+            return Ok(true);
         }
 
         let mut data = self.data.borrow_mut();
@@ -1017,6 +1063,27 @@ impl Port {
             ));
         }
 
+        // Buffered pushback text comes first. If it holds a complete line,
+        // return it; otherwise it is the start of a line whose remainder
+        // still has to come from the source.
+        let mut prefix = self.take_pushback();
+        if let Some(newline_pos) = prefix.find('\n') {
+            let rest = prefix.split_off(newline_pos + 1);
+            self.set_pushback(rest);
+            return Ok(Some(prefix));
+        }
+        match self.read_line_from_source()? {
+            Some(line) => {
+                prefix.push_str(&line);
+                Ok(Some(prefix))
+            }
+            None if prefix.is_empty() => Ok(None),
+            None => Ok(Some(prefix)),
+        }
+    }
+
+    /// Read a line from the underlying source, bypassing the pushback buffer
+    fn read_line_from_source(&self) -> io::Result<Option<String>> {
         let mut data = self.data.borrow_mut();
         match &mut *data {
             PortData::String(ref mut s) => {
@@ -1180,6 +1247,65 @@ mod tests {
         assert_eq!(port.peek_char().unwrap(), Some('b'));
         assert_eq!(port.read_char().unwrap(), Some('b'));
         assert_eq!(port.peek_char().unwrap(), None); // EOF
+    }
+
+    #[test]
+    fn test_pushback_drained_by_read_char() {
+        let port = Port::new_input_string("xyz".to_string());
+        port.set_pushback("ab".to_string());
+
+        // Pushback text is delivered before the underlying source
+        assert_eq!(port.peek_char().unwrap(), Some('a'));
+        assert_eq!(port.read_char().unwrap(), Some('a'));
+        assert_eq!(port.read_char().unwrap(), Some('b'));
+        assert_eq!(port.peek_char().unwrap(), Some('x'));
+        assert_eq!(port.read_char().unwrap(), Some('x'));
+    }
+
+    #[test]
+    fn test_pushback_read_line_complete_line() {
+        let port = Port::new_input_string("source\n".to_string());
+        port.set_pushback("40\nrest".to_string());
+
+        // A full line inside the pushback is returned without touching
+        // the source; the remainder stays buffered
+        assert_eq!(port.read_line().unwrap(), Some("40\n".to_string()));
+        assert_eq!(port.read_line().unwrap(), Some("restsource\n".to_string()));
+    }
+
+    #[test]
+    fn test_pushback_read_line_partial_line() {
+        // Pushback without a newline is the start of a line whose
+        // remainder comes from the source
+        let port = Port::new_input_string("tail\n".to_string());
+        port.set_pushback("head ".to_string());
+        assert_eq!(port.read_line().unwrap(), Some("head tail\n".to_string()));
+
+        // At source EOF the pushback alone is the final line
+        let port = Port::new_input_string(String::new());
+        port.set_pushback("last".to_string());
+        assert_eq!(port.read_line().unwrap(), Some("last".to_string()));
+        assert_eq!(port.read_line().unwrap(), None);
+    }
+
+    #[test]
+    fn test_pushback_char_ready_and_take() {
+        let port = Port::new_input_string(String::new());
+        assert!(!port.char_ready().unwrap());
+        port.set_pushback("z".to_string());
+        assert!(port.char_ready().unwrap());
+        assert_eq!(port.take_pushback(), "z".to_string());
+        assert_eq!(port.take_pushback(), String::new());
+        assert!(!port.char_ready().unwrap());
+    }
+
+    #[test]
+    fn test_close_clears_pushback() {
+        let port = Port::new_input_string("abc".to_string());
+        port.set_pushback("leftover".to_string());
+        port.close();
+        assert_eq!(port.take_pushback(), String::new());
+        assert!(port.read_char().is_err());
     }
 
     #[test]
