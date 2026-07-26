@@ -2,14 +2,44 @@
 //!
 //! Run with: cargo bench --package patina-tests
 //!
-//! These benchmarks are ported from ecraven/r7rs-benchmarks
-//! (https://github.com/ecraven/r7rs-benchmarks) for compatibility
-//! with the standard R7RS benchmark suite.
+//! Benchmarks the **VM backend** (the default backend) unless
+//! `PATINA_BENCH_BACKEND=tree-walker` is set, which switches every group to
+//! the tree-walker for cross-checking. Criterion IDs are the same for both,
+//! so compare backends across separate runs, not within one report.
 //!
-//! Benchmark programs are in bench_programs/*.scm
+//! Benchmark programs are in bench_programs/*.scm; the classic workloads
+//! follow the shapes of the ecraven/r7rs-benchmarks suite
+//! (https://github.com/ecraven/r7rs-benchmarks). nboyer/sboyer are vendored
+//! from that suite verbatim (Public Domain per their headers).
+//!
+//! # VM baseline (2026-07-26, main @ 020fe70, Apple Silicon macOS, medians)
+//!
+//! Reference numbers for regression checking; re-run with
+//! `cargo bench -p patina-tests` and compare against Criterion's own
+//! stored baseline in target/criterion/.
+//!
+//! | Benchmark                        | Median     |
+//! |----------------------------------|------------|
+//! | r7rs/tak/18_12_6                 | 23.3 ms    |
+//! | r7rs/fib/25                      | 75.2 ms    |
+//! | r7rs/ack/3/6                     | 55.4 ms    |
+//! | r7rs/deriv/1000_iter             | 36.7 ms    |
+//! | r7rs/primes/1000                 | 9.34 ms    |
+//! | r7rs/nqueens/10                  | 494 ms     |
+//! | r7rs/sum/10000                   | 3.54 ms    |
+//! | r7rs/nboyer/0                    | 423 ms     |
+//! | r7rs/sboyer/0                    | 491 ms     |
+//! | r7rs/ctak/12_8_4                 | 2.51 ms    |
+//! | continuations/dynamic_wind/simple| 6.62 µs    |
+//! | continuations/callcc/loop/200    | 139 µs     |
+//! | data/lists/map_1000              | 2.19 ms    |
+//! | data/vectors/sum_1000            | 457 µs     |
+//! | numeric/sum_10000                | 2.87 ms    |
+//! | numeric/float_sum_1000           | 334 µs     |
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use patina_interpreter::TreeWalkInterpreter;
+use patina_interpreter::{Interpreter, TreeWalkInterpreter};
+use patina_vm::VmBackend;
 use std::path::PathBuf;
 
 /// Get the path to bench_programs directory
@@ -17,27 +47,50 @@ fn bench_programs_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bench_programs")
 }
 
+/// Interpreter under benchmark: VM by default, tree-walker via
+/// `PATINA_BENCH_BACKEND=tree-walker`
+enum BenchInterp {
+    Vm(Interpreter<VmBackend>),
+    TreeWalker(TreeWalkInterpreter),
+}
+
+impl BenchInterp {
+    /// Evaluate and return the raw result value. Formatting is deliberately
+    /// not part of the benchmarked work; `Debug` on the `Copy` TaggedValue is
+    /// enough to keep the optimizer from discarding the result.
+    fn eval_program_or_panic(&self, code: &str, context: &str) -> String {
+        match self {
+            BenchInterp::Vm(i) => match i.eval_program(code) {
+                Ok(val) => format!("{:?}", val),
+                Err(e) => panic!("{}: {:?}", context, e),
+            },
+            BenchInterp::TreeWalker(i) => match i.eval_program(code) {
+                Ok(val) => format!("{:?}", val),
+                Err(e) => panic!("{}: {:?}", context, e),
+            },
+        }
+    }
+}
+
 /// Helper to create a fresh interpreter for each benchmark
-fn make_interpreter() -> TreeWalkInterpreter {
-    TreeWalkInterpreter::new_tree_walker()
+fn make_interpreter() -> BenchInterp {
+    match std::env::var("PATINA_BENCH_BACKEND").as_deref() {
+        Ok("tree-walker") => BenchInterp::TreeWalker(TreeWalkInterpreter::new_tree_walker()),
+        _ => BenchInterp::Vm(Interpreter::new(VmBackend::new())),
+    }
 }
 
 /// Load a benchmark program file
-fn load_program(interp: &TreeWalkInterpreter, filename: &str) {
+fn load_program(interp: &BenchInterp, filename: &str) {
     let path = bench_programs_dir().join(filename);
     let code = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
-    interp
-        .eval_program(&code)
-        .unwrap_or_else(|e| panic!("Failed to load {}: {:?}", filename, e));
+    interp.eval_program_or_panic(&code, &format!("Failed to load {}", filename));
 }
 
 /// Helper to evaluate Scheme code and return the result
-fn eval(interp: &TreeWalkInterpreter, code: &str) -> String {
-    match interp.eval_program(code) {
-        Ok(val) => interp.display_tagged(val),
-        Err(e) => panic!("Evaluation error: {:?}", e),
-    }
+fn eval(interp: &BenchInterp, code: &str) -> String {
+    interp.eval_program_or_panic(code, "Evaluation error")
 }
 
 // ============================================================================
@@ -151,6 +204,39 @@ fn bench_nqueens(c: &mut Criterion) {
     group.finish();
 }
 
+/// Shared body for the two Boyer variants (vendored from
+/// ecraven/r7rs-benchmarks, Public Domain — see the .scm headers).
+/// CONS-intensive logic-programming workload; the classic GC stressor.
+/// n=0 must produce exactly 95024 rewrites — asserted before benchmarking
+/// so a semantic regression can't masquerade as a speedup.
+fn bench_boyer(c: &mut Criterion, name: &str, file: &str, entry: &str) {
+    let mut group = c.benchmark_group(format!("r7rs/{}", name));
+
+    let interp = make_interpreter();
+    load_program(&interp, file);
+
+    assert_eq!(
+        eval(&interp, &format!("(= ({} 0) 95024)", entry)),
+        eval(&interp, "#t"),
+        "{} n=0 must rewrite exactly 95024 times",
+        name
+    );
+
+    // n=0 is the standard smallest scaling parameter; larger sizes grow
+    // ~6x per step and are too slow for a Criterion baseline.
+    group.bench_function("0", |b| b.iter(|| eval(&interp, &format!("({} 0)", entry))));
+
+    group.finish();
+}
+
+fn bench_nboyer(c: &mut Criterion) {
+    bench_boyer(c, "nboyer", "nboyer.scm", "nboyer-run");
+}
+
+fn bench_sboyer(c: &mut Criterion) {
+    bench_boyer(c, "sboyer", "sboyer.scm", "sboyer-run");
+}
+
 fn bench_sum(c: &mut Criterion) {
     let mut group = c.benchmark_group("r7rs/sum");
 
@@ -208,9 +294,9 @@ fn bench_dynamic_wind(c: &mut Criterion) {
     });
 
     // Nested dynamic-wind (tests wind record cloning)
-    interp
-        .eval_program(
-            r#"
+    eval(
+        &interp,
+        r#"
         (define (wind-nest n)
           (if (= n 0)
               'done
@@ -219,8 +305,7 @@ fn bench_dynamic_wind(c: &mut Criterion) {
                 (lambda () (wind-nest (- n 1)))
                 (lambda () #f))))
     "#,
-        )
-        .unwrap();
+    );
 
     group.bench_function("nested_10", |b| b.iter(|| eval(&interp, "(wind-nest 10)")));
 
@@ -240,17 +325,16 @@ fn bench_callcc(c: &mut Criterion) {
     });
 
     // call/cc in a loop - tests repeated capture/invoke
-    interp
-        .eval_program(
-            r#"
+    eval(
+        &interp,
+        r#"
         (define (cc-loop n acc)
           (if (= n 0)
               acc
               (call/cc (lambda (k)
                 (cc-loop (- n 1) (+ acc 1))))))
     "#,
-        )
-        .unwrap();
+    );
 
     for n in [50, 100, 200] {
         group.bench_with_input(BenchmarkId::new("loop", n), &n, |b, &n| {
@@ -271,27 +355,25 @@ fn bench_lists(c: &mut Criterion) {
     let interp = make_interpreter();
 
     // Build a list recursively
-    interp
-        .eval_program(
-            r#"
+    eval(
+        &interp,
+        r#"
         (define (make-list n)
           (if (= n 0) '() (cons n (make-list (- n 1)))))
     "#,
-        )
-        .unwrap();
+    );
 
     group.bench_function("make_1000", |b| {
         b.iter(|| eval(&interp, "(length (make-list 1000))"))
     });
 
     // Prepare a test list
-    interp
-        .eval_program(
-            r#"
+    eval(
+        &interp,
+        r#"
         (define test-list (make-list 1000))
     "#,
-        )
-        .unwrap();
+    );
 
     // Reverse
     group.bench_function("reverse_1000", |b| {
@@ -331,26 +413,25 @@ fn bench_vectors(c: &mut Criterion) {
     });
 
     // Sum vector elements
-    interp
-        .eval_program(
-            r#"
+    eval(
+        &interp,
+        r#"
         (define test-vec (make-vector 1000 42))
         (define (sum-vec v n acc)
           (if (= n 0)
               acc
               (sum-vec v (- n 1) (+ acc (vector-ref v (- n 1))))))
     "#,
-        )
-        .unwrap();
+    );
 
     group.bench_function("sum_1000", |b| {
         b.iter(|| eval(&interp, "(sum-vec test-vec 1000 0)"))
     });
 
     // Fill vector
-    interp
-        .eval_program(
-            r#"
+    eval(
+        &interp,
+        r#"
         (define fill-vec (make-vector 1000 0))
         (define (fill! v n)
           (if (= n 0)
@@ -359,8 +440,7 @@ fn bench_vectors(c: &mut Criterion) {
                 (vector-set! v (- n 1) n)
                 (fill! v (- n 1)))))
     "#,
-        )
-        .unwrap();
+    );
 
     group.bench_function("fill_1000", |b| {
         b.iter(|| eval(&interp, "(begin (fill! fill-vec 1000) 'done)"))
@@ -379,28 +459,26 @@ fn bench_numeric(c: &mut Criterion) {
     let interp = make_interpreter();
 
     // Tail-recursive sum
-    interp
-        .eval_program(
-            r#"
+    eval(
+        &interp,
+        r#"
         (define (sum-to n acc)
           (if (= n 0) acc (sum-to (- n 1) (+ acc n))))
     "#,
-        )
-        .unwrap();
+    );
 
     group.bench_function("sum_10000", |b| {
         b.iter(|| eval(&interp, "(sum-to 10000 0)"))
     });
 
     // Factorial (tests bignum promotion)
-    interp
-        .eval_program(
-            r#"
+    eval(
+        &interp,
+        r#"
         (define (fact n acc)
           (if (= n 0) acc (fact (- n 1) (* acc n))))
     "#,
-        )
-        .unwrap();
+    );
 
     for n in [20, 50, 100] {
         group.bench_with_input(BenchmarkId::new("factorial", n), &n, |b, &n| {
@@ -409,14 +487,13 @@ fn bench_numeric(c: &mut Criterion) {
     }
 
     // Float arithmetic
-    interp
-        .eval_program(
-            r#"
+    eval(
+        &interp,
+        r#"
         (define (float-sum n acc)
           (if (= n 0) acc (float-sum (- n 1) (+ acc 1.5))))
     "#,
-        )
-        .unwrap();
+    );
 
     group.bench_function("float_sum_1000", |b| {
         b.iter(|| eval(&interp, "(float-sum 1000 0.0)"))
@@ -432,7 +509,8 @@ fn bench_numeric(c: &mut Criterion) {
 criterion_group!(
     name = r7rs_benches;
     config = Criterion::default();
-    targets = bench_tak, bench_fib, bench_ack, bench_deriv, bench_primes, bench_nqueens, bench_sum
+    targets = bench_tak, bench_fib, bench_ack, bench_deriv, bench_primes, bench_nqueens, bench_sum,
+        bench_nboyer, bench_sboyer
 );
 
 criterion_group!(
