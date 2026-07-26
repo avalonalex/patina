@@ -673,7 +673,7 @@ impl Lexer {
 
         while !self.is_at_end()
             && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')')
+            && !matches!(self.current_char(), '(' | ')' | '"' | ';')
         {
             self.advance();
         }
@@ -691,7 +691,7 @@ impl Lexer {
         // R7RS allows combinations like #e#x10, #i#b1010, etc.
         while !self.is_at_end()
             && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')')
+            && !matches!(self.current_char(), '(' | ')' | '"' | ';')
         {
             self.advance();
         }
@@ -1061,6 +1061,48 @@ mod tests {
             lexer.next_token_kind().unwrap(),
             Token::RightParen
         ));
+    }
+
+    #[test]
+    fn test_number_terminated_by_line_comment() {
+        // R7RS: `;` is a delimiter — a comment directly after a number must
+        // not be absorbed into the number token (seen in the wild as `0.5714;;`)
+        let mut lexer = Lexer::new("0.5714;; comment\n42");
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("0.5714".to_string())
+        );
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("42".to_string())
+        );
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_integer_terminated_by_line_comment_in_list() {
+        let mut lexer = Lexer::new("(maker 0;; coef-zero\n 1)");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "maker"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "0"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "1"));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_number_terminated_by_string() {
+        // `"` is also a delimiter, matching the identifier lexing rules
+        let mut lexer = Lexer::new("1\"a\"");
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "1"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::String(s) if s == "a"));
+    }
+
+    #[test]
+    fn test_prefixed_number_terminated_by_line_comment() {
+        let mut lexer = Lexer::new("#x10; comment\n#b101;");
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "#x10"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "#b101"));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Eof);
     }
 
     // ========== String Escape Sequence Tests ==========
