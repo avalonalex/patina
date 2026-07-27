@@ -106,6 +106,29 @@ Stop-the-world **mark-and-sweep** over the typed arenas, gated behind a `gc` Car
 - **Tree-walker coexistence:** the same `SharedHeap` backs both backends; GC runs **only from the VM driver at a safe point**, never mid tree-walk. Feature flag keeps default/mixed builds unaffected. Reclaiming an object slot drops its `Rc` payload naturally.
 - **Acceptance:** two CI lanes — `--no-default-features` (must equal today) and `--features gc`; a `--gc-stress` mode (threshold=1) runs the full compliance suite to identical output; liveness stress (sum `(iota 100000)`), reuse proof (arena doesn't grow by 2N), cycle test (`set-cdr!` loop), paranoid pre-sweep assertion in debug builds.
 
+### P7 — Slice-based primitive handler ABI  *(specified 2026-07-26 after the wave-1 profiles; not started)*
+
+Eliminate the last per-primitive-call allocation: the register→`Vec<TaggedValue>` collect that every call still pays. Profiles show it as malloc/free attributed *under the callees* (`less_than`, `apply_by_index`, …) — the callee frame drops the argument vector the caller allocated. This is also why "why does `less_than` allocate?" was a false lead: the comparison itself has a clean no-allocation fixnum fast path.
+
+**Current ABI** (`crates/patina-primitives/src/registry.rs`):
+```rust
+pub type TaggedHandler   = fn(&SharedHeap, Vec<TaggedValue>) -> Result<TaggedValue, EvalError>;   // ~290 handlers
+pub type HOTaggedHandler = fn(&dyn ApplyContext, Vec<TaggedValue>) -> Result<TaggedValue, EvalError>; // ~8 handlers
+```
+
+**Target ABI — two-tier, and the tiers matter:**
+- `TaggedHandler` takes `&[TaggedValue]`. Heap-only handlers never touch `VmState`, so the slice may eventually point directly into the VM register file (`&state.registers[base..base+n]`) with **zero** per-call copying.
+- `HOTaggedHandler` **keeps an owned `Vec`** (or copies internally). Higher-order handlers re-enter the VM (`apply_proc`, `eval_expr`), which mutates/reallocates the register file — a borrowed register slice would be invalidated mid-call. This split is the load-bearing design decision; collapsing the tiers is unsound.
+
+**Migration plan:**
+1. Change `TaggedHandler` to `&[TaggedValue]`; let the compiler enumerate the ~290 handler signatures. Most bodies use `args.len()`/`args[i]`/`.iter()` and compile unchanged; the minority that consume the `Vec` (`into_iter`, `remove`, destructuring moves) get index/copy rewrites (`TaggedValue` is `Copy`, so these are cheap and mechanical).
+2. `apply_by_index`/`apply_cached`/`apply_tagged` take `&[TaggedValue]`; the `PrimitiveHandler::HigherOrder` arm materializes its `Vec` at the boundary.
+3. Phase 1 (this item): VM/tree-walker call sites pass `&arg_vals` — saves the extra move-through and unlocks phase 2. Phase 2 (optional follow-up): the VM `Call` arm passes the register slice directly for heap handlers, deleting the collect itself. Phase 2 must respect the tier split above and keep owned args for control primitives, `Apply` (which splices lists), and continuation/parameter paths.
+- **Estimated impact:** 5–10% on call-heavy code (profile-derived from the args-Vec alloc/drop share after wave 1).
+- **Acceptance:** full `cargo test` + 1163/1163 chibi; `cargo bench -p patina-tests` vs the committed baseline shows no regression anywhere and improvement on `r7rs/fib`, `r7rs/tak`, `data/*`; tree-walker paths (`apply_primitive_tagged`, CPS eval) migrated in the same PR so the shared registry keeps one ABI.
+
+**Related but separate (sized during the same investigation, not quick wins):** register-window zeroing removal needs a watermark redesign of the register arena (34 sites + continuation-capture interplay — `state.registers` is snapshotted whole by call/cc, and any latent read-before-write bug currently sees deterministic NULL rather than stale values). Defer until after P3, which changes the register traffic pattern anyway.
+
 ---
 
 ## 5. Sequencing within the track
