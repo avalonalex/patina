@@ -762,6 +762,20 @@ impl Heap {
         }
     }
 
+    /// Get only the code id of a VM closure, without cloning its captured
+    /// free variables. This is the call-path accessor — `get_vm_closure`
+    /// clones the whole `free_vars` vector, which callers that just need to
+    /// dispatch the closure would immediately discard.
+    pub fn get_vm_closure_code_id(&self, val: TaggedValue) -> Option<u32> {
+        if !val.is_object() {
+            return None;
+        }
+        match self.get_object(val) {
+            HeapObjectData::VmClosure { code_id, .. } => Some(*code_id),
+            _ => None,
+        }
+    }
+
     /// Get the globals environment from a VM closure by heap index.
     pub fn get_vm_closure_globals(
         &self,

@@ -599,8 +599,8 @@ fn call_closure(
     args: &[TaggedValue],
     return_reg: u16,
 ) -> Result<(), VmError> {
-    // Resolve the closure to a (code_id, _free_vars) pair.
-    let (code_id, _free_vars) = resolve_closure(state, closure_val)?;
+    // Resolve the closure to its code id (free vars stay on the heap).
+    let code_id = resolve_closure(state, closure_val)?;
 
     let code = state
         .code_store
@@ -988,7 +988,7 @@ fn dispatch_one_instruction(
                 return Ok(None);
             }
 
-            let (new_code_id, _) = resolve_closure(state, func_val)?;
+            let new_code_id = resolve_closure(state, func_val)?;
             let new_code =
                 state
                     .code_store
@@ -1114,7 +1114,7 @@ fn dispatch_one_instruction(
                 return Ok(None);
             }
 
-            let (new_code_id, _) = resolve_closure(state, func_val)?;
+            let new_code_id = resolve_closure(state, func_val)?;
             let new_code =
                 state
                     .code_store
@@ -1525,15 +1525,12 @@ fn dispatch_one_instruction(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn resolve_closure(
-    state: &VmState,
-    val: TaggedValue,
-) -> Result<(CodeObjectId, Vec<TaggedValue>), VmError> {
+fn resolve_closure(state: &VmState, val: TaggedValue) -> Result<CodeObjectId, VmError> {
     state
         .heap
         .borrow()
-        .get_vm_closure(val)
-        .map(|(id, free_vars)| (CodeObjectId(id), free_vars))
+        .get_vm_closure_code_id(val)
+        .map(CodeObjectId)
         .ok_or_else(|| VmError::TypeError {
             message: format!("expected a procedure, got {}", val.type_name()),
         })
