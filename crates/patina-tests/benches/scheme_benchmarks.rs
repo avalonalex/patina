@@ -49,6 +49,7 @@ fn bench_programs_dir() -> PathBuf {
 
 /// Interpreter under benchmark: VM by default, tree-walker via
 /// `PATINA_BENCH_BACKEND=tree-walker`
+#[allow(clippy::large_enum_variant)] // one instance per bench run; size is irrelevant
 enum BenchInterp {
     Vm(Interpreter<VmBackend>),
     TreeWalker(TreeWalkInterpreter),

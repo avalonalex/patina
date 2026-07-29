@@ -41,7 +41,7 @@ impl Evaluator {
 
         // Use the shared patina-primitives registry
         self.primitive_registry
-            .apply_cached(qualified_name, registry_index, args, self)
+            .apply_cached(qualified_name, registry_index, &args, self)
             .map(super::EvalResult::Tagged)
             .map_err(|e| {
                 if e.to_string().contains("not found") {

@@ -9,10 +9,7 @@ use patina_core::TaggedValue;
 use patina_runtime::{EvalError, SharedHeap};
 
 /// (read-char [port]) - Read a single character
-pub(super) fn read_char(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn read_char(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
             expected: "read-char expects 0 or 1 arguments".to_string(),
@@ -22,7 +19,7 @@ pub(super) fn read_char(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_input_port_tagged(&args, 0, &heap_ref)?
+        get_input_port_tagged(args, 0, &heap_ref)?
     };
     match port.read_char() {
         Ok(Some(ch)) => Ok(TaggedValue::character(ch)),
@@ -32,10 +29,7 @@ pub(super) fn read_char(
 }
 
 /// (peek-char [port]) - Peek at next character without consuming it
-pub(super) fn peek_char(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn peek_char(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
             expected: "peek-char expects 0 or 1 arguments".to_string(),
@@ -45,7 +39,7 @@ pub(super) fn peek_char(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_input_port_tagged(&args, 0, &heap_ref)?
+        get_input_port_tagged(args, 0, &heap_ref)?
     };
     match port.peek_char() {
         Ok(Some(ch)) => Ok(TaggedValue::character(ch)),
@@ -57,7 +51,7 @@ pub(super) fn peek_char(
 /// (char-ready? [port]) - Check if a character is ready to be read
 pub(super) fn char_ready_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
@@ -68,7 +62,7 @@ pub(super) fn char_ready_p(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_input_port_tagged(&args, 0, &heap_ref)?
+        get_input_port_tagged(args, 0, &heap_ref)?
     };
     match port.char_ready() {
         Ok(ready) => Ok(TaggedValue::boolean(ready)),
@@ -77,10 +71,7 @@ pub(super) fn char_ready_p(
 }
 
 /// (read-line [port]) - Read a line as a string
-pub(super) fn read_line(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn read_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
             expected: "read-line expects 0 or 1 arguments".to_string(),
@@ -90,7 +81,7 @@ pub(super) fn read_line(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_input_port_tagged(&args, 0, &heap_ref)?
+        get_input_port_tagged(args, 0, &heap_ref)?
     };
     match port.read_line() {
         Ok(Some(mut line)) => {
@@ -112,7 +103,7 @@ pub(super) fn read_line(
 /// Returns a string of up to k characters, or eof-object if at EOF before reading any
 pub(super) fn read_string(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -138,7 +129,7 @@ pub(super) fn read_string(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_input_port_tagged(&args, 1, &heap_ref)?
+        get_input_port_tagged(args, 1, &heap_ref)?
     };
 
     // Special case: reading 0 characters returns empty string

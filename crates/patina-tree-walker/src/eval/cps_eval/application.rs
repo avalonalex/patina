@@ -763,7 +763,7 @@ impl<'a> CpsEvaluator<'a> {
         let prim_result = self.evaluator.primitive_registry.apply_cached(
             qualified_name,
             registry_index,
-            args,
+            &args,
             self.evaluator,
         );
 
@@ -889,6 +889,6 @@ impl<'a> CpsEvaluator<'a> {
         let qualified_name = op.qualified_name().unwrap();
         self.evaluator
             .primitive_registry
-            .apply_tagged(qualified_name, args, self.evaluator)
+            .apply_tagged(qualified_name, &args, self.evaluator)
     }
 }

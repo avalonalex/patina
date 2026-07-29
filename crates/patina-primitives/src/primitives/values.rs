@@ -8,11 +8,11 @@ use crate::apply_context::ApplyContext;
 use patina_core::TaggedValue;
 use patina_runtime::{EvalError, SharedHeap};
 
-pub(super) fn values(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn values(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     match args.len() {
         1 => Ok(args[0]),
         0 => Ok(TaggedValue::UNSPECIFIED),
-        _ => Ok(heap.borrow_mut().alloc_values(args)),
+        _ => Ok(heap.borrow_mut().alloc_values(args.to_vec())),
     }
 }
 

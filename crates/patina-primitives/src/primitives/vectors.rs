@@ -8,6 +8,7 @@
 use crate::apply_context::ApplyContext;
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
+use patina_runtime::SharedHeap;
 
 // ========== TaggedValue Extraction Helpers ==========
 
@@ -102,8 +103,8 @@ fn extract_vectors_as_tagged(
 // ========== Vector Primitives ==========
 
 pub(super) fn make_vector(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -112,7 +113,6 @@ pub(super) fn make_vector(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     let k = get_index(args[0], &heap_ref, "make-vector")?;
@@ -126,18 +126,15 @@ pub(super) fn make_vector(
     Ok(heap.borrow_mut().alloc_vector_fill(k, fill))
 }
 
-pub(super) fn vector(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     // vector accepts any number of arguments (0 or more)
     // Args are already TaggedValues, allocate native heap vector directly
-    Ok(ctx.heap().borrow_mut().alloc_vector(args))
+    Ok(heap.borrow_mut().alloc_vector(args.to_vec()))
 }
 
 pub(super) fn vector_length(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -145,7 +142,6 @@ pub(super) fn vector_length(
             actual: args.len(),
         });
     }
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     let len = heap_ref
         .try_vector_len(args[0])
@@ -154,8 +150,8 @@ pub(super) fn vector_length(
 }
 
 pub(super) fn vector_ref(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
@@ -163,8 +159,6 @@ pub(super) fn vector_ref(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Phase 1: validate and classify with immutable borrow
     let (idx, vec_len) = {
@@ -188,8 +182,8 @@ pub(super) fn vector_ref(
 }
 
 pub(super) fn vector_set(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
@@ -198,7 +192,6 @@ pub(super) fn vector_set(
         });
     }
 
-    let heap = ctx.heap();
     let vec_tv = args[0];
     let new_val_tv = args[2];
 
@@ -226,8 +219,8 @@ pub(super) fn vector_set(
 }
 
 pub(super) fn vector_to_list(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
@@ -235,8 +228,6 @@ pub(super) fn vector_to_list(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Phase 1: validate bounds with immutable borrow
     let (start, end) = {
@@ -274,8 +265,8 @@ pub(super) fn vector_to_list(
 }
 
 pub(super) fn list_to_vector(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -283,8 +274,6 @@ pub(super) fn list_to_vector(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Try fast path using heap's list_to_vec for native heap lists
     let tvs_opt = { heap.borrow().list_to_vec(args[0]) };
@@ -312,8 +301,8 @@ pub(super) fn list_to_vector(
 }
 
 pub(super) fn vector_to_string(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
@@ -321,8 +310,6 @@ pub(super) fn vector_to_string(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Phase 1: validate bounds
     let (start, end) = {
@@ -373,8 +360,8 @@ pub(super) fn vector_to_string(
 }
 
 pub(super) fn string_to_vector(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
@@ -383,7 +370,6 @@ pub(super) fn string_to_vector(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     let chars = get_string_chars(args[0], &heap_ref, "string->vector")?;
@@ -415,8 +401,8 @@ pub(super) fn string_to_vector(
 }
 
 pub(super) fn vector_copy(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
@@ -424,8 +410,6 @@ pub(super) fn vector_copy(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Phase 1: validate bounds
     let (start, end) = {
@@ -462,8 +446,8 @@ pub(super) fn vector_copy(
 }
 
 pub(super) fn vector_copy_bang(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 3 || args.len() > 5 {
         return Err(EvalError::WrongArity {
@@ -472,7 +456,6 @@ pub(super) fn vector_copy_bang(
         });
     }
 
-    let heap = ctx.heap();
     let to_tv = args[0];
     let from_tv = args[2];
 
@@ -542,14 +525,13 @@ fn copy_elements_to_vector(
 }
 
 pub(super) fn vector_append(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     // vector-append accepts any number of arguments (0 or more)
-    let heap = ctx.heap();
 
     // Validate all args are vectors first
-    for &arg in &args {
+    for &arg in args {
         if !arg.is_vector() {
             return Err(EvalError::TypeError(
                 "vector-append expects a vector".to_string(),
@@ -561,7 +543,7 @@ pub(super) fn vector_append(
     let mut all_elements: Vec<TaggedValue> = Vec::new();
     {
         let heap_ref = heap.borrow();
-        for &arg in &args {
+        for &arg in args {
             all_elements.extend_from_slice(heap_ref.vector_slice(arg));
         }
     }
@@ -570,8 +552,8 @@ pub(super) fn vector_append(
 }
 
 pub(super) fn vector_fill(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 || args.len() > 4 {
         return Err(EvalError::WrongArity {
@@ -580,7 +562,6 @@ pub(super) fn vector_fill(
         });
     }
 
-    let heap = ctx.heap();
     let vec_tv = args[0];
     let fill_tv = args[1];
 
@@ -691,120 +672,120 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // Make-vector
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "make-vector",
         Arity::Range(1, 2),
         "Returns a newly allocated vector of k elements.",
-        |ctx, args| make_vector(ctx, args),
+        make_vector,
     ));
 
     // Vector constructor
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector",
         Arity::Min(0),
         "Returns a newly allocated vector whose elements contain the given arguments.",
-        |ctx, args| vector(ctx, args),
+        vector,
     ));
 
     // Vector-length
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector-length",
         Arity::Exact(1),
         "Returns the number of elements in vector.",
-        |ctx, args| vector_length(ctx, args),
+        vector_length,
     ));
 
     // Vector-ref
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector-ref",
         Arity::Exact(2),
         "Returns the contents of element k of vector.",
-        |ctx, args| vector_ref(ctx, args),
+        vector_ref,
     ));
 
     // Vector-set!
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector-set!",
         Arity::Exact(3),
         "Stores obj in element k of vector.",
-        |ctx, args| vector_set(ctx, args),
+        vector_set,
     ));
 
     // Vector->list
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector->list",
         Arity::Range(1, 3),
         "Returns a newly allocated list of the objects contained in the elements of vector.",
-        |ctx, args| vector_to_list(ctx, args),
+        vector_to_list,
     ));
 
     // List->vector
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "list->vector",
         Arity::Exact(1),
         "Returns a newly allocated vector of the objects contained in the list.",
-        |ctx, args| list_to_vector(ctx, args),
+        list_to_vector,
     ));
 
     // Vector->string
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector->string",
         Arity::Range(1, 3),
         "Returns a newly allocated string of the characters contained in the elements of vector.",
-        |ctx, args| vector_to_string(ctx, args),
+        vector_to_string,
     ));
 
     // String->vector
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string->vector",
         Arity::Range(1, 3),
         "Returns a newly allocated vector of the characters contained in the string.",
-        |ctx, args| string_to_vector(ctx, args),
+        string_to_vector,
     ));
 
     // Vector-copy
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector-copy",
         Arity::Range(1, 3),
         "Returns a newly allocated copy of the elements of the given vector.",
-        |ctx, args| vector_copy(ctx, args),
+        vector_copy,
     ));
 
     // Vector-copy!
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector-copy!",
         Arity::Range(3, 5),
         "Copies the elements of vector from at to into vector to, starting at at.",
-        |ctx, args| vector_copy_bang(ctx, args),
+        vector_copy_bang,
     ));
 
     // Vector-append
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector-append",
         Arity::Min(0),
         "Returns a newly allocated vector whose elements are the concatenation of the elements of the given vectors.",
-        |ctx, args| vector_append(ctx, args),
+        vector_append,
     ));
 
     // Vector-fill!
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "vector-fill!",
         Arity::Range(2, 4),
         "Stores fill in the elements of vector.",
-        |ctx, args| vector_fill(ctx, args),
+        vector_fill,
     ));
 
     // Vector-map
@@ -813,7 +794,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "vector-map",
         Arity::Min(2),
         "Returns a newly allocated vector of the results of applying proc element-wise to the elements of the vectors.",
-        |ctx, args| vector_map(ctx, args),
+        vector_map,
     ));
 
     // Vector-for-each
@@ -822,6 +803,6 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "vector-for-each",
         Arity::Min(2),
         "Applies proc element-wise to the elements of the vectors for side effects.",
-        |ctx, args| vector_for_each(ctx, args),
+        vector_for_each,
     ));
 }

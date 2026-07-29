@@ -7,6 +7,7 @@ use crate::apply_context::ApplyContext;
 use crate::registry::PrimitiveRegistry;
 use patina_core::{TaggedValue, heap::PromiseState};
 use patina_runtime::EvalError;
+use patina_runtime::SharedHeap;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -20,32 +21,32 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         "force",
         Arity::Exact(1),
         "Force evaluation of a promise. If the argument is not a promise, return it unchanged.",
-        |ctx, args| force(ctx, args),
+        force,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.lazy",
         "promise?",
         Arity::Exact(1),
         "Returns #t if obj is a promise, #f otherwise.",
-        |ctx, args| promise_p(ctx, args),
+        promise_p,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.lazy",
         "make-promise",
         Arity::Exact(1),
         "Returns a promise which, when forced, will return obj. If obj is already a promise, it is returned.",
-        |ctx, args| make_promise(ctx, args),
+        make_promise,
     ));
 
     // Internal helper for delay/delay-force macros
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.lazy",
         "%make-delayed-promise",
         Arity::Exact(1),
         "Internal: Create a delayed promise from a thunk. Used by delay macro.",
-        |ctx, args| make_delayed_promise(ctx, args),
+        make_delayed_promise,
     ));
 }
 
@@ -115,7 +116,7 @@ fn force_tagged(ctx: &dyn ApplyContext, obj: TaggedValue) -> Result<TaggedValue,
 }
 
 /// Check if a value is a promise
-fn promise_p(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn promise_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -123,7 +124,6 @@ fn promise_p(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<TaggedVal
         });
     }
 
-    let heap = ctx.heap();
     Ok(TaggedValue::boolean(heap.borrow().is_promise(args[0])))
 }
 
@@ -131,15 +131,13 @@ fn promise_p(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<TaggedVal
 ///
 /// If the value is already a promise, return it unchanged.
 /// Otherwise, wrap it in a promise that's already forced.
-fn make_promise(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn make_promise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Check if already a promise using heap method
     if heap.borrow().is_promise(args[0]) {
@@ -156,18 +154,13 @@ fn make_promise(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<Tagged
 /// Create a delayed promise from a thunk (internal helper for delay macro)
 ///
 /// The thunk should be a zero-argument procedure that will be called when forced.
-fn make_delayed_promise(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+fn make_delayed_promise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Create a delayed promise natively on the heap
     Ok(heap

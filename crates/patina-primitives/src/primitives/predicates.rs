@@ -9,7 +9,7 @@ use patina_runtime::SharedHeap;
 
 pub(super) fn rational_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -23,7 +23,7 @@ pub(super) fn rational_p(
     ))
 }
 
-pub(super) fn real_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn real_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -34,10 +34,7 @@ pub(super) fn real_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagged
     Ok(TaggedValue::boolean(heap.borrow().is_real_r7rs(args[0])))
 }
 
-pub(super) fn complex_p(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn complex_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -49,10 +46,7 @@ pub(super) fn complex_p(
     Ok(TaggedValue::boolean(heap.borrow().is_number(args[0])))
 }
 
-pub(super) fn symbol_p(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn symbol_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -63,7 +57,7 @@ pub(super) fn symbol_p(
     Ok(TaggedValue::boolean(heap.borrow().is_symbol(args[0])))
 }
 
-pub(super) fn list_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -74,10 +68,7 @@ pub(super) fn list_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagged
     Ok(TaggedValue::boolean(heap.borrow().is_list(args[0])))
 }
 
-pub(super) fn inexact_p(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn inexact_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -92,7 +83,7 @@ pub(super) fn inexact_p(
 
 pub(super) fn boolean_equal(
     _heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -126,7 +117,7 @@ pub(super) fn boolean_equal(
 
 pub(super) fn procedure_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -150,7 +141,7 @@ pub(super) fn procedure_p(
 // ===== TaggedValue predicates with fast paths =====
 
 /// (null? obj) - Fast path using TaggedValue
-pub(super) fn null_p(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn null_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -161,7 +152,7 @@ pub(super) fn null_p(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 }
 
 /// (pair? obj) - Check for pair (native or boxed)
-pub(super) fn pair_p(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn pair_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -174,7 +165,7 @@ pub(super) fn pair_p(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 /// (boolean? obj) - Fast path using TaggedValue
 pub(super) fn boolean_p(
     _heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -186,7 +177,7 @@ pub(super) fn boolean_p(
 }
 
 /// (char? obj) - Fast path using TaggedValue
-pub(super) fn char_p(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -197,10 +188,7 @@ pub(super) fn char_p(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 }
 
 /// (string? obj) - Check for string (native heap string)
-pub(super) fn string_p(
-    _heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -211,10 +199,7 @@ pub(super) fn string_p(
 }
 
 /// (vector? obj) - Check for vector (native heap vector)
-pub(super) fn vector_p(
-    _heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -225,10 +210,7 @@ pub(super) fn vector_p(
 }
 
 /// (integer? obj) - Fast path for fixnums
-pub(super) fn integer_p(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn integer_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -242,7 +224,7 @@ pub(super) fn integer_p(
 /// (exact-integer? obj) - Fast path for fixnums
 pub(super) fn exact_integer_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -259,7 +241,7 @@ pub(super) fn exact_integer_p(
 }
 
 /// (exact? obj) - Fast path for fixnums
-pub(super) fn exact_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn exact_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -271,10 +253,7 @@ pub(super) fn exact_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 }
 
 /// (number? obj) - Fast path for fixnums
-pub(super) fn number_p(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn number_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),

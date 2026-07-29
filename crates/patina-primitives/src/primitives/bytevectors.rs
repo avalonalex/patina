@@ -72,7 +72,7 @@ fn get_byte(
 /// (bytevector? obj) - Type predicate
 pub(super) fn bytevector_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -91,7 +91,7 @@ pub(super) fn bytevector_p(
 /// (make-bytevector k [byte]) - Create bytevector of k bytes
 pub(super) fn make_bytevector(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -116,7 +116,7 @@ pub(super) fn make_bytevector(
 /// (bytevector byte ...) - Construct bytevector from arguments
 pub(super) fn bytevector(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     let heap_ref = heap.borrow();
 
@@ -133,7 +133,7 @@ pub(super) fn bytevector(
 /// (bytevector-length bytevector) - Get length
 pub(super) fn bytevector_length(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -154,7 +154,7 @@ pub(super) fn bytevector_length(
 /// (bytevector-u8-ref bytevector k) - Get byte at index k
 pub(super) fn bytevector_u8_ref(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
@@ -188,7 +188,7 @@ pub(super) fn bytevector_u8_ref(
 /// (bytevector-u8-set! bytevector k byte) - Set byte at index k
 pub(super) fn bytevector_u8_set(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
@@ -226,7 +226,7 @@ pub(super) fn bytevector_u8_set(
 /// (bytevector-copy bytevector [start [end]]) - Copy bytevector
 pub(super) fn bytevector_copy(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
@@ -272,7 +272,7 @@ pub(super) fn bytevector_copy(
 /// (bytevector-copy! to at from [start [end]]) - Copy bytes from one bytevector to another
 pub(super) fn bytevector_copy_mut(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 3 || args.len() > 5 {
         return Err(EvalError::WrongArity {
@@ -347,7 +347,7 @@ pub(super) fn bytevector_copy_mut(
 /// (bytevector-append bytevector ...) - Concatenate bytevectors
 pub(super) fn bytevector_append(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     let heap_ref = heap.borrow();
 
@@ -364,7 +364,7 @@ pub(super) fn bytevector_append(
 /// (utf8->string bytevector [start [end]]) - Decode UTF-8 bytevector to string
 pub(super) fn utf8_to_string(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
@@ -418,7 +418,7 @@ pub(super) fn utf8_to_string(
 /// (string->utf8 string [start [end]]) - Encode string as UTF-8 bytevector
 pub(super) fn string_to_utf8(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {

@@ -18,7 +18,7 @@ use patina_runtime::SharedHeap;
 /// Returns the sum of its arguments. With no arguments, returns 0.
 ///
 /// Uses Heap::numeric_add which has built-in fixnum fast path and BigInt overflow handling.
-pub(super) fn add(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn add(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Ok(TaggedValue::fixnum(0));
     }
@@ -39,10 +39,7 @@ pub(super) fn add(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 /// With multiple arguments, subtracts subsequent from the first.
 ///
 /// Uses Heap::numeric_sub/numeric_neg which have built-in fixnum fast paths.
-pub(super) fn subtract(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn subtract(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),
@@ -73,10 +70,7 @@ pub(super) fn subtract(
 /// Returns the product of its arguments. With no arguments, returns 1.
 ///
 /// Uses Heap::numeric_mul which has built-in fixnum fast path and BigInt overflow handling.
-pub(super) fn multiply(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn multiply(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Ok(TaggedValue::fixnum(1));
     }
@@ -97,7 +91,7 @@ pub(super) fn multiply(
 /// With multiple arguments, divides the first by subsequent arguments.
 ///
 /// Uses Heap::numeric_div. Note: Division typically produces rationals.
-pub(super) fn divide(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn divide(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),

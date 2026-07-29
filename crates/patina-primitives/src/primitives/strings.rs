@@ -12,6 +12,7 @@
 use crate::apply_context::ApplyContext;
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
+use patina_runtime::SharedHeap;
 
 // ========== TaggedValue Extraction Helpers ==========
 
@@ -81,8 +82,8 @@ fn chars_to_string(chars: &[char]) -> String {
 }
 
 pub(super) fn string_length(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -91,15 +92,14 @@ pub(super) fn string_length(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     let chars = get_string_as_chars(args[0], &heap_ref, "string-length")?;
     Ok(TaggedValue::fixnum(chars.len() as i64))
 }
 
 pub(super) fn string_ref(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
@@ -108,7 +108,6 @@ pub(super) fn string_ref(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     let chars = get_string_as_chars(args[0], &heap_ref, "string-ref")?;
@@ -135,8 +134,8 @@ pub(super) fn string_ref(
 }
 
 pub(super) fn string_set(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
@@ -144,8 +143,6 @@ pub(super) fn string_set(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Extract index and char with immutable borrow
     let (k, ch) = {
@@ -184,8 +181,8 @@ pub(super) fn string_set(
 }
 
 pub(super) fn make_string(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -194,7 +191,6 @@ pub(super) fn make_string(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     let k = get_integer(args[0], &heap_ref, "make-string")?;
@@ -217,16 +213,12 @@ pub(super) fn make_string(
     Ok(heap.borrow_mut().alloc_string_chars(chars))
 }
 
-pub(super) fn string(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    let heap = ctx.heap();
+pub(super) fn string(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     let heap_ref = heap.borrow();
 
     let mut chars = Vec::new();
 
-    for arg in args {
+    for &arg in args {
         let ch = get_char(arg, &heap_ref, "string")?;
         chars.push(ch);
     }
@@ -236,8 +228,8 @@ pub(super) fn string(
 }
 
 pub(super) fn string_equal(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -246,7 +238,6 @@ pub(super) fn string_equal(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     // Get first string for comparison
@@ -264,36 +255,36 @@ pub(super) fn string_equal(
 }
 
 pub(super) fn string_less(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    string_compare(ctx, args, |a, b| a < b, "string<?")
+    string_compare(heap, args, |a, b| a < b, "string<?")
 }
 
 pub(super) fn string_greater(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    string_compare(ctx, args, |a, b| a > b, "string>?")
+    string_compare(heap, args, |a, b| a > b, "string>?")
 }
 
 pub(super) fn string_less_equal(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    string_compare(ctx, args, |a, b| a <= b, "string<=?")
+    string_compare(heap, args, |a, b| a <= b, "string<=?")
 }
 
 pub(super) fn string_greater_equal(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    string_compare(ctx, args, |a, b| a >= b, "string>=?")
+    string_compare(heap, args, |a, b| a >= b, "string>=?")
 }
 
 fn string_compare<F>(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
     cmp: F,
     fn_name: &str,
 ) -> Result<TaggedValue, EvalError>
@@ -307,7 +298,6 @@ where
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
@@ -323,43 +313,43 @@ where
 }
 
 pub(super) fn string_ci_equal(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(ctx, args, |a, b| a == b, "string-ci=?")
+    string_ci_compare(heap, args, |a, b| a == b, "string-ci=?")
 }
 
 pub(super) fn string_ci_less(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(ctx, args, |a, b| a < b, "string-ci<?")
+    string_ci_compare(heap, args, |a, b| a < b, "string-ci<?")
 }
 
 pub(super) fn string_ci_greater(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(ctx, args, |a, b| a > b, "string-ci>?")
+    string_ci_compare(heap, args, |a, b| a > b, "string-ci>?")
 }
 
 pub(super) fn string_ci_less_equal(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(ctx, args, |a, b| a <= b, "string-ci<=?")
+    string_ci_compare(heap, args, |a, b| a <= b, "string-ci<=?")
 }
 
 pub(super) fn string_ci_greater_equal(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(ctx, args, |a, b| a >= b, "string-ci>=?")
+    string_ci_compare(heap, args, |a, b| a >= b, "string-ci>=?")
 }
 
 fn string_ci_compare<F>(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
     cmp: F,
     fn_name: &str,
 ) -> Result<TaggedValue, EvalError>
@@ -373,7 +363,6 @@ where
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
@@ -393,15 +382,14 @@ where
 }
 
 pub(super) fn string_append(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     let mut result: Vec<char> = Vec::new();
 
-    for arg in args {
+    for &arg in args {
         let chars = get_string_as_chars(arg, &heap_ref, "string-append")?;
         result.extend(chars.iter());
     }
@@ -410,10 +398,7 @@ pub(super) fn string_append(
     Ok(heap.borrow_mut().alloc_string_chars(result))
 }
 
-pub(super) fn substring(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn substring(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
             expected: "3".to_string(),
@@ -421,7 +406,6 @@ pub(super) fn substring(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     let chars = get_string_as_chars(args[0], &heap_ref, "substring")?;
@@ -457,8 +441,8 @@ pub(super) fn substring(
 }
 
 pub(super) fn string_to_list(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
@@ -466,8 +450,6 @@ pub(super) fn string_to_list(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Extract chars and indices
     let (chars, start, end) = {
@@ -505,8 +487,8 @@ pub(super) fn string_to_list(
 }
 
 pub(super) fn list_to_string(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -514,8 +496,6 @@ pub(super) fn list_to_string(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Try fast path using heap's list_to_vec
     let chars_opt = {
@@ -564,8 +544,8 @@ pub(super) fn list_to_string(
 }
 
 pub(super) fn string_copy(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
@@ -574,7 +554,6 @@ pub(super) fn string_copy(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     let chars = get_string_as_chars(args[0], &heap_ref, "string-copy")?;
@@ -609,8 +588,8 @@ pub(super) fn string_copy(
 
 /// (string-upcase string) - Convert string to uppercase
 pub(super) fn string_upcase(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -619,7 +598,6 @@ pub(super) fn string_upcase(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     let chars = get_string_as_chars(args[0], &heap_ref, "string-upcase")?;
     drop(heap_ref);
@@ -631,8 +609,8 @@ pub(super) fn string_upcase(
 
 /// (string-downcase string) - Convert string to lowercase
 pub(super) fn string_downcase(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -641,7 +619,6 @@ pub(super) fn string_downcase(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     let chars = get_string_as_chars(args[0], &heap_ref, "string-downcase")?;
     drop(heap_ref);
@@ -658,8 +635,8 @@ pub(super) fn string_downcase(
 /// - ſ (long s) folds to "s"
 /// - All forms of sigma (Σ, σ, ς) fold to σ
 pub(super) fn string_foldcase(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -670,7 +647,6 @@ pub(super) fn string_foldcase(
 
     use unicode_casefold::UnicodeCaseFold;
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
     let chars = get_string_as_chars(args[0], &heap_ref, "string-foldcase")?;
     drop(heap_ref);
@@ -683,8 +659,8 @@ pub(super) fn string_foldcase(
 
 /// (string-fill! string fill [start [end]]) - Fill string with character
 pub(super) fn string_fill(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 || args.len() > 4 {
         return Err(EvalError::WrongArity {
@@ -692,8 +668,6 @@ pub(super) fn string_fill(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Extract fill_char and indices with immutable borrow
     let (fill_char, start, end_arg) = {
@@ -846,8 +820,8 @@ pub(super) fn string_for_each(
 
 /// (string-copy! to at from [start [end]]) - Copy characters from one string to another
 pub(super) fn string_copy_mutate(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 3 || args.len() > 5 {
         return Err(EvalError::WrongArity {
@@ -855,8 +829,6 @@ pub(super) fn string_copy_mutate(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Extract at, source chars, start, end with immutable borrow
     let (at, source_chars, start, end) = {
@@ -931,225 +903,225 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // String length
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-length",
         Arity::Exact(1),
         "Returns the number of characters in string.",
-        |ctx, args| string_length(ctx, args),
+        string_length,
     ));
 
     // String ref
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-ref",
         Arity::Exact(2),
         "Returns character k of string.",
-        |ctx, args| string_ref(ctx, args),
+        string_ref,
     ));
 
     // String set!
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-set!",
         Arity::Exact(3),
         "Stores char in element k of string.",
-        |ctx, args| string_set(ctx, args),
+        string_set,
     ));
 
     // Make-string
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "make-string",
         Arity::Range(1, 2),
         "Returns a newly allocated string of length k.",
-        |ctx, args| make_string(ctx, args),
+        make_string,
     ));
 
     // String constructor
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string",
         Arity::Min(0),
         "Returns a newly allocated string composed of the arguments.",
-        |ctx, args| string(ctx, args),
+        string,
     ));
 
     // String equality
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string=?",
         Arity::Min(2),
         "Returns #t if all strings are equal.",
-        |ctx, args| string_equal(ctx, args),
+        string_equal,
     ));
 
     // String less than
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string<?",
         Arity::Min(2),
         "Returns #t if strings are monotonically increasing.",
-        |ctx, args| string_less(ctx, args),
+        string_less,
     ));
 
     // String greater than
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string>?",
         Arity::Min(2),
         "Returns #t if strings are monotonically decreasing.",
-        |ctx, args| string_greater(ctx, args),
+        string_greater,
     ));
 
     // String less than or equal
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string<=?",
         Arity::Min(2),
         "Returns #t if strings are monotonically non-decreasing.",
-        |ctx, args| string_less_equal(ctx, args),
+        string_less_equal,
     ));
 
     // String greater than or equal
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string>=?",
         Arity::Min(2),
         "Returns #t if strings are monotonically non-increasing.",
-        |ctx, args| string_greater_equal(ctx, args),
+        string_greater_equal,
     ));
 
     // String case-insensitive equality
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-ci=?",
         Arity::Min(2),
         "Returns #t if all strings are equal (case-insensitive).",
-        |ctx, args| string_ci_equal(ctx, args),
+        string_ci_equal,
     ));
 
     // String case-insensitive less than
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-ci<?",
         Arity::Min(2),
         "Returns #t if strings are monotonically increasing (case-insensitive).",
-        |ctx, args| string_ci_less(ctx, args),
+        string_ci_less,
     ));
 
     // String case-insensitive greater than
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-ci>?",
         Arity::Min(2),
         "Returns #t if strings are monotonically decreasing (case-insensitive).",
-        |ctx, args| string_ci_greater(ctx, args),
+        string_ci_greater,
     ));
 
     // String case-insensitive less than or equal
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-ci<=?",
         Arity::Min(2),
         "Returns #t if strings are monotonically non-decreasing (case-insensitive).",
-        |ctx, args| string_ci_less_equal(ctx, args),
+        string_ci_less_equal,
     ));
 
     // String case-insensitive greater than or equal
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-ci>=?",
         Arity::Min(2),
         "Returns #t if strings are monotonically non-increasing (case-insensitive).",
-        |ctx, args| string_ci_greater_equal(ctx, args),
+        string_ci_greater_equal,
     ));
 
     // String append
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-append",
         Arity::Min(0),
         "Returns a newly allocated string whose characters are the concatenation of the given strings.",
-        |ctx, args| string_append(ctx, args),
+        string_append,
     ));
 
     // Substring
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "substring",
         Arity::Exact(3),
         "Returns a newly allocated string formed from the characters of string beginning with index start and ending with index end.",
-        |ctx, args| substring(ctx, args),
+        substring,
     ));
 
     // String->list
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string->list",
         Arity::Range(1, 3),
         "Returns a newly allocated list of the characters of string.",
-        |ctx, args| string_to_list(ctx, args),
+        string_to_list,
     ));
 
     // List->string
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "list->string",
         Arity::Exact(1),
         "Returns a newly allocated string formed from the characters in the list.",
-        |ctx, args| list_to_string(ctx, args),
+        list_to_string,
     ));
 
     // String-copy
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-copy",
         Arity::Range(1, 3),
         "Returns a newly allocated copy of the part of the given string.",
-        |ctx, args| string_copy(ctx, args),
+        string_copy,
     ));
 
     // String case conversion (scheme.char library)
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.char",
         "string-upcase",
         Arity::Exact(1),
         "Returns a newly allocated string with all characters converted to uppercase.",
-        |ctx, args| string_upcase(ctx, args),
+        string_upcase,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.char",
         "string-downcase",
         Arity::Exact(1),
         "Returns a newly allocated string with all characters converted to lowercase.",
-        |ctx, args| string_downcase(ctx, args),
+        string_downcase,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.char",
         "string-foldcase",
         Arity::Exact(1),
         "Returns a newly allocated string with all characters case-folded.",
-        |ctx, args| string_foldcase(ctx, args),
+        string_foldcase,
     ));
 
     // String mutation (scheme.base)
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-fill!",
         Arity::Range(2, 4),
         "Stores fill character in every element of string between start and end.",
-        |ctx, args| string_fill(ctx, args),
+        string_fill,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "string-copy!",
         Arity::Range(3, 5),
         "Copies characters from source string to destination string.",
-        |ctx, args| string_copy_mutate(ctx, args),
+        string_copy_mutate,
     ));
 
     // String higher-order functions (scheme.base)
@@ -1158,7 +1130,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "string-map",
         Arity::Min(2),
         "Applies proc element-wise to strings and returns a string of the results.",
-        |ctx, args| string_map(ctx, args),
+        string_map,
     ));
 
     registry.register(PrimitiveFn::new_higher_order(
@@ -1166,6 +1138,6 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "string-for-each",
         Arity::Min(2),
         "Applies proc to each element of the strings for its side effects.",
-        |ctx, args| string_for_each(ctx, args),
+        string_for_each,
     ));
 }

@@ -46,7 +46,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 }
 
-fn test_begin(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn test_begin(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -70,7 +70,7 @@ fn test_begin(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, 
     Ok(TaggedValue::UNSPECIFIED)
 }
 
-fn test_end(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn test_end(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -83,7 +83,7 @@ fn test_end(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, E
 
 fn test_increment_passed(
     _heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
@@ -97,7 +97,7 @@ fn test_increment_passed(
 
 fn test_increment_failed(
     _heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {

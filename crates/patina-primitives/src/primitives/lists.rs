@@ -5,6 +5,7 @@
 use crate::apply_context::ApplyContext;
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
+use patina_runtime::SharedHeap;
 
 // ========== TaggedValue Extraction Helpers ==========
 
@@ -32,10 +33,7 @@ fn get_integer(tv: TaggedValue, heap: &patina_core::Heap, fn_name: &str) -> Resu
 
 // ========== List Primitives ==========
 
-pub(super) fn cons(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn cons(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -43,15 +41,11 @@ pub(super) fn cons(
         });
     }
     // Allocate native heap pair - args are already TaggedValue
-    let heap = ctx.heap();
     let pair_tv = heap.borrow_mut().alloc_pair(args[0], args[1]);
     Ok(pair_tv)
 }
 
-pub(super) fn car(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn car(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -61,14 +55,12 @@ pub(super) fn car(
 
     // Fast path: native heap pair
     if args[0].is_pair() {
-        let heap = ctx.heap();
         let heap_ref = heap.borrow();
         let car_tv = heap_ref.car(args[0]);
         return Ok(car_tv);
     }
 
     // Fallback: use try_pair for any other pair types
-    let heap = ctx.heap();
     let (car, _) = heap
         .borrow()
         .try_pair(args[0])
@@ -76,10 +68,7 @@ pub(super) fn car(
     Ok(car)
 }
 
-pub(super) fn cdr(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn cdr(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -89,14 +78,12 @@ pub(super) fn cdr(
 
     // Fast path: native heap pair
     if args[0].is_pair() {
-        let heap = ctx.heap();
         let heap_ref = heap.borrow();
         let cdr_tv = heap_ref.cdr(args[0]);
         return Ok(cdr_tv);
     }
 
     // Fallback: use try_pair for any other pair types
-    let heap = ctx.heap();
     let (_, cdr) = heap
         .borrow()
         .try_pair(args[0])
@@ -104,27 +91,19 @@ pub(super) fn cdr(
     Ok(cdr)
 }
 
-pub(super) fn list(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn list(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     // list accepts any number of arguments (0 or more)
     // Use native heap list construction
-    let heap = ctx.heap();
-    Ok(heap.borrow_mut().list_from_iter(args))
+    Ok(heap.borrow_mut().list_from_iter(args.iter().copied()))
 }
 
-pub(super) fn length(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn length(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap = ctx.heap();
 
     // Fast path: use Heap::list_len for native pairs
     {
@@ -151,10 +130,7 @@ pub(super) fn length(
     Ok(TaggedValue::fixnum(count as i64))
 }
 
-pub(super) fn append(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn append(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Ok(TaggedValue::NULL);
     }
@@ -162,8 +138,6 @@ pub(super) fn append(
     if args.len() == 1 {
         return Ok(args[0]);
     }
-
-    let heap = ctx.heap();
 
     // Try fast path using heap's list_append for native pairs
     // Fold from right: (append a b c d) = (append a (append b (append c d)))
@@ -213,18 +187,13 @@ pub(super) fn append(
     Ok(result)
 }
 
-pub(super) fn reverse(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn reverse(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Fast path: use Heap::list_reverse for native pairs
     if (args[0].is_pair() || args[0].is_null())
@@ -250,10 +219,7 @@ pub(super) fn reverse(
     Ok(result)
 }
 
-pub(super) fn list_ref(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_ref(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -261,7 +227,6 @@ pub(super) fn list_ref(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     let k = get_integer(args[1], &heap_ref, "list-ref")?;
@@ -294,10 +259,7 @@ pub(super) fn list_ref(
     Ok(car)
 }
 
-pub(super) fn list_tail(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_tail(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -305,7 +267,6 @@ pub(super) fn list_tail(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     let k = get_integer(args[1], &heap_ref, "list-tail")?;
@@ -334,10 +295,7 @@ pub(super) fn list_tail(
     Ok(current)
 }
 
-pub(super) fn memq(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn memq(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -345,7 +303,6 @@ pub(super) fn memq(
         });
     }
 
-    let heap = ctx.heap();
     let obj = args[0];
     let mut current = args[1];
 
@@ -382,10 +339,7 @@ pub(super) fn memq(
     Ok(TaggedValue::FALSE)
 }
 
-pub(super) fn memv(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn memv(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -393,7 +347,6 @@ pub(super) fn memv(
         });
     }
 
-    let heap = ctx.heap();
     let obj = args[0];
     let mut current = args[1];
 
@@ -509,10 +462,7 @@ pub(super) fn member(
     }
 }
 
-pub(super) fn assq(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn assq(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -520,7 +470,6 @@ pub(super) fn assq(
         });
     }
 
-    let heap = ctx.heap();
     let obj = args[0];
     let mut current = args[1];
 
@@ -549,10 +498,7 @@ pub(super) fn assq(
     Ok(TaggedValue::FALSE)
 }
 
-pub(super) fn assv(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn assv(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -560,7 +506,6 @@ pub(super) fn assv(
         });
     }
 
-    let heap = ctx.heap();
     let obj = args[0];
     let mut current = args[1];
 
@@ -667,18 +612,13 @@ pub(super) fn assoc(
 }
 
 /// (make-list k [fill]) - Create list of k elements
-pub(super) fn make_list(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn make_list(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "1 or 2".to_string(),
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Get the length
     let k = {
@@ -712,10 +652,7 @@ pub(super) fn make_list(
 
 /// (list-copy list) - Create shallow copy of list
 /// Handles both proper lists and improper lists (dotted lists)
-pub(super) fn list_copy(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_copy(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -732,8 +669,6 @@ pub(super) fn list_copy(
 
     // Fast path: native heap pair - copy using heap operations
     if input.is_pair() {
-        let heap = ctx.heap();
-
         // Collect all car values and find the tail
         let mut cars: Vec<TaggedValue> = Vec::new();
         let mut current = input;
@@ -760,7 +695,6 @@ pub(super) fn list_copy(
     }
 
     // Fallback path: use try_pair for any other pair types
-    let heap = ctx.heap();
 
     // Try to walk as a pair - collect cars and find tail
     let mut cars: Vec<TaggedValue> = Vec::new();
@@ -794,10 +728,7 @@ pub(super) fn list_copy(
 }
 
 /// (set-car! pair obj) - Mutate the car of a pair
-pub(super) fn set_car(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn set_car(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -806,7 +737,6 @@ pub(super) fn set_car(
     }
 
     if args[0].is_pair() {
-        let heap = ctx.heap();
         heap.borrow_mut().set_car(args[0], args[1]);
         Ok(TaggedValue::UNSPECIFIED)
     } else {
@@ -815,10 +745,7 @@ pub(super) fn set_car(
 }
 
 /// (set-cdr! pair obj) - Mutate the cdr of a pair
-pub(super) fn set_cdr(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn set_cdr(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -827,7 +754,6 @@ pub(super) fn set_cdr(
     }
 
     if args[0].is_pair() {
-        let heap = ctx.heap();
         heap.borrow_mut().set_cdr(args[0], args[1]);
         Ok(TaggedValue::UNSPECIFIED)
     } else {
@@ -836,18 +762,13 @@ pub(super) fn set_cdr(
 }
 
 /// (list-set! list k obj) - Set the k-th element of a list to obj
-pub(super) fn list_set(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_set(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
             expected: "3".to_string(),
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // Get index first
     let index = {
@@ -914,102 +835,102 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // Cons - construct pair
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "cons",
         Arity::Exact(2),
         "Returns a newly allocated pair whose car is obj1 and whose cdr is obj2.",
-        |ctx, args| cons(ctx, args),
+        cons,
     ));
 
     // Car - first element of pair
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "car",
         Arity::Exact(1),
         "Returns the contents of the car field of pair.",
-        |ctx, args| car(ctx, args),
+        car,
     ));
 
     // Cdr - rest of pair
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "cdr",
         Arity::Exact(1),
         "Returns the contents of the cdr field of pair.",
-        |ctx, args| cdr(ctx, args),
+        cdr,
     ));
 
     // List - construct list from arguments
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "list",
         Arity::Min(0),
         "Returns a newly allocated list of its arguments.",
-        |ctx, args| list(ctx, args),
+        list,
     ));
 
     // Length - list length
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "length",
         Arity::Exact(1),
         "Returns the length of list.",
-        |ctx, args| length(ctx, args),
+        length,
     ));
 
     // Append - concatenate lists
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "append",
         Arity::Min(0),
         "Returns a list consisting of the elements of the first list followed by the elements of the other lists.",
-        |ctx, args| append(ctx, args),
+        append,
     ));
 
     // Reverse - reverse list
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "reverse",
         Arity::Exact(1),
         "Returns a newly allocated list consisting of the elements of list in reverse order.",
-        |ctx, args| reverse(ctx, args),
+        reverse,
     ));
 
     // List-ref - nth element
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "list-ref",
         Arity::Exact(2),
         "Returns the kth element of list.",
-        |ctx, args| list_ref(ctx, args),
+        list_ref,
     ));
 
     // List-tail - drop first k elements
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "list-tail",
         Arity::Exact(2),
         "Returns the sublist of list obtained by omitting the first k elements.",
-        |ctx, args| list_tail(ctx, args),
+        list_tail,
     ));
 
     // Memq - member using eq?
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "memq",
         Arity::Exact(2),
         "Returns the first sublist of list whose car is obj (compared using eq?), or #f if not found.",
-        |ctx, args| memq(ctx, args),
+        memq,
     ));
 
     // Memv - member using eqv?
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "memv",
         Arity::Exact(2),
         "Returns the first sublist of list whose car is obj (compared using eqv?), or #f if not found.",
-        |ctx, args| memv(ctx, args),
+        memv,
     ));
 
     // Member - member using equal? (or custom comparator)
@@ -1018,25 +939,25 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "member",
         Arity::Range(2, 3),
         "Returns the first sublist of list whose car is obj. Uses equal? or optional comparator.",
-        |ctx, args| member(ctx, args),
+        member,
     ));
 
     // Assq - association list lookup using eq?
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "assq",
         Arity::Exact(2),
         "Returns the first pair in alist whose car is obj (compared using eq?), or #f if not found.",
-        |ctx, args| assq(ctx, args),
+        assq,
     ));
 
     // Assv - association list lookup using eqv?
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "assv",
         Arity::Exact(2),
         "Returns the first pair in alist whose car is obj (compared using eqv?), or #f if not found.",
-        |ctx, args| assv(ctx, args),
+        assv,
     ));
 
     // Assoc - association list lookup using equal? (or custom comparator)
@@ -1045,51 +966,51 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "assoc",
         Arity::Range(2, 3),
         "Returns the first pair in alist whose car is obj. Uses equal? or optional comparator.",
-        |ctx, args| assoc(ctx, args),
+        assoc,
     ));
 
     // make-list - Create list of k elements with optional fill value
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "make-list",
         Arity::Range(1, 2),
         "Returns a newly allocated list of k elements. If fill is given, each element is initialized to fill; otherwise unspecified.",
-        |ctx, args| make_list(ctx, args),
+        make_list,
     ));
 
     // list-copy - Create shallow copy of list
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "list-copy",
         Arity::Exact(1),
         "Returns a newly allocated copy of list. Only the top level of structure is copied.",
-        |ctx, args| list_copy(ctx, args),
+        list_copy,
     ));
 
     // set-car! - Mutate car of pair
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "set-car!",
         Arity::Exact(2),
         "Stores obj in the car field of pair.",
-        |ctx, args| set_car(ctx, args),
+        set_car,
     ));
 
     // set-cdr! - Mutate cdr of pair
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "set-cdr!",
         Arity::Exact(2),
         "Stores obj in the cdr field of pair.",
-        |ctx, args| set_cdr(ctx, args),
+        set_cdr,
     ));
 
     // list-set! - Set element at index
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "list-set!",
         Arity::Exact(3),
         "Stores obj in the kth element of list.",
-        |ctx, args| list_set(ctx, args),
+        list_set,
     ));
 }

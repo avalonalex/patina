@@ -30,7 +30,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 /// (features) => (aarch64 darwin exact-closed full-unicode ieee-float
 ///                little-endian macosx patina posix r7rs ratios unix)
 /// ```
-fn features(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn features(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),

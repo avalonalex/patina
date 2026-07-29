@@ -17,7 +17,7 @@ use patina_runtime::SharedHeap;
 /// (sqrt x) - Square root
 /// Uses Complex64 to handle all cases uniformly, including negative reals
 /// R7RS branch cut: principal square root is always in right half-plane (re >= 0)
-pub(super) fn sqrt(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn sqrt(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -30,7 +30,7 @@ pub(super) fn sqrt(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVa
 }
 
 /// (square x) - Square of x
-pub(super) fn square(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn square(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -43,7 +43,7 @@ pub(super) fn square(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagged
 }
 
 /// (expt base power) - Exponentiation
-pub(super) fn expt(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn expt(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -59,7 +59,7 @@ pub(super) fn expt(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVa
 
 /// (sin x) - Sine
 /// Supports complex numbers: sin(z) = (e^(iz) - e^(-iz)) / 2i
-pub(super) fn sin(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn sin(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -73,7 +73,7 @@ pub(super) fn sin(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 
 /// (cos x) - Cosine
 /// Supports complex numbers: cos(z) = (e^(iz) + e^(-iz)) / 2
-pub(super) fn cos(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn cos(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -87,7 +87,7 @@ pub(super) fn cos(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 
 /// (tan x) - Tangent
 /// Supports complex numbers: tan(z) = sin(z) / cos(z)
-pub(super) fn tan(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn tan(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -101,7 +101,7 @@ pub(super) fn tan(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 
 /// (asin x) - Arc sine
 /// Supports complex numbers with branch cuts
-pub(super) fn asin(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn asin(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -115,7 +115,7 @@ pub(super) fn asin(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVa
 
 /// (acos x) - Arc cosine
 /// Supports complex numbers with branch cuts
-pub(super) fn acos(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn acos(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -130,7 +130,7 @@ pub(super) fn acos(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVa
 /// (atan x [y]) - Arc tangent (one or two arguments)
 /// One argument: supports complex numbers with branch cuts
 /// Two arguments: real-only atan2(y, x)
-pub(super) fn atan(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn atan(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "1 or 2".to_string(),
@@ -152,7 +152,7 @@ pub(super) fn atan(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVa
 
 /// (exp x) - e^x
 /// Supports complex numbers: e^(a+bi) = e^a * (cos(b) + i*sin(b))
-pub(super) fn exp(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn exp(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -166,7 +166,7 @@ pub(super) fn exp(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 
 /// (log x [base]) - Natural log or log with base
 /// Supports complex numbers with branch cut on negative real axis
-pub(super) fn log(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn log(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "1 or 2".to_string(),

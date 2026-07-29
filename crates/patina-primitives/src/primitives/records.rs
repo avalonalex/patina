@@ -65,7 +65,7 @@ fn extract_symbol_list_tagged(
 /// (define rtd (%make-record-type 'name '(field1 field2 ...)))
 ///
 /// Returns a new RecordTypeDescriptor with a unique ID (generative semantics).
-fn make_record_type(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn make_record_type(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "%make-record-type expects 2 arguments".to_string(),
@@ -81,7 +81,7 @@ fn make_record_type(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 }
 
 /// %record-type?: Check if value is a record type descriptor
-fn record_type_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn record_type_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -93,7 +93,7 @@ fn record_type_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValu
 }
 
 /// %record?: Check if value is a record instance
-fn record_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn record_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -107,7 +107,7 @@ fn record_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, Ev
 /// %record-type-of: Get the record type descriptor from a record instance
 ///
 /// (%record-type-of record) => rtd
-fn record_type_of(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn record_type_of(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "%record-type-of expects 1 argument".to_string(),
@@ -135,7 +135,7 @@ fn record_type_of(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 ///
 /// field-values-vector must be a vector with exactly as many elements
 /// as the record type has fields.
-fn make_record(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn make_record(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "%make-record expects 2 arguments".to_string(),
@@ -185,7 +185,7 @@ fn make_record(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue,
 /// %record-ref: Read a field from a record by index
 ///
 /// (%record-ref record index) => value
-fn record_ref(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn record_ref(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "%record-ref expects 2 arguments".to_string(),
@@ -228,7 +228,7 @@ fn record_ref(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, 
 /// %record-set!: Write a field in a record by index
 ///
 /// (%record-set! record index value) => unspecified
-fn record_set(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn record_set(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
             expected: "%record-set! expects 3 arguments".to_string(),
@@ -272,7 +272,7 @@ fn record_set(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, 
 /// %record-type-name: Get the name of a record type as a symbol
 ///
 /// (%record-type-name rtd) => symbol
-fn record_type_name(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn record_type_name(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "%record-type-name expects 1 argument".to_string(),
@@ -297,7 +297,7 @@ fn record_type_name(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 /// %record-type-fields: Get the field names of a record type as a list
 ///
 /// (%record-type-fields rtd) => (field1 field2 ...)
-fn record_type_fields(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn record_type_fields(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "%record-type-fields expects 1 argument".to_string(),
@@ -333,7 +333,7 @@ fn record_type_fields(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 /// (%record-type-field-index rtd 'field-name) => integer or #f
 fn record_type_field_index(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {

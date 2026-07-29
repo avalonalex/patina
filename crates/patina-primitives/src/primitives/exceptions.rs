@@ -11,21 +11,16 @@
 //! - `raise-continuable` - Raise a continuable exception
 //! - `with-exception-handler` - Install an exception handler
 
-use crate::apply_context::ApplyContext;
 use patina_core::ExceptionKind;
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
+use patina_runtime::SharedHeap;
 
 /// (error message obj ...) - Create and raise an error object
 ///
 /// Creates an error object with the given message and irritants, then raises it.
 /// The message must be a string. The irritants can be any values.
-pub(super) fn error(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    let heap = ctx.heap();
-
+pub(super) fn error(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),
@@ -69,8 +64,8 @@ pub(super) fn error(
 
 /// (error-object? obj) - Returns #t if obj is an error object
 pub(super) fn error_object_p(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -79,14 +74,13 @@ pub(super) fn error_object_p(
         });
     }
 
-    let heap = ctx.heap();
     Ok(TaggedValue::boolean(heap.borrow().is_exception(args[0])))
 }
 
 /// (error-object-message error-object) - Get the error message string
 pub(super) fn error_object_message(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -95,7 +89,6 @@ pub(super) fn error_object_message(
         });
     }
 
-    let heap = ctx.heap();
     let message = {
         let heap_ref = heap.borrow();
         match heap_ref.get_exception(args[0]) {
@@ -112,8 +105,8 @@ pub(super) fn error_object_message(
 
 /// (error-object-irritants error-object) - Get the list of irritants
 pub(super) fn error_object_irritants(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -122,7 +115,6 @@ pub(super) fn error_object_irritants(
         });
     }
 
-    let heap = ctx.heap();
     let irritants = {
         let heap_ref = heap.borrow();
         match heap_ref.get_exception(args[0]) {
@@ -140,8 +132,8 @@ pub(super) fn error_object_irritants(
 
 /// (file-error? obj) - Returns #t if obj is a file error
 pub(super) fn file_error_p(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -150,7 +142,6 @@ pub(super) fn file_error_p(
         });
     }
 
-    let heap = ctx.heap();
     let is_file_error = heap
         .borrow()
         .get_exception(args[0])
@@ -160,8 +151,8 @@ pub(super) fn file_error_p(
 
 /// (read-error? obj) - Returns #t if obj is a read error
 pub(super) fn read_error_p(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -170,7 +161,6 @@ pub(super) fn read_error_p(
         });
     }
 
-    let heap = ctx.heap();
     let is_read_error = heap
         .borrow()
         .get_exception(args[0])
@@ -182,18 +172,13 @@ pub(super) fn read_error_p(
 ///
 /// Raises the given object as an exception. If it's already an exception object,
 /// raises it directly. Otherwise, wraps it in an exception.
-pub(super) fn raise(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn raise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "raise expects 1 argument".to_string(),
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // If it's already an exception object, extract its info using heap method
     {
@@ -235,8 +220,8 @@ pub(super) fn raise(
 /// that becomes the result of raise-continuable.
 /// NOTE: This is currently a stub - proper implementation requires CPS integration.
 pub(super) fn raise_continuable(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -244,8 +229,6 @@ pub(super) fn raise_continuable(
             actual: args.len(),
         });
     }
-
-    let heap = ctx.heap();
 
     // For now, just raise like a non-continuable exception
     // Full implementation needs CPS exception handler support
@@ -266,8 +249,8 @@ pub(super) fn raise_continuable(
 /// If an exception is raised, handler is called with the exception object.
 /// NOTE: This is currently a stub - proper implementation requires CPS integration.
 pub(super) fn with_exception_handler(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
+    heap: &SharedHeap,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
@@ -276,7 +259,6 @@ pub(super) fn with_exception_handler(
         });
     }
 
-    let heap = ctx.heap();
     let heap_ref = heap.borrow();
 
     // Verify both are procedures using heap methods
@@ -312,83 +294,83 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Library is patina.internal.errors to match the internal library declaration.
     // error - create and raise an error
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "patina.internal.errors",
         "error",
         Arity::Min(1),
         "Raises an exception with the given message and irritants.",
-        |ctx, args| error(ctx, args),
+        error,
     ));
 
     // error-object? - predicate
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "patina.internal.errors",
         "error-object?",
         Arity::Exact(1),
         "Returns #t if obj is an error object.",
-        |ctx, args| error_object_p(ctx, args),
+        error_object_p,
     ));
 
     // error-object-message - accessor
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "patina.internal.errors",
         "error-object-message",
         Arity::Exact(1),
         "Returns the message of an error object.",
-        |ctx, args| error_object_message(ctx, args),
+        error_object_message,
     ));
 
     // error-object-irritants - accessor
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "patina.internal.errors",
         "error-object-irritants",
         Arity::Exact(1),
         "Returns the list of irritants of an error object.",
-        |ctx, args| error_object_irritants(ctx, args),
+        error_object_irritants,
     ));
 
     // file-error? - predicate
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "patina.internal.errors",
         "file-error?",
         Arity::Exact(1),
         "Returns #t if obj is a file error.",
-        |ctx, args| file_error_p(ctx, args),
+        file_error_p,
     ));
 
     // read-error? - predicate
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "patina.internal.errors",
         "read-error?",
         Arity::Exact(1),
         "Returns #t if obj is a read error.",
-        |ctx, args| read_error_p(ctx, args),
+        read_error_p,
     ));
 
     // raise - raise an exception
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "patina.internal.errors",
         "raise",
         Arity::Exact(1),
         "Raises an exception.",
-        |ctx, args| raise(ctx, args),
+        raise,
     ));
 
     // raise-continuable - raise a continuable exception
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "patina.internal.errors",
         "raise-continuable",
         Arity::Exact(1),
         "Raises a continuable exception.",
-        |ctx, args| raise_continuable(ctx, args),
+        raise_continuable,
     ));
 
     // with-exception-handler - install an exception handler
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_heap(
         "patina.internal.errors",
         "with-exception-handler",
         Arity::Exact(2),
         "Installs an exception handler and calls a thunk.",
-        |ctx, args| with_exception_handler(ctx, args),
+        with_exception_handler,
     ));
 }

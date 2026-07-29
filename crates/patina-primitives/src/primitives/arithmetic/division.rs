@@ -14,10 +14,7 @@ use patina_runtime::SharedHeap;
 
 /// (quotient n1 n2) - Integer quotient
 /// Uses Heap::numeric_quotient with built-in fixnum fast path.
-pub(super) fn quotient(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn quotient(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -32,10 +29,7 @@ pub(super) fn quotient(
 
 /// (remainder n1 n2) - Integer remainder
 /// Uses Heap::numeric_remainder with built-in fixnum fast path.
-pub(super) fn remainder(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn remainder(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -50,7 +44,7 @@ pub(super) fn remainder(
 
 /// (modulo n1 n2) - Integer modulo
 /// Uses Heap::numeric_modulo with built-in fixnum fast path.
-pub(super) fn modulo(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn modulo(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -66,10 +60,7 @@ pub(super) fn modulo(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagged
 /// (floor/ n1 n2) -> quotient remainder
 /// Returns two values: floor-quotient and floor-remainder.
 /// Uses Heap methods with built-in fixnum fast paths.
-pub(super) fn floor_div(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn floor_div(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -93,7 +84,7 @@ pub(super) fn floor_div(
 /// Uses Heap::numeric_floor_quotient with built-in fixnum fast path.
 pub(super) fn floor_quotient(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
@@ -112,7 +103,7 @@ pub(super) fn floor_quotient(
 /// Uses Heap::numeric_floor_remainder with built-in fixnum fast path.
 pub(super) fn floor_remainder(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
@@ -131,7 +122,7 @@ pub(super) fn floor_remainder(
 /// truncate operations are the same as quotient/remainder (truncation toward zero).
 pub(super) fn truncate_div(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
@@ -156,7 +147,7 @@ pub(super) fn truncate_div(
 /// Returns truncate(n1/n2). Same as quotient (truncation toward zero).
 pub(super) fn truncate_quotient(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
@@ -174,7 +165,7 @@ pub(super) fn truncate_quotient(
 /// Returns n1 - n2 * truncate(n1/n2). Same as remainder.
 pub(super) fn truncate_remainder(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {

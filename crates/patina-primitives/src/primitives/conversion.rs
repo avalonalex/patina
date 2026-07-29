@@ -35,7 +35,7 @@ fn get_string(
 // ========== Conversion Primitives ==========
 
 /// (number->string z [radix])
-fn number_to_string(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn number_to_string(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "1-2".to_string(),
@@ -99,7 +99,7 @@ fn number_to_string(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 }
 
 /// (string->number string [radix])
-fn string_to_number(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn string_to_number(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "1-2".to_string(),

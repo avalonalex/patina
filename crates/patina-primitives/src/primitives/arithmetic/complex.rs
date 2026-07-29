@@ -14,10 +14,7 @@ use patina_runtime::SharedHeap;
 
 /// (real-part z) - Real part of complex number
 /// Uses Heap::real_part with built-in fixnum fast path.
-pub(super) fn real_part(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn real_part(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -31,10 +28,7 @@ pub(super) fn real_part(
 
 /// (imag-part z) - Imaginary part of complex number
 /// Uses Heap::imag_part with built-in fixnum fast path.
-pub(super) fn imag_part(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn imag_part(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -48,10 +42,7 @@ pub(super) fn imag_part(
 
 /// (magnitude z) - Magnitude of complex number
 /// Uses Heap::magnitude with built-in fixnum fast path.
-pub(super) fn magnitude(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn magnitude(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -65,7 +56,7 @@ pub(super) fn magnitude(
 
 /// (angle z) - Angle of complex number in radians
 /// Uses Heap::angle with built-in fixnum fast path.
-pub(super) fn angle(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn angle(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -81,7 +72,7 @@ pub(super) fn angle(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 /// Uses Heap::make_rectangular with built-in fast path for zero imaginary.
 pub(super) fn make_rectangular(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
@@ -98,7 +89,7 @@ pub(super) fn make_rectangular(
 /// Uses Heap::make_polar. Always produces inexact results since trig functions are inexact.
 pub(super) fn make_polar(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {

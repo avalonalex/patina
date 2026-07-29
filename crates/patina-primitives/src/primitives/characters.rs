@@ -47,7 +47,7 @@ fn get_integer(
 /// (char=? char1 char2 ...) - Character equality
 pub(super) fn char_equal(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -69,7 +69,7 @@ pub(super) fn char_equal(
 }
 
 /// (char<? char1 char2 ...) - Character less than
-pub(super) fn char_lt(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_lt(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -90,7 +90,7 @@ pub(super) fn char_lt(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 }
 
 /// (char>? char1 char2 ...) - Character greater than
-pub(super) fn char_gt(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_gt(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -111,7 +111,7 @@ pub(super) fn char_gt(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 }
 
 /// (char<=? char1 char2 ...) - Character less than or equal
-pub(super) fn char_le(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_le(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -132,7 +132,7 @@ pub(super) fn char_le(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 }
 
 /// (char>=? char1 char2 ...) - Character greater than or equal
-pub(super) fn char_ge(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_ge(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -157,7 +157,7 @@ pub(super) fn char_ge(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 /// (char-ci=? char1 char2 ...) - Case-insensitive character equality
 pub(super) fn char_ci_equal(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -185,7 +185,7 @@ pub(super) fn char_ci_equal(
 /// (char-ci<? char1 char2 ...) - Case-insensitive character less than
 pub(super) fn char_ci_lt(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -213,7 +213,7 @@ pub(super) fn char_ci_lt(
 /// (char-ci>? char1 char2 ...) - Case-insensitive character greater than
 pub(super) fn char_ci_gt(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -241,7 +241,7 @@ pub(super) fn char_ci_gt(
 /// (char-ci<=? char1 char2 ...) - Case-insensitive character less than or equal
 pub(super) fn char_ci_le(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -269,7 +269,7 @@ pub(super) fn char_ci_le(
 /// (char-ci>=? char1 char2 ...) - Case-insensitive character greater than or equal
 pub(super) fn char_ci_ge(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -299,7 +299,7 @@ pub(super) fn char_ci_ge(
 /// (char-alphabetic? char) - Returns #t if char is alphabetic
 pub(super) fn char_alphabetic_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -315,7 +315,7 @@ pub(super) fn char_alphabetic_p(
 /// (char-numeric? char) - Returns #t if char is numeric
 pub(super) fn char_numeric_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -331,7 +331,7 @@ pub(super) fn char_numeric_p(
 /// (char-whitespace? char) - Returns #t if char is whitespace
 pub(super) fn char_whitespace_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -347,7 +347,7 @@ pub(super) fn char_whitespace_p(
 /// (char-upper-case? char) - Returns #t if char is uppercase
 pub(super) fn char_upper_case_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -364,7 +364,7 @@ pub(super) fn char_upper_case_p(
 /// (char-lower-case? char) - Returns #t if char is lowercase
 pub(super) fn char_lower_case_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -383,7 +383,7 @@ pub(super) fn char_lower_case_p(
 /// (char-upcase char) - Convert character to uppercase
 pub(super) fn char_upcase(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -403,7 +403,7 @@ pub(super) fn char_upcase(
 /// (char-downcase char) - Convert character to lowercase
 pub(super) fn char_downcase(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -426,7 +426,7 @@ pub(super) fn char_downcase(
 /// must return a single character. We use simple case folding here.
 pub(super) fn char_foldcase(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -452,7 +452,7 @@ pub(super) fn char_foldcase(
 /// (char->integer char) - Convert character to Unicode code point
 pub(super) fn char_to_integer(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -468,7 +468,7 @@ pub(super) fn char_to_integer(
 /// (integer->char n) - Convert Unicode code point to character
 pub(super) fn integer_to_char(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -507,7 +507,7 @@ pub(super) fn integer_to_char(
 /// each block contains 10 consecutive code points for 0-9.
 pub(super) fn digit_value(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {

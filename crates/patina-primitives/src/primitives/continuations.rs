@@ -59,7 +59,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 }
 
 /// Check if a value is a continuation
-fn continuation_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn continuation_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -73,7 +73,7 @@ fn continuation_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 /// Create a new continuation prompt tag
 fn make_continuation_prompt_tag(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     let name = if args.is_empty() {
         "prompt".to_string()
@@ -103,7 +103,7 @@ fn make_continuation_prompt_tag(
 /// Check if a value is a continuation prompt tag
 fn continuation_prompt_tag_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -123,7 +123,7 @@ fn continuation_prompt_tag_p(
 /// thread-local singleton. See DELIMITED_CONTINUATIONS_DESIGN.md.
 fn default_continuation_prompt_tag(
     heap: &SharedHeap,
-    _args: Vec<TaggedValue>,
+    _args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     Ok(heap
         .borrow_mut()

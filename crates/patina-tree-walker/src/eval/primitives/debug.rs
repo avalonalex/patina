@@ -30,7 +30,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 }
 
-fn library_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn library_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -40,7 +40,7 @@ fn library_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, E
     Ok(TaggedValue::boolean(heap.borrow().is_library(args[0])))
 }
 
-fn macro_debug_mode(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn macro_debug_mode(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),

@@ -14,7 +14,7 @@ use patina_runtime::{EvalError, SharedHeap};
 
 /// (display obj [port]) - Write obj in human-readable format
 /// Handles circular structures using datum labels (#n= and #n#)
-pub(super) fn display(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn display(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "display expects 1 or 2 arguments".to_string(),
@@ -24,7 +24,7 @@ pub(super) fn display(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 
     let port = {
         let heap_ref = heap.borrow();
-        get_output_port_tagged(&args, 1, &heap_ref)?
+        get_output_port_tagged(args, 1, &heap_ref)?
     };
     let output = format_display_tagged(args[0], heap);
 
@@ -36,7 +36,7 @@ pub(super) fn display(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 
 /// (write obj [port]) - Write obj in machine-readable format
 /// Handles circular structures using datum labels (#n= and #n#)
-pub(super) fn write(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn write(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "write expects 1 or 2 arguments".to_string(),
@@ -46,7 +46,7 @@ pub(super) fn write(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 
     let port = {
         let heap_ref = heap.borrow();
-        get_output_port_tagged(&args, 1, &heap_ref)?
+        get_output_port_tagged(args, 1, &heap_ref)?
     };
     let output = format_write_tagged(args[0], heap);
 
@@ -60,7 +60,7 @@ pub(super) fn write(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 /// Labels both circular and shared (multiply-referenced) structures
 pub(super) fn write_shared(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -71,7 +71,7 @@ pub(super) fn write_shared(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_output_port_tagged(&args, 1, &heap_ref)?
+        get_output_port_tagged(args, 1, &heap_ref)?
     };
     let output = format_write_shared_tagged(args[0], heap);
 
@@ -85,7 +85,7 @@ pub(super) fn write_shared(
 /// Does not handle circular structures (may loop infinitely)
 pub(super) fn write_simple(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -96,7 +96,7 @@ pub(super) fn write_simple(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_output_port_tagged(&args, 1, &heap_ref)?
+        get_output_port_tagged(args, 1, &heap_ref)?
     };
     let output = format_write_simple_tagged(args[0], heap);
 
@@ -107,7 +107,7 @@ pub(super) fn write_simple(
 }
 
 /// (newline [port]) - Write a newline character
-pub(super) fn newline(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn newline(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
             expected: "newline expects 0 or 1 arguments".to_string(),
@@ -117,7 +117,7 @@ pub(super) fn newline(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 
     let port = {
         let heap_ref = heap.borrow();
-        get_output_port_tagged(&args, 0, &heap_ref)?
+        get_output_port_tagged(args, 0, &heap_ref)?
     };
     port.write_string("\n")
         .map_err(|e| EvalError::IOError(e.to_string()))?;
@@ -128,7 +128,7 @@ pub(super) fn newline(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 /// (write-char char [port]) - Write a single character
 pub(super) fn write_char(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -148,7 +148,7 @@ pub(super) fn write_char(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_output_port_tagged(&args, 1, &heap_ref)?
+        get_output_port_tagged(args, 1, &heap_ref)?
     };
     port.write_char(ch)
         .map_err(|e| EvalError::IOError(e.to_string()))?;
@@ -159,7 +159,7 @@ pub(super) fn write_char(
 /// (write-string string [port [start [end]]]) - Write a string
 pub(super) fn write_string(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 4 {
         return Err(EvalError::WrongArity {
@@ -184,7 +184,7 @@ pub(super) fn write_string(
     // Extract port
     let port = {
         let heap_ref = heap.borrow();
-        get_output_port_tagged(&args, 1, &heap_ref)?
+        get_output_port_tagged(args, 1, &heap_ref)?
     };
 
     // Handle optional start/end indices

@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 /// (read [port]) - Read a Scheme expression from an input port
 /// Returns the parsed value, or eof-object if at end of input
-pub(super) fn read(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
             expected: "read expects 0 or 1 arguments".to_string(),
@@ -25,7 +25,7 @@ pub(super) fn read(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVa
     // Extract port from tagged args or use current-input-port
     let port = {
         let heap_ref = heap.borrow();
-        get_input_port_tagged(&args, 0, &heap_ref)?
+        get_input_port_tagged(args, 0, &heap_ref)?
     };
 
     // Determine what kind of port we have and get content if applicable

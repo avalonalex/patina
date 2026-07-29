@@ -83,6 +83,6 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "make-parameter",
         Arity::Range(1, 2),
         "Returns a new parameter initialized to init. If a conversion procedure converter is specified, it is called with init and the result becomes the current value of the parameter.",
-        |ctx, args| make_parameter(ctx, args),
+        make_parameter,
     ));
 }

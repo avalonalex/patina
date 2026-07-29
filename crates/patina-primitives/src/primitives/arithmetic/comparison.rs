@@ -20,7 +20,7 @@ use patina_runtime::SharedHeap;
 /// Fast path: If all arguments are fixnums, compares directly.
 pub(super) fn numeric_equal(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -59,10 +59,7 @@ pub(super) fn numeric_equal(
 /// Returns #t if arguments are monotonically increasing.
 ///
 /// Fast path: If all arguments are fixnums, compares directly.
-pub(super) fn less_than(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn less_than(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -101,7 +98,7 @@ pub(super) fn less_than(
 /// Fast path: If all arguments are fixnums, compares directly.
 pub(super) fn greater_than(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -141,7 +138,7 @@ pub(super) fn greater_than(
 /// Fast path: If all arguments are fixnums, compares directly.
 pub(super) fn less_equal(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
@@ -181,7 +178,7 @@ pub(super) fn less_equal(
 /// Fast path: If all arguments are fixnums, compares directly.
 pub(super) fn greater_equal(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {

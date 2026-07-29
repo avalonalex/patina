@@ -12,7 +12,7 @@ use patina_runtime::SharedHeap;
 
 // ========== Equality Primitives ==========
 
-pub(super) fn eq(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn eq(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -24,7 +24,7 @@ pub(super) fn eq(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValu
     ))
 }
 
-pub(super) fn eqv(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn eqv(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -36,7 +36,7 @@ pub(super) fn eqv(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
     ))
 }
 
-pub(super) fn equal(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn equal(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -50,7 +50,7 @@ pub(super) fn equal(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 
 pub(super) fn equal_hash(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {

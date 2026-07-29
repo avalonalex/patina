@@ -21,17 +21,17 @@ use patina_runtime::SharedHeap;
 
 /// (gcd n1 n2 ...) - Greatest common divisor
 /// Uses Heap::gcd_many with built-in fixnum fast path.
-pub(super) fn gcd(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn gcd(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     heap.borrow_mut()
-        .gcd_many(&args)
+        .gcd_many(args)
         .map_err(|e| numeric_err(e, "gcd"))
 }
 
 /// (lcm n1 n2 ...) - Least common multiple
 /// Uses Heap::lcm_many with built-in fixnum fast path.
-pub(super) fn lcm(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn lcm(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     heap.borrow_mut()
-        .lcm_many(&args)
+        .lcm_many(args)
         .map_err(|e| numeric_err(e, "lcm"))
 }
 
@@ -39,10 +39,7 @@ pub(super) fn lcm(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 
 /// (numerator q) - Returns the numerator of rational q
 /// Uses Heap::numerator with built-in fixnum fast path.
-pub(super) fn numerator(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn numerator(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -58,7 +55,7 @@ pub(super) fn numerator(
 /// Uses Heap::denominator with built-in fixnum fast path.
 pub(super) fn denominator(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -75,7 +72,7 @@ pub(super) fn denominator(
 
 /// (exact z) - Convert to exact representation (inexact->exact)
 /// Uses Heap::to_exact with built-in fixnum fast path.
-pub(super) fn exact(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn exact(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -89,7 +86,7 @@ pub(super) fn exact(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 
 /// (inexact z) - Convert to inexact representation (exact->inexact)
 /// Uses Heap::to_inexact with built-in fixnum fast path.
-pub(super) fn inexact(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn inexact(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -105,7 +102,7 @@ pub(super) fn inexact(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 /// This is the integer square root with remainder
 pub(super) fn exact_integer_sqrt(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -182,7 +179,7 @@ pub(super) fn exact_integer_sqrt(
 /// R7RS: If x is inexact, the result is inexact. If x is exact, the result is exact.
 pub(super) fn rationalize(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {

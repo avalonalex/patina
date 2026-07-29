@@ -654,7 +654,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         "environment",
         Arity::Min(0),
         "Creates an immutable environment from the given import sets.",
-        |ctx, args| primitive_environment(ctx, args),
+        primitive_environment,
     ));
 
     // eval - evaluate expression in environment
@@ -663,7 +663,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         "eval",
         Arity::Exact(2),
         "Evaluates an expression in the specified environment.",
-        |ctx, args| primitive_eval(ctx, args),
+        primitive_eval,
     ));
 
     // null-environment - R5RS environment with only syntactic keywords
@@ -672,7 +672,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         "null-environment",
         Arity::Exact(1),
         "Returns an environment with only the R5RS syntactic keywords.",
-        |ctx, args| primitive_null_environment(ctx, args),
+        primitive_null_environment,
     ));
 
     // scheme-report-environment - R5RS environment with all bindings
@@ -681,7 +681,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         "scheme-report-environment",
         Arity::Exact(1),
         "Returns an environment with all R5RS bindings.",
-        |ctx, args| primitive_scheme_report_environment(ctx, args),
+        primitive_scheme_report_environment,
     ));
 
     // load - read and evaluate a file (scheme load library)
@@ -690,7 +690,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         "load",
         Arity::Range(1, 2),
         "Reads and evaluates all expressions from a file.",
-        |ctx, args| primitive_load(ctx, args),
+        primitive_load,
     ));
 
     // interaction-environment - return the REPL/global environment (scheme repl library)
@@ -699,6 +699,6 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         "interaction-environment",
         Arity::Exact(0),
         "Returns the interaction environment.",
-        |ctx, args| primitive_interaction_environment(ctx, args),
+        primitive_interaction_environment,
     ));
 }

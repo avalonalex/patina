@@ -59,7 +59,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 /// Return the command line arguments as a list of strings.
 ///
 /// The first element is the program name (implementation-dependent).
-fn command_line(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn command_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -85,7 +85,7 @@ fn command_line(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue
 /// - No argument or #t: exit with success (0)
 /// - #f: exit with failure (1)
 /// - Integer: exit with that code
-fn exit_proc(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn exit_proc(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     let code = if args.is_empty() {
         0 // Success
     } else {
@@ -99,7 +99,7 @@ fn exit_proc(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, 
 /// Exit immediately without running handlers.
 ///
 /// This corresponds to _exit() in POSIX.
-fn emergency_exit(_heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn emergency_exit(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     let code = if args.is_empty() {
         0 // Success
     } else {
@@ -129,7 +129,7 @@ fn exit_code_from_arg(arg: TaggedValue) -> Result<i32, EvalError> {
 /// Returns #f if the variable is not set.
 fn get_environment_variable(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -161,7 +161,7 @@ fn get_environment_variable(
 /// Each entry is (name . value) where both are strings.
 fn get_environment_variables(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {

@@ -67,7 +67,7 @@ fn get_binary_output_port_tagged(
 }
 
 /// (read-u8 [port]) - Read a single byte from a binary input port
-pub(super) fn read_u8(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn read_u8(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
             expected: "read-u8 expects 0 or 1 arguments".to_string(),
@@ -77,7 +77,7 @@ pub(super) fn read_u8(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 
     let port = {
         let heap_ref = heap.borrow();
-        get_binary_input_port_tagged(&args, 0, &heap_ref)?
+        get_binary_input_port_tagged(args, 0, &heap_ref)?
     };
     match port.read_u8() {
         Ok(Some(byte)) => Ok(TaggedValue::fixnum(byte as i64)),
@@ -87,7 +87,7 @@ pub(super) fn read_u8(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 }
 
 /// (peek-u8 [port]) - Peek at next byte without consuming it
-pub(super) fn peek_u8(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn peek_u8(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
             expected: "peek-u8 expects 0 or 1 arguments".to_string(),
@@ -97,7 +97,7 @@ pub(super) fn peek_u8(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 
     let port = {
         let heap_ref = heap.borrow();
-        get_binary_input_port_tagged(&args, 0, &heap_ref)?
+        get_binary_input_port_tagged(args, 0, &heap_ref)?
     };
     match port.peek_u8() {
         Ok(Some(byte)) => Ok(TaggedValue::fixnum(byte as i64)),
@@ -109,7 +109,7 @@ pub(super) fn peek_u8(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 /// (u8-ready? [port]) - Check if a byte is ready to be read
 pub(super) fn u8_ready_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
@@ -120,7 +120,7 @@ pub(super) fn u8_ready_p(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_binary_input_port_tagged(&args, 0, &heap_ref)?
+        get_binary_input_port_tagged(args, 0, &heap_ref)?
     };
     match port.u8_ready() {
         Ok(ready) => Ok(TaggedValue::boolean(ready)),
@@ -129,10 +129,7 @@ pub(super) fn u8_ready_p(
 }
 
 /// (write-u8 byte [port]) - Write a byte to a binary output port
-pub(super) fn write_u8(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn write_u8(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "write-u8 expects 1 or 2 arguments".to_string(),
@@ -158,7 +155,7 @@ pub(super) fn write_u8(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_binary_output_port_tagged(&args, 1, &heap_ref)?
+        get_binary_output_port_tagged(args, 1, &heap_ref)?
     };
     match port.write_u8(byte) {
         Ok(()) => Ok(TaggedValue::UNSPECIFIED),
@@ -169,7 +166,7 @@ pub(super) fn write_u8(
 /// (read-bytevector k [port]) - Read up to k bytes from a binary input port
 pub(super) fn read_bytevector(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -195,7 +192,7 @@ pub(super) fn read_bytevector(
 
     let port = {
         let heap_ref = heap.borrow();
-        get_binary_input_port_tagged(&args, 1, &heap_ref)?
+        get_binary_input_port_tagged(args, 1, &heap_ref)?
     };
     match port.read_bytevector(k) {
         Ok(Some(bytes)) => Ok(heap.borrow_mut().alloc_bytevector(bytes)),
@@ -207,7 +204,7 @@ pub(super) fn read_bytevector(
 /// (read-bytevector! bytevector [port [start [end]]]) - Read into existing bytevector
 pub(super) fn read_bytevector_bang(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 4 {
         return Err(EvalError::WrongArity {
@@ -301,7 +298,7 @@ fn get_fixnum_index(tv: TaggedValue, fn_name: &str, max: usize) -> Result<usize,
 /// (write-bytevector bytevector [port [start [end]]]) - Write bytevector to port
 pub(super) fn write_bytevector(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.is_empty() || args.len() > 4 {
         return Err(EvalError::WrongArity {

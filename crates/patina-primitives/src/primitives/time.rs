@@ -58,7 +58,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 /// "returning Coordinated Universal Time plus a suitable constant might be
 /// the best an implementation can do" - so we return UTC which is standard
 /// for system time.
-fn current_second(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn current_second(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -80,7 +80,7 @@ fn current_second(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 /// A jiffy is an implementation-defined fraction of a second.
 /// We use microseconds (1,000,000 jiffies per second) which provides
 /// good resolution while fitting in a compact integer for most durations.
-fn current_jiffy(args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn current_jiffy(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -99,7 +99,7 @@ fn current_jiffy(args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
 /// This is an implementation-specified constant. We use 1,000,000
 /// (microsecond resolution) which is a good balance between precision
 /// and compact integer representation.
-fn jiffies_per_second(args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn jiffies_per_second(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),

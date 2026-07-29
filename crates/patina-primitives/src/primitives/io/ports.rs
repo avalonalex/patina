@@ -120,7 +120,7 @@ pub(super) fn get_input_port_tagged(
 // =============================================================================
 
 /// (port? obj) - Returns #t if obj is a port
-pub(super) fn port_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn port_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "port? expects 1 argument".to_string(),
@@ -136,7 +136,7 @@ pub(super) fn port_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagged
 /// (input-port? obj) - Returns #t if obj is an input port
 pub(super) fn input_port_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -154,7 +154,7 @@ pub(super) fn input_port_p(
 /// (output-port? obj) - Returns #t if obj is an output port
 pub(super) fn output_port_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -172,7 +172,7 @@ pub(super) fn output_port_p(
 /// (textual-port? obj) - Returns #t if obj is a textual port
 pub(super) fn textual_port_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -190,7 +190,7 @@ pub(super) fn textual_port_p(
 /// (binary-port? obj) - Returns #t if obj is a binary port
 pub(super) fn binary_port_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -208,7 +208,7 @@ pub(super) fn binary_port_p(
 /// (input-port-open? port) - Returns #t if port is open for input
 pub(super) fn input_port_open_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -235,7 +235,7 @@ pub(super) fn input_port_open_p(
 /// (output-port-open? port) - Returns #t if port is open for output
 pub(super) fn output_port_open_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -266,7 +266,7 @@ pub(super) fn output_port_open_p(
 /// (open-input-string string) - Create an input port from a string
 pub(super) fn open_input_string(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -291,7 +291,7 @@ pub(super) fn open_input_string(
 /// (open-output-string) - Create an output port that accumulates to a string
 pub(super) fn open_output_string(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
@@ -305,7 +305,7 @@ pub(super) fn open_output_string(
 /// (get-output-string port) - Get the accumulated string from an output string port
 pub(super) fn get_output_string(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -335,7 +335,7 @@ pub(super) fn get_output_string(
 /// (open-input-bytevector bytevector) - Create an input port from a bytevector
 pub(super) fn open_input_bytevector(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -360,7 +360,7 @@ pub(super) fn open_input_bytevector(
 /// (open-output-bytevector) - Create an output port that accumulates to a bytevector
 pub(super) fn open_output_bytevector(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
@@ -374,7 +374,7 @@ pub(super) fn open_output_bytevector(
 /// (get-output-bytevector port) - Get the accumulated bytevector from an output bytevector port
 pub(super) fn get_output_bytevector(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -404,7 +404,7 @@ pub(super) fn get_output_bytevector(
 /// (current-input-port) - Returns the current input port
 pub(super) fn current_input_port(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
@@ -418,7 +418,7 @@ pub(super) fn current_input_port(
 /// (current-output-port) - Returns the current output port
 pub(super) fn current_output_port(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
@@ -432,7 +432,7 @@ pub(super) fn current_output_port(
 /// (current-error-port) - Returns the current error port
 pub(super) fn current_error_port(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
@@ -450,7 +450,7 @@ pub(super) fn current_error_port(
 /// (close-port port) - Close a port
 pub(super) fn close_port(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -473,7 +473,7 @@ pub(super) fn close_port(
 /// (close-input-port port) - Close an input port
 pub(super) fn close_input_port(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -501,7 +501,7 @@ pub(super) fn close_input_port(
 /// (close-output-port port) - Close an output port
 pub(super) fn close_output_port(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -533,7 +533,7 @@ pub(super) fn close_output_port(
 /// (eof-object? obj) - Returns #t if obj is the EOF object
 pub(super) fn eof_object_p(
     _heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -548,7 +548,7 @@ pub(super) fn eof_object_p(
 /// (eof-object) - Returns an EOF object
 pub(super) fn eof_object(
     _heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
@@ -562,7 +562,7 @@ pub(super) fn eof_object(
 /// (flush-output-port [port]) - Flushes the output port
 pub(super) fn flush_output_port(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {

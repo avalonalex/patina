@@ -10,10 +10,7 @@ use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
 
 /// (finite? x) - Returns #t if x is finite
-pub(super) fn finite_p(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn finite_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -34,7 +31,7 @@ pub(super) fn finite_p(
 /// (infinite? x) - Returns #t if x is infinite
 pub(super) fn infinite_p(
     heap: &SharedHeap,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -54,7 +51,7 @@ pub(super) fn infinite_p(
 }
 
 /// (nan? x) - Returns #t if x is NaN
-pub(super) fn nan_p(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn nan_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),

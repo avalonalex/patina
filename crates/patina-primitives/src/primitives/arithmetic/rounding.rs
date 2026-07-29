@@ -13,7 +13,7 @@ use patina_runtime::SharedHeap;
 
 /// (floor x) - Rounds x toward negative infinity
 /// Uses Heap::numeric_floor with built-in fixnum fast path.
-pub(super) fn floor(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn floor(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -27,7 +27,7 @@ pub(super) fn floor(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 
 /// (ceiling x) - Rounds x toward positive infinity
 /// Uses Heap::numeric_ceiling with built-in fixnum fast path.
-pub(super) fn ceiling(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn ceiling(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -41,10 +41,7 @@ pub(super) fn ceiling(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<Tagge
 
 /// (truncate x) - Rounds x toward zero
 /// Uses Heap::numeric_truncate with built-in fixnum fast path.
-pub(super) fn truncate(
-    heap: &SharedHeap,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn truncate(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -58,7 +55,7 @@ pub(super) fn truncate(
 
 /// (round x) - Rounds x to nearest integer (banker's rounding: ties round to even)
 /// Uses Heap::numeric_round with built-in fixnum fast path.
-pub(super) fn round(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn round(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -72,7 +69,7 @@ pub(super) fn round(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 
 /// (abs x) - Absolute value
 /// Uses Heap::numeric_abs with built-in fixnum fast path.
-pub(super) fn abs(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn abs(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -86,7 +83,7 @@ pub(super) fn abs(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 
 /// (max x1 x2 ...) - Maximum of arguments
 /// Uses Heap::numeric_max with built-in fixnum fast path.
-pub(super) fn max(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn max(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),
@@ -117,7 +114,7 @@ pub(super) fn max(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedVal
 
 /// (min x1 x2 ...) - Minimum of arguments
 /// Uses Heap::numeric_min with built-in fixnum fast path.
-pub(super) fn min(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+pub(super) fn min(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),

@@ -5,12 +5,16 @@ use patina_runtime::{Arity, EvalError, SharedHeap, TaggedValue};
 use std::cell::Cell;
 use std::collections::HashMap;
 
-/// Handler for heap-only primitives (~290 primitives)
-/// These only need the heap for allocation/inspection
-pub type TaggedHandler = fn(&SharedHeap, Vec<TaggedValue>) -> Result<TaggedValue, EvalError>;
+/// Handler for heap-only primitives (~260 primitives)
+/// These only need the heap for allocation/inspection. Arguments are borrowed:
+/// heap handlers never re-enter the evaluator, so the slice can safely point at
+/// caller-owned storage (eventually the VM register file itself).
+pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, EvalError>;
 
-/// Handler for higher-order primitives (~8 primitives)
-/// These need to call back into the evaluator
+/// Handler for higher-order primitives (~25 primitives)
+/// These need ApplyContext to call back into the evaluator (or reach the
+/// filesystem). They take an owned Vec: re-entering the VM may reallocate the
+/// register file, which would invalidate a borrowed argument slice.
 pub type HOTaggedHandler =
     fn(&dyn ApplyContext, Vec<TaggedValue>) -> Result<TaggedValue, EvalError>;
 
@@ -208,7 +212,7 @@ impl PrimitiveRegistry {
     pub fn apply_by_index(
         &self,
         index: usize,
-        args: Vec<TaggedValue>,
+        args: &[TaggedValue],
         ctx: &dyn ApplyContext,
     ) -> Result<TaggedValue, EvalError> {
         let primitive = self.entries.get(index).ok_or_else(|| {
@@ -217,7 +221,7 @@ impl PrimitiveRegistry {
         primitive.check_arity(args.len())?;
         match &primitive.handler {
             PrimitiveHandler::Heap(h) => h(ctx.heap(), args),
-            PrimitiveHandler::HigherOrder(h) => h(ctx, args),
+            PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()),
         }
     }
 
@@ -228,7 +232,7 @@ impl PrimitiveRegistry {
         &self,
         qualified_name: &str,
         index_cache: &Cell<Option<usize>>,
-        args: Vec<TaggedValue>,
+        args: &[TaggedValue],
         ctx: &dyn ApplyContext,
     ) -> Result<TaggedValue, EvalError> {
         let index = match index_cache.get() {
@@ -261,7 +265,7 @@ impl PrimitiveRegistry {
     pub fn apply_tagged(
         &self,
         qualified_name: &str,
-        args: Vec<TaggedValue>,
+        args: &[TaggedValue],
         ctx: &dyn ApplyContext,
     ) -> Result<TaggedValue, EvalError> {
         let index = self

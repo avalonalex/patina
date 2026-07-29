@@ -875,7 +875,7 @@ fn dispatch_one_instruction(
                     return Ok(Some(escaped));
                 }
             } else if let Some(prim) = primitive_procedure(state, func_val) {
-                let result = call_primitive_proc(state, &prim, arg_vals);
+                let result = call_primitive_proc(state, &prim, &arg_vals);
                 state.set_reg(dst, result?);
             } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
                 state.set_reg(dst, result?);
@@ -960,7 +960,7 @@ fn dispatch_one_instruction(
             // Primitives in tail position: call them, write result to current
             // frame's return_reg, then simulate a Return.
             if let Some(prim) = primitive_procedure(state, func_val) {
-                let result = call_primitive_proc(state, &prim, arg_vals)?;
+                let result = call_primitive_proc(state, &prim, &arg_vals)?;
                 let frame = state.frames.pop().expect("TailCall with empty stack");
                 if state.frames.len() == exit_depth {
                     state.free_top_registers(frame.register_base);
@@ -1058,7 +1058,7 @@ fn dispatch_one_instruction(
                 })?;
             arg_vals.extend(spread);
             if let Some(prim) = primitive_procedure(state, func_val) {
-                let result = call_primitive_proc(state, &prim, arg_vals);
+                let result = call_primitive_proc(state, &prim, &arg_vals);
                 state.set_reg(dst, result?);
             } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
                 state.set_reg(dst, result?);
@@ -1084,7 +1084,7 @@ fn dispatch_one_instruction(
             arg_vals.extend(spread);
 
             if let Some(prim) = primitive_procedure(state, func_val) {
-                let result = call_primitive_proc(state, &prim, arg_vals)?;
+                let result = call_primitive_proc(state, &prim, &arg_vals)?;
                 let frame = state.frames.pop().expect("TailApply with empty stack");
                 if state.frames.len() == exit_depth {
                     state.free_top_registers(frame.register_base);
@@ -1547,7 +1547,7 @@ fn call_any(
 ) -> Result<Option<TaggedValue>, VmError> {
     // Try as primitive first
     if let Some(prim) = primitive_procedure(state, func_val) {
-        return Ok(Some(call_primitive_proc(state, &prim, args.to_vec())?));
+        return Ok(Some(call_primitive_proc(state, &prim, args)?));
     }
     // Try as parameter
     if let Some(result) = try_call_parameter(state, func_val, args) {
@@ -1607,7 +1607,7 @@ fn call_any_sync(
 ) -> Result<TaggedValue, VmError> {
     // Try as primitive first
     if let Some(prim) = primitive_procedure(state, func_val) {
-        return call_primitive_proc(state, &prim, args.to_vec());
+        return call_primitive_proc(state, &prim, args);
     }
     // Must be a VM closure — use run_thunk-style execution.
     // Use a return_reg beyond the caller's window to avoid clobbering live regs.
@@ -2470,12 +2470,13 @@ fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Proc
     matches!(proc.as_ref(), Procedure::Primitive { .. }).then_some(proc)
 }
 
-/// Call a primitive procedure (as returned by `primitive_procedure`),
-/// consuming the argument vector.
+/// Call a primitive procedure (as returned by `primitive_procedure`).
+/// Arguments are borrowed: heap-tier handlers read them in place; only the
+/// higher-order tier copies them into an owned Vec at the registry boundary.
 fn call_primitive_proc(
     state: &mut VmState,
     proc: &Procedure,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
 ) -> Result<TaggedValue, VmError> {
     let Procedure::Primitive {
         qualified_name,

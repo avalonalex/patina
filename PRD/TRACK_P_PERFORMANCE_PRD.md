@@ -1,7 +1,7 @@
 # Track P — VM Performance (Clarity-Safe) PRD
 
 **Created:** 2026-06-20
-**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1.
+**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave: P0 (#154), P1.1 (#155), P7 phase 1 (#157) landed 2026-07-26/29.
 **Scope decision:** clarity-safe optimizations only — aggressive, readability-costing items are explicitly deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing) · **Catalog:** `PRD/VM_OPTIMIZATION_ROADMAP.md` (P1–P10 superset)
 
@@ -34,6 +34,9 @@ Executed profile-first (macOS `sample`/`samply` on `fib(34)` and `destruc`) rath
 | #150 | `try_call_primitive` split into `primitive_procedure` (type check) + `call_primitive_proc` (consumes args by move); all four defensive `arg_vals.clone()` sites and two unconditional `to_vec()` sites removed | **P1.2 as specified** | fib −6.5%, destruc −12% |
 | #151 | `Environment` binding maps → `rustc-hash::FxHashMap` | **P4, first slice** (cheap-hash; slot indices still open) | fib −4.7%; others −3–5% |
 | #152 | `CallFrame` caches its `Rc<CodeObject>`; dispatch borrows instructions (`match *instr` + `ref`) instead of cloning; `code_store` → FxHashMap | **Not in plan** — profiling found the dispatch loop paid a SipHash lookup + `Rc` churn + an `Instruction::clone` (heap-allocating `Vec<Reg>` for call-shaped ops) **per instruction executed** | fib −40%, destruc −38%, compiler −40%, matrix −36%, maze −30% |
+| #154 | Criterion harness benchmarks the VM by default (`PATINA_BENCH_BACKEND=tree-walker` for cross-checks); baseline table committed; nboyer/sboyer vendored | **P0 as specified** | baseline committed |
+| #155 | `resolve_closure` reads `code_id` via new `Heap::get_vm_closure_code_id` — no free-var `Vec` clone | **P1.1 as specified** | small; closes P1 |
+| #157 | Heap-tier handlers take `&[TaggedValue]`; **70 misfiled higher-order handlers reclassified to heap tier**; registration closures → direct fn refs; `call_any`/`call_any_sync` arg copies deleted | **P7 phase 1 as specified** — plus the reclassification the tier split implied (see §P7 findings) | map −6.8%, append −5.4%, fill −5.4%, reverse −6.9%, vectors/sum −11.5%, factorial −4–8%, float_sum −7.9%; fib/tak ±1–2% (layout-scale) |
 
 **Cumulative:** fib(32) 5.68s → 2.37s (**2.4×**); quick r7rs-benchmarks set ~2–2.7× across the board. Standing vs Chibi (same machine): `browse` 2.5× *faster*, `quicksort` 3.6× behind (was 8×), `destruc` 8× behind (was 16×). Full-workload harness runs (validated-correct results, 300s CPU cap): **`compiler` 177.7s, `maze` 150.4s, `matrix` 270.0s — all three now complete under the cap** (all were cap-outs before this wave; `compiler`/`maze`/`matrix` couldn't even *parse* before the #146/#147 lexer fixes). `parsing` still caps out — it is frontend-bound (lexer/parser), not VM-bound.
 
@@ -44,7 +47,9 @@ Executed profile-first (macOS `sample`/`samply` on `fib(34)` and `destruc`) rath
 
 **Also relevant:** patina is wired into the ecraven r7rs-benchmarks harness (`~/Project/r7rs-benchmarks`, local changes: `bench` script `patina` entry + `src/Patina-postlude.scm`; run `PATINA=<path> ./bench patina all`). This currently serves as the perf baseline in place of P0's Criterion repoint, which remains open.
 
-**Next candidates, profile-ranked:** slice-based primitive handler ABI (`&[TaggedValue]`) to remove the last per-call collect (~300 signatures, mechanical); P1.1 `free_vars` clone in `resolve_closure` (visible in profiles via `get_vm_closure`); register-window zeroing (`memset_pattern16` in profile) in `alloc_registers`; then P3 inline opcodes. `parsing` needs frontend work outside this track.
+**Next candidates, profile-ranked:** P2 compile-time `CallPrimitive` wiring + **P3 inline opcodes** (the big remaining win; also takes fib/tak off the layout-sensitive generic call path — see §P7 findings); P7 phase 2 (VM `Call` arm passes the register slice directly to heap-tier handlers, deleting the per-call collect); register-window zeroing (`memset_pattern16` in profile) after P3. `parsing` needs frontend work outside this track.
+
+**Measurement discipline (learned in #157):** single Criterion runs drift ±5–10% on the µs-scale benches on the dev machine — enough to flag phantom regressions. Validate perf changes with an interleaved A/B: bench main with `--save-baseline`, bench the branch against it, then re-bench main against its own baseline to measure drift; cross-check with alternating wall-clock runs of the two release binaries.
 
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
@@ -59,12 +64,12 @@ Flat `Vec<u32>` bytecode encoding, threaded dispatch, liveness-based register al
 
 ## 4. Work items
 
-### P0 — Repoint benchmarks at the VM + baseline  *(blocking; gates all perf claims)*
+### P0 — Repoint benchmarks at the VM + baseline  *(done — PR #154)*
 The Criterion harness benchmarks the tree-walker. Parameterize `scheme_benchmarks.rs` (or add a sibling) to construct the VM backend, and check in a baseline for tak/fib/ack/nqueens/deriv/primes + list/vector/numeric programs (`crates/patina-tests/bench_programs/*.scm`). Keep `scripts/bench_compare.sh` (wall-clock VM-vs-tree-walker via `(current-jiffy)`) as a cross-check.
 - **Acceptance:** `cargo bench -p patina-tests` exercises the VM; baseline numbers committed.
 
-### P1 — Near-free clone removals  *(1 of 2 done)*
-1. **`free_vars` clone.** *(Open — visible in profiles as `get_vm_closure` allocation under `resolve_closure`.)* Add `Heap::get_vm_closure_code_id(val) -> Option<u32>` reading only `code_id` (no `Vec` clone). Change `resolve_closure` to use it; `call_closure` already discards the vec. Slot reads stay via `get_vm_closure_free_var`.
+### P1 — Near-free clone removals  *(done — PRs #150, #155)*
+1. ~~**`free_vars` clone.**~~ **Done — PR #155** (`Heap::get_vm_closure_code_id` reads only `code_id`; `resolve_closure` uses it; slot reads stay via `get_vm_closure_free_var`).
 2. ~~**`arg_vals.clone()`**~~ **Done — PR #150** (as `primitive_procedure` + `call_primitive_proc` check-then-move split; same effect as the planned `&[TaggedValue]` signature).
 - **Acceptance:** `cargo test` green; closure/tail tests (`tail_recursion.rs`, `cps_features.rs`) unchanged.
 
@@ -106,7 +111,12 @@ Stop-the-world **mark-and-sweep** over the typed arenas, gated behind a `gc` Car
 - **Tree-walker coexistence:** the same `SharedHeap` backs both backends; GC runs **only from the VM driver at a safe point**, never mid tree-walk. Feature flag keeps default/mixed builds unaffected. Reclaiming an object slot drops its `Rc` payload naturally.
 - **Acceptance:** two CI lanes — `--no-default-features` (must equal today) and `--features gc`; a `--gc-stress` mode (threshold=1) runs the full compliance suite to identical output; liveness stress (sum `(iota 100000)`), reuse proof (arena doesn't grow by 2N), cycle test (`set-cdr!` loop), paranoid pre-sweep assertion in debug builds.
 
-### P7 — Slice-based primitive handler ABI  *(specified 2026-07-26 after the wave-1 profiles; not started)*
+### P7 — Slice-based primitive handler ABI  *(phase 1 done — PR #157, 2026-07-29; phase 2 open)*
+
+**Findings from phase 1 (#157):**
+- The tier counts in the spec below were wrong: the registry actually held **188 heap / 94 higher-order** registrations, because ~70 heap-only handlers (`cons`, `car`, `cdr`, `list`, most string/vector ops, exceptions) were misfiled as higher-order during the tree-walker extraction — using `ctx` only as `ctx.heap()`. #157 reclassified them; ~24 genuinely re-entrant or `fs()`-dependent handlers remain HO. Without the reclassification, the HO-boundary `to_vec()` would have regressed the hottest list paths.
+- Measured (interleaved A/B vs main): map −6.8%, append −5.4%, vector-fill −5.4%, reverse −6.9%, vectors/sum −11.5%, factorial −4–8%, float_sum −7.9%, dynamic-wind nested −17.6%. fib/tak sit at ±1–2%: profiles show the primitive-call machinery itself got *cheaper* (`call_primitive_proc` 911→560 samples on identical fib workloads) with the delta absorbed by dispatch-loop codegen layout; P3 removes fib/tak from this path entirely.
+- Bonus deletions: `call_any`/`call_any_sync` (primitive-from-primitive path) each paid an `args.to_vec()` purely for the old ABI — gone.
 
 Eliminate the last per-primitive-call allocation: the register→`Vec<TaggedValue>` collect that every call still pays. Profiles show it as malloc/free attributed *under the callees* (`less_than`, `apply_by_index`, …) — the callee frame drops the argument vector the caller allocated. This is also why "why does `less_than` allocate?" was a false lead: the comparison itself has a clean no-allocation fixnum fast path.
 

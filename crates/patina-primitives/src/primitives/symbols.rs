@@ -42,7 +42,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 ///
 /// Returns #t if all arguments are symbols and all have the same names
 /// in the sense of string=?.
-fn symbol_equal(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn symbol_equal(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -88,7 +88,7 @@ fn symbol_equal(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue
 /// Returns the name of the symbol as a string, but without adding escapes.
 /// Note: R7RS says it's an error to mutate the returned string, but we
 /// return a regular mutable string for simplicity (as most Schemes do).
-fn symbol_to_string(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn symbol_to_string(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -118,7 +118,7 @@ fn symbol_to_string(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedV
 /// Returns the symbol whose name is the given string. This procedure can
 /// create symbols with names containing special characters that would
 /// require escaping when written, but does not interpret escapes in its input.
-fn string_to_symbol(heap: &SharedHeap, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn string_to_symbol(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
