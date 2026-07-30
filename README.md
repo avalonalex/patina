@@ -7,6 +7,30 @@
 
 ---
 
+## ⚠️ An experiment in agent-driven development
+
+**This repository is, very deliberately, an experiment in building software
+with AI coding agents.** The overwhelming majority of its code, tests,
+documentation, and planning documents were written by an AI agent (Claude
+Code) working under human direction: the human sets the goals, reviews the
+designs and diffs, merges every PR, and owns every decision — the agent does
+the reading, writing, debugging, benchmarking, and bookkeeping. The history
+is honest about this: nearly every commit carries a `Co-Authored-By: Claude`
+trailer, and the `PRD/` directory contains the actual working documents the
+human–agent pair planned with, warts and all.
+
+Two consequences worth stating plainly:
+
+- **Read it as an experiment.** It is a probe of what agent-driven
+  development can produce on a substantial project (an interpreter with a
+  bytecode VM, hygienic macros, and a full numeric tower) — not a hardened
+  production Scheme.
+- **It is tested like it matters anyway.** 1163/1163 of the chibi-scheme
+  R7RS suite on both backends, ~1,400 integration tests, and differential
+  testing between the two backends gate every change.
+
+---
+
 ## Philosophy
 
 Patina is an educational and experimental Scheme interpreter with ambitious goals:
@@ -31,7 +55,8 @@ Different pipelines can compose phases differently (e.g., adding optimization pa
 **Backend** - Handles evaluation of parsed expressions:
 ```rust
 trait Backend {
-    fn eval(&self, expr: &Value, env: &Rc<Environment>) -> Result<Value, Error>;
+    fn eval(&self, expr: TaggedValue, env: &Rc<Environment>)
+        -> Result<TaggedValue, Self::Error>;
 }
 ```
 
@@ -59,6 +84,16 @@ The architecture is designed to support future exploration:
 - `syntax-case` procedural macros
 - Nanopass-style optimization passes
 - Language extensions (gradual typing, reactive concurrency, logic programming)
+
+### Known Limitations
+
+- **No garbage collection yet.** Memory is arena-allocated and never
+  reclaimed, so long-running programs grow without bound. A feature-flagged
+  mark-and-sweep design is specified and queued.
+- Performance is that of a young interpreter: far beyond a naive
+  tree-walker and improving quickly (the VM gained 2–3× on arithmetic- and
+  list-heavy code in the most recent optimization wave), but not yet
+  competitive with mature Schemes like Chez.
 
 ### Clean, Understandable Code
 
@@ -88,8 +123,11 @@ cargo build --release
 ./target/release/patina --dump script.scm
 ./target/release/patina --trace script.scm
 
-# Run tests
-cargo test
+# R7RS compliance suite (the canonical gate)
+./scripts/run_chibi_tests.sh
+
+# Rust unit + integration tests
+cargo test --all --lib --tests
 ```
 
 ```scheme
@@ -117,17 +155,20 @@ yes
 
 ### CoreExpr IR
 
-A minimal intermediate representation with 9 core forms:
+A minimal intermediate representation with 13 core forms:
 
 ```rust
-enum CoreExpr {
-    Literal, Var, Quote,           // Values
-    Lambda, If, Set, Define,       // Core forms
-    Begin, App,                    // Control flow
+enum CoreExprKind {
+    Literal, Var, Quote, Quasiquote,   // Values
+    Lambda, If, Set, Begin,            // Core forms
+    Define, Import, Expand,            // Toplevel
+    App, Apply,                        // Application
 }
 ```
 
-All derived forms (`let`, `cond`, `case`, `do`, `and`, `or`, etc.) are macros that expand to these primitives.
+All derived forms (`let`, `cond`, `case`, `do`, `and`, `or`, `when`,
+`define-record-type`, etc.) are `syntax-rules` macros written in Scheme
+(`lib/scheme/`) that expand to these primitives.
 
 ### Hygienic Macros
 
@@ -160,11 +201,15 @@ Integer (i64) → BigInteger → Rational → Real (f64) → Complex
 
 | Document | Description |
 |----------|-------------|
-| [Getting Started](docs/GETTING_STARTED.md) | Installation and first steps |
-| [Development Guide](docs/DEVELOPMENT.md) | Architecture and contributing |
-| [API Reference](docs/API.md) | Using Patina as a library |
-| [Feature Status](docs/FEATURE_STATUS.md) | Detailed R7RS compliance matrix |
+| [VM Decisions](docs/VM_DECISIONS.md) | Settled VM architecture decisions (master reference) |
+| [VM ISA](docs/VM_ISA.md) | Instruction set architecture and semantics |
+| [VM Compiler](docs/VM_COMPILER.md) | The 5-pass compiler pipeline |
+| [VM Runtime](docs/VM_RUNTIME.md) | Execution loop and control primitives |
+| [Macro System](docs/MACRO_SYSTEM.md) | Scope-set hygiene and the flip-scope algorithm |
 | [Test Organization](docs/TEST_ORGANIZATION.md) | Test structure and running tests |
+
+The `PRD/` directory holds the living planning documents — including
+`PRD/TRACK_P_PERFORMANCE_PRD.md` with the measured performance progress log.
 
 ---
 
@@ -211,9 +256,18 @@ patina/
 
 ---
 
+## Third-Party Code
+
+- `scheme_tests/chibi/r7rs-tests.scm` is from
+  [chibi-scheme](https://github.com/ashinn/chibi-scheme) (BSD 3-Clause);
+  see `scheme_tests/README.md` for attribution and the full license text.
+- `crates/patina-tests/bench_programs/{nboyer,sboyer}.scm` are the classic
+  Boyer benchmarks (Public Domain, original headers retained), vendored via
+  [ecraven/r7rs-benchmarks](https://github.com/ecraven/r7rs-benchmarks).
+
 ## License
 
-MIT License - See LICENSE file for details
+MIT License - See [LICENSE](LICENSE) file for details
 
 ---
 
