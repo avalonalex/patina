@@ -112,10 +112,15 @@ pub enum Instruction {
 
     /// Call a statically-known primitive without pushing a `CallFrame`.
     ///
-    /// `func_id` names a registered `patina-primitives` function.  The compiler
-    /// emits this only when the callee is provably a primitive at compile time.
+    /// `func_id` names a registered `patina-primitives` function. The compiler
+    /// emits this only when the callee is a `GlobalRef` that resolved to that
+    /// primitive at compile time. `name` is the global the callee resolved
+    /// from: if the program later rebinds it (tracked per-primitive in
+    /// `VmState::shadowed_primitives`), the VM deoptimizes this site back to
+    /// the name-lookup `Call` path so redefinition semantics stay exact.
     CallPrimitive {
         func_id: PrimitiveFnId,
+        name: Symbol,
         args: Vec<Reg>,
         dst: Reg,
     },

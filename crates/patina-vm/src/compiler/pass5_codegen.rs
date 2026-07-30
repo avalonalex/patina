@@ -14,12 +14,14 @@
 //! See VM_COMPILER.md §Pass 5.
 
 use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind, RegLambda};
+use super::primitive_calls::PrimitiveCallMap;
 use crate::error::CompileError;
 use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
 use crate::types::instruction::Instruction;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,16 +47,21 @@ struct Codegen {
     nested: Vec<CodeObject>,
     /// Source location map: (pc, source_location).
     source_map: Vec<(usize, SourceLocation)>,
+    /// Global callee names that resolved to registry primitives at compile
+    /// time; `App`s on these emit `CallPrimitive` instead of `LoadGlobal` +
+    /// `Call`. Empty when compiling without an environment.
+    prim_calls: Rc<PrimitiveCallMap>,
 }
 
 impl Codegen {
-    fn new(name: Option<Symbol>) -> Self {
+    fn new(name: Option<Symbol>, prim_calls: Rc<PrimitiveCallMap>) -> Self {
         Self {
             name,
             instructions: Vec::new(),
             constants: Vec::new(),
             nested: Vec::new(),
             source_map: Vec::new(),
+            prim_calls,
         }
     }
 
@@ -125,10 +132,13 @@ impl Pass5Codegen {
     ///
     /// Returns the primary `CodeObject` plus any nested ones (from lambdas).
     /// The caller should load all of them into `VmState::code_store`.
-    pub fn run(allocated: &AllocatedExpr) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
+    pub fn run(
+        allocated: &AllocatedExpr,
+        prim_calls: PrimitiveCallMap,
+    ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
         let expr = &allocated.expr;
         let id = fresh_code_id();
-        let mut cg = Codegen::new(None);
+        let mut cg = Codegen::new(None, Rc::new(prim_calls));
         gen_expr(expr, &mut cg)?;
         // Top-level: emit a Return of the expression's result.
         cg.emit(Instruction::Return { val: expr.dst });
@@ -396,6 +406,28 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
                 return Ok(());
             }
 
+            // Statically-known primitive: skip the callee LoadGlobal and the
+            // frame push entirely. In tail position a primitive cannot capture
+            // the continuation (control primitives are excluded from the map),
+            // so CallPrimitive + Return is equivalent to TailCall.
+            if let RegExprKind::GlobalRef { name } = &func.kind
+                && let Some(&func_id) = cg.prim_calls.get(name)
+            {
+                for arg in args {
+                    gen_expr(arg, cg)?;
+                }
+                cg.emit(Instruction::CallPrimitive {
+                    func_id,
+                    name: name.clone(),
+                    args: arg_tmps.clone(),
+                    dst: expr.dst,
+                });
+                if *is_tail {
+                    cg.emit(Instruction::Return { val: expr.dst });
+                }
+                return Ok(());
+            }
+
             // General case: evaluate function and arguments, emit Call/TailCall.
             gen_expr(func, cg)?;
             for arg in args {
@@ -447,7 +479,7 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
 /// Compile a nested lambda, emit `MakeClosure` into `cg`, result in `dst`.
 fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), CompileError> {
     let child_id = fresh_code_id();
-    let mut child_cg = Codegen::new(None);
+    let mut child_cg = Codegen::new(None, Rc::clone(&cg.prim_calls));
 
     // Prologue: wrap each boxed param register in a MutableCell.
     // The param already lives in reg[r]; emit AllocCell r←r to box it in-place.

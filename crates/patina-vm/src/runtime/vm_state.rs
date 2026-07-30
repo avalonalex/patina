@@ -48,6 +48,12 @@ pub struct VmState {
     pub heap: SharedHeap,
     /// Registry of all primitive procedures.
     pub primitive_registry: Rc<PrimitiveRegistry>,
+    /// Bitset over registry indices: primitives whose global binding was
+    /// overwritten by a top-level `define`/`set!` after code was compiled.
+    /// `CallPrimitive` sites check their bit and deoptimize to the
+    /// name-lookup `Call` path when it is set, so rebinding a primitive name
+    /// behaves exactly as it did before `CallPrimitive` emission.
+    pub shadowed_primitives: Vec<u64>,
     /// Side table for full (call/cc) continuations — keyed by opaque u64 id.
     /// The corresponding `TaggedValue` handle is `VmContinuationRef(id)` on the heap.
     pub continuation_store: HashMap<u64, Rc<VmContinuation>>,
@@ -85,6 +91,7 @@ impl VmState {
             globals,
             heap,
             primitive_registry: Rc::new(registry),
+            shadowed_primitives: Vec::new(),
             continuation_store: HashMap::new(),
             delimited_continuation_store: HashMap::new(),
             next_cont_id: 0,
@@ -93,6 +100,24 @@ impl VmState {
             loader_registry: None,
             fs: Arc::new(patina_core::NativeFs),
         }
+    }
+
+    /// Record that the primitive at `index` had its global binding
+    /// overwritten; `CallPrimitive` sites for it deoptimize from now on.
+    pub fn mark_shadowed_primitive(&mut self, index: usize) {
+        let word = index / 64;
+        if word >= self.shadowed_primitives.len() {
+            self.shadowed_primitives.resize(word + 1, 0);
+        }
+        self.shadowed_primitives[word] |= 1 << (index % 64);
+    }
+
+    /// Has the primitive at `index` been rebound since compilation?
+    #[inline]
+    pub fn is_primitive_shadowed(&self, index: usize) -> bool {
+        self.shadowed_primitives
+            .get(index / 64)
+            .is_some_and(|w| w & (1 << (index % 64)) != 0)
     }
 
     /// Install all registered primitives into the global environment.
@@ -210,7 +235,7 @@ impl VmState {
 // Library loading for eval primitives
 // ─────────────────────────────────────────────────────────────────────────────
 
-use crate::compiler::compile_with_qq;
+use crate::compiler::compile_with_qq_resolving;
 use patina_frontend::Desugarer;
 use patina_runtime::Library;
 use patina_runtime::library_loader::{ExportSpec, ImportSet};
@@ -342,17 +367,20 @@ fn vm_evaluate_parsed_library(
                 }
             })?;
 
-            let (top, nested) =
-                compile_with_qq(&core_expr, &shared_heap, &lib_env).map_err(|e| {
-                    LibraryError::ParseError {
-                        file: parsed
-                            .source
-                            .as_ref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default(),
-                        message: format!("compile error: {}", e),
-                    }
-                })?;
+            let (top, nested) = compile_with_qq_resolving(
+                &core_expr,
+                &shared_heap,
+                &lib_env,
+                &state.primitive_registry,
+            )
+            .map_err(|e| LibraryError::ParseError {
+                file: parsed
+                    .source
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                message: format!("compile error: {}", e),
+            })?;
 
             let top_id = top.id;
             state.load(top);
@@ -508,9 +536,12 @@ fn vm_eval_expr(
             message: format!("eval: desugar error: {}", e),
         })?;
 
-    let (top, nested) = compile_with_qq(&core_expr, &heap, env).map_err(|e| VmError::Runtime {
-        message: format!("eval: compile error: {}", e),
-    })?;
+    let (top, nested) =
+        compile_with_qq_resolving(&core_expr, &heap, env, &state.primitive_registry).map_err(
+            |e| VmError::Runtime {
+                message: format!("eval: compile error: {}", e),
+            },
+        )?;
 
     // Swap globals to the eval environment, execute in the main state,
     // then restore. This keeps continuations and code objects valid.
@@ -815,6 +846,7 @@ fn dispatch_one_instruction(
         Instruction::StoreGlobal { ref name, src } => {
             let val = state.reg(src);
             let globals = frame_globals(state);
+            mark_if_shadowing_primitive(state, &globals, name);
             globals
                 .set(name, val)
                 .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
@@ -823,6 +855,7 @@ fn dispatch_one_instruction(
         Instruction::Define { ref name, src } => {
             let val = state.reg(src);
             let globals = frame_globals(state);
+            mark_if_shadowing_primitive(state, &globals, name);
             globals.define(name.to_string(), val);
         }
 
@@ -868,33 +901,8 @@ fn dispatch_one_instruction(
         } => {
             let func_val = state.reg(func);
             let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
-            // Intercept higher-order control primitives that need VM cooperation.
-            if let Some(ctrl) = vm_control_primitive(state, func_val) {
-                if let Some(escaped) = handle_control_primitive(state, ctrl, arg_vals, dst, false)?
-                {
-                    return Ok(Some(escaped));
-                }
-            } else if let Some(prim) = primitive_procedure(state, func_val) {
-                let result = call_primitive_proc(state, &prim, &arg_vals);
-                state.set_reg(dst, result?);
-            } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
-                state.set_reg(dst, result?);
-            } else if try_invoke_continuation(state, func_val, &arg_vals)? {
-                // Continuation was invoked — stack has been replaced/appended.
-                // Safety net: if frames dropped to or below exit_depth, the
-                // continuation escaped past a synchronous run_thunk boundary
-                // (e.g. dynamic-wind body, with-exception-handler thunk, or
-                // indirect call-with-values). Return the primary value so the
-                // enclosing run_loop_until exits correctly.
-                if state.frames.len() <= exit_depth {
-                    let primary = arg_vals
-                        .first()
-                        .copied()
-                        .unwrap_or(TaggedValue::UNSPECIFIED);
-                    return Ok(Some(primary));
-                }
-            } else {
-                call_closure(state, func_val, &arg_vals, dst)?;
+            if let Some(escaped) = call_value(state, func_val, arg_vals, dst, exit_depth)? {
+                return Ok(Some(escaped));
             }
         }
 
@@ -1473,10 +1481,35 @@ fn dispatch_one_instruction(
         }
 
         // ── Primitives ──────────────────────────────────────────────────
-        Instruction::CallPrimitive { .. } => {
-            return Err(VmError::Runtime {
-                message: "CallPrimitive not yet wired (A3+)".into(),
-            });
+        Instruction::CallPrimitive {
+            func_id,
+            ref name,
+            ref args,
+            dst,
+        } => {
+            let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
+            if state.is_primitive_shadowed(func_id.0 as usize) {
+                // The name was rebound after compilation: resolve it like
+                // LoadGlobal + Call would, preserving redefinition semantics.
+                let globals = frame_globals(state);
+                let func_val = globals
+                    .get(name)
+                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
+                if let Some(escaped) = call_value(state, func_val, arg_vals, dst, exit_depth)? {
+                    return Ok(Some(escaped));
+                }
+            } else {
+                let registry = Rc::clone(&state.primitive_registry);
+                let ctx = VmApplyContext {
+                    state: state as *mut VmState,
+                };
+                let result = registry
+                    .apply_by_index(func_id.0 as usize, &arg_vals, &ctx)
+                    .map_err(|e| VmError::Runtime {
+                        message: e.to_string(),
+                    })?;
+                state.set_reg(dst, result);
+            }
         }
 
         Instruction::AllocCell { dst, src } => {
@@ -2468,6 +2501,71 @@ fn try_invoke_continuation(
 fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Procedure>> {
     let proc = state.heap.borrow().get_procedure(func_val)?;
     matches!(proc.as_ref(), Procedure::Primitive { .. }).then_some(proc)
+}
+
+/// Dispatch a call to an arbitrary callee value — the body of the `Call`
+/// instruction, also used by `CallPrimitive`'s deopt path. Returns
+/// `Some(value)` when an invoked continuation unwound to or past
+/// `exit_depth` and the enclosing `run_loop_until` must exit with `value`.
+fn call_value(
+    state: &mut VmState,
+    func_val: TaggedValue,
+    arg_vals: Vec<TaggedValue>,
+    dst: u16,
+    exit_depth: usize,
+) -> Result<Option<TaggedValue>, VmError> {
+    // Intercept higher-order control primitives that need VM cooperation.
+    if let Some(ctrl) = vm_control_primitive(state, func_val) {
+        if let Some(escaped) = handle_control_primitive(state, ctrl, arg_vals, dst, false)? {
+            return Ok(Some(escaped));
+        }
+    } else if let Some(prim) = primitive_procedure(state, func_val) {
+        let result = call_primitive_proc(state, &prim, &arg_vals);
+        state.set_reg(dst, result?);
+    } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+        state.set_reg(dst, result?);
+    } else if try_invoke_continuation(state, func_val, &arg_vals)? {
+        // Continuation was invoked — stack has been replaced/appended.
+        // Safety net: if frames dropped to or below exit_depth, the
+        // continuation escaped past a synchronous run_thunk boundary
+        // (e.g. dynamic-wind body, with-exception-handler thunk, or
+        // indirect call-with-values). Return the primary value so the
+        // enclosing run_loop_until exits correctly.
+        if state.frames.len() <= exit_depth {
+            let primary = arg_vals
+                .first()
+                .copied()
+                .unwrap_or(TaggedValue::UNSPECIFIED);
+            return Ok(Some(primary));
+        }
+    } else {
+        call_closure(state, func_val, &arg_vals, dst)?;
+    }
+    Ok(None)
+}
+
+/// A top-level rebind that overwrites a primitive binding must deoptimize
+/// every `CallPrimitive` site compiled against it, or already-compiled
+/// callers would keep calling the old primitive. Called by the
+/// `Define`/`StoreGlobal` handlers *before* the binding is replaced.
+fn mark_if_shadowing_primitive(state: &mut VmState, globals: &Rc<Environment>, name: &str) {
+    let Some(old) = globals.get(name) else { return };
+    let proc = state.heap.borrow().get_procedure(old);
+    let Some(proc) = proc else { return };
+    let Procedure::Primitive {
+        qualified_name,
+        registry_index,
+        ..
+    } = proc.as_ref()
+    else {
+        return;
+    };
+    let index = registry_index
+        .get()
+        .or_else(|| state.primitive_registry.resolve_index(qualified_name));
+    if let Some(index) = index {
+        state.mark_shadowed_primitive(index);
+    }
 }
 
 /// Call a primitive procedure (as returned by `primitive_procedure`).

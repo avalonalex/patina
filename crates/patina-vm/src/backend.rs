@@ -10,7 +10,7 @@
 //! `Symbol = Rc<str>` which is not `Send`. We define `VmBackendError` — a
 //! thin wrapper that converts all variable names to `String` on construction.
 
-use crate::compiler::compile_with_qq;
+use crate::compiler::compile_with_qq_resolving;
 use crate::error::VmError;
 use crate::runtime::{VmState, execute};
 use patina_core::environment::Environment;
@@ -178,8 +178,10 @@ impl VmBackend {
             return Ok(TaggedValue::UNSPECIFIED);
         }
 
-        let (top, nested) = compile_with_qq(&core_expr, &heap, &self.global_env)
-            .map_err(|e| VmBackendError::Compile(e.to_string()))?;
+        let registry = Rc::clone(&self.state.borrow().primitive_registry);
+        let (top, nested) =
+            compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)
+                .map_err(|e| VmBackendError::Compile(e.to_string()))?;
 
         let top_id = top.id;
         let mut state = self.state.borrow_mut();
@@ -344,8 +346,10 @@ impl VmBackend {
                 .desugar_tagged(tv, &heap)
                 .map_err(|e| VmBackendError::Desugar(e.to_string()))?;
 
-            let (top, nested) = compile_with_qq(&core_expr, &heap, &self.global_env)
-                .map_err(|e| VmBackendError::Compile(e.to_string()))?;
+            let registry = Rc::clone(&self.state.borrow().primitive_registry);
+            let (top, nested) =
+                compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)
+                    .map_err(|e| VmBackendError::Compile(e.to_string()))?;
 
             // Build a temporary code_store for the disassembler
             let mut code_store = std::collections::HashMap::new();
@@ -470,15 +474,20 @@ impl VmBackend {
                         }
                     })?;
 
-                    let (top, nested) = compile_with_qq(&core_expr, &shared_heap, &lib_env)
-                        .map_err(|e| LibraryError::ParseError {
-                            file: parsed
-                                .source
-                                .as_ref()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default(),
-                            message: format!("compile error: {}", e),
-                        })?;
+                    let (top, nested) = compile_with_qq_resolving(
+                        &core_expr,
+                        &shared_heap,
+                        &lib_env,
+                        &state.primitive_registry,
+                    )
+                    .map_err(|e| LibraryError::ParseError {
+                        file: parsed
+                            .source
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                        message: format!("compile error: {}", e),
+                    })?;
 
                     let top_id = top.id;
                     state.load(top);
@@ -659,8 +668,10 @@ impl Backend for VmBackend {
         }
 
         // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
-        let (top, nested) = compile_with_qq(&core_expr, &heap, &self.global_env)
-            .map_err(|e| VmBackendError::Compile(e.to_string()))?;
+        let registry = Rc::clone(&self.state.borrow().primitive_registry);
+        let (top, nested) =
+            compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)
+                .map_err(|e| VmBackendError::Compile(e.to_string()))?;
 
         let top_id = top.id;
         let mut state = self.state.borrow_mut();

@@ -137,11 +137,17 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::Return { val } => {
             format!("Return       r{}", val)
         }
-        Instruction::CallPrimitive { func_id, args, dst } => {
+        Instruction::CallPrimitive {
+            func_id,
+            name,
+            args,
+            dst,
+        } => {
             let a: Vec<String> = args.iter().map(|r| format!("r{}", r)).collect();
             format!(
-                "CallPrim     r{} ← prim#{}({})",
+                "CallPrim     r{} ← {}#{}({})",
                 dst,
+                name,
                 func_id.0,
                 a.join(", ")
             )
