@@ -327,10 +327,7 @@ impl LibraryLoaderRegistry {
     pub fn load(&self, name: &[String], search_paths: &[PathBuf]) -> Result<Library, LibraryError> {
         for loader in &self.simple_loaders {
             if loader.can_load(name) {
-                match loader.load(name, search_paths) {
-                    Ok(lib) => return Ok(lib),
-                    Err(e) => return Err(e),
-                }
+                return loader.load(name, search_paths);
             }
         }
 

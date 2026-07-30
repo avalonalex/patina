@@ -1,5 +1,3 @@
-# Rename this file to ci.yml to enable CI once the repository is public
-# (GitHub Actions is free with unlimited minutes for public repos).
 name: CI
 
 on:
@@ -29,6 +27,12 @@ jobs:
       uses: Swatinem/rust-cache@v2
 
     - name: Run tests
+      env:
+        # A handful of differential tests compare output against a locally
+        # installed chibi-scheme binary, which the runners don't have. The
+        # R7RS compliance gate is the separate `chibi` job (vendored suite,
+        # no external binary needed).
+        SKIP_CHIBI_TESTS: 1
       run: cargo test --all --lib --tests
 
   chibi:
