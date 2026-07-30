@@ -25,8 +25,85 @@ use super::pass4_registers::{AllocatedExpr, RegExpr, RegExprKind};
 use crate::types::instruction::PrimitiveFnId;
 use patina_core::core_expr::Symbol;
 
-/// Names (by env binding) that pass 5 may compile to `CallPrimitive`.
-pub type PrimitiveCallMap = FxHashMap<Symbol, PrimitiveFnId>;
+/// Names (by env binding) that pass 5 may compile to `CallPrimitive` (or an
+/// inline opcode, when `inline` is set and the call site has the right arity).
+pub type PrimitiveCallMap = FxHashMap<Symbol, ResolvedPrimitive>;
+
+/// A callee name resolved to a registry primitive at compile time.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedPrimitive {
+    pub id: PrimitiveFnId,
+    /// Set when this primitive has a specialized inline opcode (Track P P3).
+    /// Keyed on the registry entry's own short name, so import renames still
+    /// inline correctly.
+    pub inline: Option<InlineOp>,
+}
+
+/// The primitives with specialized inline opcodes. Each maps to one
+/// fixed-arity `Instruction` variant; pass 5 emits it only when the call
+/// site's argument count matches (`arity()`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineOp {
+    Add,
+    Sub,
+    Mul,
+    Lt,
+    NumEq,
+    Eq,
+    Cons,
+    Car,
+    Cdr,
+    NullP,
+    PairP,
+    VectorP,
+    VectorRef,
+    VectorSet,
+}
+
+impl InlineOp {
+    /// The exact argument count the inline opcode handles.
+    pub fn arity(self) -> usize {
+        match self {
+            InlineOp::Car
+            | InlineOp::Cdr
+            | InlineOp::NullP
+            | InlineOp::PairP
+            | InlineOp::VectorP => 1,
+            InlineOp::Add
+            | InlineOp::Sub
+            | InlineOp::Mul
+            | InlineOp::Lt
+            | InlineOp::NumEq
+            | InlineOp::Eq
+            | InlineOp::Cons
+            | InlineOp::VectorRef => 2,
+            InlineOp::VectorSet => 3,
+        }
+    }
+}
+
+/// Map a registry primitive's short name to its inline opcode, if any.
+/// (`not` is Scheme-defined and never resolves to a primitive, so it has no
+/// opcode despite appearing in early drafts of the P3 list.)
+fn inline_op_for(short_name: &str) -> Option<InlineOp> {
+    Some(match short_name {
+        "+" => InlineOp::Add,
+        "-" => InlineOp::Sub,
+        "*" => InlineOp::Mul,
+        "<" => InlineOp::Lt,
+        "=" => InlineOp::NumEq,
+        "eq?" => InlineOp::Eq,
+        "cons" => InlineOp::Cons,
+        "car" => InlineOp::Car,
+        "cdr" => InlineOp::Cdr,
+        "null?" => InlineOp::NullP,
+        "pair?" => InlineOp::PairP,
+        "vector?" => InlineOp::VectorP,
+        "vector-ref" => InlineOp::VectorRef,
+        "vector-set!" => InlineOp::VectorSet,
+        _ => return None,
+    })
+}
 
 /// Primitives that must keep the generic `Call` path. Everything in
 /// `patina.internal.control` is either intercepted by the VM for control flow
@@ -59,6 +136,7 @@ pub fn resolve_primitive_calls(
         let proc = heap.borrow().get_procedure(val);
         let Some(proc) = proc else { continue };
         let Procedure::Primitive {
+            name: short_name,
             qualified_name,
             registry_index,
             ..
@@ -73,7 +151,13 @@ pub fn resolve_primitive_calls(
             .get()
             .or_else(|| registry.resolve_index(qualified_name));
         if let Some(index) = index {
-            map.insert(name, PrimitiveFnId(index as u32));
+            map.insert(
+                name,
+                ResolvedPrimitive {
+                    id: PrimitiveFnId(index as u32),
+                    inline: inline_op_for(short_name),
+                },
+            );
         }
     }
     map

@@ -153,7 +153,38 @@ All Scheme values except `#f` are truthy (R7RS §6.3).
 | `Apply` | `func: Reg, args: Vec<Reg>, dst: Reg` | Like `Call` but last arg is spread as a list |
 | `TailApply` | `func: Reg, args: Vec<Reg>` | Like `TailCall` but last arg is spread as a list |
 | `Return` | `val: Reg` | Pop frame, write val to caller's return_reg |
-| `CallPrimitive` | `func_id: PrimitiveFnId, args: Vec<Reg>, dst: Reg` | Call primitive directly without pushing a frame |
+| `CallPrimitive` | `func_id: PrimitiveFnId, name: Symbol, args: Vec<Reg>, dst: Reg` | Call primitive directly without pushing a frame; `name` supports the redefinition deopt (below) |
+
+**Inline primitive opcodes** (Track P P3). Fixed-arity fast paths for the
+hottest primitives, emitted only when the callee is a `GlobalRef` that
+resolved to that primitive at compile time *and* the call site has the exact
+arity; all other shapes use `CallPrimitive`. Every opcode carries the same
+`(func_id, name)` pair as `CallPrimitive`.
+
+| Instruction | Fast path | Falls back when |
+|---|---|---|
+| `Add` / `Sub` / `Mul` | both fixnums, no overflow → machine op | non-fixnum, overflow (handler promotes to bignum), type error |
+| `Lt` / `NumEq` | both fixnums → machine compare | non-fixnum operand |
+| `Eq` | always (`values_eq`) | rebound name only |
+| `Cons` | always (`alloc_pair`) | rebound name only |
+| `Car` / `Cdr` | native pair | non-pair (handler raises the type error) |
+| `NullP` / `PairP` / `VectorP` | always (bit test) | rebound name only |
+| `VectorRef` | vector + in-bounds fixnum index | wrong types or out of bounds (handler raises) |
+| `VectorSet` | vector + in-bounds fixnum index; `dst ← unspecified` | wrong types or out of bounds |
+
+The fallback for every opcode is `exec_call_primitive` — the same registry
+handler the generic path calls — so results, numeric promotion, and error
+messages are identical by construction, not by parallel implementation.
+
+**Primitive redefinition deopt.** Emitting `CallPrimitive`/inline opcodes
+assumes the global still binds the primitive at run time. That assumption is
+checked, not trusted: `Define`/`StoreGlobal` set a per-primitive bit in
+`VmState::shadowed_primitives` when they overwrite a primitive binding, and
+every fast path tests its bit (one load+mask) before firing. A set bit routes
+the call through `globals[name]` + full call dispatch, which is exactly the
+pre-P2 behavior. See `PRD/TRACK_P_PERFORMANCE_PRD.md` §P3 for the design
+space if this ever needs revisiting (immutable library bindings, optimize
+levels, n-ary canonicalization).
 
 **Call dispatch order** (for `Call`/`TailCall`):
 1. Check for VM control primitive intercept (continuations, exceptions, values)

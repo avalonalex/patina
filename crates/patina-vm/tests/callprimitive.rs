@@ -78,8 +78,14 @@ fn count_generic_calls(instrs: &[Instruction]) -> usize {
 
 #[test]
 fn add_emits_call_primitive() {
+    // Since P3, 2-arg + gets the inline Add opcode; the P2 property that
+    // still holds is: no generic Call and no callee LoadGlobal.
     let instrs = compile_all_instructions(&app(var("+"), vec![lit(1), lit(2)]));
-    assert_eq!(count_call_prims(&instrs), 1, "{instrs:?}");
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Add { .. })),
+        1,
+        "{instrs:?}"
+    );
     assert_eq!(count_generic_calls(&instrs), 0, "{instrs:?}");
     // The callee is never loaded — no LoadGlobal for "+".
     assert!(
@@ -92,10 +98,15 @@ fn add_emits_call_primitive() {
 
 #[test]
 fn tail_primitive_emits_call_primitive_and_return() {
-    // (lambda (p) (car p)) — body in tail position.
+    // (lambda (p) (car p)) — body in tail position. Since P3 the body is the
+    // inline Car opcode followed by Return; no generic TailCall.
     let expr = lambda(vec!["p"], vec![app(var("car"), vec![var("p")])]);
     let instrs = compile_all_instructions(&expr);
-    assert_eq!(count_call_prims(&instrs), 1, "{instrs:?}");
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Car { .. })),
+        1,
+        "{instrs:?}"
+    );
     assert_eq!(count_generic_calls(&instrs), 0, "{instrs:?}");
 }
 
@@ -149,4 +160,66 @@ fn lexically_bound_callee_keeps_generic_call() {
     let inner = lambda(vec!["car"], vec![app(var("car"), vec![lit(5)])]);
     let instrs = compile_all_instructions(&app(inner, vec![var("some-user-proc")]));
     assert_eq!(count_call_prims(&instrs), 0, "{instrs:?}");
+}
+
+// ── Inline opcode emission (Track P P3) ──────────────────────────────────────
+
+fn count_matching(instrs: &[Instruction], pred: fn(&Instruction) -> bool) -> usize {
+    instrs.iter().filter(|i| pred(i)).count()
+}
+
+#[test]
+fn two_arg_add_emits_inline_opcode() {
+    let instrs = compile_all_instructions(&app(var("+"), vec![lit(1), lit(2)]));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Add { .. })),
+        1,
+        "{instrs:?}"
+    );
+    assert_eq!(count_call_prims(&instrs), 0, "{instrs:?}");
+}
+
+#[test]
+fn three_arg_add_stays_on_call_primitive() {
+    let instrs = compile_all_instructions(&app(var("+"), vec![lit(1), lit(2), lit(3)]));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Add { .. })),
+        0,
+        "{instrs:?}"
+    );
+    assert_eq!(count_call_prims(&instrs), 1, "{instrs:?}");
+}
+
+#[test]
+fn unary_car_emits_inline_opcode() {
+    let expr = lambda(vec!["p"], vec![app(var("car"), vec![var("p")])]);
+    let instrs = compile_all_instructions(&expr);
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Car { .. })),
+        1,
+        "{instrs:?}"
+    );
+}
+
+#[test]
+fn vector_set_emits_inline_opcode() {
+    let expr = app(var("vector-set!"), vec![var("some-vec"), lit(0), lit(9)]);
+    let instrs = compile_all_instructions(&expr);
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::VectorSet { .. })),
+        1,
+        "{instrs:?}"
+    );
+}
+
+#[test]
+fn wrong_arity_car_stays_on_call_primitive() {
+    // (car x y) is an arity error — it must reach the handler to raise it.
+    let instrs = compile_all_instructions(&app(var("car"), vec![lit(1), lit(2)]));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Car { .. })),
+        0,
+        "{instrs:?}"
+    );
+    assert_eq!(count_call_prims(&instrs), 1, "{instrs:?}");
 }

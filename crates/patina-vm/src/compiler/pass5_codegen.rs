@@ -14,7 +14,7 @@
 //! See VM_COMPILER.md §Pass 5.
 
 use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind, RegLambda};
-use super::primitive_calls::PrimitiveCallMap;
+use super::primitive_calls::{InlineOp, PrimitiveCallMap, ResolvedPrimitive};
 use crate::error::CompileError;
 use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
 use crate::types::instruction::Instruction;
@@ -154,6 +154,123 @@ impl Pass5Codegen {
             source_map: cg.source_map,
         };
         Ok((code, nested))
+    }
+}
+
+/// Build the instruction for a call to a compile-time-resolved primitive:
+/// the specialized inline opcode when the primitive has one and the call
+/// site has exactly the fixed arity (Track P P3), `CallPrimitive` otherwise.
+fn primitive_call_instruction(
+    resolved: ResolvedPrimitive,
+    name: Symbol,
+    arg_tmps: &[u16],
+    dst: u16,
+) -> Instruction {
+    let func_id = resolved.id;
+    let inline = resolved.inline.filter(|op| op.arity() == arg_tmps.len());
+    let Some(op) = inline else {
+        return Instruction::CallPrimitive {
+            func_id,
+            name,
+            args: arg_tmps.to_vec(),
+            dst,
+        };
+    };
+    match op {
+        InlineOp::Add => Instruction::Add {
+            a: arg_tmps[0],
+            b: arg_tmps[1],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::Sub => Instruction::Sub {
+            a: arg_tmps[0],
+            b: arg_tmps[1],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::Mul => Instruction::Mul {
+            a: arg_tmps[0],
+            b: arg_tmps[1],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::Lt => Instruction::Lt {
+            a: arg_tmps[0],
+            b: arg_tmps[1],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::NumEq => Instruction::NumEq {
+            a: arg_tmps[0],
+            b: arg_tmps[1],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::Eq => Instruction::Eq {
+            a: arg_tmps[0],
+            b: arg_tmps[1],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::Cons => Instruction::Cons {
+            a: arg_tmps[0],
+            b: arg_tmps[1],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::Car => Instruction::Car {
+            src: arg_tmps[0],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::Cdr => Instruction::Cdr {
+            src: arg_tmps[0],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::NullP => Instruction::NullP {
+            src: arg_tmps[0],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::PairP => Instruction::PairP {
+            src: arg_tmps[0],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::VectorP => Instruction::VectorP {
+            src: arg_tmps[0],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::VectorRef => Instruction::VectorRef {
+            v: arg_tmps[0],
+            i: arg_tmps[1],
+            dst,
+            func_id,
+            name,
+        },
+        InlineOp::VectorSet => Instruction::VectorSet {
+            v: arg_tmps[0],
+            i: arg_tmps[1],
+            val: arg_tmps[2],
+            dst,
+            func_id,
+            name,
+        },
     }
 }
 
@@ -409,19 +526,19 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             // Statically-known primitive: skip the callee LoadGlobal and the
             // frame push entirely. In tail position a primitive cannot capture
             // the continuation (control primitives are excluded from the map),
-            // so CallPrimitive + Return is equivalent to TailCall.
+            // so the emitted call + Return is equivalent to TailCall.
             if let RegExprKind::GlobalRef { name } = &func.kind
-                && let Some(&func_id) = cg.prim_calls.get(name)
+                && let Some(&resolved) = cg.prim_calls.get(name)
             {
                 for arg in args {
                     gen_expr(arg, cg)?;
                 }
-                cg.emit(Instruction::CallPrimitive {
-                    func_id,
-                    name: name.clone(),
-                    args: arg_tmps.clone(),
-                    dst: expr.dst,
-                });
+                cg.emit(primitive_call_instruction(
+                    resolved,
+                    name.clone(),
+                    arg_tmps,
+                    expr.dst,
+                ));
                 if *is_tail {
                     cg.emit(Instruction::Return { val: expr.dst });
                 }

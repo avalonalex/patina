@@ -125,6 +125,132 @@ pub enum Instruction {
         dst: Reg,
     },
 
+    // ── Inline primitive opcodes (Track P P3) ───────────────────────────────
+    //
+    // Fixed-arity fast paths for the hottest primitives, executed directly in
+    // the dispatch loop. Every opcode carries the same `(func_id, name)` pair
+    // as `CallPrimitive` and obeys the same contract: the fast path fires only
+    // when `!is_primitive_shadowed(func_id)` AND the operands fit the trivial
+    // case (fixnums that don't overflow, a native pair, an in-bounds vector
+    // index). Everything else — floats, bignums, overflow, type errors,
+    // rebound names — falls back to `exec_call_primitive`, i.e. the exact
+    // registry handler the generic path calls, so results and error messages
+    // are byte-for-byte identical to `CallPrimitive`/`Call`.
+    //
+    // The compiler emits these only for the fixed-arity shape (2-arg `+`,
+    // 1-arg `car`, …); other arities stay on `CallPrimitive`.
+    /// 2-arg `+`. Fast path: fixnum add; `None` (overflow) → handler promotes.
+    Add {
+        a: Reg,
+        b: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `-`.
+    Sub {
+        a: Reg,
+        b: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `*`.
+    Mul {
+        a: Reg,
+        b: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `<`.
+    Lt {
+        a: Reg,
+        b: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `=`.
+    NumEq {
+        a: Reg,
+        b: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `eq?` — total, one `values_eq` heap call.
+    Eq {
+        a: Reg,
+        b: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `cons` — total, one `alloc_pair`.
+    Cons {
+        a: Reg,
+        b: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 1-arg `car`. Fast path: native pair only; boxed pairs and type errors
+    /// go to the handler.
+    Car {
+        src: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 1-arg `cdr`.
+    Cdr {
+        src: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 1-arg `null?` — total bit test.
+    NullP {
+        src: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 1-arg `pair?` — total bit test.
+    PairP {
+        src: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 1-arg `vector?` — total bit test.
+    VectorP {
+        src: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `vector-ref`. Fast path: vector + in-bounds fixnum index;
+    /// out-of-bounds falls back so the error message comes from the handler.
+    VectorRef {
+        v: Reg,
+        i: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 3-arg `vector-set!`. Writes `dst ← unspecified` on the fast path,
+    /// matching the handler's return value.
+    VectorSet {
+        v: Reg,
+        i: Reg,
+        val: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+
     // ── call-with-values (instruction-level) ────────────────────────────────
     /// Call `consumer` with the values produced by a preceding producer call.
     ///

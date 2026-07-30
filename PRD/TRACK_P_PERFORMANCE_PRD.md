@@ -1,7 +1,7 @@
 # Track P — VM Performance (Clarity-Safe) PRD
 
 **Created:** 2026-06-20
-**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` wiring (#158) landed 2026-07-26/29. Next: **P3 inline opcodes** (unblocked by #158), P7 phase 2.
+**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining: P4 (blocked on globals-swap redesign), P5 compiler passes, P6 GC, P7 phase 2.
 **Scope decision:** clarity-safe optimizations only — aggressive, readability-costing items are explicitly deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing) · **Catalog:** `PRD/VM_OPTIMIZATION_ROADMAP.md` (P1–P10 superset)
 
@@ -38,6 +38,7 @@ Executed profile-first (macOS `sample`/`samply` on `fib(34)` and `destruc`) rath
 | #155 | `resolve_closure` reads `code_id` via new `Heap::get_vm_closure_code_id` — no free-var `Vec` clone | **P1.1 as specified** | small; closes P1 |
 | #157 | Heap-tier handlers take `&[TaggedValue]`; **70 misfiled higher-order handlers reclassified to heap tier**; registration closures → direct fn refs; `call_any`/`call_any_sync` arg copies deleted | **P7 phase 1 as specified** — plus the reclassification the tier split implied (see §P7 findings) | map −6.8%, append −5.4%, fill −5.4%, reverse −6.9%, vectors/sum −11.5%, factorial −4–8%, float_sum −7.9%; fib/tak ±1–2% (layout-scale) |
 | #158 | `CallPrimitive` wired: compile-time resolution of `GlobalRef` callees to registry ids (`primitive_calls.rs`), no callee load / no frame push, tail = `CallPrimitive`+`Return`; redefinition handled by runtime deopt bitset instead of the planned static scan | **P2 items 2–3**, deopt design replaces the spec's shadowing scan (see §P2) | sum −28–33%, map/make/append −21–23%, factorial −13–21%, tak −17%, fib −23% (wall-clock) |
+| #159 | 14 inline opcodes in the dispatch loop (`Add`…`VectorSet`), emitted for exact-arity resolved callees; all fallbacks via `exec_call_primitive`; redefinition design space documented for future work | **P3 as specified** minus dead `Not` (Scheme-defined) | sum −42–46%, vectors/fill −44%, vectors/sum −42%, nqueens/8 −39%, deriv −28–32%, factorial −23–29%, fib −30% / tak −16% (wall-clock). Cumulative with #158, same day: sum 3.2×, nqueens 2.1×, fib 2.0× |
 
 **Cumulative:** fib(32) 5.68s → 2.37s (**2.4×**); quick r7rs-benchmarks set ~2–2.7× across the board. Standing vs Chibi (same machine): `browse` 2.5× *faster*, `quicksort` 3.6× behind (was 8×), `destruc` 8× behind (was 16×). Full-workload harness runs (validated-correct results, 300s CPU cap): **`compiler` 177.7s, `maze` 150.4s, `matrix` 270.0s — all three now complete under the cap** (all were cap-outs before this wave; `compiler`/`maze`/`matrix` couldn't even *parse* before the #146/#147 lexer fixes). `parsing` still caps out — it is frontend-bound (lexer/parser), not VM-bound.
 
@@ -89,7 +90,43 @@ Eliminate the string `HashMap` lookup on the hot path. **Status:** PR #149 deliv
   - **Shadowing:** emit `CallPrimitive` only when the name is not redefined by a top-level user `define` in the unit (reuse Pass-1's define scan). Anything uncertain → fall back to `Call` (at worst slower, never wrong).
 - **Acceptance:** disasm test shows `(+ 1 2)` emits `CallPrimitive`; full `cargo test`; `./scripts/run_chibi_tests.sh` 1163/1163.
 
-### P3 — Specialized inline opcodes for the ~15 hottest primitives
+### P3 — Specialized inline opcodes for the ~15 hottest primitives  *(done — #159, 2026-07-29)*
+
+**Landed as specified**, with two scope notes: `Not` is dropped (`not` is
+Scheme-defined in `lib/scheme/base/lists.scm`, so it never resolves to a
+registry primitive — a `Not` opcode would be dead), leaving **14 opcodes**;
+and each opcode carries the `(func_id, name)` deopt pair so the shadow-bit
+check guards every fast path. All fallbacks funnel through
+`exec_call_primitive` — the registry handler — so behavior is identical to
+the generic path by construction. Emission lives in
+`primitive_calls::inline_op_for` + `pass5_codegen::primitive_call_instruction`;
+dispatch arms in `vm_state.rs`; ISA documented in `docs/VM_ISA.md` §4.
+
+**Trail: primitive redefinition semantics (future work).** The deopt bitset
+(#158) gives exact R7RS top-level redefinition semantics at the cost of one
+load+mask per optimized call. If that check ever needs to go away — or
+redefinition needs different semantics — the design space, roughly in
+ascending effort:
+1. **Immutable library bindings (R6RS-style):** bindings imported from
+   libraries may not be redefined; only true REPL toplevels stay dynamic.
+   Kills the check for all library-compiled code. Requires an import-vs-
+   toplevel distinction in `Environment`.
+2. **Chez-style optimize levels:** a `--optimize-level` flag where level ≥2
+   documents that primitive rebinding does not affect already-compiled call
+   sites, and drops both the bit-check and the `Define`/`StoreGlobal`
+   marking. Easy, but a semantics waiver.
+3. **Code patching:** on first deopt, rewrite the instruction in the
+   `CodeObject` (needs mutable code store + care with `Rc`-shared code).
+   Removes the steady-state check without semantic compromise.
+4. **N-ary canonicalization (Guile/Chez do this):** expand `(+ a b c)` into
+   chained binary `Add`s at compile time — same association order as the
+   handler's left fold, so float semantics are preserved. Extends the inline
+   win to variadic call sites; orthogonal to the deopt question.
+Known residual gap (accepted, documented in #158): rebinding a primitive via
+`import` (rather than `define`/`set!`) after code referencing it was compiled
+does not set the shadow bit.
+
+#### Original P3 spec
 Add fixed-arity opcodes executed inline in the dispatch loop — `Add/Sub/Mul/Lt/NumEq/Eq/Car/Cdr/Cons/NullP/PairP/VectorP/VectorRef/VectorSet/Not` — each a plain struct of `Reg`s.
 - **Fast path:** guard `is_fixnum()` on both operands and use `fixnum_add/sub/mul/lt/eq` (`tagged_value.rs:154-211`); predicates/`eq?`/`cons`/`car`/`cdr` are immediate or a single heap op (`values_eq`, `alloc_pair:307`, `car`/`cdr`).
 - **Slow path = existing path.** On non-fixnum / overflow / type-error, fall back to the *same* function the primitive already calls (`Heap::numeric_add/sub/mul`, the `car`/`cdr`/`vector-ref` primitives). No duplicated numeric logic; bignum promotion, rationals, reals, complex, NaN propagation, and error messages are byte-for-byte identical.

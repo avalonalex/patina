@@ -236,6 +236,8 @@ impl VmState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::compiler::compile_with_qq_resolving;
+use crate::types::instruction::PrimitiveFnId;
+use patina_core::core_expr::Symbol;
 use patina_frontend::Desugarer;
 use patina_runtime::Library;
 use patina_runtime::library_loader::{ExportSpec, ImportSet};
@@ -1488,27 +1490,306 @@ fn dispatch_one_instruction(
             dst,
         } => {
             let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
-            if state.is_primitive_shadowed(func_id.0 as usize) {
-                // The name was rebound after compilation: resolve it like
-                // LoadGlobal + Call would, preserving redefinition semantics.
-                let globals = frame_globals(state);
-                let func_val = globals
-                    .get(name)
-                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
-                if let Some(escaped) = call_value(state, func_val, arg_vals, dst, exit_depth)? {
-                    return Ok(Some(escaped));
+            if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, arg_vals, dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        // ── Inline primitive opcodes (Track P P3) ───────────────────────
+        //
+        // Contract shared by every arm: the fast path fires only when the
+        // primitive is unshadowed AND the operands fit the trivial case;
+        // every other case funnels through exec_call_primitive, the same
+        // registry handler the CallPrimitive path uses — identical results,
+        // promotion behavior, and error messages by construction.
+        Instruction::Add {
+            a,
+            b,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let (x, y) = (state.reg(a), state.reg(b));
+            let fast = (!state.is_primitive_shadowed(func_id.0 as usize)
+                && x.is_fixnum()
+                && y.is_fixnum())
+            .then(|| x.fixnum_add(y))
+            .flatten();
+            match fast {
+                Some(r) => state.set_reg(dst, r),
+                None => {
+                    if let Some(escaped) =
+                        exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
+                    {
+                        return Ok(Some(escaped));
+                    }
                 }
+            }
+        }
+
+        Instruction::Sub {
+            a,
+            b,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let (x, y) = (state.reg(a), state.reg(b));
+            let fast = (!state.is_primitive_shadowed(func_id.0 as usize)
+                && x.is_fixnum()
+                && y.is_fixnum())
+            .then(|| x.fixnum_sub(y))
+            .flatten();
+            match fast {
+                Some(r) => state.set_reg(dst, r),
+                None => {
+                    if let Some(escaped) =
+                        exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
+                    {
+                        return Ok(Some(escaped));
+                    }
+                }
+            }
+        }
+
+        Instruction::Mul {
+            a,
+            b,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let (x, y) = (state.reg(a), state.reg(b));
+            let fast = (!state.is_primitive_shadowed(func_id.0 as usize)
+                && x.is_fixnum()
+                && y.is_fixnum())
+            .then(|| x.fixnum_mul(y))
+            .flatten();
+            match fast {
+                Some(r) => state.set_reg(dst, r),
+                None => {
+                    if let Some(escaped) =
+                        exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
+                    {
+                        return Ok(Some(escaped));
+                    }
+                }
+            }
+        }
+
+        Instruction::Lt {
+            a,
+            b,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let (x, y) = (state.reg(a), state.reg(b));
+            if !state.is_primitive_shadowed(func_id.0 as usize) && x.is_fixnum() && y.is_fixnum() {
+                state.set_reg(dst, TaggedValue::boolean(x.fixnum_lt(y)));
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        Instruction::NumEq {
+            a,
+            b,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let (x, y) = (state.reg(a), state.reg(b));
+            if !state.is_primitive_shadowed(func_id.0 as usize) && x.is_fixnum() && y.is_fixnum() {
+                state.set_reg(dst, TaggedValue::boolean(x.fixnum_eq(y)));
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        Instruction::Eq {
+            a,
+            b,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let (x, y) = (state.reg(a), state.reg(b));
+            if !state.is_primitive_shadowed(func_id.0 as usize) {
+                let r = state.heap.borrow().values_eq(x, y);
+                state.set_reg(dst, TaggedValue::boolean(r));
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        Instruction::Cons {
+            a,
+            b,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let (x, y) = (state.reg(a), state.reg(b));
+            if !state.is_primitive_shadowed(func_id.0 as usize) {
+                let pair = state.heap.borrow_mut().alloc_pair(x, y);
+                state.set_reg(dst, pair);
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        Instruction::Car {
+            src,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg(src);
+            if !state.is_primitive_shadowed(func_id.0 as usize) && x.is_pair() {
+                let car = state.heap.borrow().car(x);
+                state.set_reg(dst, car);
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        Instruction::Cdr {
+            src,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg(src);
+            if !state.is_primitive_shadowed(func_id.0 as usize) && x.is_pair() {
+                let cdr = state.heap.borrow().cdr(x);
+                state.set_reg(dst, cdr);
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        Instruction::NullP {
+            src,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg(src);
+            if !state.is_primitive_shadowed(func_id.0 as usize) {
+                state.set_reg(dst, TaggedValue::boolean(x.is_null()));
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        Instruction::PairP {
+            src,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg(src);
+            if !state.is_primitive_shadowed(func_id.0 as usize) {
+                state.set_reg(dst, TaggedValue::boolean(x.is_pair()));
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        Instruction::VectorP {
+            src,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg(src);
+            if !state.is_primitive_shadowed(func_id.0 as usize) {
+                state.set_reg(dst, TaggedValue::boolean(x.is_vector()));
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
+            }
+        }
+
+        Instruction::VectorRef {
+            v,
+            i,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let (vec, idx) = (state.reg(v), state.reg(i));
+            let fast = if !state.is_primitive_shadowed(func_id.0 as usize)
+                && vec.is_vector()
+                && idx.is_fixnum()
+            {
+                let i = idx.as_fixnum_unchecked();
+                let heap = state.heap.borrow();
+                // Out-of-bounds falls back so the handler's error message is used.
+                (i >= 0 && (i as usize) < heap.vector_len(vec))
+                    .then(|| heap.vector_slice(vec)[i as usize])
             } else {
-                let registry = Rc::clone(&state.primitive_registry);
-                let ctx = VmApplyContext {
-                    state: state as *mut VmState,
-                };
-                let result = registry
-                    .apply_by_index(func_id.0 as usize, &arg_vals, &ctx)
-                    .map_err(|e| VmError::Runtime {
-                        message: e.to_string(),
-                    })?;
-                state.set_reg(dst, result);
+                None
+            };
+            match fast {
+                Some(val) => state.set_reg(dst, val),
+                None => {
+                    if let Some(escaped) =
+                        exec_call_primitive(state, func_id, name, vec![vec, idx], dst, exit_depth)?
+                    {
+                        return Ok(Some(escaped));
+                    }
+                }
+            }
+        }
+
+        Instruction::VectorSet {
+            v,
+            i,
+            val,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let (vec, idx, x) = (state.reg(v), state.reg(i), state.reg(val));
+            let mut fast = false;
+            if !state.is_primitive_shadowed(func_id.0 as usize)
+                && vec.is_vector()
+                && idx.is_fixnum()
+            {
+                let i = idx.as_fixnum_unchecked();
+                let mut heap = state.heap.borrow_mut();
+                if i >= 0 && (i as usize) < heap.vector_len(vec) {
+                    heap.vector_set(vec, i as usize, x);
+                    fast = true;
+                }
+            }
+            if fast {
+                state.set_reg(dst, TaggedValue::UNSPECIFIED);
+            } else if let Some(escaped) =
+                exec_call_primitive(state, func_id, name, vec![vec, idx, x], dst, exit_depth)?
+            {
+                return Ok(Some(escaped));
             }
         }
 
@@ -2541,6 +2822,40 @@ fn call_value(
     } else {
         call_closure(state, func_val, &arg_vals, dst)?;
     }
+    Ok(None)
+}
+
+/// Execute a compile-time-resolved primitive call: the shared back end of
+/// `CallPrimitive` and every inline opcode's slow path. Checks the shadow
+/// bit — a rebound name deoptimizes to name-lookup dispatch (`call_value`),
+/// preserving redefinition semantics — otherwise dispatches through the
+/// registry by index. Returns `Some(value)` on a continuation escape, as
+/// `call_value` does.
+fn exec_call_primitive(
+    state: &mut VmState,
+    func_id: PrimitiveFnId,
+    name: &Symbol,
+    arg_vals: Vec<TaggedValue>,
+    dst: u16,
+    exit_depth: usize,
+) -> Result<Option<TaggedValue>, VmError> {
+    if state.is_primitive_shadowed(func_id.0 as usize) {
+        let globals = frame_globals(state);
+        let func_val = globals
+            .get(name)
+            .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
+        return call_value(state, func_val, arg_vals, dst, exit_depth);
+    }
+    let registry = Rc::clone(&state.primitive_registry);
+    let ctx = VmApplyContext {
+        state: state as *mut VmState,
+    };
+    let result = registry
+        .apply_by_index(func_id.0 as usize, &arg_vals, &ctx)
+        .map_err(|e| VmError::Runtime {
+            message: e.to_string(),
+        })?;
+    state.set_reg(dst, result);
     Ok(None)
 }
 
