@@ -16,6 +16,10 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+license = "MIT"
+repository = "https://github.com/avalonalex/patina"
+
 # Shared dependencies across workspace
 [workspace.dependencies]
 # Numeric tower support for R7RS compliance

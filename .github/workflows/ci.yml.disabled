@@ -1,3 +1,5 @@
+# Rename this file to ci.yml to enable CI once the repository is public
+# (GitHub Actions is free with unlimited minutes for public repos).
 name: CI
 
 on:
@@ -16,32 +18,36 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        rust: [stable]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: ${{ matrix.rust }}
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
 
     - name: Run tests
-      env:
-        SKIP_CHIBI_TESTS: 1
-      run: cargo test --verbose
+      run: cargo test --all --lib --tests
 
-    - name: Build
-      run: cargo build --verbose --release
+  chibi:
+    name: R7RS Compliance (chibi suite)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Build release
+      run: cargo build --release
+    - name: Run chibi r7rs-tests (must be 1163/1163)
+      run: ./scripts/run_chibi_tests.sh
 
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
@@ -51,8 +57,9 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
-    - run: cargo clippy -- -D warnings
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo clippy --all-targets --all-features -- -D warnings
