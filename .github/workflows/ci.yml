@@ -1,5 +1,3 @@
-# Rename this file to ci.yml to enable CI once the repository is public
-# (GitHub Actions is free with unlimited minutes for public repos).
 name: CI
 
 on:
