@@ -37,8 +37,6 @@ pub type LabelId = usize; // instruction index (absolute within a CodeObject)
 /// instruction reads this field without needing to inspect the caller's frame.
 #[derive(Debug, Clone)]
 pub struct CallFrame {
-    /// Which `CodeObject` is currently executing.
-    pub code_id: CodeObjectId,
     /// Program counter — index of the next instruction to execute.
     pub pc: usize,
     /// Offset into `VmState::registers` where this frame's r0 lives.
@@ -54,7 +52,8 @@ pub struct CallFrame {
     /// The code object this frame executes, resolved once at push time.
     /// Code objects are immutable after loading, so caching the `Rc` here is
     /// safe and lets the dispatch loop fetch instructions without a
-    /// `code_store` hash lookup per instruction.
+    /// `code_store` hash lookup per instruction. Its id is `code.id` — the
+    /// frame stores no separate copy that could drift out of sync.
     pub code: Rc<CodeObject>,
 }
 

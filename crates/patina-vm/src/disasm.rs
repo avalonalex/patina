@@ -63,6 +63,17 @@ fn disassemble_one(
     }
 }
 
+/// Format an inline primitive opcode (Track P P3): `Mnemonic  rD ← name(rA, …)`.
+fn fmt_inline_prim(
+    mnemonic: &str,
+    dst: u16,
+    name: &patina_core::core_expr::Symbol,
+    args: &[u16],
+) -> String {
+    let a: Vec<String> = args.iter().map(|r| format!("r{}", r)).collect();
+    format!("{:<13}r{} ← {}({})", mnemonic, dst, name, a.join(", "))
+}
+
 pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -> String {
     match instr {
         Instruction::LoadImmediate { dst, val } => {
@@ -154,59 +165,35 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         }
         Instruction::Add {
             a, b, dst, name, ..
-        } => {
-            format!("Add          r{} ← {}(r{}, r{})", dst, name, a, b)
-        }
+        } => fmt_inline_prim("Add", *dst, name, &[*a, *b]),
         Instruction::Sub {
             a, b, dst, name, ..
-        } => {
-            format!("Sub          r{} ← {}(r{}, r{})", dst, name, a, b)
-        }
+        } => fmt_inline_prim("Sub", *dst, name, &[*a, *b]),
         Instruction::Mul {
             a, b, dst, name, ..
-        } => {
-            format!("Mul          r{} ← {}(r{}, r{})", dst, name, a, b)
-        }
+        } => fmt_inline_prim("Mul", *dst, name, &[*a, *b]),
         Instruction::Lt {
             a, b, dst, name, ..
-        } => {
-            format!("Lt           r{} ← {}(r{}, r{})", dst, name, a, b)
-        }
+        } => fmt_inline_prim("Lt", *dst, name, &[*a, *b]),
         Instruction::NumEq {
             a, b, dst, name, ..
-        } => {
-            format!("NumEq        r{} ← {}(r{}, r{})", dst, name, a, b)
-        }
+        } => fmt_inline_prim("NumEq", *dst, name, &[*a, *b]),
         Instruction::Eq {
             a, b, dst, name, ..
-        } => {
-            format!("Eq           r{} ← {}(r{}, r{})", dst, name, a, b)
-        }
+        } => fmt_inline_prim("Eq", *dst, name, &[*a, *b]),
         Instruction::Cons {
             a, b, dst, name, ..
-        } => {
-            format!("Cons         r{} ← {}(r{}, r{})", dst, name, a, b)
-        }
-        Instruction::Car { src, dst, name, .. } => {
-            format!("Car          r{} ← {}(r{})", dst, name, src)
-        }
-        Instruction::Cdr { src, dst, name, .. } => {
-            format!("Cdr          r{} ← {}(r{})", dst, name, src)
-        }
-        Instruction::NullP { src, dst, name, .. } => {
-            format!("NullP        r{} ← {}(r{})", dst, name, src)
-        }
-        Instruction::PairP { src, dst, name, .. } => {
-            format!("PairP        r{} ← {}(r{})", dst, name, src)
-        }
+        } => fmt_inline_prim("Cons", *dst, name, &[*a, *b]),
+        Instruction::Car { src, dst, name, .. } => fmt_inline_prim("Car", *dst, name, &[*src]),
+        Instruction::Cdr { src, dst, name, .. } => fmt_inline_prim("Cdr", *dst, name, &[*src]),
+        Instruction::NullP { src, dst, name, .. } => fmt_inline_prim("NullP", *dst, name, &[*src]),
+        Instruction::PairP { src, dst, name, .. } => fmt_inline_prim("PairP", *dst, name, &[*src]),
         Instruction::VectorP { src, dst, name, .. } => {
-            format!("VectorP      r{} ← {}(r{})", dst, name, src)
+            fmt_inline_prim("VectorP", *dst, name, &[*src])
         }
         Instruction::VectorRef {
             v, i, dst, name, ..
-        } => {
-            format!("VectorRef    r{} ← {}(r{}, r{})", dst, name, v, i)
-        }
+        } => fmt_inline_prim("VectorRef", *dst, name, &[*v, *i]),
         Instruction::VectorSet {
             v,
             i,
@@ -214,9 +201,7 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
             dst,
             name,
             ..
-        } => {
-            format!("VectorSet    r{} ← {}(r{}, r{}, r{})", dst, name, v, i, val)
-        }
+        } => fmt_inline_prim("VectorSet", *dst, name, &[*v, *i, *val]),
         Instruction::ReturnMulti { vals } => {
             let v: Vec<String> = vals.iter().map(|r| format!("r{}", r)).collect();
             format!("ReturnMulti  ({})", v.join(", "))

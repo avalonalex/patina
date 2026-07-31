@@ -183,7 +183,7 @@ pub type HOTaggedHandler = fn(&dyn ApplyContext, Vec<TaggedValue>) -> Result<Tag
 
 **Related but separate (sized during the same investigation, not quick wins):** register-window zeroing removal needs a watermark redesign of the register arena (34 sites + continuation-capture interplay — `state.registers` is snapshotted whole by call/cc, and any latent read-before-write bug currently sees deterministic NULL rather than stale values). Defer until after P3, which changes the register traffic pattern anyway.
 
-### P8 — Deopt correctness regressions  *(recorded 2026-07-30 from post-P3 review; fix in flight)*
+### P8 — Deopt correctness regressions  *(recorded and fixed 2026-07-30, same-day, from post-P3 review)*
 
 Two regressions in the P2/P3 deopt machinery, found by a post-landing review.
 Both were demonstrated with repros, not just read from the code.
@@ -209,6 +209,12 @@ a backend divergence, not just a semantics waiver. Repro:
 - **Acceptance:** a test proving an import rebind deoptimizes
   already-compiled call sites (VM result matches tree-walker); chibi stays
   1163/1163.
+- **Fixed:** both import-set resolvers now funnel every installed binding
+  through `import_define` → `mark_if_shadowing_primitive`. The mark also
+  gained a value-identity guard (rebinding a name to the value it already
+  has never deoptimizes), so re-imports and overlapping library exports stay
+  free. Regression test: `vm_callprimitive.rs::import_rebind_deoptimizes`;
+  VM and tree-walker verified to agree on the repro.
 
 **P8.2 — Tail-position primitive sites lose proper tail calls on deopt.**
 Pass 5 lowers a tail-position resolved-primitive call to `<prim-op>; Return`,
@@ -229,6 +235,13 @@ equivalent plain mutual tail recursion.
 - **Acceptance:** rebound-primitive mutual tail recursion at 500k depth
   runs in flat memory (max RSS measured before/after the fix); results
   match the tree-walker; chibi stays 1163/1163.
+- **Fixed:** `exec_call_primitive`'s deopt branch detects the tail shape
+  against the live instruction stream and dispatches through the new
+  `tail_call_value` (the factored-out `TailCall` arm body). Measured after:
+  the 500k repro runs at **5.49 MB** max RSS vs 5.44 MB for the plain
+  tail-recursion baseline (was 109 MB). Regression tests:
+  `vm_callprimitive.rs::tail_deopt_returns_correct_result` and
+  `::tail_deopt_runs_deep_mutual_recursion`.
 
 ---
 

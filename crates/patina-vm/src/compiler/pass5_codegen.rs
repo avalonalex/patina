@@ -300,9 +300,9 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
 
         RegExprKind::Quasiquote(_v) => {
             // Quasiquotes must be expanded before codegen; callers should use
-            // `compile_with_qq` rather than the lower-level `compile` function.
+            // `compile_with_qq_resolving` rather than the lower-level `compile`.
             return Err(CompileError::Internal(
-                "Quasiquote reached codegen unexpanded; use compile_with_qq".into(),
+                "Quasiquote reached codegen unexpanded; use compile_with_qq_resolving".into(),
             ));
         }
 
@@ -526,7 +526,11 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             // Statically-known primitive: skip the callee LoadGlobal and the
             // frame push entirely. In tail position a primitive cannot capture
             // the continuation (control primitives are excluded from the map),
-            // so the emitted call + Return is equivalent to TailCall.
+            // so the emitted call + Return is equivalent to TailCall. The
+            // shadow-bit deopt path relies on this exact `<op> dst; Return
+            // dst` pair to recognize tail sites and keep them proper tail
+            // calls when the rebound callee is a closure (PRD P8.2, see
+            // `exec_call_primitive`).
             if let RegExprKind::GlobalRef { name } = &func.kind
                 && let Some(&resolved) = cg.prim_calls.get(name)
             {

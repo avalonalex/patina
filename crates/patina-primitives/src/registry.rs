@@ -207,17 +207,42 @@ impl PrimitiveRegistry {
         self.entries.get(index)
     }
 
+    /// Resolve a primitive's index through its cache slot (the one stored on
+    /// `Procedure::Primitive`), filling the slot on first use so the
+    /// name-hash fallback runs at most once per procedure. Every dispatch or
+    /// lookup site that holds a `Procedure::Primitive` should go through
+    /// this rather than re-deriving the get-or-resolve dance.
+    pub fn resolve_index_cached(
+        &self,
+        qualified_name: &str,
+        index_cache: &Cell<Option<usize>>,
+    ) -> Option<usize> {
+        match index_cache.get() {
+            Some(i) => Some(i),
+            None => {
+                let i = self.resolve_index(qualified_name)?;
+                index_cache.set(Some(i));
+                Some(i)
+            }
+        }
+    }
+
+    fn entry(&self, index: usize) -> Result<&PrimitiveFn, EvalError> {
+        self.entries
+            .get(index)
+            .ok_or_else(|| EvalError::InternalError(format!("invalid primitive index {}", index)))
+    }
+
     /// Apply a primitive by its stable registry index — the hot dispatch
-    /// path, no name hashing involved
+    /// path, no name hashing involved. Borrows the arguments; the
+    /// higher-order tier copies them into an owned Vec at this boundary.
     pub fn apply_by_index(
         &self,
         index: usize,
         args: &[TaggedValue],
         ctx: &dyn ApplyContext,
     ) -> Result<TaggedValue, EvalError> {
-        let primitive = self.entries.get(index).ok_or_else(|| {
-            EvalError::InternalError(format!("invalid primitive index {}", index))
-        })?;
+        let primitive = self.entry(index)?;
         primitive.check_arity(args.len())?;
         match &primitive.handler {
             PrimitiveHandler::Heap(h) => h(ctx.heap(), args),
@@ -225,9 +250,25 @@ impl PrimitiveRegistry {
         }
     }
 
-    /// Apply a primitive through a cached index slot (the one stored on
-    /// `Procedure::Primitive`), resolving the name and filling the slot on
-    /// first use. After the first call, dispatch is a direct array access.
+    /// `apply_by_index` for callers that own their argument vector: the
+    /// higher-order tier takes the Vec by move instead of re-copying it.
+    pub fn apply_by_index_owned(
+        &self,
+        index: usize,
+        args: Vec<TaggedValue>,
+        ctx: &dyn ApplyContext,
+    ) -> Result<TaggedValue, EvalError> {
+        let primitive = self.entry(index)?;
+        primitive.check_arity(args.len())?;
+        match &primitive.handler {
+            PrimitiveHandler::Heap(h) => h(ctx.heap(), &args),
+            PrimitiveHandler::HigherOrder(h) => h(ctx, args),
+        }
+    }
+
+    /// Apply a primitive through its cached index slot (see
+    /// `resolve_index_cached`). After the first call, dispatch is a direct
+    /// array access.
     pub fn apply_cached(
         &self,
         qualified_name: &str,
@@ -235,30 +276,30 @@ impl PrimitiveRegistry {
         args: &[TaggedValue],
         ctx: &dyn ApplyContext,
     ) -> Result<TaggedValue, EvalError> {
-        let index = match index_cache.get() {
-            Some(i) => i,
-            None => {
-                let i = self
-                    .resolve_index(qualified_name)
-                    .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))?;
-                index_cache.set(Some(i));
-                i
-            }
-        };
-        // Split at the FIRST '/', matching resolve_index: the short name may
-        // itself contain '/' (the division primitive is "library//")
+        let index = self
+            .resolve_index_cached(qualified_name, index_cache)
+            .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))?;
         debug_assert_eq!(
-            self.get_by_index(index).map(|p| p.name),
-            Some(
-                qualified_name
-                    .split_once('/')
-                    .map(|(_, n)| n)
-                    .unwrap_or(qualified_name)
-            ),
+            self.resolve_index(qualified_name),
+            Some(index),
             "stale primitive index cache for {}",
             qualified_name
         );
         self.apply_by_index(index, args, ctx)
+    }
+
+    /// `apply_cached` for callers that own their argument vector.
+    pub fn apply_cached_owned(
+        &self,
+        qualified_name: &str,
+        index_cache: &Cell<Option<usize>>,
+        args: Vec<TaggedValue>,
+        ctx: &dyn ApplyContext,
+    ) -> Result<TaggedValue, EvalError> {
+        let index = self
+            .resolve_index_cached(qualified_name, index_cache)
+            .ok_or_else(|| EvalError::UndefinedVariable(qualified_name.to_string()))?;
+        self.apply_by_index_owned(index, args, ctx)
     }
 
     /// Apply a primitive by qualified name, using the provided context

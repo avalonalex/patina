@@ -43,7 +43,6 @@ fn call_frame_is_clone() {
         source_map: vec![],
     });
     let frame = CallFrame {
-        code_id: CodeObjectId(0),
         pc: 42,
         register_base: 0,
         num_regs: 8,
