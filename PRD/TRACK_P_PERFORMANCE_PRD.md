@@ -123,9 +123,9 @@ ascending effort:
    handler's left fold, so float semantics are preserved. Extends the inline
    win to variadic call sites; orthogonal to the deopt question.
 Known residual gap (documented in #158): rebinding a primitive via `import`
-(rather than `define`/`set!`) after code referencing it was compiled does not
-set the shadow bit. **Upgraded from "accepted" to a bug — see P8.1**, whose
-review repro shows it diverging from the tree-walker.
+(rather than `define`/`set!`) after code referencing it was compiled did not
+set the shadow bit. **Upgraded from "accepted" to a bug and fixed — see
+P8.1** (PR #3), whose review repro showed it diverging from the tree-walker.
 
 #### Original P3 spec
 Add fixed-arity opcodes executed inline in the dispatch loop — `Add/Sub/Mul/Lt/NumEq/Eq/Car/Cdr/Cons/NullP/PairP/VectorP/VectorRef/VectorSet/Not` — each a plain struct of `Reg`s.
@@ -183,7 +183,7 @@ pub type HOTaggedHandler = fn(&dyn ApplyContext, Vec<TaggedValue>) -> Result<Tag
 
 **Related but separate (sized during the same investigation, not quick wins):** register-window zeroing removal needs a watermark redesign of the register arena (34 sites + continuation-capture interplay — `state.registers` is snapshotted whole by call/cc, and any latent read-before-write bug currently sees deterministic NULL rather than stale values). Defer until after P3, which changes the register traffic pattern anyway.
 
-### P8 — Deopt correctness regressions  *(recorded and fixed 2026-07-30, same-day, from post-P3 review)*
+### P8 — Deopt correctness regressions  *(done — PR #3, 2026-07-30; found and fixed same day by post-P3 review)*
 
 Two regressions in the P2/P3 deopt machinery, found by a post-landing review.
 Both were demonstrated with repros, not just read from the code.
