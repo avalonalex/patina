@@ -9,6 +9,7 @@ mod debug;
 pub(crate) mod equality;
 mod eval;
 mod exceptions;
+mod gc;
 pub mod io;
 mod lazy;
 mod lists;
@@ -50,4 +51,5 @@ pub fn register_all(registry: &mut PrimitiveRegistry) {
     records::register(registry);
     eval::register(registry);
     exceptions::register(registry);
+    gc::register(registry);
 }

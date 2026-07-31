@@ -133,6 +133,69 @@ impl CpsExpr {
     pub fn expr_kind(&self) -> &'static str {
         self.kind.expr_kind()
     }
+
+    /// Visit every heap value embedded in this expression tree
+    /// (`Literal` nodes and `Quasiquote` templates). GC tracing hook.
+    ///
+    /// `seen` deduplicates by node address: bodies are shared via `Rc` across
+    /// closures, so the caller passes one set per collection and shared
+    /// subtrees are walked once. Recursion depth is bounded by program size.
+    pub fn for_each_literal(
+        &self,
+        seen: &mut rustc_hash::FxHashSet<usize>,
+        f: &mut dyn FnMut(TaggedValue),
+    ) {
+        if !seen.insert(self as *const Self as usize) {
+            return;
+        }
+        match &self.kind {
+            CpsExprKind::Literal(tv) => f(*tv),
+            CpsExprKind::Quasiquote { template, .. } => f(*template),
+            CpsExprKind::Var { .. } | CpsExprKind::ContRef(_) => {}
+            CpsExprKind::Lambda { body, .. } => body.for_each_literal(seen, f),
+            CpsExprKind::LetVal { value, body, .. } => {
+                value.for_each_literal(seen, f);
+                body.for_each_literal(seen, f);
+            }
+            CpsExprKind::LetCont {
+                cont_body, body, ..
+            } => {
+                cont_body.for_each_literal(seen, f);
+                body.for_each_literal(seen, f);
+            }
+            CpsExprKind::App { func, args, .. } | CpsExprKind::Apply { func, args, .. } => {
+                func.for_each_literal(seen, f);
+                for arg in args {
+                    arg.for_each_literal(seen, f);
+                }
+            }
+            CpsExprKind::Continue { value, .. } => value.for_each_literal(seen, f),
+            CpsExprKind::If {
+                test,
+                consequent,
+                alternate,
+            } => {
+                test.for_each_literal(seen, f);
+                consequent.for_each_literal(seen, f);
+                alternate.for_each_literal(seen, f);
+            }
+            CpsExprKind::Set { value, cont, .. } | CpsExprKind::Define { value, cont, .. } => {
+                value.for_each_literal(seen, f);
+                cont.for_each_literal(seen, f);
+            }
+            CpsExprKind::CallCC { proc, .. } | CpsExprKind::Control { proc, .. } => {
+                proc.for_each_literal(seen, f);
+            }
+            CpsExprKind::Prompt { body, .. } => body.for_each_literal(seen, f),
+            CpsExprKind::Abort { value, .. } => value.for_each_literal(seen, f),
+            CpsExprKind::PrimOp { args, .. } => {
+                for arg in args {
+                    arg.for_each_literal(seen, f);
+                }
+            }
+            CpsExprKind::Halt(expr) => expr.for_each_literal(seen, f),
+        }
+    }
 }
 
 impl std::fmt::Display for CpsExpr {

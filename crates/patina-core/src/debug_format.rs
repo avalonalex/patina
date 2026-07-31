@@ -164,6 +164,7 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         HeapObjectData::VmDelimitedContinuationRef(id) => {
             write!(buf, "#<delimited-continuation:{}>", id).unwrap()
         }
+        HeapObjectData::Free => buf.push_str("#<gc-freed-slot>"),
     }
 }
 

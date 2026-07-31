@@ -385,6 +385,37 @@ impl Environment {
             .map(|(k, tv)| (k.clone(), *tv))
             .collect()
     }
+
+    // =========================================================================
+    // GC support (see heap/gc.rs and docs/GC_DESIGN.md)
+    // =========================================================================
+
+    /// The parent environment, if any. Used by the GC to walk the chain.
+    pub fn parent(&self) -> Option<&Rc<Environment>> {
+        self.parent.as_ref()
+    }
+
+    /// Stable identity for GC deduplication.
+    ///
+    /// Keyed on the shared bindings map rather than the `Environment` struct:
+    /// `Environment` is `Clone`, so several structs (and several
+    /// `Rc<Environment>`s) can alias the same bindings.
+    pub fn gc_identity(&self) -> usize {
+        Rc::as_ptr(&self.bindings) as usize
+    }
+
+    /// Visit every value bound locally (simple and scoped bindings, not the
+    /// parent chain). GC tracing hook — allocation-free, unlike `bindings()`.
+    pub fn for_each_local_value(&self, f: &mut dyn FnMut(TaggedValue)) {
+        for &tv in self.bindings.borrow().values() {
+            f(tv);
+        }
+        for scoped in self.scoped_bindings.borrow().values() {
+            for binding in scoped {
+                f(binding.tagged_value);
+            }
+        }
+    }
 }
 
 impl Default for Environment {

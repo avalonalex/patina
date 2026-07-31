@@ -147,6 +147,26 @@ impl Pattern {
             _ => None,
         }
     }
+
+    /// Visit every heap value embedded in this pattern. GC tracing hook.
+    pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
+        match self {
+            Pattern::Literal(tv) => f(*tv),
+            Pattern::Wildcard | Pattern::Var(_) => {}
+            Pattern::List(patterns) | Pattern::Vector(patterns) => {
+                for pattern in patterns {
+                    pattern.for_each_literal(f);
+                }
+            }
+            Pattern::DottedList { patterns, tail } => {
+                for pattern in patterns {
+                    pattern.for_each_literal(f);
+                }
+                tail.for_each_literal(f);
+            }
+            Pattern::Ellipsis { subpattern, .. } => subpattern.for_each_literal(f),
+        }
+    }
 }
 
 impl std::fmt::Display for Pattern {
@@ -348,6 +368,26 @@ impl Template {
             _ => None,
         }
     }
+
+    /// Visit every heap value embedded in this template. GC tracing hook.
+    pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
+        match self {
+            Template::Literal(tv) => f(*tv),
+            Template::Symbol(_) | Template::Var(_) => {}
+            Template::List(templates) | Template::Vector(templates) => {
+                for template in templates {
+                    template.for_each_literal(f);
+                }
+            }
+            Template::DottedList { templates, tail } => {
+                for template in templates {
+                    template.for_each_literal(f);
+                }
+                tail.for_each_literal(f);
+            }
+            Template::Ellipsis { subtemplate, .. } => subtemplate.for_each_literal(f),
+        }
+    }
 }
 
 impl std::fmt::Display for Template {
@@ -463,6 +503,18 @@ pub struct CompiledMacro {
     /// This heap is allocated at compile time and must be used (or merged into) the
     /// expansion-time heap so that literal TaggedValues remain valid.
     pub heap: SharedHeap,
+}
+
+impl CompiledMacro {
+    /// Visit every heap value embedded in this macro's patterns and
+    /// templates. GC tracing hook: a live macro binding keeps its literal
+    /// values live.
+    pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
+        for rule in &self.rules {
+            rule.pattern.for_each_literal(f);
+            rule.template.for_each_literal(f);
+        }
+    }
 }
 
 #[cfg(test)]
