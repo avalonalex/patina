@@ -106,6 +106,19 @@ pub fn eval_program(code: &str) -> String {
     interp_display(&interp, result)
 }
 
+/// Evaluate a program on the VM backend *explicitly* — not the
+/// feature-switched default — and `write` the result. For tests that
+/// exercise VM-only machinery (CallPrimitive deopt, inline opcodes).
+pub fn eval_program_vm(code: &str) -> String {
+    use patina_interpreter::Backend as _;
+    let interp = patina_interpreter::Interpreter::new(patina_vm::VmBackend::new());
+    let result = interp
+        .eval_program(code)
+        .unwrap_or_else(|e| panic!("Failed to evaluate program: {e}\n{code}"));
+    let heap = interp.backend().global_env().heap();
+    format_write_tagged(result, heap)
+}
+
 /// Assert that a multi-expression program produces expected result
 pub fn assert_program_eval_to(code: &str, expected: &str) {
     let result = eval_program(code);

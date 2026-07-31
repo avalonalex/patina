@@ -61,21 +61,9 @@ pub fn compile(expr: &CoreExpr) -> Result<(CodeObject, Vec<CodeObject>), Compile
     compile_pipeline(expr, None)
 }
 
-/// Compile a `CoreExpr` with quasiquote expansion.
-///
-/// Same as `compile`, but first expands any `Quasiquote` nodes into
-/// equivalent `App` calls (list, cons, append). Requires heap access
-/// to walk TaggedValue templates.
-pub fn compile_with_qq(
-    expr: &CoreExpr,
-    heap: &SharedHeap,
-    env: &Rc<Environment>,
-) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
-    let expanded = quasiquote_expand::expand_quasiquotes(expr, heap, env);
-    compile_pipeline(&expanded, None)
-}
-
 /// Compile with quasiquote expansion *and* compile-time primitive resolution:
+/// `Quasiquote` nodes are first expanded into equivalent `App` calls (list,
+/// cons, append — requires heap access to walk TaggedValue templates), then
 /// callees that resolve to registry primitives in `env` emit `CallPrimitive`
 /// (see `primitive_calls`). This is the entry the VM backend uses.
 pub fn compile_with_qq_resolving(

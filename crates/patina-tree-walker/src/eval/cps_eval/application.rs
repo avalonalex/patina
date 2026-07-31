@@ -759,11 +759,13 @@ impl<'a> CpsEvaluator<'a> {
             }
         };
 
-        // Dispatch through the cached registry index — no name hashing
-        let prim_result = self.evaluator.primitive_registry.apply_cached(
+        // Dispatch through the cached registry index — no name hashing. The
+        // owned entry point moves `args` straight into higher-order handlers
+        // instead of re-copying them at the registry boundary.
+        let prim_result = self.evaluator.primitive_registry.apply_cached_owned(
             qualified_name,
             registry_index,
-            &args,
+            args,
             self.evaluator,
         );
 

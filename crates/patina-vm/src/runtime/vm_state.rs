@@ -54,6 +54,12 @@ pub struct VmState {
     /// name-lookup `Call` path when it is set, so rebinding a primitive name
     /// behaves exactly as it did before `CallPrimitive` emission.
     pub shadowed_primitives: Vec<u64>,
+    /// Reusable argument buffer for `CallPrimitive` dispatch, taken out of
+    /// the state (`mem::take`) for the duration of each call so re-entrant
+    /// primitives see an empty buffer and simply allocate — only nested
+    /// primitive calls pay an allocation; the common depth-1 case is
+    /// allocation-free.
+    pub(crate) scratch_args: Vec<TaggedValue>,
     /// Side table for full (call/cc) continuations — keyed by opaque u64 id.
     /// The corresponding `TaggedValue` handle is `VmContinuationRef(id)` on the heap.
     pub continuation_store: HashMap<u64, Rc<VmContinuation>>,
@@ -92,6 +98,7 @@ impl VmState {
             heap,
             primitive_registry: Rc::new(registry),
             shadowed_primitives: Vec::new(),
+            scratch_args: Vec::new(),
             continuation_store: HashMap::new(),
             delimited_continuation_store: HashMap::new(),
             next_cont_id: 0,
@@ -456,7 +463,7 @@ fn vm_process_import_set(
         ImportSet::Library(lib_name) => {
             let imported_lib = vm_load_library(state, lib_name)?;
             for (name, value) in imported_lib.exports_iter_tagged() {
-                lib_env.define(name.clone(), value);
+                import_define(state, lib_env, name.clone(), value);
             }
             Ok(())
         }
@@ -468,7 +475,7 @@ fn vm_process_import_set(
             vm_process_import_set(state, import_set, &temp_env)?;
             for id in identifiers {
                 if let Some(value) = temp_env.get(id) {
-                    lib_env.define(id.clone(), value);
+                    import_define(state, lib_env, id.clone(), value);
                 } else {
                     return Err(LibraryError::ParseError {
                         file: String::new(),
@@ -487,7 +494,7 @@ fn vm_process_import_set(
             let exclude: std::collections::HashSet<_> = identifiers.iter().collect();
             for (name, value) in temp_env.bindings() {
                 if !exclude.contains(&name) {
-                    lib_env.define(name, value);
+                    import_define(state, lib_env, name, value);
                 }
             }
             Ok(())
@@ -496,7 +503,7 @@ fn vm_process_import_set(
             let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
             vm_process_import_set(state, import_set, &temp_env)?;
             for (name, value) in temp_env.bindings() {
-                lib_env.define(format!("{}{}", prefix, name), value);
+                import_define(state, lib_env, format!("{}{}", prefix, name), value);
             }
             Ok(())
         }
@@ -512,7 +519,7 @@ fn vm_process_import_set(
                 .collect();
             for (name, value) in temp_env.bindings() {
                 let exported_name = rename_map.get(&name).cloned().unwrap_or(name);
-                lib_env.define(exported_name, value);
+                import_define(state, lib_env, exported_name, value);
             }
             Ok(())
         }
@@ -582,7 +589,6 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
 
     let base = state.alloc_registers(code.num_regs);
     state.frames.push(CallFrame {
-        code_id,
         pc: 0,
         register_base: base,
         num_regs: code.num_regs,
@@ -610,7 +616,6 @@ pub fn execute_nested(state: &mut VmState, code_id: CodeObjectId) -> Result<Tagg
 
     let base = state.alloc_registers(code.num_regs);
     state.frames.push(CallFrame {
-        code_id,
         pc: 0,
         register_base: base,
         num_regs: code.num_regs,
@@ -663,7 +668,6 @@ fn call_closure(
     }
 
     state.frames.push(CallFrame {
-        code_id,
         pc: 0,
         register_base: base,
         num_regs: code.num_regs,
@@ -712,12 +716,10 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
     if e.source_location().is_some() {
         return e;
     }
-    if let Some(frame) = state.frames.last()
-        && let Some(code) = state.code_store.get(&frame.code_id)
-    {
+    if let Some(frame) = state.frames.last() {
         // PC was already advanced before dispatch, so use pc-1.
         let pc = frame.pc.saturating_sub(1);
-        if let Some(loc) = code.source_location(pc) {
+        if let Some(loc) = frame.code.source_location(pc) {
             return e.at(loc.clone());
         }
     }
@@ -738,6 +740,35 @@ fn frame_globals(state: &VmState) -> Rc<Environment> {
     state.globals.clone()
 }
 
+/// Shared skeleton of every inline primitive opcode arm (Track P P3): run
+/// `$fast` (which yields `Option<TaggedValue>`) only while the primitive is
+/// unshadowed; on `Some`, write `$dst`; otherwise funnel the exact same
+/// operands through `exec_call_primitive` — the registry handler the generic
+/// path uses — and propagate a continuation escape out of
+/// `dispatch_one_instruction`. Keeping the guard/fallback/escape plumbing
+/// here means an opcode arm contains only its genuinely opcode-specific
+/// fast path.
+macro_rules! inline_primitive {
+    ($state:ident, $exit_depth:ident, $func_id:ident, $name:ident, $dst:ident,
+     [$($arg:expr),+], $fast:block) => {
+        let fast = if !$state.is_primitive_shadowed($func_id.0 as usize) {
+            $fast
+        } else {
+            None
+        };
+        match fast {
+            Some(val) => $state.set_reg($dst, val),
+            None => {
+                if let Some(escaped) =
+                    exec_call_primitive($state, $func_id, $name, &[$($arg),+], $dst, $exit_depth)?
+                {
+                    return Ok(Some(escaped));
+                }
+            }
+        }
+    };
+}
+
 /// Dispatch a single instruction. Returns `Ok(Some(val))` if the loop should
 /// exit, `Ok(None)` to continue, or `Err` on error.
 fn dispatch_one_instruction(
@@ -747,13 +778,13 @@ fn dispatch_one_instruction(
     // Fetch current frame state. The frame carries its (immutable) code
     // object, so no code_store lookup or instruction clone is needed here —
     // the instruction is borrowed from the frame's Rc for the whole dispatch.
-    let (code, code_id, pc) = {
+    let (code, pc) = {
         let f = state.frames.last().expect("empty frame stack");
-        (f.code.clone(), f.code_id, f.pc)
+        (f.code.clone(), f.pc)
     };
 
     let instr = code.instructions.get(pc).ok_or_else(|| VmError::Runtime {
-        message: format!("PC {} out of bounds in {:?}", pc, code_id),
+        message: format!("PC {} out of bounds in {:?}", pc, code.id),
     })?;
 
     // Advance PC before dispatch (instructions that jump will overwrite).
@@ -766,7 +797,7 @@ fn dispatch_one_instruction(
         tracer.borrow_mut().pre_instruction_with_depth(
             &state.registers,
             f,
-            code_id,
+            code.id,
             pc,
             instr,
             &state.heap,
@@ -848,7 +879,7 @@ fn dispatch_one_instruction(
         Instruction::StoreGlobal { ref name, src } => {
             let val = state.reg(src);
             let globals = frame_globals(state);
-            mark_if_shadowing_primitive(state, &globals, name);
+            mark_if_shadowing_primitive(state, &globals, name, val);
             globals
                 .set(name, val)
                 .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
@@ -857,7 +888,7 @@ fn dispatch_one_instruction(
         Instruction::Define { ref name, src } => {
             let val = state.reg(src);
             let globals = frame_globals(state);
-            mark_if_shadowing_primitive(state, &globals, name);
+            mark_if_shadowing_primitive(state, &globals, name, val);
             globals.define(name.to_string(), val);
         }
 
@@ -911,141 +942,9 @@ fn dispatch_one_instruction(
         Instruction::TailCall { func, ref args } => {
             let func_val = state.reg(func);
             let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
-
-            // Intercept higher-order control primitives in tail position.
-            // Strategy: pop the current frame first (simulating "already returned"),
-            // then dispatch the primitive as if called from the parent frame.
-            if let Some(ctrl) = vm_control_primitive(state, func_val) {
-                let frame = state.frames.pop().expect("TailCall ctrl with empty stack");
-                let return_reg = frame.return_reg;
-                state.free_top_registers(frame.register_base);
-                // Now at depth N-1. Handle with dst = return_reg (slot in frame N-2).
-                if state.frames.len() == exit_depth {
-                    // At exit depth — use return_reg as dst (not 0, which
-                    // could clobber live registers like MutableCell pointers).
-                    if let Some(escaped) =
-                        handle_control_primitive(state, ctrl, arg_vals, return_reg, false)?
-                    {
-                        return Ok(Some(escaped));
-                    }
-                    // The primitive wrote its result to return_reg. If it
-                    // returned immediately (no new frames pushed), return
-                    // the value. Otherwise let the loop drive the new frames.
-                    if state.frames.len() == exit_depth {
-                        let result = state.reg(return_reg);
-                        return Ok(Some(result));
-                    }
-                    return Ok(None);
-                }
-                if let Some(escaped) =
-                    handle_control_primitive(state, ctrl, arg_vals, return_reg, false)?
-                {
-                    return Ok(Some(escaped));
-                }
-                // The control primitive has completed. If it left the result
-                // in the caller's register and the depth matches exit_depth,
-                // this run_loop_until should exit — the tail-called thunk
-                // is done.
-                if state.frames.len() == exit_depth {
-                    let result = state.reg(return_reg);
-                    return Ok(Some(result));
-                }
-                return Ok(None);
+            if let Some(exit_val) = tail_call_value(state, func_val, arg_vals, exit_depth)? {
+                return Ok(Some(exit_val));
             }
-
-            // Continuation invocation in tail position.
-            if try_invoke_continuation(state, func_val, &arg_vals)? {
-                // Safety net: if frames dropped to or below exit_depth, the
-                // continuation escaped past a synchronous run_thunk boundary.
-                if state.frames.len() <= exit_depth {
-                    let primary = arg_vals
-                        .first()
-                        .copied()
-                        .unwrap_or(TaggedValue::UNSPECIFIED);
-                    return Ok(Some(primary));
-                }
-                return Ok(None);
-            }
-
-            // Primitives in tail position: call them, write result to current
-            // frame's return_reg, then simulate a Return.
-            if let Some(prim) = primitive_procedure(state, func_val) {
-                let result = call_primitive_proc(state, &prim, &arg_vals)?;
-                let frame = state.frames.pop().expect("TailCall with empty stack");
-                if state.frames.len() == exit_depth {
-                    state.free_top_registers(frame.register_base);
-                    return Ok(Some(result));
-                }
-                let caller_idx = state.frames.len() - 1;
-                let return_reg = frame.return_reg;
-                state.set_reg_in_frame(caller_idx, return_reg, result);
-                state.free_top_registers(frame.register_base);
-                return Ok(None);
-            }
-
-            // Parameters in tail position: same as primitives.
-            if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
-                let result = result?;
-                let frame = state.frames.pop().expect("TailCall param with empty stack");
-                if state.frames.len() == exit_depth {
-                    state.free_top_registers(frame.register_base);
-                    return Ok(Some(result));
-                }
-                let caller_idx = state.frames.len() - 1;
-                let return_reg = frame.return_reg;
-                state.set_reg_in_frame(caller_idx, return_reg, result);
-                state.free_top_registers(frame.register_base);
-                return Ok(None);
-            }
-
-            let new_code_id = resolve_closure(state, func_val)?;
-            let new_code =
-                state
-                    .code_store
-                    .get(&new_code_id)
-                    .cloned()
-                    .ok_or_else(|| VmError::Runtime {
-                        message: format!("missing CodeObject {:?}", new_code_id),
-                    })?;
-
-            check_arity(&new_code.arity, arg_vals.len())?;
-
-            // Reuse the current frame's register window.
-            // If the new code needs more registers, grow the window.
-            let frame = state.frames.last_mut().unwrap();
-            let old_base = frame.register_base;
-            let old_num = frame.num_regs;
-            let new_num = new_code.num_regs;
-
-            if new_num > old_num {
-                let extra = new_num - old_num;
-                state
-                    .registers
-                    .resize(state.registers.len() + extra as usize, TaggedValue::NULL);
-                state.frames.last_mut().unwrap().num_regs = new_num;
-            }
-
-            // Write fixed args into r0..r(n-1), then handle variadic rest.
-            if let Arity::Variadic(fixed) = &new_code.arity {
-                let fixed = *fixed as usize;
-                for (i, val) in arg_vals[..fixed].iter().enumerate() {
-                    state.registers[old_base + i] = *val;
-                }
-                let rest = build_list(state, &arg_vals[fixed..])?;
-                state.registers[old_base + fixed] = rest;
-            } else {
-                for (i, val) in arg_vals.iter().enumerate() {
-                    state.registers[old_base + i] = *val;
-                }
-            }
-
-            // Update frame in-place. `code` must be kept in sync with
-            // `code_id` — dispatch fetches instructions from it.
-            let frame = state.frames.last_mut().unwrap();
-            frame.code_id = new_code_id;
-            frame.pc = 0;
-            frame.closure = closure_heap_index(func_val);
-            frame.code = new_code;
         }
 
         Instruction::Apply {
@@ -1163,7 +1062,6 @@ fn dispatch_one_instruction(
             }
 
             let frame = state.frames.last_mut().unwrap();
-            frame.code_id = new_code_id;
             frame.pc = 0;
             frame.closure = closure_heap_index(func_val);
             frame.code = new_code;
@@ -1489,21 +1387,26 @@ fn dispatch_one_instruction(
             ref args,
             dst,
         } => {
-            let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
-            if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, arg_vals, dst, exit_depth)?
-            {
+            // Gather args into the reusable scratch buffer (taken out of the
+            // state so a re-entrant primitive cannot alias it).
+            let mut arg_vals = std::mem::take(&mut state.scratch_args);
+            arg_vals.clear();
+            arg_vals.extend(args.iter().map(|&r| state.reg(r)));
+            let result = exec_call_primitive(state, func_id, name, &arg_vals, dst, exit_depth);
+            state.scratch_args = arg_vals;
+            if let Some(escaped) = result? {
                 return Ok(Some(escaped));
             }
         }
 
         // ── Inline primitive opcodes (Track P P3) ───────────────────────
         //
-        // Contract shared by every arm: the fast path fires only when the
-        // primitive is unshadowed AND the operands fit the trivial case;
-        // every other case funnels through exec_call_primitive, the same
-        // registry handler the CallPrimitive path uses — identical results,
-        // promotion behavior, and error messages by construction.
+        // Contract shared by every arm (owned by `inline_primitive!`): the
+        // fast path fires only when the primitive is unshadowed AND the
+        // operands fit the trivial case; every other case funnels through
+        // exec_call_primitive, the same registry handler the CallPrimitive
+        // path uses — identical results, promotion behavior, and error
+        // messages by construction.
         Instruction::Add {
             a,
             b,
@@ -1512,21 +1415,12 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let (x, y) = (state.reg(a), state.reg(b));
-            let fast = (!state.is_primitive_shadowed(func_id.0 as usize)
-                && x.is_fixnum()
-                && y.is_fixnum())
-            .then(|| x.fixnum_add(y))
-            .flatten();
-            match fast {
-                Some(r) => state.set_reg(dst, r),
-                None => {
-                    if let Some(escaped) =
-                        exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
-                    {
-                        return Ok(Some(escaped));
-                    }
-                }
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+                // Overflow returns None from fixnum_add; the handler promotes.
+                (x.is_fixnum() && y.is_fixnum())
+                    .then(|| x.fixnum_add(y))
+                    .flatten()
+            });
         }
 
         Instruction::Sub {
@@ -1537,21 +1431,11 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let (x, y) = (state.reg(a), state.reg(b));
-            let fast = (!state.is_primitive_shadowed(func_id.0 as usize)
-                && x.is_fixnum()
-                && y.is_fixnum())
-            .then(|| x.fixnum_sub(y))
-            .flatten();
-            match fast {
-                Some(r) => state.set_reg(dst, r),
-                None => {
-                    if let Some(escaped) =
-                        exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
-                    {
-                        return Ok(Some(escaped));
-                    }
-                }
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+                (x.is_fixnum() && y.is_fixnum())
+                    .then(|| x.fixnum_sub(y))
+                    .flatten()
+            });
         }
 
         Instruction::Mul {
@@ -1562,21 +1446,11 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let (x, y) = (state.reg(a), state.reg(b));
-            let fast = (!state.is_primitive_shadowed(func_id.0 as usize)
-                && x.is_fixnum()
-                && y.is_fixnum())
-            .then(|| x.fixnum_mul(y))
-            .flatten();
-            match fast {
-                Some(r) => state.set_reg(dst, r),
-                None => {
-                    if let Some(escaped) =
-                        exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
-                    {
-                        return Ok(Some(escaped));
-                    }
-                }
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+                (x.is_fixnum() && y.is_fixnum())
+                    .then(|| x.fixnum_mul(y))
+                    .flatten()
+            });
         }
 
         Instruction::Lt {
@@ -1587,13 +1461,9 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let (x, y) = (state.reg(a), state.reg(b));
-            if !state.is_primitive_shadowed(func_id.0 as usize) && x.is_fixnum() && y.is_fixnum() {
-                state.set_reg(dst, TaggedValue::boolean(x.fixnum_lt(y)));
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+                (x.is_fixnum() && y.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_lt(y)))
+            });
         }
 
         Instruction::NumEq {
@@ -1604,13 +1474,9 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let (x, y) = (state.reg(a), state.reg(b));
-            if !state.is_primitive_shadowed(func_id.0 as usize) && x.is_fixnum() && y.is_fixnum() {
-                state.set_reg(dst, TaggedValue::boolean(x.fixnum_eq(y)));
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+                (x.is_fixnum() && y.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_eq(y)))
+            });
         }
 
         Instruction::Eq {
@@ -1621,14 +1487,9 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let (x, y) = (state.reg(a), state.reg(b));
-            if !state.is_primitive_shadowed(func_id.0 as usize) {
-                let r = state.heap.borrow().values_eq(x, y);
-                state.set_reg(dst, TaggedValue::boolean(r));
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+                Some(TaggedValue::boolean(state.heap.borrow().values_eq(x, y)))
+            });
         }
 
         Instruction::Cons {
@@ -1639,14 +1500,9 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let (x, y) = (state.reg(a), state.reg(b));
-            if !state.is_primitive_shadowed(func_id.0 as usize) {
-                let pair = state.heap.borrow_mut().alloc_pair(x, y);
-                state.set_reg(dst, pair);
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![x, y], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+                Some(state.heap.borrow_mut().alloc_pair(x, y))
+            });
         }
 
         Instruction::Car {
@@ -1656,14 +1512,10 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let x = state.reg(src);
-            if !state.is_primitive_shadowed(func_id.0 as usize) && x.is_pair() {
-                let car = state.heap.borrow().car(x);
-                state.set_reg(dst, car);
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+                // Native pairs only; boxed pairs and type errors go to the handler.
+                x.is_pair().then(|| state.heap.borrow().car(x))
+            });
         }
 
         Instruction::Cdr {
@@ -1673,14 +1525,9 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let x = state.reg(src);
-            if !state.is_primitive_shadowed(func_id.0 as usize) && x.is_pair() {
-                let cdr = state.heap.borrow().cdr(x);
-                state.set_reg(dst, cdr);
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+                x.is_pair().then(|| state.heap.borrow().cdr(x))
+            });
         }
 
         Instruction::NullP {
@@ -1690,13 +1537,9 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let x = state.reg(src);
-            if !state.is_primitive_shadowed(func_id.0 as usize) {
-                state.set_reg(dst, TaggedValue::boolean(x.is_null()));
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+                Some(TaggedValue::boolean(x.is_null()))
+            });
         }
 
         Instruction::PairP {
@@ -1706,13 +1549,9 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let x = state.reg(src);
-            if !state.is_primitive_shadowed(func_id.0 as usize) {
-                state.set_reg(dst, TaggedValue::boolean(x.is_pair()));
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+                Some(TaggedValue::boolean(x.is_pair()))
+            });
         }
 
         Instruction::VectorP {
@@ -1722,13 +1561,9 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let x = state.reg(src);
-            if !state.is_primitive_shadowed(func_id.0 as usize) {
-                state.set_reg(dst, TaggedValue::boolean(x.is_vector()));
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![x], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+                Some(TaggedValue::boolean(x.is_vector()))
+            });
         }
 
         Instruction::VectorRef {
@@ -1739,28 +1574,16 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let (vec, idx) = (state.reg(v), state.reg(i));
-            let fast = if !state.is_primitive_shadowed(func_id.0 as usize)
-                && vec.is_vector()
-                && idx.is_fixnum()
-            {
-                let i = idx.as_fixnum_unchecked();
-                let heap = state.heap.borrow();
-                // Out-of-bounds falls back so the handler's error message is used.
-                (i >= 0 && (i as usize) < heap.vector_len(vec))
-                    .then(|| heap.vector_slice(vec)[i as usize])
-            } else {
-                None
-            };
-            match fast {
-                Some(val) => state.set_reg(dst, val),
-                None => {
-                    if let Some(escaped) =
-                        exec_call_primitive(state, func_id, name, vec![vec, idx], dst, exit_depth)?
-                    {
-                        return Ok(Some(escaped));
-                    }
-                }
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [vec, idx], {
+                // Out-of-bounds (`get` misses, including negative indices)
+                // falls back so the handler's error message is used.
+                (vec.is_vector() && idx.is_fixnum())
+                    .then(|| {
+                        let i = usize::try_from(idx.as_fixnum_unchecked()).ok()?;
+                        state.heap.borrow().vector_slice(vec).get(i).copied()
+                    })
+                    .flatten()
+            });
         }
 
         Instruction::VectorSet {
@@ -1772,25 +1595,19 @@ fn dispatch_one_instruction(
             ref name,
         } => {
             let (vec, idx, x) = (state.reg(v), state.reg(i), state.reg(val));
-            let mut fast = false;
-            if !state.is_primitive_shadowed(func_id.0 as usize)
-                && vec.is_vector()
-                && idx.is_fixnum()
-            {
-                let i = idx.as_fixnum_unchecked();
-                let mut heap = state.heap.borrow_mut();
-                if i >= 0 && (i as usize) < heap.vector_len(vec) {
-                    heap.vector_set(vec, i as usize, x);
-                    fast = true;
-                }
-            }
-            if fast {
-                state.set_reg(dst, TaggedValue::UNSPECIFIED);
-            } else if let Some(escaped) =
-                exec_call_primitive(state, func_id, name, vec![vec, idx, x], dst, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            inline_primitive!(state, exit_depth, func_id, name, dst, [vec, idx, x], {
+                // Out-of-bounds falls back so the handler's error message is
+                // used. Writes `dst ← unspecified`, matching the handler.
+                (vec.is_vector() && idx.is_fixnum())
+                    .then(|| {
+                        let i = usize::try_from(idx.as_fixnum_unchecked()).ok()?;
+                        let mut heap = state.heap.borrow_mut();
+                        let slot = heap.vector_slice_mut(vec).get_mut(i)?;
+                        *slot = x;
+                        Some(TaggedValue::UNSPECIFIED)
+                    })
+                    .flatten()
+            });
         }
 
         Instruction::AllocCell { dst, src } => {
@@ -2659,7 +2476,8 @@ fn run_apply_proc(
 }
 
 /// Recognized VM-intercepted control primitives.
-enum VmControlPrimitive {
+#[derive(Clone, Copy)]
+pub(crate) enum VmControlPrimitive {
     DynamicWind,
     CallWithContinuationPrompt,
     AbortCurrentContinuation,
@@ -2672,34 +2490,60 @@ enum VmControlPrimitive {
     Error,
 }
 
+/// The single source of truth for which qualified names the VM intercepts
+/// for control flow. `resolve_primitive_calls` must never emit
+/// `CallPrimitive` for any of these (its exclusion is cross-checked against
+/// this table by `excluded_covers_every_intercepted_primitive` in
+/// `compiler/primitive_calls.rs`) — a directly dispatched registry handler
+/// would bypass the VM's continuation/exception cooperation.
+pub(crate) const VM_INTERCEPTED_PRIMITIVES: &[(&str, VmControlPrimitive)] = &[
+    (
+        "patina.internal.control/dynamic-wind",
+        VmControlPrimitive::DynamicWind,
+    ),
+    (
+        "patina.internal.control/call-with-continuation-prompt",
+        VmControlPrimitive::CallWithContinuationPrompt,
+    ),
+    (
+        "patina.internal.control/abort-current-continuation",
+        VmControlPrimitive::AbortCurrentContinuation,
+    ),
+    (
+        "patina.internal.control/call-with-current-continuation",
+        VmControlPrimitive::CallWithCurrentContinuation,
+    ),
+    (
+        "patina.internal.control/call/cc",
+        VmControlPrimitive::CallWithCurrentContinuation,
+    ),
+    (
+        "patina.internal.control/call-with-values",
+        VmControlPrimitive::CallWithValues,
+    ),
+    ("patina.internal.control/values", VmControlPrimitive::Values),
+    (
+        "patina.internal.errors/with-exception-handler",
+        VmControlPrimitive::WithExceptionHandler,
+    ),
+    ("patina.internal.errors/raise", VmControlPrimitive::Raise),
+    (
+        "patina.internal.errors/raise-continuable",
+        VmControlPrimitive::RaiseContinuable,
+    ),
+    ("patina.internal.errors/error", VmControlPrimitive::Error),
+];
+
 /// If `func_val` is a VM-intercepted control primitive, return which one.
 fn vm_control_primitive(state: &VmState, func_val: TaggedValue) -> Option<VmControlPrimitive> {
     let proc = state.heap.borrow().get_procedure(func_val)?;
     let Procedure::Primitive { qualified_name, .. } = proc.as_ref() else {
         return None;
     };
-    match qualified_name.as_ref() {
-        "patina.internal.control/dynamic-wind" => Some(VmControlPrimitive::DynamicWind),
-        "patina.internal.control/call-with-continuation-prompt" => {
-            Some(VmControlPrimitive::CallWithContinuationPrompt)
-        }
-        "patina.internal.control/abort-current-continuation" => {
-            Some(VmControlPrimitive::AbortCurrentContinuation)
-        }
-        "patina.internal.control/call-with-current-continuation"
-        | "patina.internal.control/call/cc" => {
-            Some(VmControlPrimitive::CallWithCurrentContinuation)
-        }
-        "patina.internal.control/call-with-values" => Some(VmControlPrimitive::CallWithValues),
-        "patina.internal.control/values" => Some(VmControlPrimitive::Values),
-        "patina.internal.errors/with-exception-handler" => {
-            Some(VmControlPrimitive::WithExceptionHandler)
-        }
-        "patina.internal.errors/raise" => Some(VmControlPrimitive::Raise),
-        "patina.internal.errors/raise-continuable" => Some(VmControlPrimitive::RaiseContinuable),
-        "patina.internal.errors/error" => Some(VmControlPrimitive::Error),
-        _ => None,
-    }
+    VM_INTERCEPTED_PRIMITIVES
+        .iter()
+        .find(|(name, _)| *name == qualified_name.as_ref())
+        .map(|&(_, ctrl)| ctrl)
 }
 
 /// Try to invoke `func_val` as a continuation. Returns `Ok(true)` if it was
@@ -2825,17 +2669,148 @@ fn call_value(
     Ok(None)
 }
 
+/// Dispatch a call to an arbitrary callee value in tail position — the body
+/// of the `TailCall` instruction, also used by the deopt path of tail-shaped
+/// primitive sites (PRD P8.2). Control primitives, primitives, and
+/// parameters pop the frame and deliver straight to the caller; closures
+/// reuse the current frame's register window. Returns `Some(value)` when the
+/// enclosing `run_loop_until` must exit with `value`.
+fn tail_call_value(
+    state: &mut VmState,
+    func_val: TaggedValue,
+    arg_vals: Vec<TaggedValue>,
+    exit_depth: usize,
+) -> Result<Option<TaggedValue>, VmError> {
+    // Intercept higher-order control primitives in tail position.
+    // Strategy: pop the current frame first (simulating "already returned"),
+    // then dispatch the primitive as if called from the parent frame.
+    if let Some(ctrl) = vm_control_primitive(state, func_val) {
+        let frame = state.frames.pop().expect("tail call ctrl with empty stack");
+        let return_reg = frame.return_reg;
+        state.free_top_registers(frame.register_base);
+        // Now at depth N-1. Handle with dst = return_reg (slot in frame N-2).
+        // (At exit depth, return_reg is still the right dst — not 0, which
+        // could clobber live registers like MutableCell pointers.)
+        if let Some(escaped) = handle_control_primitive(state, ctrl, arg_vals, return_reg, false)? {
+            return Ok(Some(escaped));
+        }
+        // The control primitive has completed. If it wrote its result and
+        // returned immediately (no new frames pushed past exit_depth), the
+        // enclosing loop is done; otherwise let it drive the new frames.
+        if state.frames.len() == exit_depth {
+            let result = state.reg(return_reg);
+            return Ok(Some(result));
+        }
+        return Ok(None);
+    }
+
+    // Continuation invocation in tail position.
+    if try_invoke_continuation(state, func_val, &arg_vals)? {
+        // Safety net: if frames dropped to or below exit_depth, the
+        // continuation escaped past a synchronous run_thunk boundary.
+        if state.frames.len() <= exit_depth {
+            let primary = arg_vals
+                .first()
+                .copied()
+                .unwrap_or(TaggedValue::UNSPECIFIED);
+            return Ok(Some(primary));
+        }
+        return Ok(None);
+    }
+
+    // Primitives in tail position: call them, write result to current
+    // frame's return_reg, then simulate a Return.
+    if let Some(prim) = primitive_procedure(state, func_val) {
+        let result = call_primitive_proc(state, &prim, &arg_vals)?;
+        let frame = state.frames.pop().expect("tail call with empty stack");
+        if state.frames.len() == exit_depth {
+            state.free_top_registers(frame.register_base);
+            return Ok(Some(result));
+        }
+        let caller_idx = state.frames.len() - 1;
+        let return_reg = frame.return_reg;
+        state.set_reg_in_frame(caller_idx, return_reg, result);
+        state.free_top_registers(frame.register_base);
+        return Ok(None);
+    }
+
+    // Parameters in tail position: same as primitives.
+    if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+        let result = result?;
+        let frame = state
+            .frames
+            .pop()
+            .expect("tail call param with empty stack");
+        if state.frames.len() == exit_depth {
+            state.free_top_registers(frame.register_base);
+            return Ok(Some(result));
+        }
+        let caller_idx = state.frames.len() - 1;
+        let return_reg = frame.return_reg;
+        state.set_reg_in_frame(caller_idx, return_reg, result);
+        state.free_top_registers(frame.register_base);
+        return Ok(None);
+    }
+
+    let new_code_id = resolve_closure(state, func_val)?;
+    let new_code = state
+        .code_store
+        .get(&new_code_id)
+        .cloned()
+        .ok_or_else(|| VmError::Runtime {
+            message: format!("missing CodeObject {:?}", new_code_id),
+        })?;
+
+    check_arity(&new_code.arity, arg_vals.len())?;
+
+    // Reuse the current frame's register window.
+    // If the new code needs more registers, grow the window.
+    let frame = state.frames.last_mut().unwrap();
+    let old_base = frame.register_base;
+    let old_num = frame.num_regs;
+    let new_num = new_code.num_regs;
+
+    if new_num > old_num {
+        let extra = new_num - old_num;
+        state
+            .registers
+            .resize(state.registers.len() + extra as usize, TaggedValue::NULL);
+        state.frames.last_mut().unwrap().num_regs = new_num;
+    }
+
+    // Write fixed args into r0..r(n-1), then handle variadic rest.
+    if let Arity::Variadic(fixed) = &new_code.arity {
+        let fixed = *fixed as usize;
+        for (i, val) in arg_vals[..fixed].iter().enumerate() {
+            state.registers[old_base + i] = *val;
+        }
+        let rest = build_list(state, &arg_vals[fixed..])?;
+        state.registers[old_base + fixed] = rest;
+    } else {
+        for (i, val) in arg_vals.iter().enumerate() {
+            state.registers[old_base + i] = *val;
+        }
+    }
+
+    // Update frame in-place — dispatch fetches instructions from `code`.
+    let frame = state.frames.last_mut().unwrap();
+    frame.pc = 0;
+    frame.closure = closure_heap_index(func_val);
+    frame.code = new_code;
+    Ok(None)
+}
+
 /// Execute a compile-time-resolved primitive call: the shared back end of
 /// `CallPrimitive` and every inline opcode's slow path. Checks the shadow
-/// bit — a rebound name deoptimizes to name-lookup dispatch (`call_value`),
-/// preserving redefinition semantics — otherwise dispatches through the
-/// registry by index. Returns `Some(value)` on a continuation escape, as
-/// `call_value` does.
+/// bit — a rebound name deoptimizes to name-lookup dispatch, preserving
+/// redefinition semantics — otherwise dispatches through the registry by
+/// index. Returns `Some(value)` on a continuation escape, as `call_value`
+/// does.
 fn exec_call_primitive(
     state: &mut VmState,
     func_id: PrimitiveFnId,
     name: &Symbol,
-    arg_vals: Vec<TaggedValue>,
+    arg_vals: &[TaggedValue],
     dst: u16,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
@@ -2844,14 +2819,31 @@ fn exec_call_primitive(
         let func_val = globals
             .get(name)
             .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
-        return call_value(state, func_val, arg_vals, dst, exit_depth);
+        // Tail-shape detection (PRD P8.2): pass 5 lowers a tail-position
+        // primitive site to `<prim-op> dst; Return dst`. When the deopt
+        // replaces the primitive with a closure call, that shape must stay a
+        // proper tail call (R7RS §3.5), or mutual tail recursion through the
+        // rebound site grows the frame stack. The check reads the actual
+        // next instruction — it cannot go stale, and a coincidental match is
+        // semantically a tail call anyway. On the tail path the callee
+        // returns directly to this frame's caller; the `Return` is never
+        // executed.
+        let frame = state.frames.last().expect("no active frame");
+        let is_tail_site = matches!(
+            frame.code.instructions.get(frame.pc),
+            Some(Instruction::Return { val }) if *val == dst
+        );
+        if is_tail_site {
+            return tail_call_value(state, func_val, arg_vals.to_vec(), exit_depth);
+        }
+        return call_value(state, func_val, arg_vals.to_vec(), dst, exit_depth);
     }
     let registry = Rc::clone(&state.primitive_registry);
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
     let result = registry
-        .apply_by_index(func_id.0 as usize, &arg_vals, &ctx)
+        .apply_by_index(func_id.0 as usize, arg_vals, &ctx)
         .map_err(|e| VmError::Runtime {
             message: e.to_string(),
         })?;
@@ -2859,12 +2851,25 @@ fn exec_call_primitive(
     Ok(None)
 }
 
-/// A top-level rebind that overwrites a primitive binding must deoptimize
-/// every `CallPrimitive` site compiled against it, or already-compiled
-/// callers would keep calling the old primitive. Called by the
-/// `Define`/`StoreGlobal` handlers *before* the binding is replaced.
-fn mark_if_shadowing_primitive(state: &mut VmState, globals: &Rc<Environment>, name: &str) {
+/// A rebind that overwrites a primitive binding with a *different* value
+/// must deoptimize every `CallPrimitive` site compiled against it, or
+/// already-compiled callers would keep calling the old primitive.
+///
+/// Every Rust-side writer that can overwrite a global binding must call this
+/// *before* replacing it: the `Define`/`StoreGlobal` handlers, and the import
+/// machinery in both this file and `backend.rs` (via `import_define` — PRD
+/// P8.1). Rebinding a name to the value it already has is a no-op and does
+/// not deoptimize, so re-importing a library never pays for this.
+pub(crate) fn mark_if_shadowing_primitive(
+    state: &mut VmState,
+    globals: &Rc<Environment>,
+    name: &str,
+    new_val: TaggedValue,
+) {
     let Some(old) = globals.get(name) else { return };
+    if old == new_val {
+        return;
+    }
     let proc = state.heap.borrow().get_procedure(old);
     let Some(proc) = proc else { return };
     let Procedure::Primitive {
@@ -2875,12 +2880,29 @@ fn mark_if_shadowing_primitive(state: &mut VmState, globals: &Rc<Environment>, n
     else {
         return;
     };
-    let index = registry_index
-        .get()
-        .or_else(|| state.primitive_registry.resolve_index(qualified_name));
+    let index = state
+        .primitive_registry
+        .resolve_index_cached(qualified_name, registry_index);
     if let Some(index) = index {
         state.mark_shadowed_primitive(index);
     }
+}
+
+/// Import-path define: overwrite `name` in `env`, first marking the shadow
+/// bit when the write rebinds a primitive (see `mark_if_shadowing_primitive`).
+/// Both import-set resolvers (this file's and `backend.rs`'s) funnel every
+/// binding they install through here. Defines into fresh temp/library
+/// environments find no existing binding and mark nothing; over-marking is
+/// possible only when a library env genuinely rebinds a primitive name, which
+/// costs a deopt, never a wrong result.
+pub(crate) fn import_define(
+    state: &mut VmState,
+    env: &Rc<Environment>,
+    name: String,
+    value: TaggedValue,
+) {
+    mark_if_shadowing_primitive(state, env, &name, value);
+    env.define(name, value);
 }
 
 /// Call a primitive procedure (as returned by `primitive_procedure`).

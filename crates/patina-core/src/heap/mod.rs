@@ -397,6 +397,12 @@ impl Heap {
         &self.vectors[ptr.heap_index() as usize]
     }
 
+    /// Get a mutable slice of the vector
+    pub fn vector_slice_mut(&mut self, ptr: TaggedValue) -> &mut [TaggedValue] {
+        debug_assert!(ptr.is_vector());
+        &mut self.vectors[ptr.heap_index() as usize]
+    }
+
     // =========================================================================
     // String Operations
     // =========================================================================

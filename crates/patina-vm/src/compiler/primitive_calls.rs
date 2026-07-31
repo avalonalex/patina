@@ -34,8 +34,10 @@ pub type PrimitiveCallMap = FxHashMap<Symbol, ResolvedPrimitive>;
 pub struct ResolvedPrimitive {
     pub id: PrimitiveFnId,
     /// Set when this primitive has a specialized inline opcode (Track P P3).
-    /// Keyed on the registry entry's own short name, so import renames still
-    /// inline correctly.
+    /// Keyed on the registry entry's own qualified name — not the env
+    /// binding name, so import renames still inline correctly, and not the
+    /// bare short name, so an unrelated library registering e.g. its own `+`
+    /// can never pick up scheme.base's fast-path semantics.
     pub inline: Option<InlineOp>,
 }
 
@@ -82,25 +84,25 @@ impl InlineOp {
     }
 }
 
-/// Map a registry primitive's short name to its inline opcode, if any.
+/// Map a registry primitive's qualified name to its inline opcode, if any.
 /// (`not` is Scheme-defined and never resolves to a primitive, so it has no
 /// opcode despite appearing in early drafts of the P3 list.)
-fn inline_op_for(short_name: &str) -> Option<InlineOp> {
-    Some(match short_name {
-        "+" => InlineOp::Add,
-        "-" => InlineOp::Sub,
-        "*" => InlineOp::Mul,
-        "<" => InlineOp::Lt,
-        "=" => InlineOp::NumEq,
-        "eq?" => InlineOp::Eq,
-        "cons" => InlineOp::Cons,
-        "car" => InlineOp::Car,
-        "cdr" => InlineOp::Cdr,
-        "null?" => InlineOp::NullP,
-        "pair?" => InlineOp::PairP,
-        "vector?" => InlineOp::VectorP,
-        "vector-ref" => InlineOp::VectorRef,
-        "vector-set!" => InlineOp::VectorSet,
+fn inline_op_for(qualified_name: &str) -> Option<InlineOp> {
+    Some(match qualified_name {
+        "scheme.base/+" => InlineOp::Add,
+        "scheme.base/-" => InlineOp::Sub,
+        "scheme.base/*" => InlineOp::Mul,
+        "scheme.base/<" => InlineOp::Lt,
+        "scheme.base/=" => InlineOp::NumEq,
+        "scheme.base/eq?" => InlineOp::Eq,
+        "scheme.base/cons" => InlineOp::Cons,
+        "scheme.base/car" => InlineOp::Car,
+        "scheme.base/cdr" => InlineOp::Cdr,
+        "scheme.base/null?" => InlineOp::NullP,
+        "scheme.base/pair?" => InlineOp::PairP,
+        "scheme.base/vector?" => InlineOp::VectorP,
+        "scheme.base/vector-ref" => InlineOp::VectorRef,
+        "scheme.base/vector-set!" => InlineOp::VectorSet,
         _ => return None,
     })
 }
@@ -110,6 +112,9 @@ fn inline_op_for(short_name: &str) -> Option<InlineOp> {
 /// (call/cc, dynamic-wind, values, prompts, apply) or lives next to code that
 /// is; same for the exception machinery in `patina.internal.errors`
 /// (raise/raise-continuable/error/with-exception-handler are VM-intercepted).
+/// The test below cross-checks this against `VM_INTERCEPTED_PRIMITIVES` — if
+/// an intercepted primitive ever moves outside these prefixes, that test
+/// fails instead of the interception being silently bypassed.
 fn is_excluded(qualified_name: &str) -> bool {
     qualified_name.starts_with("patina.internal.control/")
         || qualified_name.starts_with("patina.internal.errors/")
@@ -136,7 +141,6 @@ pub fn resolve_primitive_calls(
         let proc = heap.borrow().get_procedure(val);
         let Some(proc) = proc else { continue };
         let Procedure::Primitive {
-            name: short_name,
             qualified_name,
             registry_index,
             ..
@@ -147,15 +151,12 @@ pub fn resolve_primitive_calls(
         if is_excluded(qualified_name) {
             continue;
         }
-        let index = registry_index
-            .get()
-            .or_else(|| registry.resolve_index(qualified_name));
-        if let Some(index) = index {
+        if let Some(index) = registry.resolve_index_cached(qualified_name, registry_index) {
             map.insert(
                 name,
                 ResolvedPrimitive {
                     id: PrimitiveFnId(index as u32),
-                    inline: inline_op_for(short_name),
+                    inline: inline_op_for(qualified_name),
                 },
             );
         }
@@ -210,5 +211,26 @@ fn collect_callee_names(expr: &RegExpr, out: &mut FxHashSet<Symbol>) {
         | RegExprKind::GlobalRef { .. }
         | RegExprKind::ReadLocalCell { .. }
         | RegExprKind::ReadClosureCell { .. } => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_excluded;
+    use crate::runtime::vm_state::VM_INTERCEPTED_PRIMITIVES;
+
+    /// `is_excluded` may be a superset of the intercepted set (everything in
+    /// the control/errors libraries stays on the generic path), but it must
+    /// never miss an intercepted name: a `CallPrimitive`-compiled intercepted
+    /// primitive would dispatch straight to the registry handler and bypass
+    /// the VM's continuation/exception cooperation.
+    #[test]
+    fn excluded_covers_every_intercepted_primitive() {
+        for (name, _) in VM_INTERCEPTED_PRIMITIVES {
+            assert!(
+                is_excluded(name),
+                "VM-intercepted primitive {name} is not excluded from CallPrimitive emission"
+            );
+        }
     }
 }

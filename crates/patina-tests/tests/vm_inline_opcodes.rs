@@ -5,17 +5,11 @@
 //! (floats, bignums, overflow, type errors, rebound names). Results and
 //! error behavior must be indistinguishable from the generic call path.
 
-use patina_interpreter::{Backend, Interpreter};
+use patina_interpreter::Interpreter;
 use patina_vm::VmBackend;
 
-fn eval(code: &str) -> String {
-    let interp = Interpreter::new(VmBackend::new());
-    let result = interp
-        .eval_program(code)
-        .unwrap_or_else(|e| panic!("Failed to evaluate program: {e}\n{code}"));
-    let heap = interp.backend().global_env().heap();
-    patina_primitives::primitives::io::datum_writer::format_write_tagged(result, heap)
-}
+mod common;
+use common::eval_program_vm as eval;
 
 fn eval_err(code: &str) -> String {
     Interpreter::new(VmBackend::new())

@@ -35,10 +35,7 @@ fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
         params: Formals::Fixed(
             params
                 .into_iter()
-                .map(|p| ScopedParam {
-                    name: Rc::from(p),
-                    scopes: Default::default(),
-                })
+                .map(|p| ScopedParam::simple(Rc::from(p)))
                 .collect(),
         ),
         body,
