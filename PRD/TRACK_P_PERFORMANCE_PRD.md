@@ -122,9 +122,10 @@ ascending effort:
    chained binary `Add`s at compile time — same association order as the
    handler's left fold, so float semantics are preserved. Extends the inline
    win to variadic call sites; orthogonal to the deopt question.
-Known residual gap (accepted, documented in #158): rebinding a primitive via
-`import` (rather than `define`/`set!`) after code referencing it was compiled
-does not set the shadow bit.
+Known residual gap (documented in #158): rebinding a primitive via `import`
+(rather than `define`/`set!`) after code referencing it was compiled does not
+set the shadow bit. **Upgraded from "accepted" to a bug — see P8.1**, whose
+review repro shows it diverging from the tree-walker.
 
 #### Original P3 spec
 Add fixed-arity opcodes executed inline in the dispatch loop — `Add/Sub/Mul/Lt/NumEq/Eq/Car/Cdr/Cons/NullP/PairP/VectorP/VectorRef/VectorSet/Not` — each a plain struct of `Reg`s.
@@ -181,6 +182,53 @@ pub type HOTaggedHandler = fn(&dyn ApplyContext, Vec<TaggedValue>) -> Result<Tag
 - **Acceptance:** full `cargo test` + 1163/1163 chibi; `cargo bench -p patina-tests` vs the committed baseline shows no regression anywhere and improvement on `r7rs/fib`, `r7rs/tak`, `data/*`; tree-walker paths (`apply_primitive_tagged`, CPS eval) migrated in the same PR so the shared registry keeps one ABI.
 
 **Related but separate (sized during the same investigation, not quick wins):** register-window zeroing removal needs a watermark redesign of the register arena (34 sites + continuation-capture interplay — `state.registers` is snapshotted whole by call/cc, and any latent read-before-write bug currently sees deterministic NULL rather than stale values). Defer until after P3, which changes the register traffic pattern anyway.
+
+### P8 — Deopt correctness regressions  *(recorded 2026-07-30 from post-P3 review; fix in flight)*
+
+Two regressions in the P2/P3 deopt machinery, found by a post-landing review.
+Both were demonstrated with repros, not just read from the code.
+
+**P8.1 — `import` bypasses shadow-bit invalidation.** Only the
+`Define`/`StoreGlobal` instruction handlers call
+`mark_if_shadowing_primitive`; the Rust-side import machinery
+(`vm_process_import_set` in `vm_state.rs`, `process_import_set` in
+`backend.rs`) rebinds globals through `Environment::define` directly and
+never sets the shadow bit. Rebinding a primitive name via
+`(import (rename ...))` after code referencing it was compiled leaves stale
+`CallPrimitive`/inline-opcode fast paths: the VM keeps calling the original
+primitive while the tree-walker (name lookup per call) honors the rebind —
+a backend divergence, not just a semantics waiver. Repro:
+`(define (f p) (car p))` then `(import (rename (scheme base) (cdr car)))` —
+`(f '(1 2))` returns `1` on the VM and `(2)` on the tree-walker. P3's
+"accepted residual gap" note is upgraded by this repro to a bug.
+- **Fix:** route every Rust-side global rebind through the same
+  mark-before-overwrite choke point the instruction handlers use, in both
+  import paths. Longer-term, if more Rust-side writers appear: an
+  invalidation hook on `Environment` itself so the choke point is the layer
+  that owns the mutation.
+- **Acceptance:** a test proving an import rebind deoptimizes
+  already-compiled call sites (VM result matches tree-walker); chibi stays
+  1163/1163.
+
+**P8.2 — Tail-position primitive sites lose proper tail calls on deopt.**
+Pass 5 lowers a tail-position resolved-primitive call to `<prim-op>; Return`,
+discarding `is_tail`. That is sound while the callee is a primitive (no
+frame needed), but the *deopt* replacement is a frame-pushing `call_value` →
+`call_closure`: after `(set! car <closure>)`, mutual tail recursion through
+an already-compiled site grows the frame stack linearly — an R7RS §3.5
+violation. Measured: 500k iterations = 109 MB max RSS vs 5.4 MB for the
+equivalent plain mutual tail recursion.
+- **Fix:** at deopt time, detect the tail shape — the site's next
+  instruction is `Return` of the same `dst`, the exact pair pass 5 emits at
+  tail sites — and dispatch with tail-call semantics (frame reuse) instead
+  of `call_value`. The check reads the actual instruction stream, so it
+  cannot go stale, and any coincidental match is semantically a tail call
+  anyway; no ISA change. Requires factoring the `TailCall` arm's callee
+  dispatch into a reusable helper (which also de-duplicates the
+  `TailCall`/`TailApply` arms).
+- **Acceptance:** rebound-primitive mutual tail recursion at 500k depth
+  runs in flat memory (max RSS measured before/after the fix); results
+  match the tree-walker; chibi stays 1163/1163.
 
 ---
 
