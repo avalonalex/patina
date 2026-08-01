@@ -165,6 +165,13 @@ impl<'a> CpsEvaluator<'a> {
         proc: TaggedValue,
         args: Vec<TaggedValue>,
     ) -> Result<TaggedValue, EvalError> {
+        // This is a second trampoline and deliberately has **no safe point**:
+        // its `current_step` is a Rust local that no root provider sees. The
+        // guard makes "every trampoline defers for its extent" structural
+        // rather than relying on this always being entered from within
+        // `eval_in_env` (`docs/GC_DESIGN.md` §7).
+        let _gc_defer = patina_core::GcDeferGuard::new(self.evaluator.global_env.heap());
+
         let env = self.evaluator.global_env.clone();
         let cont_env = ContEnv::new();
         let prompt_stack = Vec::new();

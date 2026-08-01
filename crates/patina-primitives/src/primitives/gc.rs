@@ -53,6 +53,8 @@ fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, Eva
         ("free-strings", stats.free_strings),
         ("free-objects", stats.free_objects),
         ("allocs-since-gc", stats.allocs_since_gc),
+        ("collections", stats.gc_collections as usize),
+        ("last-swept", stats.gc_last_swept),
     ];
 
     let alist: Vec<TaggedValue> = entries

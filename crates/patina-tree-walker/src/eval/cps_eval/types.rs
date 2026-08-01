@@ -105,6 +105,13 @@ impl ContEnv {
     pub fn iter(&self) -> ContEnvIter<'_> {
         ContEnvIter { current: &self.0 }
     }
+
+    /// Identity of this chain's head node, for GC dedup. Chains are shared by
+    /// `Rc`, so tracing must memoize on this or go exponential — see
+    /// `gc_roots::trace_cont_env`.
+    pub fn gc_identity(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
 }
 
 impl fmt::Debug for ContEnv {

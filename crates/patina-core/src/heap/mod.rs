@@ -292,6 +292,12 @@ pub struct Heap {
     /// registered root (nested trampolines, library-body loops). Collection
     /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
     gc_defer_depth: u32,
+
+    /// Collections performed, and slots reclaimed by the last one. Recorded
+    /// by `sweep` so `(gc-stats)` can report real collector activity without
+    /// reaching into a backend-private collector.
+    gc_collections: u64,
+    gc_last_swept: usize,
 }
 
 impl Heap {
@@ -310,6 +316,8 @@ impl Heap {
             allocs_since_gc: 0,
             gc_requested: false,
             gc_defer_depth: 0,
+            gc_collections: 0,
+            gc_last_swept: 0,
         }
     }
 
@@ -328,6 +336,8 @@ impl Heap {
             allocs_since_gc: 0,
             gc_requested: false,
             gc_defer_depth: 0,
+            gc_collections: 0,
+            gc_last_swept: 0,
         }
     }
 
@@ -367,7 +377,21 @@ impl Heap {
     }
 
     pub(crate) fn exit_gc_defer(&mut self) {
-        self.gc_defer_depth = self.gc_defer_depth.saturating_sub(1);
+        debug_assert!(
+            self.gc_defer_depth > 0,
+            "unbalanced GC defer: exit without a matching enter"
+        );
+        self.gc_defer_depth -= 1;
+    }
+
+    /// Collections performed against this heap.
+    pub fn gc_collections(&self) -> u64 {
+        self.gc_collections
+    }
+
+    /// Slots reclaimed by the most recent collection.
+    pub fn gc_last_swept(&self) -> usize {
+        self.gc_last_swept
     }
 
     // =========================================================================
@@ -2424,6 +2448,8 @@ impl Heap {
             free_strings: self.free_strings.len(),
             free_objects: self.free_objects.len(),
             allocs_since_gc: self.allocs_since_gc,
+            gc_collections: self.gc_collections,
+            gc_last_swept: self.gc_last_swept,
         }
     }
 }
@@ -2447,6 +2473,8 @@ pub struct HeapStats {
     pub free_strings: usize,
     pub free_objects: usize,
     pub allocs_since_gc: usize,
+    pub gc_collections: u64,
+    pub gc_last_swept: usize,
 }
 
 // ============================================================================

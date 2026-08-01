@@ -2,44 +2,46 @@
 //!
 //! The evaluator holds almost no values itself: the live machine state is the
 //! in-flight `StepResult` in the trampoline loop, which carries the value,
-//! environment, continuation chain, and the wind/prompt/handler stacks. That
-//! makes rooting a two-part job:
+//! environment, continuation chain, and the wind/prompt/handler stacks. The
+//! safe point therefore passes several providers:
 //!
-//! - [`EvaluatorRoots`] — the long-lived side: global environment and every
-//!   loaded library (exports *and* environment).
+//! - `Evaluator` — the global environment.
+//! - `LibraryRegistry` — every loaded library, rooted in `patina-runtime` so
+//!   both backends share one copy of the rule.
 //! - [`StepRoots`] — the transient side, constructed fresh at each safe point
 //!   from the loop's `current_step` plus the expression being evaluated,
 //!   whose literals are live for the duration of the call.
+//! - [`EscapeRoots`] — the `PENDING_ESCAPE` thread-local, which outlives any
+//!   single step and so is not part of `StepRoots`.
 //!
 //! Everything else the tree-walker keeps on the Rust stack (suspended outer
 //! `StepResult`s in nested trampolines, primitive argument vectors) is handled
 //! by deferral, not tracing — see `GcDeferGuard` and §7.
 
 use patina_core::cps_expr::CpsExpr;
-use patina_core::{DynamicWindRecord, GcRoots, GcVisitor, PromiseState};
+use patina_core::{DynamicWindRecord, GcRoots, GcVisitor};
 
 use super::types::{
     ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, trace_pending_escape,
 };
 use crate::eval::Evaluator;
 
-/// Long-lived roots: the global environment and the library registry.
-///
-/// Wrapping `Evaluator` rather than implementing `GcRoots` on it directly
-/// keeps the trait dependency out of the evaluator's public API and makes the
-/// borrow requirement explicit: the caller must ensure `library_registry` is
-/// not already mutably borrowed (the safe point checks this).
-pub(super) struct EvaluatorRoots<'a>(pub &'a Evaluator);
-
-impl GcRoots for EvaluatorRoots<'_> {
+impl GcRoots for Evaluator {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-        visitor.visit_env(&self.0.global_env);
-        for library in self.0.library_registry.borrow().iter_libraries() {
-            for (_, tv) in library.exports_iter_tagged() {
-                visitor.visit(tv);
-            }
-            visitor.visit_env(&library.env);
-        }
+        visitor.visit_env(&self.global_env);
+    }
+}
+
+/// The `PENDING_ESCAPE` thread-local: a value and continuation in flight
+/// between `set_pending_escape` and `take_pending_escape`, reachable from
+/// nowhere else. Its own provider rather than part of [`StepRoots`] because
+/// it is not step state — any collection entry must root it, including
+/// future ones that do not construct a `StepRoots`.
+pub(super) struct EscapeRoots;
+
+impl GcRoots for EscapeRoots {
+    fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+        trace_pending_escape(visitor);
     }
 }
 
@@ -56,7 +58,6 @@ impl GcRoots for StepRoots<'_> {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
         visitor.visit_expr_literals(self.expr);
         trace_step(self.step, visitor);
-        trace_pending_escape(visitor);
     }
 }
 
@@ -123,115 +124,117 @@ fn trace_stacks(
     for frame in prompt_stack {
         // `tag: Rc<PromptTag>` is a plain Rust struct, not a heap value.
         trace_cont_value(&frame.cont, visitor);
-        trace_winds(&frame.dynamic_winds, visitor);
+        visitor.visit_winds(&frame.dynamic_winds);
     }
-    trace_winds(dynamic_winds, visitor);
+    visitor.visit_winds(dynamic_winds);
     for handler in exception_handlers {
         trace_exception_handler(handler, visitor);
     }
 }
 
-fn trace_winds(winds: &[DynamicWindRecord], visitor: &mut GcVisitor<'_>) {
-    for wind in winds {
-        visitor.visit(wind.before);
-        visitor.visit(wind.after);
-    }
-}
-
 fn trace_exception_handler(handler: &ExceptionHandler, visitor: &mut GcVisitor<'_>) {
     visitor.visit(handler.handler);
-    trace_winds(&handler.dynamic_winds, visitor);
+    visitor.visit_winds(&handler.dynamic_winds);
 }
 
+/// Trace a continuation environment.
+///
+/// Deduped by chain identity: `ContEnv` is a persistent `Rc` list and every
+/// `ContValue::Local` captures the chain below it, so an un-memoized walk is
+/// exponential (`2ⁿ − 1` node visits — measured at 6.8 s for one collection
+/// at nesting depth 26). Skipping an already-seen chain is safe: its entries,
+/// and therefore its whole tail, were traced when it was first seen.
 fn trace_cont_env(cont_env: &ContEnv, visitor: &mut GcVisitor<'_>) {
+    if !visitor.visit_once(cont_env.gc_identity()) {
+        return;
+    }
     for (_, value) in cont_env.iter() {
         trace_cont_value(value, visitor);
     }
 }
 
-/// Trace a continuation value. Recursive over the `Box<ContValue>` chain;
-/// depth is bounded by nesting of `dynamic-wind` / `call-with-values` /
-/// exception handlers, not by data size.
+/// Trace a continuation value, walking the `Box<ContValue>` chain
+/// iteratively — most variants differ only in what they visit before handing
+/// off to the continuation they wrap.
 fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
-    match cont {
-        ContValue::Halt => {}
+    let mut cont = cont;
+    loop {
+        cont = match cont {
+            ContValue::Halt => return,
 
-        ContValue::Local {
-            body,
-            env,
-            cont_env,
-            ..
-        } => {
-            visitor.visit_expr_literals(body);
-            visitor.visit_env(env);
-            trace_cont_env(cont_env, visitor);
-        }
-
-        ContValue::Captured(k) => visitor.visit_continuation(k),
-
-        ContValue::CallWithValuesConsumer {
-            consumer,
-            original_cont,
-        } => {
-            visitor.visit(*consumer);
-            trace_cont_value(original_cont, visitor);
-        }
-
-        ContValue::ForceCache {
-            promise,
-            original_cont,
-        } => {
-            match *promise.borrow() {
-                PromiseState::Delayed(tv) | PromiseState::Forced(tv) => visitor.visit(tv),
+            ContValue::Local {
+                body,
+                env,
+                cont_env,
+                ..
+            } => {
+                visitor.visit_expr_literals(body);
+                visitor.visit_env(env);
+                trace_cont_env(cont_env, visitor);
+                return;
             }
-            trace_cont_value(original_cont, visitor);
-        }
 
-        ContValue::DynamicWindCleanup {
-            after,
-            original_cont,
-            ..
-        } => {
-            visitor.visit(*after);
-            trace_cont_value(original_cont, visitor);
-        }
+            ContValue::Captured(k) => return visitor.visit_continuation(k),
 
-        ContValue::DynamicWindSetup {
-            wind_record,
-            body,
-            cleanup_cont,
-        } => {
-            visitor.visit(wind_record.before);
-            visitor.visit(wind_record.after);
-            visitor.visit(*body);
-            trace_cont_value(cleanup_cont, visitor);
-        }
-
-        ContValue::DynamicWindAfterDone {
-            result_value,
-            original_cont,
-        } => {
-            visitor.visit(*result_value);
-            trace_cont_value(original_cont, visitor);
-        }
-
-        ContValue::ExceptionHandlerCleanup { original_cont } => {
-            trace_cont_value(original_cont, visitor)
-        }
-
-        ContValue::RaiseHandlerReturn {
-            original_exception,
-            original_cont,
-            popped_handler,
-            ..
-        } => {
-            if let Some(exception) = original_exception {
-                visitor.visit(*exception);
+            ContValue::CallWithValuesConsumer {
+                consumer,
+                original_cont,
+            } => {
+                visitor.visit(*consumer);
+                original_cont
             }
-            trace_cont_value(original_cont, visitor);
-            if let Some(handler) = popped_handler {
-                trace_exception_handler(handler, visitor);
+
+            ContValue::ForceCache {
+                promise,
+                original_cont,
+            } => {
+                visitor.visit_promise(promise);
+                original_cont
             }
-        }
+
+            ContValue::DynamicWindCleanup {
+                after,
+                original_cont,
+                ..
+            } => {
+                visitor.visit(*after);
+                original_cont
+            }
+
+            ContValue::DynamicWindSetup {
+                wind_record,
+                body,
+                cleanup_cont,
+            } => {
+                visitor.visit_wind(wind_record);
+                visitor.visit(*body);
+                cleanup_cont
+            }
+
+            ContValue::DynamicWindAfterDone {
+                result_value,
+                original_cont,
+            } => {
+                visitor.visit(*result_value);
+                original_cont
+            }
+
+            ContValue::ExceptionHandlerCleanup { original_cont } => original_cont,
+
+            ContValue::RaiseHandlerReturn {
+                original_exception,
+                original_cont,
+                popped_handler,
+                ..
+            } => {
+                if let Some(exception) = original_exception {
+                    visitor.visit(*exception);
+                }
+                if let Some(handler) = popped_handler {
+                    trace_exception_handler(handler, visitor);
+                }
+                original_cont
+            }
+        };
     }
 }

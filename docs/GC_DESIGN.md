@@ -168,6 +168,17 @@ impl GcVisitor<'_> {
     /// Trace through an environment chain; deduped by Rc::as_ptr so the
     /// global env is not re-walked once per closure.
     pub fn visit_env(&mut self, env: &Rc<Environment>);
+    /// Trace a continuation / expression tree held outside the arenas.
+    pub fn visit_continuation(&mut self, k: &Rc<CpsContinuation>);
+    pub fn visit_expr_literals(&mut self, expr: &CpsExpr);
+    /// Shared trace rules, so each is authored once rather than per backend.
+    pub fn visit_promise(&mut self, p: &RefCell<PromiseState>);
+    pub fn visit_wind(&mut self, w: &DynamicWindRecord);
+    pub fn visit_winds(&mut self, w: &[DynamicWindRecord]);
+    pub fn visit_library(&mut self, l: &Library);
+    /// Dedup hook for root providers' own Rc-shared structures (§9.4).
+    /// Returns false if this identity was already traced this collection.
+    pub fn visit_once(&mut self, identity: usize) -> bool;
 }
 
 /// Implemented by anything that owns live values: backend state, registries,
@@ -354,7 +365,7 @@ handled by safe-point placement + deferral (§7).**
 
 | Root | Location | Notes |
 |------|----------|-------|
-| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs:80-83` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` (`crates/patina-core/src/library.rs:30,:34`) — two root sets per library |
+| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl GcRoots for LibraryRegistry`** lives in `patina-runtime` so both backends pass it as a root rather than restating the rule; the per-library walk is `GcVisitor::visit_library` |
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs:122` | Unevaluated forms during loading; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `CompiledMacro` literals | `compiled_macro.rs:78,:280,:439` | Reached via the `Macro` heap-variant trace rule when the macro binding is live |
@@ -371,8 +382,9 @@ handled by safe-point placement + deferral (§7).**
   `alloc_*` (re-entrant `RefCell` borrow risk, and mid-operation temporaries
   would be unrooted).
 - Collection is **off by default** until stage 4: the baseline build must
-  behave exactly as it did before the collector existed. Modes are selected
-  per backend from the environment (tree-walker: `eval/gc.rs`):
+  behave exactly as it did before the collector existed. The mode table and
+  its environment grammar live in `patina-core` (`GcMode::from_env`) because
+  the variables are process-global and both backends must agree on them:
   | Mode | Selected by | Behavior |
   |------|-------------|----------|
   | Off (default) | — | collect only when `(gc)` has been called |
@@ -413,13 +425,19 @@ placement + deferral:
    `GcDeferGuard` RAII type so early returns and `?` propagation cannot leak
    an increment.
 
-   The tree-walker takes a guard **on every `eval_in_env` entry** rather than
-   instrumenting each re-entrant call site. This inverts the failure mode: a
-   nested trampoline is deferred *by construction* (whatever route reached
-   it — `apply_from_direct_tagged`, a higher-order primitive, `eval`,
-   quasiquote), instead of relying on someone having remembered to guard that
-   route. The safe point therefore collects only at `gc_defer_depth == 1`
-   (its own guard), i.e. in the outermost trampoline.
+   The tree-walker takes a guard **on every trampoline entry** (`eval_in_env`
+   *and* `apply_from_direct_tagged`) rather than instrumenting each re-entrant
+   call site. This inverts the failure mode: a nested trampoline is deferred
+   *by construction* (whatever route reached it — a higher-order primitive,
+   `eval`, quasiquote), instead of relying on someone having remembered to
+   guard that route.
+
+   A safe point asks **its own guard** — `GcDeferGuard::is_outermost()`, true
+   when nothing was deferring at the moment it was taken — rather than
+   comparing the depth to a literal. The "outermost" depth differs per backend
+   (the tree-walker guards every trampoline; the VM guards only its re-entrant
+   paths) and both share one counter through `SharedHeap`, so a hardcoded
+   number would be correct for at most one of them.
 
    Additional guards cover Rust-side scopes that hold values across an
    evaluation call:
@@ -513,7 +531,24 @@ Cycle-detection helpers key transient `HashSet`s by `tv.raw()`
 These are within-call only; safe because GC never runs mid-traversal
 (deferral / no safe point inside them).
 
-### 9.4 `CompiledMacro.heap`
+### 9.4 `Rc`-shared structures need dedup or tracing goes exponential
+
+Any persistent structure whose nodes capture the tail below them must be
+memoized by pointer identity, or a single trace is exponential rather than
+linear. The tree-walker's `ContEnv` is exactly this shape — every
+`ContValue::Local` captures the chain below it, so node *k* holds a chain of
+length *k−1* and an un-memoized walk costs `2ⁿ − 1` node visits. Measured
+before the fix: **6.8 s for one collection at nesting depth 26**, roughly
+1.9× per added level.
+
+This is why every `Rc`-shared structure the visitor walks has a dedup set
+(`visit_env`, `visit_continuation`, `visit_expr_literals`), and why
+[`GcVisitor::visit_once`] exists — root providers must be able to dedup their
+own shared structures. **Stage 3 check:** `VmContinuation` snapshots and
+`CodeObject` sharing have the same potential; if a VM root provider walks an
+`Rc` graph, it must route through `visit_once`.
+
+### 9.5 `CompiledMacro.heap`
 
 Compiled macros hold a `SharedHeap` clone for their literal values
 (`compiled_macro.rs:461-465`). As long as it is the same heap instance
@@ -532,7 +567,7 @@ unaffected without a second compilation configuration to maintain.
 | Stage | Deliverable | Acceptance |
 |-------|-------------|------------|
 | **1. Core infra** ✅ *(merged 2026-07-31, PR #4)* | Mark bit-vectors, `GcVisitor`, per-variant trace rules, tombstoning sweep, `Collector`/`GcRoots` traits, `MarkSweepCollector`, alloc counter, `Environment::for_each_local_value`, `(gc)`/`(gc-stats)` primitives | Unit tests with synthetic roots: reachability, tombstone drops `Rc` payloads, free-list reuse, poison-mode assertions |
-| **2. Tree-walker integration** ✅ *(2026-07-31)* | `EvaluatorRoots` (global env + library exports/envs), transient `StepRoots` (`StepResult` + `ContValue`/`ContEnv` chains + entry `expr`), `PENDING_ESCAPE` root, safe point at the trampoline loop top, `GcDeferGuard` on every `eval_in_env` and the library-body loop, `GcController` modes | **Met:** chibi suite (1194 test expressions) on the tree-walker under `PATINA_GC_STRESS=1` produced byte-identical output to baseline (1.26 s vs 0.17 s). Reclamation proven: a 20 000-cons workload holds 4 039 pairs under stress vs 24 047 unreclaimed without it. 12 integration tests in `patina-tests/tests/gc_tree_walker.rs` cover cycles, closures, continuations, `dynamic-wind`, records, and nested trampolines |
+| **2. Tree-walker integration** ✅ *(2026-07-31)* | Root providers for `Evaluator` (global env), `LibraryRegistry` (shared, in `patina-runtime`), `StepRoots` (`StepResult` + `ContValue`/`ContEnv` chains + entry `expr`) and `EscapeRoots` (`PENDING_ESCAPE`); safe point at the trampoline loop top; `GcDeferGuard` on both trampolines and the library-body loop; `GcMode` policy | **Met:** chibi suite (1194 test expressions) on the tree-walker under `PATINA_GC_STRESS=1` produced byte-identical output to baseline. Reclamation proven: a 20 000-cons workload holds ~4 000 pairs under stress vs ~24 000 unreclaimed without it. 14 integration tests in `patina-tests/tests/gc_tree_walker.rs` cover cycles, closures, continuations, `dynamic-wind`, records, nested trampolines, and a regression guard for §9.4 |
 | **3. VM integration** | `impl GcRoots for VmState` (incl. side tables, bare closure indices), safe point in `run_loop_until`, defer guards on `execute_nested`/`VmApplyContext` | Same stress lane on the VM backend; interleaved A/B benchmarks vs `main` (per the established methodology) showing GC-off parity and acceptable GC-on overhead |
 | **4. Default-on** | Adaptive threshold enabled, two CI lanes (baseline vs `gc`), SourceMap pruning hook, liveness stress (`(iota 100000)` sum), arena-reuse proof (arena length stops growing across N iterations) | Flip feature to default; `cargo clippy`/`fmt` clean |
 | **5+. Future** | VM-only `Collector` upgrades: immortal set for `code_store` constants, lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); explicit rooting of re-entrancy boundaries so nested loops can collect; weak symbol table | Each behind the trait, benchmarked interleaved |

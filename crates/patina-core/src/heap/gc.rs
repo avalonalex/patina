@@ -24,9 +24,12 @@ use std::time::Instant;
 
 use rustc_hash::FxHashSet;
 
+use std::cell::RefCell;
+
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap};
-use crate::continuation::CpsContinuation;
+use crate::continuation::{CpsContinuation, DynamicWindRecord};
 use crate::environment::Environment;
+use crate::library::Library;
 use crate::procedure::Procedure;
 use crate::tagged_value::{HeapIndex, TaggedValue};
 
@@ -170,25 +173,95 @@ pub trait Collector {
 
 /// RAII guard marking a scope that holds live values no root provider can
 /// see — a nested trampoline, or a Rust loop holding unevaluated forms across
-/// an evaluation call. Backends refuse to collect while any guard is alive
-/// (design §7).
+/// an evaluation call. Backends refuse to collect while an *outer* guard is
+/// alive (design §7).
 ///
 /// Drop takes a mutable heap borrow, so a guard must not be dropped while a
 /// heap borrow is outstanding.
-pub struct GcDeferGuard {
-    heap: SharedHeap,
+pub struct GcDeferGuard<'h> {
+    heap: &'h SharedHeap,
+    /// Defer depth observed on entry. Zero means nothing outer is deferring.
+    outer_depth: u32,
 }
 
-impl GcDeferGuard {
-    pub fn new(heap: &SharedHeap) -> Self {
-        heap.borrow_mut().enter_gc_defer();
-        Self { heap: heap.clone() }
+impl<'h> GcDeferGuard<'h> {
+    pub fn new(heap: &'h SharedHeap) -> Self {
+        let outer_depth = {
+            let mut h = heap.borrow_mut();
+            let depth = h.gc_defer_depth();
+            h.enter_gc_defer();
+            depth
+        };
+        Self { heap, outer_depth }
+    }
+
+    /// Whether this guard is the outermost one — i.e. nothing else was
+    /// deferring when it was taken, so a safe point inside it may collect.
+    ///
+    /// Backends ask their own guard rather than comparing the depth against a
+    /// literal: the "outermost" depth differs per backend (the tree-walker
+    /// guards every trampoline, the VM only its re-entrant paths), and both
+    /// share one counter through `SharedHeap`.
+    pub fn is_outermost(&self) -> bool {
+        self.outer_depth == 0
     }
 }
 
-impl Drop for GcDeferGuard {
+impl Drop for GcDeferGuard<'_> {
     fn drop(&mut self) {
         self.heap.borrow_mut().exit_gc_defer();
+    }
+}
+
+// ============================================================================
+// Policy
+// ============================================================================
+
+/// When automatic collection fires. Shared by both backends: `PATINA_GC` and
+/// `PATINA_GC_STRESS` are process-global, so the mode table lives here rather
+/// than being re-derived per backend (design §6).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GcMode {
+    /// Collect only when `(gc)` has been called. The default — a build that
+    /// nobody opted in to must behave exactly as it did before the collector
+    /// existed.
+    Off,
+    /// Collect on the collector's adaptive threshold.
+    On,
+    /// Collect once `n` allocations have happened since the last collection,
+    /// ignoring the adaptive floor. The differential-testing lane.
+    Stress(usize),
+}
+
+impl GcMode {
+    /// Read the mode from the environment. `PATINA_GC_STRESS` takes an
+    /// optional allocation count (`=1`, the default, collects at nearly every
+    /// safe point; larger values trade coverage for runtime).
+    pub fn from_env() -> Self {
+        fn flag(name: &str) -> Option<String> {
+            std::env::var(name)
+                .ok()
+                .filter(|v| !v.is_empty() && v != "0")
+        }
+
+        if let Some(v) = flag("PATINA_GC_STRESS") {
+            GcMode::Stress(v.parse().unwrap_or(1).max(1))
+        } else if flag("PATINA_GC").is_some() {
+            GcMode::On
+        } else {
+            GcMode::Off
+        }
+    }
+
+    /// Whether this mode wants a collection now. `(gc)` requests are honored
+    /// in every mode and are checked by the caller's fast path, so this
+    /// answers only the automatic policy question.
+    pub fn wants_collection(self, heap: &Heap, collector: &impl Collector) -> bool {
+        match self {
+            GcMode::Off => false,
+            GcMode::On => collector.should_collect(heap),
+            GcMode::Stress(n) => heap.allocs_since_gc() >= n,
+        }
     }
 }
 
@@ -210,6 +283,9 @@ pub struct GcVisitor<'h> {
     seen_envs: FxHashSet<usize>,
     seen_conts: FxHashSet<usize>,
     seen_exprs: FxHashSet<usize>,
+    /// Dedup set for `Rc`-shared structures owned by root providers
+    /// (see [`GcVisitor::visit_once`]).
+    seen_shared: FxHashSet<usize>,
 }
 
 impl<'h> GcVisitor<'h> {
@@ -231,6 +307,7 @@ impl<'h> GcVisitor<'h> {
             seen_envs: FxHashSet::default(),
             seen_conts: FxHashSet::default(),
             seen_exprs: FxHashSet::default(),
+            seen_shared: FxHashSet::default(),
         }
     }
 
@@ -293,6 +370,48 @@ impl<'h> GcVisitor<'h> {
         if self.seen_conts.insert(Rc::as_ptr(k) as usize) {
             self.cont_worklist.push(k.clone());
         }
+    }
+
+    /// Record `identity` (an `Rc::as_ptr` address) as visited for this
+    /// collection; returns `false` if it was already seen.
+    ///
+    /// Root providers need this for their own `Rc`-shared structures. Without
+    /// it, tracing a persistent linked list whose nodes each capture the tail
+    /// below them is **exponential**: the tree-walker's `ContEnv` chains cost
+    /// `2ⁿ − 1` node visits, which measured 6.8 s for a single collection at
+    /// nesting depth 26. Every other `Rc`-shared structure the visitor walks
+    /// (`visit_env`, `visit_continuation`, `visit_expr_literals`) has its own
+    /// dedup set for exactly this reason.
+    pub fn visit_once(&mut self, identity: usize) -> bool {
+        self.seen_shared.insert(identity)
+    }
+
+    /// Trace a promise's payload, forced or not.
+    pub fn visit_promise(&mut self, promise: &RefCell<PromiseState>) {
+        match *promise.borrow() {
+            PromiseState::Delayed(tv) | PromiseState::Forced(tv) => self.visit(tv),
+        }
+    }
+
+    /// Trace a `dynamic-wind` record's before/after thunks.
+    pub fn visit_wind(&mut self, wind: &DynamicWindRecord) {
+        self.visit(wind.before);
+        self.visit(wind.after);
+    }
+
+    /// Trace a stack of `dynamic-wind` records.
+    pub fn visit_winds(&mut self, winds: &[DynamicWindRecord]) {
+        for wind in winds {
+            self.visit_wind(wind);
+        }
+    }
+
+    /// Trace a library's two root sets: its exports and its environment.
+    pub fn visit_library(&mut self, library: &Library) {
+        for (_, tv) in library.exports_iter_tagged() {
+            self.visit(tv);
+        }
+        self.visit_env(&library.env);
     }
 
     /// Trace literals embedded in live code (`CpsExprKind::Literal` /
@@ -395,15 +514,8 @@ impl<'h> GcVisitor<'h> {
                     self.visit(*converter);
                 }
             }
-            HeapObjectData::Promise(state) => match *state.borrow() {
-                PromiseState::Delayed(tv) | PromiseState::Forced(tv) => self.visit(tv),
-            },
-            HeapObjectData::Library(lib) => {
-                for (_, tv) in lib.exports_iter_tagged() {
-                    self.visit(tv);
-                }
-                self.visit_env(&lib.env);
-            }
+            HeapObjectData::Promise(state) => self.visit_promise(state),
+            HeapObjectData::Library(lib) => self.visit_library(lib),
             HeapObjectData::Values(values) => {
                 for &value in values {
                     self.visit(value);
@@ -433,10 +545,7 @@ impl<'h> GcVisitor<'h> {
     fn trace_continuation_children(&mut self, k: &CpsContinuation) {
         self.visit_expr_literals(&k.body);
         self.visit_env(&k.env);
-        for wind in &k.dynamic_winds {
-            self.visit(wind.before);
-            self.visit(wind.after);
-        }
+        self.visit_winds(&k.dynamic_winds);
         for (_, captured) in &k.captured_cont_bindings {
             self.visit_continuation(captured);
         }
@@ -522,6 +631,8 @@ impl Heap {
         };
         self.allocs_since_gc = 0;
         self.gc_requested = false;
+        self.gc_collections += 1;
+        self.gc_last_swept = swept.total();
         swept
     }
 }
@@ -547,8 +658,10 @@ impl MarkSweepCollector {
         Self::with_min_threshold(DEFAULT_MIN_THRESHOLD)
     }
 
-    /// A custom floor; `1` gives the `--gc-stress` behavior (collect at every
-    /// safe point).
+    /// A custom allocation floor. Note this is only a *floor*: the adaptive
+    /// `2 × live` term still applies, so a small value does not by itself
+    /// produce stress-test behavior — that is [`GcMode::Stress`], which
+    /// bypasses the adaptive term entirely.
     pub fn with_min_threshold(min_threshold: usize) -> Self {
         Self {
             min_threshold,

@@ -3,6 +3,11 @@
 //! `(gc)` records a request that the next trampoline safe point services, so
 //! these tests exercise the whole stage 2 path: root providers, safe point,
 //! defer guards, mark, and sweep. See `docs/GC_DESIGN.md`.
+//!
+//! Gated to the tree-walker: the VM has no safe point until stage 3, so under
+//! `--features vm-backend` these would exercise an interpreter that never
+//! collects. Remove the gate when stage 3 lands.
+#![cfg(not(feature = "vm-backend"))]
 
 mod common;
 use common::*;
@@ -79,20 +84,23 @@ fn closure_environment_survives_collection() {
 }
 
 #[test]
-fn unreachable_cycle_is_reclaimed() {
-    // A self-referential pair: Rc alone can never reclaim this.
-    let before = stat("(gc)", "free-pairs");
-    let after = stat(
-        r#"(define x (cons 1 2))
-           (set-cdr! x x)
-           (set! x #f)
-           (gc)"#,
-        "free-pairs",
-    );
-    assert!(
-        after > before,
-        "cyclic pair was not reclaimed: {before} -> {after}"
-    );
+fn unreachable_cycles_are_reclaimed() {
+    // Build a thousand self-referential pairs, each garbage the moment the
+    // next iteration starts. Reference counting alone could never reclaim
+    // any of them, so a sweep that frees at least that many slots is only
+    // possible if cycles are being collected.
+    let code = r#"
+        (import (patina debug))
+        (define (make-cycles n)
+          (if (> n 0)
+              (let ((x (cons n '())))
+                (set-cdr! x x)
+                (make-cycles (- n 1)))))
+        (make-cycles 1000)
+        (gc)
+        (>= (cdr (assq 'last-swept (gc-stats))) 1000)
+    "#;
+    assert_program_eval_to(code, "#t");
 }
 
 #[test]
@@ -177,26 +185,60 @@ fn records_and_exceptions_survive_collection() {
 }
 
 #[test]
-fn repeated_collection_keeps_arena_bounded() {
-    // Allocate and drop repeatedly with a collection each round; the free
-    // list must be reused rather than the arena growing without bound.
+fn collecting_keeps_the_arena_smaller_than_not_collecting() {
+    // Allocate and drop repeatedly. The assertion compares against the same
+    // workload with the collections removed, so it can only pass if slots
+    // are actually being reclaimed and reused — a fixed bound would pass
+    // vacuously with zero collections.
+    let workload = |collect: &str| {
+        format!(
+            r#"(define (round n)
+                 (if (> n 0)
+                     (begin
+                       (let loop ((i 0) (acc '()))
+                         (if (< i 200) (loop (+ i 1) (cons i acc)) acc))
+                       {collect}
+                       (round (- n 1)))))
+               (round 10)"#
+        )
+    };
+    let with_gc = stat(&workload("(gc)"), "pairs");
+    let without_gc = stat(&workload(""), "pairs");
+    assert!(
+        with_gc < without_gc,
+        "collecting did not shrink the arena: {with_gc} with gc vs {without_gc} without"
+    );
+}
+
+#[test]
+fn collection_is_recorded_in_stats() {
+    let collections = stat("(gc)", "collections");
+    assert!(
+        collections > 0,
+        "no collection was recorded after (gc): {collections}"
+    );
+}
+
+#[test]
+fn deeply_nested_continuations_collect_promptly() {
+    // Regression guard: continuation environments are a persistent Rc list
+    // whose nodes each capture the chain below them, so tracing without
+    // dedup is exponential — this shape measured 6.8 s for a single
+    // collection at depth 26 before `GcVisitor::visit_once` was introduced.
+    // Nothing here should take a perceptible amount of time.
     let code = r#"
         (import (patina debug))
-        (define (round n)
-          (if (> n 0)
-              (begin
-                (let loop ((i 0) (acc '()))
-                  (if (< i 200) (loop (+ i 1) (cons i acc)) acc))
-                (gc)
-                (round (- n 1)))))
-        (round 10)
-        (cdr (assq 'pairs (gc-stats)))
+        (define (nest n)
+          (if (= n 0)
+              (begin (gc) 0)
+              (+ 1 (nest (- n 1)))))
+        (nest 30)
     "#;
-    let pairs: i64 = eval_program(code).parse().expect("expected a number");
-    // 10 rounds x 200 pairs = 2000 allocations; with reuse the arena stays
-    // far below that plus the bootstrap baseline growth.
+    let start = std::time::Instant::now();
+    assert_program_eval_to(code, "30");
+    let elapsed = start.elapsed();
     assert!(
-        pairs < 100_000,
-        "pair arena grew unexpectedly large: {pairs}"
+        elapsed.as_secs() < 10,
+        "collection at continuation depth 30 took {elapsed:?} — tracing is likely exponential again"
     );
 }
