@@ -439,16 +439,10 @@ impl VmBackend {
         &self,
         parsed: patina_runtime::library_loader::ParsedLibrary,
     ) -> Result<Library, LibraryError> {
-        // Library loading holds live values that no root provider can see for
-        // the whole of this function: `parsed.imports` and `parsed.body` are
-        // unevaluated forms in a Rust local, `saved_globals` is an environment
-        // reachable only from this frame while the swap is in effect, and
-        // `lib_env` is not yet installed anywhere. Body forms run via
-        // `execute`, which starts a fresh dispatch loop that would otherwise
-        // consider itself outermost and collect. Defer throughout
-        // (`docs/GC_DESIGN.md` §7).
-        let gc_heap = self.global_env.heap().clone();
-        let _gc_defer = patina_core::GcDeferGuard::new(&gc_heap);
+        // Collection is already deferred for this whole function: `parsed`
+        // carries a `GcDeferGuard` for as long as it holds unevaluated body
+        // forms (see `ParsedLibrary`). That covers `saved_globals` and
+        // `lib_env` too, both of which are reachable only from this frame.
 
         // Create a fresh environment for this library, sharing the global heap
         // so TaggedValue indices are compatible with the global environment.

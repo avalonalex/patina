@@ -665,10 +665,9 @@ impl Evaluator {
         let desugarer =
             patina_frontend::Desugarer::with_env(lib_env.clone()).with_fs(self.fs.clone());
         let shared_heap = lib_env.heap().clone();
-        // `parsed.body` holds the not-yet-evaluated forms as TaggedValues in
-        // a Rust local — invisible to every root provider. Defer collection
-        // until the whole body has been evaluated (`docs/GC_DESIGN.md` §7).
-        let _gc_defer = patina_core::GcDeferGuard::new(&shared_heap);
+        // Collection is already deferred here: `parsed` carries a
+        // `GcDeferGuard` while it holds unevaluated body forms — see
+        // `ParsedLibrary`.
         for tv in &parsed.body {
             // Desugar TaggedValue to CoreExpr
             let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {

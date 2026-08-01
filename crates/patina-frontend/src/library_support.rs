@@ -168,14 +168,14 @@ impl SchemeLibraryLoader {
         )?;
 
         // Return parsed library for the evaluator to process
-        Ok(ParsedLibrary {
-            name: lib_def.name,
+        Ok(ParsedLibrary::new(
+            lib_def.name,
             imports,
             body,
-            heap: Some(heap),
+            Some(heap),
             exports,
-            source: Some(path),
-        })
+            Some(path),
+        ))
     }
 
     /// Resolve body elements by expanding includes into actual expressions.

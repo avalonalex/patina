@@ -35,9 +35,7 @@ impl GcRoots for VmState {
         visitor.visit_slice(&self.value_buffer);
         visitor.visit_slice(&self.scratch_args);
 
-        for frame in &self.frames {
-            trace_frame(frame, visitor);
-        }
+        trace_frames(&self.frames, visitor);
 
         // Code objects are never evicted, so their constants are effectively
         // immortal roots. Tracing the store covers every frame's `code` too,
@@ -63,15 +61,17 @@ impl GcRoots for VmState {
         // Register snapshots the tracer holds between its pre/post hooks.
         // Safe points are borrow-free, so this cannot conflict.
         if let Some(tracer) = &self.tracer {
-            tracer.borrow().trace_gc_roots(visitor);
+            tracer.borrow().trace_roots(visitor);
         }
     }
 }
 
-fn trace_frame(frame: &CallFrame, visitor: &mut GcVisitor<'_>) {
-    // A bare HeapIndex, not a TaggedValue.
-    if let Some(closure) = frame.closure {
-        visitor.visit_object_index(closure);
+fn trace_frames(frames: &[CallFrame], visitor: &mut GcVisitor<'_>) {
+    for frame in frames {
+        // A bare HeapIndex, not a TaggedValue.
+        if let Some(closure) = frame.closure {
+            visitor.visit_object_index(closure);
+        }
     }
 }
 
@@ -100,9 +100,7 @@ fn trace_handlers(handlers: &[ExceptionHandler], visitor: &mut GcVisitor<'_>) {
 
 fn trace_continuation(continuation: &VmContinuation, visitor: &mut GcVisitor<'_>) {
     visitor.visit_slice(&continuation.registers);
-    for frame in &continuation.frames {
-        trace_frame(frame, visitor);
-    }
+    trace_frames(&continuation.frames, visitor);
     trace_winds(&continuation.dynamic_winds, visitor);
     trace_prompts(&continuation.prompt_stack, visitor);
     trace_handlers(&continuation.exception_handlers, visitor);
@@ -113,8 +111,6 @@ fn trace_delimited_continuation(
     visitor: &mut GcVisitor<'_>,
 ) {
     visitor.visit_slice(&continuation.registers);
-    for frame in &continuation.frames {
-        trace_frame(frame, visitor);
-    }
+    trace_frames(&continuation.frames, visitor);
     trace_winds(&continuation.dynamic_winds, visitor);
 }

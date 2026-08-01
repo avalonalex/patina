@@ -331,6 +331,26 @@ impl patina_core::GcRoots for LibraryRegistry {
     }
 }
 
+impl LibraryRegistry {
+    /// Borrow the registry for rooting, or report that it is unavailable.
+    ///
+    /// `Ok(Some)` — borrowed, pass it as a root. `Ok(None)` — there is no
+    /// registry (a temporary state), so there is nothing to root. `Err` — a
+    /// library load holds it mutably, and the caller **must not collect**:
+    /// libraries are a root set, so tracing without them would free live
+    /// values. Lives here so that rule sits with the root provider it
+    /// constrains rather than being restated in each backend's safe point.
+    #[allow(clippy::result_unit_err)]
+    pub fn try_roots(
+        registry: Option<&std::cell::RefCell<Self>>,
+    ) -> Result<Option<std::cell::Ref<'_, Self>>, ()> {
+        match registry {
+            Some(cell) => cell.try_borrow().map(Some).map_err(|_| ()),
+            None => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

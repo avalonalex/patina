@@ -13,6 +13,7 @@ use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{GcController, GcDeferGuard, GcMode};
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
 use rustc_hash::FxHashMap;
@@ -81,7 +82,7 @@ pub struct VmState {
     /// Serviced at the dispatch-loop safe point; off unless requested or
     /// enabled. Behind a `RefCell` so `collect` can take `&VmState` as a root
     /// while mutating the collector.
-    pub(crate) gc: RefCell<patina_core::GcController>,
+    pub(crate) gc: RefCell<GcController>,
 }
 
 impl VmState {
@@ -111,7 +112,7 @@ impl VmState {
             library_registry: None,
             loader_registry: None,
             fs: Arc::new(patina_core::NativeFs),
-            gc: RefCell::new(patina_core::GcController::from_env()),
+            gc: RefCell::new(GcController::from_env()),
         }
     }
 
@@ -363,12 +364,9 @@ fn vm_evaluate_parsed_library(
     // Closures created during execution capture lib_env as their globals
     // (per-closure environment pointer), so no seeding or merge is needed.
 
-    // Library loading runs outside any dispatch loop, so its nested runs
-    // would otherwise look outermost — while `parsed.body` holds unevaluated
-    // forms and `saved_globals` holds an environment reachable only from this
-    // Rust frame. Defer for the whole body (`docs/GC_DESIGN.md` §7).
-    let gc_heap = state.heap.clone();
-    let _gc_defer = patina_core::GcDeferGuard::new(&gc_heap);
+    // Collection is already deferred for this whole function: `parsed`
+    // carries a `GcDeferGuard` while it holds unevaluated body forms (see
+    // `ParsedLibrary`), which also covers `saved_globals` and `lib_env`.
 
     let saved_globals = state.globals.clone();
     state.globals = lib_env.clone();
@@ -571,8 +569,7 @@ fn vm_eval_expr(
     // `saved_globals` is reachable only from this Rust frame while the swap
     // is in effect, so defer for its extent rather than relying on this
     // always being reached from inside a dispatch loop.
-    let gc_heap = state.heap.clone();
-    let _gc_defer = patina_core::GcDeferGuard::new(&gc_heap);
+    let _gc_defer = GcDeferGuard::new(&state.heap);
 
     let saved_globals = state.globals.clone();
     state.globals = env.clone();
@@ -708,8 +705,7 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
     // caller has live values in Rust locals — capture-time register clones,
     // `mem::take`n buffers, primitive argument vectors — that no root
     // provider can see. See `docs/GC_DESIGN.md` §7.
-    let gc_heap = state.heap.clone();
-    let gc_defer = patina_core::GcDeferGuard::new(&gc_heap);
+    let gc_defer = GcDeferGuard::new(&state.heap);
     // Loop invariants, hoisted out of the safe point.
     let is_outermost = gc_defer.is_outermost();
     let gc_mode = state.gc.borrow().mode();
@@ -743,49 +739,25 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
     }
 }
 
-/// GC safe point: collect if policy says so and nothing is deferring.
+/// GC safe point: the VM's root set, handed to the shared driver.
 ///
-/// `mode` and `is_outermost` are loop invariants passed in by the caller so
-/// the disabled fast path costs one comparison plus one borrow on the VM's
-/// hottest loop.
+/// The protocol — `(gc)` honored in every mode, only the outermost guard
+/// collects, one borrow spans the collection — lives in
+/// `GcController::safe_point`; this supplies only what is VM-specific.
 #[inline]
-fn maybe_collect(state: &VmState, mode: patina_core::GcMode, is_outermost: bool) {
-    if mode == patina_core::GcMode::Off && !state.heap.borrow().gc_requested() {
-        return;
-    }
-    collect_if_due(state, is_outermost);
-}
-
-/// The rare branch, kept out of line so only the fast path inlines into the
-/// dispatch loop.
-#[inline(never)]
-fn collect_if_due(state: &VmState, is_outermost: bool) {
-    if !is_outermost {
-        return;
-    }
-    if !state.gc.borrow().should_collect(&state.heap.borrow()) {
-        return;
-    }
-
-    // Libraries are a root set, so we must be able to read the registry.
-    // If a load is in flight, defer rather than trace a partial root set —
-    // a missing root is a use-after-free.
-    let registry = match &state.library_registry {
-        Some(registry) => match registry.try_borrow() {
-            Ok(registry) => Some(registry),
-            Err(_) => return,
-        },
-        None => None,
-    };
-
-    let mut roots: Vec<&dyn patina_core::GcRoots> = vec![state];
-    if let Some(registry) = &registry {
-        roots.push(&**registry);
-    }
-
-    let heap = state.heap.clone();
-    let mut h = heap.borrow_mut();
-    state.gc.borrow_mut().collect(&mut h, &roots);
+fn maybe_collect(state: &VmState, mode: GcMode, is_outermost: bool) {
+    GcController::safe_point(&state.gc, &state.heap, mode, is_outermost, |collect| {
+        // Libraries are a root set. If a load is in flight we cannot read the
+        // registry, so return without collecting rather than trace a partial
+        // root set — a missing root is a use-after-free.
+        let Ok(registry) = LibraryRegistry::try_roots(state.library_registry.as_deref()) else {
+            return;
+        };
+        match &registry {
+            Some(registry) => collect(&[state, &**registry]),
+            None => collect(&[state]),
+        }
+    });
 }
 
 /// Attach a source location to an error if it doesn't already have one.

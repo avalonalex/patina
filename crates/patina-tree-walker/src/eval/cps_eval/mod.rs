@@ -76,7 +76,7 @@ use crate::eval::error::EvalError;
 use patina_core::Environment;
 use patina_core::TaggedValue;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind};
-use patina_core::{GcDeferGuard, GcMode};
+use patina_core::{GcController, GcDeferGuard, GcMode};
 use std::rc::Rc;
 use tracing::debug;
 
@@ -101,51 +101,31 @@ impl<'a> CpsEvaluator<'a> {
 
     // apply_from_direct is defined in wind.rs
 
-    /// GC safe point: collect if policy says so and nothing is deferring.
+    /// GC safe point: the tree-walker's root set, handed to the shared driver.
     ///
-    /// Called at the top of the trampoline loop, where the entire live
-    /// machine state is reachable from `step` + `expr` and no heap borrow is
-    /// outstanding (`docs/GC_DESIGN.md` §7).
-    ///
-    /// `mode` and `is_outermost` are passed in because they are loop
-    /// invariants: hoisting them keeps the disabled fast path down to one
-    /// comparison plus one borrow, on what is the tree-walker's hottest loop.
+    /// Called at the top of the trampoline loop, where the entire live machine
+    /// state is reachable from `step` + `expr` and no heap borrow is
+    /// outstanding (`docs/GC_DESIGN.md` §7). The protocol itself lives in
+    /// `GcController::safe_point`; this supplies only the roots.
     #[inline]
     fn maybe_collect(&self, mode: GcMode, is_outermost: bool, step: &StepResult, expr: &CpsExpr) {
-        if mode == GcMode::Off && !self.evaluator.global_env.heap().borrow().gc_requested() {
-            return;
-        }
-        self.collect_if_due(is_outermost, step, expr);
-    }
-
-    /// The rare branch, kept out of line so only the fast path above inlines
-    /// into the trampoline loop.
-    #[inline(never)]
-    fn collect_if_due(&self, is_outermost: bool, step: &StepResult, expr: &CpsExpr) {
-        // Only the outermost trampoline may collect: a nested one has the
-        // caller's state in Rust locals that no root provider can see.
-        if !is_outermost {
-            return;
-        }
-
         let evaluator = self.evaluator;
-        let heap = evaluator.global_env.heap();
-        if !evaluator.gc.borrow().should_collect(&heap.borrow()) {
-            return;
-        }
-
-        // Libraries are a root set, so we must be able to read the registry.
-        // If a load is in flight, defer rather than trace a partial root
-        // set — a missing root is a use-after-free.
-        let Ok(registry) = evaluator.library_registry.try_borrow() else {
-            return;
-        };
-
-        let step_roots = gc_roots::StepRoots { step, expr };
-        let mut h = heap.borrow_mut();
-        evaluator.gc.borrow_mut().collect(
-            &mut h,
-            &[evaluator, &*registry, &gc_roots::EscapeRoots, &step_roots],
+        GcController::safe_point(
+            &evaluator.gc,
+            evaluator.global_env.heap(),
+            mode,
+            is_outermost,
+            |collect| {
+                // Libraries are a root set. If a load is in flight we cannot
+                // read the registry, so return without collecting rather than
+                // trace a partial root set — a missing root is a
+                // use-after-free.
+                let Ok(registry) = evaluator.library_registry.try_borrow() else {
+                    return;
+                };
+                let step_roots = gc_roots::StepRoots { step, expr };
+                collect(&[evaluator, &*registry, &gc_roots::EscapeRoots, &step_roots]);
+            },
         );
     }
 
