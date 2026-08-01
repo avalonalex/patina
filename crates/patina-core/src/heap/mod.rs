@@ -20,7 +20,9 @@
 //!
 //! - `mod.rs`: Core heap types, allocation, and non-numeric operations
 //! - `numeric.rs`: All numeric operations (arithmetic, division, complex, number theory)
+//! - `gc.rs`: Mark-and-sweep garbage collection (see `docs/GC_DESIGN.md`)
 
+pub mod gc;
 mod numeric;
 
 use crate::tagged_value::{HeapIndex, TaggedValue};
@@ -99,6 +101,8 @@ pub enum HeapObjectType {
     VmContinuationRef = 23,
     /// Opaque handle to a delimited VM continuation stored in VmState's side table (Phase 2 A6)
     VmDelimitedContinuationRef = 24,
+    /// Tombstone left by the GC sweep; the slot is on the free list awaiting reuse
+    Free = 25,
 }
 
 /// State of a promise for lazy evaluation
@@ -115,6 +119,12 @@ pub enum PromiseState {
 /// Generic heap object data
 ///
 /// This enum holds the actual data for objects that use TAG_OBJECT.
+///
+/// Adding a variant? The GC tracer's exhaustive match in
+/// `heap/gc.rs::trace_object_children` will fail to compile until you add an
+/// arm. Put the variant in the leaf arm ONLY if it embeds no `TaggedValue`,
+/// `Rc<Environment>`, `Rc<CpsContinuation>`, or `CpsExpr` — a value-bearing
+/// variant misfiled as a leaf is a use-after-free, not a compile error.
 #[derive(Debug, Clone)]
 pub enum HeapObjectData {
     BigInt(BigInt),
@@ -177,6 +187,11 @@ pub enum HeapObjectData {
     /// Opaque handle to a delimited VM continuation.
     /// The actual `VmDelimitedContinuation` data lives in `VmState::delimited_continuation_store`.
     VmDelimitedContinuationRef(u64),
+    /// Tombstone written by the GC sweep. Overwriting the dead slot (rather
+    /// than leaving stale data until reuse) drops `Rc` payloads eagerly,
+    /// which is what breaks closure ↔ environment cycles. Accessing a Free
+    /// slot through `get_object` is a use-after-free bug.
+    Free,
 }
 
 impl HeapObjectData {
@@ -210,6 +225,7 @@ impl HeapObjectData {
             HeapObjectData::VmDelimitedContinuationRef(_) => {
                 HeapObjectType::VmDelimitedContinuationRef
             }
+            HeapObjectData::Free => HeapObjectType::Free,
         }
     }
 }
@@ -265,6 +281,12 @@ pub struct Heap {
 
     /// Free list for objects
     free_objects: Vec<HeapIndex>,
+
+    /// Allocations since the last GC (drives the collection trigger)
+    allocs_since_gc: usize,
+
+    /// Set by the `(gc)` primitive; consumed by backends at safe points
+    gc_requested: bool,
 }
 
 impl Heap {
@@ -280,6 +302,8 @@ impl Heap {
             free_vectors: Vec::new(),
             free_strings: Vec::new(),
             free_objects: Vec::new(),
+            allocs_since_gc: 0,
+            gc_requested: false,
         }
     }
 
@@ -295,7 +319,33 @@ impl Heap {
             free_vectors: Vec::new(),
             free_strings: Vec::new(),
             free_objects: Vec::new(),
+            allocs_since_gc: 0,
+            gc_requested: false,
         }
+    }
+
+    // =========================================================================
+    // GC bookkeeping (see heap/gc.rs and docs/GC_DESIGN.md)
+    // =========================================================================
+
+    /// Allocations since the last collection.
+    pub fn allocs_since_gc(&self) -> usize {
+        self.allocs_since_gc
+    }
+
+    /// Ask for a collection at the next backend safe point (the `(gc)`
+    /// primitive cannot collect in place: it runs mid-evaluation, where live
+    /// values sit in Rust locals no root provider can see).
+    ///
+    /// `Collector::should_collect` honors this flag, and `sweep` clears it —
+    /// backends only ever ask the collector.
+    pub fn request_gc(&mut self) {
+        self.gc_requested = true;
+    }
+
+    /// Whether a collection has been requested.
+    pub fn gc_requested(&self) -> bool {
+        self.gc_requested
     }
 
     // =========================================================================
@@ -304,6 +354,7 @@ impl Heap {
 
     /// Allocate a new pair (cons cell)
     pub fn alloc_pair(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
+        self.allocs_since_gc += 1;
         let index = if let Some(free) = self.free_pairs.pop() {
             self.pairs[free as usize] = (car, cdr);
             free
@@ -319,7 +370,13 @@ impl Heap {
     #[inline(always)]
     pub fn get_pair(&self, ptr: TaggedValue) -> (TaggedValue, TaggedValue) {
         debug_assert!(ptr.is_pair());
-        self.pairs[ptr.heap_index() as usize]
+        let pair = self.pairs[ptr.heap_index() as usize];
+        debug_assert!(
+            pair.0 != TaggedValue::GC_POISON,
+            "use-after-free: pair slot {} was reclaimed by the GC",
+            ptr.heap_index()
+        );
+        pair
     }
 
     /// Get car of a pair
@@ -338,6 +395,11 @@ impl Heap {
     #[inline(always)]
     pub fn set_car(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
+        debug_assert!(
+            self.pairs[ptr.heap_index() as usize].1 != TaggedValue::GC_POISON,
+            "use-after-free: pair slot {} was reclaimed by the GC",
+            ptr.heap_index()
+        );
         self.pairs[ptr.heap_index() as usize].0 = value;
     }
 
@@ -345,6 +407,11 @@ impl Heap {
     #[inline(always)]
     pub fn set_cdr(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
+        debug_assert!(
+            self.pairs[ptr.heap_index() as usize].0 != TaggedValue::GC_POISON,
+            "use-after-free: pair slot {} was reclaimed by the GC",
+            ptr.heap_index()
+        );
         self.pairs[ptr.heap_index() as usize].1 = value;
     }
 
@@ -354,6 +421,7 @@ impl Heap {
 
     /// Allocate a new vector
     pub fn alloc_vector(&mut self, elements: Vec<TaggedValue>) -> TaggedValue {
+        self.allocs_since_gc += 1;
         let index = if let Some(free) = self.free_vectors.pop() {
             self.vectors[free as usize] = elements;
             free
@@ -414,6 +482,7 @@ impl Heap {
 
     /// Allocate a new string from Vec<char> (primary method)
     pub fn alloc_string_chars(&mut self, chars: Vec<char>) -> TaggedValue {
+        self.allocs_since_gc += 1;
         let index = if let Some(free) = self.free_strings.pop() {
             self.strings[free as usize] = chars;
             free
@@ -871,6 +940,7 @@ impl Heap {
 
     /// Allocate a generic object
     fn alloc_object(&mut self, data: HeapObjectData) -> TaggedValue {
+        self.allocs_since_gc += 1;
         let index = if let Some(free) = self.free_objects.pop() {
             self.objects[free as usize] = data;
             free
@@ -886,7 +956,13 @@ impl Heap {
     #[inline(always)]
     pub fn get_object(&self, ptr: TaggedValue) -> &HeapObjectData {
         debug_assert!(ptr.is_object());
-        &self.objects[ptr.heap_index() as usize]
+        let data = &self.objects[ptr.heap_index() as usize];
+        debug_assert!(
+            !matches!(data, HeapObjectData::Free),
+            "use-after-free: object slot {} was reclaimed by the GC",
+            ptr.heap_index()
+        );
+        data
     }
 
     /// Get object type
@@ -1316,6 +1392,7 @@ impl Heap {
                 HeapObjectData::MutableCell(_) => "mutable-cell",
                 HeapObjectData::VmContinuationRef(_) => "continuation",
                 HeapObjectData::VmDelimitedContinuationRef(_) => "continuation",
+                HeapObjectData::Free => "gc-freed-slot",
             }
         } else {
             "unknown"
@@ -2324,6 +2401,7 @@ impl Heap {
             free_vectors: self.free_vectors.len(),
             free_strings: self.free_strings.len(),
             free_objects: self.free_objects.len(),
+            allocs_since_gc: self.allocs_since_gc,
         }
     }
 }
@@ -2346,6 +2424,7 @@ pub struct HeapStats {
     pub free_vectors: usize,
     pub free_strings: usize,
     pub free_objects: usize,
+    pub allocs_since_gc: usize,
 }
 
 // ============================================================================

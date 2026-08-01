@@ -97,6 +97,10 @@ impl TaggedValue {
     pub const EOF: Self = Self(0x18 | Self::TAG_SPECIAL);
     /// Unspecified value (void)
     pub const UNSPECIFIED: Self = Self(0x20 | Self::TAG_SPECIAL);
+    /// Debug-build poison written into swept pair slots by the GC
+    /// (`heap/gc.rs`). Never produced by any constructor, so pair accessors
+    /// can assert against it to turn use-after-free into an immediate panic.
+    pub(crate) const GC_POISON: Self = Self(0xF8 | Self::TAG_SPECIAL);
 
     // =========================================================================
     // Fixnum Constants and Operations

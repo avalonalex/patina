@@ -17,7 +17,9 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
     env.define_primitive("debug-status", Arity::Exact(0), library_name.clone());
     env.define_primitive("debug-mode", Arity::Exact(1), library_name.clone());
     env.define_primitive("macro-debug-mode", Arity::Exact(1), library_name.clone());
-    env.define_primitive("library?", Arity::Exact(1), library_name);
+    env.define_primitive("library?", Arity::Exact(1), library_name.clone());
+    env.define_primitive("gc", Arity::Exact(0), library_name.clone());
+    env.define_primitive("gc-stats", Arity::Exact(0), library_name);
 
     // Return list of exported identifiers
     vec![
@@ -28,5 +30,7 @@ pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<Strin
         "debug-mode".to_string(),
         "macro-debug-mode".to_string(),
         "library?".to_string(),
+        "gc".to_string(),
+        "gc-stats".to_string(),
     ]
 }

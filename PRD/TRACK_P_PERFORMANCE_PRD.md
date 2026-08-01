@@ -145,15 +145,7 @@ The compiler runs zero optimization passes; the 5-pass pipeline is structured fo
 - **Acceptance:** golden disasm tests; `cargo test`.
 
 ### P6 — Garbage collection (parallel correctness sub-track; feature-flagged)
-Stop-the-world **mark-and-sweep** over the typed arenas, gated behind a `gc` Cargo feature so the baseline is untouched until proven.
-- **Mark bits:** parallel bit-vectors per arena added to `Heap` (no `TaggedValue` bloat, no header change): `mark_pairs/mark_vectors/mark_strings/mark_objects`.
-- **Roots:** VM `registers`; every `CallFrame.closure` index; `value_buffer`; the `globals` `Environment` + parent chain (needs a new read-only `Environment::for_each_value`); `code_store` `CodeObject.constants`; continuation/delimited-continuation snapshots (`registers` + frame closures); the `symbol_table` (`heap/mod.rs:255`).
-- **Tracer:** iterative worklist; skip immediates; PAIR→push car/cdr; VECTOR→push elements; STRING→leaf. For OBJECT, push the embedded `TaggedValue`s of exactly the value-bearing variants (`heap/mod.rs:119-179`): `Complex{real,imag}`, `Exception{irritants}`, `Record{fields}`, `Parameter{values}`, `Promise(Delayed/Forced)`, `MutableCell`, `VmClosure{free_vars}`, `Values`. All other variants are leaves for the arena GC.
-- **Sweep:** push unmarked slots onto the **existing free lists** (already drained by `alloc_*`). Indices are reused **in place** → no pointer rewriting; all tagged pointers stay valid. Do not shrink arena `Vec`s.
-- **Trigger:** allocation-count threshold checked at a **VM safe point** (top of `dispatch_one_instruction`/`run_loop_until`, no heap borrow held); adaptive `threshold = max(min, live*2)`. Never call GC from inside `alloc_*` (re-entrant borrow risk).
-- **Staging:** sweep **pairs + vectors only** first (highest churn, no `Rc` payloads, sidesteps symbol/continuation liveness); expand to the object arena once differential tests pass.
-- **Tree-walker coexistence:** the same `SharedHeap` backs both backends; GC runs **only from the VM driver at a safe point**, never mid tree-walk. Feature flag keeps default/mixed builds unaffected. Reclaiming an object slot drops its `Rc` payload naturally.
-- **Acceptance:** two CI lanes — `--no-default-features` (must equal today) and `--features gc`; a `--gc-stress` mode (threshold=1) runs the full compliance suite to identical output; liveness stress (sum `(iota 100000)`), reuse proof (arena doesn't grow by 2N), cycle test (`set-cdr!` loop), paranoid pre-sweep assertion in debug builds.
+Designed and tracked in **`docs/GC_DESIGN.md`** (2026-07-31), which supersedes the sketch that used to live here — the full design covers both backends (not just the VM), adds a `Collector`/`GcRoots` pluggability seam, and carries the complete root inventory and staging plan.
 
 ### P7 — Slice-based primitive handler ABI  *(phase 1 done — PR #157, 2026-07-29; phase 2 open)*
 
@@ -252,7 +244,7 @@ equivalent plain mutual tail recursion.
 - **Shadowed/redefined primitives** → conservative "no top-level define of this name" guard; fall back to `Call`.
 - **Control primitives inlined by mistake** → explicit `const` exclusion set (the `vm_control_primitive` names + `apply`); single most important gate.
 - **Error-message parity** → opcodes fall back to the named primitive on the error path, matching suite expectations.
-- **GC missed root → use-after-free** → pairs+vectors-only first cut, feature flag, `--gc-stress`, paranoid assertion lane, differential testing as the acceptance bar.
+- **GC risks** → covered in `docs/GC_DESIGN.md` §9–11 (hazards, feature-flag lanes, `--gc-stress`, poison mode).
 
 ## 7. Verification (track-wide)
 - Routine: `cargo build --release && ./scripts/run_chibi_tests.sh` (must stay 1163/1163) after every item.
