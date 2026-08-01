@@ -299,6 +299,11 @@ impl LibraryRegistry {
         self.libraries.keys().collect()
     }
 
+    /// Iterate over every loaded library.
+    pub fn iter_libraries(&self) -> impl Iterator<Item = &Library> {
+        self.libraries.values()
+    }
+
     /// Clear all loaded libraries
     ///
     /// Useful for testing or resetting the interpreter state.
@@ -311,6 +316,18 @@ impl LibraryRegistry {
 impl Default for LibraryRegistry {
     fn default() -> Self {
         Self::with_default_paths()
+    }
+}
+
+/// Every loaded library is a GC root: each carries both an `exports` map and
+/// an environment (`docs/GC_DESIGN.md` §5.3). Implemented here so both
+/// backends root libraries identically — the rule lives with the registry
+/// rather than being restated in each backend's root provider.
+impl patina_core::GcRoots for LibraryRegistry {
+    fn trace_roots(&self, visitor: &mut patina_core::GcVisitor<'_>) {
+        for library in self.iter_libraries() {
+            visitor.visit_library(library);
+        }
     }
 }
 

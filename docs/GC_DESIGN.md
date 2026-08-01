@@ -168,6 +168,17 @@ impl GcVisitor<'_> {
     /// Trace through an environment chain; deduped by Rc::as_ptr so the
     /// global env is not re-walked once per closure.
     pub fn visit_env(&mut self, env: &Rc<Environment>);
+    /// Trace a continuation / expression tree held outside the arenas.
+    pub fn visit_continuation(&mut self, k: &Rc<CpsContinuation>);
+    pub fn visit_expr_literals(&mut self, expr: &CpsExpr);
+    /// Shared trace rules, so each is authored once rather than per backend.
+    pub fn visit_promise(&mut self, p: &RefCell<PromiseState>);
+    pub fn visit_wind(&mut self, w: &DynamicWindRecord);
+    pub fn visit_winds(&mut self, w: &[DynamicWindRecord]);
+    pub fn visit_library(&mut self, l: &Library);
+    /// Dedup hook for root providers' own Rc-shared structures (§9.4).
+    /// Returns false if this identity was already traced this collection.
+    pub fn visit_once(&mut self, identity: usize) -> bool;
 }
 
 /// Implemented by anything that owns live values: backend state, registries,
@@ -354,7 +365,7 @@ handled by safe-point placement + deferral (§7).**
 
 | Root | Location | Notes |
 |------|----------|-------|
-| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs:80-83` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` (`crates/patina-core/src/library.rs:30,:34`) — two root sets per library |
+| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl GcRoots for LibraryRegistry`** lives in `patina-runtime` so both backends pass it as a root rather than restating the rule; the per-library walk is `GcVisitor::visit_library` |
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs:122` | Unevaluated forms during loading; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `CompiledMacro` literals | `compiled_macro.rs:78,:280,:439` | Reached via the `Macro` heap-variant trace rule when the macro binding is live |
@@ -370,10 +381,23 @@ handled by safe-point placement + deferral (§7).**
 - The check happens **only at backend safe points** (§7) — never inside
   `alloc_*` (re-entrant `RefCell` borrow risk, and mid-operation temporaries
   would be unrooted).
-- A `--gc-stress` mode forces the threshold to 1 for differential testing.
+- Collection is **off by default** until stage 4: the baseline build must
+  behave exactly as it did before the collector existed. The mode table and
+  its environment grammar live in `patina-core` (`GcMode::from_env`) because
+  the variables are process-global and both backends must agree on them:
+  | Mode | Selected by | Behavior |
+  |------|-------------|----------|
+  | Off (default) | — | collect only when `(gc)` has been called |
+  | On | `PATINA_GC=1` | adaptive threshold above |
+  | Stress | `PATINA_GC_STRESS[=n]` | collect once `n` allocations (default 1) have happened, **bypassing the adaptive `2 × live` floor** |
+
+  Stress deliberately ignores the adaptive floor: after bootstrap the live set
+  is large enough that `2 × live` would almost never fire, which is the
+  opposite of what a stress lane wants.
 - Manual entry points for testing and users: `(gc)` and `(gc-stats)`
-  primitives (registered like any primitive per the standard three-step
-  process).
+  primitives, honored in **every** mode. `(gc)` records a request; the next
+  safe point services it. This is what makes collection testable without
+  process-global environment variables.
 
 ---
 
@@ -393,20 +417,39 @@ placement + deferral:
      `dispatch_one_instruction`. At that point all state is in `VmState`
      fields; capture temporaries are dead; `value_buffer`/`scratch_args` are
      restored.
-   - Tree-walker: top of the trampoline loop in `eval_in_env`
-     (`eval/cps_eval/mod.rs:155`). The entire machine state is `current_step`,
-     which the safe point passes as a transient root.
-2. **`gc_defer_depth` counter** (on the shared heap or a small shared cell),
-   incremented on every re-entrant entry and decremented on exit:
-   - VM: `execute_nested` (`vm_state.rs:607`), `VmApplyContext` primitive
-     callbacks (`vm_state.rs:2400`), library loading / `eval` globals-swap
-     windows.
-   - Tree-walker: `apply_from_direct_tagged` (`wind.rs:163`), macro expansion,
-     any primitive that re-enters Scheme.
-   - Parsing (datum labels live in `Parser.labels`).
+   - Tree-walker (**stage 2, implemented**): top of the trampoline loop in
+     `eval_in_env`. The entire machine state is `current_step`, which the
+     safe point passes as a transient root along with the `expr` the
+     trampoline was entered with (its literals stay live for the call).
+2. **`gc_defer_depth` counter** on the shared heap, managed by the
+   `GcDeferGuard` RAII type so early returns and `?` propagation cannot leak
+   an increment.
 
-   GC fires only at a safe point with `gc_defer_depth == 0`. Use RAII guards
-   so early returns and `?` propagation cannot leak a depth increment.
+   The tree-walker takes a guard **on every trampoline entry** (`eval_in_env`
+   *and* `apply_from_direct_tagged`) rather than instrumenting each re-entrant
+   call site. This inverts the failure mode: a nested trampoline is deferred
+   *by construction* (whatever route reached it — a higher-order primitive,
+   `eval`, quasiquote), instead of relying on someone having remembered to
+   guard that route.
+
+   A safe point asks **its own guard** — `GcDeferGuard::is_outermost()`, true
+   when nothing was deferring at the moment it was taken — rather than
+   comparing the depth to a literal. The "outermost" depth differs per backend
+   (the tree-walker guards every trampoline; the VM guards only its re-entrant
+   paths) and both share one counter through `SharedHeap`, so a hardcoded
+   number would be correct for at most one of them.
+
+   Additional guards cover Rust-side scopes that hold values across an
+   evaluation call:
+   - library loading's `for tv in &parsed.body` loop (`eval/mod.rs`) — the
+     unevaluated forms are TaggedValues no root provider can see.
+   - VM (stage 3): `execute_nested`, `VmApplyContext` primitive callbacks,
+     the globals-swap windows.
+
+   The tree-walker safe point additionally refuses to collect when
+   `library_registry` is already mutably borrowed: rooting must walk it, and
+   a partial root set is a use-after-free. Parsing needs no guard — safe
+   points exist only inside the trampoline, so GC cannot fire mid-parse.
 
 **Known limitation (accepted for v1):** a long-running nested execution — e.g.
 `(map f huge-list)` where each `f` call is a nested trampoline, or a library
@@ -488,7 +531,24 @@ Cycle-detection helpers key transient `HashSet`s by `tv.raw()`
 These are within-call only; safe because GC never runs mid-traversal
 (deferral / no safe point inside them).
 
-### 9.4 `CompiledMacro.heap`
+### 9.4 `Rc`-shared structures need dedup or tracing goes exponential
+
+Any persistent structure whose nodes capture the tail below them must be
+memoized by pointer identity, or a single trace is exponential rather than
+linear. The tree-walker's `ContEnv` is exactly this shape — every
+`ContValue::Local` captures the chain below it, so node *k* holds a chain of
+length *k−1* and an un-memoized walk costs `2ⁿ − 1` node visits. Measured
+before the fix: **6.8 s for one collection at nesting depth 26**, roughly
+1.9× per added level.
+
+This is why every `Rc`-shared structure the visitor walks has a dedup set
+(`visit_env`, `visit_continuation`, `visit_expr_literals`), and why
+[`GcVisitor::visit_once`] exists — root providers must be able to dedup their
+own shared structures. **Stage 3 check:** `VmContinuation` snapshots and
+`CodeObject` sharing have the same potential; if a VM root provider walks an
+`Rc` graph, it must route through `visit_once`.
+
+### 9.5 `CompiledMacro.heap`
 
 Compiled macros hold a `SharedHeap` clone for their literal values
 (`compiled_macro.rs:461-465`). As long as it is the same heap instance
@@ -498,17 +558,16 @@ would catch violations.
 
 ---
 
-## 10. Feature Flag and Staging
+## 10. Staging
 
-Cargo feature `gc` on `patina-core`, propagated by the backend crates.
-Default **off** until stage 4. With the feature off, the only residue is the
-unused counter fields (no behavior change); CI proves the baseline lane is
-unaffected.
+Collection is gated at runtime rather than by a Cargo feature (§6): the
+default build never collects unless `(gc)` is called, so the baseline lane is
+unaffected without a second compilation configuration to maintain.
 
 | Stage | Deliverable | Acceptance |
 |-------|-------------|------------|
-| **1. Core infra** | Mark bit-vectors, `GcVisitor`, per-variant trace rules, tombstoning sweep, `Collector`/`GcRoots` traits, `MarkSweepCollector`, alloc counter, `Environment::for_each_value`, `(gc)`/`(gc-stats)` primitives | Unit tests with synthetic roots: reachability, tombstone drops `Rc` payloads, free-list reuse, poison-mode assertions |
-| **2. Tree-walker integration** | `GcRoots` for evaluator state + transient `StepResult` root, safe point + defer guards, `PENDING_ESCAPE` root | Full chibi suite (1163) under `--gc-stress` (threshold=1) with identical output; cycle tests (`set-cdr!` loop, self-capturing closure) show reclamation via `(gc-stats)` |
+| **1. Core infra** ✅ *(merged 2026-07-31, PR #4)* | Mark bit-vectors, `GcVisitor`, per-variant trace rules, tombstoning sweep, `Collector`/`GcRoots` traits, `MarkSweepCollector`, alloc counter, `Environment::for_each_local_value`, `(gc)`/`(gc-stats)` primitives | Unit tests with synthetic roots: reachability, tombstone drops `Rc` payloads, free-list reuse, poison-mode assertions |
+| **2. Tree-walker integration** ✅ *(2026-07-31)* | Root providers for `Evaluator` (global env), `LibraryRegistry` (shared, in `patina-runtime`), `StepRoots` (`StepResult` + `ContValue`/`ContEnv` chains + entry `expr`) and `EscapeRoots` (`PENDING_ESCAPE`); safe point at the trampoline loop top; `GcDeferGuard` on both trampolines and the library-body loop; `GcMode` policy | **Met:** chibi suite (1194 test expressions) on the tree-walker under `PATINA_GC_STRESS=1` produced byte-identical output to baseline. Reclamation proven: a 20 000-cons workload holds ~4 000 pairs under stress vs ~24 000 unreclaimed without it. 14 integration tests in `patina-tests/tests/gc_tree_walker.rs` cover cycles, closures, continuations, `dynamic-wind`, records, nested trampolines, and a regression guard for §9.4 |
 | **3. VM integration** | `impl GcRoots for VmState` (incl. side tables, bare closure indices), safe point in `run_loop_until`, defer guards on `execute_nested`/`VmApplyContext` | Same stress lane on the VM backend; interleaved A/B benchmarks vs `main` (per the established methodology) showing GC-off parity and acceptable GC-on overhead |
 | **4. Default-on** | Adaptive threshold enabled, two CI lanes (baseline vs `gc`), SourceMap pruning hook, liveness stress (`(iota 100000)` sum), arena-reuse proof (arena length stops growing across N iterations) | Flip feature to default; `cargo clippy`/`fmt` clean |
 | **5+. Future** | VM-only `Collector` upgrades: immortal set for `code_store` constants, lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); explicit rooting of re-entrancy boundaries so nested loops can collect; weak symbol table | Each behind the trait, benchmarked interleaved |
@@ -523,9 +582,14 @@ visitor exists, and the stress lane is the real safety net.
 
 ## 11. Testing Strategy
 
-1. **Differential lanes:** baseline (`--no-default-features`) must be
-   bit-identical to today; `--features gc` + `--gc-stress` (threshold=1) must
-   produce identical output on the full chibi suite for **both** backends.
+1. **Differential lanes:** the default (non-collecting) build must be
+   bit-identical to today; `PATINA_GC_STRESS=1` must produce identical output
+   on the full chibi suite for **both** backends. Tree-walker:
+   ```bash
+   ./target/release/patina --tree-walker scheme_tests/chibi/r7rs-tests.scm > base.txt
+   PATINA_GC_STRESS=1 ./target/release/patina --tree-walker scheme_tests/chibi/r7rs-tests.scm > stress.txt
+   diff base.txt stress.txt   # must be empty
+   ```
 2. **Poison mode (debug):** tombstoned slots hold sentinels; accessors assert.
    Any missed root becomes a deterministic panic under stress, not a
    heisenbug.
