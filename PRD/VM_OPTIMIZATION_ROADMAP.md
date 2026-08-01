@@ -36,11 +36,11 @@ This document catalogs the gaps between Patina's first-generation VM and state-o
 
 ## 3. Garbage Collection
 
-**Current:** Arena allocation with free lists, but free is never called. No GC. Long-running programs leak.
+**Status (2026-08-01):** Done for correctness — non-moving mark-and-sweep over the typed arenas, on **both** backends, reclaiming cycles that `Rc` cannot (PRs #4-#6). Currently **off by default**; `(gc)` collects on request, `PATINA_GC`/`PATINA_GC_STRESS` enable it. Design and staging: `docs/GC_DESIGN.md`.
 
-**Target (phase 1):** Mark-and-sweep over the typed arenas (pairs, vectors, strings, objects). Root set: registers, call frames, globals, continuation side tables.
+**Remaining (stage 4):** flip to default-on. Gated on the safe-point trigger redesign — the safe point polls per dispatched instruction, costing 2.5-3.5% with GC off; see `docs/GC_DESIGN.md` §6.1.
 
-**Target (phase 2):** Generational collection. Young generation for short-lived allocations.
+**Target (later):** Generational collection. Young generation for short-lived allocations.
 
 **Reference:** Chez uses generational copying GC; Guile uses mark-sweep with generational hints.
 
