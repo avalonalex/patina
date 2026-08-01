@@ -287,6 +287,11 @@ pub struct Heap {
 
     /// Set by the `(gc)` primitive; consumed by backends at safe points
     gc_requested: bool,
+
+    /// Nesting depth of scopes that hold live values unreachable from any
+    /// registered root (nested trampolines, library-body loops). Collection
+    /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
+    gc_defer_depth: u32,
 }
 
 impl Heap {
@@ -304,6 +309,7 @@ impl Heap {
             free_objects: Vec::new(),
             allocs_since_gc: 0,
             gc_requested: false,
+            gc_defer_depth: 0,
         }
     }
 
@@ -321,6 +327,7 @@ impl Heap {
             free_objects: Vec::new(),
             allocs_since_gc: 0,
             gc_requested: false,
+            gc_defer_depth: 0,
         }
     }
 
@@ -346,6 +353,21 @@ impl Heap {
     /// Whether a collection has been requested.
     pub fn gc_requested(&self) -> bool {
         self.gc_requested
+    }
+
+    /// Depth of active GC-deferring scopes. A backend safe point may only
+    /// collect when this is at its own baseline — see `docs/GC_DESIGN.md` §7
+    /// and [`GcDeferGuard`](crate::GcDeferGuard).
+    pub fn gc_defer_depth(&self) -> u32 {
+        self.gc_defer_depth
+    }
+
+    pub(crate) fn enter_gc_defer(&mut self) {
+        self.gc_defer_depth += 1;
+    }
+
+    pub(crate) fn exit_gc_defer(&mut self) {
+        self.gc_defer_depth = self.gc_defer_depth.saturating_sub(1);
     }
 
     // =========================================================================

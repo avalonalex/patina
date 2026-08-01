@@ -66,6 +66,7 @@ mod application;
 mod continuation;
 mod environment;
 mod exceptions;
+mod gc_roots;
 pub mod quasiquote;
 mod step;
 mod types;
@@ -73,6 +74,7 @@ mod wind;
 
 use crate::eval::error::EvalError;
 use patina_core::Environment;
+use patina_core::GcDeferGuard;
 use patina_core::TaggedValue;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind};
 use std::rc::Rc;
@@ -98,6 +100,40 @@ impl<'a> CpsEvaluator<'a> {
     }
 
     // apply_from_direct is defined in wind.rs
+
+    /// GC safe point: collect if policy says so and nothing is deferring.
+    ///
+    /// Called at the top of the trampoline loop, where the entire live
+    /// machine state is reachable from `step` + `expr` and no heap borrow is
+    /// outstanding (`docs/GC_DESIGN.md` §7).
+    fn maybe_collect(&self, step: &StepResult, expr: &CpsExpr) {
+        let evaluator = self.evaluator;
+        let heap = evaluator.global_env.heap();
+
+        {
+            let h = heap.borrow();
+            // Our own guard accounts for depth 1; anything higher means a
+            // nested trampoline or a Rust-side holder of unrooted values.
+            if h.gc_defer_depth() != 1 || !evaluator.gc.borrow().should_collect(&h) {
+                return;
+            }
+        }
+
+        // Rooting walks the library registry. If a load is in flight we
+        // cannot read it, so defer rather than collect with a partial root
+        // set — a missing root is a use-after-free.
+        if evaluator.library_registry.try_borrow().is_err() {
+            return;
+        }
+
+        let evaluator_roots = gc_roots::EvaluatorRoots(evaluator);
+        let step_roots = gc_roots::StepRoots { step, expr };
+        let mut h = heap.borrow_mut();
+        evaluator
+            .gc
+            .borrow_mut()
+            .collect(&mut h, &[&evaluator_roots, &step_roots]);
+    }
 
     /// Evaluate a CPS expression to a final value
     ///
@@ -125,6 +161,12 @@ impl<'a> CpsEvaluator<'a> {
         expr: &CpsExpr,
         env: Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
+        // Every trampoline defers collection for its own extent; only the
+        // outermost one (depth 1) reaches its safe point un-deferred. A
+        // nested trampoline's caller has live values in Rust locals that no
+        // root provider can see — see `docs/GC_DESIGN.md` §7.
+        let _gc_defer = GcDeferGuard::new(self.evaluator.global_env.heap());
+
         let cont_env = ContEnv::new();
         let prompt_stack = Vec::new();
         let dynamic_winds = Vec::new();
@@ -153,6 +195,10 @@ impl<'a> CpsEvaluator<'a> {
 
         // Trampoline loop - process steps until we get a final value
         loop {
+            // GC safe point: all live state is in `current_step` and `expr`,
+            // both rooted below. No heap borrow is outstanding here.
+            self.maybe_collect(&current_step, expr);
+
             step_count += 1;
             if step_count <= 30 {
                 debug!(

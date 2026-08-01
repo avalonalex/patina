@@ -53,7 +53,7 @@ pub use scope::{ScopeId, ScopeSet};
 // TaggedValue and heap types for compact value representation
 pub use debug_format::{format_tagged, format_tagged_with_scopes};
 pub use heap::gc::{
-    ArenaCounts, Collector, GcRoots, GcStats, GcVisitor, MarkBits, MarkSweepCollector,
+    ArenaCounts, Collector, GcDeferGuard, GcRoots, GcStats, GcVisitor, MarkBits, MarkSweepCollector,
 };
 pub use heap::{new_shared_heap, Heap, SharedHeap};
 pub use tagged_value::TaggedValue;

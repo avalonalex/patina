@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use rustc_hash::FxHashSet;
 
-use super::{Heap, HeapObjectData, PromiseState};
+use super::{Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::continuation::CpsContinuation;
 use crate::environment::Environment;
 use crate::procedure::Procedure;
@@ -162,6 +162,34 @@ pub trait Collector {
     /// value reachable from `roots`, and no outstanding heap borrow other
     /// than the one behind `heap`.
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats;
+}
+
+// ============================================================================
+// Deferral
+// ============================================================================
+
+/// RAII guard marking a scope that holds live values no root provider can
+/// see — a nested trampoline, or a Rust loop holding unevaluated forms across
+/// an evaluation call. Backends refuse to collect while any guard is alive
+/// (design §7).
+///
+/// Drop takes a mutable heap borrow, so a guard must not be dropped while a
+/// heap borrow is outstanding.
+pub struct GcDeferGuard {
+    heap: SharedHeap,
+}
+
+impl GcDeferGuard {
+    pub fn new(heap: &SharedHeap) -> Self {
+        heap.borrow_mut().enter_gc_defer();
+        Self { heap: heap.clone() }
+    }
+}
+
+impl Drop for GcDeferGuard {
+    fn drop(&mut self) {
+        self.heap.borrow_mut().exit_gc_defer();
+    }
 }
 
 // ============================================================================

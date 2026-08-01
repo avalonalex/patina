@@ -299,6 +299,14 @@ impl LibraryRegistry {
         self.libraries.keys().collect()
     }
 
+    /// Iterate over every loaded library.
+    ///
+    /// Used by the GC to root library exports and environments — each
+    /// `Library` carries two root sets (`exports` and `env`).
+    pub fn iter_libraries(&self) -> impl Iterator<Item = &Library> {
+        self.libraries.values()
+    }
+
     /// Clear all loaded libraries
     ///
     /// Useful for testing or resetting the interpreter state.
