@@ -12,7 +12,9 @@
 //!   safe points; they never implement collection.
 //! - [`Collector`] — the swappable algorithm. [`MarkSweepCollector`] is the
 //!   v1 implementation shared by both backends. Implementations must be
-//!   non-moving: live slots may never be relocated.
+//!   non-moving: live slots may never be relocated. The mark phase composes
+//!   from public pieces (`GcVisitor::new` → root tracing → `finish` →
+//!   `Heap::sweep`), so alternative collectors need no private access.
 //!
 //! Nothing in this module runs automatically; collection happens only when a
 //! backend calls [`Collector::collect`] at a safe point (stages 2–3).
@@ -33,8 +35,8 @@ use crate::tagged_value::{HeapIndex, TaggedValue};
 // ============================================================================
 
 /// A fixed-size bit set, one bit per arena slot.
-#[derive(Debug, Clone)]
-pub struct BitSet {
+#[derive(Debug)]
+pub(crate) struct BitSet {
     words: Vec<u64>,
     len: usize,
 }
@@ -59,7 +61,7 @@ impl BitSet {
     }
 
     #[inline]
-    pub fn get(&self, i: usize) -> bool {
+    fn get(&self, i: usize) -> bool {
         debug_assert!(i < self.len, "bit index {i} out of range {}", self.len);
         self.words[i / 64] & (1u64 << (i % 64)) != 0
     }
@@ -70,12 +72,13 @@ impl BitSet {
 }
 
 /// Mark bits for all four arenas, sized to arena lengths at collection start.
-#[derive(Debug, Clone)]
+/// Produced by [`GcVisitor::finish`], consumed by [`Heap::sweep`].
+#[derive(Debug)]
 pub struct MarkBits {
-    pub pairs: BitSet,
-    pub vectors: BitSet,
-    pub strings: BitSet,
-    pub objects: BitSet,
+    pub(crate) pairs: BitSet,
+    pub(crate) vectors: BitSet,
+    pub(crate) strings: BitSet,
+    pub(crate) objects: BitSet,
 }
 
 impl MarkBits {
@@ -88,7 +91,8 @@ impl MarkBits {
         }
     }
 
-    /// Live slots per arena.
+    /// Live slots per arena. Read this before `Heap::sweep`, which reuses the
+    /// mark bits as scratch space.
     pub fn marked(&self) -> ArenaCounts {
         ArenaCounts {
             pairs: self.pairs.count_ones(),
@@ -104,7 +108,7 @@ impl MarkBits {
 // ============================================================================
 
 /// Per-arena slot counts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ArenaCounts {
     pub pairs: usize,
     pub vectors: usize,
@@ -119,7 +123,7 @@ impl ArenaCounts {
 }
 
 /// Cumulative collector statistics plus a snapshot of the last collection.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct GcStats {
     /// Number of collections performed.
     pub collections: u64,
@@ -148,14 +152,16 @@ pub trait GcRoots {
 /// constants — design §3.4).
 pub trait Collector {
     /// Whether a collection is warranted (checked by backends at safe points).
+    ///
+    /// Implementations must honor [`Heap::gc_requested`] — the `(gc)`
+    /// primitive's request channel — in addition to their own policy, so a
+    /// backend safe point only ever asks this one question.
     fn should_collect(&self, heap: &Heap) -> bool;
 
     /// Run a full collection. The caller must be at a safe point: every live
     /// value reachable from `roots`, and no outstanding heap borrow other
     /// than the one behind `heap`.
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats;
-
-    fn stats(&self) -> &GcStats;
 }
 
 // ============================================================================
@@ -180,9 +186,18 @@ pub struct GcVisitor<'h> {
 
 impl<'h> GcVisitor<'h> {
     pub fn new(heap: &'h Heap) -> Self {
+        let mut marks = MarkBits::for_heap(heap);
+        // Interned symbols are roots in v1 (design §9.2). Rooted here rather
+        // than by the collector because a dangling intern-table index would
+        // break any collector — it is a heap invariant, not policy. Mark-only:
+        // symbol_table entries are Symbol leaves by construction, so the
+        // worklist round-trip would be pure overhead.
+        for &idx in heap.symbol_table.values() {
+            marks.objects.set(idx as usize);
+        }
         Self {
             heap,
-            marks: MarkBits::for_heap(heap),
+            marks,
             worklist: Vec::new(),
             cont_worklist: Vec::new(),
             seen_envs: FxHashSet::default(),
@@ -192,20 +207,23 @@ impl<'h> GcVisitor<'h> {
     }
 
     /// The normal edge: mark and enqueue a heap reference; no-op for
-    /// immediates (fixnum, special, char).
+    /// immediates (fixnum, special, char). Strings are leaves, so they are
+    /// marked without a worklist round-trip.
     #[inline]
     pub fn visit(&mut self, tv: TaggedValue) {
-        if tv.is_pair() {
-            if self.marks.pairs.set(tv.heap_index() as usize) {
-                self.worklist.push(tv);
-            }
+        let newly_marked = if tv.is_pair() {
+            self.marks.pairs.set(tv.heap_index() as usize)
         } else if tv.is_vector() {
-            if self.marks.vectors.set(tv.heap_index() as usize) {
-                self.worklist.push(tv);
-            }
+            self.marks.vectors.set(tv.heap_index() as usize)
         } else if tv.is_string() {
             self.marks.strings.set(tv.heap_index() as usize);
-        } else if tv.is_object() && self.marks.objects.set(tv.heap_index() as usize) {
+            false
+        } else if tv.is_object() {
+            self.marks.objects.set(tv.heap_index() as usize)
+        } else {
+            false
+        };
+        if newly_marked {
             self.worklist.push(tv);
         }
     }
@@ -240,31 +258,32 @@ impl<'h> GcVisitor<'h> {
         }
     }
 
-    fn visit_continuation(&mut self, k: &Rc<CpsContinuation>) {
+    /// Trace a continuation held outside the heap. Root providers need this
+    /// for continuations that never became heap objects (e.g. the
+    /// tree-walker's `PENDING_ESCAPE` and in-flight continuation chain).
+    pub fn visit_continuation(&mut self, k: &Rc<CpsContinuation>) {
         if self.seen_conts.insert(Rc::as_ptr(k) as usize) {
             self.cont_worklist.push(k.clone());
         }
     }
 
-    /// Literals embedded in live code (`CpsExprKind::Literal` / `Quasiquote`).
+    /// Trace literals embedded in live code (`CpsExprKind::Literal` /
+    /// `Quasiquote`). Root providers need this for expression trees reachable
+    /// outside the heap (e.g. a suspended `StepResult`'s current expression).
     /// Memoized per collection by node address — bodies are shared via `Rc`
     /// across closures. Depth is bounded by program size, not data size, so
     /// recursion is acceptable here (data tracing stays iterative).
-    fn visit_expr_literals(&mut self, expr: &crate::cps_expr::CpsExpr) {
+    pub fn visit_expr_literals(&mut self, expr: &crate::cps_expr::CpsExpr) {
         let mut seen = std::mem::take(&mut self.seen_exprs);
         expr.for_each_literal(&mut seen, &mut |tv| self.visit(tv));
         self.seen_exprs = seen;
     }
 
-    /// Interned symbols are roots in v1: symbols are `eq?`-identity-bearing
-    /// and never collected (design §9.2).
-    fn trace_symbol_table(&mut self) {
-        // Copy the indices out first: visit_object_index needs &mut self while
-        // the table iterator would borrow self.heap through self.
-        let indices: Vec<HeapIndex> = self.heap.symbol_table.values().copied().collect();
-        for idx in indices {
-            self.visit_object_index(idx);
-        }
+    /// Finish marking: drain the worklists to a fixed point and return the
+    /// mark bits, ready for [`Heap::sweep`].
+    pub fn finish(mut self) -> MarkBits {
+        self.drain();
+        self.marks
     }
 
     /// Process the worklists to a fixed point.
@@ -394,71 +413,87 @@ impl<'h> GcVisitor<'h> {
             self.visit_continuation(captured);
         }
     }
-
-    fn finish(self) -> MarkBits {
-        self.marks
-    }
 }
 
 // ============================================================================
 // Sweep
 // ============================================================================
 
+/// Sweep one arena: pre-mark already-free slots (they are unmarked by
+/// definition; re-pushing them would double-free on reuse), then reclaim
+/// every remaining unmarked slot. Returns the number of slots reclaimed.
+fn sweep_arena<T>(
+    arena: &mut [T],
+    free_list: &mut Vec<HeapIndex>,
+    marks: &mut BitSet,
+    write_tombstone: bool,
+    tombstone: impl Fn() -> T,
+) -> usize {
+    for &idx in free_list.iter() {
+        marks.set(idx as usize);
+    }
+    let mut swept = 0;
+    for (i, slot) in arena.iter_mut().enumerate() {
+        if !marks.get(i) {
+            if write_tombstone {
+                *slot = tombstone();
+            }
+            free_list.push(i as HeapIndex);
+            swept += 1;
+        }
+    }
+    swept
+}
+
 impl Heap {
     /// Reclaim every unmarked slot: push its index onto the arena's free list
     /// and tombstone the slot. Tombstoning drops `Rc` payloads eagerly, which
     /// is what breaks closure ↔ environment cycles (design §8) — it is
-    /// load-bearing, not hygiene.
+    /// load-bearing for objects (`Rc` payloads) and vectors/strings (element
+    /// buffers). Pairs are `Copy` with nothing to drop, so release builds
+    /// skip the store; debug builds write a poison value that pair accessors
+    /// assert against.
     ///
-    /// Slots already on a free list are skipped (they are unmarked by
-    /// definition; re-pushing them would double-free on reuse).
-    pub fn sweep(&mut self, marks: &MarkBits) -> ArenaCounts {
-        fn already_free(free_list: &[HeapIndex], len: usize) -> BitSet {
-            let mut set = BitSet::new(len);
-            for &idx in free_list {
-                set.set(idx as usize);
-            }
-            set
-        }
-
-        let mut swept = ArenaCounts::default();
-
-        let free = already_free(&self.free_pairs, self.pairs.len());
-        for i in 0..self.pairs.len() {
-            if !marks.pairs.get(i) && !free.get(i) {
-                self.pairs[i] = (TaggedValue::NULL, TaggedValue::NULL);
-                self.free_pairs.push(i as HeapIndex);
-                swept.pairs += 1;
-            }
-        }
-
-        let free = already_free(&self.free_vectors, self.vectors.len());
-        for i in 0..self.vectors.len() {
-            if !marks.vectors.get(i) && !free.get(i) {
-                self.vectors[i] = Vec::new();
-                self.free_vectors.push(i as HeapIndex);
-                swept.vectors += 1;
-            }
-        }
-
-        let free = already_free(&self.free_strings, self.strings.len());
-        for i in 0..self.strings.len() {
-            if !marks.strings.get(i) && !free.get(i) {
-                self.strings[i] = Vec::new();
-                self.free_strings.push(i as HeapIndex);
-                swept.strings += 1;
-            }
-        }
-
-        let free = already_free(&self.free_objects, self.objects.len());
-        for i in 0..self.objects.len() {
-            if !marks.objects.get(i) && !free.get(i) {
-                self.objects[i] = HeapObjectData::Free;
-                self.free_objects.push(i as HeapIndex);
-                swept.objects += 1;
-            }
-        }
-
+    /// Use-after-free detectability by arena: objects panic in debug via
+    /// `get_object`; pairs panic in debug via the poison; vector/string
+    /// tombstones (empty) are legal values, so UAF there goes undetected.
+    ///
+    /// Consumes the mark bits as scratch space (read [`MarkBits::marked`]
+    /// first) and resets the allocation counter and any pending `(gc)`
+    /// request — sweep completion is the "collection happened" boundary.
+    pub fn sweep(&mut self, marks: &mut MarkBits) -> ArenaCounts {
+        let swept = ArenaCounts {
+            pairs: sweep_arena(
+                &mut self.pairs,
+                &mut self.free_pairs,
+                &mut marks.pairs,
+                cfg!(debug_assertions),
+                || (TaggedValue::GC_POISON, TaggedValue::GC_POISON),
+            ),
+            vectors: sweep_arena(
+                &mut self.vectors,
+                &mut self.free_vectors,
+                &mut marks.vectors,
+                true,
+                Vec::new,
+            ),
+            strings: sweep_arena(
+                &mut self.strings,
+                &mut self.free_strings,
+                &mut marks.strings,
+                true,
+                Vec::new,
+            ),
+            objects: sweep_arena(
+                &mut self.objects,
+                &mut self.free_objects,
+                &mut marks.objects,
+                true,
+                || HeapObjectData::Free,
+            ),
+        };
+        self.allocs_since_gc = 0;
+        self.gc_requested = false;
         swept
     }
 }
@@ -471,8 +506,8 @@ impl Heap {
 pub const DEFAULT_MIN_THRESHOLD: usize = 65_536;
 
 /// The v1 collector: stop-the-world mark-and-sweep, shared by both backends.
-/// Adaptive trigger: collect once allocations since the last GC exceed
-/// `max(min_threshold, 2 × live-after-last-GC)`.
+/// Adaptive trigger: collect on a `(gc)` request, or once allocations since
+/// the last GC exceed `max(min_threshold, 2 × live-after-last-GC)`.
 pub struct MarkSweepCollector {
     min_threshold: usize,
     live_after_last: usize,
@@ -503,35 +538,28 @@ impl Default for MarkSweepCollector {
 
 impl Collector for MarkSweepCollector {
     fn should_collect(&self, heap: &Heap) -> bool {
-        heap.allocs_since_gc() >= self.min_threshold.max(2 * self.live_after_last)
+        heap.gc_requested()
+            || heap.allocs_since_gc() >= self.min_threshold.max(2 * self.live_after_last)
     }
 
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
         let start = Instant::now();
 
         let mut visitor = GcVisitor::new(heap);
-        visitor.trace_symbol_table();
         for provider in roots {
             provider.trace_roots(&mut visitor);
         }
-        visitor.drain();
-        let marks = visitor.finish();
+        let mut marks = visitor.finish();
 
         let marked = marks.marked();
-        let swept = heap.sweep(&marks);
-        heap.allocs_since_gc = 0;
-        heap.gc_requested = false;
+        let swept = heap.sweep(&mut marks);
 
         self.live_after_last = marked.total();
         self.stats.collections += 1;
         self.stats.last_marked = marked;
         self.stats.last_swept = swept;
         self.stats.last_pause_micros = start.elapsed().as_micros();
-        self.stats.clone()
-    }
-
-    fn stats(&self) -> &GcStats {
-        &self.stats
+        self.stats
     }
 }
 
@@ -810,13 +838,30 @@ mod tests {
     }
 
     #[test]
-    fn gc_request_flag_roundtrip() {
+    fn gc_request_triggers_and_is_cleared_by_collection() {
         let mut heap = Heap::new();
-        assert!(!heap.take_gc_request());
+        // Threshold far above the allocation count: only the request fires.
+        let mut collector = MarkSweepCollector::new();
+        assert!(!collector.should_collect(&heap));
+
         heap.request_gc();
         assert!(heap.gc_requested());
-        assert!(heap.take_gc_request());
+        assert!(collector.should_collect(&heap));
+
+        let roots = TestRoots::default();
+        collector.collect(&mut heap, &[&roots]);
         assert!(!heap.gc_requested());
+        assert!(!collector.should_collect(&heap));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "use-after-free")]
+    fn swept_pair_access_panics_in_debug() {
+        let mut heap = Heap::new();
+        let dead = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+        collect(&mut heap, &TestRoots::default());
+        let _ = heap.car(dead);
     }
 
     #[test]

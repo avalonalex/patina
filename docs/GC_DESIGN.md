@@ -42,7 +42,7 @@ Non-goals (v1):
 | 1 | Non-moving stop-the-world mark-and-sweep | Indices escape `TaggedValue` (§3.4); free lists + in-place slot reuse already exist |
 | 2 | **One collector implementation shared by both backends** | Same `SharedHeap`, same object graph; backends differ only in roots + safe points |
 | 3 | Pluggability = `Collector` trait (algorithm) × `GcRoots` trait (root providers) | The seam between "how to collect" and "what is live" is the stable boundary |
-| 4 | Mark state = side bit-vectors per arena on `Heap` | No `TaggedValue` bloat, no object header changes |
+| 4 | Mark state = side bit-vectors per arena, owned by the visitor per collection | No `TaggedValue` bloat, no object header changes, no idle state on `Heap` |
 | 5 | Sweep pushes to the existing free lists **and tombstones the slot** | Allocation path unchanged; tombstoning drops `Rc` payloads eagerly → breaks env cycles (§8) |
 | 6 | Safe point = top of each backend's driver loop, guarded by a re-entrancy defer counter | All Rust-stack temporaries are dead or restored there (§7) |
 | 7 | Environments traced via new `Environment::for_each_value`, deduped by `Rc` pointer | Globals/bindings live in Rust `HashMap`s outside the arenas |
@@ -210,11 +210,14 @@ Notes:
 
 ### 4.2 Mark state
 
-Side bit-vectors on `Heap`, one per arena (`mark_pairs`, `mark_vectors`,
-`mark_strings`, `mark_objects`), sized to arena length at collection start and
-cleared each cycle. No `TaggedValue` or `HeapObjectData` change. A slot on a
-free list is never marked (allocation only hands out unmarked slots; marking
-happens only via reachability).
+Side bit-vectors, one per arena (`MarkBits`), sized to arena length at
+collection start. Owned by the `GcVisitor` and created fresh per collection —
+no persistent mark state on `Heap`, so there is no clearing step and no idle
+memory between collections. No `TaggedValue` or `HeapObjectData` change.
+The visitor also roots the intern table at construction (a dangling
+`symbol_table` index would break *any* collector — heap invariant, not
+policy), marking symbols without a worklist round-trip since they are leaves
+by construction.
 
 ### 4.3 Trace rules
 
@@ -266,27 +269,35 @@ literals in the body `Rc<CpsExpr>`.
 
 ### 4.5 Sweep and tombstoning
 
-For each arena, every unmarked, not-already-free slot:
+For each arena, every unmarked, not-already-free slot (sweep pre-marks
+free-list indices in the mark bits rather than building a separate
+already-free set):
 
 1. push its index onto the arena's free list;
 2. **tombstone the slot** — overwrite with a payload-free value:
-   pairs → `(NULL, NULL)`; vectors/strings → `Vec::new()` (drops element
-   storage); objects → a dedicated `HeapObjectData::Free` variant (or reuse
-   `LabelPlaceholder(0)` to avoid a new variant — decide at implementation;
-   a dedicated `Free` variant makes debug assertions cleaner).
+   vectors/strings → `Vec::new()` (drops element storage); objects → the
+   dedicated `HeapObjectData::Free` variant. Pairs are `Copy` with nothing to
+   drop, so release builds skip the store entirely; debug builds write a
+   reserved poison value (`TaggedValue::GC_POISON`) instead.
 
 Tombstoning is not just hygiene: dropping the old `HeapObjectData` releases its
 `Rc` payloads (environments, ports, procedures) at sweep time rather than at
 some future reuse of the slot. §8 shows this is what makes cycle reclamation
 work. It also closes resources (a swept `Port` drops promptly).
 
+Sweep completion is the "collection happened" boundary: it resets the
+allocation counter and clears any pending `(gc)` request, so alternative
+collectors composing `GcVisitor` + `sweep` get the trigger bookkeeping for
+free.
+
 Arena `Vec`s are never shrunk; a "free list ratio" stat can inform future
 shrink heuristics but v1 does not shrink.
 
-Debug builds add a **poison mode**: tombstoned pairs get a recognizable
-sentinel (e.g. car = a reserved special value) and accessors `debug_assert!`
-they never read one — turning use-after-free bugs into immediate panics
-instead of silent wrong answers.
+**Use-after-free detectability by arena** (debug builds): object-arena UAF
+panics via the `Free` assert in `get_object`; pair UAF panics via the poison
+assert in `get_pair`/`set_car`/`set_cdr`; vector/string tombstones (empty) are
+legal values, so UAF in those two arenas goes undetected — the differential
+stress lane is the safety net there.
 
 ---
 

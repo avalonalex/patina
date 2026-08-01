@@ -119,6 +119,12 @@ pub enum PromiseState {
 /// Generic heap object data
 ///
 /// This enum holds the actual data for objects that use TAG_OBJECT.
+///
+/// Adding a variant? The GC tracer's exhaustive match in
+/// `heap/gc.rs::trace_object_children` will fail to compile until you add an
+/// arm. Put the variant in the leaf arm ONLY if it embeds no `TaggedValue`,
+/// `Rc<Environment>`, `Rc<CpsContinuation>`, or `CpsExpr` — a value-bearing
+/// variant misfiled as a leaf is a use-after-free, not a compile error.
 #[derive(Debug, Clone)]
 pub enum HeapObjectData {
     BigInt(BigInt),
@@ -330,6 +336,9 @@ impl Heap {
     /// Ask for a collection at the next backend safe point (the `(gc)`
     /// primitive cannot collect in place: it runs mid-evaluation, where live
     /// values sit in Rust locals no root provider can see).
+    ///
+    /// `Collector::should_collect` honors this flag, and `sweep` clears it —
+    /// backends only ever ask the collector.
     pub fn request_gc(&mut self) {
         self.gc_requested = true;
     }
@@ -337,11 +346,6 @@ impl Heap {
     /// Whether a collection has been requested.
     pub fn gc_requested(&self) -> bool {
         self.gc_requested
-    }
-
-    /// Consume a pending collection request.
-    pub fn take_gc_request(&mut self) -> bool {
-        std::mem::take(&mut self.gc_requested)
     }
 
     // =========================================================================
@@ -366,7 +370,13 @@ impl Heap {
     #[inline(always)]
     pub fn get_pair(&self, ptr: TaggedValue) -> (TaggedValue, TaggedValue) {
         debug_assert!(ptr.is_pair());
-        self.pairs[ptr.heap_index() as usize]
+        let pair = self.pairs[ptr.heap_index() as usize];
+        debug_assert!(
+            pair.0 != TaggedValue::GC_POISON,
+            "use-after-free: pair slot {} was reclaimed by the GC",
+            ptr.heap_index()
+        );
+        pair
     }
 
     /// Get car of a pair
@@ -385,6 +395,11 @@ impl Heap {
     #[inline(always)]
     pub fn set_car(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
+        debug_assert!(
+            self.pairs[ptr.heap_index() as usize].1 != TaggedValue::GC_POISON,
+            "use-after-free: pair slot {} was reclaimed by the GC",
+            ptr.heap_index()
+        );
         self.pairs[ptr.heap_index() as usize].0 = value;
     }
 
@@ -392,6 +407,11 @@ impl Heap {
     #[inline(always)]
     pub fn set_cdr(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
+        debug_assert!(
+            self.pairs[ptr.heap_index() as usize].0 != TaggedValue::GC_POISON,
+            "use-after-free: pair slot {} was reclaimed by the GC",
+            ptr.heap_index()
+        );
         self.pairs[ptr.heap_index() as usize].1 = value;
     }
 

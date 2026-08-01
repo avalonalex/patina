@@ -12,6 +12,9 @@ use patina_runtime::Arity;
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
 
+// Both handlers are registered with Arity::Exact(0); the registry checks
+// arity before dispatch, so the handlers don't re-check.
+
 /// Register GC primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
     registry.register(PrimitiveFn::new_heap(
@@ -31,28 +34,15 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 }
 
-fn gc(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if !args.is_empty() {
-        return Err(EvalError::WrongArity {
-            expected: "0".to_string(),
-            actual: args.len(),
-        });
-    }
+fn gc(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     heap.borrow_mut().request_gc();
     Ok(TaggedValue::UNSPECIFIED)
 }
 
-fn gc_stats(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if !args.is_empty() {
-        return Err(EvalError::WrongArity {
-            expected: "0".to_string(),
-            actual: args.len(),
-        });
-    }
-
+fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     let mut h = heap.borrow_mut();
     let stats = h.stats();
-    let entries: [(&str, usize); 10] = [
+    let entries = [
         ("pairs", stats.pairs),
         ("vectors", stats.vectors),
         ("strings", stats.strings),
@@ -65,11 +55,12 @@ fn gc_stats(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Eval
         ("allocs-since-gc", stats.allocs_since_gc),
     ];
 
-    let mut list = TaggedValue::NULL;
-    for (name, count) in entries.iter().rev() {
-        let key = h.intern_symbol(name);
-        let entry = h.alloc_pair(key, TaggedValue::fixnum(*count as i64));
-        list = h.alloc_pair(entry, list);
-    }
-    Ok(list)
+    let alist: Vec<TaggedValue> = entries
+        .iter()
+        .map(|(name, count)| {
+            let key = h.intern_symbol(name);
+            h.alloc_pair(key, TaggedValue::fixnum(*count as i64))
+        })
+        .collect();
+    Ok(h.list_from_iter(alist))
 }
