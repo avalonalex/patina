@@ -1,7 +1,7 @@
 # Track P — VM Performance (Clarity-Safe) PRD
 
 **Created:** 2026-06-20
-**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining: P4 (blocked on globals-swap redesign), P5 compiler passes, P6 GC, P7 phase 2.
+**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining: P4 (blocked on globals-swap redesign), P5 compiler passes, P7 phase 2. **P6 GC: stages 1-3 landed 2026-08-01 (PRs #4-#6)** — both backends collect, off by default; stage 4 (default-on) is gated on the safe-point trigger redesign, `docs/GC_DESIGN.md` §6.1.
 **Scope decision:** clarity-safe optimizations only — aggressive, readability-costing items are explicitly deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing) · **Catalog:** `PRD/VM_OPTIMIZATION_ROADMAP.md` (P1–P10 superset)
 
@@ -144,8 +144,12 @@ Add fixed-arity opcodes executed inline in the dispatch loop — `Add/Sub/Mul/Lt
 The compiler runs zero optimization passes; the 5-pass pipeline is structured for insertion (`docs/VM_COMPILER.md §12`). Add the low-complexity ones: **constant folding** (`(+ 1 2)`→`3`), **dead-code elimination** of unused bindings, **peephole** (dead `Move` removal, `LoadConst+Add`→immediate). Skip contification / copy-propagation / liveness regalloc (deferred).
 - **Acceptance:** golden disasm tests; `cargo test`.
 
-### P6 — Garbage collection (parallel correctness sub-track; feature-flagged)
-Designed and tracked in **`docs/GC_DESIGN.md`** (2026-07-31), which supersedes the sketch that used to live here — the full design covers both backends (not just the VM), adds a `Collector`/`GcRoots` pluggability seam, and carries the complete root inventory and staging plan.
+### P6 — Garbage collection  *(stages 1-3 landed 2026-08-01; stage 4 open)*
+Designed and tracked in **`docs/GC_DESIGN.md`**, which supersedes the sketch that used to live here — it covers both backends (not just the VM), adds a `Collector`/`GcRoots` pluggability seam, and carries the complete root inventory and staging plan.
+
+Both backends now collect and reclaim cycles, verified by a differential stress lane (`PATINA_GC_STRESS=1` byte-identical to baseline, in release *and* in a debug build with use-after-free assertions live). Collection is **off by default**, so today's baseline is unchanged apart from the safe-point check itself.
+
+**Relevant to this track:** that check is not free — 2.5-3.5% of VM runtime with GC off, 13.7% with GC on even when no collection is due, because the safe point polls per dispatched instruction a question whose answer only changes on allocation. Measurements and the fix (move the trigger into `alloc_*`) are in `docs/GC_DESIGN.md` §6.1; it is the gating item for stage 4 and wants the usual interleaved A/B.
 
 ### P7 — Slice-based primitive handler ABI  *(phase 1 done — PR #157, 2026-07-29; phase 2 open)*
 

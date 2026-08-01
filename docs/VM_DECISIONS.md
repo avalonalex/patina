@@ -103,10 +103,18 @@ stored as `HeapObjectData` variants. This avoids circular dependencies between
 
 ## 5. Garbage Collection
 
-**Phase 2A (current):** `Rc`-based reference counting. Cycles from
-`set-car!`/`set-cdr!` may leak. Acceptable for bootstrap.
+**Settled (2026-08-01):** Non-moving stop-the-world mark-and-sweep over the
+typed arenas, shared by both backends — cycles from `set-car!`/`set-cdr!` and
+from closure ↔ environment references are reclaimed. `Rc` still owns
+individual heap payloads; the collector breaks cycles by tombstoning dead
+slots at sweep, which drops those `Rc`s.
 
-**Phase 2B:** Tracing GC. Handles cycles.
+The VM roots `VmState` (`runtime/gc_roots.rs`), including two members no heap
+scan can reach: the continuation side tables (the heap holds only an opaque
+`VmContinuationRef(u64)`) and `CallFrame::closure` (a bare `HeapIndex`).
+
+**Off by default** until stage 4 — see `docs/GC_DESIGN.md` for the design,
+root inventory, safe-point protocol, and staging.
 
 ---
 
