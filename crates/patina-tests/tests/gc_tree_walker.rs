@@ -4,10 +4,9 @@
 //! these tests exercise the whole stage 2 path: root providers, safe point,
 //! defer guards, mark, and sweep. See `docs/GC_DESIGN.md`.
 //!
-//! Gated to the tree-walker: the VM has no safe point until stage 3, so under
-//! `--features vm-backend` these would exercise an interpreter that never
-//! collects. Remove the gate when stage 3 lands.
-#![cfg(not(feature = "vm-backend"))]
+//! These drive the feature-switched helpers, so they cover the tree-walker in
+//! the default lane and the VM under `--features vm-backend`. `gc_vm.rs`
+//! covers VM-specific root machinery explicitly.
 
 mod common;
 use common::*;

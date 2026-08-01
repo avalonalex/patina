@@ -4,7 +4,6 @@ mod apply_context_impl;
 mod cps_eval;
 mod debug;
 mod error;
-mod gc;
 mod primitives;
 
 // Re-export error type for public API
@@ -53,7 +52,7 @@ pub struct Evaluator {
     pub(crate) fs: Arc<dyn patina_core::FileSystem>,
     /// Garbage collector policy and state (see `docs/GC_DESIGN.md`).
     /// Serviced at trampoline safe points; off unless requested or enabled.
-    pub(crate) gc: RefCell<gc::GcController>,
+    pub(crate) gc: RefCell<patina_core::GcController>,
 }
 
 impl Evaluator {
@@ -85,7 +84,7 @@ impl Evaluator {
             loader_registry,
             primitive_registry,
             fs,
-            gc: RefCell::new(gc::GcController::from_env()),
+            gc: RefCell::new(patina_core::GcController::from_env()),
         };
 
         // Initialize library loaders

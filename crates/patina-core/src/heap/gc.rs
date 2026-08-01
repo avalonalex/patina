@@ -265,6 +265,46 @@ impl GcMode {
     }
 }
 
+/// A GC mode paired with the collector instance a backend owns.
+///
+/// Shared by both backends so the mode table, the `(gc)`-request rule, and the
+/// env-var grammar have one implementation rather than one per backend.
+pub struct GcController {
+    mode: GcMode,
+    collector: MarkSweepCollector,
+}
+
+impl GcController {
+    pub fn from_env() -> Self {
+        Self {
+            mode: GcMode::from_env(),
+            collector: MarkSweepCollector::new(),
+        }
+    }
+
+    /// The mode. Backends cache this outside any `RefCell` so the hot-path
+    /// "is GC even on?" check costs no borrow.
+    pub fn mode(&self) -> GcMode {
+        self.mode
+    }
+
+    pub fn should_collect(&self, heap: &Heap) -> bool {
+        // `(gc)` is honored in every mode; the mode decides only whether to
+        // collect automatically.
+        heap.gc_requested() || self.mode.wants_collection(heap, &self.collector)
+    }
+
+    pub fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
+        self.collector.collect(heap, roots)
+    }
+}
+
+impl Default for GcController {
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
 // ============================================================================
 // Marking
 // ============================================================================

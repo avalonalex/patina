@@ -308,6 +308,14 @@ impl StepTracer {
         Rc::new(RefCell::new(Self::with_filter(filter)))
     }
 
+    /// Root the register snapshots held between the pre- and post-instruction
+    /// hooks. `TraceEvent`s themselves store pre-formatted `String`s, not
+    /// `TaggedValue`s, so these two buffers are the tracer's only GC roots.
+    pub fn trace_gc_roots(&self, visitor: &mut patina_core::GcVisitor<'_>) {
+        visitor.visit_slice(&self.pre_regs);
+        visitor.visit_slice(&self.pre_all_regs);
+    }
+
     pub fn reset(&mut self) {
         self.events.clear();
         self.step = 0;

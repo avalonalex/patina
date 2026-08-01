@@ -356,10 +356,22 @@ which makes `impl GcRoots for VmState` natural:
 | `library_registry` | yes | §5.3 |
 | `primitive_registry`, `shadowed_primitives`, `next_cont_id`, `fs` | no | No TaggedValues |
 
-Rust-stack temporaries (`cap_regs` at `vm_state.rs:1243,:1300,:1929`, full
-register clones at `:1979`, the `saved_globals` swap windows at `:360/:411`
-and `:557/:567`, primitive args in `VmApplyContext` callbacks): **not rooted —
-handled by safe-point placement + deferral (§7).**
+Rust-stack temporaries (continuation-capture register clones, the
+`saved_globals` swap windows, primitive args in `VmApplyContext` callbacks):
+**not rooted — handled by safe-point placement + deferral (§7).**
+
+**Implementation note (stage 3):** every dispatch loop takes a
+`GcDeferGuard`, so any nested `run_loop_until` — reached via `execute_nested`,
+a re-entrant primitive, or `eval` — is deferred by construction. Beyond that,
+the *library-loading* paths need explicit guards, and there are **two** of
+them: `vm_state.rs::vm_load_library_from_parsed` and
+`backend.rs::evaluate_parsed_library`. The second was missed on the first
+attempt and the stress lane caught it immediately: it calls `execute` (not
+`execute_nested`), starting a fresh dispatch loop that considered itself
+outermost while `parsed.body`, `parsed.imports`, `lib_env`, and
+`saved_globals` were all unrooted Rust locals. Bootstrap failed on the first
+collection with a swept pair — see §11's note on why the debug build is the
+lane that localizes this.
 
 ### 5.3 Shared (both backends)
 
@@ -568,7 +580,7 @@ unaffected without a second compilation configuration to maintain.
 |-------|-------------|------------|
 | **1. Core infra** ✅ *(merged 2026-07-31, PR #4)* | Mark bit-vectors, `GcVisitor`, per-variant trace rules, tombstoning sweep, `Collector`/`GcRoots` traits, `MarkSweepCollector`, alloc counter, `Environment::for_each_local_value`, `(gc)`/`(gc-stats)` primitives | Unit tests with synthetic roots: reachability, tombstone drops `Rc` payloads, free-list reuse, poison-mode assertions |
 | **2. Tree-walker integration** ✅ *(2026-07-31)* | Root providers for `Evaluator` (global env), `LibraryRegistry` (shared, in `patina-runtime`), `StepRoots` (`StepResult` + `ContValue`/`ContEnv` chains + entry `expr`) and `EscapeRoots` (`PENDING_ESCAPE`); safe point at the trampoline loop top; `GcDeferGuard` on both trampolines and the library-body loop; `GcMode` policy | **Met:** chibi suite (1194 test expressions) on the tree-walker under `PATINA_GC_STRESS=1` produced byte-identical output to baseline. Reclamation proven: a 20 000-cons workload holds ~4 000 pairs under stress vs ~24 000 unreclaimed without it. 14 integration tests in `patina-tests/tests/gc_tree_walker.rs` cover cycles, closures, continuations, `dynamic-wind`, records, nested trampolines, and a regression guard for §9.4 |
-| **3. VM integration** | `impl GcRoots for VmState` (incl. side tables, bare closure indices), safe point in `run_loop_until`, defer guards on `execute_nested`/`VmApplyContext` | Same stress lane on the VM backend; interleaved A/B benchmarks vs `main` (per the established methodology) showing GC-off parity and acceptable GC-on overhead |
+| **3. VM integration** ✅ *(2026-08-01)* | `impl GcRoots for VmState` (registers, frames' bare closure indices, `value_buffer`, `scratch_args`, wind/prompt/handler stacks, `code_store` constants, globals, **both continuation side tables**, tracer register snapshots); safe point at the top of `run_loop_until`; `GcDeferGuard` on every dispatch loop and on both library-loading paths; `GcController` lifted to `patina-core` and shared | **Met:** VM chibi suite under `PATINA_GC_STRESS=1` byte-identical to baseline in **both** release and a debug build with the poison/`Free` assertions active (the strongest check — a missed root panics rather than passing silently). 20 004 collections on a 20 000-cons workload, arena 4 039 vs 24 047 pairs. 14 VM integration tests in `patina-tests/tests/gc_vm.rs` |
 | **4. Default-on** | Adaptive threshold enabled, two CI lanes (baseline vs `gc`), SourceMap pruning hook, liveness stress (`(iota 100000)` sum), arena-reuse proof (arena length stops growing across N iterations) | Flip feature to default; `cargo clippy`/`fmt` clean |
 | **5+. Future** | VM-only `Collector` upgrades: immortal set for `code_store` constants, lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); explicit rooting of re-entrancy boundaries so nested loops can collect; weak symbol table | Each behind the trait, benchmarked interleaved |
 
@@ -590,6 +602,12 @@ visitor exists, and the stress lane is the real safety net.
    PATINA_GC_STRESS=1 ./target/release/patina --tree-walker scheme_tests/chibi/r7rs-tests.scm > stress.txt
    diff base.txt stress.txt   # must be empty
    ```
+   Run the stress lane in a **debug build too**, not just release. Release
+   tolerates a use-after-free silently (the swept slot reads back as a
+   `Free`/poisoned value and surfaces later as a confusing type error at an
+   unrelated call site); the debug build panics at the exact accessor with the
+   slot number, and the backtrace names the code that lost the root. Stage 3's
+   missed library-loading guard was diagnosed this way in one run.
 2. **Poison mode (debug):** tombstoned slots hold sentinels; accessors assert.
    Any missed root becomes a deterministic panic under stress, not a
    heisenbug.
