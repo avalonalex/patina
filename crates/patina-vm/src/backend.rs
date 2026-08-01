@@ -439,6 +439,11 @@ impl VmBackend {
         &self,
         parsed: patina_runtime::library_loader::ParsedLibrary,
     ) -> Result<Library, LibraryError> {
+        // Collection is already deferred for this whole function: `parsed`
+        // carries a `GcDeferGuard` for as long as it holds unevaluated body
+        // forms (see `ParsedLibrary`). That covers `saved_globals` and
+        // `lib_env` too, both of which are reachable only from this frame.
+
         // Create a fresh environment for this library, sharing the global heap
         // so TaggedValue indices are compatible with the global environment.
         let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));

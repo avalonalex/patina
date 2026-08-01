@@ -4,7 +4,6 @@ mod apply_context_impl;
 mod cps_eval;
 mod debug;
 mod error;
-mod gc;
 mod primitives;
 
 // Re-export error type for public API
@@ -53,7 +52,7 @@ pub struct Evaluator {
     pub(crate) fs: Arc<dyn patina_core::FileSystem>,
     /// Garbage collector policy and state (see `docs/GC_DESIGN.md`).
     /// Serviced at trampoline safe points; off unless requested or enabled.
-    pub(crate) gc: RefCell<gc::GcController>,
+    pub(crate) gc: RefCell<patina_core::GcController>,
 }
 
 impl Evaluator {
@@ -85,7 +84,7 @@ impl Evaluator {
             loader_registry,
             primitive_registry,
             fs,
-            gc: RefCell::new(gc::GcController::from_env()),
+            gc: RefCell::new(patina_core::GcController::from_env()),
         };
 
         // Initialize library loaders
@@ -666,10 +665,9 @@ impl Evaluator {
         let desugarer =
             patina_frontend::Desugarer::with_env(lib_env.clone()).with_fs(self.fs.clone());
         let shared_heap = lib_env.heap().clone();
-        // `parsed.body` holds the not-yet-evaluated forms as TaggedValues in
-        // a Rust local — invisible to every root provider. Defer collection
-        // until the whole body has been evaluated (`docs/GC_DESIGN.md` §7).
-        let _gc_defer = patina_core::GcDeferGuard::new(&shared_heap);
+        // Collection is already deferred here: `parsed` carries a
+        // `GcDeferGuard` while it holds unevaluated body forms — see
+        // `ParsedLibrary`.
         for tv in &parsed.body {
             // Desugar TaggedValue to CoreExpr
             let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {

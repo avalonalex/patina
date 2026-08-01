@@ -356,10 +356,30 @@ which makes `impl GcRoots for VmState` natural:
 | `library_registry` | yes | §5.3 |
 | `primitive_registry`, `shadowed_primitives`, `next_cont_id`, `fs` | no | No TaggedValues |
 
-Rust-stack temporaries (`cap_regs` at `vm_state.rs:1243,:1300,:1929`, full
-register clones at `:1979`, the `saved_globals` swap windows at `:360/:411`
-and `:557/:567`, primitive args in `VmApplyContext` callbacks): **not rooted —
-handled by safe-point placement + deferral (§7).**
+Rust-stack temporaries (continuation-capture register clones, the
+`saved_globals` swap windows, primitive args in `VmApplyContext` callbacks):
+**not rooted — handled by safe-point placement + deferral (§7).**
+
+**Implementation note (stage 3):** every dispatch loop takes a
+`GcDeferGuard`, so any nested `run_loop_until` — reached via `execute_nested`,
+a re-entrant primitive, or `eval` — is deferred by construction.
+
+Library loading is the case that needed more. The predicate is **"does this
+Rust frame hold heap values that must survive across an evaluation call?"** —
+*not* which entry point it uses. `execute` versus `execute_nested` is a red
+herring: `vm_load_library_from_parsed` calls `execute_nested` and still needed
+deferral, because `run_loop_until` guards unconditionally, so a nested call
+reached from outside any dispatch loop is equally "outermost".
+
+Three code paths evaluate a `ParsedLibrary` (VM backend, VM state,
+tree-walker), each a near-copy of the others, and when the guard lived at the
+call sites one of them was missed — bootstrap died on the first collection.
+The guard therefore lives on **`ParsedLibrary` itself**: it holds unevaluated
+`body` forms that no root provider can see, so it carries a `GcDeferGuard` for
+as long as it exists. A fourth loading path is now safe by construction, and
+the placement is also correct for a `ParsedLibrary` held beyond a single
+loading call, which a call-site guard would get wrong. See §11 on why the
+debug build is the lane that localizes failures like this one.
 
 ### 5.3 Shared (both backends)
 
@@ -398,6 +418,30 @@ handled by safe-point placement + deferral (§7).**
   primitives, honored in **every** mode. `(gc)` records a request; the next
   safe point services it. This is what makes collection testable without
   process-global environment variables.
+
+### 6.1 Trigger cost — measured, and why stage 4 must change it
+
+Measured on the VM (M1 Max, release, interleaved A/B/C against `main`, with a
+control binary that deletes *only* the `maybe_collect` call):
+
+| Lane | Cost vs `main` | Where it goes |
+|------|----------------|---------------|
+| GC **off** (default) | **−2.5 to −3.5%** | `mode == Off && !heap.borrow().gc_requested()` per dispatched instruction ≈ 0.24–0.34 ns (~1 cycle) |
+| GC **on**, zero collections | **−13.7%** | `should_collect` per instruction: a non-inlined call plus two `RefCell` borrows ≈ 1.75 ns |
+
+The control binary reproduced `main` to within noise on every workload, so the
+safe point *is* the whole cost — nothing else in the GC integration is
+measurable. §10's "baseline lane must be unaffected" is therefore not yet met.
+
+The flaw is architectural, not micro: **the safe point asks a question whose
+answer only changes when something allocates.** Moving the decision to where
+allocation happens — `alloc_*` already bumps `allocs_since_gc`, so it can set a
+"collection due" flag when it crosses the threshold — collapses every mode's
+safe point to a single flag test and makes the on and off lanes cost the same.
+Putting that flag outside the heap's `RefCell` (an `Rc<Cell<bool>>` shared with
+the controller) removes the borrow as well; measured in isolation it recovers
+40–50% of the off-lane cost, with the remainder being the load and branch
+themselves, which only specializing the dispatch loop on the mode can remove.
 
 ---
 
@@ -548,7 +592,34 @@ own shared structures. **Stage 3 check:** `VmContinuation` snapshots and
 `CodeObject` sharing have the same potential; if a VM root provider walks an
 `Rc` graph, it must route through `visit_once`.
 
-### 9.5 `CompiledMacro.heap`
+### 9.5 Root sets that grow without bound (measured)
+
+Two roots scale with *everything ever created* rather than with live data, so
+the pause grows monotonically in a long-running process. Both are stage 5
+work; recorded here because they are invisible until a session runs long.
+
+**`code_store` constants.** Code objects are never evicted, so every compiled
+top-level form adds roots permanently. Instrumented over one 130 ms chibi run
+(17 collections), `code_store` grew **356 → 4,660 code objects** and the scan
+grew **8.8 µs → 107–151 µs per collection** — by the last collection, **57% of
+the entire root-tracing phase** and ~19% of the pause. The cost is the hash-map
+walk and chasing scattered `Rc<CodeObject>`s, not the marking (only ~1.9
+constants each). Fix: append constants to one flat `Vec<TaggedValue>` at load
+time and `visit_slice` it once, or mark them into a persistent immortal bitmap
+seeded into `MarkBits::for_heap`. The same argument applies to the symbol
+table, which `GcVisitor::new` re-marks every collection; one immortal set
+covers both.
+
+**Continuation side tables.** Nothing ever removes entries from
+`continuation_store` / `delimited_continuation_store`. With 20 000 `call/cc`
+captures whose continuations are immediately discarded, a collection spends
+**1 456 µs of a 1.79 ms pause (81%) in root tracing** — and every register and
+frame snapshot those dead continuations pin stays unreclaimable. Fix: treat the
+stores as weak, dropping an entry when its `VmContinuationRef` object did not
+survive marking. That is a sweep-side change and needs care with the
+`is_outermost` protocol, hence stage 5.
+
+### 9.6 `CompiledMacro.heap`
 
 Compiled macros hold a `SharedHeap` clone for their literal values
 (`compiled_macro.rs:461-465`). As long as it is the same heap instance
@@ -568,8 +639,8 @@ unaffected without a second compilation configuration to maintain.
 |-------|-------------|------------|
 | **1. Core infra** ✅ *(merged 2026-07-31, PR #4)* | Mark bit-vectors, `GcVisitor`, per-variant trace rules, tombstoning sweep, `Collector`/`GcRoots` traits, `MarkSweepCollector`, alloc counter, `Environment::for_each_local_value`, `(gc)`/`(gc-stats)` primitives | Unit tests with synthetic roots: reachability, tombstone drops `Rc` payloads, free-list reuse, poison-mode assertions |
 | **2. Tree-walker integration** ✅ *(2026-07-31)* | Root providers for `Evaluator` (global env), `LibraryRegistry` (shared, in `patina-runtime`), `StepRoots` (`StepResult` + `ContValue`/`ContEnv` chains + entry `expr`) and `EscapeRoots` (`PENDING_ESCAPE`); safe point at the trampoline loop top; `GcDeferGuard` on both trampolines and the library-body loop; `GcMode` policy | **Met:** chibi suite (1194 test expressions) on the tree-walker under `PATINA_GC_STRESS=1` produced byte-identical output to baseline. Reclamation proven: a 20 000-cons workload holds ~4 000 pairs under stress vs ~24 000 unreclaimed without it. 14 integration tests in `patina-tests/tests/gc_tree_walker.rs` cover cycles, closures, continuations, `dynamic-wind`, records, nested trampolines, and a regression guard for §9.4 |
-| **3. VM integration** | `impl GcRoots for VmState` (incl. side tables, bare closure indices), safe point in `run_loop_until`, defer guards on `execute_nested`/`VmApplyContext` | Same stress lane on the VM backend; interleaved A/B benchmarks vs `main` (per the established methodology) showing GC-off parity and acceptable GC-on overhead |
-| **4. Default-on** | Adaptive threshold enabled, two CI lanes (baseline vs `gc`), SourceMap pruning hook, liveness stress (`(iota 100000)` sum), arena-reuse proof (arena length stops growing across N iterations) | Flip feature to default; `cargo clippy`/`fmt` clean |
+| **3. VM integration** ✅ *(2026-08-01)* | `impl GcRoots for VmState` (registers, frames' bare closure indices, `value_buffer`, `scratch_args`, wind/prompt/handler stacks, `code_store` constants, globals, **both continuation side tables**, tracer register snapshots); safe point at the top of `run_loop_until`; `GcDeferGuard` on every dispatch loop and on both library-loading paths; `GcController` lifted to `patina-core` and shared | **Met:** VM chibi suite under `PATINA_GC_STRESS=1` byte-identical to baseline in **both** release and a debug build with the poison/`Free` assertions active (the strongest check — a missed root panics rather than passing silently). 20 004 collections on a 20 000-cons workload, arena 4 039 vs 24 047 pairs. 14 VM integration tests in `patina-tests/tests/gc_vm.rs` |
+| **4. Default-on** | **Safe-point trigger redesign (§6.1) — this is the gating item**, adaptive threshold enabled, two CI lanes (baseline vs `gc`), SourceMap pruning hook, liveness stress (`(iota 100000)` sum), arena-reuse proof | Interleaved A/B showing **GC-off parity** (currently −2.5–3.5%, measured) and GC-on overhead within budget (currently −13.7% with zero collections); `cargo clippy`/`fmt` clean |
 | **5+. Future** | VM-only `Collector` upgrades: immortal set for `code_store` constants, lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); explicit rooting of re-entrancy boundaries so nested loops can collect; weak symbol table | Each behind the trait, benchmarked interleaved |
 
 Rationale for full-arena tracing from stage 1 (vs P6's pairs+vectors-first):
@@ -590,6 +661,12 @@ visitor exists, and the stress lane is the real safety net.
    PATINA_GC_STRESS=1 ./target/release/patina --tree-walker scheme_tests/chibi/r7rs-tests.scm > stress.txt
    diff base.txt stress.txt   # must be empty
    ```
+   Run the stress lane in a **debug build too**, not just release. Release
+   tolerates a use-after-free silently (the swept slot reads back as a
+   `Free`/poisoned value and surfaces later as a confusing type error at an
+   unrelated call site); the debug build panics at the exact accessor with the
+   slot number, and the backtrace names the code that lost the root. Stage 3's
+   missed library-loading guard was diagnosed this way in one run.
 2. **Poison mode (debug):** tombstoned slots hold sentinels; accessors assert.
    Any missed root becomes a deterministic panic under stress, not a
    heisenbug.

@@ -13,6 +13,7 @@ use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{GcController, GcDeferGuard, GcMode};
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
 use rustc_hash::FxHashMap;
@@ -77,6 +78,11 @@ pub struct VmState {
     pub loader_registry: Option<Rc<RefCell<LibraryLoaderRegistry>>>,
     /// Virtual filesystem for all file I/O operations.
     pub fs: Arc<dyn patina_core::FileSystem>,
+    /// Garbage collector policy and state (see `docs/GC_DESIGN.md`).
+    /// Serviced at the dispatch-loop safe point; off unless requested or
+    /// enabled. Behind a `RefCell` so `collect` can take `&VmState` as a root
+    /// while mutating the collector.
+    pub(crate) gc: RefCell<GcController>,
 }
 
 impl VmState {
@@ -106,6 +112,7 @@ impl VmState {
             library_registry: None,
             loader_registry: None,
             fs: Arc::new(patina_core::NativeFs),
+            gc: RefCell::new(GcController::from_env()),
         }
     }
 
@@ -357,6 +364,10 @@ fn vm_evaluate_parsed_library(
     // Closures created during execution capture lib_env as their globals
     // (per-closure environment pointer), so no seeding or merge is needed.
 
+    // Collection is already deferred for this whole function: `parsed`
+    // carries a `GcDeferGuard` while it holds unevaluated body forms (see
+    // `ParsedLibrary`), which also covers `saved_globals` and `lib_env`.
+
     let saved_globals = state.globals.clone();
     state.globals = lib_env.clone();
 
@@ -554,6 +565,12 @@ fn vm_eval_expr(
 
     // Swap globals to the eval environment, execute in the main state,
     // then restore. This keeps continuations and code objects valid.
+    //
+    // `saved_globals` is reachable only from this Rust frame while the swap
+    // is in effect, so defer for its extent rather than relying on this
+    // always being reached from inside a dispatch loop.
+    let _gc_defer = GcDeferGuard::new(&state.heap);
+
     let saved_globals = state.globals.clone();
     state.globals = env.clone();
 
@@ -683,7 +700,21 @@ fn call_closure(
 /// Use `exit_depth = 0` to run until the frame stack is fully empty (top-level).
 /// Use `exit_depth = N` to run a nested thunk until it returns to depth N.
 fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue, VmError> {
+    // Every dispatch loop defers collection for its own extent; only the
+    // outermost one reaches its safe point un-deferred. A nested loop's
+    // caller has live values in Rust locals — capture-time register clones,
+    // `mem::take`n buffers, primitive argument vectors — that no root
+    // provider can see. See `docs/GC_DESIGN.md` §7.
+    let gc_defer = GcDeferGuard::new(&state.heap);
+    // Loop invariants, hoisted out of the safe point.
+    let is_outermost = gc_defer.is_outermost();
+    let gc_mode = state.gc.borrow().mode();
+
     loop {
+        // GC safe point: all live state is on `VmState`, capture temporaries
+        // are dead, buffers are restored, and no heap borrow is outstanding.
+        maybe_collect(state, gc_mode, is_outermost);
+
         match dispatch_one_instruction(state, exit_depth) {
             Ok(Some(val)) => return Ok(val),
             Ok(None) => continue,
@@ -706,6 +737,27 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
             }
         }
     }
+}
+
+/// GC safe point: the VM's root set, handed to the shared driver.
+///
+/// The protocol — `(gc)` honored in every mode, only the outermost guard
+/// collects, one borrow spans the collection — lives in
+/// `GcController::safe_point`; this supplies only what is VM-specific.
+#[inline]
+fn maybe_collect(state: &VmState, mode: GcMode, is_outermost: bool) {
+    GcController::safe_point(&state.gc, &state.heap, mode, is_outermost, |collect| {
+        // Libraries are a root set. If a load is in flight we cannot read the
+        // registry, so return without collecting rather than trace a partial
+        // root set — a missing root is a use-after-free.
+        let Ok(registry) = LibraryRegistry::try_roots(state.library_registry.as_deref()) else {
+            return;
+        };
+        match &registry {
+            Some(registry) => collect(&[state, &**registry]),
+            None => collect(&[state]),
+        }
+    });
 }
 
 /// Attach a source location to an error if it doesn't already have one.

@@ -1,4 +1,4 @@
-//! Garbage collection infrastructure (stage 1 of `docs/GC_DESIGN.md`).
+//! Garbage collection infrastructure (`docs/GC_DESIGN.md`).
 //!
 //! Non-moving stop-the-world mark-and-sweep over the typed arenas. Mark state
 //! lives in side bit-vectors (no `TaggedValue` or object-header changes);
@@ -16,8 +16,10 @@
 //!   from public pieces (`GcVisitor::new` → root tracing → `finish` →
 //!   `Heap::sweep`), so alternative collectors need no private access.
 //!
-//! Nothing in this module runs automatically; collection happens only when a
-//! backend calls [`Collector::collect`] at a safe point (stages 2–3).
+//! Collection never happens on its own: a backend drives it by calling
+//! [`GcController::safe_point`] at a point where every live value is
+//! reachable from the roots it supplies. [`GcMode`] decides when that
+//! actually collects, and is `Off` unless opted into.
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -154,11 +156,12 @@ pub trait GcRoots {
 /// `TaggedValue` (symbol table, `SourceMap` keys, `eq?` semantics, VM
 /// constants — design §3.4).
 pub trait Collector {
-    /// Whether a collection is warranted (checked by backends at safe points).
+    /// Whether this collector's own policy wants a collection now.
     ///
-    /// Implementations must honor [`Heap::gc_requested`] — the `(gc)`
-    /// primitive's request channel — in addition to their own policy, so a
-    /// backend safe point only ever asks this one question.
+    /// Implementations answer only for their automatic policy. Explicit
+    /// `(gc)` requests are honored by [`GcController::should_collect`], which
+    /// is what backends actually call, so a collector need not — and should
+    /// not — restate that rule.
     fn should_collect(&self, heap: &Heap) -> bool;
 
     /// Run a full collection. The caller must be at a safe point: every live
@@ -178,21 +181,30 @@ pub trait Collector {
 ///
 /// Drop takes a mutable heap borrow, so a guard must not be dropped while a
 /// heap borrow is outstanding.
-pub struct GcDeferGuard<'h> {
-    heap: &'h SharedHeap,
+///
+/// Owns its `SharedHeap` handle rather than borrowing one, so a guard can be
+/// stored in a struct whose lifetime *is* the deferral extent — see
+/// `ParsedLibrary`, which holds unevaluated forms and therefore defers for as
+/// long as it exists. The `Rc` clone is paid once per guard, on paths taken
+/// per dispatch-loop entry rather than per step.
+pub struct GcDeferGuard {
+    heap: SharedHeap,
     /// Defer depth observed on entry. Zero means nothing outer is deferring.
     outer_depth: u32,
 }
 
-impl<'h> GcDeferGuard<'h> {
-    pub fn new(heap: &'h SharedHeap) -> Self {
+impl GcDeferGuard {
+    pub fn new(heap: &SharedHeap) -> Self {
         let outer_depth = {
             let mut h = heap.borrow_mut();
             let depth = h.gc_defer_depth();
             h.enter_gc_defer();
             depth
         };
-        Self { heap, outer_depth }
+        Self {
+            heap: heap.clone(),
+            outer_depth,
+        }
     }
 
     /// Whether this guard is the outermost one — i.e. nothing else was
@@ -207,7 +219,7 @@ impl<'h> GcDeferGuard<'h> {
     }
 }
 
-impl Drop for GcDeferGuard<'_> {
+impl Drop for GcDeferGuard {
     fn drop(&mut self) {
         self.heap.borrow_mut().exit_gc_defer();
     }
@@ -262,6 +274,93 @@ impl GcMode {
             GcMode::On => collector.should_collect(heap),
             GcMode::Stress(n) => heap.allocs_since_gc() >= n,
         }
+    }
+}
+
+/// A GC mode paired with the collector instance a backend owns.
+///
+/// Shared by both backends so the mode table, the `(gc)`-request rule, and the
+/// env-var grammar have one implementation rather than one per backend.
+pub struct GcController {
+    mode: GcMode,
+    collector: MarkSweepCollector,
+}
+
+impl GcController {
+    pub fn from_env() -> Self {
+        Self {
+            mode: GcMode::from_env(),
+            collector: MarkSweepCollector::new(),
+        }
+    }
+
+    /// The mode. Backends cache this outside any `RefCell` so the hot-path
+    /// "is GC even on?" check costs no borrow.
+    pub fn mode(&self) -> GcMode {
+        self.mode
+    }
+
+    pub fn should_collect(&self, heap: &Heap) -> bool {
+        // `(gc)` is honored in every mode; the mode decides only whether to
+        // collect automatically.
+        heap.gc_requested() || self.mode.wants_collection(heap, &self.collector)
+    }
+
+    pub fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
+        self.collector.collect(heap, roots)
+    }
+
+    /// Run a backend safe point.
+    ///
+    /// This owns the *rules* every backend must not restate: `(gc)` is honored
+    /// even when automatic collection is off; only the outermost guard may
+    /// collect; one `borrow_mut` spans the whole collection. Backends supply
+    /// only what is genuinely theirs — their root set.
+    ///
+    /// `with_roots` receives a `collect` callback and decides whether to call
+    /// it. That inversion lets a backend assemble roots that borrow from its
+    /// own frame (a `Ref<LibraryRegistry>`, a transient step provider) and
+    /// lets it *abort* — returning without calling `collect` — when a root is
+    /// unavailable, which must never degrade into tracing a partial root set.
+    ///
+    /// `mode` and `is_outermost` are loop invariants the caller hoists out of
+    /// its dispatch loop; the disabled fast path is one comparison plus one
+    /// borrow.
+    #[inline]
+    pub fn safe_point(
+        gc: &RefCell<Self>,
+        heap: &SharedHeap,
+        mode: GcMode,
+        is_outermost: bool,
+        with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn GcRoots])),
+    ) {
+        if mode == GcMode::Off && !heap.borrow().gc_requested() {
+            return;
+        }
+        Self::safe_point_cold(gc, heap, is_outermost, with_roots);
+    }
+
+    /// The rare branch, out of line so only the fast path inlines into the
+    /// caller's dispatch loop.
+    #[inline(never)]
+    fn safe_point_cold(
+        gc: &RefCell<Self>,
+        heap: &SharedHeap,
+        is_outermost: bool,
+        with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn GcRoots])),
+    ) {
+        // A nested loop's caller holds live values in Rust locals that no root
+        // provider can see.
+        if !is_outermost {
+            return;
+        }
+        if !gc.borrow().should_collect(&heap.borrow()) {
+            return;
+        }
+        with_roots(&mut |roots| {
+            let mut h = heap.borrow_mut();
+            gc.borrow_mut().collect(&mut h, roots);
+        });
     }
 }
 
@@ -679,8 +778,7 @@ impl Default for MarkSweepCollector {
 
 impl Collector for MarkSweepCollector {
     fn should_collect(&self, heap: &Heap) -> bool {
-        heap.gc_requested()
-            || heap.allocs_since_gc() >= self.min_threshold.max(2 * self.live_after_last)
+        heap.allocs_since_gc() >= self.min_threshold.max(2 * self.live_after_last)
     }
 
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
@@ -981,18 +1079,19 @@ mod tests {
     #[test]
     fn gc_request_triggers_and_is_cleared_by_collection() {
         let mut heap = Heap::new();
-        // Threshold far above the allocation count: only the request fires.
-        let mut collector = MarkSweepCollector::new();
-        assert!(!collector.should_collect(&heap));
+        // `(gc)` must be honored even in the default Off mode, where the
+        // automatic policy never fires. That rule lives on GcController.
+        let mut controller = GcController::from_env();
+        assert!(!controller.should_collect(&heap));
 
         heap.request_gc();
         assert!(heap.gc_requested());
-        assert!(collector.should_collect(&heap));
+        assert!(controller.should_collect(&heap));
 
         let roots = TestRoots::default();
-        collector.collect(&mut heap, &[&roots]);
+        controller.collect(&mut heap, &[&roots]);
         assert!(!heap.gc_requested());
-        assert!(!collector.should_collect(&heap));
+        assert!(!controller.should_collect(&heap));
     }
 
     #[cfg(debug_assertions)]

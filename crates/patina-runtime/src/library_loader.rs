@@ -110,7 +110,21 @@ pub enum ImportSet {
 /// before evaluation. It allows separating parsing from evaluation,
 /// which eliminates the need for circular references between loaders
 /// and evaluators.
-#[derive(Debug, Clone)]
+/// # Garbage collection
+///
+/// `body` holds unevaluated forms as `TaggedValue`s in a plain Rust struct,
+/// which no GC root provider can see. This value therefore **defers
+/// collection for as long as it exists**: it carries a `GcDeferGuard`,
+/// installed by [`ParsedLibrary::new`] and released when it drops.
+///
+/// That is deliberately a property of the data rather than of the loaders.
+/// Three separate code paths evaluate a `ParsedLibrary` (the VM backend, the
+/// VM state, and the tree-walker), each a near-copy of the others; when the
+/// guard was placed at the call sites instead, one path was missed and
+/// bootstrap failed with a use-after-free the moment collection was enabled.
+/// Attaching it here makes a fourth path safe by construction — and is also
+/// correct for a `ParsedLibrary` held longer than one loading call, which a
+/// call-site guard would get wrong.
 pub struct ParsedLibrary {
     /// Library name
     pub name: Vec<String>,
@@ -129,6 +143,46 @@ pub struct ParsedLibrary {
 
     /// Source file path (for error reporting)
     pub source: Option<PathBuf>,
+
+    /// Defers collection while the unevaluated `body` forms are unrooted.
+    /// Private so the only way to build a `ParsedLibrary` is [`Self::new`],
+    /// which cannot forget it.
+    _gc_defer: Option<patina_core::GcDeferGuard>,
+}
+
+impl ParsedLibrary {
+    /// Build a parsed library, installing the GC defer guard described above.
+    pub fn new(
+        name: Vec<String>,
+        imports: Vec<ImportSet>,
+        body: Vec<TaggedValue>,
+        heap: Option<SharedHeap>,
+        exports: Vec<ExportSpec>,
+        source: Option<PathBuf>,
+    ) -> Self {
+        let _gc_defer = heap.as_ref().map(patina_core::GcDeferGuard::new);
+        Self {
+            name,
+            imports,
+            body,
+            heap,
+            exports,
+            source,
+            _gc_defer,
+        }
+    }
+}
+
+impl std::fmt::Debug for ParsedLibrary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParsedLibrary")
+            .field("name", &self.name)
+            .field("imports", &self.imports)
+            .field("body", &self.body)
+            .field("exports", &self.exports)
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Trait for loaders that need evaluation support
