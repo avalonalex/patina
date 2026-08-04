@@ -100,6 +100,38 @@ prunes — GC design §9.5, live.
 nboyer maze slatex compiler matrix"` in `~/Project/r7rs-benchmarks`); the
 per-benchmark ratios, not the geomean alone, are what confirm a lever worked.
 
+### 1.3 Scoreboard after the inline-opcode emission fix (2026-08-04, PR #14)
+
+The §1.2 profile-first protocol paid for itself immediately: profiling `tak`
+found the P3 inline opcodes had never been emitted for real programs (see the
+§P3 2026-08-04 addendum for the alias mechanism). Post-merge sweep, same
+subset, same local Chibi 0.12 baseline:
+
+| Benchmark | 08-03 | 08-04 | Delta | Ratio vs Chibi |
+|---|---|---|---|---|
+| slatex | 34.4 | 32.7 | −5% | 0.38× → 0.36× — faster |
+| matrix | 196.7 | 153.4 | −22% | 1.4× → **1.09× — near parity** |
+| compiler | 120.9 | 103.8 | −14% | 1.7× → 1.44× |
+| maze | 115.0 | 98.9 | −14% | 2.2× → 1.85× |
+| diviter | 136.8 | 120.3 | −12% | 3.0× → 2.61× |
+| deriv | 239.8 | 224.8 | −6% | 3.1× → 2.86× |
+| nboyer | 93.3 | 72.8 | −22% | 3.7× → 2.85× |
+| divrec | 140.1 | 110.7 | −21% | 3.7× → 2.95× |
+| tak | 238.0 | 187.4 | −21% | 5.5× → 4.35× |
+| ctak | crash | crash | — | §9.5 blowup, unchanged |
+
+**Geomean ≈ 1.87× slower than Chibi** (was 2.2×). The deltas distribute
+exactly along the mechanism: call/arithmetic/vector-dense workloads −21–22%
+(matrix's jump to near-parity is the `vector-ref`/`vector-set!` opcodes),
+Rust-native-bound slatex −5%. The §1.2 priority order stands — call-path
+cost is still the defining gap (tak 4.35×), and the post-fix tak profile
+ranks the remaining levers: per-call argument-`Vec` malloc/free in the
+generic `Call` path, the callee-classification probe chain in `call_value`,
+`Environment::get` for repeated `LoadGlobal` of self-recursive callees (P4),
+and register-window memset in `call_closure`. Operational note for sweep
+ETAs: `ctak`'s crash takes ~21 min wall clock — memory thrash accumulates
+CPU slowly toward the 300 s cap.
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
