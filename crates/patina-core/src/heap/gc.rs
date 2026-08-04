@@ -235,11 +235,13 @@ impl Drop for GcDeferGuard {
 /// than being re-derived per backend (design §6).
 #[derive(Clone, Copy)]
 pub enum GcMode {
-    /// Collect only when `(gc)` has been called. The default — a build that
-    /// nobody opted in to must behave exactly as it did before the collector
-    /// existed.
+    /// Collect only when `(gc)` has been called. The opt-out (`PATINA_GC=0`)
+    /// for workloads that prefer arena-only allocation.
     Off,
-    /// Collect on the collector's adaptive threshold.
+    /// Collect on the collector's adaptive threshold. The default since
+    /// stage 4c: the §6.1 trigger redesign made the standing cost of an
+    /// enabled collector indistinguishable from off, so enabling costs only
+    /// the pauses themselves.
     On,
     /// Collect once `n` allocations have happened since the last collection,
     /// ignoring the adaptive floor. The differential-testing lane.
@@ -247,9 +249,11 @@ pub enum GcMode {
 }
 
 impl GcMode {
-    /// Read the mode from the environment. `PATINA_GC_STRESS` takes an
-    /// optional allocation count (`=1`, the default, collects at nearly every
-    /// safe point; larger values trade coverage for runtime).
+    /// Read the mode from the environment. Adaptive collection is the
+    /// default since stage 4c; `PATINA_GC=0` opts out, and
+    /// `PATINA_GC_STRESS` takes an optional allocation count (`=1`, the
+    /// default, collects at nearly every safe point; larger values trade
+    /// coverage for runtime).
     pub fn from_env() -> Self {
         fn flag(name: &str) -> Option<String> {
             std::env::var(name)
@@ -259,10 +263,10 @@ impl GcMode {
 
         if let Some(v) = flag("PATINA_GC_STRESS") {
             GcMode::Stress(v.parse().unwrap_or(1).max(1))
-        } else if flag("PATINA_GC").is_some() {
-            GcMode::On
-        } else {
+        } else if matches!(std::env::var("PATINA_GC").as_deref(), Ok("0")) {
             GcMode::Off
+        } else {
+            GcMode::On
         }
     }
 }
