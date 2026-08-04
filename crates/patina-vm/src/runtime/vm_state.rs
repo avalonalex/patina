@@ -747,18 +747,24 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
 /// `GcController::safe_point`; this supplies only what is VM-specific.
 #[inline]
 fn maybe_collect(state: &VmState, gc_pending: &std::cell::Cell<bool>, is_outermost: bool) {
-    GcController::safe_point(&state.gc, &state.heap, gc_pending, is_outermost, |collect| {
-        // Libraries are a root set. If a load is in flight we cannot read the
-        // registry, so return without collecting rather than trace a partial
-        // root set — a missing root is a use-after-free.
-        let Ok(registry) = LibraryRegistry::try_roots(state.library_registry.as_deref()) else {
-            return;
-        };
-        match &registry {
-            Some(registry) => collect(&[state, &**registry]),
-            None => collect(&[state]),
-        }
-    });
+    GcController::safe_point(
+        &state.gc,
+        &state.heap,
+        gc_pending,
+        is_outermost,
+        |collect| {
+            // Libraries are a root set. If a load is in flight we cannot read the
+            // registry, so return without collecting rather than trace a partial
+            // root set — a missing root is a use-after-free.
+            let Ok(registry) = LibraryRegistry::try_roots(state.library_registry.as_deref()) else {
+                return;
+            };
+            match &registry {
+                Some(registry) => collect(&[state, &**registry]),
+                None => collect(&[state]),
+            }
+        },
+    );
 }
 
 /// Attach a source location to an error if it doesn't already have one.

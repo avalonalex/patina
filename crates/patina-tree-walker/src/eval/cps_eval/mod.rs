@@ -170,7 +170,12 @@ impl<'a> CpsEvaluator<'a> {
         // Loop invariants, hoisted out of the safe point (see maybe_collect).
         // The pending-flag handle makes the per-step check a single load.
         let is_outermost = gc_defer.is_outermost();
-        let gc_pending = self.evaluator.global_env.heap().borrow().gc_pending_handle();
+        let gc_pending = self
+            .evaluator
+            .global_env
+            .heap()
+            .borrow()
+            .gc_pending_handle();
 
         let cont_env = ContEnv::new();
         let prompt_stack = Vec::new();
