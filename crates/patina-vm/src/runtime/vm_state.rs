@@ -79,9 +79,9 @@ pub struct VmState {
     /// Virtual filesystem for all file I/O operations.
     pub fs: Arc<dyn patina_core::FileSystem>,
     /// Garbage collector policy and state (see `docs/GC_DESIGN.md`).
-    /// Serviced at the dispatch-loop safe point; off unless requested or
-    /// enabled. Behind a `RefCell` so `collect` can take `&VmState` as a root
-    /// while mutating the collector.
+    /// Serviced at the dispatch-loop safe point; always adaptive outside the
+    /// differential test lanes. Behind a `RefCell` so `collect` can take
+    /// `&VmState` as a root while mutating the collector.
     pub(crate) gc: RefCell<GcController>,
     /// The heap's collection-pending flag, cached at construction so
     /// dispatch-loop entry costs no heap borrow and the per-instruction safe

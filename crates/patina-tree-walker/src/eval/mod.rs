@@ -51,7 +51,8 @@ pub struct Evaluator {
     /// Virtual filesystem for all file I/O operations
     pub(crate) fs: Arc<dyn patina_core::FileSystem>,
     /// Garbage collector policy and state (see `docs/GC_DESIGN.md`).
-    /// Serviced at trampoline safe points; off unless requested or enabled.
+    /// Serviced at trampoline safe points; always adaptive outside the
+    /// differential test lanes.
     pub(crate) gc: RefCell<patina_core::GcController>,
     /// The heap's collection-pending flag, cached at construction so
     /// trampoline entry costs no heap borrow and the per-step safe point is

@@ -47,7 +47,7 @@ Non-goals (v1):
 | 6 | Safe point = top of each backend's driver loop, guarded by a re-entrancy defer counter | All Rust-stack temporaries are dead or restored there (§7) |
 | 7 | Environments traced via new `Environment::for_each_value`, deduped by `Rc` pointer | Globals/bindings live in Rust `HashMap`s outside the arenas |
 | 8 | VM continuation side tables traced by `VmState`'s root provider, not the heap tracer | Heap only holds opaque `VmContinuationRef(u64)` — heap-only tracing under-approximates |
-| 9 | Feature flag `gc`, off by default until stage 4 | Baseline builds must be bit-identical until differential testing passes |
+| 9 | Runtime mode gate (no Cargo feature); off by default until stage 4c, adaptive-on since | Baseline behavior stayed bit-identical through differential testing at every stage; the CI lanes enforce it permanently |
 
 ---
 
@@ -413,14 +413,16 @@ debug build is the lane that localizes failures like this one.
   re-entrantly borrowed and mid-operation temporaries would be unrooted. The
   safe point reads the flag (one load, no `RefCell` borrow) and collects when
   it is raised. §6.1 has the measurements that forced this shape.
-- Collection is **off by default** until stage 4: the baseline build must
-  behave exactly as it did before the collector existed. The mode table and
-  its environment grammar live in `patina-core` (`GcMode::from_env`) because
-  the variables are process-global and both backends must agree on them:
+- Adaptive collection is **always on** since stage 4c (before it, Off was
+  the default while the trigger still had a standing cost — see §6.1 for the
+  measurements that justified the flip). The two environment variables are
+  **testing-lane hooks**, not supported user configuration; the grammar lives
+  in `patina-core` (`GcMode::from_env`) because the variables are
+  process-global and both backends must agree on them:
   | Mode | Selected by | Behavior |
   |------|-------------|----------|
-  | Off (default) | — | collect only when `(gc)` has been called |
-  | On | `PATINA_GC=1` | adaptive threshold above |
+  | On (default) | — | adaptive threshold above |
+  | Off | `PATINA_GC=0` *(testing lanes only — the no-collection reference run the differential suite diffs against, §11)* | collect only when `(gc)` has been called |
   | Stress | `PATINA_GC_STRESS[=n]` | collect once `n` allocations (default 1) have happened, **bypassing the adaptive `2 × live` floor** |
 
   Stress deliberately ignores the adaptive floor: after bootstrap the live set
@@ -679,8 +681,8 @@ unaffected without a second compilation configuration to maintain.
 | **3. VM integration** ✅ *(2026-08-01)* | `impl GcRoots for VmState` (registers, frames' bare closure indices, `value_buffer`, `scratch_args`, wind/prompt/handler stacks, `code_store` constants, globals, **both continuation side tables**, tracer register snapshots); safe point at the top of `run_loop_until`; `GcDeferGuard` on every dispatch loop and on both library-loading paths; `GcController` lifted to `patina-core` and shared | **Met:** VM chibi suite under `PATINA_GC_STRESS=1` byte-identical to baseline in **both** release and a debug build with the poison/`Free` assertions active (the strongest check — a missed root panics rather than passing silently). 20 004 collections on a 20 000-cons workload, arena 4 039 vs 24 047 pairs. 14 VM integration tests in `patina-tests/tests/gc_vm.rs` |
 | **4a. Trigger redesign** ✅ *(2026-08-03)* | Safe-point trigger redesign (§6.1) — the stage-4 gating item: collection decision moved to `Heap::note_alloc` (pending flag + mode-derived threshold), safe point collapsed to one flag load, `GcController::collect` re-arms the adaptive term | **Met:** interleaved A/B/C — GC-off at parity with `main` (−0.4% dispatch, −1.3% alloc-heavy) and the GC-on zero-collection penalty eliminated (−0.2% on-vs-off, was −13.7%); ~1% residual vs no-safe-point control (§6.1). Chibi suite byte-identical across baseline/stress/on lanes, both backends, release + debug poison builds |
 | **4b. Groundwork** ✅ *(2026-08-03)* | Two CI lanes (`gc-differential` release + debug-poison jobs running `scripts/run_gc_differential.sh`: stress + adaptive vs baseline, both backends, plus a reclamation proof so the lane cannot pass vacuously), SourceMap pruning hook (§9.1), liveness stress (100k-element list survives collection) and arena-reuse plateau as shared integration tests | **Met:** all lanes byte-identical locally and in CI; `cargo clippy`/`fmt` clean |
-| **4c. Default-on** | Adaptive threshold on by default (`PATINA_GC=0` opt-out) — the 4a numbers support it: enabling GC costs only the pauses themselves | Chibi suite green under the new default; interleaved sanity check; own PR for easy revert |
-| **5+. Future** | VM-only `Collector` upgrades: immortal set for `code_store` constants, lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); explicit rooting of re-entrancy boundaries so nested loops can collect; weak symbol table | Each behind the trait, benchmarked interleaved |
+| **4c. Always-on** ✅ *(2026-08-03)* | Adaptive threshold on unconditionally; the env vars remain only as testing-lane hooks (§6). The differential script gained a default-mode reclamation proof (200k churn crosses the floor → collections > 0, arena bounded) so the lanes verify the default itself | **Met:** all lanes byte-identical with the new default; full test suite and chibi green under GC-on; interleaved on-vs-off sanity: fib −1.05%, 10M-cons churn −1.07% — parity within the 3–7% spread |
+| **5+. Future** *(tracked in `PRD/future/GC_STAGE5_PRD.md`)* | Pause work first: weak continuation side tables + immortal set for `code_store` constants and symbols (§9.5, measured); explicit rooting of re-entrancy boundaries so nested loops can collect (§7); then `Collector` upgrades — lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); weak symbol table | Each behind the trait, benchmarked interleaved; differential lanes stay byte-identical |
 
 Rationale for full-arena tracing from stage 1 (vs P6's pairs+vectors-first):
 the tracer must understand every `HeapObjectData` variant *anyway* to be safe

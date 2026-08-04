@@ -113,10 +113,10 @@ The VM roots `VmState` (`runtime/gc_roots.rs`), including two members no heap
 scan can reach: the continuation side tables (the heap holds only an opaque
 `VmContinuationRef(u64)`) and `CallFrame::closure` (a bare `HeapIndex`).
 
-**Off by default** until stage 4b, at zero standing cost since stage 4a's
-trigger redesign (the safe point reads one pending flag; the decision is made
-in `alloc_*`) — see `docs/GC_DESIGN.md` for the design, root inventory,
-safe-point protocol, and staging.
+**On by default** since stage 4c (`PATINA_GC=0` opts out), at zero standing
+cost since stage 4a's trigger redesign (the safe point reads one pending
+flag; the decision is made in `alloc_*`) — see `docs/GC_DESIGN.md` for the
+design, root inventory, safe-point protocol, and staging.
 
 ---
 

@@ -71,7 +71,8 @@ cargo fmt
 - `PRD/MILESTONES.md` — project history and achievements
 - `PRD/PHASE1_CLEANUP_PRD.md` — Phase 1 cleanup tracker (Priorities 1–5 status)
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`
-- `docs/GC_DESIGN.md` — garbage collection design for both backends (Collector/GcRoots traits, root inventory, staging)
+- `docs/GC_DESIGN.md` — garbage collection design for both backends (Collector/GcRoots traits, root inventory, staging); GC is always on since stage 4c
+- `PRD/future/GC_STAGE5_PRD.md` — remaining GC pause work (weak continuation tables, immortal roots, nested-loop collection, generational)
 - `PRD/phase2/SYNTAX_CASE_DESIGN.md`, `PRD/phase2/R7RS_LARGE_STATUS.md`
 - `PRD/ARCHIVE/numeric_research/NUMERIC_SUMMARY.md` — canonical numeric tower guide
 
