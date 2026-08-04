@@ -577,16 +577,26 @@ on quiet arenas.
 
 ## 9. Known Hazards and Policies
 
-### 9.1 SourceMap raw-bits keying (cosmetic, deferred fix)
+### 9.1 SourceMap raw-bits keying (pruned since stage 4b)
 
 `SourceMap` keys `HashMap<u64, SourceLocation>` by `tv.raw_bits()`
-(`source_map.rs:17-19`). Once slots are reused, a new object can inherit a
-stale source location — misattributed diagnostics, never unsoundness.
-Frequency is low (entries are created for parsed datums, which stay rooted by
-live code). v1 documents this; stage 4 adds a pruning hook: `collect` records
-freed raw-bits and the interpreter prunes matching `SourceMap` entries
-(`Heap::take_last_freed()` or a sweep-observer callback — decide at
-implementation).
+(`source_map.rs`). Once slots are reused, a new object could inherit a stale
+source location — misattributed diagnostics, never unsoundness.
+
+**Implemented (stage 4b)** as the recording flavor: sweep pushes each
+reclaimed slot's raw bits into a capped buffer on the heap
+(`Heap::take_gc_freed_bits`), recorded only once a source-mapped session has
+called `enable_gc_freed_tracking` (done by `Parser::new_with_source_map`, so
+plain backend use pays nothing). The run loops in `patina-interpreter` and
+`patina-repl` drain via `prune_freed_locations` at the top of each
+parse–eval iteration — sweeps happen only during evaluation and raw-bits
+lookups only during a later form's desugaring, so pruning at the form
+boundary closes the window. Overflowing the buffer cap degrades the next
+drain to "clear all locations": a missing location degrades a diagnostic, a
+stale one misattributes it. Residual (accepted): with several live maps at
+once — nested tracked evals — a drain consumes bits for all of them, leaving
+possibly-stale entries in the map not being pruned; no worse than the
+unpruned status quo, and lookups by raw bits happen only at desugar time.
 
 ### 9.2 Symbol table
 
@@ -668,7 +678,8 @@ unaffected without a second compilation configuration to maintain.
 | **2. Tree-walker integration** ✅ *(2026-07-31)* | Root providers for `Evaluator` (global env), `LibraryRegistry` (shared, in `patina-runtime`), `StepRoots` (`StepResult` + `ContValue`/`ContEnv` chains + entry `expr`) and `EscapeRoots` (`PENDING_ESCAPE`); safe point at the trampoline loop top; `GcDeferGuard` on both trampolines and the library-body loop; `GcMode` policy | **Met:** chibi suite (1194 test expressions) on the tree-walker under `PATINA_GC_STRESS=1` produced byte-identical output to baseline. Reclamation proven: a 20 000-cons workload holds ~4 000 pairs under stress vs ~24 000 unreclaimed without it. 14 integration tests in `patina-tests/tests/gc_tree_walker.rs` cover cycles, closures, continuations, `dynamic-wind`, records, nested trampolines, and a regression guard for §9.4 |
 | **3. VM integration** ✅ *(2026-08-01)* | `impl GcRoots for VmState` (registers, frames' bare closure indices, `value_buffer`, `scratch_args`, wind/prompt/handler stacks, `code_store` constants, globals, **both continuation side tables**, tracer register snapshots); safe point at the top of `run_loop_until`; `GcDeferGuard` on every dispatch loop and on both library-loading paths; `GcController` lifted to `patina-core` and shared | **Met:** VM chibi suite under `PATINA_GC_STRESS=1` byte-identical to baseline in **both** release and a debug build with the poison/`Free` assertions active (the strongest check — a missed root panics rather than passing silently). 20 004 collections on a 20 000-cons workload, arena 4 039 vs 24 047 pairs. 14 VM integration tests in `patina-tests/tests/gc_vm.rs` |
 | **4a. Trigger redesign** ✅ *(2026-08-03)* | Safe-point trigger redesign (§6.1) — the stage-4 gating item: collection decision moved to `Heap::note_alloc` (pending flag + mode-derived threshold), safe point collapsed to one flag load, `GcController::collect` re-arms the adaptive term | **Met:** interleaved A/B/C — GC-off at parity with `main` (−0.4% dispatch, −1.3% alloc-heavy) and the GC-on zero-collection penalty eliminated (−0.2% on-vs-off, was −13.7%); ~1% residual vs no-safe-point control (§6.1). Chibi suite byte-identical across baseline/stress/on lanes, both backends, release + debug poison builds |
-| **4b. Default-on** | Adaptive threshold on by default (decision pending on 4a numbers), two CI lanes (baseline vs `gc`), SourceMap pruning hook, liveness stress (`(iota 100000)` sum), arena-reuse proof | Both CI lanes green; `cargo clippy`/`fmt` clean |
+| **4b. Groundwork** ✅ *(2026-08-03)* | Two CI lanes (`gc-differential` release + debug-poison jobs running `scripts/run_gc_differential.sh`: stress + adaptive vs baseline, both backends, plus a reclamation proof so the lane cannot pass vacuously), SourceMap pruning hook (§9.1), liveness stress (100k-element list survives collection) and arena-reuse plateau as shared integration tests | **Met:** all lanes byte-identical locally and in CI; `cargo clippy`/`fmt` clean |
+| **4c. Default-on** | Adaptive threshold on by default (`PATINA_GC=0` opt-out) — the 4a numbers support it: enabling GC costs only the pauses themselves | Chibi suite green under the new default; interleaved sanity check; own PR for easy revert |
 | **5+. Future** | VM-only `Collector` upgrades: immortal set for `code_store` constants, lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); explicit rooting of re-entrancy boundaries so nested loops can collect; weak symbol table | Each behind the trait, benchmarked interleaved |
 
 Rationale for full-arena tracing from stage 1 (vs P6's pairs+vectors-first):

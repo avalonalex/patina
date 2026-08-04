@@ -89,6 +89,14 @@ impl Parser {
     ) -> Result<Self, ParseError> {
         // Store source text for caret-style error display
         source_map.borrow_mut().set_source_text(input.to_string());
+        // The map is keyed by raw bits, so slots the GC reclaims must be
+        // pruned from it (§9.1). Recording is enabled here — only
+        // source-mapped sessions pay for it — and the run loops drain via
+        // `prune_freed_locations` at form boundaries. Draining now starts
+        // this session clean of any earlier session's leftover bits (the
+        // map is empty, so the prune itself is a no-op).
+        heap.borrow_mut().enable_gc_freed_tracking();
+        crate::source_map::prune_freed_locations(&heap, &source_map);
         let mut lexer = Lexer::new(input);
         let spanned = lexer.next_token()?;
         Ok(Parser {
