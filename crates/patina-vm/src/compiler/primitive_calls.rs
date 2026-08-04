@@ -115,7 +115,7 @@ fn inline_op_for(qualified_name: &str) -> Option<InlineOp> {
 /// The test below cross-checks this against `VM_INTERCEPTED_PRIMITIVES` — if
 /// an intercepted primitive ever moves outside these prefixes, that test
 /// fails instead of the interception being silently bypassed.
-fn is_excluded(qualified_name: &str) -> bool {
+pub(crate) fn is_excluded(qualified_name: &str) -> bool {
     qualified_name.starts_with("patina.internal.control/")
         || qualified_name.starts_with("patina.internal.errors/")
 }

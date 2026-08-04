@@ -667,7 +667,19 @@ fn call_closure(
 ) -> Result<(), VmError> {
     // Resolve the closure to its code id (free vars stay on the heap).
     let code_id = resolve_closure(state, closure_val)?;
+    call_closure_resolved(state, closure_val, code_id, args, return_reg)
+}
 
+/// `call_closure` for a callee whose code id is already resolved — call
+/// sites that probed the closure type up front pass the id along instead of
+/// paying a second heap lookup.
+fn call_closure_resolved(
+    state: &mut VmState,
+    closure_val: TaggedValue,
+    code_id: CodeObjectId,
+    args: &[TaggedValue],
+    return_reg: u16,
+) -> Result<(), VmError> {
     let code = state
         .code_store
         .get(&code_id)
@@ -2609,6 +2621,12 @@ fn vm_control_primitive(state: &VmState, func_val: TaggedValue) -> Option<VmCont
     let Procedure::Primitive { qualified_name, .. } = proc.as_ref() else {
         return None;
     };
+    // Cheap prefix reject before the linear string scan: every intercepted
+    // primitive lives under the excluded namespaces — enforced by
+    // `excluded_covers_every_intercepted_primitive` in primitive_calls.rs.
+    if !crate::compiler::primitive_calls::is_excluded(qualified_name) {
+        return None;
+    }
     VM_INTERCEPTED_PRIMITIVES
         .iter()
         .find(|(name, _)| *name == qualified_name.as_ref())
@@ -2708,33 +2726,50 @@ fn call_value(
     dst: u16,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
-    // Intercept higher-order control primitives that need VM cooperation.
-    if let Some(ctrl) = vm_control_primitive(state, func_val) {
-        if let Some(escaped) = handle_control_primitive(state, ctrl, arg_vals, dst, false)? {
-            return Ok(Some(escaped));
+    // The callee is almost always a plain closure, and the callable heap
+    // types are mutually exclusive — so probe the closure case first and
+    // let the common path pay one type check instead of failing the four
+    // rarer probes below (control primitive, primitive, parameter,
+    // continuation) on every call. Keep the probed code id so the closure
+    // branch doesn't resolve it a second time.
+    let closure_code_id = state.heap.borrow().get_vm_closure_code_id(func_val);
+    if closure_code_id.is_none() {
+        // Intercept higher-order control primitives that need VM cooperation.
+        if let Some(ctrl) = vm_control_primitive(state, func_val) {
+            return handle_control_primitive(state, ctrl, arg_vals, dst, false);
         }
-    } else if let Some(prim) = primitive_procedure(state, func_val) {
-        let result = call_primitive_proc(state, &prim, &arg_vals);
-        state.set_reg(dst, result?);
-    } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
-        state.set_reg(dst, result?);
-    } else if try_invoke_continuation(state, func_val, &arg_vals)? {
-        // Continuation was invoked — stack has been replaced/appended.
-        // Safety net: if frames dropped to or below exit_depth, the
-        // continuation escaped past a synchronous run_thunk boundary
-        // (e.g. dynamic-wind body, with-exception-handler thunk, or
-        // indirect call-with-values). Return the primary value so the
-        // enclosing run_loop_until exits correctly.
-        if state.frames.len() <= exit_depth {
-            let primary = arg_vals
-                .first()
-                .copied()
-                .unwrap_or(TaggedValue::UNSPECIFIED);
-            return Ok(Some(primary));
+        if let Some(prim) = primitive_procedure(state, func_val) {
+            let result = call_primitive_proc(state, &prim, &arg_vals);
+            state.set_reg(dst, result?);
+            return Ok(None);
         }
-    } else {
-        call_closure(state, func_val, &arg_vals, dst)?;
+        if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+            state.set_reg(dst, result?);
+            return Ok(None);
+        }
+        if try_invoke_continuation(state, func_val, &arg_vals)? {
+            // Continuation was invoked — stack has been replaced/appended.
+            // Safety net: if frames dropped to or below exit_depth, the
+            // continuation escaped past a synchronous run_thunk boundary
+            // (e.g. dynamic-wind body, with-exception-handler thunk, or
+            // indirect call-with-values). Return the primary value so the
+            // enclosing run_loop_until exits correctly.
+            if state.frames.len() <= exit_depth {
+                let primary = arg_vals
+                    .first()
+                    .copied()
+                    .unwrap_or(TaggedValue::UNSPECIFIED);
+                return Ok(Some(primary));
+            }
+            return Ok(None);
+        }
     }
+    let code_id = match closure_code_id {
+        Some(id) => CodeObjectId(id),
+        // Not callable: resolve_closure produces the standard type error.
+        None => resolve_closure(state, func_val)?,
+    };
+    call_closure_resolved(state, func_val, code_id, &arg_vals, dst)?;
     Ok(None)
 }
 
@@ -2750,78 +2785,91 @@ fn tail_call_value(
     arg_vals: Vec<TaggedValue>,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
-    // Intercept higher-order control primitives in tail position.
-    // Strategy: pop the current frame first (simulating "already returned"),
-    // then dispatch the primitive as if called from the parent frame.
-    if let Some(ctrl) = vm_control_primitive(state, func_val) {
-        let frame = state.frames.pop().expect("tail call ctrl with empty stack");
-        let return_reg = frame.return_reg;
-        state.free_top_registers(frame.register_base);
-        // Now at depth N-1. Handle with dst = return_reg (slot in frame N-2).
-        // (At exit depth, return_reg is still the right dst — not 0, which
-        // could clobber live registers like MutableCell pointers.)
-        if let Some(escaped) = handle_control_primitive(state, ctrl, arg_vals, return_reg, false)? {
-            return Ok(Some(escaped));
-        }
-        // The control primitive has completed. If it wrote its result and
-        // returned immediately (no new frames pushed past exit_depth), the
-        // enclosing loop is done; otherwise let it drive the new frames.
-        if state.frames.len() == exit_depth {
-            let result = state.reg(return_reg);
-            return Ok(Some(result));
-        }
-        return Ok(None);
-    }
-
-    // Continuation invocation in tail position.
-    if try_invoke_continuation(state, func_val, &arg_vals)? {
-        // Safety net: if frames dropped to or below exit_depth, the
-        // continuation escaped past a synchronous run_thunk boundary.
-        if state.frames.len() <= exit_depth {
-            let primary = arg_vals
-                .first()
-                .copied()
-                .unwrap_or(TaggedValue::UNSPECIFIED);
-            return Ok(Some(primary));
-        }
-        return Ok(None);
-    }
-
-    // Primitives in tail position: call them, write result to current
-    // frame's return_reg, then simulate a Return.
-    if let Some(prim) = primitive_procedure(state, func_val) {
-        let result = call_primitive_proc(state, &prim, &arg_vals)?;
-        let frame = state.frames.pop().expect("tail call with empty stack");
-        if state.frames.len() == exit_depth {
+    // Same closure-first probe as `call_value` — see there for why probe
+    // order is safe.
+    let closure_code_id = state.heap.borrow().get_vm_closure_code_id(func_val);
+    if closure_code_id.is_none() {
+        // Intercept higher-order control primitives in tail position.
+        // Strategy: pop the current frame first (simulating "already
+        // returned"), then dispatch the primitive as if called from the
+        // parent frame.
+        if let Some(ctrl) = vm_control_primitive(state, func_val) {
+            let frame = state.frames.pop().expect("tail call ctrl with empty stack");
+            let return_reg = frame.return_reg;
             state.free_top_registers(frame.register_base);
-            return Ok(Some(result));
+            // Now at depth N-1. Handle with dst = return_reg (slot in frame
+            // N-2). (At exit depth, return_reg is still the right dst — not
+            // 0, which could clobber live registers like MutableCell
+            // pointers.)
+            if let Some(escaped) =
+                handle_control_primitive(state, ctrl, arg_vals, return_reg, false)?
+            {
+                return Ok(Some(escaped));
+            }
+            // The control primitive has completed. If it wrote its result and
+            // returned immediately (no new frames pushed past exit_depth), the
+            // enclosing loop is done; otherwise let it drive the new frames.
+            if state.frames.len() == exit_depth {
+                let result = state.reg(return_reg);
+                return Ok(Some(result));
+            }
+            return Ok(None);
         }
-        let caller_idx = state.frames.len() - 1;
-        let return_reg = frame.return_reg;
-        state.set_reg_in_frame(caller_idx, return_reg, result);
-        state.free_top_registers(frame.register_base);
-        return Ok(None);
-    }
 
-    // Parameters in tail position: same as primitives.
-    if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
-        let result = result?;
-        let frame = state
-            .frames
-            .pop()
-            .expect("tail call param with empty stack");
-        if state.frames.len() == exit_depth {
+        // Continuation invocation in tail position.
+        if try_invoke_continuation(state, func_val, &arg_vals)? {
+            // Safety net: if frames dropped to or below exit_depth, the
+            // continuation escaped past a synchronous run_thunk boundary.
+            if state.frames.len() <= exit_depth {
+                let primary = arg_vals
+                    .first()
+                    .copied()
+                    .unwrap_or(TaggedValue::UNSPECIFIED);
+                return Ok(Some(primary));
+            }
+            return Ok(None);
+        }
+
+        // Primitives in tail position: call them, write result to current
+        // frame's return_reg, then simulate a Return.
+        if let Some(prim) = primitive_procedure(state, func_val) {
+            let result = call_primitive_proc(state, &prim, &arg_vals)?;
+            let frame = state.frames.pop().expect("tail call with empty stack");
+            if state.frames.len() == exit_depth {
+                state.free_top_registers(frame.register_base);
+                return Ok(Some(result));
+            }
+            let caller_idx = state.frames.len() - 1;
+            let return_reg = frame.return_reg;
+            state.set_reg_in_frame(caller_idx, return_reg, result);
             state.free_top_registers(frame.register_base);
-            return Ok(Some(result));
+            return Ok(None);
         }
-        let caller_idx = state.frames.len() - 1;
-        let return_reg = frame.return_reg;
-        state.set_reg_in_frame(caller_idx, return_reg, result);
-        state.free_top_registers(frame.register_base);
-        return Ok(None);
+
+        // Parameters in tail position: same as primitives.
+        if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+            let result = result?;
+            let frame = state
+                .frames
+                .pop()
+                .expect("tail call param with empty stack");
+            if state.frames.len() == exit_depth {
+                state.free_top_registers(frame.register_base);
+                return Ok(Some(result));
+            }
+            let caller_idx = state.frames.len() - 1;
+            let return_reg = frame.return_reg;
+            state.set_reg_in_frame(caller_idx, return_reg, result);
+            state.free_top_registers(frame.register_base);
+            return Ok(None);
+        }
     }
 
-    let new_code_id = resolve_closure(state, func_val)?;
+    let new_code_id = match closure_code_id {
+        Some(id) => CodeObjectId(id),
+        // Not callable: resolve_closure produces the standard type error.
+        None => resolve_closure(state, func_val)?,
+    };
     let new_code = state
         .code_store
         .get(&new_code_id)
