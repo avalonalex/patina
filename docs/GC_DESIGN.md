@@ -187,10 +187,11 @@ pub trait GcRoots {
     fn trace_roots(&self, v: &mut GcVisitor<'_>);
 }
 
-/// Swappable policy. Non-moving is a contract: implementations may not
-/// relocate live slots.
+/// Swappable algorithm. Non-moving is a contract: implementations may not
+/// relocate live slots. Automatic policy is expressed as an allocation
+/// threshold the controller installs into the heap (§6), not a per-query
+/// method — the safe point never asks the collector anything.
 pub trait Collector {
-    fn should_collect(&self, heap: &Heap) -> bool;
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats;
 }
 
@@ -395,12 +396,23 @@ debug build is the lane that localizes failures like this one.
 
 ## 6. Trigger Policy
 
-- `Heap` gains an `allocs_since_gc` counter, incremented in each `alloc_*`.
-- `Collector::should_collect` returns true when the counter exceeds an
-  adaptive threshold: `max(GC_MIN_THRESHOLD, 2 * live_after_last_gc)`.
-- The check happens **only at backend safe points** (§7) — never inside
-  `alloc_*` (re-entrant `RefCell` borrow risk, and mid-operation temporaries
-  would be unrooted).
+- `Heap` gains an `allocs_since_gc` counter, incremented in each `alloc_*`
+  via `note_alloc`, which **raises a collection-pending flag** (an
+  `Rc<Cell<bool>>` shared with the dispatch loops) when the counter crosses
+  `Heap.gc_threshold`. The threshold is the mode made concrete —
+  `GcController::current_threshold`, the single owner of that mapping:
+  `usize::MAX` for Off, the collector's adaptive `max(GC_MIN_THRESHOLD, 2 ×
+  live_after_last_gc)` for On, `n` for Stress. The backend installs it when
+  heap and controller are paired (a bare heap defaults to the inert
+  `usize::MAX` — policy stays in the controller, mechanism in the heap), and
+  `GcController::collect` re-installs it after each collection — the only
+  point the adaptive term changes. `request_gc` raises the same flag, which
+  is how `(gc)` is honored in every mode; sweep lowers it.
+- The *decision* is therefore made at allocation time, but **collection still
+  happens only at backend safe points** (§7) — inside `alloc_*` the heap is
+  re-entrantly borrowed and mid-operation temporaries would be unrooted. The
+  safe point reads the flag (one load, no `RefCell` borrow) and collects when
+  it is raised. §6.1 has the measurements that forced this shape.
 - Collection is **off by default** until stage 4: the baseline build must
   behave exactly as it did before the collector existed. The mode table and
   its environment grammar live in `patina-core` (`GcMode::from_env`) because
@@ -419,29 +431,44 @@ debug build is the lane that localizes failures like this one.
   safe point services it. This is what makes collection testable without
   process-global environment variables.
 
-### 6.1 Trigger cost — measured, and why stage 4 must change it
+### 6.1 Trigger cost — measured, redesigned (stage 4a), re-measured
 
-Measured on the VM (M1 Max, release, interleaved A/B/C against `main`, with a
-control binary that deletes *only* the `maybe_collect` call):
+The stage-3 safe point re-derived policy per dispatched instruction. Measured
+on the VM (M1 Max, release, interleaved A/B/C against `main`, with a control
+binary that deletes *only* the `maybe_collect` call):
 
-| Lane | Cost vs `main` | Where it goes |
+| Lane | Cost vs `main` | Where it went |
 |------|----------------|---------------|
 | GC **off** (default) | **−2.5 to −3.5%** | `mode == Off && !heap.borrow().gc_requested()` per dispatched instruction ≈ 0.24–0.34 ns (~1 cycle) |
 | GC **on**, zero collections | **−13.7%** | `should_collect` per instruction: a non-inlined call plus two `RefCell` borrows ≈ 1.75 ns |
 
 The control binary reproduced `main` to within noise on every workload, so the
-safe point *is* the whole cost — nothing else in the GC integration is
-measurable. §10's "baseline lane must be unaffected" is therefore not yet met.
+safe point *was* the whole cost — nothing else in the GC integration is
+measurable.
 
-The flaw is architectural, not micro: **the safe point asks a question whose
-answer only changes when something allocates.** Moving the decision to where
-allocation happens — `alloc_*` already bumps `allocs_since_gc`, so it can set a
-"collection due" flag when it crosses the threshold — collapses every mode's
-safe point to a single flag test and makes the on and off lanes cost the same.
-Putting that flag outside the heap's `RefCell` (an `Rc<Cell<bool>>` shared with
-the controller) removes the borrow as well; measured in isolation it recovers
-40–50% of the off-lane cost, with the remainder being the load and branch
-themselves, which only specializing the dispatch loop on the mode can remove.
+The flaw was architectural, not micro: **the safe point asked a question whose
+answer only changes when something allocates.** Stage 4a therefore moved the
+decision to where allocation happens — `Heap::note_alloc` raises a pending
+flag when `allocs_since_gc` crosses the mode-derived threshold (§6), and every
+mode's safe point collapsed to a single flag test. The flag lives outside the
+heap's `RefCell` (an `Rc<Cell<bool>>`; dispatch loops hoist a handle at
+entry), so the fast path has no borrow either.
+
+Re-measured after the redesign (same rig and methodology; `fib 33` for
+dispatch, a 10M-cons churn for the allocation path; 7 interleaved rounds,
+medians, round-to-round spread 1–3%):
+
+| Lane | vs `main` | vs control | Reading |
+|------|-----------|------------|---------|
+| GC **off**, dispatch | **−0.4%** | +1.4% | parity with `main`; the residual vs control is the bare load-and-branch |
+| GC **off**, alloc-heavy | **−1.3%** | +1.1% | `note_alloc`'s compare-and-branch is not measurable over the old bare increment |
+| GC **on**, zero collections | **−12.2%** (i.e. the penalty is gone) | +0.8% | on-lane now costs the same as off-lane: on-vs-off is −0.2% on the branch, +13.2% on `main` |
+
+The on/off convergence is the acceptance-relevant result: enabling collection
+no longer has a standing per-instruction cost, only the pauses themselves.
+The remaining ~1% vs control is the flag load and branch, removable only by
+specializing the dispatch loop — noted as a stage-5 option, not pursued while
+it sits at the edge of the noise band.
 
 ---
 
@@ -640,7 +667,8 @@ unaffected without a second compilation configuration to maintain.
 | **1. Core infra** ✅ *(merged 2026-07-31, PR #4)* | Mark bit-vectors, `GcVisitor`, per-variant trace rules, tombstoning sweep, `Collector`/`GcRoots` traits, `MarkSweepCollector`, alloc counter, `Environment::for_each_local_value`, `(gc)`/`(gc-stats)` primitives | Unit tests with synthetic roots: reachability, tombstone drops `Rc` payloads, free-list reuse, poison-mode assertions |
 | **2. Tree-walker integration** ✅ *(2026-07-31)* | Root providers for `Evaluator` (global env), `LibraryRegistry` (shared, in `patina-runtime`), `StepRoots` (`StepResult` + `ContValue`/`ContEnv` chains + entry `expr`) and `EscapeRoots` (`PENDING_ESCAPE`); safe point at the trampoline loop top; `GcDeferGuard` on both trampolines and the library-body loop; `GcMode` policy | **Met:** chibi suite (1194 test expressions) on the tree-walker under `PATINA_GC_STRESS=1` produced byte-identical output to baseline. Reclamation proven: a 20 000-cons workload holds ~4 000 pairs under stress vs ~24 000 unreclaimed without it. 14 integration tests in `patina-tests/tests/gc_tree_walker.rs` cover cycles, closures, continuations, `dynamic-wind`, records, nested trampolines, and a regression guard for §9.4 |
 | **3. VM integration** ✅ *(2026-08-01)* | `impl GcRoots for VmState` (registers, frames' bare closure indices, `value_buffer`, `scratch_args`, wind/prompt/handler stacks, `code_store` constants, globals, **both continuation side tables**, tracer register snapshots); safe point at the top of `run_loop_until`; `GcDeferGuard` on every dispatch loop and on both library-loading paths; `GcController` lifted to `patina-core` and shared | **Met:** VM chibi suite under `PATINA_GC_STRESS=1` byte-identical to baseline in **both** release and a debug build with the poison/`Free` assertions active (the strongest check — a missed root panics rather than passing silently). 20 004 collections on a 20 000-cons workload, arena 4 039 vs 24 047 pairs. 14 VM integration tests in `patina-tests/tests/gc_vm.rs` |
-| **4. Default-on** | **Safe-point trigger redesign (§6.1) — this is the gating item**, adaptive threshold enabled, two CI lanes (baseline vs `gc`), SourceMap pruning hook, liveness stress (`(iota 100000)` sum), arena-reuse proof | Interleaved A/B showing **GC-off parity** (currently −2.5–3.5%, measured) and GC-on overhead within budget (currently −13.7% with zero collections); `cargo clippy`/`fmt` clean |
+| **4a. Trigger redesign** ✅ *(2026-08-03)* | Safe-point trigger redesign (§6.1) — the stage-4 gating item: collection decision moved to `Heap::note_alloc` (pending flag + mode-derived threshold), safe point collapsed to one flag load, `GcController::collect` re-arms the adaptive term | **Met:** interleaved A/B/C — GC-off at parity with `main` (−0.4% dispatch, −1.3% alloc-heavy) and the GC-on zero-collection penalty eliminated (−0.2% on-vs-off, was −13.7%); ~1% residual vs no-safe-point control (§6.1). Chibi suite byte-identical across baseline/stress/on lanes, both backends, release + debug poison builds |
+| **4b. Default-on** | Adaptive threshold on by default (decision pending on 4a numbers), two CI lanes (baseline vs `gc`), SourceMap pruning hook, liveness stress (`(iota 100000)` sum), arena-reuse proof | Both CI lanes green; `cargo clippy`/`fmt` clean |
 | **5+. Future** | VM-only `Collector` upgrades: immortal set for `code_store` constants, lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); explicit rooting of re-entrancy boundaries so nested loops can collect; weak symbol table | Each behind the trait, benchmarked interleaved |
 
 Rationale for full-arena tracing from stage 1 (vs P6's pairs+vectors-first):

@@ -76,7 +76,7 @@ use crate::eval::error::EvalError;
 use patina_core::Environment;
 use patina_core::TaggedValue;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind};
-use patina_core::{GcController, GcDeferGuard, GcMode};
+use patina_core::{GcController, GcDeferGuard};
 use std::rc::Rc;
 use tracing::debug;
 
@@ -108,12 +108,12 @@ impl<'a> CpsEvaluator<'a> {
     /// outstanding (`docs/GC_DESIGN.md` §7). The protocol itself lives in
     /// `GcController::safe_point`; this supplies only the roots.
     #[inline]
-    fn maybe_collect(&self, mode: GcMode, is_outermost: bool, step: &StepResult, expr: &CpsExpr) {
+    fn maybe_collect(&self, is_outermost: bool, step: &StepResult, expr: &CpsExpr) {
         let evaluator = self.evaluator;
         GcController::safe_point(
             &evaluator.gc,
             evaluator.global_env.heap(),
-            mode,
+            &evaluator.gc_pending,
             is_outermost,
             |collect| {
                 // Libraries are a root set. If a load is in flight we cannot
@@ -160,9 +160,10 @@ impl<'a> CpsEvaluator<'a> {
         // trampoline's caller has live values in Rust locals that no root
         // provider can see — see `docs/GC_DESIGN.md` §7.
         let gc_defer = GcDeferGuard::new(self.evaluator.global_env.heap());
-        // Loop invariants, hoisted out of the safe point (see maybe_collect).
+        // Loop invariant, hoisted out of the safe point (see maybe_collect).
+        // The cached pending-flag handle makes the per-step check a single
+        // load — no borrow.
         let is_outermost = gc_defer.is_outermost();
-        let gc_mode = self.evaluator.gc.borrow().mode();
 
         let cont_env = ContEnv::new();
         let prompt_stack = Vec::new();
@@ -194,7 +195,7 @@ impl<'a> CpsEvaluator<'a> {
         loop {
             // GC safe point: all live state is in `current_step` and `expr`,
             // both rooted below. No heap borrow is outstanding here.
-            self.maybe_collect(gc_mode, is_outermost, &current_step, expr);
+            self.maybe_collect(is_outermost, &current_step, expr);
 
             step_count += 1;
             if step_count <= 30 {

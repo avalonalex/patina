@@ -28,7 +28,7 @@ mod numeric;
 use crate::tagged_value::{HeapIndex, TaggedValue};
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 // ============================================================================
@@ -285,8 +285,21 @@ pub struct Heap {
     /// Allocations since the last GC (drives the collection trigger)
     allocs_since_gc: usize,
 
-    /// Set by the `(gc)` primitive; consumed by backends at safe points
-    gc_requested: bool,
+    /// Allocation count at which `note_alloc` raises the collection-pending
+    /// flag. `usize::MAX` (the default) is inert: only `request_gc` raises
+    /// the flag. A backend installs its policy's threshold via
+    /// `GcController::current_threshold` when heap and controller are paired,
+    /// and `GcController::collect` re-installs it after each collection (the
+    /// adaptive `2 × live` term changes only there).
+    gc_threshold: usize,
+
+    /// The collection-pending flag: raised by `note_alloc` on threshold
+    /// crossing and by `request_gc`; lowered by `sweep`. Lives outside the
+    /// heap's `RefCell` (shared `Cell` handles via `gc_pending_handle`) so a
+    /// backend safe point is a single load with no borrow — the whole point
+    /// of the design §6.1 trigger redesign: the safe point used to ask a
+    /// question whose answer only changes when something allocates.
+    gc_pending: Rc<Cell<bool>>,
 
     /// Nesting depth of scopes that hold live values unreachable from any
     /// registered root (nested trampolines, library-body loops). Collection
@@ -303,22 +316,7 @@ pub struct Heap {
 impl Heap {
     /// Create a new empty heap
     pub fn new() -> Self {
-        Self {
-            pairs: Vec::new(),
-            vectors: Vec::new(),
-            strings: Vec::new(),
-            objects: Vec::new(),
-            symbol_table: std::collections::HashMap::new(),
-            free_pairs: Vec::new(),
-            free_vectors: Vec::new(),
-            free_strings: Vec::new(),
-            free_objects: Vec::new(),
-            allocs_since_gc: 0,
-            gc_requested: false,
-            gc_defer_depth: 0,
-            gc_collections: 0,
-            gc_last_swept: 0,
-        }
+        Self::with_capacity(0, 0, 0)
     }
 
     /// Create a heap with pre-allocated capacity
@@ -334,7 +332,8 @@ impl Heap {
             free_strings: Vec::new(),
             free_objects: Vec::new(),
             allocs_since_gc: 0,
-            gc_requested: false,
+            gc_threshold: usize::MAX,
+            gc_pending: Rc::new(Cell::new(false)),
             gc_defer_depth: 0,
             gc_collections: 0,
             gc_last_swept: 0,
@@ -350,19 +349,51 @@ impl Heap {
         self.allocs_since_gc
     }
 
+    /// The single invariant of the trigger design: the pending flag is up
+    /// whenever the counter has reached the threshold (or `(gc)` raised it
+    /// directly).
+    #[inline]
+    fn refresh_gc_pending(&self) {
+        if self.allocs_since_gc >= self.gc_threshold {
+            self.gc_pending.set(true);
+        }
+    }
+
+    /// Count one allocation, raising the collection-pending flag when the
+    /// policy's threshold is crossed. Called by every `alloc_*`; this is
+    /// where the collection decision is *made*, so safe points only have to
+    /// read the flag (design §6.1).
+    #[inline]
+    fn note_alloc(&mut self) {
+        self.allocs_since_gc += 1;
+        self.refresh_gc_pending();
+    }
+
+    /// A handle to the collection-pending flag. Dispatch loops clone this
+    /// once at entry so their per-iteration safe point is a single load with
+    /// no `RefCell` borrow.
+    pub fn gc_pending_handle(&self) -> Rc<Cell<bool>> {
+        self.gc_pending.clone()
+    }
+
+    /// Install the allocation threshold at which `note_alloc` raises the
+    /// pending flag. Called with `GcController::current_threshold` when heap
+    /// and controller are paired and again after each collection (the
+    /// adaptive term changes only there). Raises the flag immediately if the
+    /// counter already exceeds the new threshold.
+    pub fn set_gc_threshold(&mut self, threshold: usize) {
+        self.gc_threshold = threshold;
+        self.refresh_gc_pending();
+    }
+
     /// Ask for a collection at the next backend safe point (the `(gc)`
     /// primitive cannot collect in place: it runs mid-evaluation, where live
     /// values sit in Rust locals no root provider can see).
     ///
-    /// `Collector::should_collect` honors this flag, and `sweep` clears it —
-    /// backends only ever ask the collector.
+    /// Raises the pending flag — honored regardless of the installed
+    /// threshold — and `sweep` lowers it.
     pub fn request_gc(&mut self) {
-        self.gc_requested = true;
-    }
-
-    /// Whether a collection has been requested.
-    pub fn gc_requested(&self) -> bool {
-        self.gc_requested
+        self.gc_pending.set(true);
     }
 
     /// Depth of active GC-deferring scopes. A backend safe point may only
@@ -400,7 +431,7 @@ impl Heap {
 
     /// Allocate a new pair (cons cell)
     pub fn alloc_pair(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
-        self.allocs_since_gc += 1;
+        self.note_alloc();
         let index = if let Some(free) = self.free_pairs.pop() {
             self.pairs[free as usize] = (car, cdr);
             free
@@ -467,7 +498,7 @@ impl Heap {
 
     /// Allocate a new vector
     pub fn alloc_vector(&mut self, elements: Vec<TaggedValue>) -> TaggedValue {
-        self.allocs_since_gc += 1;
+        self.note_alloc();
         let index = if let Some(free) = self.free_vectors.pop() {
             self.vectors[free as usize] = elements;
             free
@@ -528,7 +559,7 @@ impl Heap {
 
     /// Allocate a new string from Vec<char> (primary method)
     pub fn alloc_string_chars(&mut self, chars: Vec<char>) -> TaggedValue {
-        self.allocs_since_gc += 1;
+        self.note_alloc();
         let index = if let Some(free) = self.free_strings.pop() {
             self.strings[free as usize] = chars;
             free
@@ -986,7 +1017,7 @@ impl Heap {
 
     /// Allocate a generic object
     fn alloc_object(&mut self, data: HeapObjectData) -> TaggedValue {
-        self.allocs_since_gc += 1;
+        self.note_alloc();
         let index = if let Some(free) = self.free_objects.pop() {
             self.objects[free as usize] = data;
             free

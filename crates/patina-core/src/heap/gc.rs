@@ -18,15 +18,19 @@
 //!
 //! Collection never happens on its own: a backend drives it by calling
 //! [`GcController::safe_point`] at a point where every live value is
-//! reachable from the roots it supplies. [`GcMode`] decides when that
-//! actually collects, and is `Off` unless opted into.
+//! reachable from the roots it supplies. Whether that collects is decided
+//! *ahead of time*, where the answer changes: `Heap::note_alloc` raises a
+//! shared pending flag when allocations cross the [`GcMode`]-derived
+//! threshold (never, for the default `Off` mode), `Heap::request_gc` raises
+//! it for `(gc)`, and the safe point itself is a single flag load
+//! (design §6.1).
 
 use std::rc::Rc;
 use std::time::Instant;
 
 use rustc_hash::FxHashSet;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::continuation::{CpsContinuation, DynamicWindRecord};
@@ -155,15 +159,12 @@ pub trait GcRoots {
 /// live slots may never be relocated, because raw arena indices escape
 /// `TaggedValue` (symbol table, `SourceMap` keys, `eq?` semantics, VM
 /// constants — design §3.4).
+///
+/// A collector expresses its automatic policy as an allocation threshold
+/// (`MarkSweepCollector::auto_threshold`), which [`GcController`] installs
+/// into the heap — the trigger *decision* happens in `Heap::note_alloc`, not
+/// by querying the collector (design §6.1).
 pub trait Collector {
-    /// Whether this collector's own policy wants a collection now.
-    ///
-    /// Implementations answer only for their automatic policy. Explicit
-    /// `(gc)` requests are honored by [`GcController::should_collect`], which
-    /// is what backends actually call, so a collector need not — and should
-    /// not — restate that rule.
-    fn should_collect(&self, heap: &Heap) -> bool;
-
     /// Run a full collection. The caller must be at a safe point: every live
     /// value reachable from `roots`, and no outstanding heap borrow other
     /// than the one behind `heap`.
@@ -232,7 +233,7 @@ impl Drop for GcDeferGuard {
 /// When automatic collection fires. Shared by both backends: `PATINA_GC` and
 /// `PATINA_GC_STRESS` are process-global, so the mode table lives here rather
 /// than being re-derived per backend (design §6).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub enum GcMode {
     /// Collect only when `(gc)` has been called. The default — a build that
     /// nobody opted in to must behave exactly as it did before the collector
@@ -264,17 +265,6 @@ impl GcMode {
             GcMode::Off
         }
     }
-
-    /// Whether this mode wants a collection now. `(gc)` requests are honored
-    /// in every mode and are checked by the caller's fast path, so this
-    /// answers only the automatic policy question.
-    pub fn wants_collection(self, heap: &Heap, collector: &impl Collector) -> bool {
-        match self {
-            GcMode::Off => false,
-            GcMode::On => collector.should_collect(heap),
-            GcMode::Stress(n) => heap.allocs_since_gc() >= n,
-        }
-    }
 }
 
 /// A GC mode paired with the collector instance a backend owns.
@@ -294,20 +284,28 @@ impl GcController {
         }
     }
 
-    /// The mode. Backends cache this outside any `RefCell` so the hot-path
-    /// "is GC even on?" check costs no borrow.
-    pub fn mode(&self) -> GcMode {
-        self.mode
-    }
-
-    pub fn should_collect(&self, heap: &Heap) -> bool {
-        // `(gc)` is honored in every mode; the mode decides only whether to
-        // collect automatically.
-        heap.gc_requested() || self.mode.wants_collection(heap, &self.collector)
+    /// The allocation threshold at which `Heap::note_alloc` should raise the
+    /// collection-pending flag — the mode made concrete, and the single owner
+    /// of that mapping. A backend installs this into its heap when the pair
+    /// is wired up (`Heap::set_gc_threshold`); [`GcController::collect`]
+    /// re-installs it after each collection, the only point the adaptive
+    /// term changes. A heap with no controller attached keeps its inert
+    /// `usize::MAX` default, where only `(gc)` raises the flag.
+    pub fn current_threshold(&self) -> usize {
+        match self.mode {
+            GcMode::Off => usize::MAX,
+            GcMode::On => self.collector.auto_threshold(),
+            GcMode::Stress(n) => n,
+        }
     }
 
     pub fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
-        self.collector.collect(heap, roots)
+        let stats = self.collector.collect(heap, roots);
+        // Sweep lowered the pending flag; re-arm the threshold that raises it.
+        // This is what lets `note_alloc` compare against a stored number
+        // instead of safe points re-deriving the policy per instruction.
+        heap.set_gc_threshold(self.current_threshold());
+        stats
     }
 
     /// Run a backend safe point.
@@ -322,22 +320,30 @@ impl GcController {
     /// own frame (a `Ref<LibraryRegistry>`, a transient step provider) and
     /// lets it *abort* — returning without calling `collect` — when a root is
     /// unavailable, which must never degrade into tracing a partial root set.
+    /// The pending flag stays raised across an abort, so the next safe point
+    /// retries.
     ///
-    /// `mode` and `is_outermost` are loop invariants the caller hoists out of
-    /// its dispatch loop; the disabled fast path is one comparison plus one
-    /// borrow.
+    /// `pending` (the handle from `Heap::gc_pending_handle`) and
+    /// `is_outermost` are loop invariants the caller hoists out of its
+    /// dispatch loop; the fast path is one load and one branch — no `RefCell`
+    /// borrow, no mode dispatch. The collection *decision* was already made
+    /// where it becomes true, in `Heap::note_alloc` / `Heap::request_gc`
+    /// (design §6.1).
     #[inline]
     pub fn safe_point(
         gc: &RefCell<Self>,
         heap: &SharedHeap,
-        mode: GcMode,
+        pending: &Cell<bool>,
         is_outermost: bool,
         with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn GcRoots])),
     ) {
-        if mode == GcMode::Off && !heap.borrow().gc_requested() {
+        // A nested loop never collects — its caller holds live values in Rust
+        // locals no root provider can see. Its flag check would be dead code,
+        // but `is_outermost` is a hoisted constant, so the branch predicts.
+        if !is_outermost || !pending.get() {
             return;
         }
-        Self::safe_point_cold(gc, heap, is_outermost, with_roots);
+        Self::safe_point_cold(gc, heap, with_roots);
     }
 
     /// The rare branch, out of line so only the fast path inlines into the
@@ -346,17 +352,8 @@ impl GcController {
     fn safe_point_cold(
         gc: &RefCell<Self>,
         heap: &SharedHeap,
-        is_outermost: bool,
         with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn GcRoots])),
     ) {
-        // A nested loop's caller holds live values in Rust locals that no root
-        // provider can see.
-        if !is_outermost {
-            return;
-        }
-        if !gc.borrow().should_collect(&heap.borrow()) {
-            return;
-        }
         with_roots(&mut |roots| {
             let mut h = heap.borrow_mut();
             gc.borrow_mut().collect(&mut h, roots);
@@ -695,8 +692,8 @@ impl Heap {
     /// tombstones (empty) are legal values, so UAF there goes undetected.
     ///
     /// Consumes the mark bits as scratch space (read [`MarkBits::marked`]
-    /// first) and resets the allocation counter and any pending `(gc)`
-    /// request — sweep completion is the "collection happened" boundary.
+    /// first) and resets the allocation counter and the collection-pending
+    /// flag — sweep completion is the "collection happened" boundary.
     pub fn sweep(&mut self, marks: &mut MarkBits) -> ArenaCounts {
         let swept = ArenaCounts {
             pairs: sweep_arena(
@@ -729,7 +726,7 @@ impl Heap {
             ),
         };
         self.allocs_since_gc = 0;
-        self.gc_requested = false;
+        self.gc_pending.set(false);
         self.gc_collections += 1;
         self.gc_last_swept = swept.total();
         swept
@@ -768,6 +765,14 @@ impl MarkSweepCollector {
             stats: GcStats::default(),
         }
     }
+
+    /// The adaptive trigger: allocations since the last collection at which
+    /// the next one fires. Installed into the heap via
+    /// `GcController::current_threshold` so `note_alloc` can raise the
+    /// pending flag without consulting policy.
+    pub fn auto_threshold(&self) -> usize {
+        self.min_threshold.max(2 * self.live_after_last)
+    }
 }
 
 impl Default for MarkSweepCollector {
@@ -777,10 +782,6 @@ impl Default for MarkSweepCollector {
 }
 
 impl Collector for MarkSweepCollector {
-    fn should_collect(&self, heap: &Heap) -> bool {
-        heap.allocs_since_gc() >= self.min_threshold.max(2 * self.live_after_last)
-    }
-
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
         let start = Instant::now();
 
@@ -1060,38 +1061,138 @@ mod tests {
     fn alloc_counter_and_adaptive_threshold() {
         let mut heap = Heap::new();
         let mut collector = MarkSweepCollector::with_min_threshold(10);
+        assert_eq!(collector.auto_threshold(), 10);
 
         for i in 0..9 {
             heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
         }
         assert_eq!(heap.allocs_since_gc(), 9);
-        assert!(!collector.should_collect(&heap));
+        assert!(heap.allocs_since_gc() < collector.auto_threshold());
 
         heap.alloc_pair(TaggedValue::fixnum(9), TaggedValue::NULL);
-        assert!(collector.should_collect(&heap));
+        assert!(heap.allocs_since_gc() >= collector.auto_threshold());
 
         let roots = TestRoots::default();
         collector.collect(&mut heap, &[&roots]);
         assert_eq!(heap.allocs_since_gc(), 0);
-        assert!(!collector.should_collect(&heap));
+        // 10 pairs survived nothing (no roots), so the adaptive term stays at
+        // the floor.
+        assert_eq!(collector.auto_threshold(), 10);
     }
 
     #[test]
-    fn gc_request_triggers_and_is_cleared_by_collection() {
+    fn alloc_crossing_threshold_raises_pending_flag() {
         let mut heap = Heap::new();
-        // `(gc)` must be honored even in the default Off mode, where the
-        // automatic policy never fires. That rule lives on GcController.
-        let mut controller = GcController::from_env();
-        assert!(!controller.should_collect(&heap));
+        let pending = heap.gc_pending_handle();
+        heap.set_gc_threshold(3);
+
+        heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+        heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
+        assert!(!pending.get());
+
+        heap.alloc_pair(TaggedValue::fixnum(3), TaggedValue::NULL);
+        assert!(pending.get());
+
+        // Sweep is the "collection happened" boundary: it lowers the flag
+        // along with the counter.
+        collect(&mut heap, &TestRoots::default());
+        assert!(!pending.get());
+        assert_eq!(heap.allocs_since_gc(), 0);
+    }
+
+    #[test]
+    fn request_gc_raises_pending_flag_in_any_mode() {
+        // A bare heap's threshold is the inert usize::MAX, so only `(gc)`
+        // can raise the flag.
+        let mut heap = Heap::new();
+        let pending = heap.gc_pending_handle();
+
+        heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+        assert!(!pending.get());
 
         heap.request_gc();
-        assert!(heap.gc_requested());
-        assert!(controller.should_collect(&heap));
+        assert!(pending.get());
 
-        let roots = TestRoots::default();
+        collect(&mut heap, &TestRoots::default());
+        assert!(!pending.get());
+    }
+
+    #[test]
+    fn lowering_threshold_below_counter_raises_flag_immediately() {
+        let mut heap = Heap::new();
+        let pending = heap.gc_pending_handle();
+        for i in 0..5 {
+            heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
+        }
+        assert!(!pending.get());
+
+        heap.set_gc_threshold(4);
+        assert!(pending.get());
+    }
+
+    #[test]
+    fn controller_collect_rearms_adaptive_threshold() {
+        let mut heap = Heap::new();
+        let pending = heap.gc_pending_handle();
+        // Simulate GcMode::On with a tiny floor so the adaptive `2 × live`
+        // term dominates.
+        let mut controller = GcController {
+            mode: GcMode::On,
+            collector: MarkSweepCollector::with_min_threshold(1),
+        };
+
+        // Two live pairs held by a root, one garbage.
+        let a = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+        let b = heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
+        heap.alloc_pair(TaggedValue::fixnum(3), TaggedValue::NULL);
+        let roots = TestRoots {
+            values: vec![a, b],
+            ..Default::default()
+        };
         controller.collect(&mut heap, &[&roots]);
-        assert!(!heap.gc_requested());
-        assert!(!controller.should_collect(&heap));
+        assert!(!pending.get());
+
+        // live = 2, so the re-armed threshold is max(1, 2 × 2) = 4: three
+        // allocations stay quiet, the fourth raises the flag.
+        for i in 0..3 {
+            heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
+        }
+        assert!(!pending.get());
+        heap.alloc_pair(TaggedValue::fixnum(9), TaggedValue::NULL);
+        assert!(pending.get());
+    }
+
+    #[test]
+    fn safe_point_collects_only_when_outermost_and_pending() {
+        let shared = crate::heap::new_shared_heap();
+        let pending = shared.borrow().gc_pending_handle();
+        let gc = RefCell::new(GcController::from_env());
+        let no_roots = TestRoots::default();
+
+        shared
+            .borrow_mut()
+            .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+
+        // Flag down: nothing happens.
+        GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+            collect(&[&no_roots]);
+        });
+        assert_eq!(shared.borrow().gc_collections(), 0);
+
+        // Flag up but nested: deferred, flag stays up for the outer loop.
+        shared.borrow_mut().request_gc();
+        GcController::safe_point(&gc, &shared, &pending, false, |collect| {
+            collect(&[&no_roots]);
+        });
+        assert_eq!(shared.borrow().gc_collections(), 0);
+        assert!(pending.get());
+
+        // Flag up and outermost: collects and lowers the flag.
+        GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+            collect(&[&no_roots]);
+        });
+        assert_eq!(shared.borrow().gc_collections(), 1);
+        assert!(!pending.get());
     }
 
     #[cfg(debug_assertions)]
