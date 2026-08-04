@@ -221,6 +221,9 @@ fn eval_program_vm(
         };
     let global = interp.backend().global_env().clone();
     loop {
+        // Drop SourceMap entries for slots the previous form's evaluation
+        // freed, before this iteration's parse can reuse them (§9.1).
+        patina_interpreter::prune_freed_locations(heap, &source_map);
         match parser.parse() {
             Ok(expr) => {
                 match interp
@@ -263,6 +266,9 @@ fn eval_program_resilient_vm(
         };
     let global = interp.backend().global_env().clone();
     loop {
+        // Drop SourceMap entries for slots the previous form's evaluation
+        // freed, before this iteration's parse can reuse them (§9.1).
+        patina_interpreter::prune_freed_locations(heap, &source_map);
         match parser.parse() {
             Ok(expr) => {
                 match interp
@@ -361,6 +367,9 @@ fn run_repl_vm() {
         let global = interp.backend().global_env().clone();
         let mut result = TaggedValue::UNSPECIFIED;
         loop {
+            // Drop SourceMap entries for slots the previous form's evaluation
+            // freed, before this iteration's parse can reuse them (§9.1).
+            patina_interpreter::prune_freed_locations(&heap, &source_map);
             match parser.parse() {
                 Ok(expr) => {
                     match interp

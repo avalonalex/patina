@@ -56,7 +56,7 @@ pub use simple::SimpleInterpreter;
 // Re-export types from workspace crates for convenience
 pub use patina_core::TaggedValue;
 pub use patina_frontend::{
-    DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap,
+    DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap, prune_freed_locations,
 };
 pub use patina_ir::CoreExpr;
 pub use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
@@ -399,6 +399,9 @@ impl Interpreter<TreeWalker> {
         let global = self.backend.global_env().clone();
 
         loop {
+            // Drop SourceMap entries for slots the previous form's evaluation
+            // freed, before this iteration's parse can reuse them (§9.1).
+            prune_freed_locations(heap, &source_map);
             match parser.parse() {
                 Ok(expr) => {
                     result = self
@@ -433,6 +436,9 @@ impl Interpreter<TreeWalker> {
         let global = self.backend.global_env().clone();
 
         loop {
+            // Drop SourceMap entries for slots the previous form's evaluation
+            // freed, before this iteration's parse can reuse them (§9.1).
+            prune_freed_locations(heap, &source_map);
             match parser.parse() {
                 Ok(expr) => {
                     match self
@@ -508,6 +514,9 @@ impl Interpreter<TreeWalker> {
             };
         let global = self.backend.global_env().clone();
         loop {
+            // Drop SourceMap entries for slots the previous form's evaluation
+            // freed, before this iteration's parse can reuse them (§9.1).
+            prune_freed_locations(heap, &source_map);
             match parser.parse() {
                 Ok(expr) => {
                     match self
@@ -547,6 +556,9 @@ impl Interpreter<TreeWalker> {
             };
         let global = self.backend.global_env().clone();
         loop {
+            // Drop SourceMap entries for slots the previous form's evaluation
+            // freed, before this iteration's parse can reuse them (§9.1).
+            prune_freed_locations(heap, &source_map);
             match parser.parse() {
                 Ok(expr) => {
                     match self

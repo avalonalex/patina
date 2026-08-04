@@ -56,7 +56,7 @@ pub use heap::gc::{
     ArenaCounts, Collector, GcController, GcDeferGuard, GcMode, GcRoots, GcStats, GcVisitor,
     MarkBits, MarkSweepCollector,
 };
-pub use heap::{new_shared_heap, Heap, SharedHeap};
+pub use heap::{new_shared_heap, GcFreedBits, Heap, SharedHeap};
 pub use tagged_value::TaggedValue;
 pub use vfs::{FileSystem, MemoryFs, NativeFs, OverlayFs};
 

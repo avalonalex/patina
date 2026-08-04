@@ -4,8 +4,9 @@
 //! is recorded with its source position. This allows the desugarer and
 //! evaluator to attach source locations to CoreExpr/CpsExpr nodes.
 
-use patina_core::TaggedValue;
 use patina_core::error::SourceLocation;
+use patina_core::{GcFreedBits, SharedHeap, TaggedValue};
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// Maps TaggedValue raw bits to their source locations.
@@ -101,6 +102,39 @@ impl SourceMap {
             .get(&(loc.line, loc.column))
             .map(|v| v.as_slice())
     }
+
+    /// Drop the entries for slots the GC reclaimed (`GC_DESIGN.md` §9.1): a
+    /// reused slot must not inherit the old datum's source location.
+    /// `expansion_records` is keyed by source position, not raw bits, so it
+    /// stays valid and is untouched.
+    pub fn prune_freed(&mut self, freed: &[u64]) {
+        for bits in freed {
+            self.locations.remove(bits);
+        }
+    }
+
+    /// Forget all location entries. The overflow fallback for
+    /// [`SourceMap::prune_freed`]: a missing location degrades a diagnostic,
+    /// a stale one misattributes it.
+    pub fn clear_locations(&mut self) {
+        self.locations.clear();
+    }
+}
+
+/// Drain the slots the GC reclaimed since the last call and drop their
+/// entries from `source_map` (`GC_DESIGN.md` §9.1).
+///
+/// Call between evaluating one top-level form and parsing the next: sweeps
+/// can only happen during evaluation, and raw-bits lookups only during the
+/// desugaring of a later form, so pruning at the form boundary closes the
+/// staleness window completely. Cheap when no collection ran (one empty
+/// drain, no map borrow).
+pub fn prune_freed_locations(heap: &SharedHeap, source_map: &RefCell<SourceMap>) {
+    match heap.borrow_mut().take_gc_freed_bits() {
+        GcFreedBits::Exact(freed) if freed.is_empty() => {}
+        GcFreedBits::Exact(freed) => source_map.borrow_mut().prune_freed(&freed),
+        GcFreedBits::Overflowed => source_map.borrow_mut().clear_locations(),
+    }
 }
 
 #[cfg(test)]
@@ -134,5 +168,50 @@ mod tests {
     fn test_source_map_missing() {
         let sm = SourceMap::new();
         assert!(sm.get(TaggedValue::fixnum(99)).is_none());
+    }
+
+    #[test]
+    fn prune_freed_drops_reclaimed_entries_only() {
+        use patina_core::{Collector, GcRoots, GcVisitor, MarkSweepCollector};
+
+        // A root provider keeping one of the two datums alive.
+        struct Keep(TaggedValue);
+        impl GcRoots for Keep {
+            fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+                visitor.visit(self.0);
+            }
+        }
+
+        let heap = patina_core::new_shared_heap();
+        heap.borrow_mut().enable_gc_freed_tracking();
+        let live = heap
+            .borrow_mut()
+            .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+        let dead = heap
+            .borrow_mut()
+            .alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
+
+        let loc = |line| SourceLocation {
+            source: Arc::from("test.scm"),
+            line,
+            column: 1,
+            length: None,
+        };
+        let sm = RefCell::new(SourceMap::new());
+        sm.borrow_mut().record(live, loc(1));
+        sm.borrow_mut().record(dead, loc(2));
+
+        {
+            let mut h = heap.borrow_mut();
+            MarkSweepCollector::new().collect(&mut h, &[&Keep(live)]);
+        }
+        prune_freed_locations(&heap, &sm);
+
+        let sm = sm.borrow();
+        assert_eq!(sm.get(live).unwrap().line, 1);
+        assert!(
+            sm.get(dead).is_none(),
+            "reclaimed slot must not keep its old location"
+        );
     }
 }

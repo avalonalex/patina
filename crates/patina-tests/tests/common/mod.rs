@@ -388,5 +388,48 @@ macro_rules! gc_shared_tests {
                 "collecting did not shrink the arena: {with_gc} with gc vs {without_gc} without"
             );
         }
+
+        #[test]
+        fn liveness_stress_large_list_survives_collection() {
+            // The stage-4b liveness stress (design §10): a 100k-element list
+            // stays fully intact across a collection that runs while it is
+            // the only thing keeping its cells alive.
+            assert_gc_eval_to(
+                r#"
+                (import (patina debug))
+                (define (build n acc) (if (= n 0) acc (build (- n 1) (cons n acc))))
+                (define big (build 100000 '()))
+                (gc)
+                (define (sum lst acc) (if (null? lst) acc (sum (cdr lst) (+ acc (car lst)))))
+                (sum big 0)
+                "#,
+                "5000050000",
+            );
+        }
+
+        #[test]
+        fn arena_plateaus_under_repeated_churn_with_gc() {
+            // The stage-4b arena-reuse proof (design §10): across 20 churn
+            // rounds with a collection each, the pairs arena must reuse freed
+            // slots rather than grow — the delta after 100k churned conses
+            // stays under one round's worth.
+            let delta: i64 = $eval(
+                r#"(import (patina debug))
+                   (define (churn n) (if (> n 0) (begin (cons n n) (churn (- n 1)))))
+                   (define (rounds k)
+                     (if (> k 0) (begin (churn 5000) (gc) (rounds (- k 1)))))
+                   (churn 5000)
+                   (gc)
+                   (define baseline (cdr (assq 'pairs (gc-stats))))
+                   (rounds 20)
+                   (- (cdr (assq 'pairs (gc-stats))) baseline)"#,
+            )
+            .parse()
+            .unwrap_or_else(|_| panic!("expected a numeric arena delta"));
+            assert!(
+                delta < 5000,
+                "pairs arena grew by {delta} slots across 20 collected churn rounds"
+            );
+        }
     };
 }

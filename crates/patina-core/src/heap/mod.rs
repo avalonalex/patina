@@ -49,6 +49,16 @@ use std::rc::Rc;
 /// ```
 pub type SharedHeap = Rc<RefCell<Heap>>;
 
+/// Result of draining [`Heap::take_gc_freed_bits`]: the raw bits of slots
+/// reclaimed since the last drain, or `Overflowed` when the exact set was
+/// lost to the recording cap and a consumer must treat its entire
+/// raw-bits-keyed map as stale (design §9.1).
+#[derive(Debug)]
+pub enum GcFreedBits {
+    Exact(Vec<u64>),
+    Overflowed,
+}
+
 /// Type alias for the complex parameter value type returned by `Heap::get_parameter`.
 ///
 /// Contains (values_stack, converter) where:
@@ -301,6 +311,16 @@ pub struct Heap {
     /// question whose answer only changes when something allocates.
     gc_pending: Rc<Cell<bool>>,
 
+    /// Raw bits of `TaggedValue`s whose slots sweep reclaimed, for pruning
+    /// diagnostics maps keyed by raw bits (`SourceMap` — design §9.1): a
+    /// reused slot must not inherit the old datum's source location. `None`
+    /// (the default) means nobody consumes them and sweep records nothing.
+    gc_freed_bits: Option<Vec<u64>>,
+
+    /// Set instead of growing `gc_freed_bits` past its cap; consumers must
+    /// then treat *every* entry as possibly stale.
+    gc_freed_overflow: bool,
+
     /// Nesting depth of scopes that hold live values unreachable from any
     /// registered root (nested trampolines, library-body loops). Collection
     /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
@@ -334,6 +354,8 @@ impl Heap {
             allocs_since_gc: 0,
             gc_threshold: usize::MAX,
             gc_pending: Rc::new(Cell::new(false)),
+            gc_freed_bits: None,
+            gc_freed_overflow: false,
             gc_defer_depth: 0,
             gc_collections: 0,
             gc_last_swept: 0,
@@ -394,6 +416,37 @@ impl Heap {
     /// threshold — and `sweep` lowers it.
     pub fn request_gc(&mut self) {
         self.gc_pending.set(true);
+    }
+
+    /// Start recording the raw bits of slots sweep reclaims, for
+    /// diagnostics-map pruning (design §9.1). Idempotent. Callers must
+    /// periodically drain with [`Heap::take_gc_freed_bits`]; the buffer is
+    /// capped, and overflowing it degrades the next drain to "prune
+    /// everything", never to unbounded growth.
+    pub fn enable_gc_freed_tracking(&mut self) {
+        if self.gc_freed_bits.is_none() {
+            self.gc_freed_bits = Some(Vec::new());
+        }
+    }
+
+    /// Drain the slots reclaimed since the last drain. Entries in a
+    /// raw-bits-keyed map for `Exact` bits are stale and must be dropped; on
+    /// `Overflowed` the exact set was lost and the whole map must be treated
+    /// as stale.
+    pub fn take_gc_freed_bits(&mut self) -> GcFreedBits {
+        if std::mem::take(&mut self.gc_freed_overflow) {
+            if let Some(bits) = &mut self.gc_freed_bits {
+                bits.clear();
+            }
+            GcFreedBits::Overflowed
+        } else {
+            GcFreedBits::Exact(
+                self.gc_freed_bits
+                    .as_mut()
+                    .map(std::mem::take)
+                    .unwrap_or_default(),
+            )
+        }
     }
 
     /// Depth of active GC-deferring scopes. A backend safe point may only

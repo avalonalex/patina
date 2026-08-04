@@ -47,6 +47,34 @@ jobs:
     - name: Run chibi r7rs-tests (must be 1163/1163)
       run: ./scripts/run_chibi_tests.sh
 
+  # The two GC lanes (docs/GC_DESIGN.md §10 stage 4b): the chibi suite must
+  # be byte-identical with GC off, under stress, and under the adaptive mode,
+  # on both backends. The debug lane is the strong one — poison assertions
+  # turn a lost root into a deterministic panic at the exact accessor.
+  gc-differential:
+    name: GC differential (release)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Build release
+      run: cargo build --release
+    - name: Stress + adaptive lanes vs baseline, both backends
+      run: ./scripts/run_gc_differential.sh target/release/patina
+
+  gc-differential-debug:
+    name: GC differential (debug, poison assertions)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Build debug
+      run: cargo build
+    - name: Stress + adaptive lanes vs baseline, both backends
+      run: ./scripts/run_gc_differential.sh target/debug/patina
+
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
