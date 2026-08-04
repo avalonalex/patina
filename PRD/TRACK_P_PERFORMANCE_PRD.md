@@ -1,7 +1,7 @@
 # Track P — VM Performance (Clarity-Safe) PRD
 
 **Created:** 2026-06-20
-**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining: P4 (blocked on globals-swap redesign), P5 compiler passes, P7 phase 2. **P6 GC: stages 1-3 landed 2026-08-01 (PRs #4-#6)** — both backends collect, off by default; stage 4 (default-on) is gated on the safe-point trigger redesign, `docs/GC_DESIGN.md` §6.1.
+**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining: P4 (blocked on globals-swap redesign), P5 compiler passes, P7 phase 2. **P6 GC: stages 1-3 (PRs #4-#6) and stage 4a, the safe-point trigger redesign (PR #8), landed 2026-08-01/03** — both backends collect, off by default at zero standing cost (safe point = one flag load, GC-off at parity with `main`, GC-on penalty gone); stage 4b (default-on flip, CI lanes) remains, `docs/GC_DESIGN.md` §6.1/§10.
 **Scope decision:** clarity-safe optimizations only — aggressive, readability-costing items are explicitly deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing) · **Catalog:** `PRD/VM_OPTIMIZATION_ROADMAP.md` (P1–P10 superset)
 
@@ -144,12 +144,12 @@ Add fixed-arity opcodes executed inline in the dispatch loop — `Add/Sub/Mul/Lt
 The compiler runs zero optimization passes; the 5-pass pipeline is structured for insertion (`docs/VM_COMPILER.md §12`). Add the low-complexity ones: **constant folding** (`(+ 1 2)`→`3`), **dead-code elimination** of unused bindings, **peephole** (dead `Move` removal, `LoadConst+Add`→immediate). Skip contification / copy-propagation / liveness regalloc (deferred).
 - **Acceptance:** golden disasm tests; `cargo test`.
 
-### P6 — Garbage collection  *(stages 1-3 landed 2026-08-01; stage 4 open)*
+### P6 — Garbage collection  *(stages 1-3 + 4a landed; stage 4b open)*
 Designed and tracked in **`docs/GC_DESIGN.md`**, which supersedes the sketch that used to live here — it covers both backends (not just the VM), adds a `Collector`/`GcRoots` pluggability seam, and carries the complete root inventory and staging plan.
 
 Both backends now collect and reclaim cycles, verified by a differential stress lane (`PATINA_GC_STRESS=1` byte-identical to baseline, in release *and* in a debug build with use-after-free assertions live). Collection is **off by default**, so today's baseline is unchanged apart from the safe-point check itself.
 
-**Relevant to this track:** that check is not free — 2.5-3.5% of VM runtime with GC off, 13.7% with GC on even when no collection is due, because the safe point polls per dispatched instruction a question whose answer only changes on allocation. Measurements and the fix (move the trigger into `alloc_*`) are in `docs/GC_DESIGN.md` §6.1; it is the gating item for stage 4 and wants the usual interleaved A/B.
+**Relevant to this track:** the safe-point check used to cost 2.5-3.5% of VM runtime with GC off and 13.7% with GC on even when no collection was due, because it polled per dispatched instruction a question whose answer only changes on allocation. Stage 4a (PR #8, 2026-08-03) moved the decision into `alloc_*` — the safe point is now one flag load; interleaved A/B shows GC-off at parity with `main` and the GC-on standing penalty gone (~1% residual vs a no-check control binary). Measurements in `docs/GC_DESIGN.md` §6.1. Remaining for stage 4b: the default-on flip and CI lanes.
 
 ### P7 — Slice-based primitive handler ABI  *(phase 1 done — PR #157, 2026-07-29; phase 2 open)*
 

@@ -87,9 +87,10 @@ The architecture is designed to support future exploration:
 
 ### Known Limitations
 
-- **No garbage collection yet.** Memory is arena-allocated and never
-  reclaimed, so long-running programs grow without bound. A feature-flagged
-  mark-and-sweep design is specified and queued.
+- **Garbage collection is off by default.** A non-moving mark-and-sweep
+  collector is implemented for both backends (set `PATINA_GC=1`, or call
+  `(gc)` from `(patina debug)`), but until it is switched on by default a
+  long-running program with it disabled grows without bound.
 - Performance is that of a young interpreter: far beyond a naive
   tree-walker and improving quickly (the VM gained 2–3× on arithmetic- and
   list-heavy code in the most recent optimization wave), but not yet
