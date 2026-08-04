@@ -2,6 +2,39 @@
 
 Major accomplishments and project milestones.
 
+## 2026-08-03: Garbage Collection Complete — Always On, Both Backends
+
+**GC stages 1–4 landed in one week (PRs #4–#6, #8, #10, #11): non-moving
+stop-the-world mark-and-sweep over the typed arenas, always on, at zero
+standing cost.** Cycles from `set-car!`/`set-cdr!` and closure ↔ environment
+references — which `Rc` could never reclaim — are collected on both the
+tree-walker and the VM.
+
+**Architecture** (`docs/GC_DESIGN.md`):
+- Side mark bit-vectors, tombstoning sweep into the existing free lists;
+  `Collector`/`GcRoots` seams keep backends out of the collection business
+- Safe points at dispatch-loop tops; `GcDeferGuard` makes nested executions
+  non-collecting by construction
+- Trigger redesign (stage 4a): the collection *decision* is made in
+  `alloc_*` — a pending flag raised on threshold crossing — so the
+  per-instruction safe point is a single `Cell<bool>` load. Eliminated the
+  measured −2.5–3.5% GC-off / −13.7% GC-on standing cost; on-vs-off is now
+  parity on both dispatch- and alloc-heavy workloads
+- `SourceMap` pruning: sweep reports reclaimed slots so reused slots cannot
+  inherit stale source locations
+
+**Verification discipline:**
+- Differential lanes: chibi suite byte-identical across no-collection /
+  adaptive / stress-collect-every-allocation, on both backends, in release
+  and in debug with use-after-free poison assertions — now enforced by two
+  CI jobs on every PR, with reclamation proofs so the lanes cannot pass
+  vacuously
+- All perf claims from interleaved A/B/C runs against control binaries
+
+**Remaining:** pause work (weak continuation tables, immortal root sets,
+nested-loop collection, generational) tracked in
+`PRD/future/GC_STAGE5_PRD.md`.
+
 ## 2026-03-14: VM Backend 100% R7RS Compliance (1163/1163)
 
 **Phase 2A complete — VM backend matches tree-walker at 100% chibi R7RS test pass rate.**
