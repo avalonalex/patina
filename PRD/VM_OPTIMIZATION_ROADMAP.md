@@ -38,7 +38,9 @@ This document catalogs the gaps between Patina's first-generation VM and state-o
 
 **Status (2026-08-01):** Done for correctness — non-moving mark-and-sweep over the typed arenas, on **both** backends, reclaiming cycles that `Rc` cannot (PRs #4-#6). Currently **off by default**; `(gc)` collects on request, `PATINA_GC`/`PATINA_GC_STRESS` enable it. Design and staging: `docs/GC_DESIGN.md`.
 
-**Remaining (stage 4):** flip to default-on. Gated on the safe-point trigger redesign — the safe point polls per dispatched instruction, costing 2.5-3.5% with GC off; see `docs/GC_DESIGN.md` §6.1.
+**Update (2026-08-03, PR #8):** the safe-point trigger redesign landed — the collection decision moved to alloc time and the safe point is a single flag load. GC-off is at parity with pre-GC `main` and the GC-on standing penalty (was 13.7%) is gone; see `docs/GC_DESIGN.md` §6.1 for the re-measurements.
+
+**Remaining (stage 4b):** flip to default-on (now affordable: enabling GC costs only actual pauses), two CI lanes, SourceMap pruning hook, stress proofs.
 
 **Target (later):** Generational collection. Young generation for short-lived allocations.
 
