@@ -6,6 +6,7 @@
 
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
 use patina_core::environment::Environment;
+use patina_core::procedure::Arity;
 use patina_core::tagged_value::TaggedValue;
 use patina_vm::compiler::compile_with_qq_resolving;
 use patina_vm::runtime::VmState;
@@ -43,11 +44,9 @@ fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
     })
 }
 
-/// Compile `expr` against a fresh VM's globals (primitives installed) and
-/// return every instruction from the top-level and nested code objects.
-fn compile_all_instructions(expr: &CoreExpr) -> Vec<Instruction> {
-    let mut state = VmState::new(Rc::new(Environment::new()));
-    state.install_primitives();
+/// Compile `expr` against `state`'s globals and return every instruction
+/// from the top-level and nested code objects.
+fn compile_all_in(state: &VmState, expr: &CoreExpr) -> Vec<Instruction> {
     let env = state.globals.clone();
     let heap = env.heap().clone();
     let (top, nested) = compile_with_qq_resolving(expr, &heap, &env, &state.primitive_registry)
@@ -57,6 +56,25 @@ fn compile_all_instructions(expr: &CoreExpr) -> Vec<Instruction> {
         instrs.extend(co.instructions);
     }
     instrs
+}
+
+/// Compile `expr` against a fresh VM's globals (primitives installed).
+fn compile_all_instructions(expr: &CoreExpr) -> Vec<Instruction> {
+    let mut state = VmState::new(Rc::new(Environment::new()));
+    state.install_primitives();
+    compile_all_in(&state, expr)
+}
+
+/// Fresh VM state where `name` is bound the way the library loader binds it:
+/// a `Procedure::Primitive` whose qualified name comes from `library`, not
+/// from the registry entry.
+fn state_with_library_binding(name: &'static str, arity: Arity, library: &[&str]) -> VmState {
+    let mut state = VmState::new(Rc::new(Environment::new()));
+    state.install_primitives();
+    state
+        .globals
+        .define_primitive(name, arity, library.iter().map(|s| s.to_string()).collect());
+    state
 }
 
 fn count_call_prims(instrs: &[Instruction]) -> usize {
@@ -120,34 +138,11 @@ fn control_primitives_are_excluded() {
     // patina.internal.control/values (see internal_control.rs), and the VM
     // intercepts that qualified name at call time. Bind it the same way here
     // and check the resolver refuses to emit CallPrimitive for it.
-    let mut state = VmState::new(Rc::new(Environment::new()));
-    state.install_primitives();
-    let env = state.globals.clone();
-    env.define_primitive(
-        "values",
-        patina_core::procedure::Arity::Min(0),
-        vec![
-            "patina".to_string(),
-            "internal".to_string(),
-            "control".to_string(),
-        ],
-    );
-    let heap = env.heap().clone();
-    let expr = app(var("values"), vec![lit(1), lit(2)]);
-    let (top, _) = compile_with_qq_resolving(&expr, &heap, &env, &state.primitive_registry)
-        .expect("compile error");
-    assert_eq!(
-        count_call_prims(&top.instructions),
-        0,
-        "{:?}",
-        top.instructions
-    );
-    assert_eq!(
-        count_generic_calls(&top.instructions),
-        1,
-        "{:?}",
-        top.instructions
-    );
+    let state =
+        state_with_library_binding("values", Arity::Min(0), &["patina", "internal", "control"]);
+    let instrs = compile_all_in(&state, &app(var("values"), vec![lit(1), lit(2)]));
+    assert_eq!(count_call_prims(&instrs), 0, "{instrs:?}");
+    assert_eq!(count_generic_calls(&instrs), 1, "{instrs:?}");
 }
 
 #[test]
@@ -207,6 +202,24 @@ fn vector_set_emits_inline_opcode() {
         1,
         "{instrs:?}"
     );
+}
+
+#[test]
+fn internal_library_alias_binding_emits_inline_opcode() {
+    // In the real system the stdlib binds `<` via the library loader as
+    // patina.internal.numbers/< (see internal_numbers.rs), which resolves to
+    // the registry's scheme.base/< entry only through the short-name
+    // fallback. The inline opcode must key on the registry's canonical name,
+    // not the binding's alias — this is the exact shape every program that
+    // imports (scheme base) sees.
+    let state = state_with_library_binding("<", Arity::Min(2), &["patina", "internal", "numbers"]);
+    let instrs = compile_all_in(&state, &app(var("<"), vec![lit(1), lit(2)]));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Lt { .. })),
+        1,
+        "{instrs:?}"
+    );
+    assert_eq!(count_call_prims(&instrs), 0, "{instrs:?}");
 }
 
 #[test]

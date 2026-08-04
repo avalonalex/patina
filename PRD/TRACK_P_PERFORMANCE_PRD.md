@@ -149,6 +149,25 @@ the generic path by construction. Emission lives in
 `primitive_calls::inline_op_for` + `pass5_codegen::primitive_call_instruction`;
 dispatch arms in `vm_state.rs`; ISA documented in `docs/VM_ISA.md` §4.
 
+**2026-08-04 emission fix.** The §1.2 profile-first pass on `tak` found the
+opcodes were never emitted for real programs: `inline_op_for` keyed on the
+*binding's* qualified name, but stdlib bindings carry the installing internal
+library's name (e.g. `patina.internal.numbers/<` from `internal_numbers.rs`),
+which only reaches the registry entry through `resolve_index`'s short-name
+fallback — so the exact match silently returned `None` and every site stayed
+on `CallPrimitive`. Unit tests missed it because `install_primitives()`
+stamps registry-canonical names; only the library-loader path aliases. Fixed
+by resolving the entry and keying `inline_op_for` (and an added exclusion
+re-check) on the entry's own qualified name — the contract
+`ResolvedPrimitive::inline` had documented all along. Regression test
+compiles `<` bound the library-loader way and asserts the `Lt` opcode.
+Measured (interleaved A/B ×3): fib(32) −16%, tak(32,16,8) −9%; post-fix
+profile shows the registry-dispatch path (`exec_call_primitive`,
+`apply_by_index`, `check_arity`, handler bodies) gone from tak's hot list.
+Bonus find from the same disasm: `(not (< y x))` costs a `LoadGlobal` + full
+closure call per iteration (`not` is Scheme-defined) — a `not`+`JumpUnless`
+fusion peephole is a P5 candidate.
+
 **Trail: primitive redefinition semantics (future work).** The deopt bitset
 (#158) gives exact R7RS top-level redefinition semantics at the cost of one
 load+mask per optimized call. If that check ever needs to go away — or
