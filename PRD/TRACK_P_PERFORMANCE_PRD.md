@@ -1,7 +1,7 @@
 # Track P — VM Performance (Clarity-Safe) PRD
 
 **Created:** 2026-06-20
-**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining: P4 (blocked on globals-swap redesign), P5 compiler passes, P7 phase 2. **P6 GC: complete through stage 4c (PRs #4-#6, #8, #10, #11, 2026-08-01/03)** — both backends collect, **always on** at zero standing cost (safe point = one flag load; on-vs-off at parity on dispatch- and alloc-heavy workloads); CI enforces the byte-identical differential lanes, whose env hooks are the only remaining use of `PATINA_GC`/`PATINA_GC_STRESS`. Stage 5+ pause work tracked in `PRD/future/GC_STAGE5_PRD.md`.
+**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining work re-ranked by the 2026-08-03 r7rs sweep (§1.2): call path first (P7 phase 2, then P4), weak continuation tables (cross-track, `PRD/future/GC_STAGE5_PRD.md`), then P5 compiler passes. **P6 GC: complete through stage 4c (PRs #4-#6, #8, #10, #11, 2026-08-01/03)** — both backends collect, **always on** at zero standing cost (safe point = one flag load; on-vs-off at parity on dispatch- and alloc-heavy workloads); CI enforces the byte-identical differential lanes, whose env hooks are the only remaining use of `PATINA_GC`/`PATINA_GC_STRESS`. Stage 5+ pause work tracked in `PRD/future/GC_STAGE5_PRD.md`.
 **Scope decision:** clarity-safe optimizations only — aggressive, readability-costing items are explicitly deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing) · **Catalog:** `PRD/VM_OPTIMIZATION_ROADMAP.md` (P1–P10 superset)
 
@@ -52,6 +52,53 @@ Executed profile-first (macOS `sample`/`samply` on `fib(34)` and `destruc`) rath
 **Next candidates, profile-ranked:** P2 compile-time `CallPrimitive` wiring + **P3 inline opcodes** (the big remaining win; also takes fib/tak off the layout-sensitive generic call path — see §P7 findings); P7 phase 2 (VM `Call` arm passes the register slice directly to heap-tier handlers, deleting the per-call collect); register-window zeroing (`memset_pattern16` in profile) after P3. `parsing` needs frontend work outside this track.
 
 **Measurement discipline (learned in #157):** single Criterion runs drift ±5–10% on the µs-scale benches on the dev machine — enough to flag phantom regressions. Validate perf changes with an interleaved A/B: bench main with `--save-baseline`, bench the branch against it, then re-bench main against its own baseline to measure drift; cross-check with alternating wall-clock runs of the two release binaries.
+
+### 1.2 Benchmark standing and priority re-rank (2026-08-03)
+
+First r7rs-benchmarks sweep after wave 2 + always-on GC: 10-benchmark subset
+vs a **locally-run Chibi 0.12** (same machine — the checked-in results for
+other schemes are from foreign hardware and not comparable). Seconds, 300 s
+CPU cap:
+
+| Benchmark | Patina | Chibi | Ratio | vs Jul 25 |
+|---|---|---|---|---|
+| slatex (strings/IO) | 34.4 | 91.4 | **0.38× — faster** | −66% |
+| matrix (vectors) | 196.7 | 141.3 | 1.4× | −27% |
+| compiler (mixed) | 120.9 | 72.0 | 1.7× | −32% |
+| maze (mixed) | 115.0 | 53.4 | 2.2× | −23% |
+| diviter (list churn) | 136.8 | 46.1 | 3.0× | |
+| deriv (symbolic) | 239.8 | 78.5 | 3.1× | |
+| nboyer (symbolic, GC-active) | 93.3 | 25.5 | 3.7× | |
+| divrec (recursion) | 140.1 | 37.5 | 3.7× | |
+| tak (pure calls) | 238.0 | 43.1 | 5.5× | |
+| ctak (call/cc per call) | crash | crash | — | |
+
+**Geomean ≈ 2.2× slower than Chibi**, and the July→now deltas (−23–66% while
+*also* turning GC on) confirm the waves compound. The spread orders almost
+perfectly by **call density**: Rust-native infrastructure (strings/ports)
+already beats Chibi, structured code sits under 2×, and pure function calls
+are 5.5×. Patina's `ctak` crash is a **4 GB memory blowup**: every capture
+pins register/frame snapshots in the continuation side tables that nothing
+prunes — GC design §9.5, live.
+
+**Priority for the remaining work, in order:**
+
+1. **Call-path cost** — the defining gap (tak 5.5×, divrec 3.7×).
+   Profile-first, then: **P7 phase 2** (slice ABI — the last per-call
+   argument-`Vec` allocation, previously measured as the malloc/free tail
+   under callees), **P4 continuation** (slot-indexed globals or the
+   globals-swap redesign that unblocks it), and whatever the fresh profile
+   says about closure-call frame setup.
+2. **Weak continuation side tables** — GC stage 5 priority 1, tracked in
+   `PRD/future/GC_STAGE5_PRD.md`; cross-listed here because `ctak` shows it
+   as a 4 GB correctness-of-memory cliff, not merely pause overhead.
+3. **P5 compiler passes** — constant folding, DCE, peephole; moderate,
+   broad, and independent of the above.
+
+**Scoreboard:** re-run this same subset vs local Chibi after each item lands
+(`PATINA=target/release/patina ./bench patina "tak ctak deriv diviter divrec
+nboyer maze slatex compiler matrix"` in `~/Project/r7rs-benchmarks`); the
+per-benchmark ratios, not the geomean alone, are what confirm a lever worked.
 
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
@@ -144,7 +191,7 @@ Add fixed-arity opcodes executed inline in the dispatch loop — `Add/Sub/Mul/Lt
 The compiler runs zero optimization passes; the 5-pass pipeline is structured for insertion (`docs/VM_COMPILER.md §12`). Add the low-complexity ones: **constant folding** (`(+ 1 2)`→`3`), **dead-code elimination** of unused bindings, **peephole** (dead `Move` removal, `LoadConst+Add`→immediate). Skip contification / copy-propagation / liveness regalloc (deferred).
 - **Acceptance:** golden disasm tests; `cargo test`.
 
-### P6 — Garbage collection  *(stages 1-3 + 4a landed; stage 4b open)*
+### P6 — Garbage collection  *(complete — stages 1-4, always on; stage 5 in `PRD/future/GC_STAGE5_PRD.md`)*
 Designed and tracked in **`docs/GC_DESIGN.md`**, which supersedes the sketch that used to live here — it covers both backends (not just the VM), adds a `Collector`/`GcRoots` pluggability seam, and carries the complete root inventory and staging plan.
 
 Both backends collect and reclaim cycles, verified by CI-enforced differential lanes (`PATINA_GC=0` vs the default adaptive mode vs `PATINA_GC_STRESS=1`, byte-identical, in release *and* in a debug build with use-after-free assertions live). Collection is **on by default** since stage 4c.
@@ -242,7 +289,7 @@ equivalent plain mutual tail recursion.
 ---
 
 ## 5. Sequencing within the track
-**P0** (must be first) → **P1** (warm-up) → **P2 → P3** (the big win) → **P4 → P5** (compounding) ; **P6** runs in parallel behind its feature flag and lands by milestone M4. P1 is independent and can be done anytime; doing it first banks an easy win and de-risks the P2/P3 diff. See `PRD/SNOW_AND_PERF_ROADMAP.md` for the M1–M4 interleave with Track L.
+Original plan: **P0** → **P1** → **P2 → P3** → **P4 → P5**, with **P6** in parallel — all landed through P3/P6 as of 2026-08-03. Sequencing for what remains is now data-driven, per §1.2: **P7 phase 2 → P4 → (cross-track: weak continuation tables) → P5**, each preceded by a fresh profile and followed by the §1.2 scoreboard run. See `PRD/SNOW_AND_PERF_ROADMAP.md` for the M1–M4 interleave with Track L.
 
 ## 6. Risks & mitigations
 - **Shadowed/redefined primitives** → conservative "no top-level define of this name" guard; fall back to `Call`.
