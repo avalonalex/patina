@@ -187,10 +187,11 @@ pub trait GcRoots {
     fn trace_roots(&self, v: &mut GcVisitor<'_>);
 }
 
-/// Swappable policy. Non-moving is a contract: implementations may not
-/// relocate live slots.
+/// Swappable algorithm. Non-moving is a contract: implementations may not
+/// relocate live slots. Automatic policy is expressed as an allocation
+/// threshold the controller installs into the heap (§6), not a per-query
+/// method — the safe point never asks the collector anything.
 pub trait Collector {
-    fn should_collect(&self, heap: &Heap) -> bool;
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats;
 }
 
@@ -398,12 +399,15 @@ debug build is the lane that localizes failures like this one.
 - `Heap` gains an `allocs_since_gc` counter, incremented in each `alloc_*`
   via `note_alloc`, which **raises a collection-pending flag** (an
   `Rc<Cell<bool>>` shared with the dispatch loops) when the counter crosses
-  `Heap.gc_threshold`. The threshold is the mode made concrete: `usize::MAX`
-  for Off, the collector's adaptive `max(GC_MIN_THRESHOLD, 2 ×
-  live_after_last_gc)` for On (re-armed by `GcController::collect` after each
-  collection — the only point the adaptive term changes), `n` for Stress.
-  `request_gc` raises the same flag, which is how `(gc)` is honored in every
-  mode; sweep lowers it.
+  `Heap.gc_threshold`. The threshold is the mode made concrete —
+  `GcController::current_threshold`, the single owner of that mapping:
+  `usize::MAX` for Off, the collector's adaptive `max(GC_MIN_THRESHOLD, 2 ×
+  live_after_last_gc)` for On, `n` for Stress. The backend installs it when
+  heap and controller are paired (a bare heap defaults to the inert
+  `usize::MAX` — policy stays in the controller, mechanism in the heap), and
+  `GcController::collect` re-installs it after each collection — the only
+  point the adaptive term changes. `request_gc` raises the same flag, which
+  is how `(gc)` is honored in every mode; sweep lowers it.
 - The *decision* is therefore made at allocation time, but **collection still
   happens only at backend safe points** (§7) — inside `alloc_*` the heap is
   re-entrantly borrowed and mid-operation temporaries would be unrooted. The

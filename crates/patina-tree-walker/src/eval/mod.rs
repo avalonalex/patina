@@ -53,6 +53,10 @@ pub struct Evaluator {
     /// Garbage collector policy and state (see `docs/GC_DESIGN.md`).
     /// Serviced at trampoline safe points; off unless requested or enabled.
     pub(crate) gc: RefCell<patina_core::GcController>,
+    /// The heap's collection-pending flag, cached at construction so
+    /// trampoline entry costs no heap borrow and the per-step safe point is
+    /// a single load.
+    pub(crate) gc_pending: Rc<std::cell::Cell<bool>>,
 }
 
 impl Evaluator {
@@ -77,6 +81,16 @@ impl Evaluator {
         let library_registry = RefCell::new(lib_registry);
         let loader_registry = RefCell::new(LibraryLoaderRegistry::new());
 
+        // Pairing heap with controller: install the policy's trigger
+        // threshold (a bare heap defaults to inert) and cache the pending
+        // flag the safe point reads.
+        let gc = patina_core::GcController::from_env();
+        global_env
+            .heap()
+            .borrow_mut()
+            .set_gc_threshold(gc.current_threshold());
+        let gc_pending = global_env.heap().borrow().gc_pending_handle();
+
         let evaluator = Evaluator {
             global_env,
             debug: Rc::new(DebugConfig::new()),
@@ -84,7 +98,8 @@ impl Evaluator {
             loader_registry,
             primitive_registry,
             fs,
-            gc: RefCell::new(patina_core::GcController::from_env()),
+            gc: RefCell::new(gc),
+            gc_pending,
         };
 
         // Initialize library loaders

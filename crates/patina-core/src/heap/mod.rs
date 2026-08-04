@@ -286,10 +286,11 @@ pub struct Heap {
     allocs_since_gc: usize,
 
     /// Allocation count at which `note_alloc` raises the collection-pending
-    /// flag. Derived from `GcMode` at construction and re-installed by
-    /// `GcController::collect` (the adaptive `2 × live` term changes only at
-    /// collection time). `usize::MAX` means "never automatically" — the Off
-    /// mode, where only `request_gc` raises the flag.
+    /// flag. `usize::MAX` (the default) is inert: only `request_gc` raises
+    /// the flag. A backend installs its policy's threshold via
+    /// `GcController::current_threshold` when heap and controller are paired,
+    /// and `GcController::collect` re-installs it after each collection (the
+    /// adaptive `2 × live` term changes only there).
     gc_threshold: usize,
 
     /// The collection-pending flag: raised by `note_alloc` on threshold
@@ -299,9 +300,6 @@ pub struct Heap {
     /// of the design §6.1 trigger redesign: the safe point used to ask a
     /// question whose answer only changes when something allocates.
     gc_pending: Rc<Cell<bool>>,
-
-    /// Set by the `(gc)` primitive; consumed by backends at safe points
-    gc_requested: bool,
 
     /// Nesting depth of scopes that hold live values unreachable from any
     /// registered root (nested trampolines, library-body loops). Collection
@@ -318,27 +316,7 @@ pub struct Heap {
 impl Heap {
     /// Create a new empty heap
     pub fn new() -> Self {
-        Self {
-            pairs: Vec::new(),
-            vectors: Vec::new(),
-            strings: Vec::new(),
-            objects: Vec::new(),
-            symbol_table: std::collections::HashMap::new(),
-            free_pairs: Vec::new(),
-            free_vectors: Vec::new(),
-            free_strings: Vec::new(),
-            free_objects: Vec::new(),
-            allocs_since_gc: 0,
-            // The mode is process-global (env vars), so the heap can derive
-            // its own initial threshold; the adaptive updates that need
-            // collector state come later, from `GcController::collect`.
-            gc_threshold: gc::GcMode::from_env().initial_threshold(),
-            gc_pending: Rc::new(Cell::new(false)),
-            gc_requested: false,
-            gc_defer_depth: 0,
-            gc_collections: 0,
-            gc_last_swept: 0,
-        }
+        Self::with_capacity(0, 0, 0)
     }
 
     /// Create a heap with pre-allocated capacity
@@ -354,9 +332,8 @@ impl Heap {
             free_strings: Vec::new(),
             free_objects: Vec::new(),
             allocs_since_gc: 0,
-            gc_threshold: gc::GcMode::from_env().initial_threshold(),
+            gc_threshold: usize::MAX,
             gc_pending: Rc::new(Cell::new(false)),
-            gc_requested: false,
             gc_defer_depth: 0,
             gc_collections: 0,
             gc_last_swept: 0,
@@ -372,16 +349,24 @@ impl Heap {
         self.allocs_since_gc
     }
 
-    /// Count one allocation, raising the collection-pending flag when the
-    /// mode's threshold is crossed. Called by every `alloc_*`; this is where
-    /// the collection decision is *made*, so safe points only have to read
-    /// the flag (design §6.1).
+    /// The single invariant of the trigger design: the pending flag is up
+    /// whenever the counter has reached the threshold (or `(gc)` raised it
+    /// directly).
     #[inline]
-    fn note_alloc(&mut self) {
-        self.allocs_since_gc += 1;
+    fn refresh_gc_pending(&self) {
         if self.allocs_since_gc >= self.gc_threshold {
             self.gc_pending.set(true);
         }
+    }
+
+    /// Count one allocation, raising the collection-pending flag when the
+    /// policy's threshold is crossed. Called by every `alloc_*`; this is
+    /// where the collection decision is *made*, so safe points only have to
+    /// read the flag (design §6.1).
+    #[inline]
+    fn note_alloc(&mut self) {
+        self.allocs_since_gc += 1;
+        self.refresh_gc_pending();
     }
 
     /// A handle to the collection-pending flag. Dispatch loops clone this
@@ -392,30 +377,23 @@ impl Heap {
     }
 
     /// Install the allocation threshold at which `note_alloc` raises the
-    /// pending flag. Called by `GcController::collect` after each collection
-    /// (the adaptive term changes only there). Raises the flag immediately if
-    /// the counter already exceeds the new threshold.
+    /// pending flag. Called with `GcController::current_threshold` when heap
+    /// and controller are paired and again after each collection (the
+    /// adaptive term changes only there). Raises the flag immediately if the
+    /// counter already exceeds the new threshold.
     pub fn set_gc_threshold(&mut self, threshold: usize) {
         self.gc_threshold = threshold;
-        if self.allocs_since_gc >= threshold {
-            self.gc_pending.set(true);
-        }
+        self.refresh_gc_pending();
     }
 
     /// Ask for a collection at the next backend safe point (the `(gc)`
     /// primitive cannot collect in place: it runs mid-evaluation, where live
     /// values sit in Rust locals no root provider can see).
     ///
-    /// Raises the pending flag — honored in every mode — and `sweep` clears
-    /// both it and this request.
+    /// Raises the pending flag — honored regardless of the installed
+    /// threshold — and `sweep` lowers it.
     pub fn request_gc(&mut self) {
-        self.gc_requested = true;
         self.gc_pending.set(true);
-    }
-
-    /// Whether a collection has been requested.
-    pub fn gc_requested(&self) -> bool {
-        self.gc_requested
     }
 
     /// Depth of active GC-deferring scopes. A backend safe point may only

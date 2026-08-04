@@ -17,7 +17,7 @@ use patina_core::{GcController, GcDeferGuard};
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
 use rustc_hash::FxHashMap;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -83,6 +83,10 @@ pub struct VmState {
     /// enabled. Behind a `RefCell` so `collect` can take `&VmState` as a root
     /// while mutating the collector.
     pub(crate) gc: RefCell<GcController>,
+    /// The heap's collection-pending flag, cached at construction so
+    /// dispatch-loop entry costs no heap borrow and the per-instruction safe
+    /// point is a single load.
+    pub(crate) gc_pending: Rc<Cell<bool>>,
 }
 
 impl VmState {
@@ -92,6 +96,12 @@ impl VmState {
         // Share the heap with the environment so TaggedValue indices produced by
         // the parser (which also uses global_env().heap()) remain valid.
         let heap = globals.heap().clone();
+        // Pairing heap with controller: install the policy's trigger
+        // threshold (a bare heap defaults to inert) and cache the pending
+        // flag the safe point reads.
+        let gc = GcController::from_env();
+        heap.borrow_mut().set_gc_threshold(gc.current_threshold());
+        let gc_pending = heap.borrow().gc_pending_handle();
         Self {
             registers: Vec::new(),
             frames: Vec::new(),
@@ -112,7 +122,8 @@ impl VmState {
             library_registry: None,
             loader_registry: None,
             fs: Arc::new(patina_core::NativeFs),
-            gc: RefCell::new(GcController::from_env()),
+            gc: RefCell::new(gc),
+            gc_pending,
         }
     }
 
@@ -706,15 +717,14 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
     // `mem::take`n buffers, primitive argument vectors — that no root
     // provider can see. See `docs/GC_DESIGN.md` §7.
     let gc_defer = GcDeferGuard::new(&state.heap);
-    // Loop invariants, hoisted out of the safe point. The pending-flag handle
-    // makes the per-instruction check a single load — no `RefCell` borrow.
+    // Loop invariant, hoisted out of the safe point. The cached pending-flag
+    // handle makes the per-instruction check a single load — no borrow.
     let is_outermost = gc_defer.is_outermost();
-    let gc_pending = state.heap.borrow().gc_pending_handle();
 
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
         // are dead, buffers are restored, and no heap borrow is outstanding.
-        maybe_collect(state, &gc_pending, is_outermost);
+        maybe_collect(state, is_outermost);
 
         match dispatch_one_instruction(state, exit_depth) {
             Ok(Some(val)) => return Ok(val),
@@ -746,11 +756,11 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
 /// collects, one borrow spans the collection — lives in
 /// `GcController::safe_point`; this supplies only what is VM-specific.
 #[inline]
-fn maybe_collect(state: &VmState, gc_pending: &std::cell::Cell<bool>, is_outermost: bool) {
+fn maybe_collect(state: &VmState, is_outermost: bool) {
     GcController::safe_point(
         &state.gc,
         &state.heap,
-        gc_pending,
+        &state.gc_pending,
         is_outermost,
         |collect| {
             // Libraries are a root set. If a load is in flight we cannot read the
