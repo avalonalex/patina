@@ -235,8 +235,10 @@ impl Drop for GcDeferGuard {
 /// than being re-derived per backend (design §6).
 #[derive(Clone, Copy)]
 pub enum GcMode {
-    /// Collect only when `(gc)` has been called. The opt-out (`PATINA_GC=0`)
-    /// for workloads that prefer arena-only allocation.
+    /// Collect only when `(gc)` has been called. **Testing lanes only**
+    /// (`PATINA_GC=0`): the differential suite needs a no-collection
+    /// reference run to diff the collecting modes against. Not a supported
+    /// user configuration — Patina always runs with GC.
     Off,
     /// Collect on the collector's adaptive threshold. The default since
     /// stage 4c: the §6.1 trigger redesign made the standing cost of an
@@ -249,11 +251,12 @@ pub enum GcMode {
 }
 
 impl GcMode {
-    /// Read the mode from the environment. Adaptive collection is the
-    /// default since stage 4c; `PATINA_GC=0` opts out, and
-    /// `PATINA_GC_STRESS` takes an optional allocation count (`=1`, the
-    /// default, collects at nearly every safe point; larger values trade
-    /// coverage for runtime).
+    /// Read the mode from the environment. Adaptive collection is always on;
+    /// the two variables exist for the differential test lanes
+    /// (`docs/GC_DESIGN.md` §11): `PATINA_GC=0` produces the no-collection
+    /// reference run, and `PATINA_GC_STRESS` takes an optional allocation
+    /// count (`=1`, the default, collects at nearly every safe point; larger
+    /// values trade coverage for runtime).
     pub fn from_env() -> Self {
         fn flag(name: &str) -> Option<String> {
             std::env::var(name)

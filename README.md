@@ -88,10 +88,10 @@ The architecture is designed to support future exploration:
 ### Known Limitations
 
 - **Garbage collection is stop-the-world.** A non-moving mark-and-sweep
-  collector runs by default on both backends (opt out with `PATINA_GC=0`;
-  `(gc)` and `(gc-stats)` in `(patina debug)` give manual control). Pauses
-  are unbounded by generational or incremental techniques — that work is
-  staged in `docs/GC_DESIGN.md`.
+  collector runs on both backends (`(gc)` and `(gc-stats)` in
+  `(patina debug)` give manual control). Pauses are unbounded by
+  generational or incremental techniques — that work is staged in
+  `docs/GC_DESIGN.md`.
 - Performance is that of a young interpreter: far beyond a naive
   tree-walker and improving quickly (the VM gained 2–3× on arithmetic- and
   list-heavy code in the most recent optimization wave), but not yet

@@ -36,7 +36,7 @@ This document catalogs the gaps between Patina's first-generation VM and state-o
 
 ## 3. Garbage Collection
 
-**Status (2026-08-03):** Done — non-moving mark-and-sweep over the typed arenas, on **both** backends, reclaiming cycles that `Rc` cannot (PRs #4-#6), and **on by default** since stage 4c (`PATINA_GC=0` opts out; `PATINA_GC_STRESS` for the differential lane). Design and staging: `docs/GC_DESIGN.md`.
+**Status (2026-08-03):** Done — non-moving mark-and-sweep over the typed arenas, on **both** backends, reclaiming cycles that `Rc` cannot (PRs #4-#6), and **always on** since stage 4c (the `PATINA_GC`/`PATINA_GC_STRESS` env vars exist only for the differential test lanes). Design and staging: `docs/GC_DESIGN.md`; remaining pause work: `PRD/future/GC_STAGE5_PRD.md`.
 
 **Update (2026-08-03, PRs #8/#10 + the 4c flip):** the safe-point trigger redesign landed (collection decision at alloc time, safe point = one flag load; GC-off at parity with pre-GC `main`, the 13.7% GC-on standing penalty gone — `docs/GC_DESIGN.md` §6.1), CI enforces the differential lanes, and adaptive collection is on by default. Interleaved on-vs-off: parity on both dispatch- and alloc-heavy workloads.
 
