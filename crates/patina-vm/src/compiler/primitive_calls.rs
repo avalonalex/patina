@@ -151,15 +151,29 @@ pub fn resolve_primitive_calls(
         if is_excluded(qualified_name) {
             continue;
         }
-        if let Some(index) = registry.resolve_index_cached(qualified_name, registry_index) {
-            map.insert(
-                name,
-                ResolvedPrimitive {
-                    id: PrimitiveFnId(index as u32),
-                    inline: inline_op_for(qualified_name),
-                },
-            );
+        let Some(index) = registry.resolve_index_cached(qualified_name, registry_index) else {
+            continue;
+        };
+        let Some(entry) = registry.get_by_index(index) else {
+            continue;
+        };
+        // The binding's qualified name may be an alias for the registry entry
+        // (e.g. "patina.internal.numbers/<" for "scheme.base/<", matched via
+        // the short-name fallback), so the inline key uses the entry's own
+        // name per the `ResolvedPrimitive::inline` contract. Both exclusion
+        // checks are needed: VM interception matches the binding's name
+        // (`vm_control_primitive`), while index dispatch reaches the entry.
+        let canonical = entry.qualified_name();
+        if is_excluded(&canonical) {
+            continue;
         }
+        map.insert(
+            name,
+            ResolvedPrimitive {
+                id: PrimitiveFnId(index as u32),
+                inline: inline_op_for(&canonical),
+            },
+        );
     }
     map
 }
