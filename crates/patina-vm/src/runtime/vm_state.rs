@@ -2708,33 +2708,53 @@ fn call_value(
     dst: u16,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
-    // Intercept higher-order control primitives that need VM cooperation.
-    if let Some(ctrl) = vm_control_primitive(state, func_val) {
-        if let Some(escaped) = handle_control_primitive(state, ctrl, arg_vals, dst, false)? {
-            return Ok(Some(escaped));
+    // The callee is almost always a plain closure, and the callable heap
+    // types are mutually exclusive — so probe the closure case first and
+    // let the common path pay one type check instead of failing the four
+    // rarer probes below (control primitive, primitive, parameter,
+    // continuation) on every call.
+    let is_closure = state
+        .heap
+        .borrow()
+        .get_vm_closure_code_id(func_val)
+        .is_some();
+    if !is_closure {
+        // Intercept higher-order control primitives that need VM cooperation.
+        if let Some(ctrl) = vm_control_primitive(state, func_val) {
+            if let Some(escaped) = handle_control_primitive(state, ctrl, arg_vals, dst, false)? {
+                return Ok(Some(escaped));
+            }
+            return Ok(None);
         }
-    } else if let Some(prim) = primitive_procedure(state, func_val) {
-        let result = call_primitive_proc(state, &prim, &arg_vals);
-        state.set_reg(dst, result?);
-    } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
-        state.set_reg(dst, result?);
-    } else if try_invoke_continuation(state, func_val, &arg_vals)? {
-        // Continuation was invoked — stack has been replaced/appended.
-        // Safety net: if frames dropped to or below exit_depth, the
-        // continuation escaped past a synchronous run_thunk boundary
-        // (e.g. dynamic-wind body, with-exception-handler thunk, or
-        // indirect call-with-values). Return the primary value so the
-        // enclosing run_loop_until exits correctly.
-        if state.frames.len() <= exit_depth {
-            let primary = arg_vals
-                .first()
-                .copied()
-                .unwrap_or(TaggedValue::UNSPECIFIED);
-            return Ok(Some(primary));
+        if let Some(prim) = primitive_procedure(state, func_val) {
+            let result = call_primitive_proc(state, &prim, &arg_vals);
+            state.set_reg(dst, result?);
+            return Ok(None);
         }
-    } else {
-        call_closure(state, func_val, &arg_vals, dst)?;
+        if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+            state.set_reg(dst, result?);
+            return Ok(None);
+        }
+        if try_invoke_continuation(state, func_val, &arg_vals)? {
+            // Continuation was invoked — stack has been replaced/appended.
+            // Safety net: if frames dropped to or below exit_depth, the
+            // continuation escaped past a synchronous run_thunk boundary
+            // (e.g. dynamic-wind body, with-exception-handler thunk, or
+            // indirect call-with-values). Return the primary value so the
+            // enclosing run_loop_until exits correctly.
+            if state.frames.len() <= exit_depth {
+                let primary = arg_vals
+                    .first()
+                    .copied()
+                    .unwrap_or(TaggedValue::UNSPECIFIED);
+                return Ok(Some(primary));
+            }
+            return Ok(None);
+        }
+        // Not callable: fall through to call_closure for the standard
+        // type error.
     }
+    call_closure(state, func_val, &arg_vals, dst)?;
     Ok(None)
 }
 
@@ -2750,10 +2770,20 @@ fn tail_call_value(
     arg_vals: Vec<TaggedValue>,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
+    // Same closure-first probe as `call_value`: the common case is a plain
+    // closure reusing the current frame, so skip the four rarer probes for
+    // it. The callable heap types are mutually exclusive, so probe order
+    // cannot change which branch a given callee takes.
+    let is_closure = state
+        .heap
+        .borrow()
+        .get_vm_closure_code_id(func_val)
+        .is_some();
+
     // Intercept higher-order control primitives in tail position.
     // Strategy: pop the current frame first (simulating "already returned"),
     // then dispatch the primitive as if called from the parent frame.
-    if let Some(ctrl) = vm_control_primitive(state, func_val) {
+    if !is_closure && let Some(ctrl) = vm_control_primitive(state, func_val) {
         let frame = state.frames.pop().expect("tail call ctrl with empty stack");
         let return_reg = frame.return_reg;
         state.free_top_registers(frame.register_base);
@@ -2774,7 +2804,7 @@ fn tail_call_value(
     }
 
     // Continuation invocation in tail position.
-    if try_invoke_continuation(state, func_val, &arg_vals)? {
+    if !is_closure && try_invoke_continuation(state, func_val, &arg_vals)? {
         // Safety net: if frames dropped to or below exit_depth, the
         // continuation escaped past a synchronous run_thunk boundary.
         if state.frames.len() <= exit_depth {
@@ -2789,7 +2819,7 @@ fn tail_call_value(
 
     // Primitives in tail position: call them, write result to current
     // frame's return_reg, then simulate a Return.
-    if let Some(prim) = primitive_procedure(state, func_val) {
+    if !is_closure && let Some(prim) = primitive_procedure(state, func_val) {
         let result = call_primitive_proc(state, &prim, &arg_vals)?;
         let frame = state.frames.pop().expect("tail call with empty stack");
         if state.frames.len() == exit_depth {
@@ -2804,7 +2834,7 @@ fn tail_call_value(
     }
 
     // Parameters in tail position: same as primitives.
-    if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+    if !is_closure && let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
         let result = result?;
         let frame = state
             .frames
