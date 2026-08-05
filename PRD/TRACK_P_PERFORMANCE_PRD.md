@@ -132,6 +132,46 @@ and register-window memset in `call_closure`. Operational note for sweep
 ETAs: `ctak`'s crash takes ~21 min wall clock — memory thrash accumulates
 CPU slowly toward the 300 s cap.
 
+### 1.4 Scoreboard after the call-dispatch pair (2026-08-05, PRs #16 + #17)
+
+The two levers §1.3 ranked first both landed: #16 gates the callee-
+classification probe chain behind a closure-first type check, and #17
+removes the per-call argument-`Vec` — register-to-register copy for `Call`,
+a 16-slot stack stage for `TailCall`, unchanged collected-`Vec` for
+non-closure callees. (#17's first draft shared `CallPrimitive`'s scratch
+buffer instead; it regressed a dynamic-wind/values microbench 7% — per-call
+take/restore buys nothing in re-entrant regions — and was redesigned before
+landing. The scratch-buffer approach for closure-call args is a recorded
+negative result; do not revisit.) Compound sweep vs the §1.3 baseline, same
+local Chibi 0.12:
+
+| Benchmark | 08-04 (#14) | 08-05 (#16+#17) | Delta | Ratio vs Chibi |
+|---|---|---|---|---|
+| slatex | 32.7 | 29.9 | −9% | 0.33× — faster |
+| matrix | 153.4 | 124.5 | −19% | **0.88× — faster than Chibi** |
+| compiler | 103.8 | 81.4 | −22% | 1.13× |
+| maze | 98.9 | 77.8 | −21% | 1.46× |
+| diviter | 120.3 | 77.0 | −36% | 1.67× |
+| deriv | 224.8 | 154.1 | −31% | 1.96× |
+| nboyer | 72.8 | 56.5 | −22% | 2.22× |
+| divrec | 110.7 | 83.8 | −24% | 2.24× |
+| tak | 187.4 | 146.6 | −22% | 3.40× |
+| ctak | crash | crash | — | §9.5 blowup, unchanged |
+
+**Geomean ≈ 1.44× slower than Chibi** (2.2× on 08-03 → 1.87× → 1.44× in
+three days); matrix joins slatex on the faster-than-Chibi side. Deepest
+cuts landed exactly where both levers stack: list/symbolic churn (diviter
+−36%, deriv −31%) paid the probe chain and the args-Vec on every cons-heavy
+call. Remaining ranking is unchanged in kind, thinner in expected yield:
+tak (3.40×) still marks the call-path gap — next levers are P4
+slot-indexed globals (four `LoadGlobal tak` per iteration), the
+register-window zeroing in `call_closure`, and the `classify_callee`
+unification (also adopting `Apply`/`TailApply`); weak continuation tables
+(ctak, GC stage 5) remain priority 2. Sweep hygiene, learned twice: the
+harness resolves `$PATINA` per benchmark — sweep a *copied* binary, with
+`PATINA_HOME` set so the copy finds `lib/` (a bare copy fails every
+benchmark instantly with a bogus circular-`(scheme base)` error).
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
