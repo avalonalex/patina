@@ -75,13 +75,11 @@ pub struct VmState {
     pub primitive_registry: Rc<PrimitiveRegistry>,
 
     /// Full continuation side table (avoids circular deps with patina-core).
-    pub continuation_store: HashMap<u64, Rc<VmContinuation>>,
+    /// Weak GC table (GC_DESIGN.md §9.5); ids are minted by the heap.
+    pub continuation_store: RefCell<FxHashMap<u64, Rc<VmContinuation>>>,
 
-    /// Delimited continuation side table.
-    pub delimited_continuation_store: HashMap<u64, Rc<VmDelimitedContinuation>>,
-
-    /// Monotonic counter for continuation IDs.
-    pub next_cont_id: u64,
+    /// Delimited continuation side table. Weak, like `continuation_store`.
+    pub delimited_continuation_store: RefCell<FxHashMap<u64, Rc<VmDelimitedContinuation>>>,
 
     /// Optional instruction-level tracer.
     pub tracer: Option<TracerHandle>,

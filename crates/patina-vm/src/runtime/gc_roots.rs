@@ -6,18 +6,29 @@
 //! reason this impl has to exist at all:
 //!
 //! - **The continuation side tables.** The heap holds only an opaque
-//!   `VmContinuationRef(u64)`; the captured registers, frames, and wind /
-//!   prompt / handler stacks live in `continuation_store` and
-//!   `delimited_continuation_store`. Nothing but this impl reaches them.
+//!   `VmContinuationRef(u64)`; the payloads live in `continuation_store` and
+//!   `delimited_continuation_store`. Nothing but this impl reaches them —
+//!   and they are **weak** (design §9.5, which has the measurements and the
+//!   full argument): a payload is traced only when its ref object was
+//!   itself marked (`trace_weak_ids`), and entries whose ref died are
+//!   pruned after marking (`sweep_weak`). Tracing them as strong roots
+//!   instead made every capture immortal — snapshots contain other
+//!   continuation refs, so the tables pinned themselves transitively.
 //! - **`CallFrame::closure`**, a bare `HeapIndex` rather than a
 //!   `TaggedValue`, so a "scan every TaggedValue" pass would step straight
 //!   past it. It is rooted through `GcVisitor::visit_object_index`.
+//!
+//! The weak protocol is sound because every store touch (capture, invoke)
+//! is confined to one instruction dispatch and nested loops defer
+//! collection — so at a collecting safe point an unmarked ref proves its
+//! payload unreachable.
 //!
 //! Rust-stack temporaries (continuation-capture register clones, `mem::take`n
 //! buffers, primitive argument vectors, the `saved_globals` swap windows) are
 //! handled by deferral rather than tracing — see `GcDeferGuard` and §7.
 
 use patina_core::{GcRoots, GcVisitor};
+use rustc_hash::FxHashMap;
 
 use crate::types::CallFrame;
 use crate::types::continuation::{
@@ -50,19 +61,50 @@ impl GcRoots for VmState {
         trace_winds(&self.dynamic_winds, visitor);
         trace_handlers(&self.exception_handlers, visitor);
 
-        // The side tables — see the module comment.
-        for continuation in self.continuation_store.values() {
-            trace_continuation(continuation, visitor);
-        }
-        for continuation in self.delimited_continuation_store.values() {
-            trace_delimited_continuation(continuation, visitor);
-        }
+        // The continuation side tables are deliberately NOT traced here —
+        // they are weak; see the module comment and `trace_weak_ids`.
 
         // Register snapshots the tracer holds between its pre/post hooks.
         // Safe points are borrow-free, so this cannot conflict.
         if let Some(tracer) = &self.tracer {
             tracer.borrow().trace_roots(visitor);
         }
+    }
+
+    fn trace_weak_ids(&self, ids: &[u64], visitor: &mut GcVisitor<'_>) {
+        // Each id was proven live by marking; an id keys at most one entry
+        // across both stores (heap-minted), and one not found here belongs
+        // to a dead temporary VmState — nothing to trace.
+        let conts = self.continuation_store.borrow();
+        let delims = self.delimited_continuation_store.borrow();
+        for id in ids {
+            if let Some(continuation) = conts.get(id) {
+                trace_continuation(continuation, visitor);
+            } else if let Some(continuation) = delims.get(id) {
+                trace_delimited_continuation(continuation, visitor);
+            }
+        }
+    }
+
+    fn sweep_weak(&self, visitor: &GcVisitor<'_>) {
+        // Drop every entry whose ref object did not survive marking. The
+        // payloads live outside the arenas (Rc'd register/frame snapshots),
+        // so dropping them here touches no heap state; the dead ref objects
+        // themselves are reclaimed by the sweep that follows.
+        prune_store(&self.continuation_store, visitor);
+        prune_store(&self.delimited_continuation_store, visitor);
+    }
+}
+
+/// Retain only live entries, and give back bucket capacity after a churn
+/// spike — `retain` never shrinks, and a table that once held thousands of
+/// dead captures would otherwise be walked at full width by every future
+/// collection (the §9.5 monotonic-residue problem in miniature).
+fn prune_store<T>(store: &std::cell::RefCell<FxHashMap<u64, T>>, visitor: &GcVisitor<'_>) {
+    let mut store = store.borrow_mut();
+    store.retain(|&id, _| visitor.weak_continuation_id_is_live(id));
+    if store.len() * 8 < store.capacity() {
+        store.shrink_to_fit();
     }
 }
 

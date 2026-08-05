@@ -12,9 +12,10 @@
 //!   safe points; they never implement collection.
 //! - [`Collector`] — the swappable algorithm. [`MarkSweepCollector`] is the
 //!   v1 implementation shared by both backends. Implementations must be
-//!   non-moving: live slots may never be relocated. The mark phase composes
-//!   from public pieces (`GcVisitor::new` → root tracing → `finish` →
-//!   `Heap::sweep`), so alternative collectors need no private access.
+//!   non-moving: live slots may never be relocated. The whole mark phase —
+//!   root tracing, the weak-table fixpoint, weak-entry pruning — is the
+//!   public [`run_mark_phase`]; a collector composes around it
+//!   (`run_mark_phase` → `Heap::sweep`) and cannot mis-order its interior.
 //!
 //! Collection never happens on its own: a backend drives it by calling
 //! [`GcController::safe_point`] at a point where every live value is
@@ -153,6 +154,24 @@ pub struct GcStats {
 /// `StepResult`, passed per collection).
 pub trait GcRoots {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>);
+
+    /// One round of the weak-table fixpoint (design §9.5), driven by
+    /// [`run_mark_phase`]: `ids` are continuation ids whose ref objects were
+    /// just proven live by marking — trace the payloads this provider keys
+    /// by them (ids it does not own are simply skipped). A payload may mark
+    /// further ref objects; the driver re-drains and broadcasts the next
+    /// batch until none remain. Ids are heap-unique (`Heap` mints them), so
+    /// every provider may receive every batch.
+    ///
+    /// The default is a no-op for providers with no weak tables.
+    fn trace_weak_ids(&self, _ids: &[u64], _visitor: &mut GcVisitor<'_>) {}
+
+    /// Called once per collection after marking reaches its weak fixpoint:
+    /// drop weak-table entries whose keys did not survive
+    /// (`GcVisitor::weak_continuation_id_is_live`). Runs before
+    /// `Heap::sweep`; pruning must not touch the heap — it may only drop
+    /// side-table payloads that live outside the arenas.
+    fn sweep_weak(&self, _visitor: &GcVisitor<'_>) {}
 }
 
 /// A pluggable collection algorithm. Implementations must be **non-moving**:
@@ -389,6 +408,14 @@ pub struct GcVisitor<'h> {
     /// Dedup set for `Rc`-shared structures owned by root providers
     /// (see [`GcVisitor::visit_once`]).
     seen_shared: FxHashSet<usize>,
+    /// Weak-key discovery for the VM's continuation side tables (design
+    /// §9.5): every id whose `VmContinuationRef` /
+    /// `VmDelimitedContinuationRef` heap object has been marked. One
+    /// namespace for both kinds — `Heap` mints their ids from one counter.
+    /// The queue holds the subset [`run_mark_phase`] has not yet broadcast
+    /// to [`GcRoots::trace_weak_ids`].
+    live_weak_ids: FxHashSet<u64>,
+    new_weak_ids: Vec<u64>,
 }
 
 impl<'h> GcVisitor<'h> {
@@ -411,6 +438,8 @@ impl<'h> GcVisitor<'h> {
             seen_conts: FxHashSet::default(),
             seen_exprs: FxHashSet::default(),
             seen_shared: FxHashSet::default(),
+            live_weak_ids: FxHashSet::default(),
+            new_weak_ids: Vec::new(),
         }
     }
 
@@ -529,6 +558,13 @@ impl<'h> GcVisitor<'h> {
         self.seen_exprs = seen;
     }
 
+    /// Did marking reach a `VmContinuationRef` / `VmDelimitedContinuationRef`
+    /// object with this id? For [`GcRoots::sweep_weak`] — an entry whose id
+    /// was never reached is dead.
+    pub fn weak_continuation_id_is_live(&self, id: u64) -> bool {
+        self.live_weak_ids.contains(&id)
+    }
+
     /// Finish marking: drain the worklists to a fixed point and return the
     /// mark bits, ready for [`Heap::sweep`].
     pub fn finish(mut self) -> MarkBits {
@@ -580,10 +616,16 @@ impl<'h> GcVisitor<'h> {
             | HeapObjectData::LabelPlaceholder(_)
             | HeapObjectData::Free => {}
 
-            // Leaves for the heap tracer: the payload lives in VmState's side
-            // tables, which the VM's GcRoots impl traces directly (design §5.2).
-            HeapObjectData::VmContinuationRef(_)
-            | HeapObjectData::VmDelimitedContinuationRef(_) => {}
+            // Weak keys: the payload lives in VmState's side tables and is
+            // traced only if the ref object itself is live — record the id
+            // for the trace_weak_ids fixpoint (design §9.5). The set-guard
+            // keeps the queue duplicate-free so each id is broadcast once.
+            HeapObjectData::VmContinuationRef(id)
+            | HeapObjectData::VmDelimitedContinuationRef(id) => {
+                if self.live_weak_ids.insert(*id) {
+                    self.new_weak_ids.push(*id);
+                }
+            }
 
             HeapObjectData::Complex { real, imag } => {
                 self.visit(*real);
@@ -822,15 +864,46 @@ impl Default for MarkSweepCollector {
     }
 }
 
+/// The complete mark phase: root tracing, the weak-table fixpoint (design
+/// §9.5), and weak-entry pruning, in the one order that is sound. Public so
+/// alternative collectors compose *around* it (triggering, sweep strategy)
+/// without being able to mis-order its interior — skipping the fixpoint
+/// would sweep live continuation payloads, and skipping `sweep_weak` would
+/// reinstate the §9.5 monotonic leak.
+pub fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
+    let mut visitor = GcVisitor::new(heap);
+    for provider in roots {
+        provider.trace_roots(&mut visitor);
+    }
+    visitor.drain();
+
+    // Weak-table fixpoint: draining discovers live weak keys; broadcast
+    // each new batch to every provider (ids are heap-unique, so a provider
+    // simply skips ids it does not own) and re-drain, until a round
+    // discovers none. Terminates because an id enters the queue at most
+    // once.
+    loop {
+        let ids = std::mem::take(&mut visitor.new_weak_ids);
+        if ids.is_empty() {
+            break;
+        }
+        for provider in roots {
+            provider.trace_weak_ids(&ids, &mut visitor);
+        }
+        visitor.drain();
+    }
+    for provider in roots {
+        provider.sweep_weak(&visitor);
+    }
+
+    visitor.finish()
+}
+
 impl Collector for MarkSweepCollector {
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
         let start = Instant::now();
 
-        let mut visitor = GcVisitor::new(heap);
-        for provider in roots {
-            provider.trace_roots(&mut visitor);
-        }
-        let mut marks = visitor.finish();
+        let mut marks = run_mark_phase(heap, roots);
 
         let marked = marks.marked();
         let swept = heap.sweep(&mut marks);

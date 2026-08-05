@@ -331,6 +331,13 @@ pub struct Heap {
     /// reaching into a backend-private collector.
     gc_collections: u64,
     gc_last_swept: usize,
+
+    /// Next id for `VmContinuationRef` / `VmDelimitedContinuationRef`
+    /// handles. Heap-owned so ids are unique across both continuation kinds
+    /// and every `VmState` sharing this heap — the weak side tables
+    /// (design §9.5) key on these ids and must never see one alias two
+    /// entries. Monotonic, never reused.
+    next_vm_continuation_id: u64,
 }
 
 impl Heap {
@@ -359,6 +366,7 @@ impl Heap {
             gc_defer_depth: 0,
             gc_collections: 0,
             gc_last_swept: 0,
+            next_vm_continuation_id: 0,
         }
     }
 
@@ -1025,9 +1033,14 @@ impl Heap {
         }
     }
 
-    /// Allocate an opaque handle for a full VM continuation (stored externally in VmState).
-    pub fn alloc_vm_continuation_ref(&mut self, id: u64) -> TaggedValue {
-        self.alloc_object(HeapObjectData::VmContinuationRef(id))
+    /// Allocate an opaque handle for a full VM continuation (stored externally
+    /// in VmState), minting its id. Ids come from one heap-owned counter
+    /// shared by both continuation kinds and every `VmState` on this heap, so
+    /// an id names at most one side-table entry ever — the weak-table
+    /// machinery (gc.rs §9.5) relies on ref objects never aliasing.
+    pub fn alloc_vm_continuation_ref(&mut self) -> (TaggedValue, u64) {
+        let id = self.mint_vm_continuation_id();
+        (self.alloc_object(HeapObjectData::VmContinuationRef(id)), id)
     }
 
     /// Get the continuation id from a `VmContinuationRef` TaggedValue.
@@ -1041,9 +1054,20 @@ impl Heap {
         }
     }
 
-    /// Allocate an opaque handle for a delimited VM continuation.
-    pub fn alloc_vm_delimited_continuation_ref(&mut self, id: u64) -> TaggedValue {
-        self.alloc_object(HeapObjectData::VmDelimitedContinuationRef(id))
+    /// Allocate an opaque handle for a delimited VM continuation, minting its
+    /// id (same counter as `alloc_vm_continuation_ref`).
+    pub fn alloc_vm_delimited_continuation_ref(&mut self) -> (TaggedValue, u64) {
+        let id = self.mint_vm_continuation_id();
+        (
+            self.alloc_object(HeapObjectData::VmDelimitedContinuationRef(id)),
+            id,
+        )
+    }
+
+    fn mint_vm_continuation_id(&mut self) -> u64 {
+        let id = self.next_vm_continuation_id;
+        self.next_vm_continuation_id += 1;
+        id
     }
 
     /// Get the continuation id from a `VmDelimitedContinuationRef` TaggedValue.
