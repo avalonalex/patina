@@ -8,10 +8,24 @@
 //! - **The continuation side tables.** The heap holds only an opaque
 //!   `VmContinuationRef(u64)`; the captured registers, frames, and wind /
 //!   prompt / handler stacks live in `continuation_store` and
-//!   `delimited_continuation_store`. Nothing but this impl reaches them.
+//!   `delimited_continuation_store`. Nothing but this impl reaches them —
+//!   and they are **weak** (design §9.5): a payload is traced only when its
+//!   ref object was itself marked (`trace_weak_roots`), and entries whose
+//!   ref died are pruned after marking (`sweep_weak`). Tracing them as
+//!   strong roots instead would make every capture immortal: payload
+//!   snapshots routinely contain other continuation refs (in ctak, chains
+//!   of them), so the tables would pin themselves transitively forever —
+//!   the measured 4 GB blowup.
 //! - **`CallFrame::closure`**, a bare `HeapIndex` rather than a
 //!   `TaggedValue`, so a "scan every TaggedValue" pass would step straight
 //!   past it. It is rooted through `GcVisitor::visit_object_index`.
+//!
+//! The weak protocol is sound because store entries are only ever reached
+//! through their ref `TaggedValue`: capture inserts the entry and allocates
+//! the ref within one instruction dispatch, invocation copies the payload
+//! back into `VmState` within one dispatch, and every nested loop
+//! (wind thunks, re-entrant primitives) defers collection — so at a
+//! collecting safe point an unmarked ref proves its payload unreachable.
 //!
 //! Rust-stack temporaries (continuation-capture register clones, `mem::take`n
 //! buffers, primitive argument vectors, the `saved_globals` swap windows) are
@@ -50,19 +64,55 @@ impl GcRoots for VmState {
         trace_winds(&self.dynamic_winds, visitor);
         trace_handlers(&self.exception_handlers, visitor);
 
-        // The side tables — see the module comment.
-        for continuation in self.continuation_store.values() {
-            trace_continuation(continuation, visitor);
-        }
-        for continuation in self.delimited_continuation_store.values() {
-            trace_delimited_continuation(continuation, visitor);
-        }
+        // The continuation side tables are deliberately NOT traced here —
+        // they are weak; see the module comment and `trace_weak_roots`.
 
         // Register snapshots the tracer holds between its pre/post hooks.
         // Safe points are borrow-free, so this cannot conflict.
         if let Some(tracer) = &self.tracer {
             tracer.borrow().trace_roots(visitor);
         }
+    }
+
+    fn trace_weak_roots(&self, visitor: &mut GcVisitor<'_>) -> bool {
+        let mut progress = false;
+
+        // Ids handed out by the visitor were proven live by marking; trace
+        // the payloads they key. A payload may reference further ref
+        // objects — the driver re-drains and calls back until quiescent.
+        // Ids absent from the store (a foreign VmState's captures) key no
+        // payload here and are not progress.
+        let store = self.continuation_store.borrow();
+        for id in visitor.take_new_vm_continuation_ids() {
+            if let Some(continuation) = store.get(&id) {
+                trace_continuation(continuation, visitor);
+                progress = true;
+            }
+        }
+        drop(store);
+
+        let store = self.delimited_continuation_store.borrow();
+        for id in visitor.take_new_vm_delimited_continuation_ids() {
+            if let Some(continuation) = store.get(&id) {
+                trace_delimited_continuation(continuation, visitor);
+                progress = true;
+            }
+        }
+
+        progress
+    }
+
+    fn sweep_weak(&self, visitor: &GcVisitor<'_>) {
+        // Drop every entry whose ref object did not survive marking. The
+        // payloads live outside the arenas (Rc'd register/frame snapshots),
+        // so dropping them here touches no heap state; the dead ref objects
+        // themselves are reclaimed by the sweep that follows.
+        self.continuation_store
+            .borrow_mut()
+            .retain(|&id, _| visitor.vm_continuation_is_live(id));
+        self.delimited_continuation_store
+            .borrow_mut()
+            .retain(|&id, _| visitor.vm_delimited_continuation_is_live(id));
     }
 }
 

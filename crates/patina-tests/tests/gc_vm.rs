@@ -54,6 +54,51 @@ fn mutable_boxed_upvalue_survives_collection() {
 }
 
 #[test]
+fn continuation_in_heap_data_survives_collections_and_invokes() {
+    // The side tables are weak (design §9.5): a continuation must stay
+    // invocable as long as its ref object is reachable — here only through
+    // a heap vector, across two collections, re-entering top level twice.
+    assert_gc_eval_to(
+        r#"
+        (import (patina debug))
+        (define saved (vector #f))
+        (define count 0)
+        (define result
+          (+ 1 (call/cc (lambda (k) (vector-set! saved 0 k) 1))))
+        (set! count (+ count 1))
+        (gc)
+        (if (< count 3) ((vector-ref saved 0) 41))
+        result
+        "#,
+        "42",
+    );
+}
+
+#[test]
+fn dead_captures_are_pruned_from_side_table() {
+    // The §9.5 blowup: dropped `call/cc` captures used to pin their ref
+    // objects and snapshots forever through the side table. 20 000 dead
+    // captures must leave no more than noise behind after a collection —
+    // with strong tables the delta is the full 20 000.
+    assert_gc_eval_to(
+        r#"
+        (import (patina debug))
+        (define (live-objects)
+          (let ((s (gc-stats)))
+            (- (cdr (assq 'objects s)) (cdr (assq 'free-objects s)))))
+        (define (churn n)
+          (if (> n 0) (begin (call/cc (lambda (k) 1)) (churn (- n 1)))))
+        (gc)
+        (define before (live-objects))
+        (churn 20000)
+        (gc)
+        (< (- (live-objects) before) 200)
+        "#,
+        "#t",
+    );
+}
+
+#[test]
 fn multiple_values_survive_collection() {
     // `value_buffer` is the multi-value side channel — a root that is easy
     // to miss because it is empty most of the time.

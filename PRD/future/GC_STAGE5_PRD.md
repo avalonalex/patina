@@ -1,6 +1,7 @@
 # GC Stage 5+: Pause Work and Collector Upgrades
 
-**Status:** Not started. Stage 4 complete 2026-08-03 (PRs #4–#6, #8, #10, #11):
+**Status:** In progress — Priority 1 item 1 (weak continuation tables) done
+2026-08-05. Stage 4 complete 2026-08-03 (PRs #4–#6, #8, #10, #11):
 both backends collect, adaptive collection is always on, the safe point has no
 standing cost, and CI enforces byte-identical differential lanes.
 **Authority:** `docs/GC_DESIGN.md` is the design document; this PRD tracks the
@@ -24,13 +25,21 @@ throughput work second.
 
 The two known monotonic costs, in impact order:
 
-1. **Continuation side tables.** Nothing removes entries from
-   `continuation_store` / `delimited_continuation_store`. Measured: with 20 000
-   dead `call/cc` captures, **81% of a 1.79 ms pause** is root tracing, and
-   every register/frame snapshot those dead continuations pin stays
-   unreclaimable. Fix: treat the stores as weak — drop an entry when its
-   `VmContinuationRef` heap object did not survive marking. Sweep-side change;
-   needs care with the `is_outermost` protocol.
+1. **Continuation side tables.** ✅ **Done 2026-08-05.** Nothing removed
+   entries from `continuation_store` / `delimited_continuation_store`; worse,
+   snapshots contain other continuation refs, so the strong tables pinned
+   themselves transitively — `ctak` grew to 4 GB RSS and died thrashing.
+   Fixed as an ephemeron-style weak-table fixpoint: marking records ids of
+   reached `VmContinuationRef` objects, `GcRoots::trace_weak_roots` traces
+   payloads only for recorded ids (looped with drains to quiescence), and
+   `GcRoots::sweep_weak` prunes the rest. The `is_outermost` care resolved to
+   an audit: every store touch is confined to one instruction dispatch and
+   nested loops defer, so an unmarked ref at a collecting safe point proves
+   its payload unreachable. Measured: **ctak completes — 72.6 s at 227 MB
+   peak RSS** (was CRASHED at 4 GB; Chibi itself dies on ctak at the 300 s
+   cap on this machine); 20 000 dead captures leave single-digit net live
+   objects. Differential lanes byte-identical (release + debug-poison, both
+   backends). Design details in `docs/GC_DESIGN.md` §9.5.
 2. **`code_store` constants.** Code objects are never evicted; every compiled
    top-level form adds permanent roots. Measured over one chibi run: scan grew
    8.8 µs → 107–151 µs per collection, **57% of root tracing** by the end.
