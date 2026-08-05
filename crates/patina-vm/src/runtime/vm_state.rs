@@ -59,7 +59,8 @@ pub struct VmState {
     /// the state (`mem::take`) for the duration of each call so re-entrant
     /// primitives see an empty buffer and simply allocate — only nested
     /// primitive calls pay an allocation; the common depth-1 case is
-    /// allocation-free.
+    /// allocation-free. An allocation pool, never read for meaning after a
+    /// call returns (contrast `value_buffer`, which is a value channel).
     pub(crate) scratch_args: Vec<TaggedValue>,
     /// Side table for full (call/cc) continuations — keyed by opaque u64 id.
     /// The corresponding `TaggedValue` handle is `VmContinuationRef(id)` on the heap.
@@ -718,6 +719,64 @@ fn call_closure_resolved(
     Ok(())
 }
 
+/// `call_closure_resolved` sourcing arguments directly from the caller's
+/// registers — the `Call` instruction's closure fast path. The callee
+/// window is freshly allocated above the caller's, so the copy cannot
+/// overlap and no intermediate argument buffer of any kind is needed.
+/// (Tail calls can't use this: they reuse the caller's window in place.)
+fn call_closure_from_regs(
+    state: &mut VmState,
+    closure_val: TaggedValue,
+    code_id: CodeObjectId,
+    arg_regs: &[u16],
+    return_reg: u16,
+) -> Result<(), VmError> {
+    let code = state
+        .code_store
+        .get(&code_id)
+        .cloned()
+        .ok_or_else(|| VmError::Runtime {
+            message: format!("missing CodeObject {:?}", code_id),
+        })?;
+
+    check_arity(&code.arity, arg_regs.len())?;
+
+    let caller_base = state
+        .frames
+        .last()
+        .expect("Call with empty frame stack")
+        .register_base;
+    let base = state.alloc_registers(code.num_regs);
+    if let Arity::Variadic(fixed) = &code.arity {
+        let fixed = *fixed as usize;
+        for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
+            state.registers[base + i] = state.registers[caller_base + r as usize];
+        }
+        // The rest-list build allocates on the heap, so the rest values are
+        // staged through a Vec (variadic calls are the uncommon shape).
+        let rest_vals: Vec<TaggedValue> = arg_regs[fixed..]
+            .iter()
+            .map(|&r| state.registers[caller_base + r as usize])
+            .collect();
+        let rest = build_list(state, &rest_vals)?;
+        state.registers[base + fixed] = rest;
+    } else {
+        for (i, &r) in arg_regs.iter().enumerate() {
+            state.registers[base + i] = state.registers[caller_base + r as usize];
+        }
+    }
+
+    state.frames.push(CallFrame {
+        pc: 0,
+        register_base: base,
+        num_regs: code.num_regs,
+        closure: closure_heap_index(closure_val),
+        return_reg,
+        code,
+    });
+    Ok(())
+}
+
 /// The main dispatch loop. Runs until `state.frames.len() == exit_depth`.
 ///
 /// Use `exit_depth = 0` to run until the frame stack is fully empty (top-level).
@@ -1014,17 +1073,54 @@ fn dispatch_one_instruction(
             dst,
         } => {
             let func_val = state.reg(func);
-            let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
-            if let Some(escaped) = call_value(state, func_val, arg_vals, dst, exit_depth)? {
-                return Ok(Some(escaped));
+            // Closure fast path: copy args from the caller's window straight
+            // into the fresh callee window — no argument buffer at all.
+            // Non-closure callees (control primitives, continuations,
+            // parameters, deopt'd primitives) take the generic probing path
+            // with a plain collected Vec, exactly as before the fast path.
+            let closure_id = state.heap.borrow().get_vm_closure_code_id(func_val);
+            if let Some(id) = closure_id {
+                call_closure_from_regs(state, func_val, CodeObjectId(id), args, dst)?;
+            } else {
+                let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
+                if let Some(escaped) =
+                    call_value_with_probe(state, func_val, None, &arg_vals, dst, exit_depth)?
+                {
+                    return Ok(Some(escaped));
+                }
             }
         }
 
         Instruction::TailCall { func, ref args } => {
             let func_val = state.reg(func);
-            let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
-            if let Some(exit_val) = tail_call_value(state, func_val, arg_vals, exit_depth)? {
-                return Ok(Some(exit_val));
+            // Closure fast path, tail shape: the frame window is reused in
+            // place, so the args are staged through a stack buffer before
+            // the overwrite — still no heap allocation.
+            let closure_id = state.heap.borrow().get_vm_closure_code_id(func_val);
+            if let Some(id) = closure_id {
+                const INLINE_ARGS: usize = 16;
+                if args.len() <= INLINE_ARGS {
+                    let mut buf = [TaggedValue::UNSPECIFIED; INLINE_ARGS];
+                    for (i, &r) in args.iter().enumerate() {
+                        buf[i] = state.reg(r);
+                    }
+                    tail_call_closure_resolved(
+                        state,
+                        func_val,
+                        CodeObjectId(id),
+                        &buf[..args.len()],
+                    )?;
+                } else {
+                    let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
+                    tail_call_closure_resolved(state, func_val, CodeObjectId(id), &arg_vals)?;
+                }
+            } else {
+                let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
+                if let Some(exit_val) =
+                    tail_call_value_with_probe(state, func_val, None, &arg_vals, exit_depth)?
+                {
+                    return Ok(Some(exit_val));
+                }
             }
         }
 
@@ -1903,7 +1999,7 @@ fn run_thunk(state: &mut VmState, thunk: TaggedValue) -> Result<TaggedValue, VmE
 fn handle_control_primitive(
     state: &mut VmState,
     ctrl: VmControlPrimitive,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
     dst: u16,
     _is_tail: bool,
 ) -> Result<Option<TaggedValue>, VmError> {
@@ -2072,12 +2168,12 @@ fn handle_control_primitive(
             // (values v1 v2 ...) — return multiple values via value_buffer
             // Also allocate a heap Values object so the display layer can
             // detect and show all values (matches tree-walker behaviour).
+            state.value_buffer.clear();
+            state.value_buffer.extend_from_slice(args);
             if args.len() == 1 {
                 state.set_reg(dst, args[0]);
-                state.value_buffer = args;
             } else {
-                state.value_buffer = args.clone();
-                let vals_tv = state.heap.borrow_mut().alloc_values(args);
+                let vals_tv = state.heap.borrow_mut().alloc_values(args.to_vec());
                 state.set_reg(dst, vals_tv);
             }
         }
@@ -2200,7 +2296,7 @@ fn handle_control_primitive(
 /// Implement `raise` / `raise-continuable`.
 fn vm_raise(
     state: &mut VmState,
-    args: Vec<TaggedValue>,
+    args: &[TaggedValue],
     dst: u16,
     continuable: bool,
 ) -> Result<(), VmError> {
@@ -2660,10 +2756,9 @@ fn try_invoke_continuation(
         }
         // When invoked with multiple values, populate value_buffer so
         // call-with-values can unpack them.
+        state.value_buffer.clear();
         if args.len() > 1 {
-            state.value_buffer = args.to_vec();
-        } else {
-            state.value_buffer.clear();
+            state.value_buffer.extend_from_slice(args);
         }
         return Ok(true);
     }
@@ -2693,10 +2788,9 @@ fn try_invoke_continuation(
             }
         }
         // Populate value_buffer for multi-value delivery
+        state.value_buffer.clear();
         if args.len() > 1 {
-            state.value_buffer = args.to_vec();
-        } else {
-            state.value_buffer.clear();
+            state.value_buffer.extend_from_slice(args);
         }
         return Ok(true);
     }
@@ -2722,7 +2816,7 @@ fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Proc
 fn call_value(
     state: &mut VmState,
     func_val: TaggedValue,
-    arg_vals: Vec<TaggedValue>,
+    arg_vals: &[TaggedValue],
     dst: u16,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
@@ -2733,21 +2827,34 @@ fn call_value(
     // continuation) on every call. Keep the probed code id so the closure
     // branch doesn't resolve it a second time.
     let closure_code_id = state.heap.borrow().get_vm_closure_code_id(func_val);
+    call_value_with_probe(state, func_val, closure_code_id, arg_vals, dst, exit_depth)
+}
+
+/// `call_value` for a callee whose closure probe already ran — the `Call`
+/// arm's non-closure branch passes `None` so the probe isn't repeated.
+fn call_value_with_probe(
+    state: &mut VmState,
+    func_val: TaggedValue,
+    closure_code_id: Option<u32>,
+    arg_vals: &[TaggedValue],
+    dst: u16,
+    exit_depth: usize,
+) -> Result<Option<TaggedValue>, VmError> {
     if closure_code_id.is_none() {
         // Intercept higher-order control primitives that need VM cooperation.
         if let Some(ctrl) = vm_control_primitive(state, func_val) {
             return handle_control_primitive(state, ctrl, arg_vals, dst, false);
         }
         if let Some(prim) = primitive_procedure(state, func_val) {
-            let result = call_primitive_proc(state, &prim, &arg_vals);
+            let result = call_primitive_proc(state, &prim, arg_vals);
             state.set_reg(dst, result?);
             return Ok(None);
         }
-        if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+        if let Some(result) = try_call_parameter(state, func_val, arg_vals) {
             state.set_reg(dst, result?);
             return Ok(None);
         }
-        if try_invoke_continuation(state, func_val, &arg_vals)? {
+        if try_invoke_continuation(state, func_val, arg_vals)? {
             // Continuation was invoked — stack has been replaced/appended.
             // Safety net: if frames dropped to or below exit_depth, the
             // continuation escaped past a synchronous run_thunk boundary
@@ -2769,7 +2876,7 @@ fn call_value(
         // Not callable: resolve_closure produces the standard type error.
         None => resolve_closure(state, func_val)?,
     };
-    call_closure_resolved(state, func_val, code_id, &arg_vals, dst)?;
+    call_closure_resolved(state, func_val, code_id, arg_vals, dst)?;
     Ok(None)
 }
 
@@ -2782,12 +2889,24 @@ fn call_value(
 fn tail_call_value(
     state: &mut VmState,
     func_val: TaggedValue,
-    arg_vals: Vec<TaggedValue>,
+    arg_vals: &[TaggedValue],
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
     // Same closure-first probe as `call_value` — see there for why probe
     // order is safe.
     let closure_code_id = state.heap.borrow().get_vm_closure_code_id(func_val);
+    tail_call_value_with_probe(state, func_val, closure_code_id, arg_vals, exit_depth)
+}
+
+/// `tail_call_value` for a callee whose closure probe already ran — the
+/// `TailCall` arm's non-closure branch passes `None`.
+fn tail_call_value_with_probe(
+    state: &mut VmState,
+    func_val: TaggedValue,
+    closure_code_id: Option<u32>,
+    arg_vals: &[TaggedValue],
+    exit_depth: usize,
+) -> Result<Option<TaggedValue>, VmError> {
     if closure_code_id.is_none() {
         // Intercept higher-order control primitives in tail position.
         // Strategy: pop the current frame first (simulating "already
@@ -2817,7 +2936,7 @@ fn tail_call_value(
         }
 
         // Continuation invocation in tail position.
-        if try_invoke_continuation(state, func_val, &arg_vals)? {
+        if try_invoke_continuation(state, func_val, arg_vals)? {
             // Safety net: if frames dropped to or below exit_depth, the
             // continuation escaped past a synchronous run_thunk boundary.
             if state.frames.len() <= exit_depth {
@@ -2833,7 +2952,7 @@ fn tail_call_value(
         // Primitives in tail position: call them, write result to current
         // frame's return_reg, then simulate a Return.
         if let Some(prim) = primitive_procedure(state, func_val) {
-            let result = call_primitive_proc(state, &prim, &arg_vals)?;
+            let result = call_primitive_proc(state, &prim, arg_vals)?;
             let frame = state.frames.pop().expect("tail call with empty stack");
             if state.frames.len() == exit_depth {
                 state.free_top_registers(frame.register_base);
@@ -2847,7 +2966,7 @@ fn tail_call_value(
         }
 
         // Parameters in tail position: same as primitives.
-        if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
+        if let Some(result) = try_call_parameter(state, func_val, arg_vals) {
             let result = result?;
             let frame = state
                 .frames
@@ -2870,6 +2989,19 @@ fn tail_call_value(
         // Not callable: resolve_closure produces the standard type error.
         None => resolve_closure(state, func_val)?,
     };
+    tail_call_closure_resolved(state, func_val, new_code_id, arg_vals)?;
+    Ok(None)
+}
+
+/// The tail-position closure branch of `tail_call_value`, shared with the
+/// `TailCall` instruction's closure fast path: reuse the current frame's
+/// register window for the resolved callee.
+fn tail_call_closure_resolved(
+    state: &mut VmState,
+    func_val: TaggedValue,
+    new_code_id: CodeObjectId,
+    arg_vals: &[TaggedValue],
+) -> Result<(), VmError> {
     let new_code = state
         .code_store
         .get(&new_code_id)
@@ -2898,14 +3030,14 @@ fn tail_call_value(
     // Write fixed args into r0..r(n-1), then handle variadic rest.
     if let Arity::Variadic(fixed) = &new_code.arity {
         let fixed = *fixed as usize;
-        for (i, val) in arg_vals[..fixed].iter().enumerate() {
-            state.registers[old_base + i] = *val;
+        for (i, &val) in arg_vals[..fixed].iter().enumerate() {
+            state.registers[old_base + i] = val;
         }
         let rest = build_list(state, &arg_vals[fixed..])?;
         state.registers[old_base + fixed] = rest;
     } else {
-        for (i, val) in arg_vals.iter().enumerate() {
-            state.registers[old_base + i] = *val;
+        for (i, &val) in arg_vals.iter().enumerate() {
+            state.registers[old_base + i] = val;
         }
     }
 
@@ -2914,7 +3046,7 @@ fn tail_call_value(
     frame.pc = 0;
     frame.closure = closure_heap_index(func_val);
     frame.code = new_code;
-    Ok(None)
+    Ok(())
 }
 
 /// Execute a compile-time-resolved primitive call: the shared back end of
@@ -2951,9 +3083,9 @@ fn exec_call_primitive(
             Some(Instruction::Return { val }) if *val == dst
         );
         if is_tail_site {
-            return tail_call_value(state, func_val, arg_vals.to_vec(), exit_depth);
+            return tail_call_value(state, func_val, arg_vals, exit_depth);
         }
-        return call_value(state, func_val, arg_vals.to_vec(), dst, exit_depth);
+        return call_value(state, func_val, arg_vals, dst, exit_depth);
     }
     let registry = Rc::clone(&state.primitive_registry);
     let ctx = VmApplyContext {
