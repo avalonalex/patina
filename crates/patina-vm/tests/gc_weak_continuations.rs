@@ -18,7 +18,10 @@ use patina_vm::runtime::VmState;
 use patina_vm::types::{VmContinuation, VmDelimitedContinuation};
 use std::rc::Rc;
 
-fn fresh_state() -> VmState {
+/// A `VmState` with no primitives installed — unlike `integration.rs`'s
+/// `fresh_state`, these tests drive the collector directly and need only
+/// the heap and the side tables.
+fn bare_state() -> VmState {
     VmState::new(Rc::new(Environment::new()))
 }
 
@@ -50,7 +53,7 @@ fn collect(state: &VmState) {
 
 #[test]
 fn dead_entry_pruned_live_entry_survives() {
-    let mut state = fresh_state();
+    let mut state = bare_state();
 
     let live_pin = state
         .heap
@@ -83,7 +86,7 @@ fn continuation_reachable_only_through_live_payload_survives() {
     // k_inner's ref exists only inside k_outer's register snapshot: the weak
     // fixpoint must trace k_outer's payload (its ref is rooted) and thereby
     // prove k_inner live — one round of discovery per chain link.
-    let mut state = fresh_state();
+    let mut state = bare_state();
 
     let inner_pin = state
         .heap
@@ -108,7 +111,7 @@ fn dead_chain_fully_pruned_in_one_collection() {
     // ctak shape. Once the head ref is dropped, no entry may keep another
     // alive through the side table: the whole chain must go in ONE
     // collection, not one link per collection.
-    let mut state = fresh_state();
+    let mut state = bare_state();
 
     let mut prev = TaggedValue::NULL;
     for _ in 0..10 {
@@ -123,7 +126,7 @@ fn dead_chain_fully_pruned_in_one_collection() {
 
 #[test]
 fn delimited_entries_weak_too() {
-    let mut state = fresh_state();
+    let mut state = bare_state();
 
     let live_pin = state
         .heap
@@ -151,7 +154,7 @@ fn delimited_entries_weak_too() {
 fn full_and_delimited_refs_cross_reference() {
     // A rooted full continuation whose snapshot pins a delimited ref: the
     // fixpoint must cross store boundaries in both directions.
-    let mut state = fresh_state();
+    let mut state = bare_state();
 
     let pin = state
         .heap
@@ -173,7 +176,7 @@ fn full_and_delimited_refs_cross_reference() {
 fn store_stays_bounded_under_capture_churn() {
     // The §9.5 blowup in miniature: repeated capture-and-drop cycles with
     // periodic collections must not grow the store or the pair arena.
-    let mut state = fresh_state();
+    let mut state = bare_state();
 
     for round in 0..10 {
         for i in 0..100 {

@@ -258,7 +258,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `Macro` | `CompiledMacro` pattern/template literal `TaggedValue`s (`compiled_macro.rs:78,:280`) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` before/after thunks, `captured_cont_bindings` (recursive), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
-| `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `GcRoots::trace_weak_roots` fixpoint (§5.2, §9.5) |
+| `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `GcRoots::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
 
 \* `Library` heap objects wrap `Rc<Library>` whose `exports` map and `env` are
 also reachable via `LibraryRegistry`; tracing them from the registry root
@@ -352,10 +352,10 @@ which makes `impl GcRoots for VmState` natural:
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | `tag`/`handler`/`before`/`after` values (`types/continuation.rs:14,:39,:86`) |
 | `code_store[*].constants` | **yes** | Effectively immortal (code objects are never evicted); candidate for a mark-once immortal set later |
 | `globals` | **yes** | `visit_env` |
-| `continuation_store` / `delimited_continuation_store` | **weak** (stage 5) | `VmContinuation` snapshots hold full `registers` copies, frames (each with a bare closure index), wind/prompt/handler stacks (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef(u64)` is opaque; only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_roots` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
+| `continuation_store` / `delimited_continuation_store` | **weak** (stage 5) | `VmContinuation` snapshots hold full `registers` copies, frames (each with a bare closure index), wind/prompt/handler stacks (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef(u64)` is opaque; only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | `StepTracer.pre_regs`/`pre_all_regs` (`crates/patina-vm/src/tracer.rs:270-272`) |
 | `library_registry` | yes | §5.3 |
-| `primitive_registry`, `shadowed_primitives`, `next_cont_id`, `fs` | no | No TaggedValues |
+| `primitive_registry`, `shadowed_primitives`, `fs` | no | No TaggedValues |
 
 Rust-stack temporaries (continuation-capture register clones, the
 `saved_globals` swap windows, primitive args in `VmApplyContext` callbacks):
@@ -661,16 +661,20 @@ continuation refs, so the strong tables pinned themselves transitively —
 The stores are now weak tables keyed by their ref objects, resolved as an
 ephemeron-style fixpoint: `trace_roots` skips the stores; marking records the
 id of every `VmContinuationRef` / `VmDelimitedContinuationRef` it reaches;
-the collector then alternates `GcRoots::trace_weak_roots` (the VM traces
+`run_mark_phase` then alternates `GcRoots::trace_weak_ids` broadcasts (the VM traces
 payloads for newly recorded ids — which may mark further refs) with worklist
 drains until quiescent, and `GcRoots::sweep_weak` prunes entries whose id was
 never recorded. A whole dead chain goes in one collection because dead
-payloads are never traced at all. Soundness rests on the existing safe-point
-discipline: capture and invocation each touch a store only within one
-instruction dispatch, and nested loops defer, so at a collecting safe point an
-unmarked ref proves its payload unreachable (this is the `is_outermost` care
-the plan called for). Measured after: `ctak` runs CPU-bound at flat ~220 MB
-RSS, and 20 000 dead captures leave single-digit net live objects.
+payloads are never traced at all. Ids are minted by the `Heap` from one
+counter shared by both continuation kinds and every `VmState` on the heap, so
+an id names at most one side-table entry ever — which is what makes the
+single shared id namespace and the broadcast to every provider sound.
+Soundness otherwise rests on the existing safe-point discipline: capture and
+invocation each touch a store only within one instruction dispatch, and
+nested loops defer, so at a collecting safe point an unmarked ref proves its
+payload unreachable (this is the `is_outermost` care the plan called for).
+Measured after: `ctak` runs CPU-bound at flat ~220 MB RSS, and 20 000 dead
+captures leave single-digit net live objects.
 
 ### 9.6 `CompiledMacro.heap`
 
@@ -696,7 +700,7 @@ unaffected without a second compilation configuration to maintain.
 | **4a. Trigger redesign** ✅ *(2026-08-03)* | Safe-point trigger redesign (§6.1) — the stage-4 gating item: collection decision moved to `Heap::note_alloc` (pending flag + mode-derived threshold), safe point collapsed to one flag load, `GcController::collect` re-arms the adaptive term | **Met:** interleaved A/B/C — GC-off at parity with `main` (−0.4% dispatch, −1.3% alloc-heavy) and the GC-on zero-collection penalty eliminated (−0.2% on-vs-off, was −13.7%); ~1% residual vs no-safe-point control (§6.1). Chibi suite byte-identical across baseline/stress/on lanes, both backends, release + debug poison builds |
 | **4b. Groundwork** ✅ *(2026-08-03)* | Two CI lanes (`gc-differential` release + debug-poison jobs running `scripts/run_gc_differential.sh`: stress + adaptive vs baseline, both backends, plus a reclamation proof so the lane cannot pass vacuously), SourceMap pruning hook (§9.1), liveness stress (100k-element list survives collection) and arena-reuse plateau as shared integration tests | **Met:** all lanes byte-identical locally and in CI; `cargo clippy`/`fmt` clean |
 | **4c. Always-on** ✅ *(2026-08-03)* | Adaptive threshold on unconditionally; the env vars remain only as testing-lane hooks (§6). The differential script gained a default-mode reclamation proof (200k churn crosses the floor → collections > 0, arena bounded) so the lanes verify the default itself | **Met:** all lanes byte-identical with the new default; full test suite and chibi green under GC-on; interleaved on-vs-off sanity: fib −1.05%, 10M-cons churn −1.07% — parity within the 3–7% spread |
-| **5+. Future** *(tracked in `PRD/future/GC_STAGE5_PRD.md`)* | Pause work first: ~~weak continuation side tables~~ ✅ *(2026-08-05 — `trace_weak_roots`/`sweep_weak` fixpoint, §9.5; ctak's 4 GB blowup fixed)* + immortal set for `code_store` constants and symbols (§9.5, measured); explicit rooting of re-entrancy boundaries so nested loops can collect (§7); then `Collector` upgrades — lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); weak symbol table | Each behind the trait, benchmarked interleaved; differential lanes stay byte-identical |
+| **5+. Future** *(tracked in `PRD/future/GC_STAGE5_PRD.md`)* | Pause work first: ~~weak continuation side tables~~ ✅ *(2026-08-05 — `trace_weak_ids`/`sweep_weak` fixpoint, §9.5; ctak's 4 GB blowup fixed)* + immortal set for `code_store` constants and symbols (§9.5, measured); explicit rooting of re-entrancy boundaries so nested loops can collect (§7); then `Collector` upgrades — lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); weak symbol table | Each behind the trait, benchmarked interleaved; differential lanes stay byte-identical |
 
 Rationale for full-arena tracing from stage 1 (vs P6's pairs+vectors-first):
 the tracer must understand every `HeapObjectData` variant *anyway* to be safe

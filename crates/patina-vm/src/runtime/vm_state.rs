@@ -17,8 +17,8 @@ use patina_core::{GcController, GcDeferGuard};
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
 use rustc_hash::FxHashMap;
+
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -62,19 +62,17 @@ pub struct VmState {
     /// allocation-free. An allocation pool, never read for meaning after a
     /// call returns (contrast `value_buffer`, which is a value channel).
     pub(crate) scratch_args: Vec<TaggedValue>,
-    /// Side table for full (call/cc) continuations — keyed by opaque u64 id.
-    /// The corresponding `TaggedValue` handle is `VmContinuationRef(id)` on
-    /// the heap. **Weak** (design §9.5): entries whose ref object dies are
-    /// pruned at collection via `GcRoots::sweep_weak`, which runs with
-    /// `&VmState` — hence the `RefCell`. Ids are never reused
-    /// (`next_cont_id` is monotonic), so a pruned id cannot alias a later
-    /// capture.
-    pub continuation_store: RefCell<HashMap<u64, Rc<VmContinuation>>>,
+    /// Side table for full (call/cc) continuations — keyed by the heap-minted
+    /// id inside the `VmContinuationRef(id)` handle. **Weak** (design §9.5):
+    /// entries whose ref object dies are pruned at collection via
+    /// `GcRoots::sweep_weak`, which runs with `&VmState` — hence the
+    /// `RefCell`. Ids come from the heap's counter (unique across both
+    /// continuation kinds and every `VmState` on the heap, never reused), so
+    /// a pruned id cannot alias another entry.
+    pub continuation_store: RefCell<FxHashMap<u64, Rc<VmContinuation>>>,
     /// Side table for delimited continuations — keyed by opaque u64 id.
     /// Weak, like `continuation_store`.
-    pub delimited_continuation_store: RefCell<HashMap<u64, Rc<VmDelimitedContinuation>>>,
-    /// Monotonically increasing counter for assigning continuation ids.
-    pub next_cont_id: u64,
+    pub delimited_continuation_store: RefCell<FxHashMap<u64, Rc<VmDelimitedContinuation>>>,
     /// Structured tracer for instruction-level debugging.
     pub tracer: Option<crate::tracer::TracerHandle>,
     /// Shared library registry for `load_scheme_library` in eval primitives.
@@ -122,9 +120,8 @@ impl VmState {
             primitive_registry: Rc::new(registry),
             shadowed_primitives: Vec::new(),
             scratch_args: Vec::new(),
-            continuation_store: RefCell::new(HashMap::new()),
-            delimited_continuation_store: RefCell::new(HashMap::new()),
-            next_cont_id: 0,
+            continuation_store: RefCell::new(FxHashMap::default()),
+            delimited_continuation_store: RefCell::new(FxHashMap::default()),
             tracer: None,
             library_registry: None,
             loader_registry: None,
@@ -224,16 +221,15 @@ impl VmState {
 
     /// Allocate a full VM continuation, returning its heap `TaggedValue` handle.
     ///
-    /// The store entry and its ref object are created back-to-back within
-    /// one instruction dispatch, so no safe point can observe the entry
-    /// without its (rooted) ref — required for the weak-table protocol.
+    /// The ref object (which mints the id) and the store entry are created
+    /// back-to-back within one instruction dispatch, so no safe point can
+    /// observe one without the other — required for the weak-table protocol.
     pub fn alloc_vm_continuation(&mut self, cont: VmContinuation) -> TaggedValue {
-        let id = self.next_cont_id;
-        self.next_cont_id += 1;
+        let (tv, id) = self.heap.borrow_mut().alloc_vm_continuation_ref();
         self.continuation_store
             .borrow_mut()
             .insert(id, Rc::new(cont));
-        self.heap.borrow_mut().alloc_vm_continuation_ref(id)
+        tv
     }
 
     /// Allocate a delimited VM continuation, returning its heap `TaggedValue` handle.
@@ -241,14 +237,11 @@ impl VmState {
         &mut self,
         cont: VmDelimitedContinuation,
     ) -> TaggedValue {
-        let id = self.next_cont_id;
-        self.next_cont_id += 1;
+        let (tv, id) = self.heap.borrow_mut().alloc_vm_delimited_continuation_ref();
         self.delimited_continuation_store
             .borrow_mut()
             .insert(id, Rc::new(cont));
-        self.heap
-            .borrow_mut()
-            .alloc_vm_delimited_continuation_ref(id)
+        tv
     }
 
     /// Look up a full continuation by its `TaggedValue` handle.

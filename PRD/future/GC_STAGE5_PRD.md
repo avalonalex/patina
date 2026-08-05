@@ -30,7 +30,7 @@ The two known monotonic costs, in impact order:
    snapshots contain other continuation refs, so the strong tables pinned
    themselves transitively — `ctak` grew to 4 GB RSS and died thrashing.
    Fixed as an ephemeron-style weak-table fixpoint: marking records ids of
-   reached `VmContinuationRef` objects, `GcRoots::trace_weak_roots` traces
+   reached `VmContinuationRef` objects, `GcRoots::trace_weak_ids` traces
    payloads only for recorded ids (looped with drains to quiescence), and
    `GcRoots::sweep_weak` prunes the rest. The `is_outermost` care resolved to
    an audit: every store touch is confined to one instruction dispatch and
