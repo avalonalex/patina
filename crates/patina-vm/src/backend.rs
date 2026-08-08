@@ -352,12 +352,7 @@ impl VmBackend {
                 compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)
                     .map_err(|e| VmBackendError::Compile(e.to_string()))?;
 
-            // Build a temporary code_store for the disassembler
-            let mut code_store = std::collections::HashMap::new();
-            for co in nested {
-                code_store.insert(co.id, std::rc::Rc::new(co));
-            }
-            disassemble(&top, &code_store);
+            disassemble(&top, &nested);
         }
         Ok(())
     }

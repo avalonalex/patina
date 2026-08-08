@@ -22,17 +22,6 @@ use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, Ordering};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Global CodeObjectId counter (one per process — fine for tests)
-// ─────────────────────────────────────────────────────────────────────────────
-
-static CODE_ID_COUNTER: AtomicU32 = AtomicU32::new(0);
-
-fn fresh_code_id() -> CodeObjectId {
-    CodeObjectId(CODE_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Codegen context (per CodeObject being built)
@@ -137,7 +126,7 @@ impl Pass5Codegen {
         prim_calls: PrimitiveCallMap,
     ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
         let expr = &allocated.expr;
-        let id = fresh_code_id();
+        let id = CodeObjectId::fresh();
         let mut cg = Codegen::new(None, Rc::new(prim_calls));
         gen_expr(expr, &mut cg)?;
         // Top-level: emit a Return of the expression's result.
@@ -605,7 +594,7 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
 
 /// Compile a nested lambda, emit `MakeClosure` into `cg`, result in `dst`.
 fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), CompileError> {
-    let child_id = fresh_code_id();
+    let child_id = CodeObjectId::fresh();
     let mut child_cg = Codegen::new(None, Rc::clone(&cg.prim_calls));
 
     // Prologue: wrap each boxed param register in a MutableCell.

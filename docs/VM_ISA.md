@@ -69,8 +69,8 @@ pub enum Arity {
 }
 ```
 
-Code objects are stored in `VmState::code_store` (a `HashMap<CodeObjectId, Rc<CodeObject>>`)
-and looked up by ID at runtime.
+Code objects are stored in `VmState::code_store` (a dense `Vec<Option<Rc<CodeObject>>>`
+indexed by the sequential `CodeObjectId`) and looked up by ID at runtime.
 
 ### 2.4 Flat Closures
 
