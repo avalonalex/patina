@@ -210,12 +210,31 @@ impl VmState {
 
     #[inline(always)]
     pub fn reg(&self, reg: u16) -> TaggedValue {
-        self.registers[self.frame_base() + reg as usize]
+        self.reg_at(self.frame_base(), reg)
     }
 
     #[inline(always)]
     pub fn set_reg(&mut self, reg: u16, val: TaggedValue) {
         let base = self.frame_base();
+        self.set_reg_at(base, reg, val);
+    }
+
+    // Base-relative variants for the dispatch loop: `base` is the top
+    // frame's `register_base`, hoisted once per dispatch. Only instruction
+    // arms that cannot push or pop a frame before the access may use these
+    // — after a frame change the hoisted base addresses the wrong window
+    // (a `set_reg` at a dispatch site means "the frame changed here"). The
+    // debug assert makes that rule machine-checked across the test suite.
+
+    #[inline(always)]
+    fn reg_at(&self, base: usize, reg: u16) -> TaggedValue {
+        debug_assert_eq!(base, self.frame_base());
+        self.registers[base + reg as usize]
+    }
+
+    #[inline(always)]
+    fn set_reg_at(&mut self, base: usize, reg: u16, val: TaggedValue) {
+        debug_assert_eq!(base, self.frame_base());
         self.registers[base + reg as usize] = val;
     }
 
@@ -699,24 +718,10 @@ fn call_closure_resolved(
 ) -> Result<(), VmError> {
     let code = state.code_object(code_id)?;
 
-    // Arity check.
-    check_arity(&code.arity, args.len())?;
+    check_arity(code.arity, args.len())?;
 
     let base = state.alloc_registers(code.num_regs);
-    // For variadic: copy only the fixed args, then collect the rest into a list.
-    // For exact arity: copy all args.
-    if let Arity::Variadic(fixed) = &code.arity {
-        let fixed = *fixed as usize;
-        for (i, &arg) in args[..fixed].iter().enumerate() {
-            state.registers[base + i] = arg;
-        }
-        let rest = build_list(state, &args[fixed..])?;
-        state.registers[base + fixed] = rest;
-    } else {
-        for (i, &arg) in args.iter().enumerate() {
-            state.registers[base + i] = arg;
-        }
-    }
+    store_args_in_window(state, base, code.arity, args)?;
 
     state.frames.push(CallFrame {
         pc: 0,
@@ -738,18 +743,14 @@ fn call_closure_from_regs(
     state: &mut VmState,
     closure_val: TaggedValue,
     code_id: CodeObjectId,
+    caller_base: usize,
     arg_regs: &[u16],
     return_reg: u16,
 ) -> Result<(), VmError> {
     let code = state.code_object(code_id)?;
 
-    check_arity(&code.arity, arg_regs.len())?;
+    check_arity(code.arity, arg_regs.len())?;
 
-    let caller_base = state
-        .frames
-        .last()
-        .expect("Call with empty frame stack")
-        .register_base;
     let base = state.alloc_registers(code.num_regs);
     if let Arity::Variadic(fixed) = &code.arity {
         let fixed = *fixed as usize;
@@ -796,12 +797,18 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
     // handle makes the per-instruction check a single load — no borrow.
     let is_outermost = gc_defer.is_outermost();
 
+    // Loop-resident copy of the top frame's code object: dispatch borrows it
+    // instead of cloning the `Rc` out of the frame on every instruction (two
+    // refcount writes per dispatch), refreshing it in its prologue when the
+    // frame's code changes — call, return, tail call, continuation invoke.
+    let mut cur_code = state.current_code()?;
+
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
         // are dead, buffers are restored, and no heap borrow is outstanding.
         maybe_collect(state, is_outermost);
 
-        match dispatch_one_instruction(state, exit_depth) {
+        match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
             Ok(Some(val)) => return Ok(val),
             Ok(None) => continue,
             Err(e) => {
@@ -893,7 +900,7 @@ fn frame_globals(state: &VmState) -> Rc<Environment> {
 /// here means an opcode arm contains only its genuinely opcode-specific
 /// fast path.
 macro_rules! inline_primitive {
-    ($state:ident, $exit_depth:ident, $func_id:ident, $name:ident, $dst:ident,
+    ($state:ident, $base:ident, $exit_depth:ident, $func_id:ident, $name:ident, $dst:ident,
      [$($arg:expr),+], $fast:block) => {
         let fast = if !$state.is_primitive_shadowed($func_id.0 as usize) {
             $fast
@@ -901,11 +908,11 @@ macro_rules! inline_primitive {
             None
         };
         match fast {
-            Some(val) => $state.set_reg($dst, val),
+            Some(val) => $state.set_reg_at($base, $dst, val),
             None => {
-                if let Some(escaped) =
-                    exec_call_primitive($state, $func_id, $name, &[$($arg),+], $dst, $exit_depth)?
-                {
+                if let Some(escaped) = exec_call_primitive(
+                    $state, $base, $func_id, $name, &[$($arg),+], $dst, $exit_depth,
+                )? {
                     return Ok(Some(escaped));
                 }
             }
@@ -917,22 +924,28 @@ macro_rules! inline_primitive {
 /// exit, `Ok(None)` to continue, or `Err` on error.
 fn dispatch_one_instruction(
     state: &mut VmState,
+    cur_code: &mut Rc<CodeObject>,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
-    // Fetch current frame state. The frame carries its (immutable) code
-    // object, so no code_store lookup or instruction clone is needed here —
-    // the instruction is borrowed from the frame's Rc for the whole dispatch.
-    let (code, pc) = {
-        let f = state.frames.last().expect("empty frame stack");
-        (f.code.clone(), f.pc)
+    // One frame access per dispatch: refresh the loop's cached code object
+    // (no Rc clone per instruction — only when the frame's code changed),
+    // read `pc` and fold in its advance (instructions that jump overwrite
+    // it), and hoist the register window base for the frame-stable arms
+    // (`reg_at`/`set_reg_at`).
+    let (pc, base) = {
+        let f = state.frames.last_mut().expect("empty frame stack");
+        if !Rc::ptr_eq(cur_code, &f.code) {
+            *cur_code = f.code.clone();
+        }
+        let pc = f.pc;
+        f.pc = pc + 1;
+        (pc, f.register_base)
     };
+    let code: &CodeObject = cur_code;
 
     let instr = code.instructions.get(pc).ok_or_else(|| VmError::Runtime {
         message: format!("PC {} out of bounds in {:?}", pc, code.id),
     })?;
-
-    // Advance PC before dispatch (instructions that jump will overwrite).
-    state.frames.last_mut().unwrap().pc += 1;
 
     // ── Trace: before instruction ────────────────────────────────────
     if let Some(tracer) = state.tracer.clone() {
@@ -952,7 +965,7 @@ fn dispatch_one_instruction(
     match *instr {
         // ── Load / Store ────────────────────────────────────────────────
         Instruction::LoadImmediate { dst, val } => {
-            state.set_reg(dst, val);
+            state.set_reg_at(base, dst, val);
         }
 
         Instruction::LoadConst { dst, idx } => {
@@ -963,12 +976,12 @@ fn dispatch_one_instruction(
                     .ok_or_else(|| VmError::Runtime {
                         message: format!("constant index {} out of bounds", idx),
                     })?;
-            state.set_reg(dst, val);
+            state.set_reg_at(base, dst, val);
         }
 
         Instruction::Move { dst, src } => {
-            let val = state.reg(src);
-            state.set_reg(dst, val);
+            let val = state.reg_at(base, src);
+            state.set_reg_at(base, dst, val);
         }
 
         Instruction::LoadClosure { dst, slot } => {
@@ -987,11 +1000,11 @@ fn dispatch_one_instruction(
                 .ok_or_else(|| VmError::Runtime {
                     message: format!("closure slot {} out of range", slot),
                 })?;
-            state.set_reg(dst, val);
+            state.set_reg_at(base, dst, val);
         }
 
         Instruction::StoreClosure { slot, src } => {
-            let val = state.reg(src);
+            let val = state.reg_at(base, src);
             let closure_idx =
                 state
                     .frames
@@ -1017,11 +1030,11 @@ fn dispatch_one_instruction(
             let val = globals
                 .get(name)
                 .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
-            state.set_reg(dst, val);
+            state.set_reg_at(base, dst, val);
         }
 
         Instruction::StoreGlobal { ref name, src } => {
-            let val = state.reg(src);
+            let val = state.reg_at(base, src);
             let globals = frame_globals(state);
             mark_if_shadowing_primitive(state, &globals, name, val);
             globals
@@ -1030,7 +1043,7 @@ fn dispatch_one_instruction(
         }
 
         Instruction::Define { ref name, src } => {
-            let val = state.reg(src);
+            let val = state.reg_at(base, src);
             let globals = frame_globals(state);
             mark_if_shadowing_primitive(state, &globals, name, val);
             globals.define(name.to_string(), val);
@@ -1042,13 +1055,14 @@ fn dispatch_one_instruction(
             code_id: child_id,
             ref free_vars,
         } => {
-            let captured: Vec<TaggedValue> = free_vars.iter().map(|&r| state.reg(r)).collect();
+            let captured: Vec<TaggedValue> =
+                free_vars.iter().map(|&r| state.reg_at(base, r)).collect();
             let globals = frame_globals(state);
             let closure_val = state
                 .heap
                 .borrow_mut()
                 .alloc_vm_closure(child_id.0, captured, globals);
-            state.set_reg(dst, closure_val);
+            state.set_reg_at(base, dst, closure_val);
         }
 
         // ── Control Flow ────────────────────────────────────────────────
@@ -1057,14 +1071,14 @@ fn dispatch_one_instruction(
         }
 
         Instruction::JumpIf { cond, target } => {
-            let val = state.reg(cond);
+            let val = state.reg_at(base, cond);
             if val != TaggedValue::FALSE {
                 state.frames.last_mut().unwrap().pc = target;
             }
         }
 
         Instruction::JumpUnless { cond, target } => {
-            let val = state.reg(cond);
+            let val = state.reg_at(base, cond);
             if val == TaggedValue::FALSE {
                 state.frames.last_mut().unwrap().pc = target;
             }
@@ -1076,7 +1090,7 @@ fn dispatch_one_instruction(
             ref args,
             dst,
         } => {
-            let func_val = state.reg(func);
+            let func_val = state.reg_at(base, func);
             // Closure fast path: copy args from the caller's window straight
             // into the fresh callee window — no argument buffer at all.
             // Non-closure callees (control primitives, continuations,
@@ -1084,9 +1098,10 @@ fn dispatch_one_instruction(
             // with a plain collected Vec, exactly as before the fast path.
             let closure_id = state.heap.borrow().get_vm_closure_code_id(func_val);
             if let Some(id) = closure_id {
-                call_closure_from_regs(state, func_val, CodeObjectId(id), args, dst)?;
+                call_closure_from_regs(state, func_val, CodeObjectId(id), base, args, dst)?;
             } else {
-                let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
+                let arg_vals: Vec<TaggedValue> =
+                    args.iter().map(|&r| state.reg_at(base, r)).collect();
                 if let Some(escaped) =
                     call_value_with_probe(state, func_val, None, &arg_vals, dst, exit_depth)?
                 {
@@ -1096,7 +1111,7 @@ fn dispatch_one_instruction(
         }
 
         Instruction::TailCall { func, ref args } => {
-            let func_val = state.reg(func);
+            let func_val = state.reg_at(base, func);
             // Closure fast path, tail shape: the frame window is reused in
             // place, so the args are staged through a stack buffer before
             // the overwrite — still no heap allocation.
@@ -1106,20 +1121,28 @@ fn dispatch_one_instruction(
                 if args.len() <= INLINE_ARGS {
                     let mut buf = [TaggedValue::UNSPECIFIED; INLINE_ARGS];
                     for (i, &r) in args.iter().enumerate() {
-                        buf[i] = state.reg(r);
+                        buf[i] = state.reg_at(base, r);
                     }
-                    tail_call_closure_resolved(
-                        state,
-                        func_val,
-                        CodeObjectId(id),
-                        &buf[..args.len()],
-                    )?;
+                    // Self-tail-call check while the caller's code is still
+                    // in hand — same code object, no frame access needed.
+                    if CodeObjectId(id) == code.id {
+                        self_tail_call(state, base, code.arity, func_val, &buf[..args.len()])?;
+                    } else {
+                        tail_call_closure_resolved(
+                            state,
+                            func_val,
+                            CodeObjectId(id),
+                            &buf[..args.len()],
+                        )?;
+                    }
                 } else {
-                    let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
+                    let arg_vals: Vec<TaggedValue> =
+                        args.iter().map(|&r| state.reg_at(base, r)).collect();
                     tail_call_closure_resolved(state, func_val, CodeObjectId(id), &arg_vals)?;
                 }
             } else {
-                let arg_vals: Vec<TaggedValue> = args.iter().map(|&r| state.reg(r)).collect();
+                let arg_vals: Vec<TaggedValue> =
+                    args.iter().map(|&r| state.reg_at(base, r)).collect();
                 if let Some(exit_val) =
                     tail_call_value_with_probe(state, func_val, None, &arg_vals, exit_depth)?
                 {
@@ -1133,12 +1156,12 @@ fn dispatch_one_instruction(
             ref args,
             dst,
         } => {
-            let func_val = state.reg(func);
+            let func_val = state.reg_at(base, func);
             let mut arg_vals: Vec<TaggedValue> = args[..args.len() - 1]
                 .iter()
-                .map(|&r| state.reg(r))
+                .map(|&r| state.reg_at(base, r))
                 .collect();
-            let last = state.reg(*args.last().unwrap());
+            let last = state.reg_at(base, *args.last().unwrap());
             let spread = state
                 .heap
                 .borrow()
@@ -1158,12 +1181,12 @@ fn dispatch_one_instruction(
         }
 
         Instruction::TailApply { func, ref args } => {
-            let func_val = state.reg(func);
+            let func_val = state.reg_at(base, func);
             let mut arg_vals: Vec<TaggedValue> = args[..args.len() - 1]
                 .iter()
-                .map(|&r| state.reg(r))
+                .map(|&r| state.reg_at(base, r))
                 .collect();
-            let last = state.reg(*args.last().unwrap());
+            let last = state.reg_at(base, *args.last().unwrap());
             let spread = state
                 .heap
                 .borrow()
@@ -1203,44 +1226,11 @@ fn dispatch_one_instruction(
             }
 
             let new_code_id = resolve_closure(state, func_val)?;
-            let new_code = state.code_object(new_code_id)?;
-
-            check_arity(&new_code.arity, arg_vals.len())?;
-
-            let frame = state.frames.last_mut().unwrap();
-            let old_base = frame.register_base;
-            let old_num = frame.num_regs;
-            let new_num = new_code.num_regs;
-
-            if new_num > old_num {
-                let extra = new_num - old_num;
-                state
-                    .registers
-                    .resize(state.registers.len() + extra as usize, TaggedValue::NULL);
-                state.frames.last_mut().unwrap().num_regs = new_num;
-            }
-
-            if let Arity::Variadic(fixed) = &new_code.arity {
-                let fixed = *fixed as usize;
-                for (i, val) in arg_vals[..fixed].iter().enumerate() {
-                    state.registers[old_base + i] = *val;
-                }
-                let rest = build_list(state, &arg_vals[fixed..])?;
-                state.registers[old_base + fixed] = rest;
-            } else {
-                for (i, val) in arg_vals.iter().enumerate() {
-                    state.registers[old_base + i] = *val;
-                }
-            }
-
-            let frame = state.frames.last_mut().unwrap();
-            frame.pc = 0;
-            frame.closure = closure_heap_index(func_val);
-            frame.code = new_code;
+            tail_call_closure_resolved(state, func_val, new_code_id, &arg_vals)?;
         }
 
         Instruction::Return { val } => {
-            let result = state.reg(val);
+            let result = state.reg_at(base, val);
             let frame = state.frames.pop().expect("Return with empty stack");
             if state.frames.len() == exit_depth || state.frames.is_empty() {
                 // Reached target depth (or absolute bottom) — this loop is done.
@@ -1266,17 +1256,17 @@ fn dispatch_one_instruction(
             consumer,
             producer_result,
         } => {
-            let consumer_val = state.reg(consumer);
+            let consumer_val = state.reg_at(base, consumer);
             let produced_vals = if !state.value_buffer.is_empty() {
                 std::mem::take(&mut state.value_buffer)
             } else if let Some(vals) = state
                 .heap
                 .borrow()
-                .get_values_as_tagged(state.reg(producer_result))
+                .get_values_as_tagged(state.reg_at(base, producer_result))
             {
                 vals
             } else {
-                vec![state.reg(producer_result)]
+                vec![state.reg_at(base, producer_result)]
             };
             if let Some(result) = call_any(state, consumer_val, &produced_vals, dst)? {
                 state.set_reg(dst, result);
@@ -1287,17 +1277,17 @@ fn dispatch_one_instruction(
             consumer,
             producer_result,
         } => {
-            let consumer_val = state.reg(consumer);
+            let consumer_val = state.reg_at(base, consumer);
             let produced_vals = if !state.value_buffer.is_empty() {
                 std::mem::take(&mut state.value_buffer)
             } else if let Some(vals) = state
                 .heap
                 .borrow()
-                .get_values_as_tagged(state.reg(producer_result))
+                .get_values_as_tagged(state.reg_at(base, producer_result))
             {
                 vals
             } else {
-                vec![state.reg(producer_result)]
+                vec![state.reg_at(base, producer_result)]
             };
             // Pop current frame (tail position), then call consumer.
             let frame = state
@@ -1324,8 +1314,8 @@ fn dispatch_one_instruction(
 
         // ── dynamic-wind (instruction-level) ──────────────────────────
         Instruction::PushWind { before, after } => {
-            let before_val = state.reg(before);
-            let after_val = state.reg(after);
+            let before_val = state.reg_at(base, before);
+            let after_val = state.reg_at(base, after);
             state.dynamic_winds.push(DynamicWindRecord {
                 before: before_val,
                 after: after_val,
@@ -1345,7 +1335,7 @@ fn dispatch_one_instruction(
 
         // ── Multiple Values ─────────────────────────────────────────────
         Instruction::ReturnMulti { ref vals } => {
-            let results: Vec<TaggedValue> = vals.iter().map(|&r| state.reg(r)).collect();
+            let results: Vec<TaggedValue> = vals.iter().map(|&r| state.reg_at(base, r)).collect();
             let frame = state.frames.pop().expect("ReturnMulti with empty stack");
             state.value_buffer = results.clone();
             if state.frames.is_empty() {
@@ -1367,7 +1357,7 @@ fn dispatch_one_instruction(
                 return Err(VmError::ContinuationValueMismatch);
             }
             for (&dst, val) in dsts.iter().zip(buf) {
-                state.set_reg(dst, val);
+                state.set_reg_at(base, dst, val);
             }
         }
 
@@ -1378,9 +1368,9 @@ fn dispatch_one_instruction(
             handler,
             dst,
         } => {
-            let tag_val = state.reg(tag);
-            let handler_val = state.reg(handler);
-            let body_val = state.reg(body);
+            let tag_val = state.reg_at(base, tag);
+            let handler_val = state.reg_at(base, handler);
+            let body_val = state.reg_at(base, body);
             state.prompt_stack.push(PromptFrame {
                 tag: tag_val,
                 stack_depth: state.frames.len(),
@@ -1392,8 +1382,8 @@ fn dispatch_one_instruction(
         }
 
         Instruction::AbortToPrompt { tag, val } => {
-            let tag_val = state.reg(tag);
-            let abort_val = state.reg(val);
+            let tag_val = state.reg_at(base, tag);
+            let abort_val = state.reg_at(base, val);
 
             let prompt_idx = state
                 .prompt_stack
@@ -1452,7 +1442,7 @@ fn dispatch_one_instruction(
         }
 
         Instruction::CaptureComposable { dst, tag } => {
-            let tag_val = state.reg(tag);
+            let tag_val = state.reg_at(base, tag);
             let prompt_idx = state
                 .prompt_stack
                 .iter()
@@ -1475,7 +1465,7 @@ fn dispatch_one_instruction(
                 base_at_capture: reg_base,
             };
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
-            state.set_reg(dst, cont_tv);
+            state.set_reg_at(base, dst, cont_tv);
         }
 
         Instruction::InvokeContinuation {
@@ -1483,8 +1473,8 @@ fn dispatch_one_instruction(
             val,
             composable,
         } => {
-            let cont_tv = state.reg(cont);
-            let deliver_val = state.reg(val);
+            let cont_tv = state.reg_at(base, cont);
+            let deliver_val = state.reg_at(base, val);
 
             if composable {
                 // Composable (delimited): append captured frames to current stack.
@@ -1542,10 +1532,12 @@ fn dispatch_one_instruction(
                 state.prompt_stack = cc.prompt_stack.clone();
                 state.exception_handlers = cc.exception_handlers.clone();
 
-                // Deliver value into deliver_reg of the top frame.
+                // Deliver value into deliver_reg of the top frame (the
+                // dispatch-level `base` is stale here — the whole register
+                // file was just replaced).
                 if let Some(top) = state.frames.last() {
-                    let base = top.register_base;
-                    state.registers[base + cc.deliver_reg as usize] = deliver_val;
+                    let top_base = top.register_base;
+                    state.registers[top_base + cc.deliver_reg as usize] = deliver_val;
                 }
             }
         }
@@ -1561,8 +1553,9 @@ fn dispatch_one_instruction(
             // state so a re-entrant primitive cannot alias it).
             let mut arg_vals = std::mem::take(&mut state.scratch_args);
             arg_vals.clear();
-            arg_vals.extend(args.iter().map(|&r| state.reg(r)));
-            let result = exec_call_primitive(state, func_id, name, &arg_vals, dst, exit_depth);
+            arg_vals.extend(args.iter().map(|&r| state.reg_at(base, r)));
+            let result =
+                exec_call_primitive(state, base, func_id, name, &arg_vals, dst, exit_depth);
             state.scratch_args = arg_vals;
             if let Some(escaped) = result? {
                 return Ok(Some(escaped));
@@ -1584,8 +1577,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let (x, y) = (state.reg(a), state.reg(b));
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+            let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
                 // Overflow returns None from fixnum_add; the handler promotes.
                 (x.is_fixnum() && y.is_fixnum())
                     .then(|| x.fixnum_add(y))
@@ -1600,8 +1593,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let (x, y) = (state.reg(a), state.reg(b));
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+            let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
                 (x.is_fixnum() && y.is_fixnum())
                     .then(|| x.fixnum_sub(y))
                     .flatten()
@@ -1615,8 +1608,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let (x, y) = (state.reg(a), state.reg(b));
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+            let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
                 (x.is_fixnum() && y.is_fixnum())
                     .then(|| x.fixnum_mul(y))
                     .flatten()
@@ -1630,8 +1623,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let (x, y) = (state.reg(a), state.reg(b));
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+            let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
                 (x.is_fixnum() && y.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_lt(y)))
             });
         }
@@ -1643,8 +1636,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let (x, y) = (state.reg(a), state.reg(b));
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+            let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
                 (x.is_fixnum() && y.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_eq(y)))
             });
         }
@@ -1656,8 +1649,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let (x, y) = (state.reg(a), state.reg(b));
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+            let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
                 Some(TaggedValue::boolean(state.heap.borrow().values_eq(x, y)))
             });
         }
@@ -1669,8 +1662,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let (x, y) = (state.reg(a), state.reg(b));
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x, y], {
+            let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
                 Some(state.heap.borrow_mut().alloc_pair(x, y))
             });
         }
@@ -1681,8 +1674,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let x = state.reg(src);
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+            let x = state.reg_at(base, src);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
                 // Native pairs only; boxed pairs and type errors go to the handler.
                 x.is_pair().then(|| state.heap.borrow().car(x))
             });
@@ -1694,8 +1687,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let x = state.reg(src);
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+            let x = state.reg_at(base, src);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
                 x.is_pair().then(|| state.heap.borrow().cdr(x))
             });
         }
@@ -1706,8 +1699,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let x = state.reg(src);
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+            let x = state.reg_at(base, src);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
                 Some(TaggedValue::boolean(!x.is_truthy()))
             });
         }
@@ -1718,8 +1711,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let x = state.reg(src);
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+            let x = state.reg_at(base, src);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
                 Some(TaggedValue::boolean(x.is_null()))
             });
         }
@@ -1730,8 +1723,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let x = state.reg(src);
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+            let x = state.reg_at(base, src);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
                 Some(TaggedValue::boolean(x.is_pair()))
             });
         }
@@ -1742,8 +1735,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let x = state.reg(src);
-            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+            let x = state.reg_at(base, src);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
                 Some(TaggedValue::boolean(x.is_vector()))
             });
         }
@@ -1755,8 +1748,8 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let (vec, idx) = (state.reg(v), state.reg(i));
-            inline_primitive!(state, exit_depth, func_id, name, dst, [vec, idx], {
+            let (vec, idx) = (state.reg_at(base, v), state.reg_at(base, i));
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [vec, idx], {
                 // Out-of-bounds (`get` misses, including negative indices)
                 // falls back so the handler's error message is used.
                 (vec.is_vector() && idx.is_fixnum())
@@ -1776,30 +1769,43 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
-            let (vec, idx, x) = (state.reg(v), state.reg(i), state.reg(val));
-            inline_primitive!(state, exit_depth, func_id, name, dst, [vec, idx, x], {
-                // Out-of-bounds falls back so the handler's error message is
-                // used. Writes `dst ← unspecified`, matching the handler.
-                (vec.is_vector() && idx.is_fixnum())
-                    .then(|| {
-                        let i = usize::try_from(idx.as_fixnum_unchecked()).ok()?;
-                        let mut heap = state.heap.borrow_mut();
-                        let slot = heap.vector_slice_mut(vec).get_mut(i)?;
-                        *slot = x;
-                        Some(TaggedValue::UNSPECIFIED)
-                    })
-                    .flatten()
-            });
+            let (vec, idx, x) = (
+                state.reg_at(base, v),
+                state.reg_at(base, i),
+                state.reg_at(base, val),
+            );
+            inline_primitive!(
+                state,
+                base,
+                exit_depth,
+                func_id,
+                name,
+                dst,
+                [vec, idx, x],
+                {
+                    // Out-of-bounds falls back so the handler's error message is
+                    // used. Writes `dst ← unspecified`, matching the handler.
+                    (vec.is_vector() && idx.is_fixnum())
+                        .then(|| {
+                            let i = usize::try_from(idx.as_fixnum_unchecked()).ok()?;
+                            let mut heap = state.heap.borrow_mut();
+                            let slot = heap.vector_slice_mut(vec).get_mut(i)?;
+                            *slot = x;
+                            Some(TaggedValue::UNSPECIFIED)
+                        })
+                        .flatten()
+                }
+            );
         }
 
         Instruction::AllocCell { dst, src } => {
-            let val = state.reg(src);
+            let val = state.reg_at(base, src);
             let cell = state.heap.borrow_mut().alloc_mutable_cell(val);
-            state.set_reg(dst, cell);
+            state.set_reg_at(base, dst, cell);
         }
 
         Instruction::ReadCell { dst, cell } => {
-            let cell_tv = state.reg(cell);
+            let cell_tv = state.reg_at(base, cell);
             let val = state
                 .heap
                 .borrow()
@@ -1807,12 +1813,12 @@ fn dispatch_one_instruction(
                 .ok_or_else(|| VmError::Runtime {
                     message: "ReadCell: not a MutableCell".into(),
                 })?;
-            state.set_reg(dst, val);
+            state.set_reg_at(base, dst, val);
         }
 
         Instruction::WriteCell { cell, src } => {
-            let cell_tv = state.reg(cell);
-            let val = state.reg(src);
+            let cell_tv = state.reg_at(base, cell);
+            let val = state.reg_at(base, src);
             let ok = state.heap.borrow().write_mutable_cell(cell_tv, val);
             if !ok {
                 return Err(VmError::Runtime {
@@ -1946,15 +1952,52 @@ fn closure_heap_index(val: TaggedValue) -> Option<patina_core::tagged_value::Hea
     }
 }
 
-fn check_arity(arity: &Arity, n: usize) -> Result<(), VmError> {
-    if !arity.accepts(n) {
-        return Err(VmError::ArityMismatch {
-            expected: match arity {
-                Arity::Fixed(k) => format!("{}", k),
-                Arity::Variadic(k) => format!("at least {}", k),
-            },
-            got: n,
-        });
+/// Outlined error constructor — `#[cold]` keeps the formatting machinery
+/// out of the call paths that inline `check_arity`.
+#[cold]
+#[inline(never)]
+fn arity_error(arity: Arity, n: usize) -> VmError {
+    VmError::ArityMismatch {
+        expected: match arity {
+            Arity::Fixed(k) => format!("{}", k),
+            Arity::Variadic(k) => format!("at least {}", k),
+        },
+        got: n,
+    }
+}
+
+#[inline(always)]
+fn check_arity(arity: Arity, n: usize) -> Result<(), VmError> {
+    if arity.accepts(n) {
+        Ok(())
+    } else {
+        Err(arity_error(arity, n))
+    }
+}
+
+/// Fill the register window at `base` with a call's arguments per `arity`:
+/// fixed args into `r0..`, a variadic rest collected into a list after them.
+/// The caller has already checked arity.
+fn store_args_in_window(
+    state: &mut VmState,
+    base: usize,
+    arity: Arity,
+    arg_vals: &[TaggedValue],
+) -> Result<(), VmError> {
+    if let Arity::Variadic(fixed) = arity {
+        let fixed = fixed as usize;
+        for (dst, &val) in state.registers[base..base + fixed].iter_mut().zip(arg_vals) {
+            *dst = val;
+        }
+        let rest = build_list(state, &arg_vals[fixed..])?;
+        state.registers[base + fixed] = rest;
+    } else {
+        for (dst, &val) in state.registers[base..base + arg_vals.len()]
+            .iter_mut()
+            .zip(arg_vals)
+        {
+            *dst = val;
+        }
     }
     Ok(())
 }
@@ -3005,9 +3048,18 @@ fn tail_call_closure_resolved(
     new_code_id: CodeObjectId,
     arg_vals: &[TaggedValue],
 ) -> Result<(), VmError> {
+    let top = state
+        .frames
+        .last()
+        .expect("tail call with empty frame stack");
+    if top.code.id == new_code_id {
+        let (arity, base) = (top.code.arity, top.register_base);
+        return self_tail_call(state, base, arity, func_val, arg_vals);
+    }
+
     let new_code = state.code_object(new_code_id)?;
 
-    check_arity(&new_code.arity, arg_vals.len())?;
+    check_arity(new_code.arity, arg_vals.len())?;
 
     // Reuse the current frame's register window.
     // If the new code needs more registers, grow the window.
@@ -3024,19 +3076,7 @@ fn tail_call_closure_resolved(
         state.frames.last_mut().unwrap().num_regs = new_num;
     }
 
-    // Write fixed args into r0..r(n-1), then handle variadic rest.
-    if let Arity::Variadic(fixed) = &new_code.arity {
-        let fixed = *fixed as usize;
-        for (i, &val) in arg_vals[..fixed].iter().enumerate() {
-            state.registers[old_base + i] = val;
-        }
-        let rest = build_list(state, &arg_vals[fixed..])?;
-        state.registers[old_base + fixed] = rest;
-    } else {
-        for (i, &val) in arg_vals.iter().enumerate() {
-            state.registers[old_base + i] = val;
-        }
-    }
+    store_args_in_window(state, old_base, new_code.arity, arg_vals)?;
 
     // Update frame in-place — dispatch fetches instructions from `code`.
     let frame = state.frames.last_mut().unwrap();
@@ -3046,14 +3086,39 @@ fn tail_call_closure_resolved(
     Ok(())
 }
 
+/// Tail call whose callee is the current frame's own code object — the
+/// `(define (loop …) … (loop …))` shape. No store lookup, no `Rc` churn,
+/// no window grow: the window is already sized for this code. The closure
+/// field still updates — a different instance of the same code (different
+/// captures) tail-calls itself under the same code id.
+fn self_tail_call(
+    state: &mut VmState,
+    base: usize,
+    arity: Arity,
+    func_val: TaggedValue,
+    arg_vals: &[TaggedValue],
+) -> Result<(), VmError> {
+    check_arity(arity, arg_vals.len())?;
+    store_args_in_window(state, base, arity, arg_vals)?;
+    let frame = state
+        .frames
+        .last_mut()
+        .expect("tail call with empty frame stack");
+    frame.pc = 0;
+    frame.closure = closure_heap_index(func_val);
+    Ok(())
+}
+
 /// Execute a compile-time-resolved primitive call: the shared back end of
 /// `CallPrimitive` and every inline opcode's slow path. Checks the shadow
 /// bit — a rebound name deoptimizes to name-lookup dispatch, preserving
 /// redefinition semantics — otherwise dispatches through the registry by
 /// index. Returns `Some(value)` on a continuation escape, as `call_value`
 /// does.
+#[allow(clippy::too_many_arguments)]
 fn exec_call_primitive(
     state: &mut VmState,
+    base: usize,
     func_id: PrimitiveFnId,
     name: &Symbol,
     arg_vals: &[TaggedValue],
@@ -3093,7 +3158,10 @@ fn exec_call_primitive(
         .map_err(|e| VmError::Runtime {
             message: e.to_string(),
         })?;
-    state.set_reg(dst, result);
+    // Primitives are frame-neutral on the `Ok` path (a re-entrant call runs
+    // its nested frames to completion), so the hoisted base is still the
+    // top frame's — the write the plain `set_reg` here already assumed.
+    state.set_reg_at(base, dst, result);
     Ok(None)
 }
 
