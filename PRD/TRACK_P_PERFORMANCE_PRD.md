@@ -391,6 +391,34 @@ turned out to be dead code. **pc-in-loop-local was built, measured, and
 rejected** (§P10 negative result); the standing queue is now
 compare-branch fusion and generational GC.
 
+### 1.11 Scoreboard after test-branch fusion (2026-08-08)
+
+Sweep with the fusion binary, same local Chibi 0.12 baseline:
+
+| Benchmark | P5 | fusion | Delta | Ratio vs Chibi |
+|---|---|---|---|---|
+| slatex | 23.5 | 24.6 | +5.1% | 0.27× — faster |
+| matrix | 90.1 | 90.4 | +0.3% | 0.64× — faster |
+| diviter | 33.6 | 32.8 | −2.3% | 0.71× — faster |
+| compiler | 59.3 | 59.9 | +1.1% | 0.83× — faster |
+| maze | 46.9 | 46.9 | 0% | 0.88× — faster |
+| divrec | 35.2 | 34.4 | −2.1% | 0.92× — faster |
+| nboyer | 27.2 | 27.1 | −0.5% | 1.06× |
+| tak | 47.8 | 48.2 | +0.9% | 1.12× |
+| deriv | 97.9 | 95.1 | −2.8% | 1.21× |
+| ctak | 53.9 | 56.6 | +4.9% | n/a (Chibi crashes) |
+
+**Geomean: 0.79×** — unchanged from the P5 sweep. The predicted wins landed
+where the shape census said they would (deriv −2.8%, diviter −2.3%,
+divrec −2.1%, all cons/predicate-dense), but slatex (+5.1%) and ctak
+(+4.9%) drifted up on single runs and cancel them in the geomean. Neither
+executes a fused predicate in its hot path — slatex is string/IO-bound and
+ctak is capture-bound — so both read as sweep noise rather than
+regression; the interleaved A/Bs on the same machine were tight to ±0.5%.
+Worth remembering when reading any single sweep: **the geomean moves less
+than the per-benchmark deltas warrant when two noisy entries sit at the
+extremes.**
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
@@ -549,10 +577,40 @@ compare-and-branch ahead of the match restored parity while keeping every
 other gain. If more predicates join, measure the same way before assuming
 the jump table is free.
 
+**Two more negative results, from the post-landing review round:**
+- **Hoisting by emission count is wrong.** The review correctly caught that
+  the hoist comment claimed `not` was the most-emitted predicate when a
+  census says otherwise (`null?` 150 sites, `pair?` 71, `not` 47 across
+  `lib/**` + benchmarks). Acting on that census made things *worse*:
+  hoisting `null?`+`pair?` as well cost **+1.7% on tak** and bought
+  **nothing** on a `null?`-driven loop. Static site counts measure BTB
+  pressure; what the compare chain must be ordered by is *dynamic*
+  weight, and `not` sits in tight recursive loops. The chain stays at one,
+  now with an accurate comment.
+- **`unreachable!` on the hoisted arm is load-bearing.** Spelling the
+  hoisted `Not` expression out in the residual match instead — safer-looking,
+  and the review's suggestion — cost **+1.2% on tak**: it keeps a live
+  switch case LLVM otherwise prunes.
+- Also measured and dropped: hoisting `values_eq`'s raw-bits compare into
+  the caller to skip the heap borrow. It measured **+2% on an `eq?`-heavy
+  loop** — LLVM already hoists that compare through the inlined callee, so
+  the hand-written version only added checks.
+
 **Not done:** the imm operand forms (`(if (= n 0) …)` → `LtImm`/`NumEqImm`
 + branch) are 4 of the 32 sites and need a second operand shape on
 `TestJumpUnless`; and the 11 predicate→`not`→branch chains, which would be
-a 3-into-1 fusion.
+a 3-into-1 fusion. **Where they belong:** the review identified that
+fusion runs at the `If` emission site while the invariant it creates
+("replace in place, keep the neighbour at i+1") is the same one
+`thread_returns` owns as a post-pass. Moving fusion into
+`finalize_instructions` would make the kept-landing contract structural
+rather than a caller protocol, delete the `patch_jump` arm and the `fused`
+threading, and — the reason it matters for the next wave — put the
+arbitration between literal-absorption and branch-fusion somewhere that can
+see both. Today they compete: `primitive_operands` absorbs the literal at
+the `App` site, so `(if (= n 0) …)` is already `NumEqImm` by the time the
+`If` arm looks, which is exactly why those 4 sites are unfused. Do the
+post-pass move together with the imm forms, with its own A/B.
 
 ### P6 — Garbage collection  *(complete — stages 1-4, always on; stage 5 in `PRD/future/GC_STAGE5_PRD.md`)*
 Designed and tracked in **`docs/GC_DESIGN.md`**, which supersedes the sketch that used to live here — it covers both backends (not just the VM), adds a `Collector`/`GcRoots` pluggability seam, and carries the complete root inventory and staging plan.

@@ -63,6 +63,36 @@ fn eval_err(code: &str) -> String {
 }
 
 #[test]
+fn fused_and_unfused_agree_for_every_predicate() {
+    // The fast paths of the fused and unfused forms are separate code, so
+    // pin that they answer identically across the operand kinds each
+    // predicate can meet — including the ones only one form fast-paths.
+    let vals = [
+        "'()", "'(1 2)", "#(1)", "1", "1.5", "1/2", "'sym", "\"s\"", "#t", "#f",
+    ];
+    for pred in ["null?", "pair?", "vector?", "not"] {
+        for v in vals {
+            let fused = eval(&format!("(define (f x) (if ({pred} x) 'y 'n)) (f {v})"));
+            let unfused = eval(&format!("(define (g x) ({pred} x)) (if (g {v}) 'y 'n)"));
+            assert_eq!(fused, unfused, "{pred} on {v}");
+        }
+    }
+    for pred in ["eq?", "<", "="] {
+        for a in ["1", "1.5", "1/2", "2"] {
+            for b in ["1", "1.5", "1/2", "2"] {
+                let fused = eval(&format!(
+                    "(define (f x y) (if ({pred} x y) 'y 'n)) (f {a} {b})"
+                ));
+                let unfused = eval(&format!(
+                    "(define (g x y) ({pred} x y)) (if (g {a} {b}) 'y 'n)"
+                ));
+                assert_eq!(fused, unfused, "{pred} on {a} {b}");
+            }
+        }
+    }
+}
+
+#[test]
 fn fused_comparison_type_error_matches_unfused() {
     // The fused site's slow path calls the same registry handler as the
     // unfused opcode, so a type error must read identically. `(if (< a b) …)`

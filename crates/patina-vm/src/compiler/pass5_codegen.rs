@@ -214,61 +214,51 @@ fn finalize_instructions(
 /// The caller must still emit the plain `JumpUnless` immediately after:
 /// the fused instruction's slow and deopt paths fall through to it.
 fn fuse_test_into_branch(cond: u16, cg: &mut Codegen) -> Option<usize> {
-    // Every arm maps a predicate opcode to the equivalent `TestOp`; the
-    // shapes not listed (arithmetic, `car`, vector ops) don't produce a
-    // branch condition and stay unfused.
-    let (test, a, b, dst, func_id, name) = match cg.instructions.last()? {
+    // Which opcodes are fusable, and their operands. Or-patterns bind the
+    // same names across each shape, so adding a predicate is one alternative
+    // in the matching group; anything else (arithmetic, `car`, vector ops)
+    // never produces a branch condition and stays unfused.
+    let (test, a, b, dst, func_id) = match cg.instructions.last()? {
         Instruction::Not {
-            src,
-            dst,
-            func_id,
-            name,
-        } => (TestOp::Not, *src, 0, *dst, *func_id, name.clone()),
+            src, dst, func_id, ..
+        } => (TestOp::Not, *src, 0, *dst, *func_id),
         Instruction::NullP {
-            src,
-            dst,
-            func_id,
-            name,
-        } => (TestOp::NullP, *src, 0, *dst, *func_id, name.clone()),
+            src, dst, func_id, ..
+        } => (TestOp::NullP, *src, 0, *dst, *func_id),
         Instruction::PairP {
-            src,
-            dst,
-            func_id,
-            name,
-        } => (TestOp::PairP, *src, 0, *dst, *func_id, name.clone()),
+            src, dst, func_id, ..
+        } => (TestOp::PairP, *src, 0, *dst, *func_id),
         Instruction::VectorP {
-            src,
-            dst,
-            func_id,
-            name,
-        } => (TestOp::VectorP, *src, 0, *dst, *func_id, name.clone()),
+            src, dst, func_id, ..
+        } => (TestOp::VectorP, *src, 0, *dst, *func_id),
         Instruction::Eq {
-            a,
-            b,
-            dst,
-            func_id,
-            name,
-        } => (TestOp::Eq, *a, *b, *dst, *func_id, name.clone()),
+            a, b, dst, func_id, ..
+        } => (TestOp::Eq, *a, *b, *dst, *func_id),
         Instruction::Lt {
-            a,
-            b,
-            dst,
-            func_id,
-            name,
-        } => (TestOp::Lt, *a, *b, *dst, *func_id, name.clone()),
+            a, b, dst, func_id, ..
+        } => (TestOp::Lt, *a, *b, *dst, *func_id),
         Instruction::NumEq {
-            a,
-            b,
-            dst,
-            func_id,
-            name,
-        } => (TestOp::NumEq, *a, *b, *dst, *func_id, name.clone()),
+            a, b, dst, func_id, ..
+        } => (TestOp::NumEq, *a, *b, *dst, *func_id),
         _ => return None,
     };
     if dst != cond {
         return None;
     }
-    cg.instructions.pop();
+    // Pop by value so the predicate's `name` moves into the fused
+    // instruction rather than being cloned.
+    let name = match cg.instructions.pop() {
+        Some(
+            Instruction::Not { name, .. }
+            | Instruction::NullP { name, .. }
+            | Instruction::PairP { name, .. }
+            | Instruction::VectorP { name, .. }
+            | Instruction::Eq { name, .. }
+            | Instruction::Lt { name, .. }
+            | Instruction::NumEq { name, .. },
+        ) => name,
+        _ => unreachable!("just matched a fusable test"),
+    };
     Some(cg.emit(Instruction::TestJumpUnless {
         test,
         a,

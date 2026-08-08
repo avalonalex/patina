@@ -1718,16 +1718,20 @@ fn dispatch_one_instruction(
             // `None` = this test can't answer here (non-fixnum comparison);
             // fall through to the shared slow path below, exactly like the
             // unfused opcodes' `inline_primitive!` fallback.
+            // `not` gets a compare-and-branch ahead of the jump table the
+            // rest compiles to, because it is the predicate that sits in
+            // tight recursive loops — leaving it behind the table measured
+            // +0.9% on tak. Hoisting more predicates by *emission* count
+            // (`null?` leads at 150 sites, `pair?` 71) measured worse on
+            // tak and bought nothing on a `null?`-driven loop: dynamic
+            // position beats static frequency here, so the chain stays at
+            // one.
             let verdict = if state.is_primitive_shadowed(func_id.0 as usize) {
                 None
             } else if test == TestOp::Not {
-                // `not` is the most frequently fused test (every `(if (not
-                // …))`), so it gets a predictable compare-and-branch ahead
-                // of the jump table the general match compiles to.
                 Some(!x.is_truthy())
             } else {
                 match test {
-                    TestOp::Not => unreachable!("handled above"),
                     TestOp::NullP => Some(x.is_null()),
                     TestOp::PairP => Some(x.is_pair()),
                     TestOp::VectorP => Some(x.is_vector()),
@@ -1743,6 +1747,10 @@ fn dispatch_one_instruction(
                         let y = state.reg_at(base, b);
                         (x.is_fixnum() && y.is_fixnum()).then(|| x.fixnum_eq(y))
                     }
+                    // Unreachable: hoisted above. Spelling the expression
+                    // out here instead measured +1.7% on tak — it keeps a
+                    // live switch case that LLVM otherwise prunes.
+                    TestOp::Not => unreachable!("hoisted above"),
                 }
             };
             match verdict {
@@ -1761,10 +1769,8 @@ fn dispatch_one_instruction(
                     // (identical result and error message to the unfused
                     // opcode), then control falls through to the kept
                     // `JumpUnless dst`, which branches.
-                    let args: &[TaggedValue] = match test {
-                        TestOp::Not | TestOp::NullP | TestOp::PairP | TestOp::VectorP => &[x],
-                        _ => &[x, state.reg_at(base, b)],
-                    };
+                    let operands = [x, state.reg_at(base, b)];
+                    let args = &operands[..test.arity()];
                     if let Some(escaped) =
                         exec_call_primitive(state, base, func_id, name, args, dst, exit_depth)?
                     {

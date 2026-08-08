@@ -318,8 +318,8 @@ chosen or replaced, never deleted, so no pc remapping exists anywhere:
 | Return threading | `thread_returns`, after patching | `Jump → Return` and `Move d←s; Jump → Return d` rewritten to direct `Return`s in place; orphaned instructions keep their slots |
 
 Measured on tak: 28 → 19 dispatches per iteration (−28% wall-clock). Test-branch
-fusion (wave 2) then removed one dispatch per `if` on a predicate: −7.5% on a
-`null?`-driven list walk, −2.4% deriv, −1.2% nboyer.
+fusion (wave 2) then removed one dispatch per `if` on a predicate; see
+PRD §P5.2 for its measurements and the ordering constraints found there.
 
 Still future:
 

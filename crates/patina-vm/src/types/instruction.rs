@@ -29,6 +29,19 @@ pub enum TestOp {
     NumEq,
 }
 
+impl TestOp {
+    /// Operand count — the single owner of which tests read `b`. The
+    /// dispatch arm's deopt argument list and the disassembler both read
+    /// it, so a new unary predicate can't be mistaken for a binary one.
+    #[inline]
+    pub fn arity(self) -> usize {
+        match self {
+            TestOp::Not | TestOp::NullP | TestOp::PairP | TestOp::VectorP => 1,
+            TestOp::Eq | TestOp::Lt | TestOp::NumEq => 2,
+        }
+    }
+}
+
 /// A single VM instruction.
 ///
 /// Operands use frame-relative register indices (`Reg = u16`). All values are

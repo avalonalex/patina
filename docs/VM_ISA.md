@@ -199,12 +199,9 @@ argument, preserving evaluation order). On top of that:
 
 One instruction covers every fusable predicate rather than one variant per
 predicate, so there is a single fused-branch arm, deopt path, and emission
-site as more predicates become fusable. Its slow paths — a rebound
-predicate, or operands the fixnum fast path can't judge (`(< 1.5 2)`) —
-call the same registry handler the unfused opcode uses, which writes `dst`,
-and then *fall through* to the kept `JumpUnless`, which performs the
-branch. So the kept instruction is simultaneously the deopt landing and the
-slow path's branch, and fused and unfused forms agree by construction.
+site as more predicates become fusable. Its slow paths fall through to the
+kept `JumpUnless`, which is therefore both the deopt landing and the slow
+path's branch.
 
 Only a predicate feeding a branch fuses; the same predicate used as a value
 (returned, bound, passed) keeps its plain opcode.
