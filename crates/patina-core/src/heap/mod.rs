@@ -2363,10 +2363,16 @@ impl Heap {
     // =========================================================================
 
     /// Build a proper list from an iterator of values
-    pub fn list_from_iter<I: IntoIterator<Item = TaggedValue>>(&mut self, iter: I) -> TaggedValue {
-        let items: Vec<_> = iter.into_iter().collect();
+    pub fn list_from_iter<I>(&mut self, iter: I) -> TaggedValue
+    where
+        I: IntoIterator<Item = TaggedValue>,
+        I::IntoIter: DoubleEndedIterator,
+    {
+        // Cons back-to-front directly — no staging Vec. The partial list
+        // needs no GC root: collection only runs at the interpreter loops'
+        // safe points, never inside `alloc_pair`.
         let mut result = TaggedValue::NULL;
-        for item in items.into_iter().rev() {
+        for item in iter.into_iter().rev() {
             result = self.alloc_pair(item, result);
         }
         result

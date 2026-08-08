@@ -637,6 +637,36 @@ cddr list churn −31%; fib control flat. Residual gap vs hand-inlined `not`:
 one extra dispatched `Not` per iteration — the `not`+`JumpUnless` fusion
 peephole stays a P5 candidate.
 
+### P10 — Variadic/primitive-call allocation churn  *(first slice done — 2026-08-08)*
+
+The §1.10 "deriv `Vec`-churn cluster", attributed by a debug-info profile
+(`atos` on the sampled addresses — worth the rebuild every time):
+deriv's malloc/free was 6.7% of runtime, split across the variadic
+rest-list staging `Vec` in `call_closure_from_regs` (every `map` call —
+the "variadic calls are the uncommon shape" comment was wrong in
+practice), `list_from_iter`'s collect-then-cons staging (every `list`
+call), `MakeClosure`-adjacent object-arena growth, and `Apply`'s
+`list_to_vec`.
+
+**Landed:** the two staging `Vec`s are gone — both sites now cons
+directly, back to front. This is safe because collection only runs at
+the interpreter loops' safe points, never inside `alloc_pair`, so
+partial lists need no root (the staging was never load-bearing for GC);
+`list_from_iter` now requires `DoubleEndedIterator` (all callers
+qualify). The tail-call variadic path was already `Vec`-free via the
+#17 stack stage. Measured (interleaved A/B ×3): deriv −2.2%, tak flat;
+deriv's malloc cluster 533 → 367 samples, `lists::list` self-time
+43 → 11.
+
+**Deliberately not done:** `Apply`'s `list_to_vec` scratch-buffer reuse —
+the #17 negative result (scratch take/restore for closure-call args
+regressed re-entrant code) covers it; revisit only with a design that
+avoids per-call take/restore. `MakeClosure`'s residue is object-arena
+growth between collections (captures are empty on the hot path — no
+staging `Vec` exists there), which is generational-GC territory
+(stage 5 priority 3), and `value_buffer` recycling stays queued —
+deriv never touches multi-values.
+
 ---
 
 ## 5. Sequencing within the track

@@ -757,13 +757,17 @@ fn call_closure_from_regs(
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
             state.registers[base + i] = state.registers[caller_base + r as usize];
         }
-        // The rest-list build allocates on the heap, so the rest values are
-        // staged through a Vec (variadic calls are the uncommon shape).
-        let rest_vals: Vec<TaggedValue> = arg_regs[fixed..]
-            .iter()
-            .map(|&r| state.registers[caller_base + r as usize])
-            .collect();
-        let rest = build_list(state, &rest_vals)?;
+        // Cons the rest list straight from the caller's registers — no
+        // staging Vec. Safe because the callee window is fresh (no overlap
+        // with the caller's), `alloc_pair` never touches `state.registers`,
+        // and collection only runs at the outermost-loop safe point, so the
+        // partial list needs no root. Variadic calls are hot in practice:
+        // `map` and every rest-arg stdlib procedure land here per call.
+        let mut rest = TaggedValue::NULL;
+        for &r in arg_regs[fixed..].iter().rev() {
+            let item = state.registers[caller_base + r as usize];
+            rest = state.heap.borrow_mut().alloc_pair(item, rest);
+        }
         state.registers[base + fixed] = rest;
     } else {
         for (i, &r) in arg_regs.iter().enumerate() {
