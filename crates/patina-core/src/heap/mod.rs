@@ -2374,12 +2374,23 @@ impl Heap {
         I: IntoIterator<Item = TaggedValue>,
         I::IntoIter: DoubleEndedIterator,
     {
-        // Conses back to front — hence the `DoubleEndedIterator` bound —
-        // with no staging: the partial list needs no GC root (see
-        // `alloc_pair`). A caller with a forward-only iterator should
-        // restructure toward a reversible source rather than collect into
-        // a `Vec` here; the staging is exactly what this method avoids.
-        let mut result = TaggedValue::NULL;
+        self.list_from_iter_with_tail(iter, TaggedValue::NULL)
+    }
+
+    /// Build a (possibly improper) list ending in `tail` from the iterator's
+    /// elements. `(a b . c)` is `list_from_iter_with_tail([a, b], c)`.
+    ///
+    /// Conses back to front — hence the `DoubleEndedIterator` bound — with
+    /// no staging: the partial list needs no GC root (see `alloc_pair`). A
+    /// caller with a forward-only iterator should restructure toward a
+    /// reversible source rather than collect into a `Vec` here; the staging
+    /// is exactly what this method avoids.
+    pub fn list_from_iter_with_tail<I>(&mut self, iter: I, tail: TaggedValue) -> TaggedValue
+    where
+        I: IntoIterator<Item = TaggedValue>,
+        I::IntoIter: DoubleEndedIterator,
+    {
+        let mut result = tail;
         for item in iter.into_iter().rev() {
             result = self.alloc_pair(item, result);
         }

@@ -251,14 +251,6 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
             name,
             ..
         } => fmt_inline_prim("VectorSet", *dst, name, &[*v, *i, *val]),
-        Instruction::ReturnMulti { vals } => {
-            let v: Vec<String> = vals.iter().map(|r| format!("r{}", r)).collect();
-            format!("ReturnMulti  ({})", v.join(", "))
-        }
-        Instruction::ReceiveValues { dsts } => {
-            let d: Vec<String> = dsts.iter().map(|r| format!("r{}", r)).collect();
-            format!("RecvValues   ({})", d.join(", "))
-        }
         Instruction::Define { name, src } => {
             format!("Define       globals[{}] ← r{}", name, src)
         }

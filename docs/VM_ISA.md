@@ -226,10 +226,23 @@ the param slot range.
 
 ### 4.6 Multiple Values
 
+Multiple values flow through `VmState::value_buffer`, not through dedicated
+return/receive instructions. `(values …)` is intercepted as a control
+primitive (§5) and refills the buffer in place; `call-with-values` compiles
+to instruction-level sequences ending in `CallWithValues` /
+`TailCallWithValues`:
+
 | Instruction | Operands | Semantics |
 |---|---|---|
-| `ReturnMulti` | `vals: Vec<Reg>` | Return multiple values via `VmState::value_buffer` |
-| `ReceiveValues` | `dsts: Vec<Reg>` | Bind incoming values from `value_buffer` to registers; error if count mismatches |
+| `CallWithValues` | `dst: Reg, consumer: Reg, producer_result: Reg` | Call consumer with the buffered values (or the single producer result); result → `dst` |
+| `TailCallWithValues` | `consumer: Reg, producer_result: Reg` | Tail-position variant: pops the frame first |
+
+Both consumer sides *take* the buffer (`mem::take`) rather than borrow it —
+deliberately, so re-entrant producer/consumer code always sees a clean
+channel. Continuation resume with multiple values refills the buffer the
+same way. (`ReturnMulti` / `ReceiveValues` instructions existed for an
+earlier design but were never emitted by any compiler pass; removed
+2026-08-08.)
 
 ### 4.7 Global Definitions
 

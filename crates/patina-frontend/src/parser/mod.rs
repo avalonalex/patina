@@ -1017,12 +1017,9 @@ impl Parser {
     }
 
     fn make_dotted_list(&self, elements: Vec<TaggedValue>, tail: TaggedValue) -> TaggedValue {
-        let mut heap = self.heap.borrow_mut();
-        let mut result = tail;
-        for elem in elements.into_iter().rev() {
-            result = heap.alloc_pair(elem, result);
-        }
-        result
+        self.heap
+            .borrow_mut()
+            .list_from_iter_with_tail(elements, tail)
     }
 
     /// Resolve all LabelPlaceholder values in a parsed datum.

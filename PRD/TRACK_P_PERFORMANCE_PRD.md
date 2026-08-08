@@ -664,8 +664,26 @@ regressed re-entrant code) covers it; revisit only with a design that
 avoids per-call take/restore. `MakeClosure`'s residue is object-arena
 growth between collections (captures are empty on the hot path — no
 staging `Vec` exists there), which is generational-GC territory
-(stage 5 priority 3), and `value_buffer` recycling stays queued —
-deriv never touches multi-values.
+(stage 5 priority 3).
+
+**Queued-item closures (2026-08-08, follow-up PR):**
+- **`value_buffer` recycling — resolved as dead code.** Investigating the
+  queued item found the live multi-value channels already recycle: the
+  `values` interception and continuation resume refill the buffer in
+  place, and `CallWithValues`' `mem::take` is load-bearing (re-entrant
+  code must see a clean channel — same family as the #17 negative
+  result). The only *allocating* sites were the `ReturnMulti` /
+  `ReceiveValues` dispatch arms — instructions **no compiler pass ever
+  emitted** (vestiges of a pre-`CallWithValues` design). Both
+  instructions, their arms, and the `ContinuationValueMismatch` error
+  only they raised are deleted; `docs/VM_ISA.md` §4.6 now documents the
+  actual mechanism.
+- **`list_from_iter_with_tail`** — dotted-list twin of `list_from_iter`;
+  the last three hand-rolled cons loops (tree-walker quasiquote, parser
+  `make_dotted_list`, macro-expander dotted template) now delegate. The
+  back-to-front cons exists in exactly one `impl` codebase-wide.
+- **pc-in-loop-local** remains queued (its own PR; every `frame.pc`
+  reader needs a sync point).
 
 ---
 

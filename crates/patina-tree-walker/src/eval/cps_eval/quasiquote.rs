@@ -342,12 +342,7 @@ fn build_list_from_vec(
     tail: TaggedValue,
 ) -> Result<TaggedValue, EvalError> {
     let heap = evaluator.global_env.heap();
-    let mut heap_ref = heap.borrow_mut();
-
-    let mut result = tail;
-    for elem in elements.into_iter().rev() {
-        result = heap_ref.alloc_pair(elem, result);
-    }
+    let result = heap.borrow_mut().list_from_iter_with_tail(elements, tail);
     Ok(result)
 }
 
