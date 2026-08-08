@@ -244,13 +244,10 @@ pub(super) fn append(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVa
         }
     }
 
-    // Build result: prepend collected elements before last arg
-    let mut result = args[args.len() - 1];
-    let mut heap_ref = heap.borrow_mut();
-    for car in all_cars.into_iter().rev() {
-        result = heap_ref.alloc_pair(car, result);
-    }
-    Ok(result)
+    // Prepend collected elements before the last arg
+    Ok(heap
+        .borrow_mut()
+        .list_from_iter_with_tail(all_cars, args[args.len() - 1]))
 }
 
 pub(super) fn reverse(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
@@ -748,16 +745,7 @@ pub(super) fn list_copy(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
         }
 
         // current is now the tail (Null for proper list, other value for improper list)
-        let tail = current;
-
-        // Build the copied list from right to left
-        let mut result = tail;
-        let mut heap_ref = heap.borrow_mut();
-        for car in cars.into_iter().rev() {
-            result = heap_ref.alloc_pair(car, result);
-        }
-
-        return Ok(result);
+        return Ok(heap.borrow_mut().list_from_iter_with_tail(cars, current));
     }
 
     // Fallback path: use try_pair for any other pair types
@@ -784,13 +772,8 @@ pub(super) fn list_copy(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
         return Ok(input);
     }
 
-    // Build copied list from right to left
-    let mut result = current; // tail (Null for proper list, other for improper)
-    let mut heap_ref = heap.borrow_mut();
-    for car in cars.into_iter().rev() {
-        result = heap_ref.alloc_pair(car, result);
-    }
-    Ok(result)
+    // tail: Null for a proper list, the non-pair value for an improper one
+    Ok(heap.borrow_mut().list_from_iter_with_tail(cars, current))
 }
 
 /// (set-car! pair obj) - Mutate the car of a pair

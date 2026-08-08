@@ -68,13 +68,9 @@ fn command_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, 
     }
 
     let mut h = heap.borrow_mut();
-    // Allocate each arg string, then build a proper list in reverse
+    // Allocate each arg string, then build the list
     let arg_tvs: Vec<TaggedValue> = std::env::args().map(|s| h.alloc_string(s)).collect();
-    let mut result = TaggedValue::NULL;
-    for tv in arg_tvs.into_iter().rev() {
-        result = h.alloc_pair(tv, result);
-    }
-    Ok(result)
+    Ok(h.list_from_iter(arg_tvs))
 }
 
 /// Exit the program with optional status.
@@ -179,10 +175,5 @@ fn get_environment_variables(
             h.alloc_pair(key, val)
         })
         .collect();
-    // Build proper list in reverse
-    let mut result = TaggedValue::NULL;
-    for tv in entry_tvs.into_iter().rev() {
-        result = h.alloc_pair(tv, result);
-    }
-    Ok(result)
+    Ok(h.list_from_iter(entry_tvs))
 }

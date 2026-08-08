@@ -226,10 +226,25 @@ the param slot range.
 
 ### 4.6 Multiple Values
 
+Multiple values flow through `VmState::value_buffer`, not through dedicated
+return/receive instructions. `(values …)` is intercepted as a control
+primitive (§5) and refills the buffer in place; `call-with-values` compiles
+to instruction-level sequences ending in `CallWithValues` /
+`TailCallWithValues`:
+
 | Instruction | Operands | Semantics |
 |---|---|---|
-| `ReturnMulti` | `vals: Vec<Reg>` | Return multiple values via `VmState::value_buffer` |
-| `ReceiveValues` | `dsts: Vec<Reg>` | Bind incoming values from `value_buffer` to registers; error if count mismatches |
+| `CallWithValues` | `dst: Reg, consumer: Reg, producer_result: Reg` | Call consumer with the buffered values (or the single producer result); result → `dst` |
+| `TailCallWithValues` | `consumer: Reg, producer_result: Reg` | Tail-position variant: pops the frame first |
+
+Both consumer sides *take* the buffer (`mem::take`) rather than borrow it —
+deliberately, so re-entrant producer/consumer code always sees a clean
+channel. When the buffer is empty they fall back to unpacking a `#<values>`
+heap object from the producer result — the carrier for values produced
+outside the intercept (historically the bug-prone channel; see the archived
+chibi-failure notes) — and finally to treating the result as a single
+value. Continuation resume with multiple values refills the buffer the
+same way.
 
 ### 4.7 Global Definitions
 

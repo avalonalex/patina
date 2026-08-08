@@ -127,13 +127,10 @@ impl Expander {
         // Expand the tail
         let tail_value = self.expand_impl(tail, env, indices, inside_quote)?;
 
-        // Build dotted list (from back to front)
-        let mut result = tail_value;
-        let mut heap = self.heap().borrow_mut();
-        for item in items.into_iter().rev() {
-            result = heap.alloc_pair(item, result);
-        }
-
-        Ok(result)
+        // Build dotted list
+        Ok(self
+            .heap()
+            .borrow_mut()
+            .list_from_iter_with_tail(items, tail_value))
     }
 }

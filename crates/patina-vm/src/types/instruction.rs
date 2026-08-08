@@ -335,14 +335,6 @@ pub enum Instruction {
     /// instruction emitted after `PopWind` in the codegen sequence.
     PopWind,
 
-    // ── Multiple Values ───────────────────────────────────────────────────────
-    /// Return multiple values to the caller via `VmState::value_buffer`.
-    ReturnMulti { vals: Vec<Reg> },
-
-    /// Bind incoming multiple values from `VmState::value_buffer` into registers.
-    /// Errors if the value count doesn't match `dsts.len()`.
-    ReceiveValues { dsts: Vec<Reg> },
-
     // ── Global Definitions ────────────────────────────────────────────────────
     /// Top-level `define`: `globals[name] ← reg[src]`.
     Define { name: Symbol, src: Reg },

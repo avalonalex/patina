@@ -123,13 +123,9 @@ impl<'a> CpsEvaluator<'a> {
                     if let Some(variadic_param) = variadic {
                         // Build rest list directly as TaggedValue (no conversion needed)
                         let heap = new_env.heap();
-                        let rest_list = {
-                            let mut heap_mut = heap.borrow_mut();
-                            args[params.len()..]
-                                .iter()
-                                .rev()
-                                .fold(TaggedValue::NULL, |acc, &arg| heap_mut.alloc_pair(arg, acc))
-                        };
+                        let rest_list = heap
+                            .borrow_mut()
+                            .list_from_iter(args[params.len()..].iter().copied());
                         if !variadic_param.scopes.is_empty() {
                             new_env.define_with_scopes(
                                 variadic_param.name.to_string(),

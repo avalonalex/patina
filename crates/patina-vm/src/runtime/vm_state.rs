@@ -1353,34 +1353,6 @@ fn dispatch_one_instruction(
             }
         }
 
-        // ── Multiple Values ─────────────────────────────────────────────
-        Instruction::ReturnMulti { ref vals } => {
-            let results: Vec<TaggedValue> = vals.iter().map(|&r| state.reg_at(base, r)).collect();
-            let frame = state.frames.pop().expect("ReturnMulti with empty stack");
-            state.value_buffer = results.clone();
-            if state.frames.is_empty() {
-                state.free_top_registers(frame.register_base);
-                // Return the first value (or unspecified if empty).
-                return Ok(Some(
-                    results
-                        .into_iter()
-                        .next()
-                        .unwrap_or(TaggedValue::UNSPECIFIED),
-                ));
-            }
-            state.free_top_registers(frame.register_base);
-        }
-
-        Instruction::ReceiveValues { ref dsts } => {
-            let buf = std::mem::take(&mut state.value_buffer);
-            if buf.len() != dsts.len() {
-                return Err(VmError::ContinuationValueMismatch);
-            }
-            for (&dst, val) in dsts.iter().zip(buf) {
-                state.set_reg_at(base, dst, val);
-            }
-        }
-
         // ── Continuations ───────────────────────────────────────────────
         Instruction::CallWithPrompt {
             body,
@@ -2622,10 +2594,6 @@ fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, String) {
             (kind, msg)
         }
         VmError::SchemeException { message } => (ExceptionKind::Error, message.clone()),
-        VmError::ContinuationValueMismatch => (
-            ExceptionKind::Error,
-            "continuation value mismatch".to_string(),
-        ),
         // Unwrap location wrapper and classify the inner error.
         VmError::WithLocation { error, .. } => classify_error(error),
         // Non-catchable (shouldn't reach here due to is_catchable check)

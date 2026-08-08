@@ -38,9 +38,6 @@ pub enum VmError {
     #[error("no matching prompt tag for abort")]
     NoMatchingPrompt,
 
-    #[error("continuation invoked with wrong number of values")]
-    ContinuationValueMismatch,
-
     #[error("divide by zero")]
     DivideByZero,
 
