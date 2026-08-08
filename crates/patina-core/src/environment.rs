@@ -4,6 +4,7 @@ use crate::tagged_value::TaggedValue;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A binding with its associated scope set
 /// Used for scope-based hygiene lookup
@@ -12,6 +13,45 @@ pub struct ScopedBinding {
     pub scopes: ScopeSet,
     /// Internal storage uses TaggedValue for efficiency
     pub(crate) tagged_value: TaggedValue,
+}
+
+/// Simple (non-scoped) binding storage: name → slot index into `slots`.
+///
+/// Slots are append-only: a binding's slot never moves or disappears once
+/// created, and redefining a name overwrites its slot in place. That
+/// stability is what makes the VM's per-site global caches sound — a cached
+/// `(environment id, slot)` pair always refers to the current value of the
+/// same name (see `Instruction::LoadGlobal` in patina-vm).
+#[derive(Debug, Default)]
+struct Bindings {
+    map: FxHashMap<String, u32>,
+    slots: Vec<TaggedValue>,
+}
+
+impl Bindings {
+    fn get(&self, name: &str) -> Option<TaggedValue> {
+        self.map.get(name).map(|&i| self.slots[i as usize])
+    }
+
+    /// Define semantics: overwrite the existing slot or append a new one.
+    fn insert(&mut self, name: String, value: TaggedValue) {
+        match self.map.entry(name) {
+            std::collections::hash_map::Entry::Occupied(e) => {
+                self.slots[*e.get() as usize] = value;
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(self.slots.len() as u32);
+                self.slots.push(value);
+            }
+        }
+    }
+}
+
+/// Mint a process-unique, never-reused environment id (0 is reserved as the
+/// "empty" sentinel in the VM's global caches).
+fn fresh_env_id() -> u64 {
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Environment for variable bindings
@@ -45,7 +85,13 @@ pub struct Environment {
     heap: SharedHeap,
     /// Simple name-based bindings (for built-ins and top-level)
     /// Stores TaggedValue internally for memory efficiency
-    bindings: Rc<RefCell<FxHashMap<String, TaggedValue>>>,
+    bindings: Rc<RefCell<Bindings>>,
+    /// Process-unique id for this environment's simple bindings, minted at
+    /// construction and shared by clones (which alias the same bindings).
+    /// Unlike an address, an id is never reused after the environment dies,
+    /// so it is safe to key long-lived caches on (see `gc_identity` for the
+    /// address-based identity the GC uses to dedup *live* environments).
+    env_id: u64,
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
     scoped_bindings: Rc<RefCell<FxHashMap<String, Vec<ScopedBinding>>>>,
@@ -62,7 +108,8 @@ impl Environment {
     pub fn with_heap(heap: SharedHeap) -> Self {
         Environment {
             heap,
-            bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            bindings: Rc::new(RefCell::new(Bindings::default())),
+            env_id: fresh_env_id(),
             scoped_bindings: Rc::new(RefCell::new(FxHashMap::default())),
             parent: None,
         }
@@ -72,10 +119,38 @@ impl Environment {
     pub fn with_parent(parent: Rc<Environment>) -> Self {
         Environment {
             heap: parent.heap.clone(),
-            bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            bindings: Rc::new(RefCell::new(Bindings::default())),
+            env_id: fresh_env_id(),
             scoped_bindings: Rc::new(RefCell::new(FxHashMap::default())),
             parent: Some(parent),
         }
+    }
+
+    /// Process-unique, never-reused id for this environment's simple
+    /// bindings. Safe to key caches on across the environment's death
+    /// (a stale key can only miss, never falsely hit). Always non-zero.
+    #[inline(always)]
+    pub fn env_id(&self) -> u64 {
+        self.env_id
+    }
+
+    /// Slot index of `name` in *this* environment's simple bindings
+    /// (parents are not consulted). Slot indices are stable for the life
+    /// of the environment: redefinition overwrites the slot in place.
+    pub fn local_slot(&self, name: &str) -> Option<u32> {
+        self.bindings.borrow().map.get(name).copied()
+    }
+
+    /// Read the value in a slot previously obtained from `local_slot`.
+    #[inline]
+    pub fn slot_value(&self, slot: u32) -> TaggedValue {
+        self.bindings.borrow().slots[slot as usize]
+    }
+
+    /// Overwrite the value in a slot previously obtained from `local_slot`.
+    #[inline]
+    pub fn set_slot_value(&self, slot: u32, value: TaggedValue) {
+        self.bindings.borrow_mut().slots[slot as usize] = value;
     }
 
     /// Get the shared heap
@@ -120,8 +195,9 @@ impl Environment {
     /// Set an existing binding (searches parent environments)
     /// This is the primary API - accepts TaggedValue directly.
     pub fn set(&self, name: &str, value: TaggedValue) -> Result<(), String> {
-        if self.bindings.borrow().contains_key(name) {
-            self.bindings.borrow_mut().insert(name.to_string(), value);
+        let slot = self.bindings.borrow().map.get(name).copied();
+        if let Some(slot) = slot {
+            self.bindings.borrow_mut().slots[slot as usize] = value;
             Ok(())
         } else if let Some(parent) = &self.parent {
             parent.set(name, value)
@@ -135,7 +211,7 @@ impl Environment {
     /// This is the primary API - returns TaggedValue directly.
     /// For the simple name-based lookup for identifiers.
     pub fn get(&self, name: &str) -> Option<TaggedValue> {
-        if let Some(tv) = self.bindings.borrow().get(name).copied() {
+        if let Some(tv) = self.bindings.borrow().get(name) {
             Some(tv)
         } else if let Some(parent) = &self.parent {
             parent.get(name)
@@ -353,13 +429,13 @@ impl Environment {
     /// Check if a binding exists
     #[allow(dead_code)]
     pub fn has(&self, name: &str) -> bool {
-        self.bindings.borrow().contains_key(name)
+        self.bindings.borrow().map.contains_key(name)
             || self.parent.as_ref().is_some_and(|p| p.has(name))
     }
 
     /// Get all variable names defined in this environment and parent environments
     pub fn get_all_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.bindings.borrow().keys().cloned().collect();
+        let mut names: Vec<String> = self.bindings.borrow().map.keys().cloned().collect();
         // Include names from scoped bindings
         for name in self.scoped_bindings.borrow().keys() {
             if !names.contains(name) {
@@ -379,10 +455,10 @@ impl Environment {
     /// Returns a vector of (name, TaggedValue) pairs for all bindings defined locally.
     /// This is useful for library imports where we need to iterate over all exports.
     pub fn bindings(&self) -> Vec<(String, TaggedValue)> {
-        self.bindings
-            .borrow()
+        let b = self.bindings.borrow();
+        b.map
             .iter()
-            .map(|(k, tv)| (k.clone(), *tv))
+            .map(|(k, &i)| (k.clone(), b.slots[i as usize]))
             .collect()
     }
 
@@ -407,7 +483,7 @@ impl Environment {
     /// Visit every value bound locally (simple and scoped bindings, not the
     /// parent chain). GC tracing hook — allocation-free, unlike `bindings()`.
     pub fn for_each_local_value(&self, f: &mut dyn FnMut(TaggedValue)) {
-        for &tv in self.bindings.borrow().values() {
+        for &tv in self.bindings.borrow().slots.iter() {
             f(tv);
         }
         for scoped in self.scoped_bindings.borrow().values() {
@@ -433,6 +509,49 @@ mod tests {
         let env = Environment::new();
         env.define("x".to_string(), TaggedValue::fixnum(42));
         assert_eq!(env.get("x"), Some(TaggedValue::fixnum(42)));
+    }
+
+    #[test]
+    fn test_slot_stability_across_redefine() {
+        let env = Environment::new();
+        env.define("x".to_string(), TaggedValue::fixnum(1));
+        let slot = env.local_slot("x").unwrap();
+
+        // Redefinition overwrites the slot in place — same index, new value.
+        env.define("x".to_string(), TaggedValue::fixnum(2));
+        assert_eq!(env.local_slot("x"), Some(slot));
+        assert_eq!(env.slot_value(slot), TaggedValue::fixnum(2));
+
+        // set! through the slot API is visible to name lookup and vice versa.
+        env.set_slot_value(slot, TaggedValue::fixnum(3));
+        assert_eq!(env.get("x"), Some(TaggedValue::fixnum(3)));
+        env.set("x", TaggedValue::fixnum(4)).unwrap();
+        assert_eq!(env.slot_value(slot), TaggedValue::fixnum(4));
+
+        // New defines append fresh slots without disturbing existing ones.
+        env.define("y".to_string(), TaggedValue::fixnum(10));
+        assert_ne!(env.local_slot("y"), Some(slot));
+        assert_eq!(env.slot_value(slot), TaggedValue::fixnum(4));
+    }
+
+    #[test]
+    fn test_local_slot_ignores_parent() {
+        let parent = Rc::new(Environment::new());
+        parent.define("x".to_string(), TaggedValue::fixnum(42));
+        let child = Environment::with_parent(parent);
+        // x resolves via the parent chain but has no local slot in the child.
+        assert_eq!(child.get("x"), Some(TaggedValue::fixnum(42)));
+        assert_eq!(child.local_slot("x"), None);
+    }
+
+    #[test]
+    fn test_env_ids_unique_and_shared_by_clones() {
+        let a = Environment::new();
+        let b = Environment::new();
+        assert_ne!(a.env_id(), 0);
+        assert_ne!(a.env_id(), b.env_id());
+        // A clone aliases the same bindings and must carry the same id.
+        assert_eq!(a.clone().env_id(), a.env_id());
     }
 
     #[test]

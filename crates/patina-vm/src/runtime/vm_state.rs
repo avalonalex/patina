@@ -3,7 +3,7 @@
 //! See VM_RUNTIME.md §core-data-structures.
 
 use crate::error::VmError;
-use crate::types::code_object::{Arity, CodeObject};
+use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
@@ -1027,9 +1027,27 @@ fn dispatch_one_instruction(
 
         Instruction::LoadGlobal { dst, ref name } => {
             let globals = frame_globals(state);
-            let val = globals
-                .get(name)
-                .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
+            // Per-site inline cache (Track P P4): after the first execution
+            // against a given globals environment, the name lookup collapses
+            // to an id compare + slot read. See `GlobalCacheEntry` for why
+            // hits are always sound.
+            let cache = &code.global_cache[pc];
+            let entry = cache.get();
+            let val = if entry.env_id == globals.env_id() {
+                globals.slot_value(entry.slot)
+            } else if let Some(slot) = globals.local_slot(name) {
+                cache.set(GlobalCacheEntry {
+                    env_id: globals.env_id(),
+                    slot,
+                });
+                globals.slot_value(slot)
+            } else {
+                // Not in the queried environment itself: parent-chain lookup,
+                // never cached (a later local define may change resolution).
+                globals
+                    .get(name)
+                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?
+            };
             state.set_reg_at(base, dst, val);
         }
 
@@ -1037,9 +1055,21 @@ fn dispatch_one_instruction(
             let val = state.reg_at(base, src);
             let globals = frame_globals(state);
             mark_if_shadowing_primitive(state, &globals, name, val);
-            globals
-                .set(name, val)
-                .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
+            let cache = &code.global_cache[pc];
+            let entry = cache.get();
+            if entry.env_id == globals.env_id() {
+                globals.set_slot_value(entry.slot, val);
+            } else if let Some(slot) = globals.local_slot(name) {
+                cache.set(GlobalCacheEntry {
+                    env_id: globals.env_id(),
+                    slot,
+                });
+                globals.set_slot_value(slot, val);
+            } else {
+                globals
+                    .set(name, val)
+                    .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
+            }
         }
 
         Instruction::Define { ref name, src } => {

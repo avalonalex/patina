@@ -3,7 +3,7 @@
 //! These tests verify that the crate structure compiles and the top-level
 //! types are accessible. Real VM execution tests are added in milestones A2+.
 
-use patina_vm::types::{Arity, CallFrame, CodeObject, CodeObjectId};
+use patina_vm::types::{Arity, CallFrame, CodeObject, CodeObjectId, GlobalCacheEntry};
 
 #[test]
 fn code_object_constructs() {
@@ -15,6 +15,7 @@ fn code_object_constructs() {
         num_regs: 4,
         arity: Arity::Fixed(2),
         source_map: vec![],
+        global_cache: GlobalCacheEntry::table(0),
     };
     assert!(code.source_location(0).is_none());
     assert!(matches!(code.arity, Arity::Fixed(2)));
@@ -41,6 +42,7 @@ fn call_frame_is_clone() {
         num_regs: 8,
         arity: Arity::Fixed(0),
         source_map: vec![],
+        global_cache: GlobalCacheEntry::table(0),
     });
     let frame = CallFrame {
         pc: 42,

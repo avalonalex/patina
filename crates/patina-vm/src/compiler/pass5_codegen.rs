@@ -16,7 +16,7 @@
 use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind, RegLambda};
 use super::primitive_calls::{InlineOp, PrimitiveCallMap, ResolvedPrimitive};
 use crate::error::CompileError;
-use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
+use crate::types::code_object::{Arity, CodeObject, CodeObjectId, GlobalCacheEntry};
 use crate::types::instruction::Instruction;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
@@ -135,6 +135,7 @@ impl Pass5Codegen {
         let code = CodeObject {
             id,
             name: cg.name,
+            global_cache: GlobalCacheEntry::table(cg.instructions.len()),
             instructions: cg.instructions,
             constants: cg.constants,
             // Use the Pass 4 high-water mark so all temps are covered.
@@ -640,6 +641,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
     let child_code = CodeObject {
         id: child_id,
         name: None,
+        global_cache: GlobalCacheEntry::table(child_cg.instructions.len()),
         instructions: child_cg.instructions,
         constants: child_cg.constants,
         num_regs: lam.num_regs,

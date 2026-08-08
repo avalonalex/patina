@@ -8,7 +8,7 @@ pub mod code_object;
 pub mod continuation;
 pub mod instruction;
 
-pub use code_object::{Arity, CodeObject, CodeObjectId, ConstIdx};
+pub use code_object::{Arity, CodeObject, CodeObjectId, ConstIdx, GlobalCacheEntry};
 pub use continuation::{DynamicWindRecord, PromptFrame, VmContinuation, VmDelimitedContinuation};
 pub use instruction::Instruction;
 

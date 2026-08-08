@@ -6,6 +6,7 @@ use super::instruction::Instruction;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Uniquely identifies a `CodeObject`.
@@ -80,6 +81,38 @@ pub struct CodeObject {
     /// Maps instruction indices to source locations for error reporting.
     /// Sorted by pc; binary-search to resolve.
     pub source_map: Vec<(usize, SourceLocation)>,
+
+    /// Per-site inline caches for `LoadGlobal`/`StoreGlobal`, indexed by pc
+    /// (Track P P4). Always the same length as `instructions`; entries for
+    /// non-global instructions simply stay empty. See
+    /// [`GlobalCacheEntry`] for the soundness argument.
+    pub global_cache: Vec<Cell<GlobalCacheEntry>>,
+}
+
+/// One `LoadGlobal`/`StoreGlobal` site's resolved binding: the globals
+/// environment it was resolved against (by never-reused `Environment::env_id`,
+/// so a stale entry can only miss, never falsely hit) and the binding's slot
+/// in that environment's local table (stable for the environment's life —
+/// redefinition overwrites the slot in place).
+///
+/// Only names that resolve in the queried environment's *own* table are
+/// cached; parent-resolved names always take the full lookup, so a later
+/// local (re)definition that would change resolution can never be masked.
+#[derive(Debug, Clone, Copy)]
+pub struct GlobalCacheEntry {
+    /// `Environment::env_id` of the resolved environment; 0 = empty entry.
+    pub env_id: u64,
+    /// Slot index in that environment's local binding table.
+    pub slot: u32,
+}
+
+impl GlobalCacheEntry {
+    pub const EMPTY: GlobalCacheEntry = GlobalCacheEntry { env_id: 0, slot: 0 };
+
+    /// A fresh all-empty cache table for a code object with `len` instructions.
+    pub fn table(len: usize) -> Vec<Cell<GlobalCacheEntry>> {
+        vec![Cell::new(Self::EMPTY); len]
+    }
 }
 
 impl CodeObject {
