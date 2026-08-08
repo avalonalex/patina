@@ -51,7 +51,7 @@ impl GcRoots for VmState {
         // Code objects are never evicted, so their constants are effectively
         // immortal roots. Tracing the store covers every frame's `code` too,
         // since frames only ever hold objects taken from it.
-        for code in self.code_store.values() {
+        for code in self.code_store.iter().flatten() {
             visitor.visit_slice(&code.constants);
         }
 

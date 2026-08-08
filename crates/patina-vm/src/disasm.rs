@@ -11,7 +11,7 @@ use std::rc::Rc;
 /// Pretty-print a `CodeObject` and all nested lambdas reachable from it.
 ///
 /// `code_store` maps `CodeObjectId → CodeObject` for nested lambdas.
-/// Pass the full `VmState::code_store` to get recursive disassembly.
+/// Build a map over all compiled code objects to get recursive disassembly.
 pub fn disassemble(top: &CodeObject, code_store: &HashMap<CodeObjectId, Rc<CodeObject>>) {
     let mut visited = std::collections::HashSet::new();
     disassemble_one(top, 0, code_store, &mut visited);
