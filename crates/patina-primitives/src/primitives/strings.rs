@@ -477,13 +477,11 @@ pub(super) fn string_to_list(
         (chars, start, end)
     };
 
-    // Build list directly using TaggedValue::character and heap's list_from_iter
-    let char_tvs: Vec<TaggedValue> = chars[start..end]
-        .iter()
-        .map(|&ch| TaggedValue::character(ch))
-        .collect();
-
-    Ok(heap.borrow_mut().list_from_iter(char_tvs))
+    Ok(heap.borrow_mut().list_from_iter(
+        chars[start..end]
+            .iter()
+            .map(|&ch| TaggedValue::character(ch)),
+    ))
 }
 
 pub(super) fn list_to_string(

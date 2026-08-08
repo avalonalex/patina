@@ -579,11 +579,7 @@ mod tests {
     }
 
     fn list(items: Vec<TaggedValue>, heap: &SharedHeap) -> TaggedValue {
-        let mut result = TaggedValue::NULL;
-        for item in items.into_iter().rev() {
-            result = heap.borrow_mut().alloc_pair(item, result);
-        }
-        result
+        heap.borrow_mut().list_from_iter(items)
     }
 
     #[test]
