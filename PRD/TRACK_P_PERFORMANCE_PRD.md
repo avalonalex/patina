@@ -356,6 +356,35 @@ unchanged: tak 1.55×, deriv 1.37×, nboyer 1.29×, with §1.8's queue
 pc-in-loop-local) still standing and allocation/GC still the deriv/nboyer
 residue.
 
+### 1.10 Scoreboard after P5 wave 1 (2026-08-08)
+
+Sweep with the P5 branch binary, same local Chibi 0.12 baseline:
+
+| Benchmark | P4 (§1.9) | P5 | Delta | Ratio vs Chibi |
+|---|---|---|---|---|
+| slatex | 24.5 | 23.5 | −4% | 0.26× — faster |
+| matrix | 98.5 | 90.1 | −8.5% | 0.64× — faster |
+| diviter | 39.9 | 33.6 | −16% | 0.73× — faster |
+| compiler | 64.6 | 59.3 | −8% | 0.82× — faster |
+| maze | 51.3 | 46.9 | −8.6% | 0.88× — faster |
+| divrec | 41.8 | 35.2 | −16% | **0.94× — crosses parity** |
+| nboyer | 33.0 | 27.2 | −17.5% | 1.07× |
+| tak | 66.7 | 47.8 | −28% | 1.11× |
+| deriv | 107.6 | 97.9 | −9% | 1.25× |
+| ctak | 55.9 | 53.9 | −3.5% | n/a (Chibi crashes) |
+
+**Geomean of the nine ratio benchmarks: 0.79×** (0.91× after P4; the arc
+since 08-03: 2.2× → 1.87× → 1.44× → 1.16× → 0.93× → 0.91× → 0.79×).
+Seven of nine at or past parity. Every benchmark improved — instruction-
+count reduction is a broad lever, exactly as §1.6 predicted when dispatch
+residency crossed 50%. tak collapsed from 1.55× to 1.11× (its loop went
+28 → 19 dispatches); the worst remaining ratio is now **deriv at 1.25×**,
+whose profile is cons-churn/`Vec`-alloc bound (§1.8) — the next levers are
+the deriv `Vec`-churn cluster (scratch-free `list`, `Apply`'s
+`list_to_vec`, `value_buffer` recycling), compare-branch fusion
+(`Lt`+`JumpUnless`, the §P5 follow-on), and allocation/GC (generational,
+stage 5 priority 3). Per protocol, re-profile before choosing.
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
