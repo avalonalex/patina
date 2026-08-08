@@ -6,12 +6,29 @@ use super::instruction::Instruction;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Uniquely identifies a `CodeObject` within a compilation unit.
+/// Uniquely identifies a `CodeObject`.
 ///
-/// Nested lambdas get their own `CodeObjectId`. The top-level script is id 0.
+/// Ids are minted by [`CodeObjectId::fresh`] from a process-wide sequential
+/// counter — dense and never reused — so id-indexed stores can be plain
+/// `Vec`s indexed by [`CodeObjectId::index`] (see `VmState::code_store`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CodeObjectId(pub u32);
+
+impl CodeObjectId {
+    /// Mint the next process-wide id.
+    pub fn fresh() -> Self {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        CodeObjectId(COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// The dense index this id occupies in id-indexed stores.
+    #[inline(always)]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 /// Index into `CodeObject::constants`.
 pub type ConstIdx = u16;
@@ -41,7 +58,7 @@ impl Arity {
 /// closures that share the same code but different captured environments.
 #[derive(Debug, Clone)]
 pub struct CodeObject {
-    /// Unique id within the compilation unit.
+    /// Process-unique id (see `CodeObjectId`).
     pub id: CodeObjectId,
 
     /// Inferred or declared name (for stack traces and error messages).

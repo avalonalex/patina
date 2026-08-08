@@ -40,8 +40,10 @@ pub struct VmState {
     pub dynamic_winds: Vec<DynamicWindRecord>,
     /// Stack of installed exception handlers (`with-exception-handler`).
     pub exception_handlers: Vec<ExceptionHandler>,
-    /// All compiled `CodeObject`s, keyed by id.
-    pub code_store: FxHashMap<CodeObjectId, Rc<CodeObject>>,
+    /// All compiled `CodeObject`s, indexed densely by `CodeObjectId` (ids
+    /// are process-wide sequential — see `CodeObjectId::fresh`). Slots for
+    /// ids loaded into other `VmState`s stay `None`.
+    pub(crate) code_store: Vec<Option<Rc<CodeObject>>>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     pub globals: Rc<Environment>,
@@ -114,7 +116,7 @@ impl VmState {
             prompt_stack: Vec::new(),
             dynamic_winds: Vec::new(),
             exception_handlers: Vec::new(),
-            code_store: FxHashMap::default(),
+            code_store: Vec::new(),
             globals,
             heap,
             primitive_registry: Rc::new(registry),
@@ -173,8 +175,11 @@ impl VmState {
 
     /// Load a `CodeObject` (and nested ones) into the code store.
     pub fn load(&mut self, code: CodeObject) {
-        let id = code.id;
-        self.code_store.insert(id, Rc::new(code));
+        let idx = code.id.index();
+        if idx >= self.code_store.len() {
+            self.code_store.resize(idx + 1, None);
+        }
+        self.code_store[idx] = Some(Rc::new(code));
     }
 
     pub fn load_all(&mut self, codes: impl IntoIterator<Item = CodeObject>) {
@@ -183,28 +188,34 @@ impl VmState {
         }
     }
 
+    /// Fetch a loaded `CodeObject` by id.
+    #[inline(always)]
+    fn code_object(&self, id: CodeObjectId) -> Result<Rc<CodeObject>, VmError> {
+        self.code_store
+            .get(id.index())
+            .and_then(Option::clone)
+            .ok_or_else(|| missing_code_object(id))
+    }
+
     // ── Register helpers ───────────────────────────────────────────────────
 
-    #[inline]
+    // `inline(always)` throughout: `dispatch_one_instruction` is so large
+    // that LLVM declines plain `#[inline]` for these, leaving a real call
+    // on every register access (~6-8% of runtime; PRD §1.6 finding 1).
+
+    #[inline(always)]
     fn frame_base(&self) -> usize {
         self.frames.last().expect("no active frame").register_base
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn reg(&self, reg: u16) -> TaggedValue {
         self.registers[self.frame_base() + reg as usize]
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn set_reg(&mut self, reg: u16, val: TaggedValue) {
         let base = self.frame_base();
-        self.registers[base + reg as usize] = val;
-    }
-
-    /// Write into an arbitrary frame (for Return writing into the caller's slot).
-    #[inline]
-    fn set_reg_in_frame(&mut self, frame_idx: usize, reg: u16, val: TaggedValue) {
-        let base = self.frames[frame_idx].register_base;
         self.registers[base + reg as usize] = val;
     }
 
@@ -609,19 +620,23 @@ fn vm_eval_expr(
 // Execution loop
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Outlined error constructor for a `code_object` miss — `#[cold]` keeps the
+/// formatting machinery out of the callers that inline the lookup.
+#[cold]
+#[inline(never)]
+fn missing_code_object(id: CodeObjectId) -> VmError {
+    VmError::Runtime {
+        message: format!("missing CodeObject {:?}", id),
+    }
+}
+
 /// Execute the code object identified by `code_id` in `state`, with no
 /// arguments. Returns the value in register 0 of the top frame on completion.
 ///
 /// This is the primary entry point for running a compiled top-level expression.
 pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue, VmError> {
     // Set up the initial frame.
-    let code = state
-        .code_store
-        .get(&code_id)
-        .cloned()
-        .ok_or_else(|| VmError::Runtime {
-            message: format!("CodeObject {:?} not loaded", code_id),
-        })?;
+    let code = state.code_object(code_id)?;
 
     let base = state.alloc_registers(code.num_regs);
     state.frames.push(CallFrame {
@@ -642,13 +657,7 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
 /// already has in-flight frames (e.g. during library loading from `eval`).
 pub fn execute_nested(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue, VmError> {
     let depth_before = state.frames.len();
-    let code = state
-        .code_store
-        .get(&code_id)
-        .cloned()
-        .ok_or_else(|| VmError::Runtime {
-            message: format!("CodeObject {:?} not loaded", code_id),
-        })?;
+    let code = state.code_object(code_id)?;
 
     let base = state.alloc_registers(code.num_regs);
     state.frames.push(CallFrame {
@@ -688,13 +697,7 @@ fn call_closure_resolved(
     args: &[TaggedValue],
     return_reg: u16,
 ) -> Result<(), VmError> {
-    let code = state
-        .code_store
-        .get(&code_id)
-        .cloned()
-        .ok_or_else(|| VmError::Runtime {
-            message: format!("missing CodeObject {:?}", code_id),
-        })?;
+    let code = state.code_object(code_id)?;
 
     // Arity check.
     check_arity(&code.arity, args.len())?;
@@ -738,13 +741,7 @@ fn call_closure_from_regs(
     arg_regs: &[u16],
     return_reg: u16,
 ) -> Result<(), VmError> {
-    let code = state
-        .code_store
-        .get(&code_id)
-        .cloned()
-        .ok_or_else(|| VmError::Runtime {
-            message: format!("missing CodeObject {:?}", code_id),
-        })?;
+    let code = state.code_object(code_id)?;
 
     check_arity(&code.arity, arg_regs.len())?;
 
@@ -1183,9 +1180,8 @@ fn dispatch_one_instruction(
                     state.free_top_registers(frame.register_base);
                     return Ok(Some(result));
                 }
-                let caller_idx = state.frames.len() - 1;
                 let return_reg = frame.return_reg;
-                state.set_reg_in_frame(caller_idx, return_reg, result);
+                state.set_reg(return_reg, result);
                 state.free_top_registers(frame.register_base);
                 return Ok(None);
             }
@@ -1200,22 +1196,14 @@ fn dispatch_one_instruction(
                     state.free_top_registers(frame.register_base);
                     return Ok(Some(result));
                 }
-                let caller_idx = state.frames.len() - 1;
                 let return_reg = frame.return_reg;
-                state.set_reg_in_frame(caller_idx, return_reg, result);
+                state.set_reg(return_reg, result);
                 state.free_top_registers(frame.register_base);
                 return Ok(None);
             }
 
             let new_code_id = resolve_closure(state, func_val)?;
-            let new_code =
-                state
-                    .code_store
-                    .get(&new_code_id)
-                    .cloned()
-                    .ok_or_else(|| VmError::Runtime {
-                        message: format!("missing CodeObject {:?}", new_code_id),
-                    })?;
+            let new_code = state.code_object(new_code_id)?;
 
             check_arity(&new_code.arity, arg_vals.len())?;
 
@@ -1260,9 +1248,8 @@ fn dispatch_one_instruction(
                 return Ok(Some(result));
             }
             // Write result into caller's return_reg.
-            let caller_idx = state.frames.len() - 1;
             let return_reg = frame.return_reg;
-            state.set_reg_in_frame(caller_idx, return_reg, result);
+            state.set_reg(return_reg, result);
             // Free the callee's register window.
             state.free_top_registers(frame.register_base);
             // Pop any PromptFrames whose body just returned normally.
@@ -1331,8 +1318,7 @@ fn dispatch_one_instruction(
                 }
             } else if let Some(result) = call_any(state, consumer_val, &produced_vals, return_reg)?
             {
-                let caller_idx = state.frames.len() - 1;
-                state.set_reg_in_frame(caller_idx, return_reg, result);
+                state.set_reg(return_reg, result);
             }
         }
 
@@ -2977,9 +2963,8 @@ fn tail_call_value_with_probe(
                 state.free_top_registers(frame.register_base);
                 return Ok(Some(result));
             }
-            let caller_idx = state.frames.len() - 1;
             let return_reg = frame.return_reg;
-            state.set_reg_in_frame(caller_idx, return_reg, result);
+            state.set_reg(return_reg, result);
             state.free_top_registers(frame.register_base);
             return Ok(None);
         }
@@ -2995,9 +2980,8 @@ fn tail_call_value_with_probe(
                 state.free_top_registers(frame.register_base);
                 return Ok(Some(result));
             }
-            let caller_idx = state.frames.len() - 1;
             let return_reg = frame.return_reg;
-            state.set_reg_in_frame(caller_idx, return_reg, result);
+            state.set_reg(return_reg, result);
             state.free_top_registers(frame.register_base);
             return Ok(None);
         }
@@ -3021,13 +3005,7 @@ fn tail_call_closure_resolved(
     new_code_id: CodeObjectId,
     arg_vals: &[TaggedValue],
 ) -> Result<(), VmError> {
-    let new_code = state
-        .code_store
-        .get(&new_code_id)
-        .cloned()
-        .ok_or_else(|| VmError::Runtime {
-            message: format!("missing CodeObject {:?}", new_code_id),
-        })?;
+    let new_code = state.code_object(new_code_id)?;
 
     check_arity(&new_code.arity, arg_vals.len())?;
 

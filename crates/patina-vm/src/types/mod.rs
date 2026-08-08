@@ -52,7 +52,7 @@ pub struct CallFrame {
     /// The code object this frame executes, resolved once at push time.
     /// Code objects are immutable after loading, so caching the `Rc` here is
     /// safe and lets the dispatch loop fetch instructions without a
-    /// `code_store` hash lookup per instruction. Its id is `code.id` — the
+    /// `code_store` lookup per instruction. Its id is `code.id` — the
     /// frame stores no separate copy that could drift out of sync.
     pub code: Rc<CodeObject>,
 }

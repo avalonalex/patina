@@ -6,21 +6,21 @@
 use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
 use crate::types::instruction::Instruction;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 /// Pretty-print a `CodeObject` and all nested lambdas reachable from it.
 ///
-/// `code_store` maps `CodeObjectId → CodeObject` for nested lambdas.
-/// Pass the full `VmState::code_store` to get recursive disassembly.
-pub fn disassemble(top: &CodeObject, code_store: &HashMap<CodeObjectId, Rc<CodeObject>>) {
+/// `nested` holds the lambdas compiled alongside `top` — the shape the
+/// compiler returns.
+pub fn disassemble(top: &CodeObject, nested: &[CodeObject]) {
+    let by_id: HashMap<CodeObjectId, &CodeObject> = nested.iter().map(|c| (c.id, c)).collect();
     let mut visited = std::collections::HashSet::new();
-    disassemble_one(top, 0, code_store, &mut visited);
+    disassemble_one(top, 0, &by_id, &mut visited);
 }
 
 fn disassemble_one(
     co: &CodeObject,
     depth: usize,
-    code_store: &HashMap<CodeObjectId, Rc<CodeObject>>,
+    by_id: &HashMap<CodeObjectId, &CodeObject>,
     visited: &mut std::collections::HashSet<CodeObjectId>,
 ) {
     if !visited.insert(co.id) {
@@ -56,9 +56,9 @@ fn disassemble_one(
 
     // Recursively disassemble nested lambdas in the order they appear.
     for id in nested_ids {
-        if let Some(nested) = code_store.get(&id) {
+        if let Some(nested) = by_id.get(&id) {
             println!();
-            disassemble_one(nested, depth + 1, code_store, visited);
+            disassemble_one(nested, depth + 1, by_id, visited);
         }
     }
 }
