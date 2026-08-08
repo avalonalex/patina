@@ -2,6 +2,36 @@
 
 Major accomplishments and project milestones.
 
+## 2026-08-07: VM Within 1.16× of Chibi (Track P Waves 3–4)
+
+**Geomean across the r7rs-benchmarks scoreboard subset: 2.2× slower than
+Chibi on 08-03 → 1.87× → 1.44× → 1.16× in five days** (same machine,
+locally-built Chibi 0.12, 10-benchmark subset, all sweeps with the copied-
+binary protocol). Three benchmarks now at or past Chibi — slatex 0.29×,
+matrix 0.83×, compiler 1.09× — and `ctak` completes a benchmark Chibi
+itself crashes on.
+
+The wave, each item profile-first (PRs #14–#21):
+- **#14** — inline opcodes had never fired in real programs (emission keyed
+  on the binding's aliased qualified name); fixing emission cut
+  call/vector-dense workloads −21–22%
+- **#16** — closure-first callee dispatch: probe the common case, gate the
+  four rare probes behind a type check (tak/divrec −10%)
+- **#17** — per-call argument-`Vec` eliminated: register-to-register copy
+  for `Call`, stack staging for `TailCall` (diviter −36%, deriv −31%
+  compound with #16)
+- **#19** — weak continuation side tables (GC stage 5 P1.1): `ctak` fixed
+  from a 4 GB thrash-crash to 74.6 s / 227 MB
+- **#20 (P9)** — `not`, all 28 car/cdr compositions, and the numeric
+  sign/parity predicates moved from Scheme definitions into the registry;
+  `not` alone had been 40% of tak. Every benchmark improved (−3% to −36%);
+  also fixed `(scheme cxr)` to export the three-deep compositions per R7RS
+- **#21** — scoreboard recorded; post-P9 profile re-ranked the remaining
+  levers (register-accessor inlining + Vec-indexed code store first)
+
+Full history, measurements, and the standing lever ranking:
+`PRD/TRACK_P_PERFORMANCE_PRD.md` §1.2–§1.6.
+
 ## 2026-08-03: Garbage Collection Complete — Always On, Both Backends
 
 **GC stages 1–4 landed in one week (PRs #4–#6, #8, #10, #11): non-moving
