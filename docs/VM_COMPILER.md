@@ -305,13 +305,25 @@ Internal defines (letrec* semantics) use no new instructions:
 
 ---
 
-## 12. Future Passes
+## 12. Instruction-Count Optimizations (Track P P5) and Future Passes
+
+Landed in pass 5 (2026-08-08), all emission-level — instructions are only
+chosen or replaced, never deleted, so no pc remapping exists anywhere:
+
+| Optimization | Where | What it does |
+|---|---|---|
+| In-place operands | Resolved-primitive `App` emission | All-atomic-argument calls read `LocalRef` operands from their home registers — no staging `Move`s (any non-atomic argument falls the call back to staged temps, preserving evaluation order) |
+| Immediate operands | Same | A fixnum-literal *right* operand is absorbed into `AddImm`/`SubImm`/`LtImm`/`NumEqImm` — no `LoadImmediate` (right side only: the deopt must preserve operand order for non-commutative rebinds) |
+| `not`-branch fusion | `If` emission | `Not` feeding the branch becomes `NotJumpUnless`; the plain `JumpUnless` stays at the next pc as the shadowed-`not` deopt landing |
+| Return threading | `thread_returns`, after patching | `Jump → Return` and `Move d←s; Jump → Return d` rewritten to direct `Return`s in place; orphaned instructions keep their slots |
+
+Measured on tak: 28 → 19 dispatches per iteration (−28% wall-clock).
+
+Still future:
 
 | Pass | Where it slots | What it does |
 |---|---|---|
-| Constant folding | Between 3 and 4 | Fold `(+ 1 2)` → `3` |
+| Constant folding | Between 3 and 4 | Fold `(+ 1 2)` → `3` — **caution:** must not break R7RS redefinition semantics; a folded call leaves no deopt escape (see PRD §P3's design-space notes) |
 | Inlining | Between 3 and 4 | Inline small known functions |
 | Dead code elimination | Between 3 and 4 | Remove unreachable branches |
-| Peephole optimization | After 5 | Eliminate redundant `Move`s |
-
-All are Phase 2B+ concerns.
+| Compare-branch fusion | Pass 5 | `Lt`/`NumEq`/predicate + `JumpUnless` → one fused branch, same kept-deopt-landing pattern as `NotJumpUnless` |

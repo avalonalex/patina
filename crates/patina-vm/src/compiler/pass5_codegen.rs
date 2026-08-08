@@ -76,6 +76,7 @@ impl Codegen {
             Instruction::Jump { target: t } => *t = target,
             Instruction::JumpUnless { target: t, .. } => *t = target,
             Instruction::JumpIf { target: t, .. } => *t = target,
+            Instruction::NotJumpUnless { target: t, .. } => *t = target,
             _ => panic!("patch_jump called on non-jump instruction at {}", idx),
         }
     }
@@ -131,11 +132,12 @@ impl Pass5Codegen {
         gen_expr(expr, &mut cg)?;
         // Top-level: emit a Return of the expression's result.
         cg.emit(Instruction::Return { val: expr.dst });
+        let global_cache = finalize_instructions(&mut cg.instructions);
         let nested = cg.nested;
         let code = CodeObject {
             id,
             name: cg.name,
-            global_cache: GlobalCacheEntry::table(&cg.instructions),
+            global_cache,
             instructions: cg.instructions,
             constants: cg.constants,
             // Use the Pass 4 high-water mark so all temps are covered.
@@ -147,127 +149,303 @@ impl Pass5Codegen {
     }
 }
 
+/// Thread branch tails straight to their `Return` (Track P P5). Two
+/// in-place rewrites, run to fixpoint after all jump patching:
+///
+/// - `Jump L` where `L` holds `Return v`        ⇒ `Return v`
+/// - `Move d ← s; Jump L` where `L` holds `Return d` ⇒ `Return s`
+///   (the following `Jump` becomes unreachable via fallthrough but keeps
+///   its slot, so no pc shifts anywhere)
+///
+/// Both rewrites preserve the behavior of every path *into* the rewritten
+/// pc, so jump targets need no adjustment; instructions are only replaced,
+/// never added or removed. This turns the `Move`-to-join-then-`Return`
+/// shape every `if` at function tail produces into a single dispatch, and
+/// extends proper tail behavior to sites the P8.2 deopt's `Return`-shape
+/// check can now recognize.
+///
+/// Invariant this pass (and any future in-place rewrite) must not break:
+/// a `NotJumpUnless` at pc `i` requires the `JumpUnless` at `i + 1` to
+/// survive untouched — it is the fused site's deopt landing (and the pc+2
+/// skip target). Neither rewrite here touches conditional jumps.
+fn thread_returns(instructions: &mut [Instruction]) {
+    loop {
+        let mut changed = false;
+        for i in 0..instructions.len() {
+            if let Instruction::Jump { target } = instructions[i]
+                && let Instruction::Return { val } = instructions[target]
+            {
+                instructions[i] = Instruction::Return { val };
+                changed = true;
+                continue;
+            }
+            if i + 1 < instructions.len()
+                && let Instruction::Move { dst, src } = instructions[i]
+                && let Instruction::Jump { target } = instructions[i + 1]
+                && let Instruction::Return { val } = instructions[target]
+                && val == dst
+            {
+                instructions[i] = Instruction::Return { val: src };
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// Finalize a finished instruction stream: run the in-place rewrites, then
+/// build the pc-aligned global cache table. One owner for the ordering so
+/// both CodeObject construction sites (top-level and lambda) stay in step.
+fn finalize_instructions(
+    instructions: &mut [Instruction],
+) -> Vec<std::cell::Cell<GlobalCacheEntry>> {
+    thread_returns(instructions);
+    GlobalCacheEntry::table(instructions)
+}
+
+/// Emit whatever code the arguments of a resolved-primitive call need and
+/// decide how they reach the instruction (Track P P5): the operand
+/// registers, plus at most one absorbed literal — always the *right*
+/// operand of one of the `InlineOp::has_imm_form` ops.
+///
+/// When every argument is an atom (`writes_only_dst` — no argument's
+/// evaluation can clobber another's source), `LocalRef`s are read in place
+/// (no staging `Move`; both `CallPrimitive` and the inline opcodes accept
+/// arbitrary registers). Any non-atomic argument (a nested call, `set!`,
+/// `begin`, …) falls the whole call back to fully staged temps, preserving
+/// left-to-right evaluation and its side-effect ordering.
+///
+/// Why only the right operand, even for commutative ops: the shadow-bit
+/// deopt passes `[a, imm]` to whatever the name is bound to at that point,
+/// and a user rebind need not be commutative — operand order must survive
+/// exactly. Why only fixnum literals: instructions must never embed
+/// heap-referencing `TaggedValue`s (the constant pool is what roots those —
+/// see the `is_immediate` split in the `Literal` arm); `is_immediate` would
+/// be the widest safe bound, and fixnums are the profitable subset.
+fn primitive_operands(
+    args: &[RegExpr],
+    arg_tmps: &[u16],
+    inline: Option<InlineOp>,
+    cg: &mut Codegen,
+) -> Result<(Vec<u16>, Option<TaggedValue>), CompileError> {
+    if !args.iter().all(|a| writes_only_dst(&a.kind)) {
+        for arg in args {
+            gen_expr(arg, cg)?;
+        }
+        return Ok((arg_tmps.to_vec(), None));
+    }
+    let absorbed = match (inline, args.last()) {
+        (Some(op), Some(last)) if op.has_imm_form() => match &last.kind {
+            RegExprKind::Literal(v) if v.is_fixnum() => Some(*v),
+            _ => None,
+        },
+        _ => None,
+    };
+    let reg_args = match absorbed {
+        Some(_) => &args[..args.len() - 1],
+        None => args,
+    };
+    let regs = reg_args
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| {
+            if let RegExprKind::LocalRef { src } = &arg.kind {
+                return Ok(*src);
+            }
+            gen_expr(arg, cg)?;
+            Ok(arg_tmps[i])
+        })
+        .collect::<Result<Vec<u16>, CompileError>>()?;
+    Ok((regs, absorbed))
+}
+
 /// Build the instruction for a call to a compile-time-resolved primitive:
 /// the specialized inline opcode when the primitive has one and the call
-/// site has exactly the fixed arity (Track P P3), `CallPrimitive` otherwise.
+/// site has exactly the fixed arity (Track P P3) — in its imm form when
+/// `primitive_operands` absorbed a literal (Track P P5) — and
+/// `CallPrimitive` otherwise. `inline` must be the same arity-filtered
+/// value handed to `primitive_operands`.
 fn primitive_call_instruction(
+    inline: Option<InlineOp>,
     resolved: ResolvedPrimitive,
     name: Symbol,
-    arg_tmps: &[u16],
+    regs: &[u16],
+    imm: Option<TaggedValue>,
     dst: u16,
 ) -> Instruction {
     let func_id = resolved.id;
-    let inline = resolved.inline.filter(|op| op.arity() == arg_tmps.len());
+    if let Some(imm) = imm {
+        let a = regs[0];
+        // `primitive_operands` absorbs a literal only for the
+        // `has_imm_form` ops, so this match covers exactly that set.
+        return match inline.expect("absorbed literal implies an inline op") {
+            InlineOp::Add => Instruction::AddImm {
+                a,
+                imm,
+                dst,
+                func_id,
+                name,
+            },
+            InlineOp::Sub => Instruction::SubImm {
+                a,
+                imm,
+                dst,
+                func_id,
+                name,
+            },
+            InlineOp::Lt => Instruction::LtImm {
+                a,
+                imm,
+                dst,
+                func_id,
+                name,
+            },
+            InlineOp::NumEq => Instruction::NumEqImm {
+                a,
+                imm,
+                dst,
+                func_id,
+                name,
+            },
+            op => unreachable!("no imm form for {:?}", op),
+        };
+    }
     let Some(op) = inline else {
         return Instruction::CallPrimitive {
             func_id,
             name,
-            args: arg_tmps.to_vec(),
+            args: regs.to_vec(),
             dst,
         };
     };
     match op {
         InlineOp::Add => Instruction::Add {
-            a: arg_tmps[0],
-            b: arg_tmps[1],
+            a: regs[0],
+            b: regs[1],
             dst,
             func_id,
             name,
         },
         InlineOp::Sub => Instruction::Sub {
-            a: arg_tmps[0],
-            b: arg_tmps[1],
+            a: regs[0],
+            b: regs[1],
             dst,
             func_id,
             name,
         },
         InlineOp::Mul => Instruction::Mul {
-            a: arg_tmps[0],
-            b: arg_tmps[1],
+            a: regs[0],
+            b: regs[1],
             dst,
             func_id,
             name,
         },
         InlineOp::Lt => Instruction::Lt {
-            a: arg_tmps[0],
-            b: arg_tmps[1],
+            a: regs[0],
+            b: regs[1],
             dst,
             func_id,
             name,
         },
         InlineOp::NumEq => Instruction::NumEq {
-            a: arg_tmps[0],
-            b: arg_tmps[1],
+            a: regs[0],
+            b: regs[1],
             dst,
             func_id,
             name,
         },
         InlineOp::Eq => Instruction::Eq {
-            a: arg_tmps[0],
-            b: arg_tmps[1],
+            a: regs[0],
+            b: regs[1],
             dst,
             func_id,
             name,
         },
         InlineOp::Cons => Instruction::Cons {
-            a: arg_tmps[0],
-            b: arg_tmps[1],
+            a: regs[0],
+            b: regs[1],
             dst,
             func_id,
             name,
         },
         InlineOp::Car => Instruction::Car {
-            src: arg_tmps[0],
+            src: regs[0],
             dst,
             func_id,
             name,
         },
         InlineOp::Cdr => Instruction::Cdr {
-            src: arg_tmps[0],
+            src: regs[0],
             dst,
             func_id,
             name,
         },
         InlineOp::Not => Instruction::Not {
-            src: arg_tmps[0],
+            src: regs[0],
             dst,
             func_id,
             name,
         },
         InlineOp::NullP => Instruction::NullP {
-            src: arg_tmps[0],
+            src: regs[0],
             dst,
             func_id,
             name,
         },
         InlineOp::PairP => Instruction::PairP {
-            src: arg_tmps[0],
+            src: regs[0],
             dst,
             func_id,
             name,
         },
         InlineOp::VectorP => Instruction::VectorP {
-            src: arg_tmps[0],
+            src: regs[0],
             dst,
             func_id,
             name,
         },
         InlineOp::VectorRef => Instruction::VectorRef {
-            v: arg_tmps[0],
-            i: arg_tmps[1],
+            v: regs[0],
+            i: regs[1],
             dst,
             func_id,
             name,
         },
         InlineOp::VectorSet => Instruction::VectorSet {
-            v: arg_tmps[0],
-            i: arg_tmps[1],
-            val: arg_tmps[2],
+            v: regs[0],
+            i: regs[1],
+            val: regs[2],
             dst,
             func_id,
             name,
         },
     }
+}
+
+/// True when `gen_expr` for this kind emits code that writes *only* the
+/// expression's own `dst` register — no other local can be clobbered.
+/// This is the atomicity gate for in-place operands: `primitive_operands`
+/// may read a `LocalRef`'s home register at op-execution time only if no
+/// sibling argument's code can have written it in between.
+///
+/// Every kind listed here is a claim about the corresponding `gen_expr`
+/// arm below; an arm that grows a scratch write to any register other than
+/// `expr.dst` must be removed from this list (`ReadClosureCell` writes
+/// `expr.dst` twice — its own dst as scratch — which is exactly the limit
+/// of what remains safe).
+fn writes_only_dst(kind: &RegExprKind) -> bool {
+    matches!(
+        kind,
+        RegExprKind::Literal(_)
+            | RegExprKind::Quote(_)
+            | RegExprKind::LocalRef { .. }
+            | RegExprKind::ClosureRef { .. }
+            | RegExprKind::GlobalRef { .. }
+            | RegExprKind::ReadLocalCell { .. }
+            | RegExprKind::ReadClosureCell { .. }
+    )
 }
 
 /// Generate instructions for `expr` into `cg`.
@@ -330,6 +508,32 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
         RegExprKind::If { test, then, else_ } => {
             // Evaluate test.
             gen_expr(test, cg)?;
+            // A `not` feeding the branch fuses into `NotJumpUnless`, which
+            // branches directly on the fast path (Track P P5). The plain
+            // `JumpUnless` is still emitted right after it: the fused fast
+            // path skips it, and the shadowed-`not` deopt falls through to
+            // it (see the instruction's doc). Jumps into the fused pc are
+            // safe — it writes `dst` and branches exactly like the pair.
+            let fused = if let Some(&Instruction::Not {
+                src,
+                dst,
+                func_id,
+                ref name,
+            }) = cg.instructions.last()
+                && dst == test.dst
+            {
+                let name = name.clone();
+                cg.instructions.pop();
+                Some(cg.emit(Instruction::NotJumpUnless {
+                    src,
+                    dst,
+                    target: 0,
+                    func_id,
+                    name,
+                }))
+            } else {
+                None
+            };
             // Jump to else if false.
             let jump_else = cg.emit_jump_unless_placeholder(test.dst);
             // Then branch.
@@ -339,6 +543,9 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             // Else branch.
             let else_start = cg.current_pc();
             cg.patch_jump(jump_else, else_start);
+            if let Some(idx) = fused {
+                cg.patch_jump(idx, else_start);
+            }
             gen_expr(else_, cg)?;
             let end = cg.current_pc();
             cg.patch_jump(jump_end, end);
@@ -530,13 +737,14 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             if let RegExprKind::GlobalRef { name } = &func.kind
                 && let Some(&resolved) = cg.prim_calls.get(name)
             {
-                for arg in args {
-                    gen_expr(arg, cg)?;
-                }
+                let inline = resolved.inline.filter(|op| op.arity() == args.len());
+                let (regs, imm) = primitive_operands(args, arg_tmps, inline, cg)?;
                 cg.emit(primitive_call_instruction(
+                    inline,
                     resolved,
                     name.clone(),
-                    arg_tmps,
+                    &regs,
+                    imm,
                     expr.dst,
                 ));
                 if *is_tail {
@@ -638,10 +846,11 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
         Arity::Fixed(lam.num_params)
     };
 
+    let global_cache = finalize_instructions(&mut child_cg.instructions);
     let child_code = CodeObject {
         id: child_id,
         name: None,
-        global_cache: GlobalCacheEntry::table(&child_cg.instructions),
+        global_cache,
         instructions: child_cg.instructions,
         constants: child_cg.constants,
         num_regs: lam.num_regs,
