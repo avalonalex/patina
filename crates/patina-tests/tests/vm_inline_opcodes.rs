@@ -1,9 +1,12 @@
-//! Semantic tests for the inline primitive opcodes (Track P P3).
+//! Semantic tests for the inline primitive opcodes (Track P P3) and the
+//! procedures P9 moved from Scheme definitions into the registry.
 //!
 //! Every opcode is exercised on both paths: the inline fast path (fixnums,
 //! native pairs, in-bounds vectors) and the fallback to the registry handler
 //! (floats, bignums, overflow, type errors, rebound names). Results and
 //! error behavior must be indistinguishable from the generic call path.
+//! Basic fixnum-value coverage lives in the compliance tests; here we assert
+//! only what the move could have changed (slow paths, error behavior, deopt).
 
 use patina_interpreter::Interpreter;
 use patina_vm::VmBackend;
@@ -99,6 +102,88 @@ fn predicates() {
 }
 
 #[test]
+fn not_is_total_on_every_value() {
+    // Only #f is falsy (basic cases are in compliance/predicates.rs); the
+    // novel cases here: values with no literal syntax, and the handler via
+    // the higher-order (non-callee) position.
+    assert_eq!(eval("(not \"\")"), "#f");
+    assert_eq!(eval("(not not)"), "#f");
+    assert_eq!(eval("(map not '(#f 1 #f))"), "(#t #f #t)");
+}
+
+// ── Moved-to-registry procedures (P9): cxr compositions, numeric predicates ──
+
+#[test]
+fn every_cxr_composition_matches_its_car_cdr_chain() {
+    // Generate all 28 compositions (two- through four-deep) and compare each
+    // against its hand-inlined car/cdr chain on a path-labeled binary tree.
+    // This cross-checks the handler step order, the registration table, and
+    // the library exports for every name — a dropped or misordered entry
+    // fails here rather than silently at run time.
+    let mut program = String::from(
+        "(import (scheme base) (scheme cxr)) \
+         (define (build d p) \
+           (if (= d 0) p (cons (build (- d 1) (* 2 p)) (build (- d 1) (+ (* 2 p) 1))))) \
+         (define t (build 5 1)) \
+         (list ",
+    );
+    for depth in 2..=4usize {
+        for bits in 0..(1u32 << depth) {
+            // Letters outermost-first: bit set → 'd' (cdr), clear → 'a' (car).
+            let letters: String = (0..depth)
+                .map(|i| {
+                    if bits & (1 << (depth - 1 - i)) != 0 {
+                        'd'
+                    } else {
+                        'a'
+                    }
+                })
+                .collect();
+            // Chain applies letters right-to-left: caddr x = (car (cdr (cdr x))).
+            let mut chain = String::from("t");
+            for letter in letters.chars().rev() {
+                let op = if letter == 'a' { "car" } else { "cdr" };
+                chain = format!("({op} {chain})");
+            }
+            program.push_str(&format!("(equal? (c{letters}r t) {chain}) "));
+        }
+    }
+    program.push(')');
+    let result = eval(&program);
+    assert!(
+        !result.contains("#f"),
+        "some composition diverged from its chain: {result}"
+    );
+}
+
+#[test]
+fn cxr_error_behavior_chains_through_car_cdr() {
+    // Same catchable errors as the old Scheme bodies.
+    assert_eq!(eval("(guard (e (#t 'caught)) (cadr '(1)))"), "caught");
+    assert_eq!(eval("(guard (e (#t 'caught)) (caar 'x))"), "caught");
+    assert_eq!(eval("(guard (e (#t 'caught)) (cddddr '(1 2 3)))"), "caught");
+}
+
+#[test]
+fn numeric_predicates_slow_paths_and_errors() {
+    // Fixnum basics live in compliance/numbers.rs; these are the non-fixnum
+    // slow paths and error behavior the registry move could have changed.
+    assert_eq!(eval("(zero? 0.0)"), "#t");
+    assert_eq!(eval("(zero? 1/2)"), "#f");
+    assert_eq!(eval("(negative? -1/2)"), "#t");
+    assert_eq!(eval("(even? 2.0)"), "#t");
+    // Bignums take the slow path.
+    assert_eq!(eval("(odd? 100000000000000000000001)"), "#t");
+    assert_eq!(
+        eval("(zero? (- 100000000000000000000000 100000000000000000000000))"),
+        "#t"
+    );
+    // Domain errors are catchable, as with the old Scheme definitions.
+    assert_eq!(eval("(guard (e (#t 'caught)) (zero? 'a))"), "caught");
+    assert_eq!(eval("(guard (e (#t 'caught)) (odd? 1.5))"), "caught");
+}
+
+#[test]
 fn eq_p() {
     assert_eq!(eval("(eq? 'a 'a)"), "#t");
     assert_eq!(eval("(eq? 'a 'b)"), "#f");
@@ -150,6 +235,14 @@ fn rebinding_deoptimizes_inline_pair_ops() {
     );
     assert_eq!(
         eval("(define (f a b) (cons a b)) (define cons (lambda (a b) 'mine)) (f 1 2)"),
+        "mine"
+    );
+}
+
+#[test]
+fn rebinding_deoptimizes_not() {
+    assert_eq!(
+        eval("(define (f x) (not x)) (define not (lambda (x) 'mine)) (f #f)"),
         "mine"
     );
 }

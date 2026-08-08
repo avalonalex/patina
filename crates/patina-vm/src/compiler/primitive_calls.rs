@@ -55,6 +55,7 @@ pub enum InlineOp {
     Cons,
     Car,
     Cdr,
+    Not,
     NullP,
     PairP,
     VectorP,
@@ -68,6 +69,7 @@ impl InlineOp {
         match self {
             InlineOp::Car
             | InlineOp::Cdr
+            | InlineOp::Not
             | InlineOp::NullP
             | InlineOp::PairP
             | InlineOp::VectorP => 1,
@@ -85,8 +87,6 @@ impl InlineOp {
 }
 
 /// Map a registry primitive's qualified name to its inline opcode, if any.
-/// (`not` is Scheme-defined and never resolves to a primitive, so it has no
-/// opcode despite appearing in early drafts of the P3 list.)
 fn inline_op_for(qualified_name: &str) -> Option<InlineOp> {
     Some(match qualified_name {
         "scheme.base/+" => InlineOp::Add,
@@ -98,6 +98,7 @@ fn inline_op_for(qualified_name: &str) -> Option<InlineOp> {
         "scheme.base/cons" => InlineOp::Cons,
         "scheme.base/car" => InlineOp::Car,
         "scheme.base/cdr" => InlineOp::Cdr,
+        "scheme.base/not" => InlineOp::Not,
         "scheme.base/null?" => InlineOp::NullP,
         "scheme.base/pair?" => InlineOp::PairP,
         "scheme.base/vector?" => InlineOp::VectorP,

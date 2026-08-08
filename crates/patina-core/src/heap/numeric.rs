@@ -221,6 +221,9 @@ impl Heap {
     }
 
     /// Check if a numeric value is zero (exact or inexact)
+    ///
+    /// Total: returns `false` for non-numbers. NOT a `zero?` implementation —
+    /// the primitive must raise on non-numbers (see `numeric_eq_cmp`).
     #[inline]
     pub fn is_numeric_zero_tv(&self, tv: TaggedValue) -> bool {
         if tv.is_fixnum() {
@@ -241,6 +244,10 @@ impl Heap {
     }
 
     /// Check if a numeric value is negative (only meaningful for real numbers)
+    ///
+    /// Total: returns `false` for non-numbers. NOT a `negative?`
+    /// implementation — the primitive must raise on non-numbers (see
+    /// `numeric_lt`).
     #[inline]
     pub fn is_numeric_negative_tv(&self, tv: TaggedValue) -> bool {
         if tv.is_fixnum() {

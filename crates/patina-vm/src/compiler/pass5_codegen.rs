@@ -238,6 +238,12 @@ fn primitive_call_instruction(
             func_id,
             name,
         },
+        InlineOp::Not => Instruction::Not {
+            src: arg_tmps[0],
+            dst,
+            func_id,
+            name,
+        },
         InlineOp::NullP => Instruction::NullP {
             src: arg_tmps[0],
             dst,

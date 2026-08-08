@@ -16,6 +16,7 @@ pub fn build_internal_predicates(_name: Vec<String>, env: Rc<Environment>) -> Ve
 
     let primitives = [
         // === Booleans (§6.1) ===
+        ("not", Arity::Exact(1)),
         ("boolean?", Arity::Exact(1)),
         ("boolean=?", Arity::Min(2)),
         // === Pairs/Lists (§6.4 predicates only) ===

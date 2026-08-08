@@ -7,6 +7,7 @@
 //! - Rounding (floor, ceiling, truncate, round)
 //! - Numeric utilities (abs, max, min)
 //! - Transcendental functions (sqrt, sin, cos, exp, log, etc.)
+//! - Sign/parity predicates (zero?, positive?, negative?, odd?, even?)
 //! - Float predicates (finite?, infinite?, nan?)
 //! - Complex number operations (real-part, imag-part, magnitude, etc.)
 //! - Number theory (gcd, lcm, numerator, denominator, etc.)
@@ -368,6 +369,48 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         Arity::Range(1, 2),
         "Returns the natural logarithm of x, or logarithm of x in base y.",
         transcendental::log,
+    ));
+
+    // ===== Sign and Parity Predicates (§6.2.6) =====
+
+    registry.register(PrimitiveFn::new_heap(
+        "scheme.base",
+        "zero?",
+        Arity::Exact(1),
+        "Returns #t if z is numerically equal to zero.",
+        predicates::zero_p,
+    ));
+
+    registry.register(PrimitiveFn::new_heap(
+        "scheme.base",
+        "positive?",
+        Arity::Exact(1),
+        "Returns #t if x is greater than zero.",
+        predicates::positive_p,
+    ));
+
+    registry.register(PrimitiveFn::new_heap(
+        "scheme.base",
+        "negative?",
+        Arity::Exact(1),
+        "Returns #t if x is less than zero.",
+        predicates::negative_p,
+    ));
+
+    registry.register(PrimitiveFn::new_heap(
+        "scheme.base",
+        "odd?",
+        Arity::Exact(1),
+        "Returns #t if the integer n is odd.",
+        predicates::odd_p,
+    ));
+
+    registry.register(PrimitiveFn::new_heap(
+        "scheme.base",
+        "even?",
+        Arity::Exact(1),
+        "Returns #t if the integer n is even.",
+        predicates::even_p,
     ));
 
     // ===== Float Predicates =====

@@ -168,6 +168,7 @@ arity; all other shapes use `CallPrimitive`. Every opcode carries the same
 | `Eq` | always (`values_eq`) | rebound name only |
 | `Cons` | always (`alloc_pair`) | rebound name only |
 | `Car` / `Cdr` | native pair | non-pair (handler raises the type error) |
+| `Not` | always (truthiness test) | rebound name only |
 | `NullP` / `PairP` / `VectorP` | always (bit test) | rebound name only |
 | `VectorRef` | vector + in-bounds fixnum index | wrong types or out of bounds (handler raises) |
 | `VectorSet` | vector + in-bounds fixnum index; `dst ← unspecified` | wrong types or out of bounds |

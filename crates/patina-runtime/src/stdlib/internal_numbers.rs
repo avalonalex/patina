@@ -78,6 +78,12 @@ pub fn build_internal_numbers(_name: Vec<String>, env: Rc<Environment>) -> Vec<S
         ("exact?", Arity::Exact(1)),
         ("inexact?", Arity::Exact(1)),
         ("exact-integer?", Arity::Exact(1)),
+        // Sign and parity predicates
+        ("zero?", Arity::Exact(1)),
+        ("positive?", Arity::Exact(1)),
+        ("negative?", Arity::Exact(1)),
+        ("odd?", Arity::Exact(1)),
+        ("even?", Arity::Exact(1)),
         // === Inexact operations (scheme inexact) ===
         ("finite?", Arity::Exact(1)),
         ("infinite?", Arity::Exact(1)),
