@@ -341,8 +341,8 @@ fn literal_left_operand_stays_registered() {
 
 #[test]
 fn not_condition_fuses_into_branch() {
-    // `(if (not (< y x)) x y)` fuses the Not into NotJumpUnless; the plain
-    // JumpUnless stays right behind it as the shadowed-`not` deopt landing.
+    // `(if (not (< y x)) x y)` fuses the Not into TestJumpUnless; the plain
+    // JumpUnless stays right behind it as the deopt/slow-path landing.
     let instrs = compile_all_instructions(&lambda(
         vec!["x", "y"],
         vec![if_(
@@ -352,7 +352,7 @@ fn not_condition_fuses_into_branch() {
         )],
     ));
     assert_eq!(
-        count_matching(&instrs, |i| matches!(i, Instruction::NotJumpUnless { .. })),
+        count_matching(&instrs, |i| matches!(i, Instruction::TestJumpUnless { .. })),
         1,
         "{instrs:?}"
     );
@@ -411,6 +411,52 @@ fn effectful_arg_falls_back_to_staged_temps() {
     );
     assert_eq!(
         count_matching(&instrs, |i| matches!(i, Instruction::AddImm { .. })),
+        0,
+        "{instrs:?}"
+    );
+}
+
+#[test]
+fn every_fusable_predicate_fuses_into_its_branch() {
+    // One fused branch per predicate kind, each still trailed by the kept
+    // `JumpUnless` that the slow and deopt paths fall through to.
+    for (pred, args) in [
+        ("null?", vec![var("x")]),
+        ("pair?", vec![var("x")]),
+        ("vector?", vec![var("x")]),
+        ("eq?", vec![var("x"), var("y")]),
+        ("<", vec![var("x"), var("y")]),
+        ("=", vec![var("x"), var("y")]),
+    ] {
+        let instrs = compile_all_instructions(&lambda(
+            vec!["x", "y"],
+            vec![if_(app(var(pred), args), lit(1), lit(0))],
+        ));
+        assert_eq!(
+            count_matching(&instrs, |i| matches!(i, Instruction::TestJumpUnless { .. })),
+            1,
+            "{pred}: {instrs:?}"
+        );
+        assert_eq!(
+            count_matching(&instrs, |i| matches!(i, Instruction::JumpUnless { .. })),
+            1,
+            "{pred} must keep its landing: {instrs:?}"
+        );
+    }
+}
+
+#[test]
+fn non_branch_predicate_use_stays_unfused() {
+    // The predicate's value is returned, not branched on — nothing to fuse.
+    let instrs =
+        compile_all_instructions(&lambda(vec!["x"], vec![app(var("null?"), vec![var("x")])]));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::NullP { .. })),
+        1,
+        "{instrs:?}"
+    );
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::TestJumpUnless { .. })),
         0,
         "{instrs:?}"
     );

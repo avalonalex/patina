@@ -7,7 +7,7 @@ use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::instruction::Instruction;
+use crate::types::instruction::{Instruction, TestOp};
 use crate::types::{CallFrame, CodeObjectId};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
@@ -1697,8 +1697,10 @@ fn dispatch_one_instruction(
             });
         }
 
-        Instruction::NotJumpUnless {
-            src,
+        Instruction::TestJumpUnless {
+            test,
+            a,
+            b,
             dst,
             target,
             func_id,
@@ -1706,29 +1708,74 @@ fn dispatch_one_instruction(
         } => {
             // Emission contract (see the If arm in pass 5): the plain
             // `JumpUnless dst` must sit at the next pc — it is the deopt
-            // landing and the reason the falsy fast path may skip to pc+2.
+            // landing, the slow path's branch, and the reason the false
+            // fast path may skip to pc+2.
             debug_assert!(matches!(
                 code.instructions.get(pc + 1),
                 Some(Instruction::JumpUnless { cond, .. }) if *cond == dst
             ));
-            let x = state.reg_at(base, src);
-            if !state.is_primitive_shadowed(func_id.0 as usize) {
-                // Exactly `Not` + `JumpUnless dst`, in one dispatch: write
-                // dst (jumps into this pc rely on it), then branch — to the
-                // else target when src is truthy, over the following
-                // `JumpUnless` otherwise.
-                state.set_reg_at(base, dst, TaggedValue::boolean(!x.is_truthy()));
-                let f = state.frames.last_mut().expect("empty frame stack");
-                f.pc = if x.is_truthy() { target } else { pc + 2 };
+            let x = state.reg_at(base, a);
+            // `None` = this test can't answer here (non-fixnum comparison);
+            // fall through to the shared slow path below, exactly like the
+            // unfused opcodes' `inline_primitive!` fallback.
+            // `not` gets a compare-and-branch ahead of the jump table the
+            // rest compiles to, because it is the predicate that sits in
+            // tight recursive loops — leaving it behind the table measured
+            // +0.9% on tak. Hoisting more predicates by *emission* count
+            // (`null?` leads at 150 sites, `pair?` 71) measured worse on
+            // tak and bought nothing on a `null?`-driven loop: dynamic
+            // position beats static frequency here, so the chain stays at
+            // one.
+            let verdict = if state.is_primitive_shadowed(func_id.0 as usize) {
+                None
+            } else if test == TestOp::Not {
+                Some(!x.is_truthy())
             } else {
-                // Deopt: run the current `not` binding into dst and fall
-                // through to the `JumpUnless dst` kept at the next pc, which
-                // performs the branch once the (possibly re-entrant) call
-                // has written dst.
-                if let Some(escaped) =
-                    exec_call_primitive(state, base, func_id, name, &[x], dst, exit_depth)?
-                {
-                    return Ok(Some(escaped));
+                match test {
+                    TestOp::NullP => Some(x.is_null()),
+                    TestOp::PairP => Some(x.is_pair()),
+                    TestOp::VectorP => Some(x.is_vector()),
+                    TestOp::Eq => {
+                        let y = state.reg_at(base, b);
+                        Some(state.heap.borrow().values_eq(x, y))
+                    }
+                    TestOp::Lt => {
+                        let y = state.reg_at(base, b);
+                        (x.is_fixnum() && y.is_fixnum()).then(|| x.fixnum_lt(y))
+                    }
+                    TestOp::NumEq => {
+                        let y = state.reg_at(base, b);
+                        (x.is_fixnum() && y.is_fixnum()).then(|| x.fixnum_eq(y))
+                    }
+                    // Unreachable: hoisted above. Spelling the expression
+                    // out here instead measured +1.7% on tak — it keeps a
+                    // live switch case that LLVM otherwise prunes.
+                    TestOp::Not => unreachable!("hoisted above"),
+                }
+            };
+            match verdict {
+                Some(truthy) => {
+                    // The fused pair in one dispatch: write dst (jumps into
+                    // this pc rely on it), then branch — to the else target
+                    // when the test is false, over the kept `JumpUnless`
+                    // otherwise.
+                    state.set_reg_at(base, dst, TaggedValue::boolean(truthy));
+                    let f = state.frames.last_mut().expect("empty frame stack");
+                    f.pc = if truthy { pc + 2 } else { target };
+                }
+                None => {
+                    // Slow path — rebound predicate, or operands the fast
+                    // path can't judge. The registry handler writes dst
+                    // (identical result and error message to the unfused
+                    // opcode), then control falls through to the kept
+                    // `JumpUnless dst`, which branches.
+                    let operands = [x, state.reg_at(base, b)];
+                    let args = &operands[..test.arity()];
+                    if let Some(escaped) =
+                        exec_call_primitive(state, base, func_id, name, args, dst, exit_depth)?
+                    {
+                        return Ok(Some(escaped));
+                    }
                 }
             }
         }

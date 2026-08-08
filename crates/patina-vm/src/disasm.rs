@@ -218,10 +218,21 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::Car { src, dst, name, .. } => fmt_inline_prim("Car", *dst, name, &[*src]),
         Instruction::Cdr { src, dst, name, .. } => fmt_inline_prim("Cdr", *dst, name, &[*src]),
         Instruction::Not { src, dst, name, .. } => fmt_inline_prim("Not", *dst, name, &[*src]),
-        Instruction::NotJumpUnless {
-            src, dst, target, ..
+        Instruction::TestJumpUnless {
+            test,
+            a,
+            b,
+            dst,
+            target,
+            name,
+            ..
         } => {
-            format!("NotJumpUnless r{} ← not(r{}) → {}", dst, src, target)
+            let operands = [*a, *b];
+            format!(
+                "{} → {}",
+                fmt_inline_prim("TestJumpU", *dst, name, &operands[..test.arity()]),
+                target
+            )
         }
         Instruction::AddImm {
             a, imm, dst, name, ..
