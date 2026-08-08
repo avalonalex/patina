@@ -209,6 +209,54 @@ before choosing among the queued candidates (P4 slot-indexed globals,
 register-window zeroing, `classify_callee` unification, `not`+`JumpUnless`
 fusion from P5).
 
+### 1.6 Fresh profile of the remaining gap (2026-08-07, post-P9)
+
+Sampled the three worst ratios on main `1abea44` (`/usr/bin/sample`, 10 s
+top-of-stack, ~8300 samples each; workloads: tak(40,20,11), the deriv kernel
+×2M, nboyer n=4; artifacts in `target/profiles/*_post_p9.txt`). Nothing
+primitive-dispatch-related survives in any hot list — P2/P3/P9 closed that
+chapter. What remains, as a share of samples:
+
+| Cost center | tak | deriv | nboyer |
+|---|---|---|---|
+| `dispatch_one_instruction` (loop body incl. inline opcodes) | 57% | 50% | 62% |
+| `run_loop_until` (loop wrapper; mostly return attribution) | 10% | 7% | 10% |
+| `VmState::reg`/`set_reg`/`set_reg_in_frame` | ~8% | ~6% | ~7% |
+| `call_closure_from_regs`(+`_resolved`/tail) frame setup | ~8% | ~6% | ~7% |
+| `memset_pattern16` (register-window zeroing) | 4% | 7.5% | 3% |
+| `Environment::get` + memcmp + `frame_globals` (P4) | ~7% | ~4.5% | — |
+| malloc/free + `alloc_pair` + GC sweep (cons churn) | — | ~6.5% | ~2.5% |
+| `pop_resolved_winds` + `pop_exception_handlers` per return | 1.5% | 1.4% | 1.2% |
+
+**Two findings the old profiles under-ranked:**
+
+1. **The register accessors don't inline.** `reg`/`set_reg` carry
+   `#[inline]`, but `dispatch_one_instruction` is large enough that LLVM
+   declines — every access pays a real call plus `frames.last().expect()`
+   and two bounds checks. ~6–8% on all three workloads. Fix:
+   `#[inline(always)]`, possibly hoisting `frame_base` once per dispatch.
+2. **`code_store` is an FxHashMap hit on every closure call.**
+   `CodeObjectId` is minted from a sequential `AtomicU32`
+   (`pass5_codegen.rs:34`), so the store can be a `Vec` indexed by id —
+   the same trick as #149's registry. The lookup (plus `Rc` clone) sits
+   inside `call_closure_from_regs`.
+
+**Re-ranked levers:**
+
+1. **`#[inline(always)]` accessors + Vec-indexed `code_store`** — one
+   small PR, ~10–14% combined target on all three benchmarks, mechanical,
+   proven pattern (#149).
+2. **Register-window zeroing** (watermark redesign; biggest on deriv at
+   7.5%) — still the known-risky item (34 sites, call/cc snapshot
+   interplay), but now near the top on merit.
+3. **P4 slot-indexed globals** — ~4–7%; smaller than previously billed.
+4. **P5 instruction-count reductions** (`not`+`JumpUnless` fusion,
+   folding, peephole) — with the dispatch loop at 50–62% of runtime,
+   fewer dispatched instructions is the macro lever long-term.
+5. deriv/nboyer's residue increasingly points at **allocation/GC**
+   (generational collection, GC stage 5 priority 3) rather than the call
+   path.
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
