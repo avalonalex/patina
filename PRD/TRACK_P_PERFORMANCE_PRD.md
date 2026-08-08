@@ -1,7 +1,7 @@
 # Track P — VM Performance (Clarity-Safe) PRD
 
 **Created:** 2026-06-20
-**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining work re-ranked by the 2026-08-03 r7rs sweep (§1.2): call path first (P7 phase 2, then P4), weak continuation tables (cross-track, `PRD/future/GC_STAGE5_PRD.md`), then P5 compiler passes. **P6 GC: complete through stage 4c (PRs #4-#6, #8, #10, #11, 2026-08-01/03)** — both backends collect, **always on** at zero standing cost (safe point = one flag load; on-vs-off at parity on dispatch- and alloc-heavy workloads); CI enforces the byte-identical differential lanes, whose env hooks are the only remaining use of `PATINA_GC`/`PATINA_GC_STRESS`. Stage 5+ pause work tracked in `PRD/future/GC_STAGE5_PRD.md`.
+**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining work re-ranked by the 2026-08-03 r7rs sweep (§1.2): call path first (P7 phase 2, then P4), weak continuation tables (cross-track, `PRD/future/GC_STAGE5_PRD.md`), then P5 compiler passes. **P6 GC: complete through stage 4c (PRs #4-#6, #8, #10, #11, 2026-08-01/03)** — both backends collect, **always on** at zero standing cost (safe point = one flag load; on-vs-off at parity on dispatch- and alloc-heavy workloads); CI enforces the byte-identical differential lanes, whose env hooks are the only remaining use of `PATINA_GC`/`PATINA_GC_STRESS`. Stage 5+ pause work tracked in `PRD/future/GC_STAGE5_PRD.md`. **P9 (2026-08-07, PR #20)** moved `not`, the car/cdr compositions, and the numeric predicates from Scheme into the registry — **geomean vs Chibi 1.44× → 1.16×** (§1.5), with compiler at near parity (1.09×).
 **Scope decision:** clarity-safe optimizations only — aggressive, readability-costing items are explicitly deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing) · **Catalog:** `PRD/VM_OPTIMIZATION_ROADMAP.md` (P1–P10 superset)
 
@@ -171,6 +171,43 @@ unification (also adopting `Apply`/`TailApply`); weak continuation tables
 harness resolves `$PATINA` per benchmark — sweep a *copied* binary, with
 `PATINA_HOME` set so the copy finds `lib/` (a bare copy fails every
 benchmark instantly with a bogus circular-`(scheme base)` error).
+
+### 1.5 Scoreboard after the P9 registry move (2026-08-07, PR #20)
+
+P9 moved `not`, all 28 car/cdr compositions, and the numeric sign/parity
+predicates from Scheme definitions into the registry (see §P9 — found by
+asking why hand-inlining `(not (< y x))` made tak 40% faster). Compound
+sweep on merged main (`8b09501`) vs the §1.4 baseline, same local
+Chibi 0.12:
+
+| Benchmark | 08-05 (#16+#17) | 08-07 (#20) | Delta | Ratio vs Chibi |
+|---|---|---|---|---|
+| slatex | 29.9 | 26.3 | −12% | 0.29× — faster |
+| matrix | 124.5 | 117.2 | −6% | 0.83× — faster |
+| compiler | 81.4 | 78.6 | −3% | **1.09× — near parity** |
+| maze | 77.8 | 65.8 | −15% | 1.23× |
+| diviter | 77.0 | 52.4 | −32% | 1.14× |
+| deriv | 154.1 | 142.0 | −8% | 1.81× |
+| nboyer | 56.5 | 45.2 | −20% | 1.77× |
+| divrec | 83.8 | 56.5 | −33% | 1.51× |
+| tak | 146.6 | 93.7 | −36% | 2.17× |
+| ctak | 74.6 | 57.5 | −23% | n/a (Chibi crashes) |
+
+**Geomean ≈ 1.16× slower than Chibi** (2.2× on 08-03 → 1.87× → 1.44× →
+1.16× in five days). Every benchmark improved, and the deltas distribute
+exactly along call density of the moved procedures: tak (`not` per
+iteration) −36%, divrec (`cddr` in the hot loop) −33%, diviter −32%,
+ctak −23%, nboyer −20% (imports `(scheme cxr)` — the four-deep move
+applies), maze −15%. deriv's −8% confirms it is cons-churn/`map`-bound,
+not accessor-bound.
+
+**The lever rankings above this section are now stale**: they were derived
+from profiles in which 40% of tak's samples were `not`'s closure call. The
+remaining gap is concentrated in tak (2.17×), deriv (1.81×), and nboyer
+(1.77×) — the next item must start with a fresh profile of those three
+before choosing among the queued candidates (P4 slot-indexed globals,
+register-window zeroing, `classify_callee` unification, `not`+`JumpUnless`
+fusion from P5).
 
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
