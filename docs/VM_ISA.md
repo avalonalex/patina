@@ -186,6 +186,22 @@ The fallback for every opcode is `exec_call_primitive` — the same registry
 handler the generic path calls — so results, numeric promotion, and error
 messages are identical by construction, not by parallel implementation.
 
+**Operand placement and fused forms** (Track P P5). Resolved-primitive call
+sites whose arguments are all atoms read local-variable operands *in place*
+(no staging `Move`s — `CallPrimitive` and the inline opcodes accept
+arbitrary registers; staged temps remain for any call with a non-atomic
+argument, preserving evaluation order). On top of that:
+
+| Instruction | Operands | Semantics |
+|---|---|---|
+| `AddImm` / `SubImm` / `LtImm` / `NumEqImm` | `a: Reg, imm: TaggedValue, dst: Reg` + deopt pair | The register op with a fixnum-literal *right* operand absorbed (`(+ x 1)`, `(- x 1)`, `(< x n)`, `(= x 0)`); same fast/fallback split as the register form. Right side only, even for the commutative ops — the deopt passes `[a, imm]` to whatever the name is bound to, and a rebind need not be commutative. |
+| `NotJumpUnless` | `src: Reg, dst: Reg, target: usize` + deopt pair | Fused `not` + branch, always emitted with the plain `JumpUnless dst` still at the next pc. Fast path: `dst ← not(src)`, then jump to `target` (src truthy) or over the `JumpUnless` (src falsy) — one dispatch instead of two. When `not` is rebound it deopts to exactly the un-fused pair: call the current binding into `dst`, fall through to the kept `JumpUnless`. |
+
+Pass 5 also threads branch tails to their `Return` in place (`Jump → Return`
+becomes `Return`; `Move d←s; Jump → Return d` becomes `Return s`), replacing
+instructions without moving any pc, so an `if` in tail position returns in
+one dispatch per arm.
+
 **Primitive redefinition deopt.** Emitting `CallPrimitive`/inline opcodes
 assumes the global still binds the primitive at run time. That assumption is
 checked, not trusted: `Define`/`StoreGlobal` set a per-primitive bit in

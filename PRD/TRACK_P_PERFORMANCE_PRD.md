@@ -356,6 +356,35 @@ unchanged: tak 1.55×, deriv 1.37×, nboyer 1.29×, with §1.8's queue
 pc-in-loop-local) still standing and allocation/GC still the deriv/nboyer
 residue.
 
+### 1.10 Scoreboard after P5 wave 1 (2026-08-08)
+
+Sweep with the P5 branch binary, same local Chibi 0.12 baseline:
+
+| Benchmark | P4 (§1.9) | P5 | Delta | Ratio vs Chibi |
+|---|---|---|---|---|
+| slatex | 24.5 | 23.5 | −4% | 0.26× — faster |
+| matrix | 98.5 | 90.1 | −8.5% | 0.64× — faster |
+| diviter | 39.9 | 33.6 | −16% | 0.73× — faster |
+| compiler | 64.6 | 59.3 | −8% | 0.82× — faster |
+| maze | 51.3 | 46.9 | −8.6% | 0.88× — faster |
+| divrec | 41.8 | 35.2 | −16% | **0.94× — crosses parity** |
+| nboyer | 33.0 | 27.2 | −17.5% | 1.07× |
+| tak | 66.7 | 47.8 | −28% | 1.11× |
+| deriv | 107.6 | 97.9 | −9% | 1.25× |
+| ctak | 55.9 | 53.9 | −3.5% | n/a (Chibi crashes) |
+
+**Geomean of the nine ratio benchmarks: 0.79×** (0.91× after P4; the arc
+since 08-03: 2.2× → 1.87× → 1.44× → 1.16× → 0.93× → 0.91× → 0.79×).
+Seven of nine at or past parity. Every benchmark improved — instruction-
+count reduction is a broad lever, exactly as §1.6 predicted when dispatch
+residency crossed 50%. tak collapsed from 1.55× to 1.11× (its loop went
+28 → 19 dispatches); the worst remaining ratio is now **deriv at 1.25×**,
+whose profile is cons-churn/`Vec`-alloc bound (§1.8) — the next levers are
+the deriv `Vec`-churn cluster (scratch-free `list`, `Apply`'s
+`list_to_vec`, `value_buffer` recycling), compare-branch fusion
+(`Lt`+`JumpUnless`, the §P5 follow-on), and allocation/GC (generational,
+stage 5 priority 3). Per protocol, re-profile before choosing.
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
@@ -467,8 +496,17 @@ Add fixed-arity opcodes executed inline in the dispatch loop — `Add/Sub/Mul/Lt
 - **Measured (interleaved A/B ×3 vs main, wall-clock):** globals-heavy set!/read loop −41%, tak(32,16,8) −6.6%, deriv kernel −4.3%, nboyer flat (its profile has no `Environment::get` — confirms zero overhead where the cache can't help). Matches the §1.8 shares: the hash+memcmp portion is gone; the residual `frame_globals` heap-borrow + `Rc` clone per access (~2%) stays and is a candidate for a follow-up only if a future profile ranks it.
 - **Semantics tests:** `patina-tests/tests/vm_global_cache.rs` — set!/redefine visibility through cached sites, store/load site agreement, slot stability under map growth, forward references, deep cached self-recursion, and library-vs-toplevel environment isolation (`map`'s internal `%map-cars` site vs a same-named toplevel define). Chibi 1163/1163.
 
-### P5 — Cheap, readable compiler passes
-The compiler runs zero optimization passes; the 5-pass pipeline is structured for insertion (`docs/VM_COMPILER.md §12`). Add the low-complexity ones: **constant folding** (`(+ 1 2)`→`3`), **dead-code elimination** of unused bindings, **peephole** (dead `Move` removal, `LoadConst+Add`→immediate). Skip contification / copy-propagation / liveness regalloc (deferred).
+### P5 — Cheap, readable compiler passes  *(first wave done — 2026-08-08)*
+The compiler ran zero optimization passes; the 5-pass pipeline is structured for insertion (`docs/VM_COMPILER.md §12`). The first wave was chosen by disassembling the §1.8 kernels rather than from the spec's list — tak's 31-instruction loop body wasted ~9 dispatches/iteration on staging `Move`s, re-executed `LoadImmediate`s, an unfused `not`, and a `Move`-to-join-then-`Return` tail. All four items are emission-level (instructions chosen or replaced in place, never deleted — no pc remapping exists):
+
+1. **In-place operands** — resolved-primitive calls whose args are all ANF atoms read `LocalRef` operands from their home registers; `CallPrimitive` and the inline opcodes accept arbitrary registers, so the pass-4 staging temps are only used when a non-atomic arg requires ordered evaluation.
+2. **Immediate operands** — `AddImm`/`SubImm`/`LtImm`/`NumEqImm` absorb a fixnum-literal *right* operand. Right side only, even for commutative ops: **the first draft absorbed either side of `+`/`=` and was caught by the existing `set_after_use_deoptimizes` test** — the deopt passes `[a, imm]` to whatever the name is currently bound to, and `(set! + -)` makes operand order observable. Recorded so nobody re-tries the swap.
+3. **`not`-branch fusion** — `NotJumpUnless` replaces the `Not` whose result feeds a `JumpUnless`, which is *kept at the next pc*: the fast path branches directly (one dispatch instead of two), and the shadowed-`not` deopt calls the rebound binding into `dst` and falls through to the kept `JumpUnless` — exact R7RS redefinition semantics with zero new deopt machinery, and jumps into the fused pc stay valid because it writes `dst` exactly like the pair it replaced.
+4. **Return threading** — `Jump→Return` and `Move d←s; Jump→Return d` rewrite to direct `Return`s in place (orphaned slots stay, unreachable). Tail `if` arms return in one dispatch; sites the rewrite turns into `<op> dst; Return dst` pairs are recognized by the P8.2 tail-shape deopt, extending proper-tail behavior.
+
+**Measured:** tak kernel 28 → 19 dispatches/iteration; interleaved A/B ×3 vs main: **tak −28%, nboyer −16%, deriv −10.5%**, globals loop −5%. Emission tests in `patina-vm/tests/callprimitive.rs` (in-place, imm-absorption, left-literal stays registered, fusion shape, effectful-arg fallback); semantics in `patina-tests/tests/vm_instruction_fusion.rs` (both fused branches, rebind deopts through the fused site, overflow promotion, deopt operand order, deep threaded recursion). Chibi 1163/1163.
+
+**Still open from the original list:** constant folding (hazard: a folded call leaves no deopt escape for redefinition — needs the §P3 design-space decision first), DCE, and the natural next fusion: compare-branch (`Lt`+`JumpUnless` etc.) via the same kept-landing pattern. Skip contification / copy-propagation / liveness regalloc (deferred).
 - **Acceptance:** golden disasm tests; `cargo test`.
 
 ### P6 — Garbage collection  *(complete — stages 1-4, always on; stage 5 in `PRD/future/GC_STAGE5_PRD.md`)*

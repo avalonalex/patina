@@ -93,11 +93,15 @@ fn count_generic_calls(instrs: &[Instruction]) -> usize {
 
 #[test]
 fn add_emits_call_primitive() {
-    // Since P3, 2-arg + gets the inline Add opcode; the P2 property that
+    // Since P3, 2-arg + gets the inline Add opcode (the AddImm form here,
+    // since P5 absorbs the literal right operand); the P2 property that
     // still holds is: no generic Call and no callee LoadGlobal.
     let instrs = compile_all_instructions(&app(var("+"), vec![lit(1), lit(2)]));
     assert_eq!(
-        count_matching(&instrs, |i| matches!(i, Instruction::Add { .. })),
+        count_matching(&instrs, |i| matches!(
+            i,
+            Instruction::Add { .. } | Instruction::AddImm { .. }
+        )),
         1,
         "{instrs:?}"
     );
@@ -164,7 +168,10 @@ fn count_matching(instrs: &[Instruction], pred: fn(&Instruction) -> bool) -> usi
 fn two_arg_add_emits_inline_opcode() {
     let instrs = compile_all_instructions(&app(var("+"), vec![lit(1), lit(2)]));
     assert_eq!(
-        count_matching(&instrs, |i| matches!(i, Instruction::Add { .. })),
+        count_matching(&instrs, |i| matches!(
+            i,
+            Instruction::Add { .. } | Instruction::AddImm { .. }
+        )),
         1,
         "{instrs:?}"
     );
@@ -215,7 +222,10 @@ fn internal_library_alias_binding_emits_inline_opcode() {
     let state = state_with_library_binding("<", Arity::Min(2), &["patina", "internal", "numbers"]);
     let instrs = compile_all_in(&state, &app(var("<"), vec![lit(1), lit(2)]));
     assert_eq!(
-        count_matching(&instrs, |i| matches!(i, Instruction::Lt { .. })),
+        count_matching(&instrs, |i| matches!(
+            i,
+            Instruction::Lt { .. } | Instruction::LtImm { .. }
+        )),
         1,
         "{instrs:?}"
     );
@@ -266,4 +276,150 @@ fn wrong_arity_car_stays_on_call_primitive() {
         "{instrs:?}"
     );
     assert_eq!(count_call_prims(&instrs), 1, "{instrs:?}");
+}
+
+// ── Operand and branch fusion (Track P P5) ───────────────────────────────────
+
+fn if_(test: CoreExpr, then: CoreExpr, else_: CoreExpr) -> CoreExpr {
+    CoreExpr::new(CoreExprKind::If {
+        test: Rc::new(test),
+        then: Rc::new(then),
+        else_: Rc::new(else_),
+    })
+}
+
+#[test]
+fn local_operands_read_in_place() {
+    // `(lambda (x y) (< y x))`: both operands are locals, so the inline Lt
+    // reads the parameter registers directly — no staging Moves at all.
+    let instrs = compile_all_instructions(&lambda(
+        vec!["x", "y"],
+        vec![app(var("<"), vec![var("y"), var("x")])],
+    ));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Lt { .. })),
+        1,
+        "{instrs:?}"
+    );
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Move { .. })),
+        0,
+        "{instrs:?}"
+    );
+}
+
+#[test]
+fn literal_right_operand_absorbed() {
+    // `(- x 1)` absorbs the literal: SubImm, and no LoadImmediate remains.
+    let instrs = compile_all_instructions(&lambda(
+        vec!["x"],
+        vec![app(var("-"), vec![var("x"), lit(1)])],
+    ));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::SubImm { .. })),
+        1,
+        "{instrs:?}"
+    );
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::LoadImmediate { .. })),
+        0,
+        "{instrs:?}"
+    );
+}
+
+#[test]
+fn literal_left_operand_stays_registered() {
+    // `(- 1 x)`: subtraction order must survive the deopt path exactly, so
+    // a left literal is materialized and the register form is emitted.
+    let instrs = compile_all_instructions(&lambda(
+        vec!["x"],
+        vec![app(var("-"), vec![lit(1), var("x")])],
+    ));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Sub { .. })),
+        1,
+        "{instrs:?}"
+    );
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::SubImm { .. })),
+        0,
+        "{instrs:?}"
+    );
+}
+
+#[test]
+fn not_condition_fuses_into_branch() {
+    // `(if (not (< y x)) x y)` fuses the Not into NotJumpUnless; the plain
+    // JumpUnless stays right behind it as the shadowed-`not` deopt landing.
+    let instrs = compile_all_instructions(&lambda(
+        vec!["x", "y"],
+        vec![if_(
+            app(var("not"), vec![app(var("<"), vec![var("y"), var("x")])]),
+            var("x"),
+            var("y"),
+        )],
+    ));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::NotJumpUnless { .. })),
+        1,
+        "{instrs:?}"
+    );
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Not { .. })),
+        0,
+        "{instrs:?}"
+    );
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::JumpUnless { .. })),
+        1,
+        "{instrs:?}"
+    );
+}
+
+#[test]
+fn effectful_arg_falls_back_to_staged_temps() {
+    // `(+ x (begin (set! x 99) 1))`: a non-atomic argument forces the whole
+    // call back onto staged temps so left-to-right evaluation order (and
+    // the value of x the add sees) is unchanged from the unoptimized form.
+    let set_x = CoreExpr::new(CoreExprKind::Set {
+        var: Rc::from("x"),
+        scopes: Default::default(),
+        value: Rc::new(lit(99)),
+    });
+    let instrs = compile_all_instructions(&lambda(
+        vec!["x"],
+        vec![app(
+            var("+"),
+            vec![
+                var("x"),
+                CoreExpr::new(CoreExprKind::Begin(vec![set_x, lit(1)])),
+            ],
+        )],
+    ));
+    // x is a mutated local, so it lives in a cell: its staged read must
+    // come BEFORE the begin's cell write, and the Add must consume that
+    // staged temp (register form — the literal is not absorbed either).
+    let read_at = instrs
+        .iter()
+        .position(|i| matches!(i, Instruction::ReadCell { .. }))
+        .expect("staged ReadCell");
+    let write_at = instrs
+        .iter()
+        .position(|i| matches!(i, Instruction::WriteCell { .. }))
+        .expect("WriteCell for set!");
+    assert!(read_at < write_at, "{instrs:?}");
+    let Some(Instruction::ReadCell { dst: staged, .. }) = instrs.get(read_at) else {
+        unreachable!()
+    };
+    assert!(
+        instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::Add { a, .. } if a == staged)),
+        "{instrs:?}"
+    );
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::AddImm { .. })),
+        0,
+        "{instrs:?}"
+    );
 }

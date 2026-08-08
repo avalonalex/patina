@@ -217,6 +217,56 @@ pub enum Instruction {
         func_id: PrimitiveFnId,
         name: Symbol,
     },
+    /// Fused `not` + branch (Track P P5). Emitted in place of a `Not` whose
+    /// result feeds the `JumpUnless` that *must still follow at the next pc*:
+    /// the fast path writes `dst ← not(src)` and branches directly (to
+    /// `target` when `src` is truthy, over the following `JumpUnless`
+    /// otherwise), saving one dispatch. When `not` is shadowed it deopts to
+    /// exactly the un-fused pair: call the current binding into `dst` and
+    /// fall through to the kept `JumpUnless`, which performs the branch.
+    NotJumpUnless {
+        src: Reg,
+        dst: Reg,
+        target: usize,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// `Add` with a literal right operand (Track P P5): absorbs the
+    /// `LoadImmediate` at sites like `(+ x 1)`. Right operand only, even
+    /// though `+` commutes: the shadow-bit deopt passes `[a, imm]` to
+    /// whatever the name is bound to at that point, and a user rebind need
+    /// not be commutative — operand order must survive exactly.
+    AddImm {
+        a: Reg,
+        imm: TaggedValue,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `-` with a literal right operand: `(- x 1)`-shaped sites only.
+    SubImm {
+        a: Reg,
+        imm: TaggedValue,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `<` with a literal right operand: `(< i n)`-shaped sites only.
+    LtImm {
+        a: Reg,
+        imm: TaggedValue,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
+    /// 2-arg `=` with a literal right operand: `(= x 0)`-shaped sites only.
+    NumEqImm {
+        a: Reg,
+        imm: TaggedValue,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
     /// 1-arg `null?` — total bit test.
     NullP {
         src: Reg,
