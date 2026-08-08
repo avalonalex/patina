@@ -4,6 +4,7 @@
 
 use super::instruction::Instruction;
 use patina_core::core_expr::Symbol;
+use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use std::cell::Cell;
@@ -83,21 +84,26 @@ pub struct CodeObject {
     pub source_map: Vec<(usize, SourceLocation)>,
 
     /// Per-site inline caches for `LoadGlobal`/`StoreGlobal`, indexed by pc
-    /// (Track P P4). Always the same length as `instructions`; entries for
-    /// non-global instructions simply stay empty. See
-    /// [`GlobalCacheEntry`] for the soundness argument.
+    /// (Track P P4). Built by [`GlobalCacheEntry::table`]: the same length
+    /// as `instructions` (entries for non-global instructions stay empty),
+    /// or empty when the code has no global-access instructions at all.
+    /// See [`GlobalCacheEntry`] for the soundness argument.
     pub global_cache: Vec<Cell<GlobalCacheEntry>>,
 }
 
-/// One `LoadGlobal`/`StoreGlobal` site's resolved binding: the globals
-/// environment it was resolved against (by never-reused `Environment::env_id`,
-/// so a stale entry can only miss, never falsely hit) and the binding's slot
-/// in that environment's local table (stable for the environment's life —
-/// redefinition overwrites the slot in place).
+/// One `LoadGlobal`/`StoreGlobal` site's resolved binding, and the canonical
+/// statement of why hits are sound:
 ///
-/// Only names that resolve in the queried environment's *own* table are
-/// cached; parent-resolved names always take the full lookup, so a later
-/// local (re)definition that would change resolution can never be masked.
+/// - Entries key on `Environment::env_id`, which is process-unique and
+///   **never reused** — unlike an address — so an entry left over from a
+///   dead environment can only miss, never falsely hit.
+/// - A binding's slot in an environment's local table is **stable for the
+///   environment's life**: redefinition overwrites the slot in place
+///   (see `Bindings` in patina-core), so a hit always reads the current
+///   value of the same name.
+/// - Only names that resolve in the queried environment's **own** table are
+///   cached; parent-resolved names always take the full lookup, so a later
+///   local (re)definition that would change resolution can never be masked.
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalCacheEntry {
     /// `Environment::env_id` of the resolved environment; 0 = empty entry.
@@ -109,9 +115,38 @@ pub struct GlobalCacheEntry {
 impl GlobalCacheEntry {
     pub const EMPTY: GlobalCacheEntry = GlobalCacheEntry { env_id: 0, slot: 0 };
 
-    /// A fresh all-empty cache table for a code object with `len` instructions.
-    pub fn table(len: usize) -> Vec<Cell<GlobalCacheEntry>> {
-        vec![Cell::new(Self::EMPTY); len]
+    /// The cache table for a freshly compiled instruction stream: pc-indexed,
+    /// or empty (never touched at runtime) when no instruction accesses a
+    /// global. Sizing from the stream itself keeps the length invariant in
+    /// one place.
+    pub fn table(instructions: &[Instruction]) -> Vec<Cell<GlobalCacheEntry>> {
+        let has_global_ops = instructions.iter().any(|i| {
+            matches!(
+                i,
+                Instruction::LoadGlobal { .. } | Instruction::StoreGlobal { .. }
+            )
+        });
+        if has_global_ops {
+            vec![Cell::new(Self::EMPTY); instructions.len()]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Probe — and on a local resolution, fill — a per-site cache entry.
+    /// Returns the binding's slot when `name` lives in `globals`' own table
+    /// (a hit costs one id compare); `None` for parent-resolved or unbound
+    /// names, which are never cached.
+    #[inline(always)]
+    pub fn probe(cell: &Cell<GlobalCacheEntry>, globals: &Environment, name: &str) -> Option<u32> {
+        let entry = cell.get();
+        let env_id = globals.env_id();
+        if entry.env_id == env_id {
+            return Some(entry.slot);
+        }
+        let slot = globals.local_slot(name)?;
+        cell.set(GlobalCacheEntry { env_id, slot });
+        Some(slot)
     }
 }
 

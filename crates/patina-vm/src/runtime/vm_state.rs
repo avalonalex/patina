@@ -1026,27 +1026,15 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadGlobal { dst, ref name } => {
+            // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
             let globals = frame_globals(state);
-            // Per-site inline cache (Track P P4): after the first execution
-            // against a given globals environment, the name lookup collapses
-            // to an id compare + slot read. See `GlobalCacheEntry` for why
-            // hits are always sound.
-            let cache = &code.global_cache[pc];
-            let entry = cache.get();
-            let val = if entry.env_id == globals.env_id() {
-                globals.slot_value(entry.slot)
-            } else if let Some(slot) = globals.local_slot(name) {
-                cache.set(GlobalCacheEntry {
-                    env_id: globals.env_id(),
-                    slot,
-                });
-                globals.slot_value(slot)
-            } else {
-                // Not in the queried environment itself: parent-chain lookup,
-                // never cached (a later local define may change resolution).
-                globals
-                    .get(name)
-                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?
+            let val = match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
+                Some(slot) => globals.slot_value(slot),
+                // Not local to this environment: parent-chain lookup.
+                None => globals
+                    .parent()
+                    .and_then(|p| p.get(name))
+                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
             };
             state.set_reg_at(base, dst, val);
         }
@@ -1054,21 +1042,21 @@ fn dispatch_one_instruction(
         Instruction::StoreGlobal { ref name, src } => {
             let val = state.reg_at(base, src);
             let globals = frame_globals(state);
-            mark_if_shadowing_primitive(state, &globals, name, val);
-            let cache = &code.global_cache[pc];
-            let entry = cache.get();
-            if entry.env_id == globals.env_id() {
-                globals.set_slot_value(entry.slot, val);
-            } else if let Some(slot) = globals.local_slot(name) {
-                cache.set(GlobalCacheEntry {
-                    env_id: globals.env_id(),
-                    slot,
-                });
-                globals.set_slot_value(slot, val);
-            } else {
-                globals
-                    .set(name, val)
-                    .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
+            match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
+                Some(slot) => {
+                    let old = globals.slot_value(slot);
+                    mark_if_shadowing_primitive_value(state, old, val);
+                    globals.set_slot_value(slot, val);
+                }
+                // Not local to this environment: parent-chain set.
+                None => {
+                    mark_if_shadowing_primitive(state, &globals, name, val);
+                    globals
+                        .parent()
+                        .ok_or(())
+                        .and_then(|p| p.set(name, val).map_err(|_| ()))
+                        .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
+                }
             }
         }
 
@@ -3211,6 +3199,17 @@ pub(crate) fn mark_if_shadowing_primitive(
     new_val: TaggedValue,
 ) {
     let Some(old) = globals.get(name) else { return };
+    mark_if_shadowing_primitive_value(state, old, new_val);
+}
+
+/// Value-taking core of [`mark_if_shadowing_primitive`], for callers that
+/// already hold the binding's current value (the cached `StoreGlobal` path)
+/// and need no name lookup.
+pub(crate) fn mark_if_shadowing_primitive_value(
+    state: &mut VmState,
+    old: TaggedValue,
+    new_val: TaggedValue,
+) {
     if old == new_val {
         return;
     }

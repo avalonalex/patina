@@ -135,7 +135,7 @@ impl Pass5Codegen {
         let code = CodeObject {
             id,
             name: cg.name,
-            global_cache: GlobalCacheEntry::table(cg.instructions.len()),
+            global_cache: GlobalCacheEntry::table(&cg.instructions),
             instructions: cg.instructions,
             constants: cg.constants,
             // Use the Pass 4 high-water mark so all temps are covered.
@@ -641,7 +641,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
     let child_code = CodeObject {
         id: child_id,
         name: None,
-        global_cache: GlobalCacheEntry::table(child_cg.instructions.len()),
+        global_cache: GlobalCacheEntry::table(&child_cg.instructions),
         instructions: child_cg.instructions,
         constants: child_cg.constants,
         num_regs: lam.num_regs,

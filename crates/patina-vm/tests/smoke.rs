@@ -15,7 +15,7 @@ fn code_object_constructs() {
         num_regs: 4,
         arity: Arity::Fixed(2),
         source_map: vec![],
-        global_cache: GlobalCacheEntry::table(0),
+        global_cache: GlobalCacheEntry::table(&[]),
     };
     assert!(code.source_location(0).is_none());
     assert!(matches!(code.arity, Arity::Fixed(2)));
@@ -42,7 +42,7 @@ fn call_frame_is_clone() {
         num_regs: 8,
         arity: Arity::Fixed(0),
         source_map: vec![],
-        global_cache: GlobalCacheEntry::table(0),
+        global_cache: GlobalCacheEntry::table(&[]),
     });
     let frame = CallFrame {
         pc: 42,

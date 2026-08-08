@@ -18,10 +18,9 @@ pub struct ScopedBinding {
 /// Simple (non-scoped) binding storage: name → slot index into `slots`.
 ///
 /// Slots are append-only: a binding's slot never moves or disappears once
-/// created, and redefining a name overwrites its slot in place. That
-/// stability is what makes the VM's per-site global caches sound — a cached
-/// `(environment id, slot)` pair always refers to the current value of the
-/// same name (see `Instruction::LoadGlobal` in patina-vm).
+/// created, and redefining a name overwrites its slot in place. The VM's
+/// per-site global caches rest on this invariant (see `GlobalCacheEntry`
+/// in patina-vm), so every mutation must go through these methods.
 #[derive(Debug, Default)]
 struct Bindings {
     map: FxHashMap<String, u32>,
@@ -29,15 +28,28 @@ struct Bindings {
 }
 
 impl Bindings {
+    fn slot_of(&self, name: &str) -> Option<u32> {
+        self.map.get(name).copied()
+    }
+
+    fn read_slot(&self, slot: u32) -> TaggedValue {
+        self.slots[slot as usize]
+    }
+
+    fn write_slot(&mut self, slot: u32, value: TaggedValue) {
+        self.slots[slot as usize] = value;
+    }
+
     fn get(&self, name: &str) -> Option<TaggedValue> {
-        self.map.get(name).map(|&i| self.slots[i as usize])
+        self.slot_of(name).map(|i| self.read_slot(i))
     }
 
     /// Define semantics: overwrite the existing slot or append a new one.
     fn insert(&mut self, name: String, value: TaggedValue) {
         match self.map.entry(name) {
             std::collections::hash_map::Entry::Occupied(e) => {
-                self.slots[*e.get() as usize] = value;
+                let slot = *e.get();
+                self.slots[slot as usize] = value;
             }
             std::collections::hash_map::Entry::Vacant(e) => {
                 e.insert(self.slots.len() as u32);
@@ -88,9 +100,9 @@ pub struct Environment {
     bindings: Rc<RefCell<Bindings>>,
     /// Process-unique id for this environment's simple bindings, minted at
     /// construction and shared by clones (which alias the same bindings).
-    /// Unlike an address, an id is never reused after the environment dies,
-    /// so it is safe to key long-lived caches on (see `gc_identity` for the
-    /// address-based identity the GC uses to dedup *live* environments).
+    /// Never reused, unlike an address — see `GlobalCacheEntry` in patina-vm
+    /// for the cache soundness argument, and `gc_identity` for the
+    /// address-based identity the GC uses to dedup *live* environments.
     env_id: u64,
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
@@ -127,8 +139,7 @@ impl Environment {
     }
 
     /// Process-unique, never-reused id for this environment's simple
-    /// bindings. Safe to key caches on across the environment's death
-    /// (a stale key can only miss, never falsely hit). Always non-zero.
+    /// bindings. Always non-zero.
     #[inline(always)]
     pub fn env_id(&self) -> u64 {
         self.env_id
@@ -137,20 +148,21 @@ impl Environment {
     /// Slot index of `name` in *this* environment's simple bindings
     /// (parents are not consulted). Slot indices are stable for the life
     /// of the environment: redefinition overwrites the slot in place.
+    #[inline]
     pub fn local_slot(&self, name: &str) -> Option<u32> {
-        self.bindings.borrow().map.get(name).copied()
+        self.bindings.borrow().slot_of(name)
     }
 
     /// Read the value in a slot previously obtained from `local_slot`.
     #[inline]
     pub fn slot_value(&self, slot: u32) -> TaggedValue {
-        self.bindings.borrow().slots[slot as usize]
+        self.bindings.borrow().read_slot(slot)
     }
 
     /// Overwrite the value in a slot previously obtained from `local_slot`.
     #[inline]
     pub fn set_slot_value(&self, slot: u32, value: TaggedValue) {
-        self.bindings.borrow_mut().slots[slot as usize] = value;
+        self.bindings.borrow_mut().write_slot(slot, value);
     }
 
     /// Get the shared heap
@@ -195,9 +207,8 @@ impl Environment {
     /// Set an existing binding (searches parent environments)
     /// This is the primary API - accepts TaggedValue directly.
     pub fn set(&self, name: &str, value: TaggedValue) -> Result<(), String> {
-        let slot = self.bindings.borrow().map.get(name).copied();
-        if let Some(slot) = slot {
-            self.bindings.borrow_mut().slots[slot as usize] = value;
+        if let Some(slot) = self.local_slot(name) {
+            self.set_slot_value(slot, value);
             Ok(())
         } else if let Some(parent) = &self.parent {
             parent.set(name, value)
@@ -429,7 +440,7 @@ impl Environment {
     /// Check if a binding exists
     #[allow(dead_code)]
     pub fn has(&self, name: &str) -> bool {
-        self.bindings.borrow().map.contains_key(name)
+        self.bindings.borrow().slot_of(name).is_some()
             || self.parent.as_ref().is_some_and(|p| p.has(name))
     }
 
@@ -458,7 +469,7 @@ impl Environment {
         let b = self.bindings.borrow();
         b.map
             .iter()
-            .map(|(k, &i)| (k.clone(), b.slots[i as usize]))
+            .map(|(k, &i)| (k.clone(), b.read_slot(i)))
             .collect()
     }
 
