@@ -34,7 +34,7 @@ impl CodeObjectId {
 pub type ConstIdx = u16;
 
 /// Arity descriptor for a compiled procedure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arity {
     /// Exactly `n` arguments required.
     Fixed(u16),
