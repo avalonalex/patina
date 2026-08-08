@@ -364,14 +364,7 @@ fn expand_vector_template(
     drop(borrowed);
 
     // Build a heap list from the vector elements
-    let list = {
-        let mut h = heap.borrow_mut();
-        let mut result = TaggedValue::NULL;
-        for elem in elements.into_iter().rev() {
-            result = h.alloc_pair(elem, result);
-        }
-        result
-    };
+    let list = heap.borrow_mut().list_from_iter(elements);
 
     // Expand as a list (handles splicing, unquote, etc.)
     let list_expr = if list.is_null() {

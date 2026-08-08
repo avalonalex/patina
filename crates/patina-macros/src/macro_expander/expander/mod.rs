@@ -224,14 +224,7 @@ impl Expander {
 
     /// Convert a Vec<TaggedValue> to a Scheme list (TaggedValue)
     pub(super) fn vec_to_list_tagged(&self, values: Vec<TaggedValue>) -> TaggedValue {
-        let mut result = TaggedValue::NULL;
-        let mut heap = self.heap().borrow_mut();
-
-        for value in values.into_iter().rev() {
-            result = heap.alloc_pair(value, result);
-        }
-
-        result
+        self.heap().borrow_mut().list_from_iter(values)
     }
 }
 

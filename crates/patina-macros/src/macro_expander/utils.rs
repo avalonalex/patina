@@ -129,11 +129,7 @@ pub fn list_to_vec_tagged(value: TaggedValue, heap: &Heap) -> Result<Vec<TaggedV
 
 /// Convert a Vec to a TaggedValue proper list
 pub fn vec_to_list_tagged(values: Vec<TaggedValue>, heap: &mut Heap) -> TaggedValue {
-    let mut result = TaggedValue::NULL;
-    for value in values.into_iter().rev() {
-        result = heap.alloc_pair(value, result);
-    }
-    result
+    heap.list_from_iter(values)
 }
 
 /// Convert a TaggedValue list to a Vec, allowing improper lists

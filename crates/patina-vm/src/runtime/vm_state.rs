@@ -721,7 +721,7 @@ fn call_closure_resolved(
     check_arity(code.arity, args.len())?;
 
     let base = state.alloc_registers(code.num_regs);
-    store_args_in_window(state, base, code.arity, args)?;
+    store_args_in_window(state, base, code.arity, args);
 
     state.frames.push(CallFrame {
         pc: 0,
@@ -757,13 +757,15 @@ fn call_closure_from_regs(
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
             state.registers[base + i] = state.registers[caller_base + r as usize];
         }
-        // The rest-list build allocates on the heap, so the rest values are
-        // staged through a Vec (variadic calls are the uncommon shape).
-        let rest_vals: Vec<TaggedValue> = arg_regs[fixed..]
-            .iter()
-            .map(|&r| state.registers[caller_base + r as usize])
-            .collect();
-        let rest = build_list(state, &rest_vals)?;
+        // Cons the rest list straight from the caller's registers — no
+        // staging Vec. Variadic calls are hot in practice: `map` and every
+        // rest-arg stdlib procedure land here per call.
+        let regs = &state.registers;
+        let rest = state.heap.borrow_mut().list_from_iter(
+            arg_regs[fixed..]
+                .iter()
+                .map(|&r| regs[caller_base + r as usize]),
+        );
         state.registers[base + fixed] = rest;
     } else {
         for (i, &r) in arg_regs.iter().enumerate() {
@@ -2090,18 +2092,16 @@ fn check_arity(arity: Arity, n: usize) -> Result<(), VmError> {
 /// Fill the register window at `base` with a call's arguments per `arity`:
 /// fixed args into `r0..`, a variadic rest collected into a list after them.
 /// The caller has already checked arity.
-fn store_args_in_window(
-    state: &mut VmState,
-    base: usize,
-    arity: Arity,
-    arg_vals: &[TaggedValue],
-) -> Result<(), VmError> {
+fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals: &[TaggedValue]) {
     if let Arity::Variadic(fixed) = arity {
         let fixed = fixed as usize;
         for (dst, &val) in state.registers[base..base + fixed].iter_mut().zip(arg_vals) {
             *dst = val;
         }
-        let rest = build_list(state, &arg_vals[fixed..])?;
+        let rest = state
+            .heap
+            .borrow_mut()
+            .list_from_iter(arg_vals[fixed..].iter().copied());
         state.registers[base + fixed] = rest;
     } else {
         for (dst, &val) in state.registers[base..base + arg_vals.len()]
@@ -2111,15 +2111,6 @@ fn store_args_in_window(
             *dst = val;
         }
     }
-    Ok(())
-}
-
-fn build_list(state: &mut VmState, items: &[TaggedValue]) -> Result<TaggedValue, VmError> {
-    let mut result = TaggedValue::NULL;
-    for &item in items.iter().rev() {
-        result = state.heap.borrow_mut().alloc_pair(item, result);
-    }
-    Ok(result)
 }
 
 /// Run a thunk (0-arg closure) to completion, returning its result.
@@ -3188,7 +3179,7 @@ fn tail_call_closure_resolved(
         state.frames.last_mut().unwrap().num_regs = new_num;
     }
 
-    store_args_in_window(state, old_base, new_code.arity, arg_vals)?;
+    store_args_in_window(state, old_base, new_code.arity, arg_vals);
 
     // Update frame in-place — dispatch fetches instructions from `code`.
     let frame = state.frames.last_mut().unwrap();
@@ -3211,7 +3202,7 @@ fn self_tail_call(
     arg_vals: &[TaggedValue],
 ) -> Result<(), VmError> {
     check_arity(arity, arg_vals.len())?;
-    store_args_in_window(state, base, arity, arg_vals)?;
+    store_args_in_window(state, base, arity, arg_vals);
     let frame = state
         .frames
         .last_mut()

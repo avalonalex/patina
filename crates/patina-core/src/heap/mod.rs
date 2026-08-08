@@ -490,7 +490,13 @@ impl Heap {
     // Pair Operations
     // =========================================================================
 
-    /// Allocate a new pair (cons cell)
+    /// Allocate a new pair (cons cell).
+    ///
+    /// Callers may hold partial structures in Rust locals across `alloc_*`
+    /// calls: collection runs only at the backend loops' safe points, never
+    /// inside allocation (see `docs/GC_DESIGN.md` §6), so such partials
+    /// need no GC root.
+    #[inline]
     pub fn alloc_pair(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
         self.note_alloc();
         let index = if let Some(free) = self.free_pairs.pop() {
@@ -2363,10 +2369,18 @@ impl Heap {
     // =========================================================================
 
     /// Build a proper list from an iterator of values
-    pub fn list_from_iter<I: IntoIterator<Item = TaggedValue>>(&mut self, iter: I) -> TaggedValue {
-        let items: Vec<_> = iter.into_iter().collect();
+    pub fn list_from_iter<I>(&mut self, iter: I) -> TaggedValue
+    where
+        I: IntoIterator<Item = TaggedValue>,
+        I::IntoIter: DoubleEndedIterator,
+    {
+        // Conses back to front — hence the `DoubleEndedIterator` bound —
+        // with no staging: the partial list needs no GC root (see
+        // `alloc_pair`). A caller with a forward-only iterator should
+        // restructure toward a reversible source rather than collect into
+        // a `Vec` here; the staging is exactly what this method avoids.
         let mut result = TaggedValue::NULL;
-        for item in items.into_iter().rev() {
+        for item in iter.into_iter().rev() {
             result = self.alloc_pair(item, result);
         }
         result
