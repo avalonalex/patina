@@ -2,6 +2,29 @@
 
 Major accomplishments and project milestones.
 
+## 2026-08-07: VM Faster Than Chibi — Scoreboard Geomean 0.93×
+
+**Patina's VM crossed parity with Chibi 0.12: geomean 0.93× across the
+r7rs-benchmarks scoreboard subset** (same machine, same-machine Chibi
+baseline, copied-binary protocol; the arc since 08-03: 2.2× → 1.87× →
+1.44× → 1.16× → 0.93×). Five of nine ratio benchmarks at or past parity —
+slatex 0.27×, matrix 0.70×, diviter 0.87×, compiler 0.90×, maze 1.00× —
+and `ctak` completes a benchmark Chibi itself crashes on.
+
+The two PRs that closed the last 23% (both profile-first, from the §1.6
+lever ranking):
+- **#23** — `code_store` Vec-indexed by the sequential `CodeObjectId`
+  (hash lookup off every closure call) + `#[inline(always)]` register
+  accessors LLVM had declined to inline (tak −12%, deriv −9%, nboyer −15%)
+- **#24** — dispatch-loop residency: the top frame's code `Rc` cached in
+  the loop (no refcount churn per instruction), frame base hoisted once
+  per dispatch for ~67 frame-stable arms, self-tail-call fast path, and a
+  review pass that collapsed dispatch to a single frame access per
+  instruction (tak −13%, deriv −15%, nboyer −16% on top of #23)
+
+Measurements and the standing lever ranking:
+`PRD/TRACK_P_PERFORMANCE_PRD.md` §1.7.
+
 ## 2026-08-07: VM Within 1.16× of Chibi (Track P Waves 3–4)
 
 **Geomean across the r7rs-benchmarks scoreboard subset: 2.2× slower than
