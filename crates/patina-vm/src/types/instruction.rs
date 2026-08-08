@@ -10,6 +10,25 @@ use super::{CodeObjectId, ConstIdx, Reg};
 use patina_core::core_expr::Symbol;
 use patina_core::tagged_value::TaggedValue;
 
+/// Which predicate a [`Instruction::TestJumpUnless`] evaluates. Folding the
+/// test into the branch instruction (rather than minting one fused variant
+/// per predicate) keeps a single fused-branch arm, deopt path, and emission
+/// site as more predicates become fusable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestOp {
+    /// `(not a)` — total truthiness test.
+    Not,
+    /// `(null? a)`, `(pair? a)`, `(vector? a)` — total bit tests.
+    NullP,
+    PairP,
+    VectorP,
+    /// `(eq? a b)` — total identity test.
+    Eq,
+    /// `(< a b)` / `(= a b)` — fixnum fast path, else the registry handler.
+    Lt,
+    NumEq,
+}
+
 /// A single VM instruction.
 ///
 /// Operands use frame-relative register indices (`Reg = u16`). All values are
@@ -217,15 +236,25 @@ pub enum Instruction {
         func_id: PrimitiveFnId,
         name: Symbol,
     },
-    /// Fused `not` + branch (Track P P5). Emitted in place of a `Not` whose
-    /// result feeds the `JumpUnless` that *must still follow at the next pc*:
-    /// the fast path writes `dst ← not(src)` and branches directly (to
-    /// `target` when `src` is truthy, over the following `JumpUnless`
-    /// otherwise), saving one dispatch. When `not` is shadowed it deopts to
-    /// exactly the un-fused pair: call the current binding into `dst` and
-    /// fall through to the kept `JumpUnless`, which performs the branch.
-    NotJumpUnless {
-        src: Reg,
+    /// Fused test + branch (Track P P5). Emitted in place of a predicate
+    /// opcode whose result feeds the `JumpUnless` that *must still follow
+    /// at the next pc*: the fast path writes `dst` and branches directly
+    /// (to `target` when the test is false, over the following `JumpUnless`
+    /// otherwise), saving one dispatch.
+    ///
+    /// Every slow case — a non-shadowed test whose operands miss the fast
+    /// path (`(< 1.5 2)`), or a shadowed/rebound predicate — funnels into
+    /// `exec_call_primitive`, which writes `dst` exactly as the unfused
+    /// opcode would, and then *falls through* to the kept `JumpUnless`,
+    /// which performs the branch. So the fused and unfused forms agree by
+    /// construction, and the kept instruction is both the deopt landing and
+    /// the fallback's branch.
+    ///
+    /// `b` is unused for the unary tests (`Not`/`NullP`/`PairP`/`VectorP`).
+    TestJumpUnless {
+        test: TestOp,
+        a: Reg,
+        b: Reg,
         dst: Reg,
         target: usize,
         func_id: PrimitiveFnId,

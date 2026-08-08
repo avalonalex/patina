@@ -17,7 +17,7 @@ use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind,
 use super::primitive_calls::{InlineOp, PrimitiveCallMap, ResolvedPrimitive};
 use crate::error::CompileError;
 use crate::types::code_object::{Arity, CodeObject, CodeObjectId, GlobalCacheEntry};
-use crate::types::instruction::Instruction;
+use crate::types::instruction::{Instruction, TestOp};
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
@@ -76,7 +76,7 @@ impl Codegen {
             Instruction::Jump { target: t } => *t = target,
             Instruction::JumpUnless { target: t, .. } => *t = target,
             Instruction::JumpIf { target: t, .. } => *t = target,
-            Instruction::NotJumpUnless { target: t, .. } => *t = target,
+            Instruction::TestJumpUnless { target: t, .. } => *t = target,
             _ => panic!("patch_jump called on non-jump instruction at {}", idx),
         }
     }
@@ -165,7 +165,7 @@ impl Pass5Codegen {
 /// check can now recognize.
 ///
 /// Invariant this pass (and any future in-place rewrite) must not break:
-/// a `NotJumpUnless` at pc `i` requires the `JumpUnless` at `i + 1` to
+/// a `TestJumpUnless` at pc `i` requires the `JumpUnless` at `i + 1` to
 /// survive untouched — it is the fused site's deopt landing (and the pc+2
 /// skip target). Neither rewrite here touches conditional jumps.
 fn thread_returns(instructions: &mut [Instruction]) {
@@ -203,6 +203,81 @@ fn finalize_instructions(
 ) -> Vec<std::cell::Cell<GlobalCacheEntry>> {
     thread_returns(instructions);
     GlobalCacheEntry::table(instructions)
+}
+
+/// Fold a just-emitted predicate opcode into a fused test+branch
+/// (Track P P5 wave 2), when the last instruction is a fusable test writing
+/// the register the branch is about to read. Returns the fused
+/// instruction's index for jump patching, or `None` when no fusion applies
+/// (any other test shape simply keeps the unfused opcode + `JumpUnless`).
+///
+/// The caller must still emit the plain `JumpUnless` immediately after:
+/// the fused instruction's slow and deopt paths fall through to it.
+fn fuse_test_into_branch(cond: u16, cg: &mut Codegen) -> Option<usize> {
+    // Every arm maps a predicate opcode to the equivalent `TestOp`; the
+    // shapes not listed (arithmetic, `car`, vector ops) don't produce a
+    // branch condition and stay unfused.
+    let (test, a, b, dst, func_id, name) = match cg.instructions.last()? {
+        Instruction::Not {
+            src,
+            dst,
+            func_id,
+            name,
+        } => (TestOp::Not, *src, 0, *dst, *func_id, name.clone()),
+        Instruction::NullP {
+            src,
+            dst,
+            func_id,
+            name,
+        } => (TestOp::NullP, *src, 0, *dst, *func_id, name.clone()),
+        Instruction::PairP {
+            src,
+            dst,
+            func_id,
+            name,
+        } => (TestOp::PairP, *src, 0, *dst, *func_id, name.clone()),
+        Instruction::VectorP {
+            src,
+            dst,
+            func_id,
+            name,
+        } => (TestOp::VectorP, *src, 0, *dst, *func_id, name.clone()),
+        Instruction::Eq {
+            a,
+            b,
+            dst,
+            func_id,
+            name,
+        } => (TestOp::Eq, *a, *b, *dst, *func_id, name.clone()),
+        Instruction::Lt {
+            a,
+            b,
+            dst,
+            func_id,
+            name,
+        } => (TestOp::Lt, *a, *b, *dst, *func_id, name.clone()),
+        Instruction::NumEq {
+            a,
+            b,
+            dst,
+            func_id,
+            name,
+        } => (TestOp::NumEq, *a, *b, *dst, *func_id, name.clone()),
+        _ => return None,
+    };
+    if dst != cond {
+        return None;
+    }
+    cg.instructions.pop();
+    Some(cg.emit(Instruction::TestJumpUnless {
+        test,
+        a,
+        b,
+        dst,
+        target: 0,
+        func_id,
+        name,
+    }))
 }
 
 /// Emit whatever code the arguments of a resolved-primitive call need and
@@ -508,32 +583,14 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
         RegExprKind::If { test, then, else_ } => {
             // Evaluate test.
             gen_expr(test, cg)?;
-            // A `not` feeding the branch fuses into `NotJumpUnless`, which
-            // branches directly on the fast path (Track P P5). The plain
-            // `JumpUnless` is still emitted right after it: the fused fast
-            // path skips it, and the shadowed-`not` deopt falls through to
-            // it (see the instruction's doc). Jumps into the fused pc are
-            // safe — it writes `dst` and branches exactly like the pair.
-            let fused = if let Some(&Instruction::Not {
-                src,
-                dst,
-                func_id,
-                ref name,
-            }) = cg.instructions.last()
-                && dst == test.dst
-            {
-                let name = name.clone();
-                cg.instructions.pop();
-                Some(cg.emit(Instruction::NotJumpUnless {
-                    src,
-                    dst,
-                    target: 0,
-                    func_id,
-                    name,
-                }))
-            } else {
-                None
-            };
+            // A predicate feeding the branch fuses into `TestJumpUnless`,
+            // which branches directly on the fast path (Track P P5). The
+            // plain `JumpUnless` is still emitted right after it: the fused
+            // fast path skips it, while the deopt and slow paths fall
+            // through to it (see the instruction's doc). Jumps into the
+            // fused pc are safe — it writes `dst` and branches exactly like
+            // the pair it replaced.
+            let fused = fuse_test_into_branch(test.dst, cg);
             // Jump to else if false.
             let jump_else = cg.emit_jump_unless_placeholder(test.dst);
             // Then branch.

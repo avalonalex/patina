@@ -195,7 +195,19 @@ argument, preserving evaluation order). On top of that:
 | Instruction | Operands | Semantics |
 |---|---|---|
 | `AddImm` / `SubImm` / `LtImm` / `NumEqImm` | `a: Reg, imm: TaggedValue, dst: Reg` + deopt pair | The register op with a fixnum-literal *right* operand absorbed (`(+ x 1)`, `(- x 1)`, `(< x n)`, `(= x 0)`); same fast/fallback split as the register form. Right side only, even for the commutative ops — the deopt passes `[a, imm]` to whatever the name is bound to, and a rebind need not be commutative. |
-| `NotJumpUnless` | `src: Reg, dst: Reg, target: usize` + deopt pair | Fused `not` + branch, always emitted with the plain `JumpUnless dst` still at the next pc. Fast path: `dst ← not(src)`, then jump to `target` (src truthy) or over the `JumpUnless` (src falsy) — one dispatch instead of two. When `not` is rebound it deopts to exactly the un-fused pair: call the current binding into `dst`, fall through to the kept `JumpUnless`. |
+| `TestJumpUnless` | `test: TestOp, a: Reg, b: Reg, dst: Reg, target: usize` + deopt pair | Fused predicate + branch, always emitted with the plain `JumpUnless dst` still at the next pc. Fast path: write `dst`, then jump to `target` (test false) or over the `JumpUnless` (test true) — one dispatch instead of two. `TestOp` selects the predicate (`Not`, `NullP`, `PairP`, `VectorP`, `Eq`, `Lt`, `NumEq`); `b` is unused by the unary ones. |
+
+One instruction covers every fusable predicate rather than one variant per
+predicate, so there is a single fused-branch arm, deopt path, and emission
+site as more predicates become fusable. Its slow paths — a rebound
+predicate, or operands the fixnum fast path can't judge (`(< 1.5 2)`) —
+call the same registry handler the unfused opcode uses, which writes `dst`,
+and then *fall through* to the kept `JumpUnless`, which performs the
+branch. So the kept instruction is simultaneously the deopt landing and the
+slow path's branch, and fused and unfused forms agree by construction.
+
+Only a predicate feeding a branch fuses; the same predicate used as a value
+(returned, bound, passed) keeps its plain opcode.
 
 Pass 5 also threads branch tails to their `Return` in place (`Jump → Return`
 becomes `Return`; `Move d←s; Jump → Return d` becomes `Return s`), replacing

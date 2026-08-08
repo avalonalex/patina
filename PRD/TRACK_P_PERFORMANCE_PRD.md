@@ -507,13 +507,52 @@ The compiler ran zero optimization passes; the 5-pass pipeline is structured for
 
 1. **In-place operands** — resolved-primitive calls whose args are all ANF atoms read `LocalRef` operands from their home registers; `CallPrimitive` and the inline opcodes accept arbitrary registers, so the pass-4 staging temps are only used when a non-atomic arg requires ordered evaluation.
 2. **Immediate operands** — `AddImm`/`SubImm`/`LtImm`/`NumEqImm` absorb a fixnum-literal *right* operand. Right side only, even for commutative ops: **the first draft absorbed either side of `+`/`=` and was caught by the existing `set_after_use_deoptimizes` test** — the deopt passes `[a, imm]` to whatever the name is currently bound to, and `(set! + -)` makes operand order observable. Recorded so nobody re-tries the swap.
-3. **`not`-branch fusion** — `NotJumpUnless` replaces the `Not` whose result feeds a `JumpUnless`, which is *kept at the next pc*: the fast path branches directly (one dispatch instead of two), and the shadowed-`not` deopt calls the rebound binding into `dst` and falls through to the kept `JumpUnless` — exact R7RS redefinition semantics with zero new deopt machinery, and jumps into the fused pc stay valid because it writes `dst` exactly like the pair it replaced.
+3. **`not`-branch fusion** (generalized to all predicates in wave 2, §P5.2) — a fused branch replaces the `Not` whose result feeds a `JumpUnless`, which is *kept at the next pc*: the fast path branches directly (one dispatch instead of two), and the shadowed-`not` deopt calls the rebound binding into `dst` and falls through to the kept `JumpUnless` — exact R7RS redefinition semantics with zero new deopt machinery, and jumps into the fused pc stay valid because it writes `dst` exactly like the pair it replaced.
 4. **Return threading** — `Jump→Return` and `Move d←s; Jump→Return d` rewrite to direct `Return`s in place (orphaned slots stay, unreachable). Tail `if` arms return in one dispatch; sites the rewrite turns into `<op> dst; Return dst` pairs are recognized by the P8.2 tail-shape deopt, extending proper-tail behavior.
 
 **Measured:** tak kernel 28 → 19 dispatches/iteration; interleaved A/B ×3 vs main: **tak −28%, nboyer −16%, deriv −10.5%**, globals loop −5%. Emission tests in `patina-vm/tests/callprimitive.rs` (in-place, imm-absorption, left-literal stays registered, fusion shape, effectful-arg fallback); semantics in `patina-tests/tests/vm_instruction_fusion.rs` (both fused branches, rebind deopts through the fused site, overflow promotion, deopt operand order, deep threaded recursion). Chibi 1163/1163.
 
 **Still open from the original list:** constant folding (hazard: a folded call leaves no deopt escape for redefinition — needs the §P3 design-space decision first), DCE, and the natural next fusion: compare-branch (`Lt`+`JumpUnless` etc.) via the same kept-landing pattern. Skip contification / copy-propagation / liveness regalloc (deferred).
 - **Acceptance:** golden disasm tests; `cargo test`.
+
+### P5.2 — Test-branch fusion  *(done — 2026-08-08)*
+
+Wave 2 of the instruction-count work, and the follow-on §P5 named. Chosen
+the same way as wave 1 — by counting shapes in the emitted bytecode of the
+benchmark set (`patina --dump`) rather than from the spec's list:
+
+| Shape | Sites |
+|---|---|
+| predicate → `JumpUnless` (fusable, this item) | **32** — `null?` 16, `eq?` 8, `=`-imm 3, `pair?` 3, `<`-imm 1, `=` 1 |
+| predicate → `NotJumpUnless` (3-instruction chain, not fused) | 11 |
+| `JumpUnless` fed by a call/move (not fusable) | 23 |
+
+**Landed:** `NotJumpUnless` is *replaced* by a single `TestJumpUnless`
+carrying a `TestOp` discriminant (`Not`, `NullP`, `PairP`, `VectorP`,
+`Eq`, `Lt`, `NumEq`). One variant, one dispatch arm, one deopt path and
+one emission site cover all seven predicates — the answer to the
+combinatorial worry recorded when wave 1 landed (a variant per predicate
+would have been eight, doubling again with the imm forms). The kept
+`JumpUnless` now serves *two* fall-through roles, not just deopt: a
+non-fixnum comparison (`(< 1.5 2)`) also routes through
+`exec_call_primitive` and lands on it, so fused and unfused forms agree by
+construction rather than by parallel implementation.
+
+**Measured (interleaved A/B ×3–9 vs main, wall-clock):** `null?`-driven
+list walk **−7.5%**, deriv **−2.4%**, nboyer **−1.2%**, tak parity.
+
+**Negative result folded in:** the first version put *all* seven
+predicates behind the inner `match`, which cost **+0.9% on tak** (9 pairs,
+consistent) — `not` fusion had been a specialized arm before, and became
+an extra jump-table dispatch. Hoisting `Not` to a predictable
+compare-and-branch ahead of the match restored parity while keeping every
+other gain. If more predicates join, measure the same way before assuming
+the jump table is free.
+
+**Not done:** the imm operand forms (`(if (= n 0) …)` → `LtImm`/`NumEqImm`
++ branch) are 4 of the 32 sites and need a second operand shape on
+`TestJumpUnless`; and the 11 predicate→`not`→branch chains, which would be
+a 3-into-1 fusion.
 
 ### P6 — Garbage collection  *(complete — stages 1-4, always on; stage 5 in `PRD/future/GC_STAGE5_PRD.md`)*
 Designed and tracked in **`docs/GC_DESIGN.md`**, which supersedes the sketch that used to live here — it covers both backends (not just the VM), adds a `Collector`/`GcRoots` pluggability seam, and carries the complete root inventory and staging plan.

@@ -4,7 +4,7 @@
 //!   `,dis (expression)`  — compile and print bytecode without executing
 
 use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
-use crate::types::instruction::Instruction;
+use crate::types::instruction::{Instruction, TestOp};
 use std::collections::HashMap;
 
 /// Pretty-print a `CodeObject` and all nested lambdas reachable from it.
@@ -218,10 +218,23 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::Car { src, dst, name, .. } => fmt_inline_prim("Car", *dst, name, &[*src]),
         Instruction::Cdr { src, dst, name, .. } => fmt_inline_prim("Cdr", *dst, name, &[*src]),
         Instruction::Not { src, dst, name, .. } => fmt_inline_prim("Not", *dst, name, &[*src]),
-        Instruction::NotJumpUnless {
-            src, dst, target, ..
+        Instruction::TestJumpUnless {
+            test,
+            a,
+            b,
+            dst,
+            target,
+            name,
+            ..
         } => {
-            format!("NotJumpUnless r{} ← not(r{}) → {}", dst, src, target)
+            let operands = match test {
+                TestOp::Not | TestOp::NullP | TestOp::PairP | TestOp::VectorP => format!("r{}", a),
+                _ => format!("r{}, r{}", a, b),
+            };
+            format!(
+                "TestJumpUnless r{} ← {}({}) → {}",
+                dst, name, operands, target
+            )
         }
         Instruction::AddImm {
             a, imm, dst, name, ..

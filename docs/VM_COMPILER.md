@@ -314,10 +314,12 @@ chosen or replaced, never deleted, so no pc remapping exists anywhere:
 |---|---|---|
 | In-place operands | Resolved-primitive `App` emission | All-atomic-argument calls read `LocalRef` operands from their home registers — no staging `Move`s (any non-atomic argument falls the call back to staged temps, preserving evaluation order) |
 | Immediate operands | Same | A fixnum-literal *right* operand is absorbed into `AddImm`/`SubImm`/`LtImm`/`NumEqImm` — no `LoadImmediate` (right side only: the deopt must preserve operand order for non-commutative rebinds) |
-| `not`-branch fusion | `If` emission | `Not` feeding the branch becomes `NotJumpUnless`; the plain `JumpUnless` stays at the next pc as the shadowed-`not` deopt landing |
+| Test-branch fusion | `If` emission | A predicate (`not`, `null?`, `pair?`, `vector?`, `eq?`, `<`, `=`) feeding the branch becomes `TestJumpUnless`; the plain `JumpUnless` stays at the next pc as the deopt and slow-path landing |
 | Return threading | `thread_returns`, after patching | `Jump → Return` and `Move d←s; Jump → Return d` rewritten to direct `Return`s in place; orphaned instructions keep their slots |
 
-Measured on tak: 28 → 19 dispatches per iteration (−28% wall-clock).
+Measured on tak: 28 → 19 dispatches per iteration (−28% wall-clock). Test-branch
+fusion (wave 2) then removed one dispatch per `if` on a predicate: −7.5% on a
+`null?`-driven list walk, −2.4% deriv, −1.2% nboyer.
 
 Still future:
 
@@ -326,4 +328,4 @@ Still future:
 | Constant folding | Between 3 and 4 | Fold `(+ 1 2)` → `3` — **caution:** must not break R7RS redefinition semantics; a folded call leaves no deopt escape (see PRD §P3's design-space notes) |
 | Inlining | Between 3 and 4 | Inline small known functions |
 | Dead code elimination | Between 3 and 4 | Remove unreachable branches |
-| Compare-branch fusion | Pass 5 | `Lt`/`NumEq`/predicate + `JumpUnless` → one fused branch, same kept-deopt-landing pattern as `NotJumpUnless` |
+| Imm-operand test fusion | Pass 5 | `LtImm`/`NumEqImm` + `JumpUnless` (`(if (= n 0) …)`) — needs a second operand form on `TestJumpUnless`; measured at 4 of 32 fusable sites in the benchmark set |

@@ -1,5 +1,5 @@
 //! Semantic tests for the P5 fused/immediate instruction forms
-//! (`NotJumpUnless`, `AddImm`/`SubImm`/`LtImm`/`NumEqImm`) and return
+//! (`TestJumpUnless`, `AddImm`/`SubImm`/`LtImm`/`NumEqImm`) and return
 //! threading. These run against `VmBackend` explicitly — the fusions only
 //! exist in the VM — and pin the R7RS redefinition semantics the deopt
 //! paths must preserve.
@@ -12,6 +12,78 @@ fn fused_not_branch_takes_both_arms() {
     assert_eq!(
         eval("(define (f a b) (if (not (< a b)) 'ge 'lt)) (list (f 2 1) (f 1 2))"),
         "(ge lt)"
+    );
+}
+
+#[test]
+fn fused_predicates_take_both_arms() {
+    // Every fusable predicate, both outcomes, through a fused branch.
+    assert_eq!(
+        eval(
+            "(define (t-null x) (if (null? x) 'y 'n)) \
+             (define (t-pair x) (if (pair? x) 'y 'n)) \
+             (define (t-vec x) (if (vector? x) 'y 'n)) \
+             (define (t-eq a b) (if (eq? a b) 'y 'n)) \
+             (define (t-lt a b) (if (< a b) 'y 'n)) \
+             (define (t-numeq a b) (if (= a b) 'y 'n)) \
+             (list (t-null '()) (t-null 1) \
+                   (t-pair '(1)) (t-pair 1) \
+                   (t-vec #(1)) (t-vec 1) \
+                   (t-eq 'a 'a) (t-eq 'a 'b) \
+                   (t-lt 1 2) (t-lt 2 1) \
+                   (t-numeq 1 1) (t-numeq 1 2))"
+        ),
+        "(y n y n y n y n y n y n)"
+    );
+}
+
+#[test]
+fn fused_comparison_falls_back_for_non_fixnums() {
+    // The fixnum fast path can't judge these, so the fused branch falls
+    // through to the registry handler and the kept JumpUnless — the result
+    // must match the unfused opcode exactly, across the numeric tower.
+    assert_eq!(
+        eval(
+            "(define (t-lt a b) (if (< a b) 'y 'n)) \
+             (define (t-numeq a b) (if (= a b) 'y 'n)) \
+             (list (t-lt 1.5 2) (t-lt 2 1.5) (t-lt 1/2 3/4) \
+                   (t-numeq 1.0 1) (t-numeq 1/2 1/2) (t-numeq 2.5 1))"
+        ),
+        "(y n y y y n)"
+    );
+}
+
+/// Evaluate on the VM and return the error text (panics if it succeeds).
+fn eval_err(code: &str) -> String {
+    let interp = patina_interpreter::Interpreter::new(patina_vm::VmBackend::new());
+    match interp.eval_program(code) {
+        Ok(v) => panic!("expected an error, got: {v:?}\n{code}"),
+        Err(e) => e.to_string(),
+    }
+}
+
+#[test]
+fn fused_comparison_type_error_matches_unfused() {
+    // The fused site's slow path calls the same registry handler as the
+    // unfused opcode, so a type error must read identically. `(if (< a b) …)`
+    // fuses; returning `(< a b)` does not.
+    let fused = eval_err("(define (f a b) (if (< a b) 1 0)) (f 1 'x)");
+    let unfused = eval_err("(define (g a b) (< a b)) (g 1 'x)");
+    assert_eq!(fused, unfused, "fused site must report the same error");
+}
+
+#[test]
+fn fused_predicate_deoptimizes_on_rebind() {
+    // Rebinding a fused predicate must change what an already-compiled
+    // branch site tests: null? becomes "is it the symbol none?".
+    assert_eq!(
+        eval(
+            "(define (f x) (if (null? x) 'empty 'full)) \
+             (define r1 (f '())) \
+             (define null? (lambda (v) (eq? v 'none))) \
+             (list r1 (f '()) (f 'none))"
+        ),
+        "(empty full empty)"
     );
 }
 
