@@ -257,6 +257,44 @@ chapter. What remains, as a share of samples:
    (generational collection, GC stage 5 priority 3) rather than the call
    path.
 
+### 1.7 Scoreboard at 2026-08-07 evening: sub-parity — geomean 0.93× (post #23/#24)
+
+Levers 1 and 2 from the §1.6 ranking landed as PR #23 (Vec-indexed
+`code_store` + `inline(always)` register accessors) and PR #24
+(dispatch-loop residency: loop-cached code `Rc`, hoisted frame base with
+`reg_at`/`set_reg_at`, self-tail-call fast path — plus a review pass that
+collapsed dispatch to a single frame access per instruction). Full sweep on
+merged main `091f18a`, copied binary + `PATINA_HOME`, vs the same-machine
+Chibi 0.12 baseline:
+
+| Benchmark | Patina (s) | Chibi (s) | Ratio | post-P9 ratio |
+|---|---|---|---|---|
+| slatex | 24.7 | 91.4 | **0.27×** | 0.29× |
+| matrix | 98.5 | 141.3 | **0.70×** | 0.83× |
+| diviter | 39.9 | 46.1 | **0.87×** | 1.14× |
+| compiler | 64.9 | 72.0 | **0.90×** | 1.09× |
+| maze | 53.2 | 53.4 | **1.00×** | 1.23× |
+| divrec | 43.6 | 37.5 | 1.17× | 1.51× |
+| nboyer | 32.5 | 25.5 | 1.27× | 1.77× |
+| deriv | 113.1 | 78.5 | 1.44× | 1.81× |
+| tak | 73.8 | 43.1 | 1.71× | 2.17× |
+| ctak | 58.6 | CRASHED | — | — |
+
+**Geomean of the nine ratio benchmarks: 0.93× — faster than Chibi.**
+(1.16× → 0.93×; the arc since 08-03: 2.2× → 1.87× → 1.44× → 1.16× →
+0.93×.) Five of nine at or past parity; ctak completes where Chibi
+crashes. Per-benchmark deltas vs post-P9: −16% to −28% everywhere except
+ctak (+1.9%, within single-run drift — its runtime is call/cc-capture
+dominated, which these levers don't touch).
+
+**Remaining gap ranking** (tak 1.71×, deriv 1.44×, nboyer 1.27×): the
+§1.6 residue analysis stands — next levers are the pc-in-loop-local
+refactor (its own PR; every `frame.pc` reader needs a sync point), the
+per-primitive-call registry `Rc` clone, `value_buffer` recycling on
+multi-value returns (all three surfaced by #24's review), then P4
+slot-indexed globals and P5 instruction-count reductions. deriv/nboyer
+residue still points at allocation/GC (generational, stage 5 priority 3).
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
