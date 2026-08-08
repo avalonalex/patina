@@ -89,7 +89,6 @@ impl InlineOp {
 /// Map a registry primitive's qualified name to its inline opcode, if any.
 fn inline_op_for(qualified_name: &str) -> Option<InlineOp> {
     Some(match qualified_name {
-        "scheme.base/not" => InlineOp::Not,
         "scheme.base/+" => InlineOp::Add,
         "scheme.base/-" => InlineOp::Sub,
         "scheme.base/*" => InlineOp::Mul,
@@ -99,6 +98,7 @@ fn inline_op_for(qualified_name: &str) -> Option<InlineOp> {
         "scheme.base/cons" => InlineOp::Cons,
         "scheme.base/car" => InlineOp::Car,
         "scheme.base/cdr" => InlineOp::Cdr,
+        "scheme.base/not" => InlineOp::Not,
         "scheme.base/null?" => InlineOp::NullP,
         "scheme.base/pair?" => InlineOp::PairP,
         "scheme.base/vector?" => InlineOp::VectorP,

@@ -212,9 +212,9 @@ Eliminate the string `HashMap` lookup on the hot path. **Status:** PR #149 deliv
 ### P3 — Specialized inline opcodes for the ~15 hottest primitives  *(done — #159, 2026-07-29)*
 
 **Landed as specified**, with two scope notes: `Not` is dropped (`not` was
-Scheme-defined in `lib/scheme/base/lists.scm`, so it never resolved to a
-registry primitive — a `Not` opcode would have been dead; **superseded by P9**,
-which moved `not` into the registry and added the opcode), leaving **14 opcodes**;
+Scheme-defined at the time, so it never resolved to a registry primitive),
+leaving **14 opcodes** — P9 later moved `not` into the registry and added
+the 15th;
 and each opcode carries the `(func_id, name)` deopt pair so the shadow-bit
 check guards every fast path. All fallbacks funnel through
 `exec_call_primitive` — the registry handler — so behavior is identical to
@@ -389,17 +389,21 @@ one-instruction work. Call-site counts across the r7rs-benchmarks suite:
 `not` 399, `cadr` 220, `cddr` 91, `caddr` 60, `zero?` 42.
 
 **Landed:** `not` (registry + the `Not` inline opcode P3 specced and
-dropped), the 12 two-/three-deep car/cdr compositions (registry →
-`CallPrimitive`; handlers chain the existing `car`/`cdr` handlers so error
-behavior is identical to the old Scheme bodies by construction), and
+dropped), all 28 car/cdr compositions — two- through four-deep — via a
+depth-agnostic `cxr!` macro (registry → `CallPrimitive`; one heap borrow per
+call, per-step `is_pair` guards emitting the same "car/cdr expects a pair"
+errors the old Scheme bodies produced), and
 `zero?`/`positive?`/`negative?`/`odd?`/`even?` (registry → `CallPrimitive`;
 slow paths compose the same heap ops — `numeric_eq_cmp`/`numeric_gt`/
 `numeric_lt`/`numeric_remainder` — the old Scheme bodies called, with fixnum
-fast paths). `base/lists.scm` and `base/numbers.scm` are deleted; the
-four-deep compositions in `(scheme cxr)` stay Scheme (rare). All get the
+fast paths, but errors labeled with the predicate's own name).
+`base/lists.scm` and `base/numbers.scm` are deleted; `(scheme cxr)` is now
+pure re-exports and — per R7RS — exports the three-deep names too (it
+previously only had the four-deep ones, a conformance gap). All get the
 standard shadow-bit deopt for free; regression tests cover the
 library-loader alias binding (the P3 2026-08-04 bug class), rebinding deopt,
-and both value paths per predicate.
+every composition against its hand-inlined car/cdr chain, and both value
+paths per predicate.
 
 **Measured (interleaved A/B vs main ×3, wall-clock):** predicate-heavy loop
 −50%, cadr/caddr-heavy loop −51%, tak-shaped `(not (<))` recursion −36%,

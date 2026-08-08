@@ -91,24 +91,33 @@ pub(super) fn cdr(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
     Ok(cdr)
 }
 
-/// Define a car/cdr composition (caar, cadr, ..., cdddr) by chaining the
-/// `car`/`cdr` handlers above, innermost step first — so `cadr` is
-/// `cdr` then `car`, exactly like the former Scheme definition
-/// `(define (cadr x) (car (cdr x)))`, with identical error behavior.
+/// Define a car/cdr composition (caar, cadr, ..., cddddr), steps listed
+/// innermost first — so `cadr` is `cdr` then `car`, exactly like the former
+/// Scheme definition `(define (cadr x) (car (cdr x)))`.
+///
+/// Each step is a direct `Heap::car`/`Heap::cdr` under one borrow rather
+/// than a chained call through the handler fns above: the handlers'
+/// `try_pair` fallback only ever *fails* (it is `is_pair()`-gated, same as
+/// the fast path), so guarding with `is_pair` and emitting the same
+/// "car/cdr expects a pair" message is behavior-identical while skipping
+/// the per-step arity check, slice temp, and RefCell borrow.
 macro_rules! cxr {
     ($fname:ident, $($step:ident),+) => {
         pub(super) fn $fname(
             heap: &SharedHeap,
             args: &[TaggedValue],
         ) -> Result<TaggedValue, EvalError> {
-            if args.len() != 1 {
-                return Err(EvalError::WrongArity {
-                    expected: "1".to_string(),
-                    actual: args.len(),
-                });
-            }
+            crate::registry::expect_arity(args, 1)?;
+            let h = heap.borrow();
             let mut v = args[0];
-            $( v = $step(heap, &[v])?; )+
+            $(
+                if !v.is_pair() {
+                    return Err(EvalError::TypeError(
+                        concat!(stringify!($step), " expects a pair").into(),
+                    ));
+                }
+                v = h.$step(v);
+            )+
             Ok(v)
         }
     };
@@ -129,6 +138,24 @@ cxr!(cdaar, car, car, cdr);
 cxr!(cdadr, cdr, car, cdr);
 cxr!(cddar, car, cdr, cdr);
 cxr!(cdddr, cdr, cdr, cdr);
+
+// Four-deep compositions ((scheme cxr))
+cxr!(caaaar, car, car, car, car);
+cxr!(caaadr, cdr, car, car, car);
+cxr!(caadar, car, cdr, car, car);
+cxr!(caaddr, cdr, cdr, car, car);
+cxr!(cadaar, car, car, cdr, car);
+cxr!(cadadr, cdr, car, cdr, car);
+cxr!(caddar, car, cdr, cdr, car);
+cxr!(cadddr, cdr, cdr, cdr, car);
+cxr!(cdaaar, car, car, car, cdr);
+cxr!(cdaadr, cdr, car, car, cdr);
+cxr!(cdadar, car, cdr, car, cdr);
+cxr!(cdaddr, cdr, cdr, car, cdr);
+cxr!(cddaar, car, car, cdr, cdr);
+cxr!(cddadr, cdr, car, cdr, cdr);
+cxr!(cdddar, car, cdr, cdr, cdr);
+cxr!(cddddr, cdr, cdr, cdr, cdr);
 
 pub(super) fn list(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     // list accepts any number of arguments (0 or more)
@@ -917,6 +944,34 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ] {
         registry.register(PrimitiveFn::new_heap(
             "scheme.base",
+            name,
+            Arity::Exact(1),
+            "Composition of car/cdr accessors.",
+            handler,
+        ));
+    }
+
+    // Four-deep compositions ((scheme cxr))
+    for (name, handler) in [
+        ("caaaar", caaaar as crate::registry::TaggedHandler),
+        ("caaadr", caaadr),
+        ("caadar", caadar),
+        ("caaddr", caaddr),
+        ("cadaar", cadaar),
+        ("cadadr", cadadr),
+        ("caddar", caddar),
+        ("cadddr", cadddr),
+        ("cdaaar", cdaaar),
+        ("cdaadr", cdaadr),
+        ("cdadar", cdadar),
+        ("cdaddr", cdaddr),
+        ("cddaar", cddaar),
+        ("cddadr", cddadr),
+        ("cdddar", cdddar),
+        ("cddddr", cddddr),
+    ] {
+        registry.register(PrimitiveFn::new_heap(
+            "scheme.cxr",
             name,
             Arity::Exact(1),
             "Composition of car/cdr accessors.",

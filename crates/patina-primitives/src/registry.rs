@@ -26,6 +26,20 @@ pub enum PrimitiveHandler {
     HigherOrder(HOTaggedHandler),
 }
 
+/// Handler-side exact-arity check: the standard `WrongArity` error every
+/// hand-rolled handler produces. (Registry dispatch also checks the declared
+/// `Arity` up front via `PrimitiveFn::check_arity`; handlers keep their own
+/// check so they stay correct when called directly.)
+pub(crate) fn expect_arity(args: &[TaggedValue], n: usize) -> Result<(), EvalError> {
+    if args.len() != n {
+        return Err(EvalError::WrongArity {
+            expected: n.to_string(),
+            actual: args.len(),
+        });
+    }
+    Ok(())
+}
+
 pub struct PrimitiveFn {
     pub library: &'static str,
     pub name: &'static str,

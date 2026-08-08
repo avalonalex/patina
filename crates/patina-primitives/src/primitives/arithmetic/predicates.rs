@@ -6,19 +6,20 @@
 //! - finite? - Returns #t if x is finite
 //! - infinite? - Returns #t if x is infinite
 //! - nan? - Returns #t if x is NaN
+//!
+//! The sign/parity predicates deliberately keep their own bodies rather than
+//! delegating to the `=`/`<`/`>`/`remainder` handlers: they call the same
+//! heap ops (which own the numeric-tower semantics), but label domain errors
+//! with the predicate's own name — `(zero? "a")` says `zero?`, not `=`.
 
 use super::helpers::numeric_err;
+use crate::registry::expect_arity;
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
 
 fn check_unary(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if args.len() != 1 {
-        return Err(EvalError::WrongArity {
-            expected: "1".to_string(),
-            actual: args.len(),
-        });
-    }
+    expect_arity(args, 1)?;
     Ok(args[0])
 }
 
@@ -74,12 +75,11 @@ pub(super) fn negative_p(
 /// same heap operations as the former Scheme definitions so domain errors
 /// (non-integers) are identical.
 fn remainder_is_zero(heap: &SharedHeap, x: TaggedValue, name: &str) -> Result<bool, EvalError> {
-    let r = heap
-        .borrow_mut()
+    let mut h = heap.borrow_mut();
+    let r = h
         .numeric_remainder(x, TaggedValue::fixnum(2))
         .map_err(|e| numeric_err(e, name))?;
-    heap.borrow()
-        .numeric_eq_cmp(r, TaggedValue::fixnum(0))
+    h.numeric_eq_cmp(r, TaggedValue::fixnum(0))
         .map_err(|e| numeric_err(e, name))
 }
 
@@ -103,12 +103,7 @@ pub(super) fn even_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVa
 
 /// (finite? x) - Returns #t if x is finite
 pub(super) fn finite_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if args.len() != 1 {
-        return Err(EvalError::WrongArity {
-            expected: "1".to_string(),
-            actual: args.len(),
-        });
-    }
+    check_unary(args)?;
     let heap_ref = heap.borrow();
 
     match heap_ref.numeric_is_finite(args[0]) {
@@ -125,12 +120,7 @@ pub(super) fn infinite_p(
     heap: &SharedHeap,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    if args.len() != 1 {
-        return Err(EvalError::WrongArity {
-            expected: "1".to_string(),
-            actual: args.len(),
-        });
-    }
+    check_unary(args)?;
     let heap_ref = heap.borrow();
 
     match heap_ref.numeric_is_infinite(args[0]) {
@@ -144,12 +134,7 @@ pub(super) fn infinite_p(
 
 /// (nan? x) - Returns #t if x is NaN
 pub(super) fn nan_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if args.len() != 1 {
-        return Err(EvalError::WrongArity {
-            expected: "1".to_string(),
-            actual: args.len(),
-        });
-    }
+    check_unary(args)?;
     let heap_ref = heap.borrow();
 
     match heap_ref.numeric_is_nan(args[0]) {

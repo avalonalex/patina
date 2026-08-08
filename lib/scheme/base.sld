@@ -67,7 +67,9 @@
     memq memv member
     assq assv assoc
     list-copy
-    ;; Car/cdr compositions (two- and three-deep; four-deep in (scheme cxr))
+    ;; Car/cdr compositions. R7RS puts the two-deep ones here and all
+    ;; three- and four-deep ones in (scheme cxr); this implementation also
+    ;; exports the three-deep ones from base as an extension.
     caar cadr cdar cddr
     caaar caadr cadar caddr
     cdaar cdadr cddar cdddr

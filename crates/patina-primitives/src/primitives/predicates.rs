@@ -164,12 +164,7 @@ pub(super) fn pair_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
 
 /// (not obj) - Returns #t if obj is #f, #f otherwise
 pub(super) fn not_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if args.len() != 1 {
-        return Err(EvalError::WrongArity {
-            expected: "1".to_string(),
-            actual: args.len(),
-        });
-    }
+    crate::registry::expect_arity(args, 1)?;
     Ok(TaggedValue::boolean(!args[0].is_truthy()))
 }
 
