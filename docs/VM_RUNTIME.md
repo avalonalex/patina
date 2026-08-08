@@ -179,11 +179,18 @@ Catchable errors are routed through exception handlers via `vm_raise_value()`.
 ```rust
 fn dispatch_one_instruction(
     state: &mut VmState,
+    cur_code: &mut Rc<CodeObject>,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError>
 ```
 
 Returns `Ok(Some(val))` to exit the loop, `Ok(None)` to continue.
+
+`cur_code` is the loop's cached copy of the top frame's code object; the
+dispatch prologue refreshes it (pointer compare) only when the frame's code
+changed, so no `Rc` clone is paid per instruction. The prologue also reads
+`pc` (folding in its advance) and the frame's `register_base` in the same
+frame access.
 
 ### 3.4 Register Access
 
@@ -191,10 +198,15 @@ Returns `Ok(Some(val))` to exit the loop, `Ok(None)` to continue.
 impl VmState {
     pub fn reg(&self, r: Reg) -> TaggedValue;
     pub fn set_reg(&mut self, r: Reg, val: TaggedValue);
+    fn reg_at(&self, base: usize, r: Reg) -> TaggedValue;      // dispatch loop
+    fn set_reg_at(&mut self, base: usize, r: Reg, val: TaggedValue);
 }
 ```
 
-Both use `frame.register_base + r` to index into the flat register array.
+All index `register_base + r` into the flat register array. The `_at`
+variants take the dispatch prologue's hoisted base; only instruction arms
+that cannot push or pop a frame before the access may use them (a plain
+`set_reg` at a dispatch site signals "the frame changed here").
 
 ---
 

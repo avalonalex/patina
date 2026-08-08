@@ -210,27 +210,31 @@ impl VmState {
 
     #[inline(always)]
     pub fn reg(&self, reg: u16) -> TaggedValue {
-        self.registers[self.frame_base() + reg as usize]
+        self.reg_at(self.frame_base(), reg)
     }
 
     #[inline(always)]
     pub fn set_reg(&mut self, reg: u16, val: TaggedValue) {
         let base = self.frame_base();
-        self.registers[base + reg as usize] = val;
+        self.set_reg_at(base, reg, val);
     }
 
     // Base-relative variants for the dispatch loop: `base` is the top
     // frame's `register_base`, hoisted once per dispatch. Only instruction
     // arms that cannot push or pop a frame before the access may use these
-    // — after a frame change the hoisted base addresses the wrong window.
+    // — after a frame change the hoisted base addresses the wrong window
+    // (a `set_reg` at a dispatch site means "the frame changed here"). The
+    // debug assert makes that rule machine-checked across the test suite.
 
     #[inline(always)]
     fn reg_at(&self, base: usize, reg: u16) -> TaggedValue {
+        debug_assert_eq!(base, self.frame_base());
         self.registers[base + reg as usize]
     }
 
     #[inline(always)]
     fn set_reg_at(&mut self, base: usize, reg: u16, val: TaggedValue) {
+        debug_assert_eq!(base, self.frame_base());
         self.registers[base + reg as usize] = val;
     }
 
@@ -714,24 +718,10 @@ fn call_closure_resolved(
 ) -> Result<(), VmError> {
     let code = state.code_object(code_id)?;
 
-    // Arity check.
-    check_arity(&code.arity, args.len())?;
+    check_arity(code.arity, args.len())?;
 
     let base = state.alloc_registers(code.num_regs);
-    // For variadic: copy only the fixed args, then collect the rest into a list.
-    // For exact arity: copy all args.
-    if let Arity::Variadic(fixed) = &code.arity {
-        let fixed = *fixed as usize;
-        for (i, &arg) in args[..fixed].iter().enumerate() {
-            state.registers[base + i] = arg;
-        }
-        let rest = build_list(state, &args[fixed..])?;
-        state.registers[base + fixed] = rest;
-    } else {
-        for (i, &arg) in args.iter().enumerate() {
-            state.registers[base + i] = arg;
-        }
-    }
+    store_args_in_window(state, base, code.arity, args)?;
 
     state.frames.push(CallFrame {
         pc: 0,
@@ -753,18 +743,14 @@ fn call_closure_from_regs(
     state: &mut VmState,
     closure_val: TaggedValue,
     code_id: CodeObjectId,
+    caller_base: usize,
     arg_regs: &[u16],
     return_reg: u16,
 ) -> Result<(), VmError> {
     let code = state.code_object(code_id)?;
 
-    check_arity(&code.arity, arg_regs.len())?;
+    check_arity(code.arity, arg_regs.len())?;
 
-    let caller_base = state
-        .frames
-        .last()
-        .expect("Call with empty frame stack")
-        .register_base;
     let base = state.alloc_registers(code.num_regs);
     if let Arity::Variadic(fixed) = &code.arity {
         let fixed = *fixed as usize;
@@ -813,28 +799,16 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
 
     // Loop-resident copy of the top frame's code object: dispatch borrows it
     // instead of cloning the `Rc` out of the frame on every instruction (two
-    // refcount writes per dispatch). Refreshed only when the top frame's
-    // code changes — call, return, tail call, continuation invoke.
-    let mut cur_code = state
-        .frames
-        .last()
-        .expect("run loop with empty frame stack")
-        .code
-        .clone();
+    // refcount writes per dispatch), refreshing it in its prologue when the
+    // frame's code changes — call, return, tail call, continuation invoke.
+    let mut cur_code = state.current_code()?;
 
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
         // are dead, buffers are restored, and no heap borrow is outstanding.
         maybe_collect(state, is_outermost);
 
-        {
-            let f = state.frames.last().expect("empty frame stack");
-            if !Rc::ptr_eq(&cur_code, &f.code) {
-                cur_code = f.code.clone();
-            }
-        }
-
-        match dispatch_one_instruction(state, &cur_code, exit_depth) {
+        match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
             Ok(Some(val)) => return Ok(val),
             Ok(None) => continue,
             Err(e) => {
@@ -936,9 +910,9 @@ macro_rules! inline_primitive {
         match fast {
             Some(val) => $state.set_reg_at($base, $dst, val),
             None => {
-                if let Some(escaped) =
-                    exec_call_primitive($state, $func_id, $name, &[$($arg),+], $dst, $exit_depth)?
-                {
+                if let Some(escaped) = exec_call_primitive(
+                    $state, $base, $func_id, $name, &[$($arg),+], $dst, $exit_depth,
+                )? {
                     return Ok(Some(escaped));
                 }
             }
@@ -950,25 +924,28 @@ macro_rules! inline_primitive {
 /// exit, `Ok(None)` to continue, or `Err` on error.
 fn dispatch_one_instruction(
     state: &mut VmState,
-    code: &CodeObject,
+    cur_code: &mut Rc<CodeObject>,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
-    // `code` is the loop's cached copy of the top frame's code object
-    // (refreshed by `run_loop_until` on frame change), so no Rc clone per
-    // dispatch. `base` is the frame's register window, hoisted for the
-    // frame-stable arms (`reg_at`/`set_reg_at`).
+    // One frame access per dispatch: refresh the loop's cached code object
+    // (no Rc clone per instruction — only when the frame's code changed),
+    // read `pc` and fold in its advance (instructions that jump overwrite
+    // it), and hoist the register window base for the frame-stable arms
+    // (`reg_at`/`set_reg_at`).
     let (pc, base) = {
-        let f = state.frames.last().expect("empty frame stack");
-        debug_assert!(std::ptr::eq::<CodeObject>(&*f.code, code));
-        (f.pc, f.register_base)
+        let f = state.frames.last_mut().expect("empty frame stack");
+        if !Rc::ptr_eq(cur_code, &f.code) {
+            *cur_code = f.code.clone();
+        }
+        let pc = f.pc;
+        f.pc = pc + 1;
+        (pc, f.register_base)
     };
+    let code: &CodeObject = cur_code;
 
     let instr = code.instructions.get(pc).ok_or_else(|| VmError::Runtime {
         message: format!("PC {} out of bounds in {:?}", pc, code.id),
     })?;
-
-    // Advance PC before dispatch (instructions that jump will overwrite).
-    state.frames.last_mut().unwrap().pc += 1;
 
     // ── Trace: before instruction ────────────────────────────────────
     if let Some(tracer) = state.tracer.clone() {
@@ -1121,7 +1098,7 @@ fn dispatch_one_instruction(
             // with a plain collected Vec, exactly as before the fast path.
             let closure_id = state.heap.borrow().get_vm_closure_code_id(func_val);
             if let Some(id) = closure_id {
-                call_closure_from_regs(state, func_val, CodeObjectId(id), args, dst)?;
+                call_closure_from_regs(state, func_val, CodeObjectId(id), base, args, dst)?;
             } else {
                 let arg_vals: Vec<TaggedValue> =
                     args.iter().map(|&r| state.reg_at(base, r)).collect();
@@ -1146,12 +1123,18 @@ fn dispatch_one_instruction(
                     for (i, &r) in args.iter().enumerate() {
                         buf[i] = state.reg_at(base, r);
                     }
-                    tail_call_closure_resolved(
-                        state,
-                        func_val,
-                        CodeObjectId(id),
-                        &buf[..args.len()],
-                    )?;
+                    // Self-tail-call check while the caller's code is still
+                    // in hand — same code object, no frame access needed.
+                    if CodeObjectId(id) == code.id {
+                        self_tail_call(state, base, code.arity, func_val, &buf[..args.len()])?;
+                    } else {
+                        tail_call_closure_resolved(
+                            state,
+                            func_val,
+                            CodeObjectId(id),
+                            &buf[..args.len()],
+                        )?;
+                    }
                 } else {
                     let arg_vals: Vec<TaggedValue> =
                         args.iter().map(|&r| state.reg_at(base, r)).collect();
@@ -1243,40 +1226,7 @@ fn dispatch_one_instruction(
             }
 
             let new_code_id = resolve_closure(state, func_val)?;
-            let new_code = state.code_object(new_code_id)?;
-
-            check_arity(&new_code.arity, arg_vals.len())?;
-
-            let frame = state.frames.last_mut().unwrap();
-            let old_base = frame.register_base;
-            let old_num = frame.num_regs;
-            let new_num = new_code.num_regs;
-
-            if new_num > old_num {
-                let extra = new_num - old_num;
-                state
-                    .registers
-                    .resize(state.registers.len() + extra as usize, TaggedValue::NULL);
-                state.frames.last_mut().unwrap().num_regs = new_num;
-            }
-
-            if let Arity::Variadic(fixed) = &new_code.arity {
-                let fixed = *fixed as usize;
-                for (i, val) in arg_vals[..fixed].iter().enumerate() {
-                    state.registers[old_base + i] = *val;
-                }
-                let rest = build_list(state, &arg_vals[fixed..])?;
-                state.registers[old_base + fixed] = rest;
-            } else {
-                for (i, val) in arg_vals.iter().enumerate() {
-                    state.registers[old_base + i] = *val;
-                }
-            }
-
-            let frame = state.frames.last_mut().unwrap();
-            frame.pc = 0;
-            frame.closure = closure_heap_index(func_val);
-            frame.code = new_code;
+            tail_call_closure_resolved(state, func_val, new_code_id, &arg_vals)?;
         }
 
         Instruction::Return { val } => {
@@ -1582,10 +1532,12 @@ fn dispatch_one_instruction(
                 state.prompt_stack = cc.prompt_stack.clone();
                 state.exception_handlers = cc.exception_handlers.clone();
 
-                // Deliver value into deliver_reg of the top frame.
+                // Deliver value into deliver_reg of the top frame (the
+                // dispatch-level `base` is stale here — the whole register
+                // file was just replaced).
                 if let Some(top) = state.frames.last() {
-                    let base = top.register_base;
-                    state.registers[base + cc.deliver_reg as usize] = deliver_val;
+                    let top_base = top.register_base;
+                    state.registers[top_base + cc.deliver_reg as usize] = deliver_val;
                 }
             }
         }
@@ -1602,7 +1554,8 @@ fn dispatch_one_instruction(
             let mut arg_vals = std::mem::take(&mut state.scratch_args);
             arg_vals.clear();
             arg_vals.extend(args.iter().map(|&r| state.reg_at(base, r)));
-            let result = exec_call_primitive(state, func_id, name, &arg_vals, dst, exit_depth);
+            let result =
+                exec_call_primitive(state, base, func_id, name, &arg_vals, dst, exit_depth);
             state.scratch_args = arg_vals;
             if let Some(escaped) = result? {
                 return Ok(Some(escaped));
@@ -1999,15 +1952,52 @@ fn closure_heap_index(val: TaggedValue) -> Option<patina_core::tagged_value::Hea
     }
 }
 
-fn check_arity(arity: &Arity, n: usize) -> Result<(), VmError> {
-    if !arity.accepts(n) {
-        return Err(VmError::ArityMismatch {
-            expected: match arity {
-                Arity::Fixed(k) => format!("{}", k),
-                Arity::Variadic(k) => format!("at least {}", k),
-            },
-            got: n,
-        });
+/// Outlined error constructor — `#[cold]` keeps the formatting machinery
+/// out of the call paths that inline `check_arity`.
+#[cold]
+#[inline(never)]
+fn arity_error(arity: Arity, n: usize) -> VmError {
+    VmError::ArityMismatch {
+        expected: match arity {
+            Arity::Fixed(k) => format!("{}", k),
+            Arity::Variadic(k) => format!("at least {}", k),
+        },
+        got: n,
+    }
+}
+
+#[inline(always)]
+fn check_arity(arity: Arity, n: usize) -> Result<(), VmError> {
+    if arity.accepts(n) {
+        Ok(())
+    } else {
+        Err(arity_error(arity, n))
+    }
+}
+
+/// Fill the register window at `base` with a call's arguments per `arity`:
+/// fixed args into `r0..`, a variadic rest collected into a list after them.
+/// The caller has already checked arity.
+fn store_args_in_window(
+    state: &mut VmState,
+    base: usize,
+    arity: Arity,
+    arg_vals: &[TaggedValue],
+) -> Result<(), VmError> {
+    if let Arity::Variadic(fixed) = arity {
+        let fixed = fixed as usize;
+        for (dst, &val) in state.registers[base..base + fixed].iter_mut().zip(arg_vals) {
+            *dst = val;
+        }
+        let rest = build_list(state, &arg_vals[fixed..])?;
+        state.registers[base + fixed] = rest;
+    } else {
+        for (dst, &val) in state.registers[base..base + arg_vals.len()]
+            .iter_mut()
+            .zip(arg_vals)
+        {
+            *dst = val;
+        }
     }
     Ok(())
 }
@@ -3058,40 +3048,18 @@ fn tail_call_closure_resolved(
     new_code_id: CodeObjectId,
     arg_vals: &[TaggedValue],
 ) -> Result<(), VmError> {
-    // Self-tail-call fast path — the `(define (loop …) … (loop …))` shape.
-    // The frame already holds this exact code object, so the store lookup
-    // and `Rc` churn are skipped and the window is already sized for it.
-    // The closure must still be updated: a different instance of the same
-    // code (different captures) tail-calling itself is the same code id.
     let top = state
         .frames
         .last()
         .expect("tail call with empty frame stack");
     if top.code.id == new_code_id {
-        let arity = top.code.arity;
-        let base = top.register_base;
-        check_arity(&arity, arg_vals.len())?;
-        if let Arity::Variadic(fixed) = arity {
-            let fixed = fixed as usize;
-            for (i, &val) in arg_vals[..fixed].iter().enumerate() {
-                state.registers[base + i] = val;
-            }
-            let rest = build_list(state, &arg_vals[fixed..])?;
-            state.registers[base + fixed] = rest;
-        } else {
-            for (i, &val) in arg_vals.iter().enumerate() {
-                state.registers[base + i] = val;
-            }
-        }
-        let frame = state.frames.last_mut().unwrap();
-        frame.pc = 0;
-        frame.closure = closure_heap_index(func_val);
-        return Ok(());
+        let (arity, base) = (top.code.arity, top.register_base);
+        return self_tail_call(state, base, arity, func_val, arg_vals);
     }
 
     let new_code = state.code_object(new_code_id)?;
 
-    check_arity(&new_code.arity, arg_vals.len())?;
+    check_arity(new_code.arity, arg_vals.len())?;
 
     // Reuse the current frame's register window.
     // If the new code needs more registers, grow the window.
@@ -3108,19 +3076,7 @@ fn tail_call_closure_resolved(
         state.frames.last_mut().unwrap().num_regs = new_num;
     }
 
-    // Write fixed args into r0..r(n-1), then handle variadic rest.
-    if let Arity::Variadic(fixed) = &new_code.arity {
-        let fixed = *fixed as usize;
-        for (i, &val) in arg_vals[..fixed].iter().enumerate() {
-            state.registers[old_base + i] = val;
-        }
-        let rest = build_list(state, &arg_vals[fixed..])?;
-        state.registers[old_base + fixed] = rest;
-    } else {
-        for (i, &val) in arg_vals.iter().enumerate() {
-            state.registers[old_base + i] = val;
-        }
-    }
+    store_args_in_window(state, old_base, new_code.arity, arg_vals)?;
 
     // Update frame in-place — dispatch fetches instructions from `code`.
     let frame = state.frames.last_mut().unwrap();
@@ -3130,14 +3086,39 @@ fn tail_call_closure_resolved(
     Ok(())
 }
 
+/// Tail call whose callee is the current frame's own code object — the
+/// `(define (loop …) … (loop …))` shape. No store lookup, no `Rc` churn,
+/// no window grow: the window is already sized for this code. The closure
+/// field still updates — a different instance of the same code (different
+/// captures) tail-calls itself under the same code id.
+fn self_tail_call(
+    state: &mut VmState,
+    base: usize,
+    arity: Arity,
+    func_val: TaggedValue,
+    arg_vals: &[TaggedValue],
+) -> Result<(), VmError> {
+    check_arity(arity, arg_vals.len())?;
+    store_args_in_window(state, base, arity, arg_vals)?;
+    let frame = state
+        .frames
+        .last_mut()
+        .expect("tail call with empty frame stack");
+    frame.pc = 0;
+    frame.closure = closure_heap_index(func_val);
+    Ok(())
+}
+
 /// Execute a compile-time-resolved primitive call: the shared back end of
 /// `CallPrimitive` and every inline opcode's slow path. Checks the shadow
 /// bit — a rebound name deoptimizes to name-lookup dispatch, preserving
 /// redefinition semantics — otherwise dispatches through the registry by
 /// index. Returns `Some(value)` on a continuation escape, as `call_value`
 /// does.
+#[allow(clippy::too_many_arguments)]
 fn exec_call_primitive(
     state: &mut VmState,
+    base: usize,
     func_id: PrimitiveFnId,
     name: &Symbol,
     arg_vals: &[TaggedValue],
@@ -3177,7 +3158,10 @@ fn exec_call_primitive(
         .map_err(|e| VmError::Runtime {
             message: e.to_string(),
         })?;
-    state.set_reg(dst, result);
+    // Primitives are frame-neutral on the `Ok` path (a re-entrant call runs
+    // its nested frames to completion), so the hoisted base is still the
+    // top frame's — the write the plain `set_reg` here already assumed.
+    state.set_reg_at(base, dst, result);
     Ok(None)
 }
 
