@@ -74,6 +74,16 @@ fn fmt_inline_prim(
     format!("{:<13}r{} ← {}({})", mnemonic, dst, name, a.join(", "))
 }
 
+fn fmt_imm_prim(
+    mnemonic: &str,
+    dst: u16,
+    name: &patina_core::core_expr::Symbol,
+    a: u16,
+    imm: patina_core::tagged_value::TaggedValue,
+) -> String {
+    format!("{:<13}r{} ← {}(r{}, {:?})", mnemonic, dst, name, a, imm)
+}
+
 pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -> String {
     match instr {
         Instruction::LoadImmediate { dst, val } => {
@@ -187,6 +197,23 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::Car { src, dst, name, .. } => fmt_inline_prim("Car", *dst, name, &[*src]),
         Instruction::Cdr { src, dst, name, .. } => fmt_inline_prim("Cdr", *dst, name, &[*src]),
         Instruction::Not { src, dst, name, .. } => fmt_inline_prim("Not", *dst, name, &[*src]),
+        Instruction::NotJumpUnless {
+            src, dst, target, ..
+        } => {
+            format!("NotJumpUnless r{} ← not(r{}) → {}", dst, src, target)
+        }
+        Instruction::AddImm {
+            a, imm, dst, name, ..
+        } => fmt_imm_prim("AddImm", *dst, name, *a, *imm),
+        Instruction::SubImm {
+            a, imm, dst, name, ..
+        } => fmt_imm_prim("SubImm", *dst, name, *a, *imm),
+        Instruction::LtImm {
+            a, imm, dst, name, ..
+        } => fmt_imm_prim("LtImm", *dst, name, *a, *imm),
+        Instruction::NumEqImm {
+            a, imm, dst, name, ..
+        } => fmt_imm_prim("NumEqImm", *dst, name, *a, *imm),
         Instruction::NullP { src, dst, name, .. } => fmt_inline_prim("NullP", *dst, name, &[*src]),
         Instruction::PairP { src, dst, name, .. } => fmt_inline_prim("PairP", *dst, name, &[*src]),
         Instruction::VectorP { src, dst, name, .. } => {

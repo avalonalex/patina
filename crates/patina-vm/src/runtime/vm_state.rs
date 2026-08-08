@@ -1723,6 +1723,92 @@ fn dispatch_one_instruction(
             });
         }
 
+        Instruction::NotJumpUnless {
+            src,
+            dst,
+            target,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg_at(base, src);
+            if !state.is_primitive_shadowed(func_id.0 as usize) {
+                // Exactly `Not` + `JumpUnless dst`, in one dispatch: write
+                // dst (jumps into this pc rely on it), then branch — to the
+                // else target when src is truthy, over the following
+                // `JumpUnless` otherwise.
+                state.set_reg_at(base, dst, TaggedValue::boolean(!x.is_truthy()));
+                let f = state.frames.last_mut().expect("empty frame stack");
+                f.pc = if x.is_truthy() { target } else { pc + 2 };
+            } else {
+                // Deopt: run the current `not` binding into dst and fall
+                // through to the `JumpUnless dst` kept at the next pc, which
+                // performs the branch once the (possibly re-entrant) call
+                // has written dst.
+                if let Some(escaped) =
+                    exec_call_primitive(state, base, func_id, name, &[x], dst, exit_depth)?
+                {
+                    return Ok(Some(escaped));
+                }
+            }
+        }
+
+        Instruction::AddImm {
+            a,
+            imm,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg_at(base, a);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
+                // Overflow returns None from fixnum_add; the handler promotes.
+                (x.is_fixnum() && imm.is_fixnum())
+                    .then(|| x.fixnum_add(imm))
+                    .flatten()
+            });
+        }
+
+        Instruction::SubImm {
+            a,
+            imm,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg_at(base, a);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
+                (x.is_fixnum() && imm.is_fixnum())
+                    .then(|| x.fixnum_sub(imm))
+                    .flatten()
+            });
+        }
+
+        Instruction::LtImm {
+            a,
+            imm,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg_at(base, a);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
+                (x.is_fixnum() && imm.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_lt(imm)))
+            });
+        }
+
+        Instruction::NumEqImm {
+            a,
+            imm,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg_at(base, a);
+            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
+                (x.is_fixnum() && imm.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_eq(imm)))
+            });
+        }
+
         Instruction::NullP {
             src,
             dst,
