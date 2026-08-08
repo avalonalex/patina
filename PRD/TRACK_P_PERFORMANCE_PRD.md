@@ -295,6 +295,67 @@ multi-value returns (all three surfaced by #24's review), then P4
 slot-indexed globals and P5 instruction-count reductions. deriv/nboyer
 residue still points at allocation/GC (generational, stage 5 priority 3).
 
+### 1.8 Fresh profile of the remaining gap (2026-08-08, post #23/#24)
+
+Re-profiled the three worst ratios on main `f1d60a1` before choosing the
+next lever (same protocol as §1.6: `/usr/bin/sample`, 10 s top-of-stack,
+~8000 samples; artifacts in `target/profiles/*_post_p24.txt`). #23/#24
+fully banked their targets: the register accessors and the `code_store`
+hash are absent from every hot list, and deriv's `memset_pattern16` fell
+7.5% → 2.0% (the self-tail-call fast path). What remains:
+
+| Cost center | tak | deriv | nboyer |
+|---|---|---|---|
+| `dispatch_one_instruction` + `run_loop_until` | 76% | 66% | 76% |
+| Globals cluster: `Environment::get` + memcmp + `frame_globals` + `get_vm_closure_globals` (P4) | 10.4% | 7.3% | ~0% |
+| `call_closure_from_regs` (+resolved/tail/store_args) | 7.4% | 7.0% | 7.4% |
+| malloc/free + Vec growth (primitive temp Vecs, `Apply` path) | ~0.4% | ~6.5% | ~0.7% |
+| `memset_pattern16` (register-window zeroing) | 3.2% | 2.0% | 3.3% |
+| `alloc_*` + GC sweep/visit | — | 2.6% | 3.1% |
+| `pop_resolved_winds` + `pop_exception_handlers` | 1.4% | 1.1% | 1.1% |
+| `read/write_mutable_cell` | — | — | 2.1% |
+
+**Ranking shifts vs §1.7's queue:** P4 slot-indexed globals became the top
+addressable lever (it *grew* in relative terms as everything around it
+shrank — and tak is the worst ratio). deriv's distinctive cost is
+temporary-`Vec` churn on the primitive/`Apply` path: the `list` handler
+builds and frees a `Vec::from_iter` per call, plus `list_to_vec` under
+`Apply`/`map` — same family as the queued `value_buffer` recycling. The
+per-primitive-call registry `Rc` clone is **not visible** (≤0.5%; P2/P3/P9
+took these benchmarks off the registry path) — dropped from the queue.
+Register-window zeroing is down to 2–3.3% — deprioritized. The
+pc-in-loop-local refactor can't be sized by sampling but targets the
+dominant dispatch-residency block; still queued.
+
+### 1.9 Scoreboard after P4 slot-indexed globals (2026-08-08)
+
+Sweep with the P4 branch binary (copied binary + `PATINA_HOME`), same
+local Chibi 0.12 baseline:
+
+| Benchmark | 08-07 (#23/#24) | P4 | Delta | Ratio vs Chibi |
+|---|---|---|---|---|
+| slatex | 24.7 | 24.5 | −1% | 0.27× — faster |
+| matrix | 98.5 | 98.5 | 0% | 0.70× — faster |
+| diviter | 39.9 | 39.9 | 0% | 0.86× — faster |
+| compiler | 64.9 | 64.6 | −0.5% | 0.90× — faster |
+| maze | 53.2 | 51.3 | −3.6% | **0.96× — crosses parity** |
+| divrec | 43.6 | 41.8 | −4.1% | 1.11× |
+| nboyer | 32.5 | 33.0 | +1.5% | 1.29× |
+| deriv | 113.1 | 107.6 | −4.9% | 1.37× |
+| tak | 73.8 | 66.7 | −9.6% | 1.55× |
+| ctak | 58.6 | 55.9 | −4.6% | n/a (Chibi crashes) |
+
+**Geomean of the nine ratio benchmarks: 0.91×** (was 0.93×); six of nine
+now at or past parity. The deltas distribute exactly along `LoadGlobal`
+density: tak (self-call through a cached global site every iteration)
+−9.6%, deriv/divrec/ctak −4–5%, matrix/diviter (loop-local and
+vector-opcode bound) flat, nboyer's +1.5% is single-run drift — its
+profile has no `Environment::get`. The remaining gap ranking is
+unchanged: tak 1.55×, deriv 1.37×, nboyer 1.29×, with §1.8's queue
+(P5 instruction-count reductions, deriv's `Vec`-churn cluster,
+pc-in-loop-local) still standing and allocation/GC still the deriv/nboyer
+residue.
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
@@ -398,9 +459,13 @@ Add fixed-arity opcodes executed inline in the dispatch loop — `Add/Sub/Mul/Lt
 - **Acceptance:** per-opcode tests on **both** paths — fixnum (`(+ 1 2)`→3), overflow→bignum (`verify_bigint_promotion.rs` semantics), non-fixnum (`(+ 1.5 2)`→3.5), type error (`(car 5)`, `(vector-ref v 99)`); full `cargo test`.
 - **Estimated P2+P3 impact:** 2–5× on arithmetic/list-heavy code.
 
-### P4 — Indexed / cached global access  *(first slice done in #151; caution flag added)*
-`LoadGlobal`/`StoreGlobal` hash a `String` and walk the parent chain. **Status:** #151 swapped `Environment`'s maps to `FxHashMap` (−3–5% on globals-heavy code). Slot indices / inline caches remain open — **but see §1.1's negative result:** `state.globals` is swapped live during library loading, so any push-time or callsite-cached resolution of the globals *environment* is unsound today; only caching within a stable environment (e.g. slot index into a map that is mutated but never replaced) or redesigning the library-loading swap can go further.
-- **Acceptance:** `cargo test`; benchmark a global-bound loop against the P0 baseline.
+### P4 — Indexed / cached global access  *(done — #151 FxHashMap; slot cache landed 2026-08-08)*
+`LoadGlobal`/`StoreGlobal` hash a `String` and walk the parent chain. **Status:** #151 swapped `Environment`'s maps to `FxHashMap` (−3–5% on globals-heavy code). The slot cache landed 2026-08-08 (branch `track-p-p4-global-slot-cache`), designed around §1.1's negative result — nothing caches the globals *environment*; `frame_globals` still resolves per instruction:
+- **Slot-stable bindings:** `Environment`'s simple bindings are now a name→slot `FxHashMap<String, u32>` plus an append-only `Vec<TaggedValue>` slot table. A binding's slot never moves or disappears; redefinition overwrites the slot in place, so a cached slot always reads the *current* value of the same name.
+- **Per-site inline cache:** `CodeObject` carries a pc-indexed `Vec<Cell<GlobalCacheEntry>>` (16 bytes/instruction; no ISA change — `pc` is already live in the dispatch arms). `LoadGlobal`/`StoreGlobal` validate the entry and collapse to an id compare + slot read, skipping the string hash + memcmp.
+- **Soundness:** entries key on a process-unique, never-reused `u64` environment id (not an address — a dropped env's recycled address would let an address-keyed cache falsely hit). Only names resolving in the queried environment's *own* table are cached; parent-resolved names always take the full lookup, so a later local define that changes resolution can never be masked. Stale entries can only miss.
+- **Measured (interleaved A/B ×3 vs main, wall-clock):** globals-heavy set!/read loop −41%, tak(32,16,8) −6.6%, deriv kernel −4.3%, nboyer flat (its profile has no `Environment::get` — confirms zero overhead where the cache can't help). Matches the §1.8 shares: the hash+memcmp portion is gone; the residual `frame_globals` heap-borrow + `Rc` clone per access (~2%) stays and is a candidate for a follow-up only if a future profile ranks it.
+- **Semantics tests:** `patina-tests/tests/vm_global_cache.rs` — set!/redefine visibility through cached sites, store/load site agreement, slot stability under map growth, forward references, deep cached self-recursion, and library-vs-toplevel environment isolation (`map`'s internal `%map-cars` site vs a same-named toplevel define). Chibi 1163/1163.
 
 ### P5 — Cheap, readable compiler passes
 The compiler runs zero optimization passes; the 5-pass pipeline is structured for insertion (`docs/VM_COMPILER.md §12`). Add the low-complexity ones: **constant folding** (`(+ 1 2)`→`3`), **dead-code elimination** of unused bindings, **peephole** (dead `Move` removal, `LoadConst+Add`→immediate). Skip contification / copy-propagation / liveness regalloc (deferred).

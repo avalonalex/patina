@@ -3,7 +3,7 @@
 //! See VM_RUNTIME.md §core-data-structures.
 
 use crate::error::VmError;
-use crate::types::code_object::{Arity, CodeObject};
+use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
@@ -1026,20 +1026,38 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadGlobal { dst, ref name } => {
+            // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
             let globals = frame_globals(state);
-            let val = globals
-                .get(name)
-                .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
+            let val = match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
+                Some(slot) => globals.slot_value(slot),
+                // Not local to this environment: parent-chain lookup.
+                None => globals
+                    .parent()
+                    .and_then(|p| p.get(name))
+                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
+            };
             state.set_reg_at(base, dst, val);
         }
 
         Instruction::StoreGlobal { ref name, src } => {
             let val = state.reg_at(base, src);
             let globals = frame_globals(state);
-            mark_if_shadowing_primitive(state, &globals, name, val);
-            globals
-                .set(name, val)
-                .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
+            match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
+                Some(slot) => {
+                    let old = globals.slot_value(slot);
+                    mark_if_shadowing_primitive_value(state, old, val);
+                    globals.set_slot_value(slot, val);
+                }
+                // Not local to this environment: parent-chain set.
+                None => {
+                    mark_if_shadowing_primitive(state, &globals, name, val);
+                    globals
+                        .parent()
+                        .ok_or(())
+                        .and_then(|p| p.set(name, val).map_err(|_| ()))
+                        .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
+                }
+            }
         }
 
         Instruction::Define { ref name, src } => {
@@ -3181,6 +3199,17 @@ pub(crate) fn mark_if_shadowing_primitive(
     new_val: TaggedValue,
 ) {
     let Some(old) = globals.get(name) else { return };
+    mark_if_shadowing_primitive_value(state, old, new_val);
+}
+
+/// Value-taking core of [`mark_if_shadowing_primitive`], for callers that
+/// already hold the binding's current value (the cached `StoreGlobal` path)
+/// and need no name lookup.
+pub(crate) fn mark_if_shadowing_primitive_value(
+    state: &mut VmState,
+    old: TaggedValue,
+    new_val: TaggedValue,
+) {
     if old == new_val {
         return;
     }

@@ -115,6 +115,15 @@ pub type ConstIdx = u16;    // index into CodeObject::constants
 | `LoadGlobal` | `dst: Reg, name: Symbol` | `dst ← globals[name]` (error if unbound) |
 | `StoreGlobal` | `name: Symbol, src: Reg` | `globals[name] ← src` |
 
+Both global instructions consult a per-site inline cache (Track P P4): each
+`CodeObject` carries a pc-indexed table of `(environment id, slot)` entries.
+After the first execution against a given globals environment, the name
+lookup collapses to an id compare plus a slot read into the environment's
+append-only slot table — redefinition overwrites a binding's slot in place,
+so hits always see the current value. Names that resolve through a parent
+environment are never cached. The cache is invisible to the ISA: operands,
+semantics, and error behavior are unchanged.
+
 ### 4.2 MutableCell Operations
 
 For variables that are mutated after being captured by a closure (letrec*
