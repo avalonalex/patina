@@ -162,6 +162,17 @@ pub(super) fn pair_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
     Ok(TaggedValue::boolean(args[0].is_pair()))
 }
 
+/// (not obj) - Returns #t if obj is #f, #f otherwise
+pub(super) fn not_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    Ok(TaggedValue::boolean(!args[0].is_truthy()))
+}
+
 /// (boolean? obj) - Fast path using TaggedValue
 pub(super) fn boolean_p(
     _heap: &SharedHeap,
@@ -337,6 +348,15 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         Arity::Exact(1),
         "Returns #t if obj is an inexact number.",
         inexact_p,
+    ));
+
+    // Boolean negation (§6.1)
+    registry.register(PrimitiveFn::new_heap(
+        "scheme.base",
+        "not",
+        Arity::Exact(1),
+        "Returns #t if obj is #f, and #f otherwise.",
+        not_p,
     ));
 
     // Data type predicates (with TaggedValue fast paths)

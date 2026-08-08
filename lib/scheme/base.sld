@@ -26,8 +26,7 @@
     eq? eqv? equal?
 
     ;; === Booleans (§6.1) ===
-    boolean? boolean=?
-    ;; not is defined in Scheme (base/lists.scm)
+    not boolean? boolean=?
 
     ;; === Numbers (§6.2) ===
     ;; Type predicates
@@ -51,7 +50,8 @@
     ;; Conversion
     exact inexact
     number->string string->number
-    ;; Note: zero?, positive?, negative?, odd?, even? defined in Scheme
+    ;; Sign and parity predicates
+    zero? positive? negative? odd? even?
 
     ;; === Symbols (§6.3) ===
     symbol? symbol=?
@@ -67,7 +67,10 @@
     memq memv member
     assq assv assoc
     list-copy
-    ;; Note: caar, cadr, etc. defined in Scheme
+    ;; Car/cdr compositions (two- and three-deep; four-deep in (scheme cxr))
+    caar cadr cdar cddr
+    caaar caadr cadar caddr
+    cdaar cdadr cddar cdddr
 
     ;; === Characters (§6.6) ===
     char?
@@ -171,15 +174,6 @@
     ;; Derived forms (defined in Scheme via include)
     ;; ============================================================
 
-    ;; From base/lists.scm
-    not
-    caar cadr cdar cddr
-    caaar caadr cadar caddr
-    cdaar cdadr cddar cdddr
-
-    ;; From base/numbers.scm
-    zero? positive? negative? odd? even?
-
     ;; From base/conditionals.scm
     when unless
     and or
@@ -213,8 +207,6 @@
     (define => '=>))
 
   ;; Include Scheme-defined derived forms (organized by domain)
-  (include "base/lists.scm")
-  (include "base/numbers.scm")
   (include "base/conditionals.scm")
   (include "base/binding.scm")
   (include "base/iteration.scm")

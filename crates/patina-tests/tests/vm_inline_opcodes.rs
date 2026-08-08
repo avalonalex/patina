@@ -99,6 +99,65 @@ fn predicates() {
 }
 
 #[test]
+fn not_is_total_on_every_value() {
+    // Only #f is falsy; everything else — including 0, '(), and "" — negates
+    // to #f. The inline fast path is total, so also exercise the handler via
+    // the higher-order (non-callee) position.
+    assert_eq!(eval("(not #f)"), "#t");
+    assert_eq!(eval("(not #t)"), "#f");
+    assert_eq!(eval("(not 0)"), "#f");
+    assert_eq!(eval("(not '())"), "#f");
+    assert_eq!(eval("(not \"\")"), "#f");
+    assert_eq!(eval("(not not)"), "#f");
+    assert_eq!(eval("(map not '(#f 1 #f))"), "(#t #f #t)");
+}
+
+#[test]
+fn rebinding_deoptimizes_not() {
+    assert_eq!(
+        eval("(define (f x) (not x)) (define not (lambda (x) 'mine)) (f #f)"),
+        "mine"
+    );
+}
+
+// ── Moved-to-registry procedures: cxr compositions, numeric predicates ──────
+
+#[test]
+fn cxr_compositions() {
+    assert_eq!(eval("(cadr '(1 2 3))"), "2");
+    assert_eq!(eval("(cddr '(1 2 3))"), "(3)");
+    assert_eq!(eval("(caar '((1 2) 3))"), "1");
+    assert_eq!(eval("(caddr '(1 2 3))"), "3");
+    assert_eq!(eval("(cdadr '(1 (2 3) 4))"), "(3)");
+    // Error behavior chains through car/cdr, same as the old Scheme bodies.
+    assert_eq!(eval("(guard (e (#t 'caught)) (cadr '(1)))"), "caught");
+    assert_eq!(eval("(guard (e (#t 'caught)) (caar 'x))"), "caught");
+}
+
+#[test]
+fn numeric_predicates() {
+    assert_eq!(eval("(zero? 0)"), "#t");
+    assert_eq!(eval("(zero? 0.0)"), "#t");
+    assert_eq!(eval("(zero? 1/2)"), "#f");
+    assert_eq!(eval("(positive? 3)"), "#t");
+    assert_eq!(eval("(positive? -3)"), "#f");
+    assert_eq!(eval("(negative? -1/2)"), "#t");
+    assert_eq!(eval("(odd? 7)"), "#t");
+    assert_eq!(eval("(odd? -3)"), "#t");
+    assert_eq!(eval("(even? -4)"), "#t");
+    assert_eq!(eval("(even? 2.0)"), "#t");
+    // Bignums take the slow path.
+    assert_eq!(eval("(odd? 100000000000000000000001)"), "#t");
+    assert_eq!(
+        eval("(zero? (- 100000000000000000000000 100000000000000000000000))"),
+        "#t"
+    );
+    // Domain errors are catchable, as with the old Scheme definitions.
+    assert_eq!(eval("(guard (e (#t 'caught)) (zero? 'a))"), "caught");
+    assert_eq!(eval("(guard (e (#t 'caught)) (odd? 1.5))"), "caught");
+}
+
+#[test]
 fn eq_p() {
     assert_eq!(eval("(eq? 'a 'a)"), "#t");
     assert_eq!(eval("(eq? 'a 'b)"), "#f");

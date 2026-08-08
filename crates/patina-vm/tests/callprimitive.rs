@@ -223,6 +223,40 @@ fn internal_library_alias_binding_emits_inline_opcode() {
 }
 
 #[test]
+fn not_emits_inline_opcode_via_library_binding() {
+    // `not` moved from a Scheme definition (base/lists.scm) into the
+    // registry; the stdlib binds it via the library loader as
+    // patina.internal.predicates/not. It must compile to the inline `Not`
+    // opcode, not a generic closure call — this was 40% of tak's runtime
+    // while `not` was Scheme-defined.
+    let state = state_with_library_binding(
+        "not",
+        Arity::Exact(1),
+        &["patina", "internal", "predicates"],
+    );
+    let instrs = compile_all_in(&state, &app(var("not"), vec![lit(1)]));
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::Not { .. })),
+        1,
+        "{instrs:?}"
+    );
+    assert_eq!(count_call_prims(&instrs), 0, "{instrs:?}");
+    assert_eq!(count_generic_calls(&instrs), 0, "{instrs:?}");
+}
+
+#[test]
+fn cxr_composition_emits_call_primitive_via_library_binding() {
+    // The car/cdr compositions (cadr, cddr, ...) also moved into the
+    // registry; they have no inline opcode but must at least compile to
+    // CallPrimitive (no frame push) instead of a generic closure call.
+    let state =
+        state_with_library_binding("cadr", Arity::Exact(1), &["patina", "internal", "lists"]);
+    let instrs = compile_all_in(&state, &app(var("cadr"), vec![lit(1)]));
+    assert_eq!(count_call_prims(&instrs), 1, "{instrs:?}");
+    assert_eq!(count_generic_calls(&instrs), 0, "{instrs:?}");
+}
+
+#[test]
 fn wrong_arity_car_stays_on_call_primitive() {
     // (car x y) is an arity error — it must reach the handler to raise it.
     let instrs = compile_all_instructions(&app(var("car"), vec![lit(1), lit(2)]));

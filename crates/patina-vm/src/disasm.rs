@@ -186,6 +186,7 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         } => fmt_inline_prim("Cons", *dst, name, &[*a, *b]),
         Instruction::Car { src, dst, name, .. } => fmt_inline_prim("Car", *dst, name, &[*src]),
         Instruction::Cdr { src, dst, name, .. } => fmt_inline_prim("Cdr", *dst, name, &[*src]),
+        Instruction::Not { src, dst, name, .. } => fmt_inline_prim("Not", *dst, name, &[*src]),
         Instruction::NullP { src, dst, name, .. } => fmt_inline_prim("NullP", *dst, name, &[*src]),
         Instruction::PairP { src, dst, name, .. } => fmt_inline_prim("PairP", *dst, name, &[*src]),
         Instruction::VectorP { src, dst, name, .. } => {

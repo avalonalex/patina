@@ -91,6 +91,45 @@ pub(super) fn cdr(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
     Ok(cdr)
 }
 
+/// Define a car/cdr composition (caar, cadr, ..., cdddr) by chaining the
+/// `car`/`cdr` handlers above, innermost step first — so `cadr` is
+/// `cdr` then `car`, exactly like the former Scheme definition
+/// `(define (cadr x) (car (cdr x)))`, with identical error behavior.
+macro_rules! cxr {
+    ($fname:ident, $($step:ident),+) => {
+        pub(super) fn $fname(
+            heap: &SharedHeap,
+            args: &[TaggedValue],
+        ) -> Result<TaggedValue, EvalError> {
+            if args.len() != 1 {
+                return Err(EvalError::WrongArity {
+                    expected: "1".to_string(),
+                    actual: args.len(),
+                });
+            }
+            let mut v = args[0];
+            $( v = $step(heap, &[v])?; )+
+            Ok(v)
+        }
+    };
+}
+
+// Two-deep compositions
+cxr!(caar, car, car);
+cxr!(cadr, cdr, car);
+cxr!(cdar, car, cdr);
+cxr!(cddr, cdr, cdr);
+
+// Three-deep compositions
+cxr!(caaar, car, car, car);
+cxr!(caadr, cdr, car, car);
+cxr!(cadar, car, cdr, car);
+cxr!(caddr, cdr, cdr, car);
+cxr!(cdaar, car, car, cdr);
+cxr!(cdadr, cdr, car, cdr);
+cxr!(cddar, car, cdr, cdr);
+cxr!(cdddr, cdr, cdr, cdr);
+
 pub(super) fn list(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     // list accepts any number of arguments (0 or more)
     // Use native heap list construction
@@ -860,6 +899,30 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         "Returns the contents of the cdr field of pair.",
         cdr,
     ));
+
+    // Car/cdr compositions (two- and three-deep, R7RS §6.4)
+    for (name, handler) in [
+        ("caar", caar as crate::registry::TaggedHandler),
+        ("cadr", cadr),
+        ("cdar", cdar),
+        ("cddr", cddr),
+        ("caaar", caaar),
+        ("caadr", caadr),
+        ("cadar", cadar),
+        ("caddr", caddr),
+        ("cdaar", cdaar),
+        ("cdadr", cdadr),
+        ("cddar", cddar),
+        ("cdddr", cdddr),
+    ] {
+        registry.register(PrimitiveFn::new_heap(
+            "scheme.base",
+            name,
+            Arity::Exact(1),
+            "Composition of car/cdr accessors.",
+            handler,
+        ));
+    }
 
     // List - construct list from arguments
     registry.register(PrimitiveFn::new_heap(

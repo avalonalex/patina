@@ -210,6 +210,13 @@ pub enum Instruction {
         func_id: PrimitiveFnId,
         name: Symbol,
     },
+    /// 1-arg `not` — total truthiness test (only #f is falsy).
+    Not {
+        src: Reg,
+        dst: Reg,
+        func_id: PrimitiveFnId,
+        name: Symbol,
+    },
     /// 1-arg `null?` — total bit test.
     NullP {
         src: Reg,

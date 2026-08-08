@@ -1714,6 +1714,18 @@ fn dispatch_one_instruction(
             });
         }
 
+        Instruction::Not {
+            src,
+            dst,
+            func_id,
+            ref name,
+        } => {
+            let x = state.reg(src);
+            inline_primitive!(state, exit_depth, func_id, name, dst, [x], {
+                Some(TaggedValue::boolean(!x.is_truthy()))
+            });
+        }
+
         Instruction::NullP {
             src,
             dst,
