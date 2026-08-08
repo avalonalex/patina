@@ -72,3 +72,54 @@ functions testing specific transformations.
 
 VM tests focus on: compilation correctness, execution correctness,
 continuation semantics, and tail call behavior.
+
+## 5. Profiling and Perf Measurement
+
+The workflow behind every Track P item (history and rankings live in
+`PRD/TRACK_P_PERFORMANCE_PRD.md`). Rule one: **profile first** — every
+lever in that PRD that skipped this step turned out to be mis-ranked.
+
+### Sampling profile (macOS `sample`)
+
+```bash
+# 1. Release build with debug symbols (needed for readable stacks)
+CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release
+
+# 2. Write a workload that runs 10-30s (size the input so the hot loop
+#    dominates; library load is ~negligible after warmup)
+
+# 3. Launch it, then sample the pid for 10s
+./target/release/patina workload.scm > /dev/null &
+sleep 3   # skip startup
+/usr/bin/sample $! 10 -file target/profiles/<name>.txt
+wait
+
+# 4. Read the "Sort by top of stack" section at the bottom of the file —
+#    that is the self-time ranking. The call-tree above it shows who calls
+#    whom. Convention: keep artifacts in target/profiles/ (untracked).
+```
+
+Alternative: `samply record ./target/release/patina workload.scm` opens an
+interactive Firefox Profiler UI (`scripts/profile_benchmark.sh` wraps this
+for a few canned microbenchmarks).
+
+### Measuring a change (the drift problem)
+
+Single Criterion runs drift ±5-10% on µs-scale benches; single wall-clock
+runs drift a few percent. **Never compare one run against a stored
+number.** Validate with an interleaved A/B: alternate main-binary and
+branch-binary runs ×3 and compare medians. For Criterion:
+`--save-baseline` on main, bench the branch against it, then re-bench main
+against its own baseline to measure the drift floor.
+
+Cross-branch A/B gotcha: the binary resolves `./lib` **before**
+`$PATINA_HOME/lib`, so when the two branches' `lib/` trees differ, run
+each binary with its cwd inside its own checkout (e.g. a `git worktree`
+for main).
+
+### Scoreboard sweeps (r7rs-benchmarks)
+
+The external harness protocol — copied binary + `PATINA_HOME`, subset
+list, Chibi baseline — is documented in `PRD/TRACK_P_PERFORMANCE_PRD.md`
+§1.2 (and the sweep-hygiene notes in §1.4). Run it after a perf item
+lands, not per-commit.
