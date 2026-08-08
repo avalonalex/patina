@@ -327,6 +327,35 @@ Register-window zeroing is down to 2–3.3% — deprioritized. The
 pc-in-loop-local refactor can't be sized by sampling but targets the
 dominant dispatch-residency block; still queued.
 
+### 1.9 Scoreboard after P4 slot-indexed globals (2026-08-08)
+
+Sweep with the P4 branch binary (copied binary + `PATINA_HOME`), same
+local Chibi 0.12 baseline:
+
+| Benchmark | 08-07 (#23/#24) | P4 | Delta | Ratio vs Chibi |
+|---|---|---|---|---|
+| slatex | 24.7 | 24.5 | −1% | 0.27× — faster |
+| matrix | 98.5 | 98.5 | 0% | 0.70× — faster |
+| diviter | 39.9 | 39.9 | 0% | 0.86× — faster |
+| compiler | 64.9 | 64.6 | −0.5% | 0.90× — faster |
+| maze | 53.2 | 51.3 | −3.6% | **0.96× — crosses parity** |
+| divrec | 43.6 | 41.8 | −4.1% | 1.11× |
+| nboyer | 32.5 | 33.0 | +1.5% | 1.29× |
+| deriv | 113.1 | 107.6 | −4.9% | 1.37× |
+| tak | 73.8 | 66.7 | −9.6% | 1.55× |
+| ctak | 58.6 | 55.9 | −4.6% | n/a (Chibi crashes) |
+
+**Geomean of the nine ratio benchmarks: 0.91×** (was 0.93×); six of nine
+now at or past parity. The deltas distribute exactly along `LoadGlobal`
+density: tak (self-call through a cached global site every iteration)
+−9.6%, deriv/divrec/ctak −4–5%, matrix/diviter (loop-local and
+vector-opcode bound) flat, nboyer's +1.5% is single-run drift — its
+profile has no `Environment::get`. The remaining gap ranking is
+unchanged: tak 1.55×, deriv 1.37×, nboyer 1.29×, with §1.8's queue
+(P5 instruction-count reductions, deriv's `Vec`-churn cluster,
+pc-in-loop-local) still standing and allocation/GC still the deriv/nboyer
+residue.
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
