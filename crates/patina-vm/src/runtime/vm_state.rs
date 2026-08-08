@@ -1730,6 +1730,13 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
+            // Emission contract (see the If arm in pass 5): the plain
+            // `JumpUnless dst` must sit at the next pc — it is the deopt
+            // landing and the reason the falsy fast path may skip to pc+2.
+            debug_assert!(matches!(
+                code.instructions.get(pc + 1),
+                Some(Instruction::JumpUnless { cond, .. }) if *cond == dst
+            ));
             let x = state.reg_at(base, src);
             if !state.is_primitive_shadowed(func_id.0 as usize) {
                 // Exactly `Not` + `JumpUnless dst`, in one dispatch: write
@@ -1759,12 +1766,14 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
+            // The compiler only absorbs fixnum literals (`primitive_operands`),
+            // so `imm.is_fixnum()` holds by construction — asserted, not
+            // re-checked on the hot path. Same for the other *Imm arms.
+            debug_assert!(imm.is_fixnum());
             let x = state.reg_at(base, a);
             inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
                 // Overflow returns None from fixnum_add; the handler promotes.
-                (x.is_fixnum() && imm.is_fixnum())
-                    .then(|| x.fixnum_add(imm))
-                    .flatten()
+                x.is_fixnum().then(|| x.fixnum_add(imm)).flatten()
             });
         }
 
@@ -1775,11 +1784,10 @@ fn dispatch_one_instruction(
             func_id,
             ref name,
         } => {
+            debug_assert!(imm.is_fixnum());
             let x = state.reg_at(base, a);
             inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
-                (x.is_fixnum() && imm.is_fixnum())
-                    .then(|| x.fixnum_sub(imm))
-                    .flatten()
+                x.is_fixnum().then(|| x.fixnum_sub(imm)).flatten()
             });
         }
 

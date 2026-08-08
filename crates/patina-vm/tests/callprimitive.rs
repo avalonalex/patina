@@ -93,18 +93,10 @@ fn count_generic_calls(instrs: &[Instruction]) -> usize {
 
 #[test]
 fn add_emits_call_primitive() {
-    // Since P3, 2-arg + gets the inline Add opcode (the AddImm form here,
-    // since P5 absorbs the literal right operand); the P2 property that
-    // still holds is: no generic Call and no callee LoadGlobal.
+    // The P2 property under test: no generic Call and no callee LoadGlobal.
+    // (Which inline opcode the site gets is pinned by
+    // two_arg_add_emits_inline_opcode.)
     let instrs = compile_all_instructions(&app(var("+"), vec![lit(1), lit(2)]));
-    assert_eq!(
-        count_matching(&instrs, |i| matches!(
-            i,
-            Instruction::Add { .. } | Instruction::AddImm { .. }
-        )),
-        1,
-        "{instrs:?}"
-    );
     assert_eq!(count_generic_calls(&instrs), 0, "{instrs:?}");
     // The callee is never loaded — no LoadGlobal for "+".
     assert!(

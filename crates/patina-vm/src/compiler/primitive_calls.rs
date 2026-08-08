@@ -84,6 +84,17 @@ impl InlineOp {
             InlineOp::VectorSet => 3,
         }
     }
+
+    /// Ops with an `*Imm` right-operand instruction form (Track P P5).
+    /// The single owner of that set: `primitive_operands` absorbs a literal
+    /// only for these, and `primitive_call_instruction`'s imm branch covers
+    /// exactly these.
+    pub fn has_imm_form(self) -> bool {
+        matches!(
+            self,
+            InlineOp::Add | InlineOp::Sub | InlineOp::Lt | InlineOp::NumEq
+        )
+    }
 }
 
 /// Map a registry primitive's qualified name to its inline opcode, if any.

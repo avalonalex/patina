@@ -390,6 +390,11 @@ pub enum Instruction {
     Nop,
 }
 
+// Every dispatched instruction is fetched by value from this enum, so its
+// size is hot-loop-critical. 48 bytes is the current high-water mark
+// (`CallPrimitive`'s Vec + Symbol payload); new variants must fit under it.
+const _: () = assert!(std::mem::size_of::<Instruction>() <= 48);
+
 /// Identifier for a registered primitive function.
 ///
 /// In Phase 2A this is an index into a flat `Vec` of primitive descriptors

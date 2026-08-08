@@ -71,7 +71,7 @@ fn fmt_inline_prim(
     args: &[u16],
 ) -> String {
     let a: Vec<String> = args.iter().map(|r| format!("r{}", r)).collect();
-    format!("{:<13}r{} ← {}({})", mnemonic, dst, name, a.join(", "))
+    fmt_prim_operands(mnemonic, dst, name, &a)
 }
 
 fn fmt_imm_prim(
@@ -81,7 +81,28 @@ fn fmt_imm_prim(
     a: u16,
     imm: patina_core::tagged_value::TaggedValue,
 ) -> String {
-    format!("{:<13}r{} ← {}(r{}, {:?})", mnemonic, dst, name, a, imm)
+    fmt_prim_operands(
+        mnemonic,
+        dst,
+        name,
+        &[format!("r{}", a), format!("{:?}", imm)],
+    )
+}
+
+/// Shared layout for every inline-primitive mnemonic line.
+fn fmt_prim_operands(
+    mnemonic: &str,
+    dst: u16,
+    name: &patina_core::core_expr::Symbol,
+    operands: &[String],
+) -> String {
+    format!(
+        "{:<13}r{} ← {}({})",
+        mnemonic,
+        dst,
+        name,
+        operands.join(", ")
+    )
 }
 
 pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -> String {
