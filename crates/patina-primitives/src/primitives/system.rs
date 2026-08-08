@@ -45,9 +45,5 @@ fn features(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Eval
         .into_iter()
         .map(|name| h.intern_symbol(&name))
         .collect();
-    let mut result = TaggedValue::NULL;
-    for tv in sym_tvs.into_iter().rev() {
-        result = h.alloc_pair(tv, result);
-    }
-    Ok(result)
+    Ok(h.list_from_iter(sym_tvs))
 }

@@ -405,11 +405,10 @@ impl Parser {
         }
         self.advance()?; // consume )
 
-        let result = if let Some(tail) = dotted_tail {
-            self.make_dotted_list(elements, tail)
-        } else {
-            self.make_list(elements)
-        };
+        let result = self
+            .heap
+            .borrow_mut()
+            .list_from_iter_with_tail(elements, dotted_tail.unwrap_or(TaggedValue::NULL));
         self.record_source(result, open_line, open_col);
         Ok(result)
     }
@@ -1014,12 +1013,6 @@ impl Parser {
 
     fn make_list(&self, elements: Vec<TaggedValue>) -> TaggedValue {
         self.heap.borrow_mut().list_from_iter(elements)
-    }
-
-    fn make_dotted_list(&self, elements: Vec<TaggedValue>, tail: TaggedValue) -> TaggedValue {
-        self.heap
-            .borrow_mut()
-            .list_from_iter_with_tail(elements, tail)
     }
 
     /// Resolve all LabelPlaceholder values in a parsed datum.

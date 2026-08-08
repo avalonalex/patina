@@ -239,10 +239,12 @@ to instruction-level sequences ending in `CallWithValues` /
 
 Both consumer sides *take* the buffer (`mem::take`) rather than borrow it —
 deliberately, so re-entrant producer/consumer code always sees a clean
-channel. Continuation resume with multiple values refills the buffer the
-same way. (`ReturnMulti` / `ReceiveValues` instructions existed for an
-earlier design but were never emitted by any compiler pass; removed
-2026-08-08.)
+channel. When the buffer is empty they fall back to unpacking a `#<values>`
+heap object from the producer result — the carrier for values produced
+outside the intercept (historically the bug-prone channel; see the archived
+chibi-failure notes) — and finally to treating the result as a single
+value. Continuation resume with multiple values refills the buffer the
+same way.
 
 ### 4.7 Global Definitions
 

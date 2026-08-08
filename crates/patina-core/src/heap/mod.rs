@@ -2555,13 +2555,7 @@ impl Heap {
             return None; // Not a proper list
         }
 
-        // Build result from right to left
-        let mut result = second;
-        for elem in elements.into_iter().rev() {
-            result = self.alloc_pair(elem, result);
-        }
-
-        Some(result)
+        Some(self.list_from_iter_with_tail(elements, second))
     }
 
     // =========================================================================

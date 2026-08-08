@@ -267,7 +267,9 @@ fn process_quasiquote_pair(
     }
 
     // Reconstruct the list using heap-allocated pairs
-    build_list_from_vec(evaluator, elements, tail)
+    let heap = evaluator.global_env.heap();
+    let result = heap.borrow_mut().list_from_iter_with_tail(elements, tail);
+    Ok(result)
 }
 
 // =============================================================================
@@ -335,17 +337,6 @@ fn make_list_2(
     heap_ref.alloc_pair(sym, inner)
 }
 
-/// Build a list from a vector of TaggedValues with an optional tail
-fn build_list_from_vec(
-    evaluator: &crate::eval::Evaluator,
-    elements: Vec<TaggedValue>,
-    tail: TaggedValue,
-) -> Result<TaggedValue, EvalError> {
-    let heap = evaluator.global_env.heap();
-    let result = heap.borrow_mut().list_from_iter_with_tail(elements, tail);
-    Ok(result)
-}
-
 /// Convert vector to list (TaggedValue version)
 fn vector_to_list_tagged(
     evaluator: &crate::eval::Evaluator,
@@ -359,7 +350,7 @@ fn vector_to_list_tagged(
         let len = borrowed.vector_len(vec_tv);
         let elements: Vec<TaggedValue> = (0..len).map(|i| borrowed.vector_ref(vec_tv, i)).collect();
         drop(borrowed);
-        return build_list_from_vec(evaluator, elements, TaggedValue::NULL);
+        return Ok(heap.borrow_mut().list_from_iter(elements));
     }
 
     // Handle vectors
@@ -368,7 +359,7 @@ fn vector_to_list_tagged(
         .try_vector_to_vec(vec_tv)
         .ok_or_else(|| EvalError::InvalidSyntax("Expected vector".to_string()))?;
 
-    build_list_from_vec(evaluator, elements, TaggedValue::NULL)
+    Ok(heap.borrow_mut().list_from_iter(elements))
 }
 
 /// Convert list to vector (TaggedValue version)

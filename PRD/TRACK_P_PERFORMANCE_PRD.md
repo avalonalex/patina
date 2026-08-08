@@ -679,9 +679,14 @@ staging `Vec` exists there), which is generational-GC territory
   only they raised are deleted; `docs/VM_ISA.md` §4.6 now documents the
   actual mechanism.
 - **`list_from_iter_with_tail`** — dotted-list twin of `list_from_iter`;
-  the last three hand-rolled cons loops (tree-walker quasiquote, parser
-  `make_dotted_list`, macro-expander dotted template) now delegate. The
-  back-to-front cons exists in exactly one `impl` codebase-wide.
+  every production back-to-front cons loop now delegates to the one
+  `Heap` impl: tree-walker quasiquote and variadic rest args, parser
+  dotted lists, macro-expander dotted templates, `Heap::list_append`,
+  and the `append`/`list-copy`/`command-line`/
+  `get-environment-variables`/`features` primitives. The deliberate
+  exceptions: `records.rs`'s field-name build (interleaves interning
+  with consing — not a pure list build) and a handful of test-local
+  helpers.
 - **pc-in-loop-local** remains queued (its own PR; every `frame.pc`
   reader needs a sync point).
 
