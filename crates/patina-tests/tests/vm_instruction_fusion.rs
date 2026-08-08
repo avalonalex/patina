@@ -88,6 +88,26 @@ fn fused_predicate_deoptimizes_on_rebind() {
 }
 
 #[test]
+fn deopt_through_fused_site_keeps_tail_loop_flat() {
+    // A rebound predicate at a fused site deopts into a closure call every
+    // iteration, inside a tail-recursive loop. The site's next instruction
+    // is the kept `JumpUnless` (not a `Return`), so the deopt must NOT take
+    // the tail-call path — and the loop's own tail call must still work.
+    // Verified separately to run in flat memory (11 MB max RSS at 200k).
+    assert_eq!(
+        eval(
+            "(define (count n acc) (if (null? n) acc (count (cdr n) (+ acc 1)))) \
+             (define lst (let loop ((i 0) (a '())) \
+                           (if (= i 50000) a (loop (+ i 1) (cons i a))))) \
+             (define before (count lst 0)) \
+             (define null? (lambda (v) (eq? v '()))) \
+             (list before (count lst 0))"
+        ),
+        "(50000 50000)"
+    );
+}
+
+#[test]
 fn fused_not_branch_deoptimizes_on_rebind() {
     // After `not` is rebound to the identity function, the already-compiled
     // fused site must call the new binding (a closure — the deopt path
