@@ -385,6 +385,12 @@ the deriv `Vec`-churn cluster (scratch-free `list`, `Apply`'s
 (`Lt`+`JumpUnless`, the §P5 follow-on), and allocation/GC (generational,
 stage 5 priority 3). Per protocol, re-profile before choosing.
 
+*Queue update (2026-08-08, after this sweep):* the `Vec`-churn cluster and
+`value_buffer` items are closed in §P10 — the first landed, the second
+turned out to be dead code. **pc-in-loop-local was built, measured, and
+rejected** (§P10 negative result); the standing queue is now
+compare-branch fusion and generational GC.
+
 ## 2. Goals
 - Cut per-call and per-allocation overhead measurably (target **2–5×** on arithmetic/list-heavy code from P2+P3).
 - Make VM performance **measurable** and regression-guarded.
@@ -687,8 +693,38 @@ staging `Vec` exists there), which is generational-GC territory
   exceptions: `records.rs`'s field-name build (interleaves interning
   with consing — not a pure list build) and a handful of test-local
   helpers.
-- **pc-in-loop-local** remains queued (its own PR; every `frame.pc`
-  reader needs a sync point).
+- **pc-in-loop-local — NEGATIVE RESULT, do not retry as specified.**
+  Built and fully working (chibi 1163/1163, suite green) on a scrapped
+  branch: `run_loop_until` holds the program counter in a loop local, the
+  dispatch prologue increments it locally, jump arms write it locally, and
+  `flush_pc`/`reload_pc` sync it with the frame at every site that can
+  suspend or observe the frame (calls, deopt, continuation capture/invoke,
+  raise). Three measured variants, interleaved A/B ×4–7 vs main:
+
+  | Variant | tak | globals loop |
+  |---|---|---|
+  | v1: flush + reload at every transfer | −1.3% | **+1.8%** |
+  | v2: constant `pc = 0` for fresh/reused frames (no reload read) | −1.4% | **+1.1%** |
+  | v3: v2 + drop the dead flush before tail calls (frame's pc is
+    overwritten with 0 anyway) | −2.0% | **+0.7%** |
+
+  **Why it loses:** the pre-existing prologue already fused the `pc` read
+  and write into the *one* frame access it needs anyway for
+  `register_base` (#24). So hoisting `pc` removes no frame access — it
+  *adds* one at each control-transfer site. Only straight-line and
+  jump-dense code (tak) profits; tail-call-dense code (the globals loop)
+  regresses, and no amount of eliding recovered parity across three
+  iterations.
+
+  **Verdict:** a ≤2% win on the most dispatch-dense benchmark, a
+  regression elsewhere, bought with a permanent multi-case invariant —
+  the frame's `pc` is stale while the loop runs, flush before *some*
+  transfers but not others, reload from the frame in some paths and
+  constant 0 in others — which every future dispatch arm must get right
+  or silently misbehave. That fails this track's clarity-safe scope bar
+  (§Scope decision). Any retry needs a design where the loop local
+  *replaces* the frame access rather than supplementing it (e.g. frames
+  storing a resume pointer rather than an index), not this one.
 
 ---
 
