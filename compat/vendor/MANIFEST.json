@@ -354,7 +354,7 @@
       ],
       "modified": false,
       "needs_ffi": false,
-      "bundled_by_patina": false
+      "bundled_by_patina": true
     },
     {
       "library": "chibi pathname",
@@ -1352,7 +1352,7 @@
       ],
       "modified": false,
       "needs_ffi": false,
-      "bundled_by_patina": false
+      "bundled_by_patina": true
     },
     {
       "library": "pfds lazy-list",
@@ -1963,7 +1963,7 @@
       ],
       "modified": false,
       "needs_ffi": false,
-      "bundled_by_patina": false
+      "bundled_by_patina": true
     },
     {
       "library": "chibi edit-distance",

@@ -115,6 +115,33 @@ const GUARDED: &[Guarded] = &[
         rationale: "%salt% is an internal hash parameter upstream exposes; not part of the SRFI \
                     128 specification and deliberately not re-exported.",
     },
+    // Imported verbatim from the vendored copy rather than ported, which is the
+    // L4 end state: byte-identical, so there is nothing to reconcile and these
+    // three can leave the corpus as soon as the exclusion mechanism lands.
+    Guarded {
+        library: "chibi term ansi",
+        bundled: "lib/chibi/term/ansi.sld",
+        vendored: "compat/vendor/chibi-term-ansi/chibi/term/ansi.sld",
+        only_bundled: &[],
+        only_vendored: &[],
+        rationale: "Byte-identical upstream import.",
+    },
+    Guarded {
+        library: "chibi optional",
+        bundled: "lib/chibi/optional.sld",
+        vendored: "compat/vendor/chibi-optional/chibi/optional.sld",
+        only_bundled: &[],
+        only_vendored: &[],
+        rationale: "Byte-identical upstream import.",
+    },
+    Guarded {
+        library: "chibi diff",
+        bundled: "lib/chibi/diff.sld",
+        vendored: "compat/vendor/chibi-diff/chibi/diff.sld",
+        only_bundled: &[],
+        only_vendored: &[],
+        rationale: "Byte-identical upstream import.",
+    },
     Guarded {
         library: "chibi test",
         bundled: "lib/chibi/test.sld",
