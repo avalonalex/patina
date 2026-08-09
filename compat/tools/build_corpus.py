@@ -230,6 +230,27 @@ def load_index(offline: bool) -> list[dict]:
     return out
 
 
+def bundled_libraries() -> set[str]:
+    """Library names Patina ships itself, read from lib/ rather than hardcoded.
+
+    Used only to flag vendored packages that duplicate a bundled library, so the
+    drift guard in crates/patina-tests/tests/bundled_vs_vendored.rs can check
+    the port against its upstream reference.
+
+    TODO(L4): this is interim. Once each bundled port is a faithful import of
+    upstream, the bundled version becomes canonical and packages in this set
+    should be *excluded* from the corpus rather than flagged -- change the
+    `sel` filter below to drop them, then delete this function's flag, the
+    drift guard, and the `bundled_by_patina` field. See
+    PRD/TRACK_L_SNOW_LIBRARIES_PRD.md section L4.
+    """
+    out = set()
+    for sld in (ROOT / "lib").rglob("*.sld"):
+        rel = sld.relative_to(ROOT / "lib").with_suffix("")
+        out.add(" ".join(rel.parts))
+    return out
+
+
 def version_key(v: str | None):
     return tuple(int(x) if x.isdigit() else 0 for x in re.split(r"[.\-]", v or "")[:4])
 
@@ -307,6 +328,10 @@ def build(target: Path, offline: bool) -> dict:
             "depends": [" ".join(d) for d in p["deps"]], "description": p["desc"][:200],
             "files": files, "modified": False,
             "needs_ffi": any(f.endswith((".stub", ".c")) for f in files),
+            # Patina ships its own port of this library. Such packages are not
+            # merely corpus subjects: the vendored copy is the canonical
+            # upstream reference that the bundled port is checked against.
+            "bundled_by_patina": bundled_libraries() & {" ".join(l) for l in p["libs"]} != set(),
         })
 
     (target / "MANIFEST.json").write_text(json.dumps({
