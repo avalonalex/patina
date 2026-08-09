@@ -1,7 +1,7 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-08-08 — reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
+**Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** Planning → ready to execute
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
@@ -67,16 +67,37 @@ External library directories are currently unusable. This is table stakes for an
 Before porting anything, establish what "popular" actually means, as data. Fetch the snow-fort repository index (an s-expression document) and inventory the chibi library tree, then count **import frequency across all packages**. Output a ranked table of imported library names with counts, checked into `compat/`. This single artefact orders L1 and L2 and sets the corpus for L3 — the candidate lists in this PRD are a *hypothesis* to be replaced by it.
 - **Acceptance:** a committed, regenerable frequency table; L1/L2 below re-ordered to match it.
 
-### L1 — Bundle the common missing SRFIs
-**Ordered by L0.75's frequency table and L3's failure buckets, not by the lists below** — those are only the starting hypothesis, to be replaced once the data exists.
-- **Pure-Scheme (cheap; `.sld` + `.scm` only):** SRFI 26 (`cut`/`cute`), SRFI 2 (`and-let*`), SRFI 13 (strings), SRFI 14 (char-sets), SRFI 41 (streams), SRFI 95 (sort), SRFI 130 / 152 (string cursors & strings).
-  - *Note:* SRFI 64 is a lower priority than its ubiquity elsewhere suggests — Snow packages overwhelmingly test with `(chibi test)`, which Patina **already ships**.
-- **Need Rust primitives** (add under `crates/patina-runtime/src/stdlib/internal_*.rs`, registered in *both* the primitive registry and the library builder; aligns with `PRD/PARALLEL_TRACKS.md` Track B3):
-  - SRFI 125 — standard hash-table; needs a `HeapObjectData::HashMap` variant.
-  - SRFI 143 — fixnum operations.
-  - SRFI 151 — bitwise operations.
-  - SRFI 27 — random sources (needs an RNG primitive; common in Snow packages and absent today).
-  - SRFI 115 — regular expressions (large; schedule only if the frequency count justifies it).
+### L1 — Bundle the SRFIs that policy and data agree on
+**Scope is set by the bundling policy in `PRD/phase2/R7RS_LARGE_STATUS.md`, and ordering by measured
+in-degree over `compat/vendor/`.** The earlier hypothesis in this PRD — leading with SRFI 26, 13 and
+41 — was wrong and has been dropped: those are pure-Scheme leaves with in-degree ≤ 1 that the corpus
+and `-A` already cover, and none is standard-track.
+
+The policy in one line: bundle what R7RS-large names, plus what cannot exist without the runtime,
+plus the legacy aliases the ecosystem actually imports. Everything else stays out.
+
+Priority order, highest value first:
+1. **Bitwise: SRFI 151, plus `(srfi 60)` / `(srfi 33)` shims.** Standard-track *and* the largest
+   ecosystem gap — 31 packages import `(srfi 60)`, 19 import `(srfi 33)`, and R7RS-large names 151.
+   Shipping 151 alone leaves all of them failing. Needs Rust primitives; portable Scheme would be
+   unusably slow.
+2. **`(scheme …)` alias libraries** for the six Red-edition SRFIs already shipped (1, 111, 113, 128,
+   132, 133) and for 158. A `.sld` re-export each — the cheapest R7RS-large progress available.
+3. **SRFI 125** hash tables, superseding the shipped SRFI 69 (in-degree 16); keep 69 as an alias.
+   Needs a `HeapObjectData::HashMap` variant.
+4. **SRFI 27** random — impossible without an RNG primitive; in-degree 9.
+5. **SRFI 143** fixnums — must match the VM's actual fixnum width.
+6. **SRFI 14** char-sets (in-degree 4), then the remaining standard-track set with little measured
+   demand: Red 41, 101, 116, 117, 124, 127, 134, 135 and Tangerine 146, 159, 160.
+7. **SRFI 115** regex last — large, and only if the corpus justifies it.
+
+Near-free re-export shims to do alongside, since R7RS base already provides the functionality but
+packages import them by SRFI name: `(srfi 9)`, `(srfi 11)`, `(srfi 39)`, `(srfi 6)`.
+
+*Note:* SRFI 64 is lower priority than its ubiquity elsewhere suggests — Snow packages overwhelmingly
+test with `(chibi test)`, which Patina **already ships**. Primitive-backed work goes under
+`crates/patina-runtime/src/stdlib/internal_*.rs`, registered in *both* the primitive registry and the
+library builder; aligns with `PRD/PARALLEL_TRACKS.md` Track B3.
 - **Porting patterns to reapply** (from `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`): import `(scheme r5rs)` for R5RS naming (`exact->inexact` etc.); shim `:optional`/`let-optionals`/`receive`/`check-arg`; treat form-feed as whitespace (already fixed); defer arity rejection so `guard` can catch `apply` errors (already fixed); watch the VM control-op edge cases in `PRD/phase2/INSTRUCTION_LEVEL_CONTROL_OPS.md`.
 - **Acceptance:** one integration test per SRFI exercising its headline forms; `./scripts/run_chibi_tests.sh` stays 1163/1163.
 
