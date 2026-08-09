@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8"><style type="text/css">
+body {color: #000; background-color: #FFFFF8;}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 250px; height: 100%}
+div#menu a:link {text-decoration: none}
+div#main  {font-size: large; position: absolute; top: 0; left: 260px; max-width: 590px; height: 100%}
+div#notes {position: relative; top: 2em; left: 620px; width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+div#menu ol {list-style-position:inside; padding-left: 5px; margin-left: 5px}
+div#menu ol ol {list-style: lower-alpha; padding-left: 15px; margin-left: 15px}
+div#menu ol ol ol {list-style: decimal; padding-left: 5px; margin-left: 5px}
+h2 { color: #888888; border-top: 3px solid #4588ba; }
+h3 { color: #666666; border-top: 2px solid #4588ba; }
+h4 { color: #222288; border-top: 1px solid #4588ba; }
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h4_(assertexpr[msg...])">assert</a></li></ol></div><div id="main"><div><a name="h1_(chibiassert)"></a><h1>(chibi assert)</h1></div><p>A nice assert macro.
+
+Assert macros are common in Scheme, in particular being helpful
+for domain checks at the beginning of a procedure to catch errors
+as early as possible.  Compared to statically typed languages this
+has the advantages that the assertions are optional, and that they
+are not limited by the type system.  SRFI 145 provides the related
+notion of assumptions, but the motivation there is to provide
+hints to optimizing compilers, and these are not required to
+actually signal an error.
+
+<div><a name="h4_(assertexpr[msg...])"></a><h4><code>(assert expr [msg ...])</code></h4></div>
+
+Equivalent to SRFI 145 <code><span>assume</span></code> except that an error is
+guaranteed to be raised if <code>expr</code> is false.  Conceptually
+shorthand for
+
+<code>(or <code><span>expr</span></code>
+    (error <span class="string">"assertion failed"</span> <code><span>msg</span></code> ...))</code>
+
+that is, evaluates <code>expr</code> and returns it if true, but raises
+an exception otherwise.  The error is augmented to include the
+text of the failed <code>expr</code>.  If no additional <code>msg</code>
+arguments are provided then <code>expr</code> is scanned for free
+variables in non-operator positions to report values from, e.g. in
+
+<code>(<span class="keyword">let</span> ((x <span>3</span>))
+ (assert (= <span>x</span> (+ <span>x</span> <span>1</span>))))</code>
+
+the error would also report the bound value of <code><span>x</span></code>.  This
+uses the technique from Oleg Kiselyov's <a href="http://okmij.org/ftp/Scheme/assert-syntax-rule.txt">good assert macro</a>,
+which is convenient but fallible.  It is thus best to keep the
+body of the assertion simple, moving any predicates you need to
+external utilities, or provide an explicit <code>msg</code>.</p><div id="footer"></div></div></body></html>

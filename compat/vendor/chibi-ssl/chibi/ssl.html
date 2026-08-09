@@ -1,0 +1,41 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_ssl-method">ssl-method</a></li><li><a href="#h3_ssl-ctx-new">ssl-ctx-new</a></li><li><a href="#h3_ssl-new">ssl-new</a></li><li><a href="#h3_ssl-make-i/o-ports">ssl-make-i/o-ports</a></li><li><a href="#h3_ssl-method?">ssl-method?</a></li><li><a href="#h3_SSLv23_server_method">SSLv23_server_method</a></li><li><a href="#h3_SSLv23_client_method">SSLv23_client_method</a></li><li><a href="#h3_SSLv2_server_method">SSLv2_server_method</a></li><li><a href="#h3_SSLv2_client_method">SSLv2_client_method</a></li><li><a href="#h3_SSLv3_server_method">SSLv3_server_method</a></li><li><a href="#h3_SSLv3_client_method">SSLv3_client_method</a></li><li><a href="#h3_TLSv1_server_method">TLSv1_server_method</a></li><li><a href="#h3_TLSv1_client_method">TLSv1_client_method</a></li><li><a href="#h3_ssl-context?">ssl-context?</a></li><li><a href="#h3_ssl-ctx-set-mode!">ssl-ctx-set-mode!</a></li><li><a href="#h3_ssl?">ssl?</a></li><li><a href="#h3_ssl-set-fd!">ssl-set-fd!</a></li><li><a href="#h3_ssl-do-handshake">ssl-do-handshake</a></li><li><a href="#h3_ssl-shutdown">ssl-shutdown</a></li><li><a href="#h3_ssl-write">ssl-write</a></li><li><a href="#h3_ssl-read">ssl-read</a></li></ol></div><div id="main"><div><a name="h1_(chibissl)"></a><h1>(chibi ssl)</h1></div><p>Basic bindings for establishing SSL connections.<div><a name="h3_ssl-method"></a><h3><code>(ssl-method protocol [server?])</code></h3></div>A utility to generate the appropriate method for the <code>protocol</code>,
+as a client unless the optional <code>server?</code> is true.  <code>Protocol</code>
+should be one of the symbols 'sslv2-or-v3, 'sslv2, 'sslv3 or 'tls.<div><a name="h3_ssl-ctx-new"></a><h3><code>(ssl-ctx-new protocol [server?])</code></h3></div>A wrapper around SSL_CTX_new for the given <code>protocol</code>, as symbol
+as in <code><span>ssl-method</span></code>, setting SSL_MODE_ENABLE_PARTIAL_WRITE
+and SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER by default.<div><a name="h3_ssl-new"></a><h3><code>(ssl-new x . o)</code></h3></div>Wrapper around SSL_new.  Creates a new SSL structure which is
+needed to hold the data for a TLS/SSL connection.  Takes settings
+from an ssl-context, which can either be provided directly as
+<code>x</code>, or created implicitly using the same signature as
+<code><span>ssl-ctx-new</span></code>.<div><a name="h3_ssl-make-i/o-ports"></a><h3><code>(ssl-make-i/o-ports ssl fd in out)</code></h3></div>Given the ssl context <code>ssl</code>, as created with <code><span>ssl-new</span></code>,
+establishes an SSL connection on ports <code>in</code> and <code>out</code> from
+file descriptor <code>fd</code> and returns a list of two new ports, the
+wrapped input and output of the SSL connection.<div><a name="h3_ssl-method?"></a><h3><code>(ssl-method? obj)</code></h3></div><div><a name="h3_SSLv23_server_method"></a><h3><code>(SSLv23_server_method)</code></h3></div><div><a name="h3_SSLv23_client_method"></a><h3><code>(SSLv23_client_method)</code></h3></div><div><a name="h3_SSLv2_server_method"></a><h3><code>(SSLv2_server_method)</code></h3></div><div><a name="h3_SSLv2_client_method"></a><h3><code>(SSLv2_client_method)</code></h3></div><div><a name="h3_SSLv3_server_method"></a><h3><code>(SSLv3_server_method)</code></h3></div><div><a name="h3_SSLv3_client_method"></a><h3><code>(SSLv3_client_method)</code></h3></div><div><a name="h3_TLSv1_server_method"></a><h3><code>(TLSv1_server_method)</code></h3></div><div><a name="h3_TLSv1_client_method"></a><h3><code>(TLSv1_client_method)</code></h3></div><div><a name="h3_ssl-context?"></a><h3><code>(ssl-context? obj)</code></h3></div><div><a name="h3_ssl-ctx-set-mode!"></a><h3><code>(ssl-ctx-set-mode! SSL_CTX long)</code></h3></div><div><a name="h3_ssl?"></a><h3><code>(ssl? obj)</code></h3></div><div><a name="h3_ssl-set-fd!"></a><h3><code>(ssl-set-fd! SSL int)</code></h3></div><div><a name="h3_ssl-do-handshake"></a><h3><code>(ssl-do-handshake SSL)</code></h3></div><div><a name="h3_ssl-shutdown"></a><h3><code>(ssl-shutdown SSL)</code></h3></div><div><a name="h3_ssl-write"></a><h3><code>(ssl-write SSL bytevector int)</code></h3></div><div><a name="h3_ssl-read"></a><h3><code>(ssl-read SSL bytevector int)</code></h3></div></p><div id="footer"></div></div></body></html>

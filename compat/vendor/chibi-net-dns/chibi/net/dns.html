@@ -1,0 +1,34 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_dns/A">dns/A</a></li><li><a href="#h3_dns/MX">dns/MX</a></li><li><a href="#h3_dns/TXT">dns/TXT</a></li><li><a href="#h3_dns/IN">dns/IN</a></li><li><a href="#h3_dns/QUERY">dns/QUERY</a></li><li><a href="#h3_dns/IQUERY">dns/IQUERY</a></li><li><a href="#h3_dns/STATUS">dns/STATUS</a></li><li><a href="#h3_dns-build-query">dns-build-query</a></li><li><a href="#h3_dns-build-response">dns-build-response</a></li><li><a href="#h3_dns-lookup">dns-lookup</a></li><li><a href="#h3_dns-text">dns-text</a></li><li><a href="#h3_dns-mx">dns-mx</a></li></ol></div><div id="main"><div><a name="h1_(chibinetdns)"></a><h1>(chibi net dns)</h1></div><p>Domain Name Service library, with high-level utilities for
+address, mx and text record lookups.  See
+http://tools.ietf.org/html/rfc1035.<div><a name="h3_dns/A"></a><h3><code>dns/A</code></h3></div><div><a name="h3_dns/MX"></a><h3><code>dns/MX</code></h3></div><div><a name="h3_dns/TXT"></a><h3><code>dns/TXT</code></h3></div><div><a name="h3_dns/IN"></a><h3><code>dns/IN</code></h3></div><div><a name="h3_dns/QUERY"></a><h3><code>dns/QUERY</code></h3></div><div><a name="h3_dns/IQUERY"></a><h3><code>dns/IQUERY</code></h3></div><div><a name="h3_dns/STATUS"></a><h3><code>dns/STATUS</code></h3></div><div><a name="h3_dns-build-query"></a><h3><code>(dns-build-query opcode questions)</code></h3></div><div><a name="h3_dns-build-response"></a><h3><code>(dns-build-response opcode response answers)</code></h3></div><div><a name="h3_dns-lookup"></a><h3><code>(dns-lookup name . o)</code></h3></div>Lookup and return the numeric ip address for the domain
+<code>name</code>, formatted as a string.<div><a name="h3_dns-text"></a><h3><code>(dns-text name . o)</code></h3></div>Lookup and return the DNS TEXT entry for the domain <code>name</code>.<div><a name="h3_dns-mx"></a><h3><code>(dns-mx name . o)</code></h3></div>Lookup and return the sorted list of MX entries for the domain
+<code>name</code>.</p><div id="footer"></div></div></body></html>

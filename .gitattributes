@@ -1,0 +1,4 @@
+# Third-party compatibility corpus: unmodified upstream sources kept for testing only.
+# Marking it vendored keeps it out of GitHub's language stats and collapses it in diffs.
+compat/vendor/** linguist-vendored
+compat/vendor/**/*.html linguist-documentation

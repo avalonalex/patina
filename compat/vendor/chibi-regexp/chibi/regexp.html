@@ -1,0 +1,79 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_rx">rx</a></li><li><a href="#h3_regexp-match-count">regexp-match-count</a></li><li><a href="#h3_regexp-match-submatch/list">regexp-match-submatch/list</a></li><li><a href="#h3_regexp-match-submatch">regexp-match-submatch</a></li><li><a href="#h3_regexp-match-submatch-start">regexp-match-submatch-start</a></li><li><a href="#h3_regexp-match-submatch-end">regexp-match-submatch-end</a></li><li><a href="#h3_regexp-match->list">regexp-match->list</a></li><li><a href="#h3_regexp-match->sexp">regexp-match->sexp</a></li><li><a href="#h3_regexp-matches">regexp-matches</a></li><li><a href="#h3_regexp-matches?">regexp-matches?</a></li><li><a href="#h3_regexp-search">regexp-search</a></li><li><a href="#h3_valid-sre?">valid-sre?</a></li><li><a href="#h3_char-set->sre">char-set->sre</a></li><li><a href="#h3_regexp">regexp</a></li><li><a href="#h3_regexp-fold">regexp-fold</a></li><li><a href="#h3_regexp-extract">regexp-extract</a></li><li><a href="#h3_regexp-split">regexp-split</a></li><li><a href="#h3_regexp-partition">regexp-partition</a></li><li><a href="#h3_regexp-replace">regexp-replace</a></li><li><a href="#h3_regexp-replace-all">regexp-replace-all</a></li></ol></div><div id="main"><div><a name="h1_(chibiregexp)"></a><h1>(chibi regexp)</h1></div><p>A regular expression engine implementing SRFI 115 using a
+non-backtracking Thompson NFA algorithm.<div><a name="h3_rx"></a><h3><code>(rx sre ...)</code></h3></div><div><a name="h3_regexp-match-count"></a><h3><code>(regexp-match-count md)</code></h3></div><div><a name="h3_regexp-match-submatch/list"></a><h3><code>(regexp-match-submatch/list md n)</code></h3></div>Returns the matching result for the given named or indexed
+submatch <code>n</code>, possibly as a list for a submatch-list, or
+<code>#f</code> if not matched.<div><a name="h3_regexp-match-submatch"></a><h3><code>(regexp-match-submatch md n)</code></h3></div>Returns the matching substring for the given named or indexed
+submatch <code>n</code>, or <code>#f</code> if not matched.<div><a name="h3_regexp-match-submatch-start"></a><h3><code>(regexp-match-submatch-start md n)</code></h3></div>Returns the start index for the given named or indexed submatch
+<code>n</code>, or <code>#f</code> if not matched.<div><a name="h3_regexp-match-submatch-end"></a><h3><code>(regexp-match-submatch-end md n)</code></h3></div>Returns the end index for the given named or indexed submatch
+<code>n</code>, or <code>#f</code> if not matched.<div><a name="h3_regexp-match->list"></a><h3><code>(regexp-match->list md)</code></h3></div>Convert an regexp-match result to a list of submatches, beginning
+with the full match, using <code>#f</code> for unmatched submatches.<div><a name="h3_regexp-match->sexp"></a><h3><code>(regexp-match->sexp md)</code></h3></div>Convert an regexp-match result to a forest of submatches, beginning
+with the full match, using <code>#f</code> for unmatched submatches.<div><a name="h3_regexp-matches"></a><h3><code>(regexp-matches rx str . o)</code></h3></div>Match the given regexp or SRE against the entire string and return
+the match data on success.  Returns <code>#f</code> on failure.<div><a name="h3_regexp-matches?"></a><h3><code>(regexp-matches? rx str . o)</code></h3></div>Match the given regexp or SRE against the entire string and return
+the <code>#t</code> on success.  Returns <code>#f</code> on failure.<div><a name="h3_regexp-search"></a><h3><code>(regexp-search rx str . o)</code></h3></div>Search for the given regexp or SRE within string and return
+the match data on success.  Returns <code>#f</code> on failure.<div><a name="h3_valid-sre?"></a><h3><code>(valid-sre? x)</code></h3></div><div><a name="h3_char-set->sre"></a><h3><code>(char-set->sre cset)</code></h3></div><div><a name="h3_regexp"></a><h3><code>(regexp sre . o)</code></h3></div>Compile an <code>sre</code> into a regexp.<div><a name="h3_regexp-fold"></a><h3><code>(regexp-fold rx kons knil str [finish])</code></h3></div>The fundamental regexp matching iterator.  Repeatedly searches
+<code>str</code> for the regexp <code>re</code> so long as a match can be found.
+On each successful match, applies <code>(<code><span>kons</span></code> <code><span>i</span></code>
+<code><span>regexp-match</span></code> <code><span>str</span></code> <code><span>acc</span></code><span class="syntaxerror">)</span></code> where <code>i</code> is the
+index since the last match (beginning with
+<code>start</code>),<code>regexp-match</code> is the resulting match, and
+<code>acc</code> is the result of the previous <code>kons</code> application,
+beginning with <code>knil</code>.  When no more matches can be found,
+calls <code>finish</code> with the same arguments, except that
+<code>regexp-match</code> is <code>#f</code>.
+
+By default <code>finish</code> just returns <code>acc</code>.<div><a name="h3_regexp-extract"></a><h3><code>(regexp-extract rx str . o)</code></h3></div>Extracts all non-empty substrings of <code>str</code> which match
+<code>re</code> between <code>start</code> and <code>end</code> as a list of strings.<div><a name="h3_regexp-split"></a><h3><code>(regexp-split rx str [start end])</code></h3></div>Splits <code>str</code> into a list of strings separated by matches of
+<code>re</code>.<div><a name="h3_regexp-partition"></a><h3><code>(regexp-partition rx str [start end])</code></h3></div>Partitions <code>str</code> into a list of non-empty strings
+matching <code>re</code>, interspersed with the unmatched portions
+of the string.  The first and every odd element is an unmatched
+substring, which will be the empty string if <code>re</code> matches
+at the beginning of the string or end of the previous match.  The
+second and every even element will be a substring matching
+<code>re</code>.  If the final match ends at the end of the string,
+no trailing empty string will be included.  Thus, in the
+degenerate case where <code>str</code> is the empty string, the
+result is <code>(<span class="string">""</span>)</code>.<div><a name="h3_regexp-replace"></a><h3><code>(regexp-replace rx str subst [count])</code></h3></div>Returns a new string replacing the <code>count</code>th match of <code>re</code>
+in <code>str</code> the <code>subst</code>, where the zero-indexed <code>count</code>
+defaults to zero (i.e. the first match).  If there are not
+<code>count</code> matches, returns the selected substring unmodified.
+<code>subst</code> can be a string, an integer or symbol indicating the
+contents of a numbered or named submatch of <code>re</code>,<code>'<span>pre</span></code>
+for the substring to the left of the match, or <code>'<span>post</span></code> for
+the substring to the right of the match.
+The optional parameters <code>start</code> and <code>end</code> restrict both
+the matching and the substitution, to the given indices, such that
+the result is equivalent to omitting these parameters and
+replacing on <code>(substring <span>str</span> <span>start</span> <span>end</span>)</code>. As a convenience,
+a value of <code>#f</code> for <code>end</code> is equivalent to
+<code>(string-length <span>str</span>)</code>.<div><a name="h3_regexp-replace-all"></a><h3><code>(regexp-replace-all rx str subst . o)</code></h3></div>Equivalent to <code>regexp-replace</code>, but replaces all occurrences
+of <code>re</code> in <code>str</code>.</p><div id="footer"></div></div></body></html>

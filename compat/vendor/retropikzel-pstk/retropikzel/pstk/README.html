@@ -1,0 +1,779 @@
+<pre>Use Tk GUI from Scheme
+
+A new chapter in the long continuation of porting the pstk library.
+
+
+The starting code was taken from
+[(rebottled pstk)](https://snow-fort.org/s/peterlane.info/peter/rebottled/pstk/1.7.0/index.html)
+which can be found from snow-fort.
+
+
+The library now uses (retropikzel named-pipes) library, which uses (foreign c)
+underneath. It should work on any implementation those libraries work on.
+
+
+Set PSTK_DEBUG environment variable to see debug output.
+
+### 1.1. Simple Example
+
+Get started with the following program:
+
+
+
+    (import (scheme base)
+            (scheme write)
+            (rebottled pstk))
+
+    (let ((tk (tk-start)))                                                  ; **< 1>**
+      (tk/pack (tk 'create-widget                                           ; **< 2>**
+                   'button 'text: "Hello"
+                   'command: (lambda () (display "Hello world") (newline))) ; **< 3>**
+               'padx: 20 'pady: 20)
+      (tk-event-loop tk))                                                   ; **< 4>**
+
+  1. Starts the TK shell working. The returned value is used to interact with the shell.
+
+  2. Creates a button with a label and command, and packs it onto the default frame.
+
+  3. Commands are given as Scheme functions of zero arguments.
+
+  4. Starts the TK event loop.
+
+
+
+### 1.2. Working with Widgets
+
+The example above shows how widgets are created by sending instructions to the
+Tk process. The manner of operation is very close to, but a little different
+to that used in Tcl/Tk itself. In this section, some descriptions and examples
+are given to help in translating the Tcl/Tk documentation into Scheme.
+
+In Tk, widgets are created using appropriately named functions, providing a
+name for the new widget as a string. Tk parses this string to work out the
+parent widget and provide some structure. In PS/Tk we instead represent
+widgets as functions; these functions take a _command_ and associated
+arguments. Commands that the widgets respond to include:
+
+  * get-id: returns the Tk id
+
+  * create-widget: used to create a child widget
+
+  * configure: used to alter parameters of a widget
+
+  * cget: returns value of a configuration option
+
+For example, having created a button, we can later change the displayed text
+using `configure`, or retrieve the text using `cget`:
+
+
+
+    sash> (hello 'configure 'text: "Goodbye")
+    ()
+    sash> (hello 'cget 'text:)
+    "Goodbye"
+
+Apart from representing widgets as functions, most of the Tk parameters and
+functions map across into Scheme. Consider the Tcl/Tk equivalent of the
+example program above:
+
+
+
+    button .hello -text Hello -command {puts stdout "Hello world"}
+    pack .hello -padx 20 -pady 20
+
+The first line creates a widget named ".hello". The "." means it is attached
+to the top-most frame. The widget is referred to in the second line, which
+packs the widget into the frame.
+
+Comparing the second line with the Scheme program illustrates how direct most
+conversions can be:
+
+
+
+    pack <widget-name> -padx 20 -pady 20
+
+
+    (tk/pack <widget-value> 'padx: 20 'pady: 20)
+
+Notice these three principles:
+
+  1. Instead of a string for the widget name, we have what is returned by creating the widget (a function); for the top-most frame ("." in tcl/tk) we have the return value of `tk-start` (called `tk` here). 
+
+  2. The parameters `-padx` are converted to symbols with a trailing colon `'padx:`
+
+  3. The function name `pack` becomes `tk/pack`
+
+In addition, Scheme values are converted to Tcl values. So Scheme's #t/#f are
+Tcl's "1"/"0", symbols can be used in place of strings, etc.
+
+Creating a widget is done through the `create-widget` command mentioned above:
+
+    button .hello -text Hello -command {puts stdout "Hello world"}
+    (define hello
+      (tk 'create-widget 'button
+          'text: "Hello"
+          'command: (lambda () (display "Hello world") (newline))))
+
+Instead of calling a `button` function, as in Tcl, the parent widget's
+function is requested to create a button widget. The parameters defining the
+button are the same as in the Tcl example, just mapped to Scheme equivalents.
+This call returns a function defining the new button, which we can name in a
+Scheme variable.
+
+Notice how the command `'create-widget` is passed as a symbol without a
+trailing colon; compare with how the parameter `'text:` is given.
+
+This use of symbols as commands arises elsewhere, for example with `winfo`:
+
+
+
+    winfo screenwidth .           # TCL version
+    (tk/winfo 'screenwidth tk)    ; Scheme version
+
+All the Tk widgets can be created and used in this way. For a list of
+available widgets see any Tk documentation or
+<https://www.tcl.tk/man/tcl8.6/TkCmd/contents.htm>.
+
+
+
+### 1.3. Tk Functions
+
+These functions map directly onto underlying Tk functions. The names start
+`tk/` with the remainder of the name mapping onto the Tk equivalent function:
+
+  * `tk/bell` is equivalent to Tk's `bell`
+
+  * `tk/choose-color` is equivalent to Tk's `tk_chooseColor`
+
+
+
+
+#### 1.3.1. `tk/after`
+
+`tk/after` takes a time in milliseconds and an optional function. After the
+given time, it calls the function or continues processing.
+
+In the analogue clock example, the function to redraw the hands in the clock
+uses `tk/after` to delay for a second before calling itself to draw the hands
+in the new position and repeating.
+
+
+
+    (define (hands canvas)
+
+      ; code to redraw the clock
+
+      (tk/after 1000 (lambda () (hands canvas))))
+
+
+
+
+#### 1.3.2. `tk/appname`
+
+`tk/appname` gets or sets the application name.
+
+    sash> (tk/appname)
+    "tclsh"
+    sash> (tk/appname "new name set")
+    "new name set"
+    sash> (tk/appname)
+    "new name set"
+
+
+
+
+#### 1.3.3. `tk/bell`
+
+`tk/bell` rings the bell.
+
+
+
+
+#### 1.3.4. `tk/bgerror`
+
+`tk/bgerror` is used to tell the Tcl process that an error has occurred.
+
+
+
+
+#### 1.3.5. `tk/bind!`
+
+`tk/bind` binds actions to events. For example, a function can be called when
+a mouse button is clicked, or a key pressed. First argument is a window, or
+the symbol `all`; second argument is the pattern for the event to bind to; and
+third argument is the function to call.
+
+    (tk/bind 'all "<Button-1>" `(,(lambda (x) (display x) (newline) #f) %x))
+
+
+
+
+#### 1.3.6. `tk/bindtags`
+
+`tk/bindtags` gets or sets the binding tags of a given window.
+
+
+
+
+#### 1.3.7. `tk/caret`
+
+`tk/caret` is used to query or set the current caret position in a given
+window.
+
+    sash> (tk/caret tk)                            ; **< 1>**
+    "-height 0 -x 0 -y 0"
+    sash> (tk/caret tk 'height: 10 'x: 2 'y: 3)    ; **< 2>**
+    ""
+
+  1. `tk` refers to the default, or top-most window, as it is the value returned by `tk-start`. 
+
+  2. Sets the height or x/y position of the caret in the given window. 
+
+
+
+
+#### 1.3.8. `tk/choose-color`
+
+`tk/choose-color` opens a dialog from which to select a colour. Returns the
+RGB code of the selected colour, or "" if cancel is clicked.
+
+    sash> (tk/choose-color)
+    "#7ce679"
+
+Optional parameters let you select the `initialcolor` `parent` and `title`.
+See the Tk documentation for details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/chooseColor.htm>
+
+
+
+
+#### 1.3.9. `tk/choose-directory`
+
+`tk/choose-directory` opens a dialog from which to select a directory. Returns
+the directory name as a string or "" if cancel is clicked.
+
+    sash> (tk/choose-directory)
+    "/home/peter/Software/r7rs-libs"
+
+Optional parameters let you select the `initialdir` `parent` `title` and
+whether the chosen directory must exist. See the Tk documentation for details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/chooseDirectory.htm>
+
+
+
+
+#### 1.3.10. `tk/clipboard`
+
+`tk/clipboard` provides access to the clipboard, with its parameter specifying
+an action: `append` `clear` `get`
+
+See Tk documentation for details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/clipboard.htm>
+
+
+
+
+#### 1.3.11. `tk/destroy`
+
+`tk/destroy` deletes the window or windows given as arguments.
+
+
+
+
+#### 1.3.12. `tk/event`
+
+`tk/event` is used to create and manage events.
+
+See the Tk documentation for details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/event.htm>
+
+
+
+#### 1.3.13. `tk/focus`
+
+`tk/focus` manages the input focus.
+
+See the Tk documentation for details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/focus.htm>
+
+
+
+
+#### 1.3.14. `tk/focus-follows-mouse`
+
+`tk/focus-follows-mouse` changes the focus status so it follows the mouse
+rather than changes with a click.
+
+
+
+
+#### 1.3.15. `tk/focus-next`
+
+`tk/focus-next` returns the next window from the given window, in the focus
+order.
+
+
+
+
+#### 1.3.16. `tk/focus-prev`
+
+`tk/focus-prev` returns the previous window from the given window, in the
+focus order.
+
+
+
+
+#### 1.3.17. `tk/get-open-file`
+
+`tk/get-open-file` opens a dialog from which the user can select a file.
+Returns the file path in a string or "" if cancel is clicked.
+
+    sash> (tk/get-open-file)
+    "/home/peter/Software/r7rs-libs/rebottled-examples/pstk/example-menu.sps"
+
+Optional parameters let you select the `initialdir` `parent` `title`
+`filetypes` etc. See the Tk documentation for details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/getOpenFile.htm>
+
+
+
+
+#### 1.3.18. `tk/get-save-file`
+
+`tk/get-save-file` opens a dialog from which the user can select a file.
+Returns the file path in a string or "" if cancel is clicked.
+
+    sash> (tk/get-save-file)
+    "/home/peter/Software/r7rs-libs/rebottled-examples/pstk/newfile.txt"
+
+Optional parameters let you select the `initialdir` `parent` `title`
+`filetypes` etc. See the Tk documentation for details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/getSaveFile.htm>
+
+
+
+
+#### 1.3.19. `tk/grab`
+
+`tk/grab` provides a way to redirect mouse or keyboard events to specific
+windows.
+
+See Tk documentation for details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/grab.htm>
+
+
+
+
+#### 1.3.20. `tk/grid`
+
+`tk/grid` is the first of three techniques used to place widgets within a
+frame. This geometry manager is probably the most important of the three, and
+can be used to arrange widgets by row and column.
+
+The following sample, taken from the example "example-temp-conversion.sps"
+illustrates some of the possibilities:
+
+      (tk/grid celsius 'column: 2 'row: 1 'sticky: 'we 'padx: 5 'pady: 5) ; **< 1>**
+      (tk/grid label 'column: 2 'row: 2 'sticky: 'we 'padx: 5 'pady: 5)   ; **< 2>**
+      (tk/grid button 'column: 2 'row: 3 'sticky: 'we 'padx: 5 'pady: 5)
+      (tk/grid (tk 'create-widget 'label 'text: "celsius")
+               'column: 3 'row: 1 'sticky: 'w 'padx: 5 'pady: 5)          ; **< 3>**
+      (tk/grid (tk 'create-widget 'label 'text: "is")
+               'column: 1 'row: 2 'sticky: 'e 'padx: 5 'pady: 5)          ; **< 4>**
+      (tk/grid (tk 'create-widget 'label 'text: "fahrenheit")
+               'column: 3 'row: 2 'sticky: 'w 'padx: 5 'pady: 5)
+
+  1. Places the `celsius` widget in row 1, column 2. The `sticky` option means the widget will fill the space in the horizontal direction. The `pad` options place some space around the widget. Note, rows and columns are indexed from 1. 
+
+  2. Similarly, the `label` is placed in column 2 row 2. 
+
+  3. This option only has `w` for the `sticky` option: the text label is left-justified. 
+
+  4. With the `e` option for `sticky`, this label is right-justified. 
+
+The final layout is:
+
+For more of the many options, see:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/grid.htm>
+
+
+
+
+#### 1.3.21. `tk/image`
+
+`tk/image` used to create, delete and query images.
+
+    sash> (define im (tk/image 'create 'photo 'file: "doc/pstk-hello.png"))  ; **< 1>**
+    #<unspecified>
+    sash> (tk/pack (tk 'create-widget 'label 'image: im))                    ; **< 2>**
+    ""
+
+  1. Loads an image from a file. The type should be `photo` or `bitmap`. 
+
+  2. Puts the image onto a label in the current frame. 
+
+See the Tk documentation for more details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/image.htm>
+
+
+
+
+#### 1.3.22. `tk/lower`
+
+`tk/lower` lowers the given window below all its siblings in the current
+stacking order.
+
+
+
+
+#### 1.3.23. `tk/message-box`
+
+`tk/message-box` displays a Tk message box. These dialogs can be
+straightforward or display a range of options and an icon.
+
+The simplest information box shows a given message, and adds an "OK" button:
+
+    sash> (tk/message-box 'message: "Hello")
+    "ok"                                        ; **< 1>**
+
+  1. The function returns the string label of the clicked button. 
+
+We can also add a title to the box, and select an icon from one of: `(error
+info question warning)` The type of box specifies the buttons. The choices
+are:
+
+  * "abortretryignore" - which displays three buttons, "abort" "retry" "ignore"
+
+  * "ok" - which displays one button "ok"
+
+  * "okcancel" - which displays two buttons "ok" or "cancel"
+
+  * "retrycancel"
+
+  * "yesno"
+
+  * "yesnocancel"
+
+    sash> (tk/message-box 'title: "Error on opening file" 'icon: 'question 'message: "What to do now?" 'type: "abortretryignore")
+    "ignore"
+    sash> (tk/message-box 'title: "Error on opening file" 'icon: 'question 'message: "What to do now?" 'type: "abortretryignore")
+    "abort"
+
+For a full set of options, see the Tk documentation:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/messageBox.htm>
+
+
+
+
+#### 1.3.24. `tk/option`
+
+`tk/option` is used to add or retrieve window options to or from the option
+database.
+
+For details see the Tk documentation:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/option.htm>
+
+
+
+
+#### 1.3.25. `tk/pack`
+
+`tk/pack` is the second of three techniques used to place widgets within a
+frame.
+
+    (tk/pack command ...)
+
+The tk `pack` command takes a number of options to control the order and
+spacing of widgets placed within a frame. For the Tk documentation, see:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/pack.htm>
+
+
+
+
+#### 1.3.26. `tk/place`
+
+`tk/place` is the third of three techniques used to place widgets within a
+frame. It provides a way to place widgets at specific coordinates. For the Tk
+documentation, see: <https://www.tcl.tk/man/tcl8.6/TkCmd/place.htm>
+
+
+
+
+#### 1.3.27. `tk/popup`
+
+`tk/popup` takes three arguments, a menu and x/y coordinates. The function
+pops up a menu at the given position.
+
+
+
+
+#### 1.3.28. `tk/raise`
+
+`tk/raise` raises the given window above its siblings in the current stacking
+order.
+
+
+
+
+#### 1.3.29. `tk/scaling`
+
+`tk/scaling` is used to get or set the number of pixels per point on a
+display. An optional `displayof` argument is used to specify a window.
+
+    sash> (tk/scaling)
+    "1.3333333333333333"
+
+
+
+
+#### 1.3.30. `tk/selection`
+
+`tk/selection` provides access to the X selection (e.g. text highlighted with
+the mouse).
+
+In the following image, the text "get-save" was highlighted with the mouse,
+and returned by calling the function with the symbol `'get`:
+
+
+
+
+#### 1.3.31. `tk/update`
+
+`tk/update` updates any pending events - "Use with extreme care" (Nils Holm)
+
+
+
+
+#### 1.3.32. `tk/useinputmethods`
+
+`tk/useinputmethods` is used for XIM filtering. According to the [Tcl
+wiki](http://wiki.tcl.tk/8695), this is useful in some locales, such as
+Japanese or Korean, to use particular input devices. This only works under X.
+
+    (tk/useinputmethods ['displayof: window] [boolean])
+
+For querying:
+
+    sash> (tk/useinputmethods)
+    "1"
+
+
+
+
+#### 1.3.33. `tk/wait`
+
+`tk/wait` is a general-purpose wait function, where the arguments specify
+events to wait for. In case of visibility/window types, `tk-wait-for-window`
+and `tk-wait-until-visible` are better choices. This function can also wait
+for changes to variables.
+
+See the Tk documentation for details:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/tkwait.htm>
+
+
+
+
+#### 1.3.34. `tk/windowingsystem`
+
+`tk/windowingsystem` returns a string naming the underlying window system.
+
+    sash> (tk/windowingsystem)
+    "x11"
+
+
+
+
+#### 1.3.35. `tk/winfo`
+
+`tk/winfo` is used to find out information about windows currently being
+managed by tk. For example, the screen width and height can be found using:
+
+    sash> (tk/winfo 'screenwidth tk)
+    "1920"                                    ; **< 1>**
+    sash> (tk/winfo 'screenheight tk)
+    "1080"
+
+  1. The values are returned as _strings_ , use `string->number` to convert to numbers. 
+
+Similarly, information about a named window:
+
+    sash> (tk/winfo 'x tk)
+    "860"
+    sash> (tk/winfo 'y tk)
+    "464"
+
+There are many kinds of information that may be queried. For a full list, see
+the Tk documentation: <https://www.tcl.tk/man/tcl8.6/TkCmd/winfo.htm>
+
+
+
+
+#### 1.3.36. `tk/wm`
+
+`tk/wm` is used to communicate with the Window Manager of the operating
+system. A simple use is to set the title of the top-most window:
+
+      (tk/wm 'title tk "GMT Clock")
+
+More complex uses include fixing a window's size, specifying an operating-
+system-specific window type or setting an icon. For the Tk documentation, see:
+<https://www.tcl.tk/man/tcl8.6/TkCmd/wm.htm>
+
+
+
+
+#### 1.3.37. `ttk/available-themes`
+
+`ttk/available-themes` returns a list of the available themes.
+
+    sash> (define tk (tk-start))
+    #<unspecified>
+    sash> (ttk/available-themes)
+    ("clam" "alt" "default" "classic")
+
+
+
+#### 1.3.38. `ttk-map-widgets`
+
+Tile is an alternative set of widgets for Tk supporting a more attractive set
+of themes as well as some additional widgets, such as a treeview.
+
+`ttk-map-widgets` is used to map native Tk widgets to their TTk equivalents.
+To use all the Tile widgets, call:
+
+    (ttk-map-widgets 'all)
+
+(A value of `none` will not use any Tile widgets. Alternatively, list the
+specific widgets you want to map.)
+
+
+
+
+#### 1.3.39. `ttk/set-theme`
+
+`ttk/set-theme` is used to set the theme to one of those available.
+
+    sash> (ttk/set-theme "classic")
+    ""
+
+
+
+
+#### 1.3.40. `ttk/style`
+
+`ttk/style` is used to query or change the Tk style database. For the Tk
+documentation, see: <https://www.tcl.tk/man/tcl8.6/TkCmd/ttk_style.htm>
+
+
+
+### 1.4. PS/Tk Functions
+
+These functions are included within the library but do not have direct Tk
+equivalents. (The function names start "tk-".)
+
+
+
+
+#### 1.4.1. `tk-end`
+
+`tk-end` is used to shutdown the Tk process, and effectively end the program.
+
+    (tk-end)
+
+
+
+
+#### 1.4.2. `tk-eval`
+
+`tk-eval` evaluates a piece of TCL code, provided as a string.
+
+    sash> (tk-eval "bell")
+    ""
+    sash> (tk-eval "puts 3")
+    An error occurred inside Tcl/Tk
+     --> 3
+    #<unspecified>
+
+
+
+
+#### 1.4.3. `tk-event-loop`
+
+`tk-event-loop` is used to enter the TK event loop. It takes the `tk` value
+returned from `tk-start` as a parameter, and does not end until `tk-end` is
+called.
+
+    (tk-event-loop tk)
+
+
+
+
+#### 1.4.4. `tk-start`
+
+`tk-start` is used to initiate the Tk process. It returns a function used to
+send commands to Tk. An optional argument names the tcl/tk program to use: on
+Linux, this program is "tclsh", but for easy distribution, you may wish to use
+"tclkit".
+
+
+
+    (let ((tk (tk-start "tclkit"))) ...)  ; **< 1>**
+
+  1. Starts the Tk program called "tclkit" and stores the result in the `tk` variable. 
+
+
+
+
+#### 1.4.5. `tk-var` `tk-get-var` `tk-set-var!`
+
+These three functions work as a group and deal with how variables are linked
+to widget controls.
+
+`tk-var` is used to register a new `tk-var` with the given symbol name.
+
+`tk-get-var` is used to retrieve the value of a `tk-var`
+
+`tk-set-var!` is used to change the value of a `tk-var`
+
+For example:
+
+
+
+    (tk-var 'cb-value)                                    ; **< 1>**
+    (tk 'create-widget 'checkbutton 'text: "Check me"
+                   'variable: (tk-var 'cb-value))         ; **< 2>**
+    (display (tk-get-var 'cb-value))                      ; **< 3>**
+
+  1. Set up symbol `cb-value` as the name of variable
+
+  2. Associates the `cb-value` variable with the check button
+
+  3. Retrieves the `cb-value` value to display the check button's state
+
+
+
+
+#### 1.4.6. `tk-wait-for-window`
+
+`tk-wait-for-window` waits until the given window is destroyed (such as a
+dialog being closed).
+
+
+
+
+#### 1.4.7. `tk-wait-until-visible`
+
+`tk-wait-until-visible` waits until the given window becomes visible.
+
+
+
+
+#### 1.4.8. `tk-with-lock`
+
+`tk-with-lock` is used to protect functions which are working with state in a
+multi-threaded environment.
+
+    (tk 'create-widget 'button
+        'command: (lambda ()
+                    (tk-with-lock
+                      (lambda () do-something-critical))))</pre>

@@ -1,0 +1,47 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-fector">make-fector</a></li><li><a href="#h3_fector">fector</a></li><li><a href="#h3_build-fector">build-fector</a></li><li><a href="#h3_build-fector">fector-length</a></li><li><a href="#h3_fector-ref">fector-ref</a></li><li><a href="#h3_fector-set">fector-set</a></li><li><a href="#h3_list->fector">list->fector</a></li><li><a href="#h3_fector->list">fector->list</a></li></ol></div><div id="main"><div><a name="h1_(pfdsfector)"></a><h1>(pfds fector)</h1></div><p>fector? :: Object -> Boolean
+Returns #t if a given object is a fector, #f otherwise.<div><a name="h3_make-fector"></a><h3><code>(make-fector . args)</code></h3></div>make-fector :: Int [ Object ] -> Fector
+Returns a fector of a specified size. If the fill parameter is
+given, the locations of the fector are initialised to that object,
+otherwise their initial values are unspecified.<div><a name="h3_fector"></a><h3><code>(fector . values)</code></h3></div>fector :: [Object ...] -> Fector
+Returns a fector whose initial values are given as arguments.<div><a name="h3_build-fector"></a><h3><code>(build-fector n f)</code></h3></div>build-fector :: Int (Int -> Object) -> Fector
+returns a new fector of a given length, where each element is
+initialised to the value of the given function applied to its index.<div><a name="h3_build-fector"></a><h3><code>(fector-length fector)</code></h3></div>fector-length :: Fector -> Int
+Returns the number of elements that are stored in the fector.<div><a name="h3_fector-ref"></a><h3><code>(fector-ref fector index)</code></h3></div>fector-ref :: Fector Int -> Object
+Returns the value associated with a given index into the fector. If
+the index is outwith the range 0 &lt;= index &lt; length, then an
+&amp;assertion is raised.<div><a name="h3_fector-set"></a><h3><code>(fector-set fector index object)</code></h3></div>fector-set :: Fector Int Object -> Fector
+Returns a new fector equivalent to the previous one except the
+given index is now associated with a given object. If the index is
+outwith the range 0 &lt;= index &lt; length, then an &amp;assertion is
+raised.<div><a name="h3_list->fector"></a><h3><code>(list->fector l)</code></h3></div>list->fector ;; Listof(Object) -> Fector
+Returns a fector initialised with the contents of the given list.<div><a name="h3_fector->list"></a><h3><code>(fector->list fector)</code></h3></div>fector->list :: Fector -> Listof(Object)
+Returns a list containing the objects in a given fector.</p><div id="footer"></div></div></body></html>

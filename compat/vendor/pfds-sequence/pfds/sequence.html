@@ -1,0 +1,91 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-sequence">make-sequence</a></li><li><a href="#h3_sequence-empty?">sequence-empty?</a></li><li><a href="#h3_sequence-size">sequence-size</a></li><li><a href="#h3_sequence-cons">sequence-cons</a></li><li><a href="#h3_sequence-snoc">sequence-snoc</a></li><li><a href="#h3_sequence-uncons">sequence-uncons</a></li><li><a href="#h3_sequence-unsnoc">sequence-unsnoc</a></li><li><a href="#h3_sequence-append">sequence-append</a></li><li><a href="#h3_list->sequence">list->sequence</a></li><li><a href="#h3_sequence->list">sequence->list</a></li><li><a href="#h3_sequence">%sequence</a></li><li><a href="#h3_sequence">sequence-split-at</a></li><li><a href="#h3_sequence-take">sequence-take</a></li><li><a href="#h3_sequence-drop">sequence-drop</a></li><li><a href="#h3_sequence-ref">sequence-ref</a></li><li><a href="#h3_sequence-set">sequence-set</a></li><li><a href="#h3_sequence-fold">sequence-fold</a></li><li><a href="#h3_sequence-fold-right">sequence-fold-right</a></li><li><a href="#h3_sequence-reverse">sequence-reverse</a></li><li><a href="#h3_sequence-map">sequence-map</a></li><li><a href="#h3_sequence-filter">sequence-filter</a></li></ol></div><div id="main"><div><a name="h1_(pfdssequence)"></a><h1>(pfds sequence)</h1></div><p>sequence? : any -> bool
+returns #t if the argument is a sequence, #f otherwise.<div><a name="h3_make-sequence"></a><h3><code>(make-sequence)</code></h3></div>make-sequence : () -> sequence
+returns a new empty sequence<div><a name="h3_sequence-empty?"></a><h3><code>(sequence-empty? seq)</code></h3></div>sequence-empty? : sequence -> bool
+returns #t if the argument sequence contains no elements, #f otherwise.<div><a name="h3_sequence-size"></a><h3><code>(sequence-size seq)</code></h3></div>sequence-size : sequence -> non-negative integer
+returns the number of elements in the sequence<div><a name="h3_sequence-cons"></a><h3><code>(sequence-cons value seq)</code></h3></div>sequence-cons : any sequence -> sequence
+return the new sequence created by adding the element to the front of
+the sequence.<div><a name="h3_sequence-snoc"></a><h3><code>(sequence-snoc seq value)</code></h3></div>sequence-snoc : sequence any -> sequence
+return the new sequence created by adding the element to the end of
+the sequence.<div><a name="h3_sequence-uncons"></a><h3><code>(sequence-uncons seq)</code></h3></div>sequence-uncons : sequence -> any sequence
+returns two values: the first element of the sequence, and a new
+sequence containing all but the first element. If the sequence is
+empty, an error is raised.<div><a name="h3_sequence-unsnoc"></a><h3><code>(sequence-unsnoc seq)</code></h3></div>sequence-unsnoc : sequence -> sequence any
+returns two values: a new sequence containing all but the last
+element of the sequence, and the last element itself. If the
+sequence is empty, an error is raised.<div><a name="h3_sequence-append"></a><h3><code>(sequence-append seq1 seq2)</code></h3></div>sequence-append : sequence sequence -> sequence
+returns a new sequence containing all the elements of the first
+sequence, followed by all the elements of the second sequence.<div><a name="h3_list->sequence"></a><h3><code>(list->sequence list)</code></h3></div>list->sequence : Listof(Any) -> sequence
+returns a new sequence containing all the elements of the argument
+list, in the same order.<div><a name="h3_sequence->list"></a><h3><code>(sequence->list seq)</code></h3></div>sequence->list : sequence -> Listof(Any)
+returns a new list containing all the elements of the sequence, in the
+same order.<div><a name="h3_sequence"></a><h3><code>(%sequence . args)</code></h3></div><div><a name="h3_sequence"></a><h3><code>(sequence-split-at seq i)</code></h3></div>sequence-split-at sequence integer -> sequence + sequence
+returns two new sequences, the first containing the first N elements
+of the sequence, the second containing the remaining elements. If N is
+negative, it returns the empty sequence as the first argument, and the
+original sequence as the second argument. Similarly, if N is greater
+than the length of the list, it returns the original sequence as the
+first argument, and the empty sequence as the second argument.
+
+Consequently, (let-values (((a b) (sequence-split-at s i)))
+(sequence-append a b)) is equivalent to s for all sequences s, and
+integers i.<div><a name="h3_sequence-take"></a><h3><code>(sequence-take seq i)</code></h3></div>sequence-take sequence integer -> sequence
+returns a new sequence containing the first N elements of the
+argument sequence. If N is negative, the empty sequence is
+returned. If N is larger than the length of the sequence, the whole
+sequence is returned.<div><a name="h3_sequence-drop"></a><h3><code>(sequence-drop seq i)</code></h3></div>sequence-drop sequence integer -> sequence
+returns a new sequence containing all but the first N elements of the
+argument sequence. If N is negative, the whole sequence is
+returned. If N is larger than the length of the sequence, the empty
+sequence is returned.<div><a name="h3_sequence-ref"></a><h3><code>(sequence-ref seq i)</code></h3></div>sequence-ref : sequence non-negative-integer -> any
+returns the element at the specified index in the sequence. If the
+index is outside the range 0 &lt;= i &lt; (sequence-size sequence), an
+error is raised.<div><a name="h3_sequence-set"></a><h3><code>(sequence-set seq i val)</code></h3></div>sequence-set : sequence non-negative-integer any -> sequence
+returns the new sequence obtained by replacing the element at the
+specified index in the sequence with the given value. If the index
+is outside the range 0 &lt;= i &lt; (sequence-size sequence), an
+error is raised.<div><a name="h3_sequence-fold"></a><h3><code>(sequence-fold proc base seq)</code></h3></div>sequence-fold (any -> any -> any) any sequence
+returns the value obtained by iterating the combiner procedure over
+the sequence in left-to-right order. The combiner procedure takes two
+arguments, the value of the position in the sequence, and an
+accumulator, and its return value is used as the value of the
+accumulator for the next call. The initial accumulator value is given
+by the base argument.<div><a name="h3_sequence-fold-right"></a><h3><code>(sequence-fold-right proc base seq)</code></h3></div>sequence-fold-right (any -> any -> any) any sequence
+Like sequence-fold, but the sequence is traversed in right-to-left
+order, rather than left-to-right.<div><a name="h3_sequence-reverse"></a><h3><code>(sequence-reverse seq)</code></h3></div>sequence-reverse : sequence -> sequence
+returns a new sequence containing all the arguments of the argument
+list, in reverse order.<div><a name="h3_sequence-map"></a><h3><code>(sequence-map proc seq)</code></h3></div>sequence-map : (any -> any) sequence -> sequence
+returns a new sequence obtained by applying the procedure to each
+element of the argument sequence in turn.<div><a name="h3_sequence-filter"></a><h3><code>(sequence-filter pred? seq)</code></h3></div>sequence-filter : (any -> bool) sequence -> sequence
+returns a new sequence containing all the elements of the argument
+sequence for which the predicate is true.sequence any ... -> sequence
+returns a new sequence containing all of the argument elements, in the
+same order.</p><div id="footer"></div></div></body></html>

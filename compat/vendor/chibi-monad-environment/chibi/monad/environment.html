@@ -1,0 +1,89 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_(define-environment-monadnamekeyword:value...)">define-environment-monad</a></li></ol></div><div id="main"><div><a name="h1_(chibimonadenvironment)"></a><h1>(chibi monad environment)</h1></div><p>A Scheme take on the environment (reader) monad, focusing more on
+being efficient and convenient than pure.
+<div><a name="h3_(define-environment-monadnamekeyword:value...)"></a><h3><code>(define-environment-monad name keyword: value ...)</code></h3></div>
+
+Define a new environment monad.  This syntax hides the
+implementation, allowing the use of records, dynamic parameters,
+or explicit value passing.
+
+The <code>name</code> is used for description and may or may not be bound
+to a value representing the monad.  All other parameters are
+keywords, and with the exception of <code><span>fields</span></code> simply provide
+binding names for the monad operators described below.
+
+The <code><span>fields:</span></code> keyword takes a list of field name
+identifiers known to be used by the monad.  This is an
+optimization hint, as the monad can be used to store and query
+values for any identifier at runtime.
+
+The following keywords obey the definition of a monad:
+
+sequence: sequence (>>) - Essentially a semi-colon, this joins two
+ operations together.
+
+bind: (>>=) - Runs a normal function.  As a syntactic convenience,
+ <code><span>bind</span></code> looks and behaves like a lambda, but the parameters
+ of the <code><span>bind</span></code> are bound as Scheme variables with the
+ values of the corresponding environment variables.  Thus you
+ fetch the values of foo and bar with:
+
+   <code>(bind (foo <span>bar</span>) <span>...</span>)</code>
+
+ hiding the need for an explicit <code><span>ask</span></code>.  If you want to
+ bind the values to some other name, you can use it like a
+ <code><span>let</span></code>:
+
+   <code>(bind ((my-foo <span>foo</span>) (my-bar <span>bar</span>)) <span>...</span>)</code>
+
+return: Returns a pure (non-monadic) value.
+
+run: Start the monad.
+
+The following are specific to the environment monad:
+
+ask: Ask the current value of an environment variable.  This is not
+ meant to be used directly - use the `bind' syntax to query bindings.
+
+local: Shadow the value one or more environment variables,
+ analogous to `let'.
+
+In addition, support for optional mutation is provided:
+
+local!: (local! (var val) ...) will update the environment with
+ the corresponding variable bindings.  In a sequence, successive
+ operations will see the result of the update, unlike with `local'.
+ This is allowed, but not required, to perform mutation.
+
+bind-fork: <code>(bind-fork <span>a</span> <span>b</span>)</code> runs `a' followed by `b',
+  passing `b' the original state before `a' was run.</p><div id="footer"></div></div></body></html>

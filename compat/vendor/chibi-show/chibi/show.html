@@ -1,0 +1,105 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h2_Background">Background</a></li><li><a href="#h2_Interface">Interface</a><ol><li><a href="#h3_(showout[args...])">show</a></li></ol></li><li><a href="#h2_Formatters">Formatters</a><ol><li><a href="#h3_nl">nl</a></li><li><a href="#h3_fl">fl</a></li><li><a href="#h3_tab-to">tab-to</a></li><li><a href="#h3_space-to">space-to</a></li><li><a href="#h3_upcased">upcased</a></li><li><a href="#h3_downcased">downcased</a></li><li><a href="#h3_downcased">padded/both</a></li><li><a href="#h3_padded">padded</a></li><li><a href="#h3_padded/right">padded/right</a></li><li><a href="#h3_padded/left">padded/left</a></li><li><a href="#h3_trimmed/right">trimmed</a></li><li><a href="#h3_trimmed/right">trimmed/right</a></li><li><a href="#h3_trimmed/left">trimmed/left</a></li><li><a href="#h3_trimmed/both">trimmed/both</a></li><li><a href="#h3_trimmed/lazy">trimmed/lazy</a></li><li><a href="#h3_fitted/right">fitted</a></li><li><a href="#h3_fitted/left">fitted/left</a></li><li><a href="#h3_fitted/both">fitted/both</a></li><li><a href="#h3_fitted/both">joined/general</a></li><li><a href="#h3_(joinedelt-fls[sep])">joined</a></li><li><a href="#h3_joined/prefix">joined/prefix</a></li><li><a href="#h3_joined/suffix">joined/suffix</a></li><li><a href="#h3_joined/last">joined/last</a></li><li><a href="#h3_joined/dot">joined/dot</a></li></ol></li></ol></div><div id="main"><div><a name="h1_(chibishow)"></a><h1>(chibi show)</h1></div><p>A library of procedures for formatting Scheme objects to text in
+various ways, and for easily concatenating, composing and
+extending these formatters.
+<div><a name="h2_Background"></a><h2>Background</h2></div>
+
+There are several approaches to text formatting.  Building strings
+to <code><span>display</span></code> is not acceptable, since it doesn't scale to
+very large output.  The simplest realistic idea, and what people
+resort to in typical portable Scheme, is to interleave
+<code><span>display</span></code> and <code><span>write</span></code> and manual loops, but this is
+both extremely verbose and doesn't compose well.  A simple concept
+such as padding space can't be achieved directly without somehow
+capturing intermediate output.
+
+The traditional approach is to use templates - typically strings,
+though in theory any object could be used and indeed Emacs'
+mode-line format templates allow arbitrary sexps.  Templates can
+use either escape sequences (as in C's <code>printf</code> and
+<a href="http://en.wikipedia.org/wiki/Format_(Common_Lisp)">CL's</a>
+<code><span>format</span></code>) or pattern matching (as in Visual Basic's
+<code>Format</code>,
+<a href="http://search.cpan.org/~dconway/Perl6-Form-0.04/Form.pm">Perl6's</a>
+<code>form</code>, and SQL date formats).  The primary disadvantage of
+templates is the relative difficulty (usually impossibility) of
+extending them, their opaqueness, and the unreadability that
+arises with complex formats.  Templates are not without their
+advantages, but they are already addressed by other libraries such
+as
+<a href="http://srfi.schemers.org/srfi-28/srfi-28.html">SRFI-28</a>
+and
+<a href="http://srfi.schemers.org/srfi-48/srfi-48.html">SRFI-48</a>.
+
+This library takes a combinator approach.  Formats are nested chains
+of closures, which are called to produce their output as needed.
+The primary goal of this library is to have, first and foremost, a
+maximally expressive and extensible formatting library.  The next
+most important goal is scalability - to be able to handle
+arbitrarily large output and not build intermediate results except
+where necessary.  The third goal is brevity and ease of use.
+<div><a name="h2_Interface"></a><h2>Interface</h2></div>
+<div><a name="h3_(showout[args...])"></a><h3><code>(show out [args ...])</code></h3></div>
+
+The primary interface.  Analogous to CL's <code><span>format</span></code>, the first
+argument is either an output port or a boolean, with <code>#t</code>
+indicating <code><span>current-output-port</span></code> and <code>#f</code> indicating a
+string port.  The remaining arguments are formatters, combined as with
+<code><span>each</span></code>, run with output to the given destination.  If <code>out</code>
+is <code>#f</code> then the accumulated output is returned, otherwise
+the result is unspecified.
+<div><a name="h2_Formatters"></a><h2>Formatters</h2></div><div><a name="h3_nl"></a><h3><code>nl</code></h3></div>Output a single newline.<div><a name="h3_fl"></a><h3><code>(fl st)</code></h3></div>"Fresh line" - output a newline iff we're not at the start of a
+fresh line.<div><a name="h3_tab-to"></a><h3><code>(tab-to . o)</code></h3></div>Move to a given tab-stop (using spaces, not tabs).<div><a name="h3_space-to"></a><h3><code>(space-to where)</code></h3></div>Move to an explicit column.<div><a name="h3_upcased"></a><h3><code>(upcased . ls)</code></h3></div>Show each of <code>ls</code>, uppercasing all generated text.<div><a name="h3_downcased"></a><h3><code>(downcased . ls)</code></h3></div>Show each of <code>ls</code>, lowercasing all generated text.<div><a name="h3_downcased"></a><h3><code>(padded/both width . ls)</code></h3></div>Pad the result of <code>(each-in-list <span>ls</span>)</code> to at least
+<code>width</code> characters, equally applied to the left and right,
+with any extra odd padding applied to the right.  Uses the value
+of <code><span>pad-char</span></code> for padding, defaulting to <code>#space</code>.<div><a name="h3_padded"></a><h3><code>(padded width . ls)</code></h3></div>As <code><span>padded/both</span></code> but only applies padding on the right.<div><a name="h3_padded/right"></a><h3><code>padded/right</code></h3></div>An alias for <code><span>padded</span></code>.<div><a name="h3_padded/left"></a><h3><code>(padded/left width . ls)</code></h3></div>As <code><span>padded/both</span></code> but only applies padding on the left.<div><a name="h3_trimmed/right"></a><h3><code>(trimmed width . ls)</code></h3></div>Trims the result of <code>(each-in-list <span>ls</span>)</code> to at most
+<code>width</code> characters, removed from the right.  If any characters
+are removed, then the value of <code><span>ellipsis</span></code> (default empty)
+is used in its place (trimming additional characters as needed to
+be sure the final output doesn't exceed <code>width</code>).<div><a name="h3_trimmed/right"></a><h3><code>trimmed/right</code></h3></div>An alias for <code><span>trimmed</span></code>.<div><a name="h3_trimmed/left"></a><h3><code>(trimmed/left width . ls)</code></h3></div>As <code><span>trimmed</span></code> but removes from the left.<div><a name="h3_trimmed/both"></a><h3><code>(trimmed/both width . ls)</code></h3></div>As <code><span>trimmed</span></code> but removes equally from both the left and the
+right, removing extra odd characters from the right, and inserting
+<code><span>ellipsis</span></code> on both sides.<div><a name="h3_trimmed/lazy"></a><h3><code>(trimmed/lazy width . ls)</code></h3></div>A <code><span>trimmed</span></code>, but truncates and terminates immediately if
+more than <code>width</code> characters are generated by <code>ls</code>.  Thus
+<code>ls</code> may lazily generate an infinite amount of output safely
+(e.g. <code><span>write-simple</span></code> on an infinite list).  The nature of
+this procedure means only truncating on the right is meaningful.<div><a name="h3_fitted/right"></a><h3><code>(fitted width . ls)</code></h3></div>Fits the result of <code>(each-in-list <span>ls</span>)</code> to exactly
+<code>width</code> characters, padding or trimming on the right as
+needed.An alias for <code><span>fitted</span></code>.<div><a name="h3_fitted/left"></a><h3><code>(fitted/left width . ls)</code></h3></div>As <code><span>fitted</span></code> but pads/trims from the left.<div><a name="h3_fitted/both"></a><h3><code>(fitted/both width . ls)</code></h3></div>As <code><span>fitted</span></code> but pads/trims equally from both the left and
+the right.<div><a name="h3_fitted/both"></a><h3><code>(joined/general elt-f last-f dot-f init-ls sep)</code></h3></div><div><a name="h3_(joinedelt-fls[sep])"></a><h3><code>(joined elt-f ls [sep])</code></h3></div>
+
+Joins the result of applying <code>elt-f</code> to each element of the
+list <code>ls</code> together with <code>sep</code>, which defaults to the empty
+string.<div><a name="h3_joined/prefix"></a><h3><code>(joined/prefix elt-f ls . o)</code></h3></div>As <code><span>joined</span></code> but treats the separator as a prefix, inserting
+before every element instead of between.<div><a name="h3_joined/suffix"></a><h3><code>(joined/suffix elt-f ls . o)</code></h3></div>As <code><span>joined</span></code> but treats the separator as a suffix, inserting
+after every element instead of between.<div><a name="h3_joined/last"></a><h3><code>(joined/last elt-f last-f ls . o)</code></h3></div>As <code><span>joined</span></code> but applies <code>last-f</code>, instead of
+<code>elt-f</code>, to the last element of <code>ls</code>, useful for
+e.g. commas separating a list with "and" before the final element.<div><a name="h3_joined/dot"></a><h3><code>(joined/dot elt-f dot-f ls . o)</code></h3></div>As <code><span>joined</span></code> but if <code>ls</code> is a dotted list applies
+<code>dot-f</code> to the dotted tail as a final element.</p><div id="footer"></div></div></body></html>

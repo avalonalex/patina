@@ -1,0 +1,206 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h2_Library">Library</a><ol><li><a href="#h3_black-escape">black-escape</a></li><li><a href="#h3_red-escape">red-escape</a></li><li><a href="#h3_green-escape">green-escape</a></li><li><a href="#h3_yellow-escape">yellow-escape</a></li><li><a href="#h3_blue-escape">blue-escape</a></li><li><a href="#h3_magenta-escape">magenta-escape</a></li><li><a href="#h3_cyan-escape">cyan-escape</a></li><li><a href="#h3_white-escape">white-escape</a></li><li><a href="#h3_rgb-escape">rgb-escape</a></li><li><a href="#h3_gray-escape">gray-escape</a></li><li><a href="#h3_rgb24-escape">rgb24-escape</a></li><li><a href="#h3_reset-color-escape">reset-color-escape</a></li><li><a href="#h3_black">black</a></li><li><a href="#h3_red">red</a></li><li><a href="#h3_green">green</a></li><li><a href="#h3_yellow">yellow</a></li><li><a href="#h3_blue">blue</a></li><li><a href="#h3_magenta">magenta</a></li><li><a href="#h3_cyan">cyan</a></li><li><a href="#h3_white">white</a></li><li><a href="#h3_rgb">rgb</a></li><li><a href="#h3_gray">gray</a></li><li><a href="#h3_rgb24">rgb24</a></li><li><a href="#h3_black-background-escape">black-background-escape</a></li><li><a href="#h3_red-background-escape">red-background-escape</a></li><li><a href="#h3_green-background-escape">green-background-escape</a></li><li><a href="#h3_yellow-background-escape">yellow-background-escape</a></li><li><a href="#h3_blue-background-escape">blue-background-escape</a></li><li><a href="#h3_magenta-background-escape">magenta-background-escape</a></li><li><a href="#h3_cyan-background-escape">cyan-background-escape</a></li><li><a href="#h3_white-background-escape">white-background-escape</a></li><li><a href="#h3_rgb-background-escape">rgb-background-escape</a></li><li><a href="#h3_gray-background-escape">gray-background-escape</a></li><li><a href="#h3_rgb24-background-escape">rgb24-background-escape</a></li><li><a href="#h3_(reset-background-color-escape)">reset-background-color-escape</a></li><li><a href="#h3_black-background">black-background</a></li><li><a href="#h3_red-background">red-background</a></li><li><a href="#h3_green-background">green-background</a></li><li><a href="#h3_yellow-background">yellow-background</a></li><li><a href="#h3_blue-background">blue-background</a></li><li><a href="#h3_magenta-background">magenta-background</a></li><li><a href="#h3_cyan-background">cyan-background</a></li><li><a href="#h3_white-background">white-background</a></li><li><a href="#h3_rgb-background">rgb-background</a></li><li><a href="#h3_gray-background">gray-background</a></li><li><a href="#h3_rgb24-background">rgb24-background</a></li><li><a href="#h3_bold-escape">bold-escape</a></li><li><a href="#h3_reset-bold-escape">reset-bold-escape</a></li><li><a href="#h3_bold">bold</a></li><li><a href="#h3_underline-escape">underline-escape</a></li><li><a href="#h3_reset-underline-escape">reset-underline-escape</a></li><li><a href="#h3_underline">underline</a></li><li><a href="#h3_italic-escape">italic-escape</a></li><li><a href="#h3_reset-italic-escape">reset-italic-escape</a></li><li><a href="#h3_italic">italic</a></li><li><a href="#h3_strikethrough-escape">strikethrough-escape</a></li><li><a href="#h3_reset-strikethrough-escape">reset-strikethrough-escape</a></li><li><a href="#h3_strikethrough">strikethrough</a></li><li><a href="#h3_negative-escape">negative-escape</a></li><li><a href="#h3_reset-negative-escape">reset-negative-escape</a></li><li><a href="#h3_negative">negative</a></li><li><a href="#h3_ansi-escapes-enabled?">ansi-escapes-enabled?</a></li></ol></li><li><a href="#h2_Notes">Notes</a></li></ol></div><div id="main"><div><a name="h1_(chibitermansi)"></a><h1>(chibi term ansi)</h1></div><p>A library to use ANSI escape codes to format text and background
+color, font weigh, and underlining.<div><a name="h2_Library"></a><h2>Library</h2></div><div><a name="h3_black-escape"></a><h3><code>(black-escape)</code></h3></div><div><a name="h3_red-escape"></a><h3><code>(red-escape)</code></h3></div><div><a name="h3_green-escape"></a><h3><code>(green-escape)</code></h3></div><div><a name="h3_yellow-escape"></a><h3><code>(yellow-escape)</code></h3></div><div><a name="h3_blue-escape"></a><h3><code>(blue-escape)</code></h3></div><div><a name="h3_magenta-escape"></a><h3><code>(magenta-escape)</code></h3></div><div><a name="h3_cyan-escape"></a><h3><code>(cyan-escape)</code></h3></div><div><a name="h3_white-escape"></a><h3><code>(white-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select the
+specified text color.<div><a name="h3_rgb-escape"></a><h3><code>(rgb-escape red-level green-level blue-level)</code></h3></div>Return a string consisting of an ANSI escape code to select the
+text color specified by the <code>red-level</code>, <code>green-level</code>,
+and <code>blue-level</code> arguments, each of which must be an exact
+integer in the range [0, 5].
+
+The caller is resonsible for verifying that the terminal supports
+256 colors.<div><a name="h3_gray-escape"></a><h3><code>(gray-escape gray-level)</code></h3></div>Return a string consisting of an ANSI escape code to select the
+text color specified by the <code>gray-level</code> argument, which must
+be an exact integer in the range [0, 23].
+
+The caller is resonsible for verifying that the terminal supports
+256 colors.<div><a name="h3_rgb24-escape"></a><h3><code>(rgb24-escape red-level green-level blue-level)</code></h3></div>The true-color equivalent of <code><span>rgb-escape</span></code>. Return a string
+consisting of an ANSI escape code to select the text color
+specified by the <code>red-level</code>, <code>green-level</code>, and
+<code>blue-level</code> arguments, each of which must be an exact integer
+in the range [0, 255].<div><a name="h3_reset-color-escape"></a><h3><code>(reset-color-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select the
+default text color.<div><a name="h3_black"></a><h3><code>(black str)</code></h3></div><div><a name="h3_red"></a><h3><code>(red str)</code></h3></div><div><a name="h3_green"></a><h3><code>(green str)</code></h3></div><div><a name="h3_yellow"></a><h3><code>(yellow str)</code></h3></div><div><a name="h3_blue"></a><h3><code>(blue str)</code></h3></div><div><a name="h3_magenta"></a><h3><code>(magenta str)</code></h3></div><div><a name="h3_cyan"></a><h3><code>(cyan str)</code></h3></div><div><a name="h3_white"></a><h3><code>(white str)</code></h3></div>If ANSI escapes are enabled, return a string consisting of the
+string <code>str</code> with a prefix that selects specified text color
+and a suffix that selects the default text color.
+
+If ANSI escapes are not enabled, return <code>str</code>.<div><a name="h3_rgb"></a><h3><code>(rgb red-level green-level blue-level)</code></h3></div>Returns a procedure which takes a single argument, a string, and
+which when called behaves as follows.
+
+If ANSI escapes are enabled, the procedure returns a string
+consisting of its argument with a prefix that selects specified
+text color (obtained by calling the <code><span>rgb-escape</span></code> procedure
+with the values of the <code>red-level</code>, <code>green-level</code>, and
+<code>blue-level</code> arguments) and a suffix that selects the default
+text color.
+
+If ANSI escapes are not enabled, the procedure returns its argument.
+
+The caller is resonsible for verifying that the terminal supports
+256 colors.<div><a name="h3_gray"></a><h3><code>(gray gray-level)</code></h3></div>Returns a procedure which takes a single argument, a string, and
+which when called behaves as follows.
+
+If ANSI escapes are enabled, the procedure returns a string
+consisting of its argument with a prefix that selects specified
+text color (obtained by calling the <code><span>gray-escape</span></code> procedure
+with the values of the <code>gray-level</code> argument) and a suffix
+that selects the default text color.
+
+If ANSI escapes are not enabled, the procedure returns its argument.
+
+The caller is resonsible for verifying that the terminal supports
+256 colors.<div><a name="h3_rgb24"></a><h3><code>(rgb24 red-level green-level blue-level)</code></h3></div>The true-color equivalent of <code><span>rbg</span></code>, extending the ranges
+to [0, 255].<div><a name="h3_black-background-escape"></a><h3><code>(black-background-escape)</code></h3></div><div><a name="h3_red-background-escape"></a><h3><code>(red-background-escape)</code></h3></div><div><a name="h3_green-background-escape"></a><h3><code>(green-background-escape)</code></h3></div><div><a name="h3_yellow-background-escape"></a><h3><code>(yellow-background-escape)</code></h3></div><div><a name="h3_blue-background-escape"></a><h3><code>(blue-background-escape)</code></h3></div><div><a name="h3_magenta-background-escape"></a><h3><code>(magenta-background-escape)</code></h3></div><div><a name="h3_cyan-background-escape"></a><h3><code>(cyan-background-escape)</code></h3></div><div><a name="h3_white-background-escape"></a><h3><code>(white-background-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select the
+specified background color.<div><a name="h3_rgb-background-escape"></a><h3><code>(rgb-background-escape red-level green-level blue-level)</code></h3></div>Return a string consisting of an ANSI escape code to select the
+background color specified by the <code>red-level</code>, <code>green-level</code>,
+and <code>blue-level</code> arguments, each of which must be an exact
+integer in the range [0, 5].
+
+The caller is resonsible for verifying that the terminal supports
+256 colors.<div><a name="h3_gray-background-escape"></a><h3><code>(gray-background-escape gray-level)</code></h3></div>Return a string consisting of an ANSI escape code to select the
+background color specified by the <code>gray-level</code> argument, which
+must be an exact integer in the range [0, 23].
+
+The caller is resonsible for verifying that the terminal supports
+256 colors.<div><a name="h3_rgb24-background-escape"></a><h3><code>(rgb24-background-escape red-level green-level blue-level)</code></h3></div>The true-color equivalent of <code><span>rgb-background-escape</span></code>.
+Return a string consisting of an ANSI escape code to select the
+text color specified by the <code>red-level</code>, <code>green-level</code>,
+and <code>blue-level</code> arguments, each of which must be an exact
+integer in the range [0, 255].<div><a name="h3_(reset-background-color-escape)"></a><h3><code>(reset-background-color-escape)</code></h3></div>
+
+Return a string consisting of an ANSI escape code to select the
+default background color.<div><a name="h3_black-background"></a><h3><code>(black-background str)</code></h3></div><div><a name="h3_red-background"></a><h3><code>(red-background str)</code></h3></div><div><a name="h3_green-background"></a><h3><code>(green-background str)</code></h3></div><div><a name="h3_yellow-background"></a><h3><code>(yellow-background str)</code></h3></div><div><a name="h3_blue-background"></a><h3><code>(blue-background str)</code></h3></div><div><a name="h3_magenta-background"></a><h3><code>(magenta-background str)</code></h3></div><div><a name="h3_cyan-background"></a><h3><code>(cyan-background str)</code></h3></div><div><a name="h3_white-background"></a><h3><code>(white-background str)</code></h3></div>If ANSI escapes are enabled, return a string consisting of the
+string <code>str</code> with a prefix that selects specified background
+color and a suffix that selects the default background color.
+
+If ANSI escapes are not enabled, return <code>str</code>.<div><a name="h3_rgb-background"></a><h3><code>(rgb-background red-level green-level blue-level)</code></h3></div>Returns a procedure which takes a single argument, a string, and
+which when called behaves as follows.
+
+If ANSI escapes are enabled, the procedure returns a string
+consisting of its argument with a prefix that selects specified
+background color (obtained by calling the <code><span>rgb-background-escape</span></code>
+procedure with the values of the <code>red-level</code>, <code>green-level</code>,
+and <code>blue-level</code> arguments) and a suffix that selects the
+default background color.
+
+If ANSI escapes are not enabled, the procedure returns its argument.
+
+The caller is resonsible for verifying that the terminal supports
+256 colors.<div><a name="h3_gray-background"></a><h3><code>(gray-background gray-level)</code></h3></div>Returns a procedure which takes a single argument, a string, and
+which when called behaves as follows.
+
+If ANSI escapes are enabled, the procedure returns a string
+consisting of its argument with a prefix that selects specified
+background color (obtained by calling the <code><span>gray-background-escape</span></code>
+procedure with the values of the <code>gray-level</code> argument) and a
+suffix that selects the default background color.
+
+If ANSI escapes are not enabled, the procedure returns its argument.
+
+The caller is resonsible for verifying that the terminal supports
+256 colors.<div><a name="h3_rgb24-background"></a><h3><code>(rgb24-background red-level green-level blue-level)</code></h3></div>The true-color equivalent of <code><span>rbg-background</span></code>, extending
+the ranges to [0, 255].<div><a name="h3_bold-escape"></a><h3><code>(bold-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select bold
+style.<div><a name="h3_reset-bold-escape"></a><h3><code>(reset-bold-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select non-bold
+style.<div><a name="h3_bold"></a><h3><code>(bold str)</code></h3></div>If ANSI escapes are enabled, return a string consisting of the
+string <code>str</code> with a prefix that selects bold style and a suffix
+that selects non-bold style.
+
+If ANSI escapes are not enabled, return <code>str</code>.<div><a name="h3_underline-escape"></a><h3><code>(underline-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select
+underlined style.<div><a name="h3_reset-underline-escape"></a><h3><code>(reset-underline-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select
+non-underlined style.<div><a name="h3_underline"></a><h3><code>(underline str)</code></h3></div>If ANSI escapes are enabled, return a string consisting of the
+string <code>str</code> with a prefix that selects underlined style and
+a suffix that selects non-underlined style.
+
+If ANSI escapes are not enabled, return <code>str</code>.<div><a name="h3_italic-escape"></a><h3><code>(italic-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select
+italic style.<div><a name="h3_reset-italic-escape"></a><h3><code>(reset-italic-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select
+non-italic style.<div><a name="h3_italic"></a><h3><code>(italic str)</code></h3></div>Returns <code>str</code> optionally wrapped in italic escapes.<div><a name="h3_strikethrough-escape"></a><h3><code>(strikethrough-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select
+strikethrough style.<div><a name="h3_reset-strikethrough-escape"></a><h3><code>(reset-strikethrough-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select
+non-strikethrough style.<div><a name="h3_strikethrough"></a><h3><code>(strikethrough str)</code></h3></div>Returns <code>str</code> optionally wrapped in strikethrough escapes.<div><a name="h3_negative-escape"></a><h3><code>(negative-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select negative
+style (text in the background color and background in the text
+color).<div><a name="h3_reset-negative-escape"></a><h3><code>(reset-negative-escape)</code></h3></div>Return a string consisting of an ANSI escape code to select positive
+style (text in the text color and background in the background
+color).<div><a name="h3_negative"></a><h3><code>(negative str)</code></h3></div>If ANSI escapes are enabled, return a string consisting of the
+string <code>str</code> with a prefix that selects negative style (text
+in the background color and background in the text color) and a
+suffix that selects positive style (text in the text color and
+background in the background color).
+
+If ANSI escapes are not enabled, return <code>str</code>.<div><a name="h3_ansi-escapes-enabled?"></a><h3><code>ansi-escapes-enabled?</code></h3></div>A parameter object that determines whether ANSI escapes are enabled
+in some of the preceding procedures. They are disabled if
+<code>(ansi-escapes-enabled?)</code> returns <code>#f</code>, and otherwise
+they are enabled.
+
+The initial value returned by <code>(ansi-escapes-enabled?)</code> is
+determined by the environment.
+
+If the environment variable <code><span>ANSI_ESCAPES_ENABLED</span></code> is set,
+its value determines the initial value returned by
+<code>(ansi-escapes-enabled?)</code>. If the value of
+<code><span>ANSI_ESCAPES_ENABLED</span></code> is <code><span class="string">"0"</span></code>, the initial value
+is <code>#f</code>, otherwise the initial value is <code>#t</code>.
+
+If the environment variable <code><span>ANSI_ESCAPES_ENABLED</span></code> is not
+set, but the environment variable <code><span>TERM</span></code> is set, the value
+of the latter determines the initial value returned by
+<code>(ansi-escapes-enabled?)</code>. If the value of <code><span>TERM</span></code>
+is <code><span class="string">"xterm"</span></code>, <code><span class="string">"xterm-color"</span></code>, <code><span class="string">"xterm-256color"</span></code>,
+<code><span class="string">"rxvt"</span></code>, <code><span class="string">"rxvt-unicode-256color"</span></code>, <code><span class="string">"kterm"</span></code>,
+<code><span class="string">"linux"</span></code>, <code><span class="string">"screen"</span></code>, <code><span class="string">"screen-256color"</span></code>,
+or <code><span class="string">"vt100"</span></code>, the initial value is <code>#t</code>, otherwise
+the initial value is <code>#f</code>.
+
+If neither of the environment variables <code><span>ANSI_ESCAPES_ENABLED</span></code>
+and <code><span>TERM</span></code> are set, the initial value returned by
+<code>(ansi-escapes-enabled?)</code> is <code>#f</code>.<div><a name="h2_Notes"></a><h2>Notes</h2></div>
+
+It is important to remember that the formatting procedures apply
+a prefix to set a particular graphics parameter and a suffix to
+reset the parameter to its default value. This can lead to surprises.
+For example, on an ANSI terminal, one might mistakenly expect the
+following to display GREEN in green text and then RED in red text:
+
+<pre><code>(display (red (string-append (green <span class="string">"GREEN"</span>) <span class="string">"RED"</span>)))</code></pre>
+
+However, it will actually display GREEN in green text and then RED
+in the default text color. This is a limitation of ANSI control
+codes; graphics attributes are not saved to and restored from a
+stack, but instead are simply set. One way to display GREEN in
+green text and then RED in red text is:
+
+<pre><code>(display (string-append (green <span class="string">"GREEN"</span>) (red <span class="string">"RED"</span>)))</code></pre>
+
+On the other hand, text color, background color, font weight (bold
+or default), underline (on or off), image (positive or negative)
+are orthogonal. So, for example, on an ANSI terminal the following
+should display GREEN in green text and then RED in red text, with
+both in bold and GREEN underlined.
+
+<pre><code>(display (bold (string-append (underline (green <span class="string">"GREEN"</span>)) (red <span class="string">"RED"</span>))))</code></pre>
+</p><div id="footer"></div></div></body></html>

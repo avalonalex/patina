@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8"><style type="text/css">
+body {color: #000; background-color: #FFFFF8;}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 250px; height: 100%}
+div#menu a:link {text-decoration: none}
+div#main  {font-size: large; position: absolute; top: 0; left: 260px; max-width: 590px; height: 100%}
+div#notes {position: relative; top: 2em; left: 620px; width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+div#menu ol {list-style-position:inside; padding-left: 5px; margin-left: 5px}
+div#menu ol ol {list-style: lower-alpha; padding-left: 15px; margin-left: 15px}
+div#menu ol ol ol {list-style: decimal; padding-left: 5px; margin-left: 5px}
+h2 { color: #888888; border-top: 3px solid #4588ba; }
+h3 { color: #666666; border-top: 2px solid #4588ba; }
+h4 { color: #222288; border-top: 1px solid #4588ba; }
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h4_modular-inverse">modular-inverse</a></li><li><a href="#h4_modular-expt">modular-expt</a></li><li><a href="#h4_coprime?">coprime?</a></li><li><a href="#h4_provable-prime?">provable-prime?</a></li><li><a href="#h4_miller-rabin-composite?">miller-rabin-composite?</a></li><li><a href="#h4_probable-prime?">probable-prime?</a></li><li><a href="#h4_prime?">prime?</a></li><li><a href="#h4_nth-prime">nth-prime</a></li><li><a href="#h4_prime-below">prime-below</a></li><li><a href="#h4_prime-above">prime-above</a></li><li><a href="#h4_factor">factor</a></li><li><a href="#h4_totient">totient</a></li><li><a href="#h4_aliquot">aliquot</a></li><li><a href="#h4_perfect?">perfect?</a></li><li><a href="#h4_random-prime">random-prime</a></li><li><a href="#h4_random-prime-distinct-from">random-prime-distinct-from</a></li><li><a href="#h4_random-coprime">random-coprime</a></li></ol></div><div id="main"><div><a name="h1_(chibimathprime)"></a><h1>(chibi math prime)</h1></div><p>Prime and number theoretic utilities.
+Returns a pair whose car is the power of 2 in the factorization of
+n, and whose cdr is the product of all remaining primes.<div><a name="h4_modular-inverse"></a><h4><code>(modular-inverse a b)</code></h4></div>Returns the multiplicative inverse of <code>a</code> modulo <code>b</code>.<div><a name="h4_modular-expt"></a><h4><code>(modular-expt a e m)</code></h4></div>Returns (remainder (expt a e) m).<div><a name="h4_coprime?"></a><h4><code>(coprime? n m)</code></h4></div>Returns true iff n and m are coprime.<div><a name="h4_provable-prime?"></a><h4><code>(provable-prime? n)</code></h4></div>Returns true iff <code>n</code> is definitely prime.  May take an
+impossibly long time for large values.<div><a name="h4_miller-rabin-composite?"></a><h4><code>(miller-rabin-composite? n)</code></h4></div>Returns true if we can show <code>n</code> to be composite by finding an
+exception to the Miller Rabin lemma.<div><a name="h4_probable-prime?"></a><h4><code>(probable-prime? n)</code></h4></div>Returns true if <code>n</code> has a very high probability (enough that
+you can assume a false positive will never occur in your lifetime)
+of being prime.<div><a name="h4_prime?"></a><h4><code>(prime? n)</code></h4></div>Returns true iff <code>n</code> is prime.  Uses <code><span>provable-prime?</span></code>
+for small <code>n</code>, falling back on <code><span>probable-prime?</span></code> for
+large values.<div><a name="h4_nth-prime"></a><h4><code>(nth-prime i)</code></h4></div>Returns the nth prime, with 2 being the 0th prime.<div><a name="h4_prime-below"></a><h4><code>(prime-below n)</code></h4></div>Returns the first prime less than or equal to <code>n</code>, or #f if
+there are no such primes.<div><a name="h4_prime-above"></a><h4><code>(prime-above n [limit])</code></h4></div>Returns the first prime greater than or equal to <code>n</code>.  If the
+optional <code>limit</code> is given and not false, returns <code>#f</code>
+if no such primes exist below <code>limit</code>.<div><a name="h4_factor"></a><h4><code>(factor n)</code></h4></div>Returns the factorization of <code>n</code> as a monotonically
+increasing list of primes.<div><a name="h4_totient"></a><h4><code>(totient n)</code></h4></div>Returns the Euler totient function, the number of positive
+integers less than <code>n</code> that are relatively prime to <code>n</code>.<div><a name="h4_aliquot"></a><h4><code>(aliquot n)</code></h4></div>The aliquot sum s(n), equal to the sum of proper divisors of an
+integer n.<div><a name="h4_perfect?"></a><h4><code>(perfect? n)</code></h4></div>Returns true iff <code>n</code> is a perfect number, i.e. the sum of its
+divisors other than itself equals itself.<div><a name="h4_random-prime"></a><h4><code>(random-prime lo hi)</code></h4></div>Returns a random prime between <code>lo</code>, inclusive, and <code>hi</code>,
+exclusive.<div><a name="h4_random-prime-distinct-from"></a><h4><code>(random-prime-distinct-from lo hi p)</code></h4></div>Variant of <code><span>random-prime</span></code> which ensures the result is
+distinct from <code>p</code>.<div><a name="h4_random-coprime"></a><h4><code>(random-coprime n)</code></h4></div>Returns a random integer less than <code>n</code> relatively prime to
+<code>n</code>.</p><div id="footer"></div></div></body></html>

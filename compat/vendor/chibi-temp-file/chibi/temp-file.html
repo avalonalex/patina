@@ -1,0 +1,49 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_call-with-temp-file">call-with-temp-file</a></li><li><a href="#h3_call-with-temp-dir">call-with-temp-dir</a></li></ol></div><div id="main"><div><a name="h1_(chibitemp-file)"></a><h1>(chibi temp-file)</h1></div><div><a name="h3_call-with-temp-file"></a><h3><code>(call-with-temp-file template proc [mode])</code></h3></div>Runs a procedure on a temporary file.  <code>proc</code> should be a
+procedure of three values: <code>(path <span>out</span> <span>preserve</span>)</code>, where
+<code><span>path</span></code> is the path to the temporary file, <code><span>out</span></code> is
+an output port opened on the file, and <code><span>preserve</span></code> is a
+thunk to disable deleting the file.  The file name will be in a
+temp directory, based on <code>template</code> and having the same
+extension if present, with permissions from the optional
+<code>mode</code> which defaults to <code>#o<span>700</span></code>.  Returns the result
+of <code>proc</code>, after first deleting the file if the
+<code><span>preserve</span></code> thunk was not called.<div><a name="h3_call-with-temp-dir"></a><h3><code>(call-with-temp-dir template proc [mode])</code></h3></div>Runs a procedure on a temporary directory.  <code>proc</code> should be a
+procedure of two values: <code>(path <span>preserve</span>)</code>, where
+<code><span>path</span></code> is the path to the temporary directory and
+<code><span>preserve</span></code> is a thunk to disable deleting the dir.  The
+directory name will be in a temp directory, based on
+<code>template</code>, with permissions from the optional <code>mode</code>
+which defaults to <code>#o<span>700</span></code>.  Returns the result of
+<code>proc</code>, after first deleting the file hierarchy rooted at
+<code><span>path</span></code> if the <code><span>preserve</span></code> thunk was not called.<div id="footer"></div></div></body></html>

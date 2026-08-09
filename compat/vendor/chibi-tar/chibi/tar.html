@@ -1,0 +1,32 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-tar">make-tar</a></li><li><a href="#h3_write-tar">write-tar</a></li><li><a href="#h3_tar-path">tar-path</a></li><li><a href="#h3_tar-path-set!">tar-path-set!</a></li><li><a href="#h3_tar-fold">tar-fold</a></li><li><a href="#h3_tar-safe?">tar-safe?</a></li><li><a href="#h3_tar-files">tar-files</a></li><li><a href="#h3_tar-extract">tar-extract</a></li><li><a href="#h3_tar-extract-file">tar-extract-file</a></li><li><a href="#h3_tar-create">tar-create</a></li></ol></div><div id="main"><div><a name="h1_(chibitar)"></a><h1>(chibi tar)</h1></div><div><a name="h3_make-tar"></a><h3><code>(make-tar file mode uid gid size mod-time type [link])</code></h3></div><div><a name="h3_write-tar"></a><h3><code>(write-tar tar out)</code></h3></div><div><a name="h3_tar-path"></a><h3><code>(tar-path tar)</code></h3></div><div><a name="h3_tar-path-set!"></a><h3><code>(tar-path-set! tar path)</code></h3></div><div><a name="h3_tar-fold"></a><h3><code>(tar-fold src kons knil)</code></h3></div><div><a name="h3_tar-safe?"></a><h3><code>(tar-safe? tarball)</code></h3></div><div><a name="h3_tar-files"></a><h3><code>(tar-files tarball)</code></h3></div><div><a name="h3_tar-extract"></a><h3><code>(tar-extract tarball [rename])</code></h3></div><div><a name="h3_tar-extract-file"></a><h3><code>(tar-extract-file tarball file)</code></h3></div><div><a name="h3_tar-create"></a><h3><code>(tar-create tarball files [rename no-recurse?])</code></h3></div><div id="footer"></div></div></body></html>

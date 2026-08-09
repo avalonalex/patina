@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8"><style type="text/css">
+body {color: #000; background-color: #FFFFF8;}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 250px; height: 100%}
+div#menu a:link {text-decoration: none}
+div#main  {font-size: large; position: absolute; top: 0; left: 260px; max-width: 590px; height: 100%}
+div#notes {position: relative; top: 2em; left: 620px; width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+div#menu ol {list-style-position:inside; padding-left: 5px; margin-left: 5px}
+div#menu ol ol {list-style: lower-alpha; padding-left: 15px; margin-left: 15px}
+div#menu ol ol ol {list-style: decimal; padding-left: 5px; margin-left: 5px}
+h2 { color: #888888; border-top: 3px solid #4588ba; }
+h3 { color: #666666; border-top: 2px solid #4588ba; }
+h4 { color: #222288; border-top: 1px solid #4588ba; }
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h2_Ranking">Ranking</a><ol><li><a href="#h4_tideman-rank">tideman-rank</a></li><li><a href="#h4_plurality-rank">plurality-rank</a></li><li><a href="#h4_instant-runoff-rank">instant-runoff-rank</a></li></ol></li><li><a href="#h2_Tallying">Tallying</a><ol><li><a href="#h4_make-tally">make-tally</a></li><li><a href="#h4_make-paired-tally">make-paired-tally</a></li><li><a href="#h4_make-distinct-tally">make-distinct-tally</a></li><li><a href="#h4_tally-distinct-ref">tally-distinct-ref</a></li><li><a href="#h4_tally-pairwise-ref">tally-pairwise-ref</a></li><li><a href="#h4_tally-inc!">tally-inc!</a></li><li><a href="#h4_votes->paired-tally">votes->paired-tally</a></li><li><a href="#h4_tally->distinct-alist">tally->distinct-alist</a></li><li><a href="#h4_distinct-alist->tally">distinct-alist->tally</a></li><li><a href="#h4_tally->pairs">tally->pairs</a></li><li><a href="#h4_pairs->tally">pairs->tally</a></li><li><a href="#h4_sort-pairs">sort-pairs</a></li><li><a href="#h4_lock-pairs">lock-pairs</a></li></ol></li></ol></div><div id="main"><div><a name="h1_(chibivoting)"></a><h1>(chibi voting)</h1></div><p>Preferential voting utilities to help come to reasonable decisions
+when there are more than 2 options.  Currently we provide 3 common
+voting implementations, with batch and incremental tallying.
+
+In this library, a <code><span>candidate</span></code> is a non-numeric object
+compared via <code><span>eq?</span></code> such as a symbol and a <code><span>tally</span></code> is
+an object aggregating <code>votes</code>.  A single <code><span>vote</span></code> is a
+list of lists of candidates in order of preference.  The inner
+lists may have multiple elements to represent an equal preference
+among the options, so that the vote <code>((A <span>B</span>) (C))</code>
+represents a preference of either <code><span>A</span></code> or <code><span>B</span></code> equally
+over <code><span>C</span></code>.  A vote should not have any duplicate candidates,
+but need not include all eligible candidates.
+<div><a name="h2_Ranking"></a><h2>Ranking</h2></div><div><a name="h4_tideman-rank"></a><h4><code>(tideman-rank x)</code></h4></div>
+Aka "ranked pairs" voting, returns a list of candidates ordered by
+the largest pairwise preference above other candidates.  <code>x</code>
+should be either a <code>tally</code> or alist of votes.  Unlike
+<code><span>plurality-rank</span></code> and <code><span>instant-runoff-rank</span></code> satisfies
+the Condorcet winner and loser criteria, the Smith criterion, and
+various other criteria desirable in motivating people to vote
+honestly and without strategy for their actual preferences.
+Recommended for most use cases.<div><a name="h4_plurality-rank"></a><h4><code>(plurality-rank x)</code></h4></div>Aka "first-past-the-post" voting, returns a list of candidates
+ordered by their frequency as the first place vote.  This is the
+voting used in most elections.  <code>x</code>, which can be either a
+<code>tally</code> or alist of votes.  The keys of the alist should be
+some identifier of the voter, but are for debugging purposes and
+not actually used.  Second or later preferences are allowed but
+ignored by the algorithm.  However, unlike traditional plurality
+voting, each vote may have multiple first place choice candidates
+which are counted equally.  If equal weighted votes are not
+desired they should be filtered separately prior to tallying.<div><a name="h4_instant-runoff-rank"></a><h4><code>(instant-runoff-rank x)</code></h4></div>Aka "IRV" or "ranked-choice voting" (RCV), returns a list of
+candidates ordered by successive rounds of removing the last place
+candidate.  This is the system used in most of Australia's
+elections among other uses, and as such is perhaps the best known
+preferential voting system.  However, it fails to satisfy the
+Condorcet winner criteria, which is to say that even if there is a
+candidate preferred pairwise over all other candidates, they may
+not necessarily win.  <code>x</code> should be either a <code>tally</code> or
+alist of votes.  Unlike traditional IRV this implementation allows
+equal weighted votes which should be filtered prior to tallying if
+undesired.<div><a name="h2_Tallying"></a><h2>Tallying</h2></div>
+A <code><span>Tally</span></code> is an object holding an aggregated count of
+preferential votes.  On creation you specify what level of
+aggregation is done.  The most general case is <code><span>distinct</span></code>,
+which keeps a count of each unique preferential vote.  The next
+most general is <code><span>pairwise</span></code>, which counts just pairwise
+preferences, followed by the default which just counts the number
+of times a candidate appeared as the first choice.<div><a name="h4_make-tally"></a><h4><code>(make-tally . args)</code></h4></div>Returns a tally of candidate first place counts.  <code>candidates</code>
+should be a vector of all valid candidates.<div><a name="h4_make-paired-tally"></a><h4><code>(make-paired-tally . args)</code></h4></div>Returns a tally of candidate vs candidate pairwise counts.<div><a name="h4_make-distinct-tally"></a><h4><code>(make-distinct-tally . args)</code></h4></div>Returns a tally of counts of each distinct preferential vote, in
+addition to pairwise and first place counts.<div><a name="h4_tally-distinct-ref"></a><h4><code>(tally-distinct-ref tally vote)</code></h4></div><div><a name="h4_tally-pairwise-ref"></a><h4><code>(tally-pairwise-ref tally i j)</code></h4></div><div><a name="h4_tally-inc!"></a><h4><code>(tally-inc! tally vote [count])</code></h4></div>Add a new <code>vote</code> to the <code>tally</code>.Returns a <code><span>tally</span></code> for the votes alist <code>votes</code>.<div><a name="h4_votes->paired-tally"></a><h4><code>(votes->paired-tally votes [candidates])</code></h4></div>Returns a <code><span>tally</span></code> with pairwise aggregation for the votes
+alist <code>votes</code>.Returns a <code><span>tally</span></code> with distinct aggregation for the votes
+alist <code>votes</code>.<div><a name="h4_tally->distinct-alist"></a><h4><code>(tally->distinct-alist tally)</code></h4></div>Returns an alist of distinct vote to count for the given <code>tally</code>.<div><a name="h4_distinct-alist->tally"></a><h4><code>(distinct-alist->tally ls)</code></h4></div>Returns a new tally with distinct aggregation for the given vote
+to count alist.<div><a name="h4_tally->pairs"></a><h4><code>(tally->pairs tally)</code></h4></div>Returns an alist with <code>(candidate <span>.</span> <span>candidate</span>)</code> pair keys
+and count values for the given <code>tally</code>.<div><a name="h4_pairs->tally"></a><h4><code>(pairs->tally pairs [count])</code></h4></div>Returns a new <code><span>tally</span></code> with pairwise aggregation for the
+given alist of pairs having <code>(candidate <span>.</span> <span>candidate</span>)</code> keys
+and count values.<div><a name="h4_sort-pairs"></a><h4><code>(sort-pairs x)</code></h4></div><div><a name="h4_lock-pairs"></a><h4><code>(lock-pairs pairs)</code></h4></div></p><div id="footer"></div></div></body></html>

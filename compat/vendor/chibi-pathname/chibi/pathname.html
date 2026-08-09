@@ -1,0 +1,54 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_path-strip-directory">path-strip-directory</a></li><li><a href="#h3_path-directory">path-directory</a></li><li><a href="#h3_path-extension">path-extension</a></li><li><a href="#h3_path-strip-extension">path-strip-extension</a></li><li><a href="#h3_path-replace-extension">path-replace-extension</a></li><li><a href="#h3_path-strip-leading-parents">path-strip-leading-parents</a></li><li><a href="#h3_path-absolute?">path-absolute?</a></li><li><a href="#h3_path-relative?">path-relative?</a></li><li><a href="#h3_path-relative-to">path-relative-to</a></li><li><a href="#h3_path-resolve">path-resolve</a></li><li><a href="#h3_path-normalize">path-normalize</a></li><li><a href="#h3_make-path">make-path</a></li></ol></div><div id="main"><div><a name="h1_(chibipathname)"></a><h1>(chibi pathname)</h1></div><p>A general, non-filesystem-specific pathname library.<div><a name="h3_path-strip-directory"></a><h3><code>(path-strip-directory path)</code></h3></div>Returns just the basename of <code>path</code>, with any directory
+removed.  If <code>path</code> does not contain a directory separator,
+return the whole <code>path</code>.  If <code>path</code> ends in a directory
+separator (i.e. path is a directory), or is empty, return the
+empty string.<div><a name="h3_path-directory"></a><h3><code>(path-directory path)</code></h3></div>Returns just the directory of <code>path</code>.
+If <code>path</code> is relative (or empty), return <code><span class="string">"."</span></code>.<div><a name="h3_path-extension"></a><h3><code>(path-extension path)</code></h3></div>Returns the rightmost extension of <code>path</code>, not including the
+<code><span class="string">"."</span></code>.  If there is no extension, returns <code>#f</code>.  The
+extension will always be non-empty and contain no <code><span class="string">"."</span></code>s.<div><a name="h3_path-strip-extension"></a><h3><code>(path-strip-extension path)</code></h3></div>Returns <code>path</code> with the extension, if any, removed,
+along with the <code><span class="string">"."</span></code>.<div><a name="h3_path-replace-extension"></a><h3><code>(path-replace-extension path ext)</code></h3></div>Returns <code>path</code> with the extension, if any, replaced
+with <code>ext</code>.<div><a name="h3_path-strip-leading-parents"></a><h3><code>(path-strip-leading-parents path)</code></h3></div>Returns <code>path</code> with any leading ../ removed.<div><a name="h3_path-absolute?"></a><h3><code>(path-absolute? path)</code></h3></div>Returns <code>#t</code> iff <code>path</code> is an absolute path,
+i.e. begins with "/".<div><a name="h3_path-relative?"></a><h3><code>(path-relative? path)</code></h3></div>Returns <code>#t</code> iff <code>path</code> is a relative path.<div><a name="h3_path-relative-to"></a><h3><code>(path-relative-to path dir)</code></h3></div>Returns the suffix of <code>path</code> relative to the directory
+<code>dir</code>, or <code>#f</code> if <code>path</code> is not contained in
+<code>dir</code>.  If the two are the same (modulo a trailing
+<code><span class="string">"/"</span></code>), then <code><span class="string">"."</span></code> is returned.<div><a name="h3_path-resolve"></a><h3><code>(path-resolve path dir)</code></h3></div>Resolve <code>path</code> relative to the given directory.  Returns
+<code>path</code> unchanged if already absolute.<div><a name="h3_path-normalize"></a><h3><code>(path-normalize path)</code></h3></div>Returns a normalized version of path, with duplicate directory
+separators removed and "/./" and "x/../" references removed.
+Does not take symbolic links into account - this is meant to
+be abstract and applicable to paths on remote systems and in
+URIs.  Returns <code>path</code> itself if <code>path</code> is already
+normalized.<div><a name="h3_make-path"></a><h3><code>(make-path . args)</code></h3></div>Return a new string representing the path where each of <code>args</code>
+is a path component, separated with the directory separator.
+<code>args</code> may include symbols and integers, in addition to
+strings.</p><div id="footer"></div></div></body></html>

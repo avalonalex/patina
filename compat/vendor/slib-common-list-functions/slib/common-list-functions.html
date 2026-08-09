@@ -1,0 +1,35 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_adjoin">adjoin</a></li><li><a href="#h3_fold-left">fold-left</a></li><li><a href="#h3_fold-right">fold-right</a></li><li><a href="#h3_reduce">reduce</a></li><li><a href="#h3_position">position</a></li></ol></div><div id="main"><div><a name="h1_(slibcommon-list-functions)"></a><h1>(slib common-list-functions)</h1></div><div><a name="h3_adjoin"></a><h3><code>(adjoin obj lst)</code></h3></div>Returns list with object added, unless object already in the list<div><a name="h3_fold-left"></a><h3><code>(fold-left f i l)</code></h3></div>fold-left takes a function whose arguments are (accumulated-value next-item)
+this agrees with fold-left from R6RS, but is different to fold in SRFI 1
+e.g. (fold-left f i '(a b c)) computes (f (f (f i a) b) c)<div><a name="h3_fold-right"></a><h3><code>(fold-right f i l)</code></h3></div>(fold-right f i '(a b c)) computes (f a (f b (f c i)))<div><a name="h3_reduce"></a><h3><code>(reduce pred? lst)</code></h3></div>a convenient version of fold-left taking its initial 
+argument from the start of the list.<div><a name="h3_position"></a><h3><code>(position obj lst)</code></h3></div>Returns the left-most index of obj in lst, or #f if it is not present.
+Note, list-index in srfi-1 uses a procedure to test for the object, so
+this is effectively (list-index (lambda (o) (eqv? o obj)) lst)<div id="footer"></div></div></body></html>

@@ -1,0 +1,58 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-heap">make-heap</a></li><li><a href="#h3_heap">heap</a></li><li><a href="#h3_heap-size">heap-size</a></li><li><a href="#h3_heap-empty?">heap-empty?</a></li><li><a href="#h3_heap-empty?">heap-min</a></li><li><a href="#h3_heap-delete-min">heap-delete-min</a></li><li><a href="#h3_heap-pop">heap-pop</a></li><li><a href="#h3_heap-insert">heap-insert</a></li><li><a href="#h3_heap->list">heap->list</a></li><li><a href="#h3_list->heap">list->heap</a></li><li><a href="#h3_heap-merge">heap-merge</a></li><li><a href="#h3_heap-sort">heap-sort</a></li></ol></div><div id="main"><div><a name="h1_(pfdsheap)"></a><h1>(pfds heap)</h1></div><p>heap? : any -> bool
+returns #t if the argument is a heap, #f otherwise.<div><a name="h3_make-heap"></a><h3><code>(make-heap priority&lt;?)</code></h3></div>make-heap : (any any -> bool) -> heap
+returns a new empty heap which uses the ordering procedure.<div><a name="h3_heap"></a><h3><code>(heap &lt; . vals)</code></h3></div>heap : (any any -> bool) any ... -> heap
+return a new heap, ordered by the procedure argument, that contains
+all the other arguments as elements.<div><a name="h3_heap-size"></a><h3><code>(heap-size heap)</code></h3></div>heap-size : heap -> non-negative integer
+returns the number of elements in the heap.<div><a name="h3_heap-empty?"></a><h3><code>(heap-empty? heap)</code></h3></div>heap-empty? : heap -> bool
+returns #t if the heap contains no elements, #f otherwise.<div><a name="h3_heap-empty?"></a><h3><code>(heap-min heap)</code></h3></div>heap-min : heap -> any
+returns the minimum element in the heap, according the heap's
+ordering procedure. If there are no elements, an error is raised.<div><a name="h3_heap-delete-min"></a><h3><code>(heap-delete-min heap)</code></h3></div>heap-delete-min : heap -> heap
+returns a new heap containing all the elements of the heap
+argument, except for the minimum argument, as determined by the
+heap's ordering procedure. If there are no elements, an error is 
+raised.<div><a name="h3_heap-pop"></a><h3><code>(heap-pop heap)</code></h3></div>heap-pop : any + heap
+returns two values: the the minimum value, and a heap obtained by
+removing the minimum value from the original heap. If the heap is
+empty, an error is raised.<div><a name="h3_heap-insert"></a><h3><code>(heap-insert heap value)</code></h3></div>heap-insert : heap any -> heap
+returns the new heap obtained by adding the element to those in the
+argument heap.<div><a name="h3_heap->list"></a><h3><code>(heap->list heap)</code></h3></div>heap->list : heap -> Listof(any)
+returns the heap containing all the elements of the heap. The
+elements of the list are ordered according to the heap's ordering
+procedure.<div><a name="h3_list->heap"></a><h3><code>(list->heap list &lt;)</code></h3></div>list->heap : Listof(any) (any any -> boolean) -> heap
+returns the heap containing all the elements of the list, and using
+the procedure argument to order the elements.<div><a name="h3_heap-merge"></a><h3><code>(heap-merge heap1 heap2)</code></h3></div>heap-merge : heap heap -> heap
+returns the heap containing all the elements of the argument
+heaps. The argument heaps are assumed to be using the same ordering
+procedure.<div><a name="h3_heap-sort"></a><h3><code>(heap-sort &lt; list)</code></h3></div>heap-sort : (any any -> bool) list -> list
+returns a new list that is a permutation of the argument list, such
+that all the elements are ordered by the given procedure.heap-ordering-procedure : heap -> (any any -> boolean)
+returns the ordering procedure used internally by the heap.</p><div id="footer"></div></div></body></html>

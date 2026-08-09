@@ -1,0 +1,75 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_(make-html-parser.keys)">make-html-parser</a></li><li><a href="#h3_(html->sxml[port])">html->sxml</a></li><li><a href="#h3_(html-strip[port])">html-strip</a></li></ol></div><div id="main"><div><a name="h1_(chibihtml-parser)"></a><h1>(chibi html-parser)</h1></div><p>A permissive HTML parser supporting scalable streaming with a tree
+folding interface.  This copies the interface of Oleg Kiselyov's
+SSAX parser, as well as providing simple convenience utilities.
+It correctly handles all invalid HTML, inserting "virtual"
+starting and closing tags as needed to maintain the proper tree
+structure needed for the foldts down/up logic.  A major goal of
+this parser is bug-for-bug compatibility with the way common web
+browsers parse HTML.<div><a name="h3_(make-html-parser.keys)"></a><h3><code>(make-html-parser . keys)</code></h3></div>
+
+Returns a procedure of two arguments, and initial seed and an
+optional input port, which parses the HTML document from the port
+with the callbacks specified in the plist <code>keys</code> (using
+normal, quoted symbols, for portability and to avoid making this a
+macro).  The following callbacks are recognized:
+
+<ul><li>  <code>(start <span>tag</span> <span>attrs</span> <span>seed</span> <span>virtual?</span>)</code> -
+    fdown in foldts, called when a start-tag is encountered.
+    <ul><li><code>tag</code>:       tag name</li><li><code>attrs</code>:     tag attributes as a alist</li><li><code>seed</code>:      current seed value</li><li><code>virtual?</code>:  #t iff this start tag was inserted to fix the HTML tree</li></ul></li><li>  <code>(end <span>tag</span> <span>attrs</span> <span>parent-seed</span> <span>seed</span> <span>virtual?</span>)</code> -
+    fup in foldts, called when an end-tag is encountered.
+    <ul><li><code>tag</code>:         tag name</li><li><code>attrs</code>:       tag attributes of the corresponding start tag</li><li><code>parent-seed</code>: parent seed value (i.e. seed passed to the start tag)</li><li><code>seed</code>:        current seed value</li><li><code>virtual?</code>:    #t iff this end tag was inserted to fix the HTML tree</li></ul></li><li>  <code>(text <span>text</span> <span>seed</span>)</code> -
+    fhere in foldts, called when any text is encountered.  May be
+    called multiple times between a start and end tag, so you need
+    to string-append yourself if desired.
+    <ul><li><code>text</code>:      entity-decoded text</li><li><code>seed</code>:      current seed value</li></ul></li><li>  <code>(comment <span>text</span> <span>seed</span>)</code> -
+    fhere on comment data</li><li>  <code>(decl <span>name</span> <span>attrs</span> <span>seed</span>)</code> -
+    fhere on declaration data</li><li>  <code>(process <span>list</span> <span>seed</span>)</code> -
+    fhere on process-instruction data</li><li>  <code>(entity <span>name-or-num</span> <span>seed</span>)</code> -
+    convert an entity with a given name, or number via &amp;#NNNN;
+    to a string</li></ul>
+    
+In addition, entity-mappings may be overriden with the
+<code>entities</code>: keyword.
+
+Example: the parser for html-strip could be defined as:
+
+<pre><code> (make-html-parser
+  '<span>start:</span> (<span class="keyword">lambda</span> (tag <span>attrs</span> <span>seed</span> <span>virtual?</span>) <span>seed</span>)
+  '<span>end:</span>   (<span class="keyword">lambda</span> (tag <span>attrs</span> <span>parent-seed</span> <span>seed</span> <span>virtual?</span>) <span>seed</span>)
+  '<span>text:</span>  (<span class="keyword">lambda</span> (text <span>seed</span>) (display <span>text</span>)))</code></pre>
+
+Also see the parser code for <code><span>html->sxml</span></code>.<div><a name="h3_(html->sxml[port])"></a><h3><code>(html->sxml [port])</code></h3></div>
+Returns the SXML representation of the document from <code>port</code>,
+using the default parsing options.<div><a name="h3_(html-strip[port])"></a><h3><code>(html-strip [port])</code></h3></div>
+Returns a string representation of the document from <code>port</code>
+with all tags removed.  No whitespace reduction or other rendering
+is done.</p><div id="footer"></div></div></body></html>

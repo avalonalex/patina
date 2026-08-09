@@ -1,0 +1,70 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-hamt">make-hamt</a></li><li><a href="#h3_hamt-set">hamt-set</a></li><li><a href="#h3_hamt-update">hamt-update</a></li><li><a href="#h3_hamt-delete">hamt-delete</a></li><li><a href="#h3_hamt-contains?">hamt-contains?</a></li><li><a href="#h3_hamt-map">hamt-map</a></li><li><a href="#h3_hamt-fold">hamt-fold</a></li><li><a href="#h3_hamt->alist">hamt->alist</a></li><li><a href="#h3_alist->hamt">alist->hamt</a></li></ol></div><div id="main"><div><a name="h1_(pfdshash-array-mapped-trie)"></a><h1>(pfds hash-array-mapped-trie)</h1></div><p>Note: For all procedures which take a key as an argument, the key
+must be hashable with the hamt hash function, and comparable with
+the hamt equivalence predicate.hamt? : any -> boolean
+returns #t if argument is a hamt, #f otherwise.
+
+hamt-size : hamt -> non-negative integer
+returns the number of associations in the hamt.
+
+hamt-equivalence-predicate : hamt -> (any -> any -> boolean)
+returns the procedure used internally by the hamt to compare keys.
+
+hamt-hash-function : hamt -> (any -> non-negative integer)
+returns the hash procedure used internally by the hamt.<div><a name="h3_make-hamt"></a><h3><code>(make-hamt hash eqv?)</code></h3></div>make-hamt : (any -> non-negative integer) (any -> any -> boolean) -> hamt
+returns a new empty hamt using the given hash and equivalence functions.hamt-ref : hamt any [any] -> any
+returns the value associated with the key in the hamt. If there is
+no value associated with the key, it returns the default value if
+provided, or raises an error if it isn't.<div><a name="h3_hamt-set"></a><h3><code>(hamt-set hamt key value)</code></h3></div>hamt-set : hamt any any -> hamt
+returns a new hamt with the key associated to the value. If the key
+is already associated with a value, it is replaced.<div><a name="h3_hamt-update"></a><h3><code>(hamt-update hamt key proc default)</code></h3></div>hamt-update : hamt any (any -> any) any -> hamt
+returns a new hamt with the valued associated with the key updated
+by the update procedure. If the hamt does not already have a value
+associated with the key, then it applies the update procedure to
+the default value, and associates the key with that.<div><a name="h3_hamt-delete"></a><h3><code>(hamt-delete hamt key)</code></h3></div>hamt-delete : hamt any -> hamt
+returns a hamt with the key and its associated value removed. If
+the key is not in the hamt, a copy of the original hamt is
+returned.<div><a name="h3_hamt-contains?"></a><h3><code>(hamt-contains? hamt key)</code></h3></div>hamt-contains? : hamt any -> boolean
+returns #t if there is an association for the key in the hamt, #f
+otherwise.<div><a name="h3_hamt-map"></a><h3><code>(hamt-map mapper hamt)</code></h3></div>hamt-map : (any -> any) hamt -> hamt
+returns the hamt obtained by applying the update procedure to each
+of the values in the hamt.<div><a name="h3_hamt-fold"></a><h3><code>(hamt-fold combine initial hamt)</code></h3></div>hamt-fold : (any any any -> any) any hamt -> hamt
+returns the value obtained by iterating the combine procedure over
+each key value pair in the hamt. The combine procedure takes three
+arguments, the key and value of an association, and an accumulator,
+and returns a new accumulator value. The initial value of the
+accumulator is provided by the base argument. The order in which
+the hamt is traversed is not guaranteed.<div><a name="h3_hamt->alist"></a><h3><code>(hamt->alist hamt)</code></h3></div>hamt->alist : hamt -> Listof(Pairs)
+returns the key/value associations of the hamt as a list of pairs.
+The order of the list is not guaranteed.<div><a name="h3_alist->hamt"></a><h3><code>(alist->hamt alist hash eqv?)</code></h3></div>alist->hamt : Listof(Pairs) (any -> non-negative integer) (any -> any -> boolean) -> hamt
+returns the hamt containing the associations specified by the pairs
+in the alist. If the same key appears in the alist multiple times,
+its leftmost value is the one that is used.</p><div id="footer"></div></div></body></html>

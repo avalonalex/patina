@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8"><style type="text/css">
+body {color: #000; background-color: #FFFFF8;}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 250px; height: 100%}
+div#menu a:link {text-decoration: none}
+div#main  {font-size: large; position: absolute; top: 0; left: 260px; max-width: 590px; height: 100%}
+div#notes {position: relative; top: 2em; left: 620px; width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+div#menu ol {list-style-position:inside; padding-left: 5px; margin-left: 5px}
+div#menu ol ol {list-style: lower-alpha; padding-left: 15px; margin-left: 15px}
+div#menu ol ol ol {list-style: decimal; padding-left: 5px; margin-left: 5px}
+h2 { color: #888888; border-top: 3px solid #4588ba; }
+h3 { color: #666666; border-top: 2px solid #4588ba; }
+h4 { color: #222288; border-top: 1px solid #4588ba; }
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h4_mecab-dictionary-path">mecab-dictionary-path</a></li><li><a href="#h4_make-mecab">make-mecab</a></li><li><a href="#h4_mecab-parse">mecab-parse</a></li><li><a href="#h4_mecab-tokenizer">mecab-tokenizer</a></li><li><a href="#h4_mecab-tokenize">mecab-tokenize</a></li><li><a href="#h4_mecab-pronouncer">mecab-pronouncer</a></li><li><a href="#h4_mecab-yomi">mecab-yomi</a></li><li><a href="#h4_mecab-last-error">mecab-last-error</a></li><li><a href="#h4_mecab?">mecab?</a></li><li><a href="#h4_%make-mecab">%make-mecab</a></li><li><a href="#h4_mecab-version">mecab-version</a></li><li><a href="#h4_mecab-strerror">mecab-strerror</a></li><li><a href="#h4_mecab-get-partial">mecab-get-partial</a></li><li><a href="#h4_mecab-set-partial">mecab-set-partial</a></li><li><a href="#h4_mecab-get-theta">mecab-get-theta</a></li><li><a href="#h4_mecab-set-theta">mecab-set-theta</a></li><li><a href="#h4_mecab-get-lattice-level">mecab-get-lattice-level</a></li><li><a href="#h4_mecab-set-lattice-level">mecab-set-lattice-level</a></li><li><a href="#h4_mecab-get-all-morphs">mecab-get-all-morphs</a></li><li><a href="#h4_mecab-set-all-morphs">mecab-set-all-morphs</a></li><li><a href="#h4_%mecab-parse">%mecab-parse</a></li></ol></div><div id="main"><div><a name="h1_(chibimecab)"></a><h1>(chibi mecab)</h1></div><p>A wrapper around MeCab, a part-of-speech and morphological
+analyzer for Japanese.
+
+<code>(<span class="keyword">let</span> ((mecab (make-mecab <span class="string">"/var/lib/mecab/dic/ipadic-utf8/"</span>)))
+  (mecab-parse <span>mecab</span> <span class="string">"今日学校に行きます"</span>))
+<span>=></span> ((<span class="string">"今日"</span> <span class="string">"名詞,時相名詞,*,*,今日,きょう,代表表記:今日/きょう カテゴリ:時間"</span>) <span>...</span>)
+</code>
+
+<code>(mecab-tokenize <span class="string">"今日学校に行きます"</span>)
+<span>=></span> (<span class="string">"今日"</span> <span class="string">"学校"</span> <span class="string">"に"</span> <span class="string">"行き"</span> <span class="string">"ます"</span> <span class="string">"</span>n<span class="string">")
+</span></code>
+
+<code>(mecab-yomi <span class="string">"今日学校に行きます"</span>)
+<span>=></span> <span class="string">"きょうがっこうにいきます</span>n<span class="string">"
+</span></code>
+
+Note in addition to the mecab library you will need a dictionary
+in utf-8 format installed, e.g. in Ubuntu from the
+mecab-ipadic-utf8 or mecab-jumandic-utf8 packages.<div><a name="h4_mecab-dictionary-path"></a><h4><code>mecab-dictionary-path</code></h4></div>A parameter holding the default path of the dictionary to use
+for <code><span>make-mecab</span></code>.<div><a name="h4_make-mecab"></a><h4><code>(make-mecab . o)</code></h4></div>Create a new mecab parser.<div><a name="h4_mecab-parse"></a><h4><code>(mecab-parse mecab str)</code></h4></div>Parses the string <code>str</code> with the <code>mecab</code> parser, and
+returns a list of parses.<div><a name="h4_mecab-tokenizer"></a><h4><code>mecab-tokenizer</code></h4></div>A parameter holding the mecab parser used for
+<code><span>mecab-tokenize</span></code>.<div><a name="h4_mecab-tokenize"></a><h4><code>(mecab-tokenize str)</code></h4></div>Splits <code>str</code> into a list of tokens.<div><a name="h4_mecab-pronouncer"></a><h4><code>mecab-pronouncer</code></h4></div>A parameter holding the mecab parser used for
+<code><span>mecab-yomi</span></code>.<div><a name="h4_mecab-yomi"></a><h4><code>(mecab-yomi str)</code></h4></div>Returns the hiragana pronunciation of <code>str</code>.<div><a name="h4_mecab-last-error"></a><h4><code>(mecab-last-error)</code></h4></div>Returns the last error generated by mecab-parse.<div><a name="h4_mecab?"></a><h4><code>(mecab? obj)</code></h4></div><div><a name="h4_%make-mecab"></a><h4><code>(%make-mecab string)</code></h4></div><div><a name="h4_mecab-version"></a><h4><code>(mecab-version)</code></h4></div><div><a name="h4_mecab-strerror"></a><h4><code>(mecab-strerror mecab_t)</code></h4></div><div><a name="h4_mecab-get-partial"></a><h4><code>(mecab-get-partial mecab_t)</code></h4></div><div><a name="h4_mecab-set-partial"></a><h4><code>(mecab-set-partial mecab_t int)</code></h4></div><div><a name="h4_mecab-get-theta"></a><h4><code>(mecab-get-theta mecab_t)</code></h4></div><div><a name="h4_mecab-set-theta"></a><h4><code>(mecab-set-theta mecab_t float)</code></h4></div><div><a name="h4_mecab-get-lattice-level"></a><h4><code>(mecab-get-lattice-level mecab_t)</code></h4></div><div><a name="h4_mecab-set-lattice-level"></a><h4><code>(mecab-set-lattice-level mecab_t int)</code></h4></div><div><a name="h4_mecab-get-all-morphs"></a><h4><code>(mecab-get-all-morphs mecab_t)</code></h4></div><div><a name="h4_mecab-set-all-morphs"></a><h4><code>(mecab-set-all-morphs mecab_t int)</code></h4></div><div><a name="h4_%mecab-parse"></a><h4><code>(%mecab-parse mecab_t string)</code></h4></div></p><div id="footer"></div></div></body></html>

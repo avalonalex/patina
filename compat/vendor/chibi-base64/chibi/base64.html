@@ -1,0 +1,44 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_base64-decode-string">base64-decode-string</a></li><li><a href="#h3_base64-decode-bytevector">base64-decode-bytevector</a></li><li><a href="#h3_base64-decode">base64-decode</a></li><li><a href="#h3_base64-encode-string">base64-encode-string</a></li><li><a href="#h3_base64-encode-bytevector">base64-encode-bytevector</a></li><li><a href="#h3_base64-encode">base64-encode</a></li><li><a href="#h3_base64-encode-header">base64-encode-header</a></li></ol></div><div id="main"><div><a name="h1_(chibibase64)"></a><h1>(chibi base64)</h1></div><p>RFC 3548 base64 encoding and decoding utilities.
+This API is compatible with the Gauche library rfc.base64.<div><a name="h3_base64-decode-string"></a><h3><code>(base64-decode-string str)</code></h3></div>Return a base64 decoded representation of string, also interpreting
+the alternate 62 &amp; 63 valued characters as described in RFC3548.
+Other out-of-band characters are silently stripped, and = signals
+the end of the encoded string.  No errors will be raised.<div><a name="h3_base64-decode-bytevector"></a><h3><code>(base64-decode-bytevector src)</code></h3></div><div><a name="h3_base64-decode"></a><h3><code>(base64-decode [in out])</code></h3></div> Variation of the above to read and write to ports.<div><a name="h3_base64-encode-string"></a><h3><code>(base64-encode-string str)</code></h3></div>Return a base64 encoded representation of string according to the
+official base64 standard as described in RFC3548.<div><a name="h3_base64-encode-bytevector"></a><h3><code>(base64-encode-bytevector bv)</code></h3></div><div><a name="h3_base64-encode"></a><h3><code>(base64-encode [in out])</code></h3></div> Variation of the above to read and write to ports.<div><a name="h3_base64-encode-header"></a><h3><code>(base64-encode-header encoding str [start-col])</code></h3></div>Return a base64 encoded representation of the string <code>str</code> as
+above, wrapped in =?ENC?B?...?= as per RFC1522, split across
+multiple MIME-header lines as needed to keep each lines length
+less than <code>max-col</code>.  The string is encoded as is, and the
+encoding <code>enc</code> is just used for the prefix, i.e. you are
+responsible for ensuring <code>str</code> is already encoded according to
+<code>enc</code>.  The optional argument <code>nl</code> is the newline
+separator, defaulting to <code>crlf</code>.</p><div id="footer"></div></div></body></html>

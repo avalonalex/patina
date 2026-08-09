@@ -1,0 +1,53 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_parse-edn">parse-edn</a></li></ol></div><div id="main"><div><a name="h1_(edn)"></a><h1>(edn)</h1></div><p>EDN is a data format from the Clojure ecosystem. It is essentially
+the format of Clojure programs, minus surface syntax such as
+quoting, syntax-quoting, and @ rest argument syntax.
+This reader depends on the (chibi parse) module, part of Chibi
+Scheme but theoretically portable to any R7RS Scheme.
+This library, (edn), exports parse-edn and edn-value. Parse-edn is
+procedure of one argument and parses the passed source, returning a
+data structure representing the passed EDN. If parsing fails, an error
+is raised. Edn-value is a parser combinator that can be called with
+call-with-parse or other similar procedures in the (chibi parse)
+library.
+Additionally, the library exports predicates, accessors, and
+constructors for types that don't have exact analogs in Scheme or
+where the analogs are not nearly-universally supported. Of
+particular note, the library returns EDN nil as the Scheme
+symbol nil.
+This implementation should parse any valid EDN document. Also,
+since Clojure programs may emit ratio values, they are parsed into
+Scheme ratios despite their absence from the EDN standard. Finally,
+note that parse-edn will return #f on failure, which is also the
+result of parsing the string "false". If this is a problem, use the
+call-with-parse procedure metioned above.
+A test suite is included in the `(edn-test)` library. To execute
+it, evaluate `(run-tests)`.<div><a name="h3_parse-edn"></a><h3><code>(parse-edn source)</code></h3></div></p><div id="footer"></div></div></body></html>

@@ -1,0 +1,67 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-psq">make-psq</a></li><li><a href="#h3_make-psq">psq-empty?</a></li><li><a href="#h3_psq-ref">psq-ref</a></li><li><a href="#h3_psq-set">psq-set</a></li><li><a href="#h3_psq-update">psq-update</a></li><li><a href="#h3_psq-delete">psq-delete</a></li><li><a href="#h3_psq-contains?">psq-contains?</a></li><li><a href="#h3_psq-min">psq-min</a></li><li><a href="#h3_psq-delete-min">psq-delete-min</a></li><li><a href="#h3_psq-pop">psq-pop</a></li><li><a href="#h3_psq-at-most">psq-at-most</a></li><li><a href="#h3_psq-at-most-range">psq-at-most-range</a></li><li><a href="#h3_psq-size">psq-size</a></li></ol></div><div id="main"><div><a name="h1_(pfdspriority-search-queue)"></a><h1>(pfds priority-search-queue)</h1></div><p>psq? : obj -> boolean
+returns #t if the object is a priority search queue, #f otherwise.<div><a name="h3_make-psq"></a><h3><code>(make-psq key&lt;? priority&lt;?)</code></h3></div>make-psq : &lt; &lt; -> psq
+takes a two ordering procedures, one for keys, and another for
+priorities, and returns an empty priority search queue<div><a name="h3_make-psq"></a><h3><code>(psq-empty? psq)</code></h3></div>psq-empty? : psq -> boolean
+returns #t if the priority search queue contains no elements, #f
+otherwise.<div><a name="h3_psq-ref"></a><h3><code>(psq-ref psq key)</code></h3></div>psq-ref : psq key -> priority
+returns the priority of a key if it is in the priority search
+queue. If the key is not in the priority queue an
+error is raised.<div><a name="h3_psq-set"></a><h3><code>(psq-set psq key priority)</code></h3></div>psq-set : psq key priority -> psq
+returns the priority search queue obtained from inserting a key
+with a given priority. If the key is already in the priority search
+queue, it updates the priority to the new value.<div><a name="h3_psq-update"></a><h3><code>(psq-update psq key f default)</code></h3></div>psq-update : psq key (priority -> priority) priority -> psq
+returns the priority search queue obtained by modifying the
+priority of key, by the given function. If the key is not in the
+priority search queue, it is inserted with the priority obtained by
+calling the function on the default value.<div><a name="h3_psq-delete"></a><h3><code>(psq-delete psq key)</code></h3></div>psq-delete : psq key -> psq
+returns the priority search queue obtained by removing the
+key-priority association from the priority search queue. If the key
+is not in the queue, then the returned search queue will be the
+same as the original.<div><a name="h3_psq-contains?"></a><h3><code>(psq-contains? psq key)</code></h3></div>psq-contains? : psq key -> boolean
+returns #t if there is an association for the given key in the
+priority search queue, #f otherwise.<div><a name="h3_psq-min"></a><h3><code>(psq-min psq)</code></h3></div>psq-min : psq -> key
+
+returns the key of the minimum association in the priority search
+queue. If the queue is empty, an error is raised.<div><a name="h3_psq-delete-min"></a><h3><code>(psq-delete-min psq)</code></h3></div>psq-delete-min : psq -> psq
+returns the priority search queue obtained by removing the minimum
+association in the priority search queue. If the queue is empty, an
+error is raised.<div><a name="h3_psq-pop"></a><h3><code>(psq-pop psq)</code></h3></div>psq-pop : psq -> key + psq
+returns two values: the minimum key and the priority search queue
+obtained by removing the minimum association from the original
+queue. If the queue is empty, an error is raised.<div><a name="h3_psq-at-most"></a><h3><code>(psq-at-most psq max-priority)</code></h3></div>psq-at-most : psq priority -> ListOf(key . priority)
+returns an alist containing all the associations in the priority
+search queue with priority less than or equal to a given value. The
+alist returned is ordered by key according to the predicate for the
+psq.<div><a name="h3_psq-at-most-range"></a><h3><code>(psq-at-most-range psq max-priority min-key max-key)</code></h3></div>psq-at-most-range : psq priority key key -> ListOf(key . priority)
+Similar to psq-at-most, but it also takes an upper and lower bound,
+for the keys it will return. These bounds are inclusive.<div><a name="h3_psq-size"></a><h3><code>(psq-size psq)</code></h3></div>psq-size : psq -> non-negative integer
+returns the number of associations in the priority search queue</p><div id="footer"></div></div></body></html>

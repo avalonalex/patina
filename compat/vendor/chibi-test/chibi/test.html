@@ -1,0 +1,131 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h2_Testing">Testing</a><ol><li><a href="#h3_(test[name]expectexpr)">test</a></li><li><a href="#h3_(test-equalequal[name]expectexpr)">test-equal</a></li><li><a href="#h3_(test-assert[name]expr)">test-assert</a></li><li><a href="#h3_(test-not[name]expr)">test-not</a></li><li><a href="#h3_(test-values[name]expectexpr)">test-values</a></li><li><a href="#h3_(test-error[name]expr)">test-error</a></li><li><a href="#h3_test-propagate-info">test-propagate-info</a></li><li><a href="#h3_test-run">test-run</a></li><li><a href="#h3_test-equal?">test-equal?</a></li></ol></li><li><a href="#h2_TestGroups">Test Groups</a><ol><li><a href="#h3_test-group">test-group</a></li><li><a href="#h3_test-begin">test-begin</a></li><li><a href="#h3_test-end">test-end</a></li><li><a href="#h3_test-exit">test-exit</a></li><li><a href="#h3_test-syntax-error">test-syntax-error</a></li></ol></li><li><a href="#h2_Accessors">Accessors</a><ol><li><a href="#h3_test-group-name">test-group-name</a></li><li><a href="#h3_test-group-ref">test-group-ref</a></li><li><a href="#h3_test-group-set!">test-group-set!</a></li><li><a href="#h3_test-group-inc!">test-group-inc!</a></li><li><a href="#h3_test-group-push!">test-group-push!</a></li><li><a href="#h3_test-get-name!">test-get-name!</a></li></ol></li><li><a href="#h2_Parameters">Parameters</a><ol><li><a href="#h3_current-test-group">current-test-group</a></li><li><a href="#h3_current-test-verbosity">current-test-verbosity</a></li><li><a href="#h3_current-test-epsilon">current-test-epsilon</a></li><li><a href="#h3_current-test-comparator">current-test-comparator</a></li><li><a href="#h3_current-test-applier">current-test-applier</a></li><li><a href="#h3_current-test-skipper">current-test-skipper</a></li><li><a href="#h3_current-test-reporter">current-test-reporter</a></li><li><a href="#h3_current-test-group-reporter">current-test-group-reporter</a></li><li><a href="#h3_test-failure-count">test-failure-count</a></li><li><a href="#h3_current-test-group-filters">current-test-group-filters</a></li><li><a href="#h3_current-test-group-removers">current-test-group-removers</a></li><li><a href="#h3_current-test-filters">current-test-filters</a></li><li><a href="#h3_current-test-removers">current-test-removers</a></li><li><a href="#h3_current-column-width">current-column-width</a></li></ol></li></ol></div><div id="main"><div><a name="h1_(chibitest)"></a><h1>(chibi test)</h1></div><p>Simple but extensible testing framework with advanced reporting.<div><a name="h2_Testing"></a><h2>Testing</h2></div>
+<div><a name="h3_(test[name]expectexpr)"></a><h3><code>(test [name] expect expr)</code></h3></div>
+The primary interface to testing.  Evaluate <code>expr</code> and check
+that it is equal to <code>expect</code>, and report the result, using
+<code>name</code> or a printed summary of <code>expr</code>.
+
+If used inside a group this will contribute to the overall group
+reporting, but can be used standalone:
+
+<div><pre><code>(test <span>4</span> (+ <span>2</span> <span>2</span>))</code></pre><div class="output"><pre>(+ 2 2) .............................................................. [ PASS]
+</pre></div><div class="result"><code>=> PASS</code></div></div>
+<div><pre><code>(test <span class="string">"add two and two"</span> <span>4</span> (+ <span>2</span> <span>2</span>))</code></pre><div class="output"><pre>add two and two ...................................................... [ PASS]
+</pre></div><div class="result"><code>=> PASS</code></div></div>
+<div><pre><code>(test <span>3</span> (+ <span>2</span> <span>2</span>))</code></pre><div class="output"><pre><span>(+ 2 2) .............................................................. [ <span style="color:red">FAIL</span>]
+    expected <span style="color:red">3</span> but got <span style="color:green">4</span>
+</span></pre></div><div class="result"><code>=> FAIL</code></div></div>
+<div><pre><code>(test <span>4</span> (+ <span>2</span> <span class="string">"2"</span>))</code></pre><div class="output"><pre><span>(+ 2 "2") ............................................................ [<u><span style="color:red">ERROR</span></u>]
+    ERROR: invalid type, expected Number: "2"
+</span></pre></div><div class="result"><code>=> ERROR</code></div></div>
+
+The equality comparison is made with
+<code><span>current-test-comparator</span></code>, defaulting to
+<code><span>test-equal?</span></code>, which is the same as <code><span>equal?</span></code> but
+more permissive on floating point comparisons).  Returns the
+status of the test (one of the symbols <code>'<span>PASS</span></code>,
+<code>'<span>FAIL</span></code>, <code>'<span>SKIP</span></code>, <code>'<span>ERROR</span></code>).<div><a name="h3_(test-equalequal[name]expectexpr)"></a><h3><code>(test-equal equal [name] expect expr)</code></h3></div>
+Equivalent to test, using <code>equal</code> for comparison instead of
+<code><span>equal?</span></code>.<div><a name="h3_(test-assert[name]expr)"></a><h3><code>(test-assert [name] expr)</code></h3></div>
+Like <code><span>test</span></code> but evaluates <code>expr</code> and checks that it's true.<div><a name="h3_(test-not[name]expr)"></a><h3><code>(test-not [name] expr)</code></h3></div>
+Like <code><span>test</span></code> but evaluates <code>expr</code> and checks that it's false.<div><a name="h3_(test-values[name]expectexpr)"></a><h3><code>(test-values [name] expect expr)</code></h3></div>
+Like <code><span>test</span></code> but <code>expect</code> and <code>expr</code> can both
+return multiple values.<div><a name="h3_(test-error[name]expr)"></a><h3><code>(test-error [name] expr)</code></h3></div>
+Like <code><span>test</span></code> but evaluates <code>expr</code> and checks that it
+raises an error.<div><a name="h3_test-propagate-info"></a><h3><code>(test-propagate-info name expect expr info)</code></h3></div>Low-level macro to pass alist info to the underlying <code>test-run</code>.<div><a name="h3_test-run"></a><h3><code>(test-run expect expr info)</code></h3></div>The procedural interface to testing.  <code>expect</code> and <code>expr</code>
+should be thunks, and <code>info</code> is an alist of properties used in
+test reporting.<div><a name="h3_test-equal?"></a><h3><code>(test-equal? expect res)</code></h3></div>Returns true if either <code>(equal? <span>expect</span> <span>res</span>)</code>, or
+<code>expect</code> is inexact and <code>res</code> is within
+<code><span>current-test-epsilon</span></code> of <code>expect</code>.<div><a name="h2_TestGroups"></a><h2>Test Groups</h2></div><div><a name="h3_test-group"></a><h3><code>(test-group name-expr body ...)</code></h3></div>
+Tests can be collected in groups for
+Wraps <code>body</code> as a single test group, which can be filtered
+and summarized separately.
+<div><pre><code>(test-group <span class="string">"pi"</span>
+  (test <span>3.14159</span> (acos <span>-1</span>))
+  (test <span>3</span> (acos <span>-1</span>))
+  (test <span>3.14159</span> (acos <span class="string">"-1"</span>)))
+</code></pre><div class="output"><pre><span><b>pi: </b>.<span style="color:red">x</span><u><span style="color:red">!</span></u>
+1 out of 3 (33.3%) test passed in 0.00030422210693359375 seconds.
+<span style="color:red">1 failure (33.3%).
+</span><u><span style="color:red">1 error (33.3%).
+</span></u><span style="color:red">FAIL: </span>(acos -1)
+    expected 3 but got 3<span style="color:green">.141592653589793</span>
+<span style="color:red">ERROR: </span>(acos "-1")
+    ERROR in "acos": invalid type, expected Number: "-1"
+</span></pre></div></div><div><a name="h3_test-begin"></a><h3><code>(test-begin [name])</code></h3></div>Begin testing a new group until the closing <code>(test-end)</code>.<div><a name="h3_test-end"></a><h3><code>(test-end [name])</code></h3></div>Ends testing group introduced with <code>(test-begin)</code>, and
+summarizes the results.  The <code>name</code> is optional, but if
+present should match the corresponding <code><span>test-begin</span></code> name,
+or a warning is printed.<div><a name="h3_test-exit"></a><h3><code>(test-exit)</code></h3></div>Exits with a failure status if any tests have failed,
+and a successful status otherwise.<div><a name="h3_test-syntax-error"></a><h3><code>(test-syntax-error)</code></h3></div><div><a name="h2_Accessors"></a><h2>Accessors</h2></div><div><a name="h3_test-group-name"></a><h3><code>(test-group-name group)</code></h3></div>Returns the name of a test group info object.<div><a name="h3_test-group-ref"></a><h3><code>(test-group-ref group field . o)</code></h3></div>Returns the value of a <code>field</code> in a test var{group} info
+object.  <code>field</code> should be a symbol, and predefined fields
+include <code><span>parent</span></code>, <code><span>verbose</span></code>, <code><span>level</span></code>,
+<code><span>start-time</span></code>, <code><span>skip-group?</span></code>, <code><span>count</span></code>,
+<code><span>total-pass</span></code>, <code><span>total-fail</span></code>, <code><span>total-error</span></code>.<div><a name="h3_test-group-set!"></a><h3><code>(test-group-set! group field value)</code></h3></div>Sets the value of a <code>field</code> in a test <code>group</code> info object.<div><a name="h3_test-group-inc!"></a><h3><code>(test-group-inc! group field [amount])</code></h3></div>Increments the value of a <code>field</code> in a test <code>group</code> info
+object by <code>amount</code>, defaulting to 1.<div><a name="h3_test-group-push!"></a><h3><code>(test-group-push! group field value)</code></h3></div>Updates a <code>field</code> in a test group info object by consing
+<code>value</code> onto it.<div><a name="h3_test-get-name!"></a><h3><code>(test-get-name! info)</code></h3></div><div><a name="h2_Parameters"></a><h2>Parameters</h2></div><div><a name="h3_current-test-group"></a><h3><code>current-test-group</code></h3></div>
+The current test group as started by <code><span>test-group</span></code> or
+<code><span>test-begin</span></code>.<div><a name="h3_current-test-verbosity"></a><h3><code>current-test-verbosity</code></h3></div>If true, show more verbose output per test.  Inferred from the
+environment variable TEST_VERBOSE.<div><a name="h3_current-test-epsilon"></a><h3><code>current-test-epsilon</code></h3></div>The epsilon used for floating point comparisons.<div><a name="h3_current-test-comparator"></a><h3><code>current-test-comparator</code></h3></div>The underlying comparator used in testing, defaults to
+<code><span>test-equal?</span></code>.<div><a name="h3_current-test-applier"></a><h3><code>current-test-applier</code></h3></div>The test applier - what we do with non-skipped tests.  Takes the
+same signature as <code><span>test-run</span></code>, should be responsible for
+evaluating the thunks, determining the status of the test, and
+passing this information to <code><span>current-test-reporter</span></code>.<div><a name="h3_current-test-skipper"></a><h3><code>current-test-skipper</code></h3></div>The test skipper - what we do with non-skipped tests.  This should
+not evaluate the thunks and simply pass off to
+<code><span>current-test-reporter</span></code>.<div><a name="h3_current-test-reporter"></a><h3><code>current-test-reporter</code></h3></div>Takes two arguments, the symbol status of the test and the info
+alist.  Reports the result of the test and updates bookkeeping in
+the current test group for reporting.<div><a name="h3_current-test-group-reporter"></a><h3><code>current-test-group-reporter</code></h3></div>Takes one argument, a test group, and prints a summary of the test
+results for that group.<div><a name="h3_test-failure-count"></a><h3><code>test-failure-count</code></h3></div>A running count of all test failures and errors across all groups
+(and threads).  Used by <code><span>test-exit</span></code>.<div><a name="h3_current-test-group-filters"></a><h3><code>current-test-group-filters</code></h3></div><div><a name="h3_current-test-group-removers"></a><h3><code>current-test-group-removers</code></h3></div>Parameters controlling which test groups are skipped.  Each
+parameter is a list of procedures of one argument, a test group
+info, which can be queried with <code>test-group-name</code> and
+<code>test-group-ref</code>.  Analogous to SRFI 1, a filter selects a
+group for inclusion and a removers for exclusion.  The defaults
+are set automatically from the environment variables
+TEST_GROUP_FILTER and TEST_GROUP_REMOVE, which should be
+comma-delimited lists of strings which are checked for a substring
+match in the test group name.  A test group is skipped if it does
+not match any filter and:
+<ul><li>its parent group is skipped, or</li><li>it matches a remover, or</li><li>no removers are specified but some filters are</li></ul><div><a name="h3_current-test-filters"></a><h3><code>current-test-filters</code></h3></div><div><a name="h3_current-test-removers"></a><h3><code>current-test-removers</code></h3></div>Parameters controlling which tests are skipped.  Each parameter is
+a list of procedures of one argument, a test info alist, which can
+be queried with <code><span>test-get-name!</span></code> or <code><span>assq</span></code>.
+Analogous to SRFI 1, a filter selects a test for inclusion and a
+removers for exclusion.  The defaults are set automatically from
+the environment variables TEST_FILTER and TEST_REMOVE, which
+should be comma-delimited lists of strings which are checked for a
+substring match in the test name.  A test is skipped if its group
+is skipped, or if it does not match a filter and:
+<ul><li>it matches a remover, or</li><li>no removers are specified but some filters are</li></ul><div><a name="h3_current-column-width"></a><h3><code>current-column-width</code></h3></div>Parameter controlling the current column width for test output,
+can be set from the environment variable TEST_COLUMN_WIDTH,
+otherwise defaults to 78.  For portability of implementation (and
+resulting output), does not attempt to use termios to determine
+the actual available width.</p><div id="footer"></div></div></body></html>

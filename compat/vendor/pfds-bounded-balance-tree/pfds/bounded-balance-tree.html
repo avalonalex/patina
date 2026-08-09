@@ -1,0 +1,102 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-bbtree">make-bbtree</a></li><li><a href="#h3_bbtree-size">bbtree-size</a></li><li><a href="#h3_bbtree-ref">bbtree-ref</a></li><li><a href="#h3_bbtree-set">bbtree-set</a></li><li><a href="#h3_bbtree-update">bbtree-update</a></li><li><a href="#h3_bbtree-delete">bbtree-delete</a></li><li><a href="#h3_bbtree-contains?">bbtree-contains?</a></li><li><a href="#h3_bbtree-traverse">bbtree-traverse</a></li><li><a href="#h3_bbtree-fold">bbtree-fold</a></li><li><a href="#h3_bbtree-fold-right">bbtree-fold-right</a></li><li><a href="#h3_bbtree-map">bbtree-map</a></li><li><a href="#h3_bbtree->alist">bbtree->alist</a></li><li><a href="#h3_alist->bbtree">alist->bbtree</a></li><li><a href="#h3_bbtree-keys">bbtree-keys</a></li><li><a href="#h3_bbtree-union">bbtree-union</a></li><li><a href="#h3_bbtree-difference">bbtree-difference</a></li><li><a href="#h3_bbtree-intersection">bbtree-intersection</a></li><li><a href="#h3_bbtree-index">bbtree-index</a></li><li><a href="#h3_bbtree-ref/index">bbtree-ref/index</a></li></ol></div><div id="main"><div><a name="h1_(pfdsbounded-balance-tree)"></a><h1>(pfds bounded-balance-tree)</h1></div><p>Note: For all procedures which take a key as an argument, the key
+must be comparable with the ordering procedure of the bbtree.
+bbtree? : any -> bool
+returns #t if the argument is a bbtree, #f otherwise
+bbtree-ordering-procedure : bbtree -> (any any -> bool)
+returns the ordering procedure used internally to order the
+bbtree.<div><a name="h3_make-bbtree"></a><h3><code>(make-bbtree &lt;)</code></h3></div>make-bbtree : (any -> any -> boolean) -> bbtree
+returns an empty bbtree. bbtrees derived from this one will use the
+procedure argument for ordering keys.<div><a name="h3_bbtree-size"></a><h3><code>(bbtree-size bbtree)</code></h3></div>bbtree-size : bbtree -> non-negative integer
+returns the number of elements in a bbtree<div><a name="h3_bbtree-ref"></a><h3><code>(bbtree-ref . args)</code></h3></div>bbtree-ref : bbtree any [any] -> any
+returns the value associated with the key in the bbtree.  If the
+value is not in the tree, then, if the optional third argument is
+passed, it is returned, otherwise an error is raised.<div><a name="h3_bbtree-set"></a><h3><code>(bbtree-set bbtree key value)</code></h3></div>bbtree-set : bbtree any any -> bbtree
+returns a new bbtree with the key associated with the value. If the
+key is already in the bbtree, its associated value is replaced with
+the new value in the returned bbtree.<div><a name="h3_bbtree-update"></a><h3><code>(bbtree-update bbtree key proc default)</code></h3></div>bbtree-update : bbtree any (any -> any) any -> bbtree
+returns a new bbtree with the value associated with the key updated
+according to the update procedure. If the key was not already in
+the bbtree, the update procedure is called on the default value,
+and the association is added to the bbtree.<div><a name="h3_bbtree-delete"></a><h3><code>(bbtree-delete bbtree key)</code></h3></div>bbtree-delete : bbtree any -> bbtree
+returns a new bbtree with the key and its associated value
+removed. If the key is not in the bbtree, the returned bbtree is a
+copy of the original<div><a name="h3_bbtree-contains?"></a><h3><code>(bbtree-contains? bbtree key)</code></h3></div>bbtree-contains? : bbtree any -> boolean
+returns #t if there is association for key in the bbtree, false
+otherwise<div><a name="h3_bbtree-traverse"></a><h3><code>(bbtree-traverse traverser base bbtree)</code></h3></div>bbtree-traverse : (any any (any -> any) (any -> any) any) any bbtree -> any
+A general tree traversal procedure. Returns the value of applying
+the traverser procedure to the current node's key, value, a
+procedure to traverse the left subtree, a procedure to traverse the
+right subtree, and a base value. The subtree traversal procedures
+both take a base argument, and call bbtree-traverse recursively on
+the appropriate subtree. It is mostly useful for implementing
+other, more specific tree traversal procedures. For example,
+  (define (l-to-r-pre-order cons base bbtree)
+    (bbtree-traverse (lambda (key value left right base)
+                       (right (left (cons key value base))))
+                     base
+                     bbtree))
+implements a left-to-right pre-order traversal variant of bbtree-fold<div><a name="h3_bbtree-fold"></a><h3><code>(bbtree-fold combine base bbtree)</code></h3></div>bbtree-fold : (any any any -> any) any bbtree -> any
+returns the value obtained by the iterating the combine procedure
+over each node in the tree. The combine procedure takes three
+arguments, the key and value of the current node, and an
+accumulator value, and its return value is used as the accumulator
+value for the next node. The initial accumulator value is provided
+by the base argument. bbtree-fold performs an left-to-right
+in-order traversal or "minimum key to maximum key".<div><a name="h3_bbtree-fold-right"></a><h3><code>(bbtree-fold-right combine base bbtree)</code></h3></div>bbtree-fold-right : (any any any -> any) any bbtree -> any
+like bbtree-fold, but it performs a right-to-left in-order
+traversal instead (i.e. maximum to minimum).<div><a name="h3_bbtree-map"></a><h3><code>(bbtree-map mapper bbtree)</code></h3></div>bbtree-map : (any -> any) bbtree -> bbtree
+returns the tree obtained by updating the value of each node with
+the result of applying the procedure to its value.<div><a name="h3_bbtree->alist"></a><h3><code>(bbtree->alist bbtree)</code></h3></div>bbtree->alist : bbtree -> Listof(Pairs)
+returns the key value associations of the bbtree as a list of
+pairs. The list returned is in sorted order according to the
+ordering procedure of the bbtree. A consequence of this is that one
+could write a sort procedure for lists of pairs as
+  (define (alist-sort alist &lt;)
+    (bbtree->alist (alist->bbtree alist &lt;))) <div><a name="h3_alist->bbtree"></a><h3><code>(alist->bbtree lst &lt;)</code></h3></div>alist->bbtree : Listof(Pairs) -> (any any -> boolean) -> bbtree
+returns the bbtree containing each of the key value pairs in the
+alist, using the &lt; argument as the ordering procedure.<div><a name="h3_bbtree-keys"></a><h3><code>(bbtree-keys bbtree)</code></h3></div>bbtree-keys : bbtree -> Listof(any)
+returns a list containing all the keys of the bbtree. The keys are
+sorted according to the bbtree's ordering procedure.<div><a name="h3_bbtree-union"></a><h3><code>(bbtree-union bbtree1 bbtree2)</code></h3></div>bbtree-union : bbtree bbtree -> bbtree
+returns a bbtree containing the union of the associations in
+bbtree1 and bbtree2. Where the same key occurs in both, the value
+in bbtree1 is preferred.<div><a name="h3_bbtree-difference"></a><h3><code>(bbtree-difference bbtree1 bbtree2)</code></h3></div>bbtree-difference : bbtree bbtree -> bbtree
+returns a bbtree containing the all the associations in bbtree1,
+which do not occur in bbtree2.<div><a name="h3_bbtree-intersection"></a><h3><code>(bbtree-intersection bbtree1 bbtree2)</code></h3></div>bbtree-intersection : bbtree bbtree -> bbtree
+returns a bbtree containing all the associations which appear in
+both bbtree1 and bbtree2. The value in bbtree1 are preferred over
+those in bbtree2.<div><a name="h3_bbtree-index"></a><h3><code>(bbtree-index bbtree key)</code></h3></div>bbtree-index bbtree any -> non-negative integer
+returns the index of the key in the bbtree. Index is an integer
+between 0 and size - 1, with the a key having a lower index than
+another if first-key &lt; second-key, according to the bbtree ordering
+procedure.<div><a name="h3_bbtree-ref/index"></a><h3><code>(bbtree-ref/index bbtree idx)</code></h3></div>bbtree-ref/index bbtree non-negative-integer -> any any
+returns the key and value of the association in the bbtree at the
+given index.</p><div id="footer"></div></div></body></html>
