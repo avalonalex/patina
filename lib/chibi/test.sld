@@ -1,154 +1,39 @@
-;; (chibi test) - Test framework library
-;;
-;; Provides testing functionality compatible with chibi-scheme's test suite.
-;; The primitive procedures are in (chibi test primitives), this file adds
-;; the test macro and helper functions.
 
 (define-library (chibi test)
+  (export
+   ;; basic interface
+   test test-equal test-error test-assert test-not test-values
+   test-group current-test-group
+   test-begin test-end test-syntax-error test-propagate-info
+   test-run test-exit test-equal?
+   ;; test and group data
+   test-get-name! test-group-name test-group-ref
+   test-group-set! test-group-inc! test-group-push!
+   ;; parameters
+   current-test-verbosity
+   current-test-applier current-test-skipper current-test-reporter
+   current-test-group-reporter test-failure-count
+   current-test-epsilon current-test-comparator
+   current-test-filters current-test-removers
+   current-test-group-filters current-test-group-removers
+   current-column-width)
   (import (scheme base)
-          (scheme complex)
           (scheme write)
-          (chibi test primitives))
-  (export test test-assert test-not test-error
-          test-begin test-end test-values
-          test-increment-passed test-increment-failed
-          test-equal?)
-  (begin
-    ;; test-equal? - Helper for approximate equality
-    ;;
-    ;; Supports:
-    ;; - Approximate comparison for inexact real numbers (using epsilon = 1e-6)
-    ;; - Approximate comparison for inexact complex numbers (compares real and imaginary parts)
-    ;; - Recursive comparison for pairs and vectors
-    ;; - Exact comparison for everything else
-    (define (test-equal? expected actual)
-      (define epsilon 1e-6)
-
-      ;; Helper predicates
-      (define (is-nan? x) (and (real? x) (inexact? x) (not (= x x))))
-      (define (is-infinite? x) (and (real? x) (inexact? x) (not (is-nan? x)) (= x (* 2 x))))
-
-      (define (approx-equal? x y)
-        (cond
-          ;; For inexact complex numbers (non-real), compare real and imaginary parts
-          ((and (complex? x) (complex? y)
-                (not (real? x)) (not (real? y))
-                (or (inexact? x) (inexact? y)))
-           (and (approx-equal? (real-part x) (real-part y))
-                (approx-equal? (imag-part x) (imag-part y))))
-          ;; For real inexact numbers, use epsilon-based comparison
-          ((and (real? x) (real? y) (inexact? x) (inexact? y))
-           (cond
-             ((and (is-nan? x) (is-nan? y)) #t)
-             ((or (is-nan? x) (is-nan? y)) #f)
-             ((and (is-infinite? x) (is-infinite? y)) (eqv? x y))
-             ((or (is-infinite? x) (is-infinite? y)) #f)
-             (else (< (abs (- x y)) epsilon))))
-          ;; For pairs, recurse
-          ((and (pair? x) (pair? y))
-           (and (approx-equal? (car x) (car y))
-                (approx-equal? (cdr x) (cdr y))))
-          ;; For vectors, recurse
-          ((and (vector? x) (vector? y) (= (vector-length x) (vector-length y)))
-           (let loop ((i 0))
-             (or (>= i (vector-length x))
-                 (and (approx-equal? (vector-ref x i) (vector-ref y i))
-                      (loop (+ i 1))))))
-          ;; Everything else: exact equal?
-          (else (equal? x y))))
-
-      (approx-equal? expected actual))
-
-    ;; test-values - Test for multiple values
-    (define-syntax test-values
-      (syntax-rules ()
-        ((test-values expect expr)
-         (test-values #f expect expr))
-        ((test-values name expect expr)
-         (test (call-with-values (lambda () expect) (lambda results results))
-               (call-with-values (lambda () expr) (lambda results results))))))
-
-    ;; test - Main test macro
-    (define-syntax test
-      (syntax-rules ()
-        ((test expected expr)
-         (begin
-           (display "Testing: ")
-           (newline)
-           (write 'expr)
-           (newline)
-           (newline)
-           (let ((expected-val expected))
-             (let ((actual-val expr))
-               (if (test-equal? expected-val actual-val)
-                   (begin
-                     (test-increment-passed)
-                     #t)
-                   (begin
-                     (test-increment-failed)
-                     (display "FAIL: ")
-                     (write 'expr)
-                     (newline)
-                     (display "  expected: ")
-                     (write expected-val)
-                     (newline)
-                     (display "  but got:  ")
-                     (write actual-val)
-                     (newline)
-                     (newline)
-                     #f))))))))
-
-    ;; test-assert - Assert that expression evaluates to a true value
-    ;; (test-assert expr) - unnamed assertion
-    ;; (test-assert name expr) - named assertion
-    (define-syntax test-assert
-      (syntax-rules ()
-        ((test-assert expr)
-         (test-assert #f expr))
-        ((test-assert name expr)
-         (let ((result expr))
-           (if result
-               (begin
-                 (test-increment-passed)
-                 #t)
-               (begin
-                 (test-increment-failed)
-                 (display "FAIL: ")
-                 (if name
-                     (begin (display name) (display " - ")))
-                 (write 'expr)
-                 (display " => expected true value, got ")
-                 (write result)
-                 (newline)
-                 #f))))))
-
-    ;; test-not - Assert that expression evaluates to #f
-    (define-syntax test-not
-      (syntax-rules ()
-        ((test-not expr)
-         (test-assert (not expr)))
-        ((test-not name expr)
-         (test-assert name (not expr)))))
-
-    ;; test-error - Assert that expression raises an error
-    ;; Uses guard to catch any error raised by expr.
-    (define-syntax test-error
-      (syntax-rules ()
-        ((test-error expr)
-         (test-error #f expr))
-        ((test-error name expr)
-         (guard (exn
-                  (#t
-                   ;; An error was raised — test passes
-                   (test-increment-passed)
-                   #t))
-           ;; If expr returns normally, the test fails
-           expr
-           (test-increment-failed)
-           (display "FAIL: ")
-           (if name
-               (begin (display name) (display " - ")))
-           (write 'expr)
-           (display " => expected error, but returned normally")
-           (newline)
-           #f))))))))
+          (scheme complex)
+          (scheme process-context)
+          (scheme time)
+          (chibi diff)
+          (chibi term ansi))
+  (cond-expand
+   (chibi
+    (import (only (chibi) pair-source print-exception)))
+   (chicken
+    (import (only (chicken) print-error-message))
+    (begin
+      (define (pair-source x) #f)
+      (define print-exception print-error-message)))
+   (else
+    (begin
+      (define (pair-source x) #f)
+      (define print-exception write))))
+  (include "test.scm"))

@@ -49,35 +49,6 @@ const CXR: &[&str] = &[
     "cddaar", "cddadr", "cddar", "cdddar", "cddddr", "cddr",
 ];
 
-const CHIBI_TEST_EXTRA: &[&str] = &[
-    "current-column-width",
-    "current-test-applier",
-    "current-test-comparator",
-    "current-test-epsilon",
-    "current-test-filters",
-    "current-test-group",
-    "current-test-group-filters",
-    "current-test-group-removers",
-    "current-test-group-reporter",
-    "current-test-removers",
-    "current-test-reporter",
-    "current-test-skipper",
-    "current-test-verbosity",
-    "test-equal",
-    "test-exit",
-    "test-failure-count",
-    "test-get-name!",
-    "test-group",
-    "test-group-inc!",
-    "test-group-name",
-    "test-group-push!",
-    "test-group-ref",
-    "test-group-set!",
-    "test-propagate-info",
-    "test-run",
-    "test-syntax-error",
-];
-
 const GUARDED: &[Guarded] = &[
     Guarded {
         library: "srfi 1",
@@ -146,12 +117,11 @@ const GUARDED: &[Guarded] = &[
         library: "chibi test",
         bundled: "lib/chibi/test.sld",
         vendored: "compat/vendor/chibi-test/chibi/test.sld",
-        only_bundled: &["test-increment-failed", "test-increment-passed"],
-        only_vendored: CHIBI_TEST_EXTRA,
-        rationale: "Patina implements the subset of (chibi test) the R7RS suite needs, plus two \
-                    counter hooks of its own. The upstream extras are test-runner configuration \
-                    and grouping that nothing in the corpus has required yet — expect this gap to \
-                    shrink as corpus packages ask for them.",
+        only_bundled: &[],
+        only_vendored: &[],
+        rationale: "Byte-identical upstream import. Patina previously shipped a \
+                    hand-written subset that under-reported the R7RS suite by 63 \
+                    tests and could not express three of its failures.",
     },
 ];
 

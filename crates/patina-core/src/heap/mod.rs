@@ -1774,8 +1774,22 @@ impl Heap {
             (HeapObjectData::BigInt(a_val), HeapObjectData::BigInt(b_val)) => a_val == b_val,
             // Rational comparison
             (HeapObjectData::Rational(a_val), HeapObjectData::Rational(b_val)) => a_val == b_val,
-            // Real comparison (IEEE 754 equality)
-            (HeapObjectData::Real(a_val), HeapObjectData::Real(b_val)) => a_val == b_val,
+            // Real comparison by bit pattern, not IEEE `==`.
+            //
+            // R7RS 6.1 requires eqv? on two inexact numbers to hold only when
+            // they "yield the same results ... when passed as arguments to any
+            // other procedure that can be defined as a finite composition of
+            // Scheme's standard arithmetic procedures". Bitwise identity is
+            // exactly that condition, and IEEE `==` gets both edge cases wrong
+            // in opposite directions:
+            //
+            //   (eqv? +nan.0 +nan.0)  `==` says #f; the values are
+            //                         indistinguishable, so #t.
+            //   (eqv? 0.0 -0.0)       `==` says #t; but (/ 1.0 0.0) is +inf.0
+            //                         while (/ 1.0 -0.0) is -inf.0, so #f.
+            (HeapObjectData::Real(a_val), HeapObjectData::Real(b_val)) => {
+                a_val.to_bits() == b_val.to_bits()
+            }
             // Complex comparison - recursively compare real and imaginary parts
             (
                 HeapObjectData::Complex {
@@ -1863,7 +1877,11 @@ impl Heap {
             // Numeric types - use eqv? semantics
             (HeapObjectData::BigInt(a_val), HeapObjectData::BigInt(b_val)) => a_val == b_val,
             (HeapObjectData::Rational(a_val), HeapObjectData::Rational(b_val)) => a_val == b_val,
-            (HeapObjectData::Real(a_val), HeapObjectData::Real(b_val)) => a_val == b_val,
+            // Same bit-pattern rule as values_eqv: equal? defers to eqv?
+            // on numbers, so the two must not disagree about NaN or -0.0.
+            (HeapObjectData::Real(a_val), HeapObjectData::Real(b_val)) => {
+                a_val.to_bits() == b_val.to_bits()
+            }
             (
                 HeapObjectData::Complex {
                     real: a_real,
