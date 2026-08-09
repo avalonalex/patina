@@ -78,6 +78,7 @@ use patina_core::{SharedHeap, TaggedValue};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_runtime::{Environment, ScopeId, ScopeSet};
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// Walk a freshly-expanded pair tree and stamp each unrecorded pair with the call-site source.
@@ -109,6 +110,15 @@ fn stamp_expansion_source(
         stamp_expansion_source(car, source, source_map, heap, depth + 1);
         stamp_expansion_source(cdr, source, source_map, heap, depth + 1);
     }
+}
+
+/// Monotonic counter for the unique names given to definition-environment
+/// aliases. Never reused, so an alias cannot collide with a user binding or
+/// with an alias from another expansion.
+fn next_alias_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Desugarer converts Value (surface syntax) to CoreExpr (core IR)
@@ -281,6 +291,134 @@ impl Desugarer {
         }
     }
 
+    /// Rewrite a macro expansion's free identifiers so they resolve where the
+    /// macro was defined.
+    ///
+    /// A `syntax-rules` template may name a helper private to the library that
+    /// defines the macro. The expansion carries only the bare name, so at the
+    /// use site it compiles to a global load that is not there. Each such name
+    /// gets a uniquely-named alias in the use site's global environment
+    /// pointing back at the definition environment.
+    ///
+    /// The definition binding wins whenever the two environments disagree
+    /// (R7RS 4.3.2), so a use-site binding of the same name does not displace
+    /// it. Where both resolve to the same value — the common case, since most
+    /// template references are to primitives copied into both — nothing is
+    /// rewritten.
+    fn link_definition_env_refs(
+        &self,
+        expanded: TaggedValue,
+        definition_env: Option<&Rc<Environment>>,
+        template_symbols: &HashSet<Rc<str>>,
+        shared_heap: &SharedHeap,
+    ) -> TaggedValue {
+        let (Some(def_env), Some(use_env)) = (definition_env, self.env.as_ref()) else {
+            return expanded;
+        };
+        if def_env.env_id() == use_env.env_id() || template_symbols.is_empty() {
+            return expanded;
+        }
+
+        // Decide once per *name* rather than once per occurrence: the answer
+        // depends only on the two environments, both fixed for this call. This
+        // keeps the tree walk to a map lookup per leaf, and skips it entirely
+        // when nothing needs relinking — which is the usual outcome, since
+        // `let`, `cond` and friends only reference primitives.
+        //
+        // Aliases must land in the environment the code will actually be
+        // resolved in. `self.env` may be a transient child created for a
+        // `let-syntax` or internal-define body and dropped when desugaring
+        // ends, so walk to the root of the chain.
+        let target_env = use_env.root();
+        let mut renames: HashMap<Rc<str>, TaggedValue> = HashMap::new();
+        for name in template_symbols {
+            let Some(def_value) = def_env.get(name) else {
+                continue;
+            };
+            if use_env.get(name) == Some(def_value) {
+                continue;
+            }
+            let alias = format!("{}.{}", name, next_alias_id());
+            let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
+            target_env.define_alias(alias, def_env.clone(), name.clone());
+            renames.insert(name.clone(), symbol);
+        }
+        if renames.is_empty() {
+            return expanded;
+        }
+        self.rewrite_refs(expanded, &renames, 0, shared_heap)
+    }
+
+    /// Substitute `renames` into evaluated positions of `tv`.
+    ///
+    /// `quote_depth` tracks quasiquotation: names inside quoted data denote
+    /// themselves, not bindings, so rewriting them there would corrupt the
+    /// datum. Depth rises through `quasiquote` and falls through `unquote` /
+    /// `unquote-splicing`; `quote` is opaque outright.
+    fn rewrite_refs(
+        &self,
+        tv: TaggedValue,
+        renames: &HashMap<Rc<str>, TaggedValue>,
+        quote_depth: u32,
+        shared_heap: &SharedHeap,
+    ) -> TaggedValue {
+        if tv.is_pair() {
+            let (car, cdr) = shared_heap.borrow().get_pair(tv);
+            // A quoting head changes how the rest of the form is read.
+            let head = {
+                let heap = shared_heap.borrow();
+                heap.get_symbol_or_identifier_name(car).map(String::from)
+            };
+            let inner_depth = match head.as_deref() {
+                Some("quote") => return tv,
+                Some("quasiquote") => quote_depth + 1,
+                Some("unquote") | Some("unquote-splicing") => quote_depth.saturating_sub(1),
+                _ => quote_depth,
+            };
+            let new_car = self.rewrite_refs(car, renames, quote_depth, shared_heap);
+            let new_cdr = self.rewrite_refs(cdr, renames, inner_depth, shared_heap);
+            if new_car == car && new_cdr == cdr {
+                return tv;
+            }
+            return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
+        }
+
+        if tv.is_vector() {
+            // Vector elements are evaluated inside quasiquote, so they have to
+            // be walked. A bare `#(...)` is self-evaluating data and is
+            // protected by `quote_depth` like anything else.
+            let (len, elems) = {
+                let heap = shared_heap.borrow();
+                let len = heap.vector_len(tv);
+                let elems: Vec<TaggedValue> = (0..len).map(|i| heap.vector_ref(tv, i)).collect();
+                (len, elems)
+            };
+            let mut out = Vec::with_capacity(len);
+            let mut changed = false;
+            for e in elems {
+                let new_e = self.rewrite_refs(e, renames, quote_depth, shared_heap);
+                changed |= new_e != e;
+                out.push(new_e);
+            }
+            if !changed {
+                return tv;
+            }
+            return shared_heap.borrow_mut().alloc_vector(out);
+        }
+
+        if quote_depth > 0 {
+            return tv;
+        }
+        let name = {
+            let heap = shared_heap.borrow();
+            heap.get_symbol_or_identifier_name(tv).map(String::from)
+        };
+        match name.and_then(|n| renames.get(n.as_str()).copied()) {
+            Some(alias) => alias,
+            None => tv,
+        }
+    }
+
     /// Look up the source location for a TaggedValue in the source map
     fn lookup_source(&self, tv: TaggedValue) -> Option<SourceLocation> {
         self.source_map
@@ -450,6 +588,17 @@ impl Desugarer {
                 &self.current_scopes,
             )
             .map_err(|e| DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e)))?;
+
+            // Referential transparency: a template's free identifiers denote what
+            // they were bound to where the macro was *defined*. Link any that the
+            // use site cannot resolve back to the definition environment before
+            // desugaring, otherwise they become bare global loads here and fail.
+            let expanded_tagged = self.link_definition_env_refs(
+                expanded_tagged,
+                compiled_macro.definition_env.as_ref(),
+                &compiled_macro.template_symbols,
+                shared_heap,
+            );
 
             // Phase 4: stamp expanded pairs + record macro expansion chain
             if let (Some(src), Some(sm)) = (&call_site_source, &self.source_map) {

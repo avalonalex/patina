@@ -325,13 +325,20 @@ impl Compiler {
             max_pvars = max_pvars.max(self.pvar_count);
         }
 
+        let template_symbols = CompiledMacro::collect_template_symbols(&compiled_rules);
         Ok(CompiledMacro {
             name,
             literals: self.literals.clone(),
+            template_symbols,
             rules: compiled_rules,
             max_pvars,
             definition_scopes: self.definition_scopes.clone(),
             heap: self.heap.clone(),
+            // Carry the definition environment so a template's free identifiers
+            // can be resolved where the macro was written rather than where it
+            // is used. Previously `env` was consulted only as a yes/no predicate
+            // and then dropped.
+            definition_env: self.env.clone(),
         })
     }
 }

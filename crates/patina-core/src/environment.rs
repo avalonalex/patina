@@ -15,6 +15,13 @@ pub struct ScopedBinding {
     pub(crate) tagged_value: TaggedValue,
 }
 
+/// Where a macro-expansion alias points: the environment holding the real
+/// binding, and the name it has there.
+type AliasTarget = (Rc<Environment>, Rc<str>);
+
+/// Alias name -> the binding it forwards to.
+type AliasBindings = FxHashMap<String, AliasTarget>;
+
 /// Simple (non-scoped) binding storage: name → slot index into `slots`.
 ///
 /// Slots are append-only: a binding's slot never moves or disappears once
@@ -107,6 +114,18 @@ pub struct Environment {
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
     scoped_bindings: Rc<RefCell<FxHashMap<String, Vec<ScopedBinding>>>>,
+    /// Bindings installed by macro expansion that point at a binding in
+    /// another environment instead of holding a value.
+    ///
+    /// A `syntax-rules` template may reference a name bound where the macro was
+    /// *defined* — typically a library-private helper — which does not exist
+    /// where the macro is *used*. Expansion renames such a reference to a
+    /// unique name and records the alias here, so the use site can resolve it.
+    ///
+    /// The indirection is deliberate: resolving through the alias on every
+    /// lookup means a later `set!` on the original binding is visible, which
+    /// copying the value at expansion time would silently freeze.
+    alias_bindings: Rc<RefCell<AliasBindings>>,
     parent: Option<Rc<Environment>>,
 }
 
@@ -123,6 +142,7 @@ impl Environment {
             bindings: Rc::new(RefCell::new(Bindings::default())),
             env_id: fresh_env_id(),
             scoped_bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            alias_bindings: Rc::new(RefCell::new(FxHashMap::default())),
             parent: None,
         }
     }
@@ -134,6 +154,7 @@ impl Environment {
             bindings: Rc::new(RefCell::new(Bindings::default())),
             env_id: fresh_env_id(),
             scoped_bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            alias_bindings: Rc::new(RefCell::new(FxHashMap::default())),
             parent: Some(parent),
         }
     }
@@ -209,11 +230,17 @@ impl Environment {
     pub fn set(&self, name: &str, value: TaggedValue) -> Result<(), String> {
         if let Some(slot) = self.local_slot(name) {
             self.set_slot_value(slot, value);
-            Ok(())
-        } else if let Some(parent) = &self.parent {
-            parent.set(name, value)
-        } else {
-            Err(name.to_string())
+            return Ok(());
+        }
+        // Assign through a macro-expansion alias, so a template that mutates a
+        // binding private to its defining library works. Reads follow aliases
+        // in `get`; writes have to as well or the two disagree.
+        if let Some((target_env, target_name)) = self.alias_target(name) {
+            return target_env.set(&target_name, value);
+        }
+        match &self.parent {
+            Some(parent) => parent.set(name, value),
+            None => Err(name.to_string()),
         }
     }
 
@@ -223,12 +250,53 @@ impl Environment {
     /// For the simple name-based lookup for identifiers.
     pub fn get(&self, name: &str) -> Option<TaggedValue> {
         if let Some(tv) = self.bindings.borrow().get(name) {
-            Some(tv)
-        } else if let Some(parent) = &self.parent {
-            parent.get(name)
-        } else {
-            None
+            return Some(tv);
         }
+        // Follow a macro-expansion alias into the environment the macro was
+        // defined in. Checked after real bindings so a local definition always
+        // wins, and before the parent so the alias is not shadowed by an
+        // unrelated outer binding of the same (unique) name.
+        if let Some((target_env, target_name)) = self.alias_target(name) {
+            return target_env.get(&target_name);
+        }
+        self.parent.as_ref().and_then(|p| p.get(name))
+    }
+
+    /// Resolve a macro-expansion alias installed here, if any.
+    ///
+    /// The emptiness check matters: this sits on every global lookup that falls
+    /// through to a parent, and almost every environment has no aliases at all.
+    fn alias_target(&self, name: &str) -> Option<AliasTarget> {
+        let aliases = self.alias_bindings.borrow();
+        if aliases.is_empty() {
+            return None;
+        }
+        aliases.get(name).cloned()
+    }
+
+    /// The root of this environment's parent chain.
+    ///
+    /// Macro-expansion aliases must be installed where the code will actually
+    /// be resolved. A desugar-time environment may be a transient child made
+    /// for a `let-syntax` or internal-define body and dropped once desugaring
+    /// finishes, so aliases go to the root instead.
+    pub fn root(self: &Rc<Self>) -> Rc<Environment> {
+        let mut env = self.clone();
+        while let Some(parent) = env.parent.clone() {
+            env = parent;
+        }
+        env
+    }
+
+    /// Install a macro-expansion alias: `alias` resolves to `target_name` as
+    /// bound in `target_env`, looked up afresh on every access.
+    ///
+    /// `alias` is expected to be a name expansion generated and therefore
+    /// unique, so this cannot shadow anything the program itself wrote.
+    pub fn define_alias(&self, alias: String, target_env: Rc<Environment>, target_name: Rc<str>) {
+        self.alias_bindings
+            .borrow_mut()
+            .insert(alias, (target_env, target_name));
     }
 
     /// Define a binding with a scope set (for scope-based hygiene)
@@ -501,6 +569,18 @@ impl Environment {
             for binding in scoped {
                 f(binding.tagged_value);
             }
+        }
+    }
+
+    /// Visit the environments this one's macro-expansion aliases point at.
+    ///
+    /// GC tracing hook. Values reachable only through an alias -- a library
+    /// private referenced by an exported macro -- are live, but the alias edge
+    /// is an `Rc<Environment>` in a side table rather than a `TaggedValue` in a
+    /// slot, so `for_each_local_value` cannot see it.
+    pub fn for_each_alias_target(&self, f: &mut dyn FnMut(&Environment)) {
+        for (env, _) in self.alias_bindings.borrow().values() {
+            f(env);
         }
     }
 }

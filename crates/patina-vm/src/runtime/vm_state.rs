@@ -1032,10 +1032,12 @@ fn dispatch_one_instruction(
             let globals = frame_globals(state);
             let val = match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
                 Some(slot) => globals.slot_value(slot),
-                // Not local to this environment: parent-chain lookup.
+                // Not a local slot. Fall back to the full lookup rather than
+                // straight to the parent: `get` also follows macro-expansion
+                // aliases recorded on this environment, which is how a template
+                // reaches a binding private to the library that defined it.
                 None => globals
-                    .parent()
-                    .and_then(|p| p.get(name))
+                    .get(name)
                     .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
             };
             state.set_reg_at(base, dst, val);
@@ -1050,13 +1052,14 @@ fn dispatch_one_instruction(
                     mark_if_shadowing_primitive_value(state, old, val);
                     globals.set_slot_value(slot, val);
                 }
-                // Not local to this environment: parent-chain set.
+                // Not a local slot. Use the full `set` rather than going
+                // straight to the parent: it also follows macro-expansion
+                // aliases, so a template can assign to a binding private to the
+                // library that defined it, matching what `get` already does.
                 None => {
                     mark_if_shadowing_primitive(state, &globals, name, val);
                     globals
-                        .parent()
-                        .ok_or(())
-                        .and_then(|p| p.set(name, val).map_err(|_| ()))
+                        .set(name, val)
                         .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
                 }
             }

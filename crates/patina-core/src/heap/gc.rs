@@ -491,6 +491,13 @@ impl<'h> GcVisitor<'h> {
                 break;
             }
             e.for_each_local_value(&mut |tv| self.visit(tv));
+            // Alias edges leave the parent tree, so collect them and walk them
+            // as separate roots rather than following the chain.
+            let mut alias_targets = Vec::new();
+            e.for_each_alias_target(&mut |target| alias_targets.push(target.clone()));
+            for target in &alias_targets {
+                self.visit_env(target);
+            }
             current = e.parent().map(|p| p.as_ref());
         }
     }
@@ -645,6 +652,12 @@ impl<'h> GcVisitor<'h> {
             },
             HeapObjectData::Macro(m) => {
                 m.for_each_literal(&mut |tv| self.visit(tv));
+                // A live macro keeps its definition environment live: its
+                // templates may reference bindings that exist nowhere else.
+                if let Some(env) = &m.definition_env {
+                    let env = env.clone();
+                    self.visit_env(&env);
+                }
             }
             HeapObjectData::Record { fields, .. } => {
                 for &field in fields.borrow().iter() {
