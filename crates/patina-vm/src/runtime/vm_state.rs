@@ -1052,13 +1052,14 @@ fn dispatch_one_instruction(
                     mark_if_shadowing_primitive_value(state, old, val);
                     globals.set_slot_value(slot, val);
                 }
-                // Not local to this environment: parent-chain set.
+                // Not a local slot. Use the full `set` rather than going
+                // straight to the parent: it also follows macro-expansion
+                // aliases, so a template can assign to a binding private to the
+                // library that defined it, matching what `get` already does.
                 None => {
                     mark_if_shadowing_primitive(state, &globals, name, val);
                     globals
-                        .parent()
-                        .ok_or(())
-                        .and_then(|p| p.set(name, val).map_err(|_| ()))
+                        .set(name, val)
                         .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
                 }
             }

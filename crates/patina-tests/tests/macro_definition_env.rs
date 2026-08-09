@@ -224,3 +224,119 @@ fn test_definition_binding_wins_over_use_site() {
         "template's `shared` must be the one defined alongside the macro"
     );
 }
+
+// ─── Cases the first cut of the alias mechanism got wrong ────────────────────
+//
+// The rewrite that links template identifiers to the definition environment
+// initially walked the raw expansion as a flat pair tree. That is the wrong
+// shape for syntax in three ways, each of which corrupted working programs.
+
+/// Quoted data denotes itself. Rewriting a name inside `quote` turned
+/// `'(helper x)` into `'(helper.0 x)` — a corrupted datum, not a reference.
+#[test]
+fn test_quoted_data_is_not_rewritten() {
+    let (eval, _t) = eval_with_libs(&[
+        (
+            "q.sld",
+            r#"(define-library (t q)
+                 (import (scheme base))
+                 (export mq)
+                 (begin
+                   (define (helper x) x)
+                   (define-syntax mq (syntax-rules () ((mq x) '(helper x))))))"#,
+        ),
+        (
+            "useq.sld",
+            r#"(define-library (t useq)
+                 (import (scheme base) (t q))
+                 (export r)
+                 (begin (define r (length (mq 1)))))"#,
+        ),
+    ]);
+    assert_eq!(exported_fixnum(&eval, "useq", "r"), 2);
+}
+
+/// Vector elements are evaluated inside quasiquote, so the walk has to descend
+/// into vectors. A pair-only walk silently left the reference unlinked.
+#[test]
+fn test_quasiquoted_vector_elements_are_rewritten() {
+    let (eval, _t) = eval_with_libs(&[
+        (
+            "v.sld",
+            r#"(define-library (t v)
+                 (import (scheme base))
+                 (export mvec)
+                 (begin
+                   (define (secret x) (* x 2))
+                   (define-syntax mvec (syntax-rules () ((mvec e) `#(,(secret e)))))))"#,
+        ),
+        (
+            "usev.sld",
+            r#"(define-library (t usev)
+                 (import (scheme base) (t v))
+                 (export r)
+                 (begin (define r (vector-ref (mvec 5) 0))))"#,
+        ),
+    ]);
+    assert_eq!(exported_fixnum(&eval, "usev", "r"), 10);
+}
+
+/// Writes must follow the alias as reads do. `get` was taught to and `set` was
+/// not, so a template that mutated a library-private binding failed — while the
+/// field documentation claimed the opposite.
+#[test]
+fn test_set_through_a_template_reference_is_live() {
+    let (eval, _t) = eval_with_libs(&[
+        (
+            "c.sld",
+            r#"(define-library (t c)
+                 (import (scheme base))
+                 (export bump)
+                 (begin
+                   (define counter 0)
+                   (define-syntax bump
+                     (syntax-rules () ((bump) (begin (set! counter (+ counter 1)) counter))))))"#,
+        ),
+        (
+            "usec.sld",
+            r#"(define-library (t usec)
+                 (import (scheme base) (t c))
+                 (export r)
+                 (begin
+                   (bump)
+                   (bump)
+                   (define r (bump))))"#,
+        ),
+    ]);
+    // 3, not 1: the alias resolves afresh each time rather than snapshotting.
+    assert_eq!(exported_fixnum(&eval, "usec", "r"), 3);
+}
+
+/// Aliases must land in the environment the code is resolved in. `self.env` at
+/// desugar time can be a transient child made for a `let-syntax` body, which is
+/// dropped before the program runs — so the alias went with it.
+#[test]
+fn test_expansion_inside_a_let_syntax_body_resolves() {
+    let (eval, _t) = eval_with_libs(&[
+        (
+            "p.sld",
+            r#"(define-library (t p)
+                 (import (scheme base))
+                 (export mp)
+                 (begin
+                   (define (helper x) (* 5 x))
+                   (define-syntax mp (syntax-rules () ((mp x) (helper x))))))"#,
+        ),
+        (
+            "usep.sld",
+            r#"(define-library (t usep)
+                 (import (scheme base) (t p))
+                 (export r)
+                 (begin
+                   (define r
+                     (let-syntax ((ignore (syntax-rules () ((ignore) 0))))
+                       (mp 5)))))"#,
+        ),
+    ]);
+    assert_eq!(exported_fixnum(&eval, "usep", "r"), 25);
+}

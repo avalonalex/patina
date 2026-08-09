@@ -78,6 +78,7 @@ use patina_core::{SharedHeap, TaggedValue};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_runtime::{Environment, ScopeId, ScopeSet};
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// Walk a freshly-expanded pair tree and stamp each unrecorded pair with the call-site source.
@@ -111,6 +112,15 @@ fn stamp_expansion_source(
     }
 }
 
+/// Monotonic counter for the unique names given to definition-environment
+/// aliases. Never reused, so an alias cannot collide with a user binding or
+/// with an alias from another expansion.
+fn next_alias_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Desugarer converts Value (surface syntax) to CoreExpr (core IR)
 ///
 /// **Macro-Aware Design**: The desugarer can optionally take an environment
@@ -132,15 +142,6 @@ fn stamp_expansion_source(
 /// macro calls, even if a macro with that name exists in the environment.
 /// This handles cases like `(let ((let odd?)) (let 8))` where the inner `let`
 /// should call the variable, not expand the macro.
-/// Monotonic counter for the unique names given to definition-environment
-/// aliases. Never reused, so an alias cannot collide with a user binding or
-/// with an alias from another expansion.
-fn next_alias_id() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    NEXT.fetch_add(1, Ordering::Relaxed)
-}
-
 pub struct Desugarer {
     /// Optional environment for macro lookup
     /// If None, macros cannot be expanded (will cause desugar errors)
@@ -290,88 +291,134 @@ impl Desugarer {
         }
     }
 
-    /// Rewrite free identifiers in a macro expansion that only the macro's
-    /// definition environment can resolve.
+    /// Rewrite a macro expansion's free identifiers so they resolve where the
+    /// macro was defined.
     ///
-    /// A `syntax-rules` template may name a helper that is private to the
-    /// library defining the macro. The expansion carries only the bare name, so
-    /// at the use site it compiles to a global load that is not there. For each
-    /// such name this installs a uniquely-named alias in the use-site
-    /// environment pointing back at the definition environment, and rewrites
-    /// the reference to use it.
+    /// A `syntax-rules` template may name a helper private to the library that
+    /// defines the macro. The expansion carries only the bare name, so at the
+    /// use site it compiles to a global load that is not there. Each such name
+    /// gets a uniquely-named alias in the use site's global environment
+    /// pointing back at the definition environment.
     ///
-    /// Deliberately conservative: a name the use site *can* already resolve is
-    /// left untouched. Preferring the definition binding in that case would be
-    /// more faithful to R7RS, but it would also change the meaning of macros
-    /// that resolve correctly today, so it is left for a separate change.
+    /// The definition binding wins whenever the two environments disagree
+    /// (R7RS 4.3.2), so a use-site binding of the same name does not displace
+    /// it. Where both resolve to the same value — the common case, since most
+    /// template references are to primitives copied into both — nothing is
+    /// rewritten.
     fn link_definition_env_refs(
         &self,
-        expanded: patina_core::TaggedValue,
-        definition_env: Option<&std::rc::Rc<patina_runtime::Environment>>,
-        template_symbols: &std::collections::HashSet<std::rc::Rc<str>>,
-        shared_heap: &patina_core::SharedHeap,
-    ) -> patina_core::TaggedValue {
-        let (Some(def_env), Some(use_env)) = (definition_env, self.env.clone()) else {
+        expanded: TaggedValue,
+        definition_env: Option<&Rc<Environment>>,
+        template_symbols: &HashSet<Rc<str>>,
+        shared_heap: &SharedHeap,
+    ) -> TaggedValue {
+        let (Some(def_env), Some(use_env)) = (definition_env, self.env.as_ref()) else {
             return expanded;
         };
-        // Same environment: nothing can be missing.
         if def_env.env_id() == use_env.env_id() || template_symbols.is_empty() {
             return expanded;
         }
-        self.link_refs_impl(expanded, def_env, &use_env, template_symbols, shared_heap)
+
+        // Decide once per *name* rather than once per occurrence: the answer
+        // depends only on the two environments, both fixed for this call. This
+        // keeps the tree walk to a map lookup per leaf, and skips it entirely
+        // when nothing needs relinking — which is the usual outcome, since
+        // `let`, `cond` and friends only reference primitives.
+        //
+        // Aliases must land in the environment the code will actually be
+        // resolved in. `self.env` may be a transient child created for a
+        // `let-syntax` or internal-define body and dropped when desugaring
+        // ends, so walk to the root of the chain.
+        let target_env = use_env.root();
+        let mut renames: HashMap<Rc<str>, TaggedValue> = HashMap::new();
+        for name in template_symbols {
+            let Some(def_value) = def_env.get(name) else {
+                continue;
+            };
+            if use_env.get(name) == Some(def_value) {
+                continue;
+            }
+            let alias = format!("{}.{}", name, next_alias_id());
+            let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
+            target_env.define_alias(alias, def_env.clone(), name.clone());
+            renames.insert(name.clone(), symbol);
+        }
+        if renames.is_empty() {
+            return expanded;
+        }
+        self.rewrite_refs(expanded, &renames, 0, shared_heap)
     }
 
-    fn link_refs_impl(
+    /// Substitute `renames` into evaluated positions of `tv`.
+    ///
+    /// `quote_depth` tracks quasiquotation: names inside quoted data denote
+    /// themselves, not bindings, so rewriting them there would corrupt the
+    /// datum. Depth rises through `quasiquote` and falls through `unquote` /
+    /// `unquote-splicing`; `quote` is opaque outright.
+    fn rewrite_refs(
         &self,
-        tv: patina_core::TaggedValue,
-        def_env: &std::rc::Rc<patina_runtime::Environment>,
-        use_env: &std::rc::Rc<patina_runtime::Environment>,
-        template_symbols: &std::collections::HashSet<std::rc::Rc<str>>,
-        shared_heap: &patina_core::SharedHeap,
-    ) -> patina_core::TaggedValue {
+        tv: TaggedValue,
+        renames: &HashMap<Rc<str>, TaggedValue>,
+        quote_depth: u32,
+        shared_heap: &SharedHeap,
+    ) -> TaggedValue {
         if tv.is_pair() {
             let (car, cdr) = shared_heap.borrow().get_pair(tv);
-            let new_car = self.link_refs_impl(car, def_env, use_env, template_symbols, shared_heap);
-            let new_cdr = self.link_refs_impl(cdr, def_env, use_env, template_symbols, shared_heap);
+            // A quoting head changes how the rest of the form is read.
+            let head = {
+                let heap = shared_heap.borrow();
+                heap.get_symbol_or_identifier_name(car).map(String::from)
+            };
+            let inner_depth = match head.as_deref() {
+                Some("quote") => return tv,
+                Some("quasiquote") => quote_depth + 1,
+                Some("unquote") | Some("unquote-splicing") => quote_depth.saturating_sub(1),
+                _ => quote_depth,
+            };
+            let new_car = self.rewrite_refs(car, renames, quote_depth, shared_heap);
+            let new_cdr = self.rewrite_refs(cdr, renames, inner_depth, shared_heap);
             if new_car == car && new_cdr == cdr {
                 return tv;
             }
             return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
         }
 
+        if tv.is_vector() {
+            // Vector elements are evaluated inside quasiquote, so they have to
+            // be walked. A bare `#(...)` is self-evaluating data and is
+            // protected by `quote_depth` like anything else.
+            let (len, elems) = {
+                let heap = shared_heap.borrow();
+                let len = heap.vector_len(tv);
+                let elems: Vec<TaggedValue> = (0..len).map(|i| heap.vector_ref(tv, i)).collect();
+                (len, elems)
+            };
+            let mut out = Vec::with_capacity(len);
+            let mut changed = false;
+            for e in elems {
+                let new_e = self.rewrite_refs(e, renames, quote_depth, shared_heap);
+                changed |= new_e != e;
+                out.push(new_e);
+            }
+            if !changed {
+                return tv;
+            }
+            return shared_heap.borrow_mut().alloc_vector(out);
+        }
+
+        if quote_depth > 0 {
+            return tv;
+        }
         let name = {
             let heap = shared_heap.borrow();
-            heap.get_symbol_name(tv)
-                .map(std::rc::Rc::from)
-                .or_else(|| utils::get_identifier_info(tv, &heap).map(|(n, _)| n))
+            heap.get_symbol_or_identifier_name(tv).map(String::from)
         };
-        let Some(name) = name else { return tv };
-
-        // Only names the template itself mentions are eligible: anything else
-        // arrived by pattern-variable substitution and belongs to the caller.
-        if !template_symbols.contains(&name) {
-            return tv;
+        match name.and_then(|n| renames.get(n.as_str()).copied()) {
+            Some(alias) => alias,
+            None => tv,
         }
-        // The definition environment decides. R7RS 4.3.2: a free identifier in a
-        // template refers to the binding in scope where the macro was written,
-        // so a use-site binding of the same name must not displace it.
-        let Some(def_value) = def_env.get(&name) else {
-            return tv;
-        };
-
-        // Both environments agree on the value -- overwhelmingly the common
-        // case, since most template references are to primitives that were
-        // copied into both. Relinking would be a no-op, so skip the alias and
-        // the symbol allocation rather than paying for them on every expansion
-        // of `let`, `cond`, `do` and friends.
-        if use_env.get(&name) == Some(def_value) {
-            return tv;
-        }
-
-        let alias = format!("{}.{}", name, next_alias_id());
-        use_env.define_alias(alias.clone(), def_env.clone(), name);
-        shared_heap.borrow_mut().intern_symbol(&alias)
     }
+
     /// Look up the source location for a TaggedValue in the source map
     fn lookup_source(&self, tv: TaggedValue) -> Option<SourceLocation> {
         self.source_map
