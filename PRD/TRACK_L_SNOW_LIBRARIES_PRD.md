@@ -133,7 +133,47 @@ Tier 0 keeps ordinary CI fast and offline; tiers 1–2 give the breadth the goal
 
 **Location.** In-tree, so a fix and its results delta land in the same PR; a separate repo invites version skew about which Patina produced which matrix.
 
-- **Acceptance:** `cargo run -p patina-compat -- run` reports a baseline "N of M" on a machine with no Scheme installed, and tier 0 runs as part of normal CI so regressions surface without network.
+- **Acceptance:** `cargo run -p patina-compat -- run` reports a baseline "N of M" on a machine with no Scheme installed.
+
+**What gates CI, and what does not.** The corpus pass rate is a *measurement*, not a promise, so it
+runs out-of-band and never blocks a merge — a third-party package regressing is information, not a
+build break. Bundled libraries are the opposite: they are part of what Patina ships, so their tests
+**do** run in routine CI. See L4.
+
+---
+
+### L4 — Make bundled ports canonical, then drop their vendored duplicates  *(TODO — interim state)*
+
+`compat/vendor/` currently contains five packages Patina also bundles — `(chibi test)`, `(srfi 1)`,
+`(srfi 8)`, `(srfi 69)`, `(srfi 128)`. **This duplication is temporary and should be removed.**
+
+**Target state:** every bundled library is a faithful import of its upstream reference rather than a
+subset or a local adaptation; the **bundled version is canonical**; and the vendored duplicate is
+gone from the corpus, so there is no shadowing question to answer and no second copy to keep in sync.
+
+**Why it is not done yet:** the ports have diverged from upstream, and deleting the references before
+reconciling them would discard the only evidence of how. Measured today:
+
+| Library | Divergence from upstream |
+|---|---|
+| `(chibi test)` | **Missing 26 exports** — `test-group`, `test-exit`, `test-run`, `test-equal`, `test-group-ref`, the `current-test-*` parameters. Patina ships two counter hooks upstream lacks. |
+| `(srfi 1)` | Does not re-export the 26 `c[ad]+r` accessors upstream does; exports `make-list`/`list-copy`, which upstream leaves to `(scheme base)`. 74 lines of real drift, rest whitespace. |
+| `(srfi 128)` | Missing `%salt%` (internal, not in the SRFI — likely correct to keep out). |
+| `(srfi 8)`, `(srfi 69)` | Identical. Ready to un-duplicate now. |
+
+**`(chibi test)` first.** It was written as a hack — the minimum needed to get the chibi R7RS suite
+running under Patina — and it is now the **most-depended library in the ecosystem** (in-degree 43),
+so its 26 missing exports will block corpus packages directly. Replace it with a proper import of
+upstream. Care required: the 1163-test R7RS suite runs on it, so this lands as its own PR where any
+regression is attributable.
+
+**Steps:** reconcile each port against its vendored reference → remove the vendored copy → let
+`build_corpus.py` exclude bundled libraries automatically via `bundled_libraries()` → delete
+`crates/patina-tests/tests/bundled_vs_vendored.rs` and the `bundled_by_patina` manifest flag, which
+exist only to make the interim state safe.
+
+- **Acceptance:** no package in `compat/vendor/` is flagged `bundled_by_patina`; the drift guard and
+  the flag are deleted; `./scripts/run_chibi_tests.sh` still reports 1163/1163.
 
 ---
 
