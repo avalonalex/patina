@@ -1,0 +1,30 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_xgb-create-booster">xgb-create-booster</a></li><li><a href="#h3_dmatrix?">dmatrix?</a></li><li><a href="#h3_booster?">booster?</a></li><li><a href="#h3_xgb-get-last-error">xgb-get-last-error</a></li><li><a href="#h3_xgb-create-matrix">xgb-create-matrix</a></li><li><a href="#h3_xgb-create-matrix/csr">xgb-create-matrix/csr</a></li><li><a href="#h3_xgb-create-matrix-from-file">xgb-create-matrix-from-file</a></li><li><a href="#h3_xgb-matrix-num-rows">xgb-matrix-num-rows</a></li><li><a href="#h3_xgb-matrix-num-cols">xgb-matrix-num-cols</a></li><li><a href="#h3_%xgb-booster-create">%xgb-booster-create</a></li><li><a href="#h3_xgb-booster-set-param!">xgb-booster-set-param!</a></li><li><a href="#h3_xgb-booster-update-one-iter">xgb-booster-update-one-iter</a></li><li><a href="#h3_xgb-booster-eval-one-iter">xgb-booster-eval-one-iter</a></li><li><a href="#h3_xgb-booster-boost-one-iter">xgb-booster-boost-one-iter</a></li><li><a href="#h3_xgb-booster-predict">xgb-booster-predict</a></li><li><a href="#h3_xgb-matrix-float-info">xgb-matrix-float-info</a></li></ol></div><div id="main"><div><a name="h1_(chibixgboost)"></a><h1>(chibi xgboost)</h1></div><div><a name="h3_xgb-create-booster"></a><h3><code>(xgb-create-booster dmat [ls])</code></h3></div><div><a name="h3_dmatrix?"></a><h3><code>(dmatrix? obj)</code></h3></div><div><a name="h3_booster?"></a><h3><code>(booster? obj)</code></h3></div><div><a name="h3_xgb-get-last-error"></a><h3><code>(xgb-get-last-error)</code></h3></div><div><a name="h3_xgb-create-matrix"></a><h3><code>(xgb-create-matrix f32vector bst_ulong bst_ulong float int)</code></h3></div><div><a name="h3_xgb-create-matrix/csr"></a><h3><code>(xgb-create-matrix/csr u64vector u32vector f32vector size_t size_t)</code></h3></div><div><a name="h3_xgb-create-matrix-from-file"></a><h3><code>(xgb-create-matrix-from-file string boolean)</code></h3></div><div><a name="h3_xgb-matrix-num-rows"></a><h3><code>(xgb-matrix-num-rows DMatrixHandle)</code></h3></div><div><a name="h3_xgb-matrix-num-cols"></a><h3><code>(xgb-matrix-num-cols DMatrixHandle)</code></h3></div><div><a name="h3_%xgb-booster-create"></a><h3><code>(%xgb-booster-create DMatrixHandle)</code></h3></div><div><a name="h3_xgb-booster-set-param!"></a><h3><code>(xgb-booster-set-param! BoosterHandle string string)</code></h3></div><div><a name="h3_xgb-booster-update-one-iter"></a><h3><code>(xgb-booster-update-one-iter BoosterHandle int DMatrixHandle)</code></h3></div><div><a name="h3_xgb-booster-eval-one-iter"></a><h3><code>(xgb-booster-eval-one-iter BoosterHandle int DMatrixHandle [const string])</code></h3></div><div><a name="h3_xgb-booster-boost-one-iter"></a><h3><code>(xgb-booster-boost-one-iter BoosterHandle DMatrixHandle f32vector f32vector)</code></h3></div><div><a name="h3_xgb-booster-predict"></a><h3><code>(xgb-booster-predict BoosterHandle DMatrixHandle int unsigned)</code></h3></div><div><a name="h3_xgb-matrix-float-info"></a><h3><code>(xgb-matrix-float-info DMatrixHandle string)</code></h3></div><div id="footer"></div></div></body></html>

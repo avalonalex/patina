@@ -1,0 +1,174 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h2_ParseStreams">Parse Streams</a><ol><li><a href="#h3_make-parse-stream">make-parse-stream</a></li><li><a href="#h3_file->parse-stream">file->parse-stream</a></li><li><a href="#h3_string->parse-stream">string->parse-stream</a></li><li><a href="#h3_string->parse-stream">parse-stream-tail</a></li><li><a href="#h3_parse-stream-start?">parse-stream-start?</a></li><li><a href="#h3_parse-stream-end?">parse-stream-end?</a></li><li><a href="#h3_parse-stream-ref">parse-stream-ref</a></li><li><a href="#h3_parse-stream-substring">parse-stream-substring</a></li></ol></li><li><a href="#h2_ParserInterface">Parser Interface</a><ol><li><a href="#h3_parse-failure">parse-failure</a></li><li><a href="#h3_call-with-parse">call-with-parse</a></li><li><a href="#h3_parse">parse</a></li><li><a href="#h3_parse-fully">parse-fully</a></li><li><a href="#h3_parse-fold">parse-fold</a></li><li><a href="#h3_parse->list">parse->list</a></li><li><a href="#h3_parse-fully->list">parse-fully->list</a></li><li><a href="#h3_parse-with-failure-reason">parse-with-failure-reason</a></li></ol></li><li><a href="#h2_BasicParsingCombinators">Basic Parsing Combinators</a><ol><li><a href="#h3_parse-epsilon">parse-epsilon</a></li><li><a href="#h3_parse-epsilon">parse-anything</a></li><li><a href="#h3_parse-nothing">parse-nothing</a></li><li><a href="#h3_parse-or">parse-or</a></li><li><a href="#h3_parse-and">parse-and</a></li><li><a href="#h3_parse-not">parse-not</a></li><li><a href="#h3_parse-seq">parse-seq</a></li><li><a href="#h3_list->parse-seq">list->parse-seq</a></li><li><a href="#h3_parse-optional">parse-optional</a></li><li><a href="#h3_parse-repeat">parse-repeat</a></li><li><a href="#h3_parse-repeat+">parse-repeat+</a></li><li><a href="#h3_parse-repeat+">parse-map</a></li><li><a href="#h3_parse-map-substring">parse-map-substring</a></li><li><a href="#h3_parse-ignore">parse-ignore</a></li><li><a href="#h3_parse-ignore">parse-assert</a></li><li><a href="#h3_parse-atomic">parse-atomic</a></li><li><a href="#h3_parse-commit">parse-commit</a></li></ol></li><li><a href="#h2_BoundaryChecks">Boundary Checks</a><ol><li><a href="#h3_parse-beginning">parse-beginning</a></li><li><a href="#h3_parse-end">parse-end</a></li><li><a href="#h3_parse-beginning-of-line">parse-beginning-of-line</a></li><li><a href="#h3_parse-end-of-line">parse-end-of-line</a></li><li><a href="#h3_parse-beginning-of-word">parse-beginning-of-word</a></li><li><a href="#h3_parse-end-of-word">parse-end-of-word</a></li><li><a href="#h3_parse-word">parse-word</a></li><li><a href="#h3_parse-word+">parse-word+</a></li></ol></li><li><a href="#h2_ConstantParsers">Constant Parsers</a><ol><li><a href="#h3_parse-char">parse-char</a></li><li><a href="#h3_parse-char">parse-not-char</a></li><li><a href="#h3_parse-string">parse-string</a></li><li><a href="#h3_parse-token">parse-token</a></li><li><a href="#h3_parse-sre">parse-sre</a></li></ol></li><li><a href="#h2_Laziness">Laziness</a></li><li><a href="#h2_Memoization">Memoization</a><ol><li><a href="#h3_parse-memoize">parse-memoize</a></li></ol></li><li><a href="#h2_Syntax">Syntax</a><ol><li><a href="#h3_(grammar/unmemoizedinit(rule(clause[action])...)...)">grammar/unmemoized</a></li><li><a href="#h3_(grammarinit(rule(clause[action])...)...)">grammar</a></li><li><a href="#h3_(define-grammar/unmemoizedname(rule(clause[action])...)...)">define-grammar/unmemoized</a></li><li><a href="#h3_(define-grammarname(rule(clause[action])...)...)">define-grammar</a></li></ol></li></ol></div><div id="main"><div><a name="h1_(chibiparse)"></a><h1>(chibi parse)</h1></div><p>A parser combinator library with optional memoization and
+convenient syntax.<div><a name="h2_ParseStreams"></a><h2>Parse Streams</h2></div>
+Parse streams are an abstraction to treat ports as proper streams
+so that we can backtrack from previous states.  A single
+Parse-Stream record represents a single buffered chunk of text.<div><a name="h3_make-parse-stream"></a><h3><code>(make-parse-stream filename [port len])</code></h3></div>Create a parse stream open on the given <code>filename</code>, with a
+possibly already opened <code>port</code>.<div><a name="h3_file->parse-stream"></a><h3><code>(file->parse-stream filename)</code></h3></div>Open <code>filename</code> and create a parse stream on it.<div><a name="h3_string->parse-stream"></a><h3><code>(string->parse-stream str)</code></h3></div>Create a parse stream on a string <code>str</code>.<div><a name="h3_string->parse-stream"></a><h3><code>(parse-stream-tail source)</code></h3></div>Access the next buffered chunk of a parse stream.<div><a name="h3_parse-stream-start?"></a><h3><code>(parse-stream-start? source i)</code></h3></div>Returns true iff <code>i</code> is the first character position in the
+parse stream <code>source</code>.<div><a name="h3_parse-stream-end?"></a><h3><code>(parse-stream-end? source i)</code></h3></div>Returns true iff <code>i</code> is the last character position in the
+parse stream <code>source</code>.<div><a name="h3_parse-stream-ref"></a><h3><code>(parse-stream-ref source i)</code></h3></div>Returns the character in parse stream <code>source</code> indexed by
+<code>i</code>.<div><a name="h3_parse-stream-substring"></a><h3><code>(parse-stream-substring s0 i0 s1 i1)</code></h3></div>Returns a string composed of the characters starting at parse
+stream <code>s0</code> index <code>i0</code> (inclusive), and ending at <code>s1</code>
+index <code>i1</code> (exclusive).<div><a name="h2_ParserInterface"></a><h2>Parser Interface</h2></div><div><a name="h3_parse-failure"></a><h3><code>(parse-failure s i reason)</code></h3></div>
+Combinator to indicate failure.<div><a name="h3_call-with-parse"></a><h3><code>(call-with-parse f source index sk [fk])</code></h3></div>Call the parser combinator <code>f</code> on the parse stream
+<code>source</code>, starting at index <code>index</code>, passing the result to
+the given success continuation <code>sk</code>, which should be a
+procedure of the form <code>(result <span>source</span> <span>index</span> <span>fail</span>)</code>.  The
+optional failure continuation should be a procedure of the form
+<code>(source <span>index</span> <span>reason</span>)</code>, and defaults to just returning
+<code>#f</code>.<div><a name="h3_parse"></a><h3><code>(parse f source [index])</code></h3></div>Call the parser combinator <code>f</code> on the parse stream
+<code>source</code>, at index <code>index</code>, and return the result, or
+<code>#f</code> if parsing fails.<div><a name="h3_parse-fully"></a><h3><code>(parse-fully f source [index])</code></h3></div>Call the parser combinator <code>f</code> on the parse stream
+<code>source</code>, at index <code>index</code>.  If the entire source is not
+parsed, raises an error, otherwise returns the result.<div><a name="h3_parse-fold"></a><h3><code>(parse-fold f kons knil source [index])</code></h3></div>The fundamental parse iterator.  Repeatedly applies the parser
+combinator <code>f</code> to <code>source</code>, starting at <code>index</code>, as
+long as a valid parse is found.  On each successful parse applies
+the procedure <code>kons</code> to the parse result and the previous
+<code>kons</code> result, beginning with <code>knil</code>.  If no parses
+succeed returns <code>knil</code>.<div><a name="h3_parse->list"></a><h3><code>(parse->list f source [index])</code></h3></div>Parse as many of the parser combinator <code>f</code> from the parse
+stream <code>source</code>, starting at <code>index</code>, as possible, and
+return the result as a list.<div><a name="h3_parse-fully->list"></a><h3><code>(parse-fully->list f source [index])</code></h3></div>As <code><span>parse->list</span></code> but requires the entire source be parsed
+with no left over characters, signalling an error otherwise.<div><a name="h3_parse-with-failure-reason"></a><h3><code>(parse-with-failure-reason f reason)</code></h3></div>Return a new parser combinator with the same behavior as <code>f</code>,
+but on failure replaces the reason with <code>reason</code>.  This can be
+useful to provide more descriptive parse failure reasons when
+chaining combinators.  For example, <code><span>parse-string</span></code> just
+expects to parse a single fixed string.  If it were defined in
+terms of <code><span>parse-char</span></code>, failure would indicate some char
+failed to match, but it's more useful to describe the whole string
+we were expecting to see.<div><a name="h2_BasicParsingCombinators"></a><h2>Basic Parsing Combinators</h2></div><div><a name="h3_parse-epsilon"></a><h3><code>(parse-epsilon source index sk fk)</code></h3></div>
+Parse nothing successfully.<div><a name="h3_parse-epsilon"></a><h3><code>(parse-anything source index sk fk)</code></h3></div>Parse any single character successfully.  Fails at end of input.<div><a name="h3_parse-nothing"></a><h3><code>(parse-nothing source index sk fk)</code></h3></div>Always fail to parse.<div><a name="h3_parse-or"></a><h3><code>(parse-or f . o)</code></h3></div>The disjunction combinator.  Returns the first combinator that
+succeeds parsing from the same source and index.<div><a name="h3_parse-and"></a><h3><code>(parse-and f g)</code></h3></div>The conjunction combinator.  If both <code>f</code> and <code>g</code> parse
+successfully starting at the same source and index, returns the
+result of <code>g</code>.  Otherwise fails.<div><a name="h3_parse-not"></a><h3><code>(parse-not f)</code></h3></div>The negation combinator.  If <code>f</code> succeeds, fails, otherwise
+succeeds with <code>#t</code>.<div><a name="h3_parse-seq"></a><h3><code>(parse-seq . o)</code></h3></div>The sequence combinator.  Each combinator is applied in turn just
+past the position of the previous.  If all succeed, returns a list
+of the results in order, skipping any ignored values.<div><a name="h3_list->parse-seq"></a><h3><code>(list->parse-seq ls)</code></h3></div>Convert the list of parser combinators <code>ls</code> to a
+<code><span>parse-seq</span></code> sequence.<div><a name="h3_parse-optional"></a><h3><code>(parse-optional f . o)</code></h3></div>The optional combinator.  Parse the combinator <code>f</code> (in
+sequence with any additional combinator args <code>o</code>), and return
+the result, or parse nothing successully on failure.<div><a name="h3_parse-repeat"></a><h3><code>(parse-repeat f [lo hi])</code></h3></div>The repetition combinator.  Parse <code>f</code> repeatedly and return a
+list of the results.  <code>lo</code> is the minimum number of parses
+(deafult 0) to be considered a successful parse, and <code>hi</code> is
+the maximum number (default infinite) before stopping.<div><a name="h3_parse-repeat+"></a><h3><code>(parse-repeat+ f)</code></h3></div>Parse <code>f</code> one or more times.<div><a name="h3_parse-repeat+"></a><h3><code>(parse-map f proc)</code></h3></div>Parse <code>f</code> and apply the procedure <code>proc</code> to the result on success.<div><a name="h3_parse-map-substring"></a><h3><code>(parse-map-substring f [proc])</code></h3></div>Parse <code>f</code> and apply the procedure <code>proc</code> to the substring
+of the parsed data.  <code>proc</code> defaults to the identity.<div><a name="h3_parse-ignore"></a><h3><code>(parse-ignore f)</code></h3></div>Parses the same streams as <code>f</code> but ignores the result on
+success.  Inside a <code><span>parse-seq</span></code> the result will not be
+included in the list of results.  Useful for discarding
+boiler-plate without the need for post-processing results.<div><a name="h3_parse-ignore"></a><h3><code>(parse-assert f check?)</code></h3></div>Parse with <code>f</code> and further require <code>check?</code> to return true
+when applied to the result.<div><a name="h3_parse-atomic"></a><h3><code>(parse-atomic f)</code></h3></div>Parse with <code>f</code> once and keep the first result, not allowing
+further backtracking within <code>f</code>.<div><a name="h3_parse-commit"></a><h3><code>(parse-commit f)</code></h3></div>Parse with <code>f</code> once, keep the first result, and commit to the
+current parse path, discarding any prior backtracking options.<div><a name="h2_BoundaryChecks"></a><h2>Boundary Checks</h2></div><div><a name="h3_parse-beginning"></a><h3><code>(parse-beginning source index sk fk)</code></h3></div>
+Returns true iff <code>index</code> is the first index of the first parse
+stream <code>source</code>.<div><a name="h3_parse-end"></a><h3><code>(parse-end source index sk fk)</code></h3></div>Returns true iff <code>index</code> is the last index of the last parse
+stream <code>source</code>.<div><a name="h3_parse-beginning-of-line"></a><h3><code>(parse-beginning-of-line source index sk fk)</code></h3></div>Returns true iff <code>source</code>, <code>index</code> indicate the beginning
+of a line (or the entire stream).<div><a name="h3_parse-end-of-line"></a><h3><code>(parse-end-of-line source index sk fk)</code></h3></div>Returns true iff <code>source</code>, <code>index</code> indicate the end of a
+line (or the entire stream).<div><a name="h3_parse-beginning-of-word"></a><h3><code>(parse-beginning-of-word source index sk fk)</code></h3></div>Returns true iff <code>source</code>, <code>index</code> indicate the beginning
+of a word (or the entire stream).<div><a name="h3_parse-end-of-word"></a><h3><code>(parse-end-of-word source index sk fk)</code></h3></div>Returns true iff <code>source</code>, <code>index</code> indicate the end of a
+word (or the entire stream).<div><a name="h3_parse-word"></a><h3><code>(parse-word [word])</code></h3></div>Parse the combinator <code>word</code> (default a <code><span>parse-token</span></code> of
+<code><span>char-alphabetic?</span></code> or underscores), ensuring it begins and
+ends on a word boundary.<div><a name="h3_parse-word+"></a><h3><code>(parse-word+ . o)</code></h3></div>As <code><span>parse-word</span></code>, but instead of an arbitrary word
+combinator takes a character predicate <code>pred</code> (conjoined with
+<code><span>char-alphabetic?</span></code> or underscore), and parses a sequence of
+those characters with <code><span>parse-token</span></code>.  Returns the parsed
+substring.<div><a name="h2_ConstantParsers"></a><h2>Constant Parsers</h2></div><div><a name="h3_parse-char"></a><h3><code>(parse-char x)</code></h3></div>Parse a single char which matches <code>x</code>, which can be a
+character, character set, or arbitrary procedure.<div><a name="h3_parse-char"></a><h3><code>(parse-not-char x)</code></h3></div>Parse a single char which does not match <code>x</code>, which can be a
+character, character set, or arbitrary procedure.<div><a name="h3_parse-string"></a><h3><code>(parse-string str)</code></h3></div>Parse the exact string <code>str</code>.<div><a name="h3_parse-token"></a><h3><code>(parse-token x)</code></h3></div>Parse a sequence of characters matching <code>x</code> as with
+<code><span>parse-char</span></code>, and return the resulting substring.<div><a name="h3_parse-sre"></a><h3><code>(parse-sre x)</code></h3></div>We provide an extended subset of SRE syntax (see
+<a href="http://srfi.schemers.org/srfi-115/srfi-115.html">SRFI 115</a>),
+taking advantage of more general parsing features.  These are just
+translated directly into parser combinators, with characters and
+strings implicitly matching themselves.  For example, <code>'(or
+<span class="string">"foo"</span> <span class="string">"bar"</span>)</code> matches either of the strings <code><span class="string">"foo"</span></code> or
+<code><span class="string">"bar"</span></code>.  Existing parser combinators may be embedded directly.
+This is of course more powerful than SREs since it is not
+restricted to regular languages (or in fact any languages), though
+it does not provide the same performance guarantees.<div><a name="h2_Laziness"></a><h2>Laziness</h2></div>
+A delayed combinator.  This is equivalent to the parser combinator
+<code>f</code>, but is delayed so it can be more efficient if never used
+and <code>f</code> is expensive to compute.  Moreover, it can allow
+self-referentiality as in:
+
+<pre><code>(<span class="keyword">letrec*</span> ((f (parse-lazy (parse-or (parse-seq <span>g</span> <span>f</span>) <span>h</span>))))
+  <span>...</span>)
+</code></pre><div><a name="h2_Memoization"></a><h2>Memoization</h2></div><div><a name="h3_parse-memoize"></a><h3><code>(parse-memoize name f)</code></h3></div>Parse the same strings as <code>f</code>, but memoize the result at each
+source and index to avoid exponential backtracking.  <code>name</code> is
+provided for debugging only.<div><a name="h2_Syntax"></a><h2>Syntax</h2></div>
+The four basic interfaces are <code><span>grammar</span></code>,
+<code><span>define-grammar</span></code>, and their unmemoized variants
+<code><span>grammar/unmemoized</span></code> and
+<code><span>define-grammar/unmemoized</span></code>.  This is optimized for the
+common case - generally you want to memoize grammars, and may or
+may not want to memoize the smaller lexical components.
+<div><a name="h3_(grammar/unmemoizedinit(rule(clause[action])...)...)"></a><h3><code>(grammar/unmemoized init (rule (clause [action]) ...) ...)</code></h3></div>
+
+Describe an grammar for the given named <code>rules</code> and return the
+rule named <code>init</code>.  The rules are parser combinators which
+match the first <code>clause</code> which succeeds, and returns the
+corresponding action.  Each <code>clause</code> is an SRE parser as in
+<code><span>parse-sre</span></code>, which may include embdedded parser combinators
+with <code><span>unquote</span></code> (,).  In particular, the rule itself and any
+other rules can be referenced in this way.  The optional
+<code>action</code>, which defaults to the normal result of the clause
+parser, is a normal Scheme expression with all <code><span>-></span></code> named
+expressions in clause bound to the corresponding result.
+Alternately, <code>action</code> can be of the form <code><span>=></span> <span>receiver</span></code>
+to send the results directly to a success continuation as in
+<code><span>call-with-parse</span></code>.<div><a name="h3_(grammarinit(rule(clause[action])...)...)"></a><h3><code>(grammar init (rule (clause [action]) ...) ...)</code></h3></div>
+
+Equivalent to <code><span>grammar</span></code> but memoizes each clause.  Parsers
+nested within each clause are not automatically memoized, so if
+necessary should be memoized explicitly or split out into separate
+rules.<div><a name="h3_(define-grammar/unmemoizedname(rule(clause[action])...)...)"></a><h3><code>(define-grammar/unmemoized name (rule (clause [action]) ...) ...)</code></h3></div>
+
+Similar to <code><span>grammar/unmemoized</span></code>, instead of returning a
+single entry point parser defines each <code>rule</code> as its own
+parser.  Also defines <code>name</code> as an alist mapping rule names to
+their values.<div><a name="h3_(define-grammarname(rule(clause[action])...)...)"></a><h3><code>(define-grammar name (rule (clause [action]) ...) ...)</code></h3></div>
+
+The memoized version of <code><span>define-grammar/unmemoized</span></code>.
+
+Example:
+
+<div><pre><code>(define-grammar <span>calc</span>
+  (space ((* ,(parse-char <span>char-whitespace?</span>))))
+  (number ((-> <span>n</span> (+ ,(parse-char <span>char-numeric?</span>)))
+           (string->number (list->string <span>n</span>))))
+  (simple ((-> <span>n</span> ,<span>number</span>) <span>n</span>)
+          ((: <span class="string">"("</span> (=> <span>e1</span> ,<span>term</span>) <span class="string">")"</span>) <span>e1</span>))
+  (term-op (<span class="string">"*"</span> <span>*</span>)
+           (<span class="string">"/"</span> <span>/</span>)
+           (<span class="string">"%"</span> <span>modulo</span>))
+  (term ((: (-> <span>e1</span> ,<span>simple</span>) ,<span>space</span> (-> <span>op</span> ,<span>term-op</span>) ,<span>space</span> (-> <span>e2</span> ,<span>term</span>))
+         (op <span>e1</span> <span>e2</span>))
+        ((-> <span>e1</span> ,<span>simple</span>)
+         <span>e1</span>)))
+(parse <span>term</span> <span class="string">"12 / (2*3)"</span>)
+</code></pre><div class="result"><code>=> 2</code></div></div></p><div id="footer"></div></div></body></html>

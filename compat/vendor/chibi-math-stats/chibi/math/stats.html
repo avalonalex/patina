@@ -1,0 +1,478 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFFFF8;}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 250px; height: 100%}
+div#menu a:link {text-decoration: none}
+div#main  {font-size: large; position: absolute; top: 0; left: 260px; max-width: 590px; height: 100%}
+div#notes {position: relative; top: 2em; left: 620px; width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+div#menu ol {list-style-position:inside; padding-left: 5px; margin-left: 5px}
+div#menu ol ol {list-style: lower-alpha; padding-left: 15px; margin-left: 15px}
+div#menu ol ol ol {list-style: decimal; padding-left: 5px; margin-left: 5px}
+h2 { color: #888888; border-top: 3px solid #4588ba; }
+h3 { color: #666666; border-top: 2px solid #4588ba; }
+h4 { color: #222288; border-top: 1px solid #4588ba; }
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h2_Distributions">Distributions</a><ol><li><a href="#h3_DistributionType">Distribution Type</a><ol><li><a href="#h4_(distribution?x)">distribution?</a></li><li><a href="#h4_(pure-distributionnamepdfcdfstatistics[random])">pure-distribution</a></li><li><a href="#h4_pure-discrete-distribution">pure-discrete-distribution</a></li><li><a href="#h4_distribution">distribution</a></li><li><a href="#h4_population">population</a></li><li><a href="#h4_open-distribution">open-distribution</a></li><li><a href="#h4_open-distribution">summary-distribution</a></li><li><a href="#h4_bernoulli-trials">bernoulli-trials</a></li><li><a href="#h4_mean-distribution">mean-distribution</a></li><li><a href="#h4_mean-distribution">summarize</a></li><li><a href="#h4_distribution-pure?">distribution-pure?</a></li><li><a href="#h4_distribution-pure?">distribution-open?</a></li><li><a href="#h4_distribution-open?">distribution-add!</a></li><li><a href="#h4_(distribution-pdfdist)">distribution-pdf</a></li><li><a href="#h4_(distribution-cdfdist)">distribution-cdf</a></li></ol></li><li><a href="#h3_StandardDistributions">Standard Distributions</a><ol><li><a href="#h4_normal-distribution">normal-distribution</a></li><li><a href="#h4_uniform-distribution">uniform-distribution</a></li><li><a href="#h4_discrete-uniform-distribution">discrete-uniform-distribution</a></li><li><a href="#h4_poisson-distribution">poisson-distribution</a></li><li><a href="#h4_kolmogorov-distribution">kolmogorov-distribution</a></li><li><a href="#h4_binomial-distribution">binomial-distribution</a></li><li><a href="#h4_f-distribution">f-distribution</a></li></ol></li></ol></li><li><a href="#h2_DescriptiveStatistics">Descriptive Statistics</a><ol><li><a href="#h4_(sizedist[getter])">size</a></li><li><a href="#h3_CentralTendencies">Central Tendencies</a><ol><li><a href="#h4_(meandist[getter])">mean</a></li><li><a href="#h4_(geometric-meandist[getter])">geometric-mean</a></li><li><a href="#h4_(harmonic-meandist[getter])">harmonic-mean</a></li><li><a href="#h4_(quadratic-meandist[getter])">quadratic-mean</a></li><li><a href="#h4_(mediandist[getter])">median</a></li><li><a href="#h4_(modedist[getter])">mode</a></li></ol></li><li><a href="#h3_CentralMoments">Central Moments</a><ol><li><a href="#h4_(variancedist[getter])">variance</a></li><li><a href="#h4_(standard-deviationdist[getter])">standard-deviation</a></li><li><a href="#h4_(stdevdist[getter])">stdev</a></li><li><a href="#h4_(coefficient-of-variationdist[getter])">coefficient-of-variation</a></li><li><a href="#h4_(covariancedist1dist2[getter1[getter2]])">covariance</a></li><li><a href="#h4_coefficient-of-variation">covariance</a></li><li><a href="#h4_(pearson-correlationdist1dist2[getter1[getter2]])">pearson-correlation</a></li><li><a href="#h4_(spearman-rank-correlationdist1dist2[getter1[getter2]])">spearman-rank-correlation</a></li><li><a href="#h4_(skewnessdist[getter])">skewness</a></li><li><a href="#h4_(kurtosisdist[getter])">kurtosis</a></li><li><a href="#h4_(excess-kurtosisdist[getter])">excess-kurtosis</a></li></ol></li><li><a href="#h3_RankStatistics">Rank Statistics</a><ol><li><a href="#h4_(maximumdist[getter])">maximum</a></li><li><a href="#h4_(minimumdist[getter])">minimum</a></li><li><a href="#h4_(percentiledistn[getter])">percentile</a></li><li><a href="#h4_(rankls[getter])">rank</a></li><li><a href="#h4_map-rank">map-rank</a></li></ol></li></ol></li><li><a href="#h2_Sampling">Sampling</a><ol><li><a href="#h4_flip?">flip?</a></li><li><a href="#h4_random-pick">random-pick</a></li><li><a href="#h4_random-pick">random-sample</a></li><li><a href="#h4_make-multi-sampler">make-multi-sampler</a></li><li><a href="#h4_random-multi-sample">random-multi-sample</a></li><li><a href="#h4_(min-sample-sizenum-total[conferrp])">min-sample-size</a></li></ol></li><li><a href="#h2_InferentialStatistics">Inferential Statistics</a><ol><li><a href="#h3_HypothesisTesting">Hypothesis Testing</a><ol><li><a href="#h4_z-test">z-test</a></li><li><a href="#h4_z-test?">z-test?</a></li><li><a href="#h4_z-statistic">z-statistic</a></li><li><a href="#h4_t-test">t-test</a></li><li><a href="#h4_t-test?">t-test?</a></li><li><a href="#h4_t-statistic">t-statistic</a></li><li><a href="#h4_t-df">t-df</a></li><li><a href="#h4_chi^2-test">chi^2-test</a></li><li><a href="#h4_chi^2-test?">chi^2-test?</a></li><li><a href="#h4_(chi^2-statisticobservedexpected)">chi^2-statistic</a></li><li><a href="#h4_chi^2-df">chi^2-df</a></li><li><a href="#h4_g-test">g-test</a></li><li><a href="#h4_g-test?">g-test?</a></li><li><a href="#h4_(g-statisticobservedexpected)">g-statistic</a></li><li><a href="#h4_binomial-test">binomial-test</a></li><li><a href="#h4_binomial-test?">binomial-test?</a></li><li><a href="#h4_kolmogorov-smirnoff-test">kolmogorov-smirnoff-test</a></li><li><a href="#h4_kolmogorov-smirnoff-test?">kolmogorov-smirnoff-test?</a></li><li><a href="#h4_kolmogorov-smirnoff-statistic">kolmogorov-smirnoff-statistic</a></li><li><a href="#h4_kolmogorov-smirnoff-critical">kolmogorov-smirnoff-critical</a></li><li><a href="#h4_wilcoxon-test?">wilcoxon-test?</a></li><li><a href="#h4_wilcoxon-statistic">wilcoxon-statistic</a></li><li><a href="#h4_wilcoxon-critical">wilcoxon-critical</a></li><li><a href="#h4_f-test">f-test</a></li><li><a href="#h4_f-test?">f-test?</a></li><li><a href="#h4_f-statistic">f-statistic</a></li></ol></li><li><a href="#h3_ConfidenceIntervals">Confidence Intervals</a><ol><li><a href="#h4_wilson-lower-bound">wilson-lower-bound</a></li><li><a href="#h4_wilson-upper-bound">wilson-upper-bound</a></li><li><a href="#h4_wilson-score-offset">wilson-score-offset</a></li></ol></li></ol></li><li><a href="#h2_Similarity">Similarity</a><ol><li><a href="#h4_jaccard-index">jaccard-index</a></li><li><a href="#h4_jaccard-distance">jaccard-distance</a></li><li><a href="#h4_jaccard-distance">sorenson-dice-index</a></li></ol></li><li><a href="#h2_SimpleLinearRegression">Simple Linear Regression</a><ol><li><a href="#h4_fit-line">fit-line</a></li></ol></li><li><a href="#h2_Utilities">Utilities</a><ol><li><a href="#h4_cube">cube</a></li><li><a href="#h4_tesseract">tesseract</a></li><li><a href="#h4_tesseract">sign</a></li><li><a href="#h4_factorial">factorial</a></li><li><a href="#h4_loggamma">loggamma</a></li><li><a href="#h4_lower-incomplete-gamma">lower-incomplete-gamma</a></li><li><a href="#h4_beta-pdf">beta-pdf</a></li><li><a href="#h4_beta">beta</a></li><li><a href="#h4_inverse-transform-cdf">inverse-transform-cdf</a></li><li><a href="#h4_inverse-transform-random">inverse-transform-random</a></li><li><a href="#h4_numeric-diff">numeric-diff</a></li><li><a href="#h4_combinations">combinations</a></li><li><a href="#h4_permutations">permutations</a></li><li><a href="#h4_sum">sum</a></li><li><a href="#h4_square-sum">square-sum</a></li><li><a href="#h4_reciprocal-sum">reciprocal-sum</a></li><li><a href="#h4_log-sum">log-sum</a></li><li><a href="#h4_map-sum">map-sum</a></li><li><a href="#h4_make-running-sum">make-running-sum</a></li><li><a href="#h4_(running-sum?x)">running-sum?</a></li><li><a href="#h4_running-sum-get">running-sum-get</a></li><li><a href="#h4_running-sum-inc!">running-sum-inc!</a></li><li><a href="#h4_running-sum-dec!">running-sum-dec!</a></li><li><a href="#h4_product">product</a></li><li><a href="#h4_gain">gain</a></li></ol></li><li><a href="#h2_AdditionalDataStructures">Additional Data Structures</a><ol><li><a href="#h3_Reservoirs">Reservoirs</a><ol><li><a href="#h4_make-reservoir">make-reservoir</a></li><li><a href="#h4_make-reservoir">reservoir-maybe-add!</a></li><li><a href="#h4_reservoir->vector!">reservoir->vector!</a></li></ol></li><li><a href="#h3_Histograms">Histograms</a><ol><li><a href="#h4_make-histogram">make-histogram</a></li><li><a href="#h4_(histogram?x)">histogram?</a></li><li><a href="#h4_histogram-add!">histogram-add!</a></li><li><a href="#h4_list->histogram">list->histogram</a></li><li><a href="#h4_vector->histogram">vector->histogram</a></li><li><a href="#h4_histogram-min">histogram-min</a></li><li><a href="#h4_histogram-min">histogram-max</a></li><li><a href="#h4_histogram-max">histogram-scale</a></li><li><a href="#h4_histogram-quantile">histogram-quantile</a></li><li><a href="#h4_histogram-deciles">histogram-deciles</a></li><li><a href="#h4_histogram-plot-ascii">histogram-plot-ascii</a></li><li><a href="#h4_histogram-cdf">histogram-cdf</a></li></ol></li></ol></li><li><a href="#h2_References">References</a></li></ol></div><div id="main"><div><a name="h1_(chibimathstats)"></a><h1>(chibi math stats)</h1></div><p>Statistics is the branch of mathematics dealing with the collection
+and analysis of data.  As we are increasingly overwhelmed with data
+it is important to be able to analyze that data, and so statistics
+should have a prominant role in any programming language's standard
+libraries.
+
+Broadly speaking statistics can be divided into descriptive
+statistics and inferential statistics.  This library provides
+basic utilities for both of these covering many common use cases,
+while serving as a basis for more advanced uses.<div><a name="h2_Distributions"></a><h2>Distributions</h2></div>
+This library takes a holistic view of a distribution, with
+procedures working on both theoretical and empirical
+distributions.
+<div><a name="h3_DistributionType"></a><h3>Distribution Type</h3></div><div><a name="h4_(distribution?x)"></a><h4><code>(distribution? x)</code></h4></div>
+Returns <code>#t</code> iff x is a distribution.
+<div><a name="h4_(pure-distributionnamepdfcdfstatistics[random])"></a><h4><code>(pure-distribution name pdf cdf statistics [random])</code></h4></div>
+Creates a new theoretical distribution.  <code>name</code> should be a
+symbol and is used for debugging.  The probability density
+function <code>pdf</code>, cumulative distribution function <code>cdf</code>,
+and summary <code>statistics</code> are required.  <code>random</code> is
+optionally and can be inferred from the <code>cdf</code> but faster
+implementations are usually available.<div><a name="h4_pure-discrete-distribution"></a><h4><code>(pure-discrete-distribution name pmf cdf statistics [random])</code></h4></div>Creates a new theoretical discrete distribution, similar to
+<code><span>pure-distribution</span></code>.<div><a name="h4_distribution"></a><h4><code>(distribution seq)</code></h4></div>Creates a new distribution for the sampled data in <code>seq</code>.<div><a name="h4_population"></a><h4><code>(population seq)</code></h4></div>Equivalent to <code><span>distribution</span></code>, but records that <code>seq</code>
+represents the full population rather than a subsample.<div><a name="h4_open-distribution"></a><h4><code>(open-distribution)</code></h4></div>Creates a new running sample distribution to which new elements
+can be added.<div><a name="h4_open-distribution"></a><h4><code>(summary-distribution . o)</code></h4></div>Returns a new distribution from summmary statistics, without a
+sample.  Takes keyword arguments in the style of
+<code>(chibi <span>optional</span>)</code>, with the following values:
+
+<ul><li>name: used for debugging</li><li>size: the population size</li><li>mean: the mean (average) value</li><li>median: the median (middle) value</li><li>mode: the mode (most common) value</li><li>variance: the variance</li><li>skew: the skew</li><li>kurtosis: the kurtosis</li><li>minimum: the minimum value</li><li>maximum: the maximum value</li><li>discrete?: true iff this is a discrete distribution</li><li>population?: true iff this is a population (as opposed to sample)</li></ul>
+
+Example: create a summary given just a mean and variance:
+<div><pre><code>(mean (summary-distribution '<span>mean:</span> <span>0.5</span> '<span>variance:</span> <span>2.5</span>))</code></pre><div class="result"><code>=> 0.5</code></div></div><div><a name="h4_bernoulli-trials"></a><h4><code>(bernoulli-trials successes trials)</code></h4></div>A utility for a summary distribution of bernoulli trials, based on
+the number of successes out of the total number of trials.<div><a name="h4_mean-distribution"></a><h4><code>(mean-distribution mean)</code></h4></div>A utility for a summary distribution where we only know the mean.<div><a name="h4_mean-distribution"></a><h4><code>(summarize dist)</code></h4></div>Returns a new distribution containing only the summary statistics
+of the given distribution.<div><a name="h4_distribution-pure?"></a><h4><code>(distribution-pure? dist)</code></h4></div>Returns <code>#t</code> iff <code>dist1</code> is a theoretical distribution
+(is derived from a pdf).<div><a name="h4_distribution-pure?"></a><h4><code>(distribution-open? dist)</code></h4></div>Returns <code>#t</code> iff <code>dist1</code> is a sample distribution to
+which new elements can be added.<div><a name="h4_distribution-open?"></a><h4><code>(distribution-add! dist elt)</code></h4></div>Adds a new element <code>elt</code> to the sample distribution <code>dist</code>.<div><a name="h4_(distribution-pdfdist)"></a><h4><code>(distribution-pdf dist)</code></h4></div>
+Returns the pdf if <code>dist</code> is pure a distribution, <code>#f</code> otherwise.
+<div><a name="h4_(distribution-cdfdist)"></a><h4><code>(distribution-cdf dist)</code></h4></div>
+Returns the cdf if <code>dist</code> is pure a distribution, <code>#f</code> otherwise.
+Returns the underlying values, or sampled representatives, of
+<code>dist</code>, if available.  If you want a sample from any
+distribution, use <code><span>random-sample</span></code>.<div><a name="h3_StandardDistributions"></a><h3>Standard Distributions</h3></div><div><a name="h4_normal-distribution"></a><h4><code>(normal-distribution [mean variance])</code></h4></div>Returns a new normal (gaussian) distribution, with the given
+<code>mean</code> and <code>variance</code>.  Also know as a bell curve, many
+things are normally distributed, and the Central Limit THeorem
+says that the sum of independent random variables tends towards
+normal.<div><a name="h4_uniform-distribution"></a><h4><code>(uniform-distribution a b . o)</code></h4></div>Returns a new continuous uniform distribution over [<code>a</code>,
+<code>b</code>].  Every value in the range is equally likely.<div><a name="h4_discrete-uniform-distribution"></a><h4><code>(discrete-uniform-distribution a b . o)</code></h4></div>Returns a new discrete uniform distribution over [<code>a</code>,
+<code>b</code>], in <code>step</code> intervals.  Every value in the range is
+equally likely.<div><a name="h4_poisson-distribution"></a><h4><code>(poisson-distribution lam k . o)</code></h4></div>Returns a new poisson distribution, a discrete distribution
+measuring the probability that a certain number of events occur
+within a certain period of time.<div><a name="h4_kolmogorov-distribution"></a><h4><code>(kolmogorov-distribution n)</code></h4></div>Returns a new kolmogorov distribution, the distribution of the
+suprememum of the Brownian bridge over [0, 1].  This is used in
+the Kolmogorov-Smirnoff test.<div><a name="h4_binomial-distribution"></a><h4><code>(binomial-distribution n p)</code></h4></div>Returns a new binomial distribution, a discrete distribution of
+the number of successes over <code>n</code> Bernoulli trials with
+probability <code>p</code>.<div><a name="h4_f-distribution"></a><h4><code>(f-distribution d1 d2)</code></h4></div>Returns a new F-distribution, aka the Fisher–Snedecor
+distribution, used in the F-test for ANOVA.<div><a name="h2_DescriptiveStatistics"></a><h2>Descriptive Statistics</h2></div>
+Descriptive statistics summarize some aspect of a distribution.
+The following procedures all take either a distribution, or for
+convenience a list or vector as an implicit sample distribution (as
+constructed by the <code><span>distribution</span></code> procedure).
+
+If a list of vector is passed, an optional getter argument is
+allowed to return the value of each element in the sequence.  This
+is to allow idioms similar to dataframes in R and numpy, where the
+sequence elements could be vectors or records containing multiple
+fields.
+
+If a distribution is passed, we may not have complete information
+for that distribution, so any of these may return <code>#f</code>.
+<div><a name="h4_(sizedist[getter])"></a><h4><code>(size dist [getter])</code></h4></div>
+Returns the size of the distribution population, which may be
++inf.0 for pure distributions, or #f if unknown.
+
+<div><pre><code>(size '(1 <span>2</span> <span>3</span>))</code></pre><div class="result"><code>=> 3</code></div></div>
+<div><pre><code>(size (normal-distribution <span>0</span> <span>1</span>))</code></pre><div class="result"><code>=> +inf.0</code></div></div><div><a name="h3_CentralTendencies"></a><h3>Central Tendencies</h3></div>
+Central tendencies measure a central or typical value of a
+distribution.  The arithmetic <code><span>mean</span></code>,
+<code><span>geometric-mean</span></code> and <code><span>harmonic-mean</span></code> are the three
+classical Pythagorean means.  The <code><span>mean</span></code>, <code><span>median</span></code>
+and <code><span>mode</span></code> can be unified as:
+
+<pre><code> (mode <span>xi</span>)   <span>=></span> (argmin <span>s</span> (sum (expt (abs (- <span>xi</span> <span>s</span>)) <span>0</span>)))
+ (median <span>xi</span>) <span>=></span> (argmin <span>s</span> (sum (expt (abs (- <span>xi</span> <span>s</span>)) <span>1</span>)))
+ (mean <span>xi</span>)   <span>=></span> (argmin <span>s</span> (sum (expt (abs (- <span>xi</span> <span>s</span>)) <span>2</span>)))</code></pre>
+<div><a name="h4_(meandist[getter])"></a><h4><code>(mean dist [getter])</code></h4></div>
+Returns the arithmetic-mean, aka the first moment, what people
+typically think of as the average.  As with other procedures in
+this library, the computation should be numerically stable.
+
+<div><pre><code>(mean '(1 <span>2</span> <span>3</span>))</code></pre><div class="result"><code>=> 2</code></div></div>
+<div><pre><code>(mean '((a <span>.</span> <span>1</span>) (b <span>.</span> <span>2</span>) (c <span>.</span> <span>3</span>)) <span>cdr</span>)</code></pre><div class="result"><code>=> 2</code></div></div>
+<div><pre><code>(mean (make-list <span>1000000</span> #i<span>1/3</span>))</code></pre><div class="result"><code>=> 0.3333333333333333</code></div></div>
+<div><pre><code>(mean (normal-distribution <span>2.4</span> <span>7</span>))</code></pre><div class="result"><code>=> 2.4</code></div></div><div><a name="h4_(geometric-meandist[getter])"></a><h4><code>(geometric-mean dist [getter])</code></h4></div>
+Returns the geometric mean, which is the central tendency based on
+the product of the values, rather than the sum as in the
+arithmetic mean.  In geometric terms, the geometric mean of two
+numbers, a and b, is the length of one side of a square whose area
+is equal to that of a rectangle with sides a and b.
+
+The <code><span>geometric-mean</span></code> is often used for numbers whose values
+are exponential in nature, such as population growth or financial
+investments.<div><a name="h4_(harmonic-meandist[getter])"></a><h4><code>(harmonic-mean dist [getter])</code></h4></div>
+Returns the harmonic mean, aka the F-1 score, of the distribution.
+This is the reciprocal of the arithmetic <code><span>mean</span></code> of the
+reciprocals of the values.  The <code><span>harmonic-mean</span></code> is often
+used in machine learning as an aggregated performance score over
+other metrics (such as precision and recall), which penalizes a
+single low score harder than the arithmetic or geometric means
+would.<div><a name="h4_(quadratic-meandist[getter])"></a><h4><code>(quadratic-mean dist [getter])</code></h4></div>
+Returns the quadratic mean of the distribution, aka the
+root-mean-squared (RMS), which is the square root of the mean
+square (the generalized mean with exponent 2).  The RMS of a
+deviation or error (RMSE) is frequently used in machine learning
+to evaluate the fitness of a model.<div><a name="h4_(mediandist[getter])"></a><h4><code>(median dist [getter])</code></h4></div>
+Returns the median of a distribution, the 50th percentile or
+"middle" value if the elements were sorted.<div><a name="h4_(modedist[getter])"></a><h4><code>(mode dist [getter])</code></h4></div>
+Returns the mode, or most frequently occuring element of the
+distribution.<div><a name="h3_CentralMoments"></a><h3>Central Moments</h3></div>
+<div><a name="h4_(variancedist[getter])"></a><h4><code>(variance dist [getter])</code></h4></div>
+Returns the variance, aka the second central moment, of a
+distribution, defined as the expectation of the squared deviation
+from the mean.  Variance is used extensively in descriptive and
+inferential statistics.<div><a name="h4_(standard-deviationdist[getter])"></a><h4><code>(standard-deviation dist [getter])</code></h4></div>
+Returns the standard deviation, the square root of the
+<code><span>variance</span></code>.  Unlike <code><span>variance</span></code> this is expressed in
+the same unit as the data, and can thus be easier to reason about.
+In particular, the 68-95-99.7 rule states that 68% of the
+population is within 1 stdev of the mean, 95% within 2 stdevs, and
+99.7% within 3 stdevs.
+
+A simple form of outlier removal is to remove data points more
+than 3 (or 4) standard deviations from the mean.<div><a name="h4_(stdevdist[getter])"></a><h4><code>(stdev dist [getter])</code></h4></div>
+An alias for <code><span>standard-deviation</span></code>.<div><a name="h4_(coefficient-of-variationdist[getter])"></a><h4><code>(coefficient-of-variation dist [getter])</code></h4></div>
+Returns the coefficient of variation, aka the relative standard
+deviation (RSD) of <code>dist</code>, the ratio of the
+<code><span>standard-deviation</span></code> to the <code><span>mean</span></code>.<div><a name="h4_(covariancedist1dist2[getter1[getter2]])"></a><h4><code>(covariance dist1 dist2 [getter1 [getter2]])</code></h4></div><div><a name="h4_coefficient-of-variation"></a><h4><code>(covariance dist1 dist2 . o)</code></h4></div>
+Returns the covariance, a measure of the joint variability, of the
+two (non-pure) distributions <code>dist1</code> and <code>dist2</code>.  The
+sign of the covariance shows the tendency in the linear
+relationship between the variables, though the magnitude is hard
+to interpret.  For a better understanding of the strength of the
+relation, use the <code><span>pearson-correlation</span></code>.<div><a name="h4_(pearson-correlationdist1dist2[getter1[getter2]])"></a><h4><code>(pearson-correlation dist1 dist2 [getter1 [getter2]])</code></h4></div>
+Returns the Pearson correlation coefficient (PCC), aka Pearson's
+r, the Pearson product-moment correlation coefficient (PPMCC), or
+the bivariate correlation.  This is a value between [-1, 1]
+showing the correlation between the two distributions <code>dist1</code>
+and <code>dist2</code>, with positive values indicating a positive linear
+correlation, negative values indicating a negative linear
+correlation, and values close to zero indicating no correlation.<div><a name="h4_(spearman-rank-correlationdist1dist2[getter1[getter2]])"></a><h4><code>(spearman-rank-correlation dist1 dist2 [getter1 [getter2]])</code></h4></div>
+Returns the Spearman's rank correlation coefficient, aka
+Spearman's ρ.  This is the <code><span>pearson-correlation</span></code> between
+the rank variables of <code>dist1</code> and <code>dist2</code>, indicating how
+well their relationship can be described by a monotonic function.<div><a name="h4_(skewnessdist[getter])"></a><h4><code>(skewness dist [getter])</code></h4></div>
+Returns the skewness, aka the third standardized moment, of
+<code>dist</code>, which indicates the lopsidedness of the distribution.
+For a unimodal distribution, negative skew indicates the tail is
+to the left of the mode, and positive skew indicates it is to the
+right.  Zero skew indicates the tails balance out, though may not
+be symmetric.<div><a name="h4_(kurtosisdist[getter])"></a><h4><code>(kurtosis dist [getter])</code></h4></div>
+Returns the kurtosis, aka the fourth standardizes moment, of
+<code>dist</code>, indicating the heaviness of the tail.  A
+<code><span>kurtosis</span></code> less than 3 is called "platykurtic", suggesting
+the distribution is flat or has fewer extremes than a normal
+distribution, whereas a <code><span>kurtosis</span></code> greater than 3 is called
+"leptokurtic", and has more outliers than a normal distribution.<div><a name="h4_(excess-kurtosisdist[getter])"></a><h4><code>(excess-kurtosis dist [getter])</code></h4></div>
+Returns the excess kurtosis, aka Pearson's kurtosis, of
+<code>dist</code>.  The <code><span>kurtosis</span></code> of any normal distribution is
+3, so this is defined as the kurtosis minus 3.<div><a name="h3_RankStatistics"></a><h3>Rank Statistics</h3></div>
+<div><a name="h4_(maximumdist[getter])"></a><h4><code>(maximum dist [getter])</code></h4></div>
+Returns the maximum value of <code>dist</code>.<div><a name="h4_(minimumdist[getter])"></a><h4><code>(minimum dist [getter])</code></h4></div>
+Returns the minimum value of <code>dist</code>.<div><a name="h4_(percentiledistn[getter])"></a><h4><code>(percentile dist n [getter])</code></h4></div>
+Returns the <code>n</code>th percentile of <code>dist</code>.  If <code>dist</code> is
+non-pure and the rank doesn't fall on an exact position, uses
+linear interpolation between adjacent ranks, which produces better
+results for small samples.<div><a name="h4_(rankls[getter])"></a><h4><code>(rank ls [getter])</code></h4></div>
+Ranks a sorted list (x1 x2 ... xn) returning
+  <pre><code>((rank1 <span>.</span> <span>x1</span>) (rank2 <span>.</span> <span>x2</span>) <span>...</span> <span>xn</span>)</code></pre>
+where the ranks are 1..n if there all xi are unique,
+otherwise the average rank among equal elements.<div><a name="h4_map-rank"></a><h4><code>(map-rank dist [less get-key])</code></h4></div>Returns a new list with the elements replaced by their rank.<div><a name="h2_Sampling"></a><h2>Sampling</h2></div><div><a name="h4_flip?"></a><h4><code>(flip? [p])</code></h4></div>
+Returns a random flip of a weighted coin, i.e. runs a Bernoulli
+trial, returning <code>#t</code> with probability <code>p</code> (default
+0.5) and <code>#f</code> otherwise.<div><a name="h4_random-pick"></a><h4><code>(random-pick dist)</code></h4></div>Returns a random value from distribution <code>dist</code>.<div><a name="h4_random-pick"></a><h4><code>(random-sample n dist . o)</code></h4></div>Returns a sequence of <code>n</code> random value from distribution
+<code>dist</code>.  If <code>dist</code> is a list or distribution based on one
+the result is a list, otherwise it's a vector.<div><a name="h4_make-multi-sampler"></a><h4><code>(make-multi-sampler seq get-norm-weight)</code></h4></div><div><a name="h4_random-multi-sample"></a><h4><code>(random-multi-sample n x . o)</code></h4></div>Like <code><span>random-sample</span></code>, but returns a sample with replacement.<div><a name="h4_(min-sample-sizenum-total[conferrp])"></a><h4><code>(min-sample-size num-total [conf err p])</code></h4></div>
+
+Compute the minimum sample size for a population num-total, with
+the given confidence, error bound requirements, and population
+proportion.
+
+<ul><li>num-total: total population size
+           (+inf.0 uses the normal approximation to binomial dist, otherwise
+            we use the normal approximation to the hypergeometric dist)</li><li>conf: desired level of confidence, default 1.96 (95%)</li><li>err: desired error bounds, default 3%</li><li>p: population proportion, default 0.5</li></ul>
+
+For example, assume you want a 99% confidence (conf: 2.75) that the
+result is within 1%, then:
+
+  <div><pre><code>(min-sample-size <span>+inf.0</span> <span>2.75</span> <span>0.01</span>)</code></pre><div class="result"><code>=> 18906.25</code></div></div>
+
+however if you know the total population the required size may be
+smaller (but never larger):
+
+  <div><pre><code>(min-sample-size <span>73015</span> <span>2.75</span> <span>0.01</span>)</code></pre><div class="result"><code>=> 15017.799056791075</code></div></div><div><a name="h2_InferentialStatistics"></a><h2>Inferential Statistics</h2></div>
+<div><a name="h3_HypothesisTesting"></a><h3>Hypothesis Testing</h3></div><div><a name="h4_z-test"></a><h4><code>(z-test sample dist [tails])</code></h4></div>Performs a Z-test, a test that a <code>sample</code> can be approximated
+by a normal distribution.  Returns the probability that
+<code>sample</code> is consistent with <code>dist</code>, default one-tailed.
+This is more convenient than the T-test if the population size is
+large or the variance is known.
+
+<code>tails</code> must be 1 (the default) for a one-tailed test, or 2
+for a two-tailed test.  If you are testing whether a mean is
+greater (or less) than the population, you want a one-tailed test,
+but if you are just testing whether it is different (in either
+direction) you want a two-tailed test.
+
+Example: We claim it takes Schemers longer to fix reported bugs
+because they get distracted finding the perfect solution to the
+problem.  Querying the
+<a href="https://developer.github.com/v3/issues/">Github API</a>
+indicates that the overall mean time to close an issue is 7.8 days
+with a variance of 23.1 (made up numbers).  Restricting this to
+just the 5,197 Scheme repositories yields a mean time to close of
+8.3 days.  Is our claim valid?  Assuming the distribution for the
+time to fix bugs is normal, we can run a <code><span>z-test</span></code>:
+
+<div><pre><code>(z-test (summary-distribution '<span>mean:</span> <span>8.3</span> '<span>size:</span> <span>5197</span>)
+        (normal-distribution <span>7.8</span> <span>23.1</span>))</code></pre><div class="result"><code>=> 0.05933335376636473</code></div></div>
+
+This is greater than 0.05, so at a 95% confidence interval we
+would reject our hypothesis - Schemers are just as slow as
+everbody else.<div><a name="h4_z-test?"></a><h4><code>(z-test? sample dist [alpha tails])</code></h4></div>Returns true iff the <code><span>z-test</span></code> for <code>sample</code> and
+<code>dist</code> meets the given <code>alpha</code> level, default 5%.
+
+<div><pre><code>(z-test? (summary-distribution '<span>mean:</span> <span>8.3</span> '<span>size:</span> <span>5197</span>)
+         (normal-distribution <span>7.8</span> <span>23.1</span>))</code></pre><div class="result"><code>=> #f</code></div></div><div><a name="h4_z-statistic"></a><h4><code>(z-statistic sample dist)</code></h4></div>Returns the underlying Z statistic showing how well <code>dist</code>
+approximates <code>sample</code>.
+
+<div><pre><code>(z-statistic (summary-distribution '<span>mean:</span> <span>8.3</span> '<span>size:</span> <span>5197</span>)
+             (normal-distribution <span>7.8</span> <span>23.1</span>))</code></pre><div class="result"><code>=> 1.5603943993695748</code></div></div><div><a name="h4_t-test"></a><h4><code>(t-test dist1 dist2 [tails])</code></h4></div>AKA the Student's t-test, after the pen name "Student" used by
+William Sealy Gosset.  Returns the probability that the two
+distributions <code>dist1</code> and <code>dist2</code> have the same mean,
+under the assumption the underlying distributions are normal.
+<code>tails</code> defaults to 1 and has the same semantics as in the
+<code><span>z-test</span></code>.
+
+Example: You made a micro-optimization to your code but the
+benchmark results are inconsistent, sometimes even being slower
+than before.  The average of the times is faster, but you're not
+sure if this is a real improvement or just noise.  Assuming the
+noise is normally distributed, we can run a <code><span>t-test</span></code> on the
+times:
+
+<div><pre><code>(<span class="keyword">let</span> ((before '(30.02 <span>29.99</span> <span>30.11</span> <span>29.97</span> <span>30.01</span> <span>29.99</span>))
+      (after  '(29.89 <span>29.93</span> <span>29.72</span> <span>29.98</span> <span>30.02</span> <span>29.98</span>)))
+  (t-test <span>after</span> <span>before</span>))</code></pre><div class="result"><code>=> 0.04538666186968663</code></div></div>
+
+This is less than a 0.05 alpha, so we can assume the improvement
+is significant, if small (0.3%):
+
+<div><pre><code>(gain (mean '(30.02 <span>29.99</span> <span>30.11</span> <span>29.97</span> <span>30.01</span> <span>29.99</span>))
+      (mean '(29.89 <span>29.93</span> <span>29.72</span> <span>29.98</span> <span>30.02</span> <span>29.98</span>)))</code></pre><div class="result"><code>=> -0.0031650841246043267</code></div></div><div><a name="h4_t-test?"></a><h4><code>(t-test? dist1 dist2 [alpha tails])</code></h4></div>Returns true iff the <code><span>t-test</span></code> for <code>dist1</code> and
+<code>dist2</code> meets the given <code>alpha</code> level, default 5%.
+
+Example: Given a random sample of Schemer's IQs, can we assume
+they are smarter than the overall population?
+
+<div><pre><code>(t-test? '(120 <span>115</span> <span>95</span> <span>135</span>) (normal-distribution <span>100</span> <span>225</span>))</code></pre><div class="result"><code>=> #f</code></div></div><div><a name="h4_t-statistic"></a><h4><code>(t-statistic dist1 dist2)</code></h4></div>Returns the underlying t statistic showing how well <code>dist1</code>
+matches <code>dist2</code>.
+
+<div><pre><code>(t-test? '(120 <span>115</span> <span>95</span> <span>135</span>) (normal-distribution <span>100</span> <span>225</span>))</code></pre><div class="result"><code>=> #f</code></div></div><div><a name="h4_t-df"></a><h4><code>(t-df dist1 dist2)</code></h4></div>Returns the degrees of freedom for the <code><span>t-test</span></code> comparing
+<code>dist1</code> and <code>dist2</code>.
+
+<div><pre><code>(t-df '(120 <span>115</span> <span>95</span> <span>135</span>) (normal-distribution <span>100</span> <span>225</span>))</code></pre><div class="result"><code>=> 3</code></div></div><div><a name="h4_chi^2-test"></a><h4><code>(chi^2-test observed expected)</code></h4></div>Performs Pearson's chi-squared test (χ²) to determine the
+goodness of fit between the <code>observed</code> and <code>expected</code>
+distributions.  Returns the p-value.
+
+Example: We want to know if our new PRNG is generating evenly
+distributed die rolls.  We can test this by comparing a histogram
+of the values generated for 1 through 6, against the expected
+uniform distribution:
+
+<div><pre><code>(<span class="keyword">let</span> ((rolls-histogram '#(<span>5</span> <span>8</span> <span>9</span> <span>8</span> <span>10</span> <span>20</span>)))
+  (chi^2-test <span>rolls-histogram</span> (discrete-uniform-distribution <span>1</span> <span>6</span>))<span class="syntaxerror">)</span></code></pre><div class="result"><code>=> 0.019905220334775264</code></div></div>
+
+Since this is less than the 0.05 alpha we reject the null
+hypothesis that the PRNG generates a uniform distribution, i.e. it
+must be biased.<div><a name="h4_chi^2-test?"></a><h4><code>(chi^2-test? observed expected [alpha])</code></h4></div>Returns <code>#t</code> iff the p-value from <code><span>chi^2-test</span></code> is
+less than <code>alpha</code> (default 0.05), i.e. iff the two
+distributions differ.
+
+<div><pre><code>(<span class="keyword">let</span> ((rolls-histogram '#(<span>5</span> <span>8</span> <span>9</span> <span>8</span> <span>10</span> <span>20</span>)))
+  (chi^2-test? <span>rolls-histogram</span> (discrete-uniform-distribution <span>1</span> <span>6</span>))<span class="syntaxerror">)</span></code></pre><div class="result"><code>=> #t</code></div></div><div><a name="h4_(chi^2-statisticobservedexpected)"></a><h4><code>(chi^2-statistic observed expected)</code></h4></div>
+Returns the underlying chi^2 statistic for <code><span>chi^2-test</span></code>.
+
+<div><pre><code>(<span class="keyword">let</span> ((rolls-histogram '#(<span>5</span> <span>8</span> <span>9</span> <span>8</span> <span>10</span> <span>20</span>)))
+  (chi^2-statistic <span>rolls-histogram</span> (discrete-uniform-distribution <span>1</span> <span>6</span>))<span class="syntaxerror">)</span></code></pre><div class="result"><code>=> 67/5</code></div></div><div><a name="h4_chi^2-df"></a><h4><code>(chi^2-df observed [params])</code></h4></div>Returns the degrees of freedom for a chi^2 goodness of fit test
+(as well as g-test).
+
+<div><pre><code>(chi^2-df '#(<span>5</span> <span>8</span> <span>9</span> <span>8</span> <span>10</span> <span>20</span>)<span class="syntaxerror">)</span></code></pre><div class="result"><code>=> 5</code></div></div><div><a name="h4_g-test"></a><h4><code>(g-test observed expected)</code></h4></div>Performs a G-test for goodness of fit between the <code>observed</code>
+and <code>expected</code> distributions, which performs better than the
+chi^2 test in many cases.  Returns the p-value.
+
+Example: Your university claimed equal enrollment for men and
+women in Computer Science, but when you show up the first day to
+COMP 101 there are only 42 girls out of a class of 100.  Is the
+42:58 ratio significantly different from the expected 50:50?
+
+<div><pre><code>(g-test '(42 <span>58</span>) '(50 <span>50</span>))</code></pre><div class="result"><code>=> 0.10883642860717235</code></div></div>
+
+Since this is greater than a 0.05 alpha we can't assume it is
+significant, i.e. this split is within the range of the
+universities' claim.<div><a name="h4_g-test?"></a><h4><code>(g-test? observed expected [alpha])</code></h4></div>Returns <code>#t</code> iff the p-value from <code><span>g-test</span></code> is less
+than <code>alpha</code> (default 0.05) i.e. iff the two distributions
+differ.
+
+<div><pre><code>(g-test? '(42 <span>58</span>) '(50 <span>50</span>))</code></pre><div class="result"><code>=> #f</code></div></div><div><a name="h4_(g-statisticobservedexpected)"></a><h4><code>(g-statistic observed expected)</code></h4></div>
+Returns the underlying statistic the for <code><span>g-test</span></code>.
+
+<div><pre><code>(g-statistic '(42 <span>58</span>) '(50 <span>50</span>))</code></pre><div class="result"><code>=> 2.571036073558357</code></div></div><div><a name="h4_binomial-test"></a><h4><code>(binomial-test observed expected [tails])</code></h4></div>Performs a binomial test that the <code>observed</code> distribution
+matches the <code>expected</code>.  This is more accurate than the
+<code><span>chi^2-test</span></code> and <code><span>g-test</span></code> when there are few values.
+Returns the p-value.
+
+Example: A mobile game you play has an option to spin a virtual
+capsule machine as an in-game purchase, with each spin giving you
+a new character.  They advertise a 3% chance of getting a rare
+character.  You pay for 100 spins and get only 1 rare character.
+We can run a <code><span>binomial-test</span></code> to determine if we believe
+their advertised probability:
+
+<div><pre><code>(binomial-test (bernoulli-trials <span>1</span> <span>100</span>) (mean-distribution <span>0.03</span>))</code></pre><div class="result"><code>=> 0.04755250792540563</code></div></div>
+
+The p-value is less than 0.05 so you should probably demand your
+money back.<div><a name="h4_binomial-test?"></a><h4><code>(binomial-test? observed expected [tails alpha])</code></h4></div>Returns <code>#t</code> iff the p-value from <code><span>binomial-test</span></code> is
+less than <code>alpha</code>, default 0.05.
+
+<div><pre><code>(binomial-test? (bernoulli-trials <span>1</span> <span>100</span>) (mean-distribution <span>0.03</span>))</code></pre><div class="result"><code>=> #t</code></div></div><div><a name="h4_kolmogorov-smirnoff-test"></a><h4><code>(kolmogorov-smirnoff-test dist1 dist2 [strict?])</code></h4></div>Performs a Kolmogorov Smirnoff test, returning the distance
+between <code>dist1</code> and <code>dist2</code>.  This is frequently used to
+determine if two samples come from the same distribution, without
+needing to make assumptions about that distribution (e.g. it need
+not be normal).<div><a name="h4_kolmogorov-smirnoff-test?"></a><h4><code>(kolmogorov-smirnoff-test? dist1 dist2 [alpha strict?])</code></h4></div>Returns <code>#t</code> iff the <code><span>kolmogorov-smirnoff-test</span></code>
+value between <code>dist1</code> and <code>dist2</code> is greater than the
+<code><span>kolmogorov-smirnoff-critical</span></code> value.<div><a name="h4_kolmogorov-smirnoff-statistic"></a><h4><code>(kolmogorov-smirnoff-statistic dist1 dist2)</code></h4></div>Returns the underlying statistic for the
+<code><span>kolmogorov-smirnoff-test</span></code>.<div><a name="h4_kolmogorov-smirnoff-critical"></a><h4><code>(kolmogorov-smirnoff-critical n m [alpha])</code></h4></div><div><a name="h4_wilcoxon-test?"></a><h4><code>(wilcoxon-test? dist1 dist2 [tails alpha])</code></h4></div>Performs a Wilcoxon signed ranked test to determine whether the
+mean ranks of <code>dist1</code> and <code>dist2</code> (which must be paired,
+i.e. the elements in aligned order) differ.  It can be used as an
+alternative to the <code><span>t-test</span></code> when the distributions can't be
+assumed to be normal.  Returns <code>#t</code> iff we fail to reject
+the null hypothesis, i.e. we assume the distributions are the
+same.<div><a name="h4_wilcoxon-statistic"></a><h4><code>(wilcoxon-statistic dist1 dist2)</code></h4></div>Returns the underlying statistic for the <code><span>wilcoxon-test?</span></code>.<div><a name="h4_wilcoxon-critical"></a><h4><code>(wilcoxon-critical nr tails alpha)</code></h4></div>Returns the critical value for comparison against the statistic in
+the <code><span>wilcoxon-test?</span></code>.<div><a name="h4_f-test"></a><h4><code>(f-test seq-of-seqs)</code></h4></div>Performs an f-test of equality of variance of the distributions.
+Returns the p-value.<div><a name="h4_f-test?"></a><h4><code>(f-test? seq-of-seqs [alpha])</code></h4></div>Returns <code>#t</code> iff the <code>f-test</code> is less than <code>alpha</code>.<div><a name="h4_f-statistic"></a><h4><code>(f-statistic seq-of-seqs)</code></h4></div>Returns the underlying statistic for <code><span>f-test</span></code>.<div><a name="h3_ConfidenceIntervals"></a><h3>Confidence Intervals</h3></div><div><a name="h4_wilson-lower-bound"></a><h4><code>(wilson-lower-bound successes trials [confidence])</code></h4></div>
+Returns the lower bound of the Wilson score interval, a binomial
+proportion confidence interval.  This interval gives a better
+understanding of the probability of success from a series of
+Bernoulli trials than the raw ratio, which can be misleading for a
+small number of trials.<div><a name="h4_wilson-upper-bound"></a><h4><code>(wilson-upper-bound successes trials [confidence])</code></h4></div>Returns the upper bound of the Wilson score interval.<div><a name="h4_wilson-score-offset"></a><h4><code>(wilson-score-offset successes trials [z])</code></h4></div>Returns the offset used in <code><span>wilson-lower-bound</span></code> and
+<code><span>wilson-upper-bound</span></code>.<div><a name="h2_Similarity"></a><h2>Similarity</h2></div><div><a name="h4_jaccard-index"></a><h4><code>(jaccard-index dist1 dist2 [cmp])</code></h4></div>A similarity measure, also known as the Jaccard similarity
+coefficient, returns the size of the intersection of <code>seq1</code>
+and <code>seq2</code> divided by the size of their union. The range is in
+[0, 1], with 0 indicating no intersection and 1 indicating they
+are the same sets.  Equality is determined by the comparator
+<code>cmp</code>, defaulting to an <code><span>equal?</span></code> comparator.<div><a name="h4_jaccard-distance"></a><h4><code>(jaccard-distance dist1 dist2 . o)</code></h4></div>Returns the dissimilarity between <code>seq1</code> and <code>seq2</code>, this
+is 1 - the index.<div><a name="h4_jaccard-distance"></a><h4><code>(sorenson-dice-index seq1 seq2 . o)</code></h4></div>The Sørensen-Dice coefficient, aka Czekanowski's binary index,
+Zijdenbos similarity index.  Another similarity index, this is
+essentially the set equivalent of the <code><span>harmonic-mean</span></code>.
+
+The corresponding distance function (subtracted from 1), unlike
+Jaccard, is not a proper distance metric because it doesn't
+satisfy the triangle inequality.<div><a name="h2_SimpleLinearRegression"></a><h2>Simple Linear Regression</h2></div><div><a name="h4_fit-line"></a><h4><code>(fit-line x y)</code></h4></div>
+Computes a simple linear regression using ordinary least squares
+on the paired sequences <code>x</code> and <code>y</code> and returns two
+values: the y-intercept and the slope of the line closest fitting
+the points.  This is the univariate case and so simply called
+<code>fit-line</code> to distinguish from the multivariate linear
+regression used in machine learning.
+
+Example: The number of SRFIs has been increasing at a steady rate
+in the past 20 years.  Assuming the growth is linear, how many
+final SRFIs do we expect in 2030?
+
+<div><pre><code>(<span class="keyword">let</span> ((srfis '((1999 <span>9</span>) (2000 <span>16</span>) (2001 <span>19</span>) (2002 <span>30</span>) (2003 <span>34</span>)
+               (2004 <span>42</span>) (2005 <span>58</span>) (2006 <span>62</span>) (2007 <span>67</span>) (2008 <span>71</span>)
+               (2009 <span>72</span>) (2010 <span>73</span>) (2012 <span>74</span>) (2013 <span>82</span>) (2014 <span>85</span>)
+               (2015 <span>92</span>) (2016 <span>108</span>) (2017 <span>119</span>) (2018 <span>124</span>)
+               (2019 <span>138</span>) (2020 <span>151</span>))))
+  (call-with-values (<span class="keyword">lambda</span> () (fit-line (map <span>car</span> <span>srfis</span>) (map <span>cadr</span> <span>srfis</span>)))
+    (<span class="keyword">lambda</span> (m <span>b</span>)
+      (<span class="keyword">let</span> ((f (<span class="keyword">lambda</span> (x) (inexact (+ (* <span>m</span> <span>x</span>) <span>b</span>)))))
+        (f <span>2030</span>)))))</code></pre><div class="result"><code>=> 193.28006039038067</code></div></div>
+
+Given only 73 SRFIs over the first decade this may seem
+reasonable, but this doesn't account for the recent explosion in
+activity, with over 200 SRFIs counting those in draft.  If the
+relation is not linear, <code><span>fit-line</span></code> is a bad tool.<div><a name="h2_Utilities"></a><h2>Utilities</h2></div><div><a name="h4_cube"></a><h4><code>(cube x)</code></h4></div>
+Returns <code>x</code> raised to the 3rd power.<div><a name="h4_tesseract"></a><h4><code>(tesseract x)</code></h4></div>Returns <code>x</code> raised to the 4th power.<div><a name="h4_tesseract"></a><h4><code>(sign x)</code></h4></div>Returns the sign of <code>x</code>, either 0, 1 or -1.<div><a name="h4_factorial"></a><h4><code>(factorial n)</code></h4></div>Returns <code>n</code>! = 1*2*...*<code>n</code>.<div><a name="h4_loggamma"></a><h4><code>(loggamma x)</code></h4></div>Returns the log of the gamma function applied to <code>x</code>,
+i.e. just the first value of <code><span>flloggamma</span></code> from SRFI 144.<div><a name="h4_lower-incomplete-gamma"></a><h4><code>(lower-incomplete-gamma s z)</code></h4></div>Returns the regularized lower incomplete gamma, γ(vars<div><a name="h4_beta-pdf"></a><h4><code>(beta-pdf a b x)</code></h4></div>The probability distribution function for the beta distribution.<div><a name="h4_beta"></a><h4><code>(beta a b [x])</code></h4></div>Returns the incomplete beta function, Β(<code>a</code>, <code>b</code>).<div><a name="h4_inverse-transform-cdf"></a><h4><code>(inverse-transform-cdf cdf statistics)</code></h4></div>Returns the quantile function, or inverse distribution function,
+for the given <code>cdf</code>, with <code>statistics</code> used to determine
+the domain.<div><a name="h4_inverse-transform-random"></a><h4><code>(inverse-transform-random cdf statistics)</code></h4></div>Utility to return a random value matching a given <code>cdf</code>, with
+<code>statistics</code> used to determine the domain.<div><a name="h4_numeric-diff"></a><h4><code>(numeric-diff f)</code></h4></div>Returns a procedure of one value which approximates the derivative
+of <code>f</code>.<div><a name="h4_combinations"></a><h4><code>(combinations n k)</code></h4></div>Also known as the binomial coefficient, returns the number of
+combinations of <code>k</code> elements from a set of size <code>n</code>.<div><a name="h4_permutations"></a><h4><code>(permutations n k)</code></h4></div>Returns the number of permutations of <code>k</code> ordered elements
+from a set of size <code>n</code>.<div><a name="h4_sum"></a><h4><code>(sum seq . o)</code></h4></div>Returns the sum of the elements of <code>seq</code>, which must be real.
+This and all operations involving sums are numerically stable.
+The current implementation uses Neumaier's variant of Kahan
+summation.
+
+Examples:
+<div><pre><code>(sum (make-list <span>10000</span> (acos <span>-1</span>)))</code></pre><div class="result"><code>=> 31415.926535897932</code></div></div>
+<div><pre><code>(sum '#(<span>1</span> <span>1e100</span> <span>1</span> <span>-1e100</span>)<span class="syntaxerror">)</span></code></pre><div class="result"><code>=> 2.0</code></div></div><div><a name="h4_square-sum"></a><h4><code>(square-sum seq . o)</code></h4></div>Like <code><span>sum</span></code> but sums the <code><span>square</span></code>s of the elements.<div><a name="h4_reciprocal-sum"></a><h4><code>(reciprocal-sum seq . o)</code></h4></div>Like <code><span>sum</span></code> but sums the inverse (<code><span>/</span></code>) of the elements.<div><a name="h4_log-sum"></a><h4><code>(log-sum seq . o)</code></h4></div>Like <code><span>sum</span></code> but sums the <code><span>log</span></code> of the elements.<div><a name="h4_map-sum"></a><h4><code>(map-sum proc seq . o)</code></h4></div>Generalized stable <code><span>sum</span></code>.  Applies <code>proc</code> to the
+sequences and returns the sum of all the results.  It is an error
+if the sequences don't all have the same length.<div><a name="h4_make-running-sum"></a><h4><code>(make-running-sum [init])</code></h4></div>Creates a new running-sum object initialized to <code>init</code>,
+defaulting to 0.  A running-sum allows you take compute a
+numerically stable sum incrementally, so that it can be updated
+over time or fed from a generator or other data structure, etc.<div><a name="h4_(running-sum?x)"></a><h4><code>(running-sum? x)</code></h4></div><div><a name="h4_running-sum-get"></a><h4><code>(running-sum-get rs)</code></h4></div>
+Returns true iff <code>x</code> is a running-sum object.
+Returns the current value of the running-sum <code>rs</code>.<div><a name="h4_running-sum-inc!"></a><h4><code>(running-sum-inc! rs x)</code></h4></div>Adds <code>x</code> to the running-sum <code>rs</code>.<div><a name="h4_running-sum-dec!"></a><h4><code>(running-sum-dec! rs x)</code></h4></div>Subtracts <code>x</code> from the running-sum <code>rs</code>.<div><a name="h4_product"></a><h4><code>(product seq . o)</code></h4></div>Returns the product of the elements in <code>seq</code>.  Multiplication
+is stable so there is no need for error compensation.<div><a name="h4_gain"></a><h4><code>(gain x y)</code></h4></div>The relative change from <code>x</code> to <code>y</code>, useful to answer the
+question what percentage the gain (or loss) was.
+
+Examples:
+
+<div><pre><code>(gain <span>50</span> <span>60</span>)</code></pre><div class="result"><code>=> 1/5</code></div></div>
+<div><pre><code>(gain <span>2/3</span> <span>1</span>)</code></pre><div class="result"><code>=> 1/2</code></div></div>
+<div><pre><code>(gain <span>.75</span> <span>.50</span>)</code></pre><div class="result"><code>=> -0.3333333333333333</code></div></div><div><a name="h2_AdditionalDataStructures"></a><h2>Additional Data Structures</h2></div>
+We make use of reservoirs and histograms for summarizing
+distributions.
+<div><a name="h3_Reservoirs"></a><h3>Reservoirs</h3></div><div><a name="h4_make-reservoir"></a><h4><code>(make-reservoir max-size)</code></h4></div>
+Returns a new reservoir, a random running sample of up to
+<code>max-size</code> elements.  As new elements are added beyond
+<code>max-size</code>, the elements are probabilistic replaced such that
+the sample has the same distribution as if <code><span>random-sample</span></code>
+was run on the full population.<div><a name="h4_make-reservoir"></a><h4><code>(reservoir-maybe-add! rv elt)</code></h4></div>Probabilistically adds <code>elt</code> to the reservoir <code>rv</code>.<div><a name="h4_reservoir->vector!"></a><h4><code>(reservoir->vector! rv)</code></h4></div>Returns a vector containing the current elements of the reservoir
+<code>rv</code>, which may share space with the underlying data structure.<div><a name="h3_Histograms"></a><h3>Histograms</h3></div><div><a name="h4_make-histogram"></a><h4><code>(make-histogram [max-bins])</code></h4></div>Returns a new empty histogram for describing a distribution using
+up to <code>max-bins</code> bins.<div><a name="h4_(histogram?x)"></a><h4><code>(histogram? x)</code></h4></div><div><a name="h4_histogram-add!"></a><h4><code>(histogram-add! hist elt)</code></h4></div>
+Returns <code>#t</code> iff <code>x</code> is a histogram.
+Adds an element to a histogram.<div><a name="h4_list->histogram"></a><h4><code>(list->histogram ls [max-bins])</code></h4></div>Returns a new histogram summarizing the elements of list <code>ls</code>.<div><a name="h4_vector->histogram"></a><h4><code>(vector->histogram vec [max-bins])</code></h4></div>Returns a new histogram summarizing the elements of vector <code>vec</code>.<div><a name="h4_histogram-min"></a><h4><code>(histogram-min hist)</code></h4></div>Returns the smallest value seen by the histogram <code>hist</code>.<div><a name="h4_histogram-min"></a><h4><code>(histogram-max hist)</code></h4></div>Returns the largest value seen by the histogram <code>hist</code>.<div><a name="h4_histogram-max"></a><h4><code>(histogram-scale hist . o)</code></h4></div><div><a name="h4_histogram-quantile"></a><h4><code>(histogram-quantile hist x)</code></h4></div>Returns the <code>x</code>th quantile ([0, 1]) of the histogram <code>hist</code>.<div><a name="h4_histogram-deciles"></a><h4><code>(histogram-deciles hist)</code></h4></div>Returns the <code>x</code>th decile ([0, 10]) of the histogram <code>hist</code>.<div><a name="h4_histogram-plot-ascii"></a><h4><code>(histogram-plot-ascii hist [width height])</code></h4></div>Simple utility to plot a histogram with characters in a
+fixed-width font.<div><a name="h4_histogram-cdf"></a><h4><code>(histogram-cdf hist x)</code></h4></div>Computes the cumulative distribution function of <code>hist</code> at
+point <code>x</code>.<div><a name="h2_References"></a><h2>References</h2></div>
+
+<ul><li><a href="https://www-cs-faculty.stanford.edu/~knuth/taocp.html">The Art of Computer Programming, Volume 2: Seminumerical Algorithms</a>, Donald E. Knuth (1997)</li><li><a href="https://cran.r-project.org/doc/manuals/r-release/R-intro.html">An Introduction to R</a>, R Core Team (1999-2018)</li><li><a href="http://homepage.divms.uiowa.edu/~luke/xls/tutorial/techreport/techreport.html">XLISP-STAT</a>, Luke Tierney (1989)</li><li><a href="https://commons.apache.org/proper/commons-math/userguide/stat.html">Apache Commons Math - Statistics</a>, The Apache Software Foundation (2003-2016)</li><li><a href="http://www.jstatsoft.org/v08/i18/paper">Evaluating Kolmogorov’s Distribution</a>, George Marsaglia et al (2003)</li><li><a href="https://srfi.schemers.org/srfi-144/srfi-144.html">SRFI 144 - Flonums</a>, John Cowan and Will Clinger (2017)</li><li><a href="https://www.mat.univie.ac.at/~neum/scan/01.pdf">Rounding Error Analysis of Some Methods for Summing Finite Sums</a>, Arnold Neumaier (1974)</li><li><a href="https://jmlr.org/papers/volume11/ben-haim10a/ben-haim10a.pdf">A Streaming Parallel Decision Tree Algorithm</a>, Yael Ben-Haim et al (2010)</li><li><a href="http://www.johnmyleswhite.com/notebook/2013/03/22/modes-medians-and-means-an-unifying-perspective/">Modes, Medians and Means: A Unifying Perspective</a>, John Myles White (2013)</li><li><a href="https://towardsdatascience.com/on-average-youre-using-the-wrong-average-geometric-harmonic-means-in-data-analysis-2a703e21ea0">On Average, You’re Using the Wrong Average</a>, Daniel McNichol (2018)</li></ul></p><div id="footer"></div></div></body></html>

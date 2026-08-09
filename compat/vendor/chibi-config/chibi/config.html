@@ -1,0 +1,121 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h2_Background">Background</a></li><li><a href="#h2_Syntax">Syntax</a></li><li><a href="#h2_Interface">Interface</a><ol><li><a href="#h3_make-conf">make-conf</a></li><li><a href="#h3_read-from-file">read-from-file</a></li><li><a href="#h3_(assoc-getalistkey[equal?[default]])">assoc-get</a></li><li><a href="#h3_(assoc-get-listalistkey[default])">assoc-get-list</a></li><li><a href="#h3_conf-head">conf-head</a></li><li><a href="#h3_(conf-loadfile[conf])">conf-load</a></li><li><a href="#h3_conf-load-in-path">conf-load-in-path</a></li><li><a href="#h3_(conf-load-cascadedconfig-pathfile[include-keyword])">conf-load-cascaded</a></li><li><a href="#h3_(conf-getconfigkey[default])">conf-get</a></li><li><a href="#h3_(conf-get-listconfigkey[default])">conf-get-list</a></li><li><a href="#h3_conf-get-cdr">conf-get-cdr</a></li><li><a href="#h3_conf-get-multi">conf-get-multi</a></li><li><a href="#h3_conf-extend">conf-extend</a></li><li><a href="#h3_conf-append">conf-append</a></li><li><a href="#h3_conf-unfold-key">conf-unfold-key</a></li><li><a href="#h3_conf-set">conf-set</a></li><li><a href="#h3_conf-specialize">conf-specialize</a></li></ol></li><li><a href="#h2_ConfigVerification">Config Verification</a><ol><li><a href="#h3_conf-verify">conf-verify</a></li></ol></li></ol></div><div id="main"><div><a name="h1_(chibiconfig)"></a><h1>(chibi config)</h1></div><p>This is a library for unified configuration management.
+Essentially it provides an abstract collection data type for
+looking up named values, two or more of which can be chained
+together.  Values from more recent collections can be preferred as
+with an environment, or the values at multiple levels can be
+flattened together.  Convenience routines are provided from
+loading these collections from files while allowing extensions
+such as configurations from command-line options.
+<div><a name="h2_Background"></a><h2>Background</h2></div>
+
+As any application grows to sufficient complexity, it acquires
+options and behaviors that one may want to modify at startup or
+runtime.  The traditional approach is a combination of
+command-line options, config files, environment variables, and/or
+other specialized settings.  These all have various pros and cons:
+
+<table border="1" style="border-collapse:collapse" width="100%"><tr><th>name</th> <th>pros</th> <th>cons</th></tr>
+<tr><td>environment variables</td>
+    <td>implicit - no need to retype; can share between applications</td>
+    <td>unclear when set; unexpected differences between users; limited size</td></tr>
+<tr><td>command-line options</td>
+    <td>explicit - visible each time a command is run; </td>
+    <td>verbose; limited size</td></tr>
+<tr><td>config files</td>
+    <td>implicit; preserved - can be shared and version controlled</td>
+    <td>requires a parser</td></tr>
+</table>
+
+Environment variables are convenient for broad preferences, used
+by many different applications, and unlikely to change per user.
+Command-line options are best for settings that are likely to
+change between invocations of a program.  Anything else is best
+stored in a config file.  If there are settings that multiple
+users of a group or whole system are likely to want to share, then
+it makes sense to cascade multiple config files.
+<div><a name="h2_Syntax"></a><h2>Syntax</h2></div>
+
+With any other language there is a question of config file syntax,
+and a few popular choices exist such as .ini syntax.  With Scheme
+the obvious choice is sexps, generally as an alist.  We use a
+single alist for the whole file, with symbols for keys and
+arbitrary sexps for values.  The alists are intended primarily for
+editing by hand and need not be dotted, but the interface allows
+dotted values.  Disambiguation is handled as with two separate
+functions, <code>(conf-get <span>config</span> <span>key</span>)</code> and
+<code>(conf-get-list <span>config</span> <span>key</span>)</code>, which both retrieve the value
+associated with <code>key</code> from <code>config</code>, in the latter case
+coercing to a list.  The result is determined according to the
+structure of the alist cell as follows:
+
+<table border="1" style="border-collapse:collapse" width="100%"><tr><th>Cell</th> <th><code><span>conf-get</span></code> result</th> <th><code><span>conf-get-list</span></code> result</th></tr>
+<tr><td><code>(key)</code></td> <td><code>()</code></td> <td><code>()</code></td></tr>
+<tr><td><code>(key <span>.</span> <span>non-list-value</span>)</code></td> <td><code><span>non-list-value</span></code></td> <td><code>(non-list-value)</code></td></tr>
+<tr><td><code>(key <span>non-list-value</span>)</code></td> <td><code><span>non-list-value</span></code></td> <td><code>(non-list-value)</code></td></tr>
+<tr><td><code>(key (value1 <span>value2</span> <span>...</span>))</code></td> <td><code>(value1 <span>value2</span> <span>...</span>)</code></td> <td><code>(value1 <span>value2</span> <span>...</span>)</code></td></tr>
+<tr><td><code>(key <span>value1</span> <span>value2</span> <span>...</span>)</code></td> <td><code>(value1 <span>value2</span> <span>...</span>)</code></td> <td><code>(value1 <span>value2</span> <span>...</span>)</code></td></tr>
+</table>
+
+Thus writing the non-dotted value will always do what you want.
+Specifically, the only thing to be careful of is if you want a
+single-element list value, even with <code><span>conf-get</span></code>, you should
+write <code>(key (value))</code>.<div><a name="h2_Interface"></a><h2>Interface</h2></div>
+Returns true iff <code>x</code> is a config object.<div><a name="h3_make-conf"></a><h3><code>(make-conf alist parent source timestamp)</code></h3></div><div><a name="h3_read-from-file"></a><h3><code>(read-from-file file . opt)</code></h3></div><div><a name="h3_(assoc-getalistkey[equal?[default]])"></a><h3><code>(assoc-get alist key [equal? [default]])</code></h3></div>
+Utility analogous to <code><span>conf-get</span></code> on a pure alist.  Returns
+the value of the cell in <code>alist</code> whose car is <code>equal?</code> to
+<code>key</code>, where the value is determined as the <code>cadr</code> if the
+cell is a proper list of two elements and the <code>cdr</code> otherwise.
+If no cell is found, returns <code>default</code>, or <code>#f</code> if
+unspecified.<div><a name="h3_(assoc-get-listalistkey[default])"></a><h3><code>(assoc-get-list alist key [default])</code></h3></div>
+Equivalent to <code><span>assoc-get</span></code> but coerces its result to a list
+as described in the syntax section.<div><a name="h3_conf-head"></a><h3><code>(conf-head config)</code></h3></div>Returns just the base of <code>config</code> without any parent.<div><a name="h3_(conf-loadfile[conf])"></a><h3><code>(conf-load file [conf])</code></h3></div>
+Loads the config file <code>file</code>, prepending to <code>conf</code> if
+provided.<div><a name="h3_conf-load-in-path"></a><h3><code>(conf-load-in-path config-path file)</code></h3></div>Search for and load any files named <code>file</code> in the
+<code>config-path</code>, which should be a list of strings.<div><a name="h3_(conf-load-cascadedconfig-pathfile[include-keyword])"></a><h3><code>(conf-load-cascaded config-path file [include-keyword])</code></h3></div>
+Similar to conf-load-in-path, but also recursively loads any
+"include" config files, indicated by a top-level
+<code>include-keyword</code> with either a string or symbol value.
+Includes are loaded relative to the current file, and cycles
+automatically ignored.<div><a name="h3_(conf-getconfigkey[default])"></a><h3><code>(conf-get config key [default])</code></h3></div>
+Basic config lookup - retrieves the value from <code>config</code>
+associated with <code>key</code>.  If not present, return <code>default</code>.
+In <code><span>conf-get</span></code> and related accessors <code>key</code> can be either
+a symbol, or a list of symbols.  In the latter case, each symbol
+is used as a key in turn, with the value taken as an alist to
+further lookup values in.<div><a name="h3_(conf-get-listconfigkey[default])"></a><h3><code>(conf-get-list config key [default])</code></h3></div>
+Equivalent to <code><span>conf-get</span></code> but coerces its result to a list
+as described in the syntax section.<div><a name="h3_conf-get-cdr"></a><h3><code>(conf-get-cdr config key . opt)</code></h3></div>Equivalent to <code><span>conf-get</span></code> but always returns the
+<code><span>cdr</span></code> as-is without possibly taking its <code><span>car</span></code>.<div><a name="h3_conf-get-multi"></a><h3><code>(conf-get-multi config key)</code></h3></div>Equivalent to <code><span>conf-get-list</span></code> but returns a list of all
+cascaded configs appended together.<div><a name="h3_conf-extend"></a><h3><code>(conf-extend config alist [source])</code></h3></div>Extends the config with anadditional alist.<div><a name="h3_conf-append"></a><h3><code>(conf-append a b)</code></h3></div>Joins two configs.<div><a name="h3_conf-unfold-key"></a><h3><code>(conf-unfold-key key value)</code></h3></div>Utility to create an alist cell representing the chained key
+<code>key</code> mapped to <code>value</code>.<div><a name="h3_conf-set"></a><h3><code>(conf-set config key value)</code></h3></div>Replace a new definition into the first config alist.<div><a name="h3_conf-specialize"></a><h3><code>(conf-specialize config key name)</code></h3></div>Lift specialized sections to the top-level of a config.<div><a name="h2_ConfigVerification"></a><h2>Config Verification</h2></div><div><a name="h3_conf-verify"></a><h3><code>(conf-verify spec config [warn])</code></h3></div></p><div id="footer"></div></div></body></html>

@@ -1,0 +1,32 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-history">make-history</a></li><li><a href="#h3_history->list">history->list</a></li><li><a href="#h3_list->history">list->history</a></li><li><a href="#h3_history-insert!">history-insert!</a></li><li><a href="#h3_history-reset!">history-reset!</a></li><li><a href="#h3_history-commit!">history-commit!</a></li><li><a href="#h3_make-buffer">make-buffer</a></li><li><a href="#h3_buffer->string">buffer->string</a></li><li><a href="#h3_buffer-clear">buffer-clear</a></li><li><a href="#h3_buffer-draw">buffer-draw</a></li><li><a href="#h3_buffer-refresh">buffer-refresh</a></li><li><a href="#h3_buffer-make-completer">buffer-make-completer</a></li><li><a href="#h3_make-keymap">make-keymap</a></li><li><a href="#h3_make-standard-keymap">make-standard-keymap</a></li><li><a href="#h3_make-line-editor">make-line-editor</a></li><li><a href="#h3_edit-line">edit-line</a></li><li><a href="#h3_edit-line-repl">edit-line-repl</a></li></ol></div><div id="main"><div><a name="h1_(chibitermedit-line)"></a><h1>(chibi term edit-line)</h1></div><div><a name="h3_make-history"></a><h3><code>(make-history . o)</code></h3></div><div><a name="h3_history->list"></a><h3><code>(history->list h)</code></h3></div><div><a name="h3_list->history"></a><h3><code>(list->history ls . o)</code></h3></div><div><a name="h3_history-insert!"></a><h3><code>(history-insert! h x)</code></h3></div><div><a name="h3_history-reset!"></a><h3><code>(history-reset! h)</code></h3></div><div><a name="h3_history-commit!"></a><h3><code>(history-commit! h x)</code></h3></div><div><a name="h3_make-buffer"></a><h3><code>(make-buffer)</code></h3></div><div><a name="h3_buffer->string"></a><h3><code>(buffer->string buf)</code></h3></div><div><a name="h3_buffer-clear"></a><h3><code>(buffer-clear buf out)</code></h3></div><div><a name="h3_buffer-draw"></a><h3><code>(buffer-draw buf out)</code></h3></div><div><a name="h3_buffer-refresh"></a><h3><code>(buffer-refresh buf out)</code></h3></div><div><a name="h3_buffer-make-completer"></a><h3><code>(buffer-make-completer generate)</code></h3></div><div><a name="h3_make-keymap"></a><h3><code>(make-keymap . o)</code></h3></div><div><a name="h3_make-standard-keymap"></a><h3><code>(make-standard-keymap [catch-control-c?])</code></h3></div><div><a name="h3_make-line-editor"></a><h3><code>(make-line-editor . args)</code></h3></div><div><a name="h3_edit-line"></a><h3><code>(edit-line . args)</code></h3></div><div><a name="h3_edit-line-repl"></a><h3><code>(edit-line-repl . args)</code></h3></div><div id="footer"></div></div></body></html>

@@ -1,0 +1,56 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_quoted-printable-encode-string">quoted-printable-encode-string</a></li><li><a href="#h3_quoted-printable-encode-bytevector">quoted-printable-encode-bytevector</a></li><li><a href="#h3_quoted-printable-encode">quoted-printable-encode</a></li><li><a href="#h3_quoted-printable-encode-header">quoted-printable-encode-header</a></li><li><a href="#h3_quoted-printable-decode-string">quoted-printable-decode-string</a></li><li><a href="#h3_quoted-printable-decode-bytevector">quoted-printable-decode-bytevector</a></li><li><a href="#h3_quoted-printable-decode">quoted-printable-decode</a></li></ol></div><div id="main"><div><a name="h1_(chibiquoted-printable)"></a><h1>(chibi quoted-printable)</h1></div><p>RFC 2045 quoted printable encoding and decoding utilities.  This
+API is backwards compatible with the Gauche library
+rfc.quoted-printable.
+<pre><code>(<span class="keyword">define</span> (<span class="function">mime-encode-header</span> <span>header</span> <span>value</span> <span>charset</span>)
+  (<span class="keyword">let</span> ((<span class="keyword">prefix</span> (string-append <span>header</span> <span class="string">": "</span>))
+        (str (ces-convert <span>value</span> <span class="string">"UTF8"</span> <span>charset</span>)))
+    (string-append
+     <span>prefix</span>
+     (quoted-printable-encode-header <span>charset</span> <span>str</span> (string-length <span>prefix</span>))))<span class="syntaxerror">)</span>
+</code></pre><div><a name="h3_quoted-printable-encode-string"></a><h3><code>(quoted-printable-encode-string src . o)</code></h3></div>Return a quoted-printable encoded representation of the input
+according to the official standard as described in RFC2045.
+
+? and _ are always encoded for compatibility with RFC1522
+encoding, and soft newlines are inserted as necessary to keep each
+lines length less than <code>max-col</code> (default 76).  The starting
+column may be overridden with <code>start-col</code> (default 0).<div><a name="h3_quoted-printable-encode-bytevector"></a><h3><code>(quoted-printable-encode-bytevector [sep max-col start-col src])</code></h3></div><div><a name="h3_quoted-printable-encode"></a><h3><code>(quoted-printable-encode . o)</code></h3></div>Variation of the above to read and write to ports.<div><a name="h3_quoted-printable-encode-header"></a><h3><code>(quoted-printable-encode-header encoding [nl max-col start-col src])</code></h3></div>Return a quoted-printable encoded representation of string as
+above, wrapped in =?ENC?Q?...?= as per RFC1522, split across
+multiple MIME-header lines as needed to keep each lines length
+less than <code>max-col</code>.  The string is encoded as is, and the
+encoding <code>enc</code> is just used for the prefix, i.e. you are
+responsible for ensuring <code>str</code> is already encoded according to
+<code>enc</code>.<div><a name="h3_quoted-printable-decode-string"></a><h3><code>(quoted-printable-decode-string src . o)</code></h3></div>Return a quoted-printable decoded representation of <code>str</code>.  If
+<code>mime-header?</code> is specified and true, _ will be decoded as as
+space in accordance with RFC1522.  No errors will be raised on
+invalid input.<div><a name="h3_quoted-printable-decode-bytevector"></a><h3><code>(quoted-printable-decode-bytevector [src])</code></h3></div><div><a name="h3_quoted-printable-decode"></a><h3><code>(quoted-printable-decode . o)</code></h3></div>Variation of the above to read and write to ports.</p><div id="footer"></div></div></body></html>

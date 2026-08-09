@@ -1,0 +1,83 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_domain-part">domain-part</a></li><li><a href="#h3_local-part">local-part</a></li><li><a href="#h3_parse-mail-address-list">parse-mail-address-list</a></li><li><a href="#h3_parse-mail-address-list">smtp-get-response</a></li><li><a href="#h3_smtp-open">smtp-open</a></li><li><a href="#h3_smtp-close">smtp-close</a></li><li><a href="#h3_smtp-helo">smtp-helo</a></li><li><a href="#h3_smtp-mail">smtp-mail</a></li><li><a href="#h3_smtp-rcpt">smtp-rcpt</a></li><li><a href="#h3_smtp-data">smtp-data</a></li><li><a href="#h3_smtp-reset">smtp-reset</a></li><li><a href="#h3_smtp-verify">smtp-verify</a></li><li><a href="#h3_smtp-expand">smtp-expand</a></li><li><a href="#h3_smtp-help">smtp-help</a></li><li><a href="#h3_smtp-quit">smtp-quit</a></li><li><a href="#h3_smtp-noop">smtp-noop</a></li><li><a href="#h3_smtp-starttls">smtp-starttls</a></li><li><a href="#h3_smtp-mail-from">smtp-mail-from</a></li><li><a href="#h3_smtp-recipient">smtp-recipient</a></li><li><a href="#h3_smtp-generate-boundary">smtp-generate-boundary</a></li><li><a href="#h3_smtp-generate-msgid">smtp-generate-msgid</a></li><li><a href="#h3_send-mail">send-mail</a></li><li><a href="#h3_smtp-write-message">smtp-write-message</a></li><li><a href="#h3_mime-choose-encoding">mime-choose-encoding</a></li><li><a href="#h3_mime-encode-header">mime-encode-header</a></li><li><a href="#h3_smtp-write-headers">smtp-write-headers</a></li><li><a href="#h3_smtp-write-mime-part">smtp-write-mime-part</a></li></ol></div><div id="main"><div><a name="h1_(chibinetsmtp)"></a><h1>(chibi net smtp)</h1></div><p>Easy mail interface.
+
+Example:
+
+<pre><code>(send-mail '<span>From:</span>    <span class="string">"Dr. Watson &amp;lt;guest@grimpen.moor>"</span>
+           '<span>To:</span>      <span class="string">"Sherlock Homes &amp;lt;not-really@221B-baker.street>"</span>
+           '<span>Subject:</span> <span class="string">"First Report"</span>
+           '<span>Charset:</span> <span class="string">"ISO-8859-1"</span>
+           '<span>Body:</span>    <span class="string">"Moor is gloomy. Heard strange noise, attached."</span>
+           '<span>Attachments:</span> '((File: <span class="string">"howl.ogg"</span>)))</code></pre>
+
+This tries very hard to do The Right Thing.
+
+More specifically, the body and headers are all properly MIME-encoded
+for the given Charset (which may alternately be specified in
+Content-Type), choosing the whichever of base64 and quoted-printable
+would encode with the smallest size.  Source strings are all assumed
+to be UTF-8 and charset encoded as needed.
+
+Attachments are arbitrarily nested lists of the same keyword
+parameters as in the main send-mail parameters, and are sent as
+multipart MIME encodings (i.e. any valid parameter list to send-mail
+could also be used in an Attachments: list).  Attachments inherit,
+but may override, their parents' Charset settings.
+
+Most standard mail headers are recognized as keyword arguments,
+always titlecased (e.g. Cc:, Message-Id:, Mime-Version:) for a
+friendly mail-like interface.  Additional headers may be specified in
+the Headers: keyword, for example
+
+  <code><span>Headers:</span> '(X-Foo: <span class="string">"bar"</span> <span>X-Baz:</span> <span class="string">"qux"</span>)</code>
+
+The parameters To:, Cc: and Bcc: may also be lists of addresses which
+will be properly comma-delimited.
+
+You can tell send-mail *not* to perform character encoding
+conversions by passing the Charconv: #f keyword argument, and
+likewise disable automatic MIME encoding of message bodies by passing
+Encode: #f, in which case you are responsible for ensuring the
+literal text matches with the given Content-type and
+Content-Transfer-Encoding.
+
+If you just want to send a raw message without any processing at all,
+you can pass an input-port to the Source: parameter
+
+<pre><code>  (send-mail '<span>To:</span> <span>addresses</span> '<span>Source:</span> (open-input-file <span class="string">"message.txt"</span>))</code></pre>
+
+By default send-mail connects to the local smtp port, however you can
+override this with the Host: parameter to use a particular server.
+Alternately, if you specify Host: #f then send-mail will look up the
+appropriate DNS entries for all recipients and send to them in turn.
+
+send-mail returns the list of recipients who couldn't be delivered to
+(i.e. a null list when there are no errors).<div><a name="h3_domain-part"></a><h3><code>(domain-part addr)</code></h3></div><div><a name="h3_local-part"></a><h3><code>(local-part addr)</code></h3></div><div><a name="h3_parse-mail-address-list"></a><h3><code>(parse-mail-address-list str)</code></h3></div><div><a name="h3_parse-mail-address-list"></a><h3><code>(smtp-get-response smtp)</code></h3></div><div><a name="h3_smtp-open"></a><h3><code>(smtp-open host [port from-host debug?])</code></h3></div><div><a name="h3_smtp-close"></a><h3><code>(smtp-close smtp)</code></h3></div><div><a name="h3_smtp-helo"></a><h3><code>(smtp-helo smtp . o)</code></h3></div><div><a name="h3_smtp-mail"></a><h3><code>(smtp-mail smtp . o)</code></h3></div><div><a name="h3_smtp-rcpt"></a><h3><code>(smtp-rcpt smtp . o)</code></h3></div><div><a name="h3_smtp-data"></a><h3><code>(smtp-data smtp . o)</code></h3></div><div><a name="h3_smtp-reset"></a><h3><code>(smtp-reset smtp . o)</code></h3></div><div><a name="h3_smtp-verify"></a><h3><code>(smtp-verify smtp . o)</code></h3></div><div><a name="h3_smtp-expand"></a><h3><code>(smtp-expand smtp . o)</code></h3></div><div><a name="h3_smtp-help"></a><h3><code>(smtp-help smtp . o)</code></h3></div><div><a name="h3_smtp-quit"></a><h3><code>(smtp-quit smtp . o)</code></h3></div><div><a name="h3_smtp-noop"></a><h3><code>(smtp-noop smtp . o)</code></h3></div><div><a name="h3_smtp-starttls"></a><h3><code>(smtp-starttls smtp)</code></h3></div><div><a name="h3_smtp-mail-from"></a><h3><code>(smtp-mail-from smtp address)</code></h3></div><div><a name="h3_smtp-recipient"></a><h3><code>(smtp-recipient smtp address)</code></h3></div><div><a name="h3_smtp-generate-boundary"></a><h3><code>(smtp-generate-boundary)</code></h3></div><div><a name="h3_smtp-generate-msgid"></a><h3><code>(smtp-generate-msgid)</code></h3></div><div><a name="h3_send-mail"></a><h3><code>(send-mail . args)</code></h3></div><div><a name="h3_smtp-write-message"></a><h3><code>(smtp-write-message port . keys)</code></h3></div><div><a name="h3_mime-choose-encoding"></a><h3><code>(mime-choose-encoding str)</code></h3></div><div><a name="h3_mime-encode-header"></a><h3><code>(mime-encode-header name val charset [nl])</code></h3></div><div><a name="h3_smtp-write-headers"></a><h3><code>(smtp-write-headers port . args)</code></h3></div><div><a name="h3_smtp-write-mime-part"></a><h3><code>(smtp-write-mime-part port . args)</code></h3></div></p><div id="footer"></div></div></body></html>

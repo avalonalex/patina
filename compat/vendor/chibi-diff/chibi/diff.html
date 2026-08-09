@@ -1,0 +1,75 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFFFF8;}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 250px; height: 100%}
+div#menu a:link {text-decoration: none}
+div#main  {font-size: large; position: absolute; top: 0; left: 260px; max-width: 590px; height: 100%}
+div#notes {position: relative; top: 2em; left: 620px; width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+div#menu ol {list-style-position:inside; padding-left: 5px; margin-left: 5px}
+div#menu ol ol {list-style: lower-alpha; padding-left: 15px; margin-left: 15px}
+div#menu ol ol ol {list-style: decimal; padding-left: 5px; margin-left: 5px}
+h2 { color: #888888; border-top: 3px solid #4588ba; }
+h3 { color: #666666; border-top: 2px solid #4588ba; }
+h4 { color: #222288; border-top: 1px solid #4588ba; }
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h4_lcs">lcs</a></li><li><a href="#h4_lcs-with-positions">lcs-with-positions</a></li><li><a href="#h4_diff">diff</a></li><li><a href="#h4_write-diff">write-diff</a></li><li><a href="#h4_diff->string">diff->string</a></li><li><a href="#h4_write-line-diffs">write-line-diffs</a></li><li><a href="#h4_write-line-diffs/color">write-line-diffs/color</a></li><li><a href="#h4_write-char-diffs">write-char-diffs</a></li><li><a href="#h4_write-char-diffs/color">write-char-diffs/color</a></li><li><a href="#h4_write-edits">write-edits</a></li><li><a href="#h4_edits->string">edits->string</a></li><li><a href="#h4_edits->string/color">edits->string/color</a></li></ol></div><div id="main"><div><a name="h1_(chibidiff)"></a><h1>(chibi diff)</h1></div><div><a name="h4_lcs"></a><h4><code>(lcs a-ls b-ls [eq])</code></h4></div>Finds the Longest Common Subsequence between <code>a-ls</code> and
+<code>b-ls</code>, comparing elements with <code>eq</code> (default
+<code><span>equal?</span></code>.  Returns this sequence as a list, using the
+elements from <code>a-ls</code>.  Uses quadratic time and space.<div><a name="h4_lcs-with-positions"></a><h4><code>(lcs-with-positions a-ls b-ls [eq])</code></h4></div>Variant of <code><span>lcs</span></code> which returns the annotated sequence.  The
+result is a list of the common elements, each represented as a
+list of 3 values: the element, the zero-indexed position in
+<code>a-ls</code> where the element occurred, and the position in
+<code>b-ls</code>.<div><a name="h4_diff"></a><h4><code>(diff a b [reader eq])</code></h4></div>Utility to run lcs on text.  <code>a</code> and <code>b</code> can be strings or
+ports, which are tokenized into a sequence by calling <code>reader</code>
+until <code>eof-object</code> is found.  Returns a list of three values,
+the sequences read from <code>a</code> and <code>b</code>, and the <code><span>lcs</span></code>
+result.<div><a name="h4_write-diff"></a><h4><code>(write-diff diff [writer out])</code></h4></div>Utility to format the result of a <code>diff</code> to output port
+<code>out</code> (default <code>(current-output-port)</code>).  Applies
+<code>writer</code> to successive diff chunks.  <code>writer</code> should be a
+procedure of three arguments: <code>(writer <span>subsequence</span> <span>type</span>
+<span>out</span>)<span>.</span>  <code><span>subsequence</span></code> <span>is</span> <span>a</span> <span>subsequence</span> <span>from</span> <span>the</span> <span>original</span> <span>input</span>,
+<code><span>type</span></code> <span>is</span> <span>a</span> <span>symbol</span> <span>indicating</span> <span>the</span> <span>type</span> <span>of</span> <span>diff:</span> <code>'<span><span>same</span></span></code>
+<span>if</span> <span>this</span> <span>is</span> <span>part</span> <span>of</span> <span>the</span> <span>lcs</span>, <code>'<span><span>add</span></span></code> <span>if</span> <span>it</span> <span>is</span> <span>unique</span> <span>to</span> <span>the</span>
+<span>second</span> <span>input</span>, <span>or</span> <code>'<span><span>remove</span></span></code> <span>if</span> <span>it</span> <span>is</span> <span>unique</span> <span>to</span> <span>the</span> <span>first</span>
+<span>input.</span>  <code><span>writer</span></code> <span>defaults</span> <span>to</span> <code><span><span>write-line-diffs</span></span></code>,
+<span>assuming</span> <span>the</span> <span>default</span> <span>line</span> <span>diffs.</span></code><div><a name="h4_diff->string"></a><h4><code>(diff->string diff . o)</code></h4></div>Equivalent to <code><span>write-diff</span></code> but collects the output to a string.<div><a name="h4_write-line-diffs"></a><h4><code>(write-line-diffs lines type out)</code></h4></div>The default writer for <code><span>write-diff</span></code>, annotates simple +/-
+prefixes for added/removed lines.<div><a name="h4_write-line-diffs/color"></a><h4><code>(write-line-diffs/color lines type out)</code></h4></div>A variant of <code><span>write-line-diffs</span></code> which adds red/green ANSI
+coloring to the +/- prefix.<div><a name="h4_write-char-diffs"></a><h4><code>(write-char-diffs chars type out)</code></h4></div>A diff writer for sequences of characters (when a diff was
+generated with <code><span>read-char</span></code>), enclosing added characters in
+«...» brackets and removed characters in »...«.<div><a name="h4_write-char-diffs/color"></a><h4><code>(write-char-diffs/color chars type out)</code></h4></div>A diff writer for sequences of characters (when a diff was
+generated with <code><span>read-char</span></code>), formatting added characters in
+green and removed characters in red.<div><a name="h4_write-edits"></a><h4><code>(write-edits ls lcs [index writer out])</code></h4></div>Utility to format the result of a <code><span>diff</span></code> with respect to a
+single input sequence <code>ls</code>. <code>lcs</code> is the annotated common
+sequence from <code><span>diff</span></code> or <code><span>lcs-with-positions</span></code>, and
+<code>index</code> is the index (0 or 1, default 1) of <code>ls</code> in the
+original call.  Since we have no information about the other
+input, we can only format what is the same and what is different,
+formatting the differences as either added (if <code>index</code> is 0)
+or removed (if <code>index</code> is 1).<div><a name="h4_edits->string"></a><h4><code>(edits->string ls lcs [type writer])</code></h4></div>Equivalent to <code><span>write-edits</span></code> but collects the output to a string.<div><a name="h4_edits->string/color"></a><h4><code>(edits->string/color ls lcs [type writer])</code></h4></div>Equivalent to <code><span>write-edits</span></code> but collects the output to a
+string and uses a color-aware writer by default.  Note with a
+character diff this returns the original input string as-is, with
+only ANSI escapes indicating what changed.<div id="footer"></div></div></body></html>

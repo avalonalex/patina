@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8"><style type="text/css">
+body {color: #000; background-color: #FFFFF8;}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 250px; height: 100%}
+div#menu a:link {text-decoration: none}
+div#main  {font-size: large; position: absolute; top: 0; left: 260px; max-width: 590px; height: 100%}
+div#notes {position: relative; top: 2em; left: 620px; width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+div#menu ol {list-style-position:inside; padding-left: 5px; margin-left: 5px}
+div#menu ol ol {list-style: lower-alpha; padding-left: 15px; margin-left: 15px}
+div#menu ol ol ol {list-style: decimal; padding-left: 5px; margin-left: 5px}
+h2 { color: #888888; border-top: 3px solid #4588ba; }
+h3 { color: #666666; border-top: 2px solid #4588ba; }
+h4 { color: #222288; border-top: 1px solid #4588ba; }
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h4_locale:root">locale:root</a></li><li><a href="#h4_locale:arabic">locale:arabic</a></li><li><a href="#h4_locale:chinese">locale:chinese</a></li><li><a href="#h4_locale:dutch">locale:dutch</a></li><li><a href="#h4_locale:english">locale:english</a></li><li><a href="#h4_locale:french">locale:french</a></li><li><a href="#h4_locale:german">locale:german</a></li><li><a href="#h4_locale:hindi">locale:hindi</a></li><li><a href="#h4_locale:italian">locale:italian</a></li><li><a href="#h4_locale:japanese">locale:japanese</a></li><li><a href="#h4_locale:korean">locale:korean</a></li><li><a href="#h4_locale:polish">locale:polish</a></li><li><a href="#h4_locale:portuguese">locale:portuguese</a></li><li><a href="#h4_locale:russian">locale:russian</a></li><li><a href="#h4_locale:spanish">locale:spanish</a></li><li><a href="#h4_locale:thai">locale:thai</a></li><li><a href="#h4_locale:turkish">locale:turkish</a></li><li><a href="#h4_(make-localelanguage[regionvariantscriptextensions])">make-locale</a></li><li><a href="#h4_locale=">locale=</a></li><li><a href="#h4_locale-includes?">locale-includes?</a></li><li><a href="#h4_locale-generalize">locale-generalize</a></li><li><a href="#h4_string->locale">string->locale</a></li><li><a href="#h4_locale->string">locale->string</a></li></ol></div><div id="main"><div><a name="h1_(chibilocale)"></a><h1>(chibi locale)</h1></div><p>A lightweight library for representing locale information and
+serializing to and from strings.
+A Locale record is an immutable object representing the
+information in IETF BCP 47.  This can be used for distinctions
+necessary in written and spoken language, but does not provide the
+full locale information specified by POSIX LC_* variables such as
+collation and numeric and time formatting, except for reasonable
+defaults that can be inferred from the region.<div><a name="h4_locale:root"></a><h4><code>locale:root</code></h4></div><div><a name="h4_locale:arabic"></a><h4><code>locale:arabic</code></h4></div><div><a name="h4_locale:chinese"></a><h4><code>locale:chinese</code></h4></div><div><a name="h4_locale:dutch"></a><h4><code>locale:dutch</code></h4></div><div><a name="h4_locale:english"></a><h4><code>locale:english</code></h4></div><div><a name="h4_locale:french"></a><h4><code>locale:french</code></h4></div><div><a name="h4_locale:german"></a><h4><code>locale:german</code></h4></div><div><a name="h4_locale:hindi"></a><h4><code>locale:hindi</code></h4></div><div><a name="h4_locale:italian"></a><h4><code>locale:italian</code></h4></div><div><a name="h4_locale:japanese"></a><h4><code>locale:japanese</code></h4></div><div><a name="h4_locale:korean"></a><h4><code>locale:korean</code></h4></div><div><a name="h4_locale:polish"></a><h4><code>locale:polish</code></h4></div><div><a name="h4_locale:portuguese"></a><h4><code>locale:portuguese</code></h4></div><div><a name="h4_locale:russian"></a><h4><code>locale:russian</code></h4></div><div><a name="h4_locale:spanish"></a><h4><code>locale:spanish</code></h4></div><div><a name="h4_locale:thai"></a><h4><code>locale:thai</code></h4></div><div><a name="h4_locale:turkish"></a><h4><code>locale:turkish</code></h4></div>Useful predefined locales representing just a language with no
+other fields, except for <code><span>locale:root</span></code> which is the empty
+locale.<div><a name="h4_(make-localelanguage[regionvariantscriptextensions])"></a><h4><code>(make-locale language [region variant script extensions])</code></h4></div>
+
+Returns an immutable locale object for the given language, with
+optional region, variant, script and extensions.  The
+<code>language</code> should be a 2 or 3 letter symbol such as
+<code>'<span>en</span></code> or <code>'<span>ain</span></code>.  The <code>region</code> is an ISO 3166
+code, either an uppercased 2 letter symbol such as <code>'<span>US</span></code> or
+<code>'<span>FR</span></code> or a 3 digit code from ISO 3166-1 or UN M49 such as
+<code><span>029</span></code> (Caribbean).  The <code>variant</code> is a 5-8 letter
+language variant such as <code>'<span>polyton</span></code> for Polytonic (Ancient)
+Greek.  The <code>script</code> is a 4 letter titlecased symbol such as
+<code>'<span>Latn</span></code> (Latin), <code>'<span>Cyrl</span></code> (Cyrillic), or
+<code>'<span>Jpan</span></code> (Han + Hiragana + Katakana).  The <code>extensions</code>
+are an alist whose keys are single letter symbols (currently only
+<code>'<span>u</span></code> and <code>'<span>x</span></code> are defined) with subtag string
+values.
+
+The implementation may intern or otherwise coalesce locale objects
+with the same values.
+
+Note the order of the arguments differs from the serialized string
+representation (moving <code>script</code> after <code>region</code> and
+<code>variant</code>) to make the common case construction more
+convenient.
+
+Example:
+<div><pre><code>(locale->string (make-locale '<span>ja</span> '<span>JP</span>))</code></pre><div class="result"><code>=> "ja-JP"</code></div></div><div><a name="h4_locale="></a><h4><code>(locale= a b)</code></h4></div>Returns <code>#t</code> iff all components of <code>a</code> and <code>b</code> are equal.<div><a name="h4_locale-includes?"></a><h4><code>(locale-includes? a b)</code></h4></div>Returns <code>#t</code> iff <code>a</code> includes <code>b</code>, i.e. it <code>a</code>
+is a more general locale, differing only in components specified
+in <code>b</code> which are unspecific in <code>a</code>.<div><a name="h4_locale-generalize"></a><h4><code>(locale-generalize locale)</code></h4></div>Returns the next more general locale than <code>locale</code> by ablating
+one of its components, or <code>#f</code> if locale can't be made more
+general (i.e. is already <code><span>locale:root</span></code>).  The order of
+generalization follows that of the serialized string
+representation, first removing the extensions if present, then the
+variant, then the region, then script.<div><a name="h4_string->locale"></a><h4><code>(string->locale str)</code></h4></div>Returns the Locale record corresponding to the given serialized
+string representation, signalling an error on invalid format.
+Allows underscores as well as hyphens as tag separators.  Note
+that the LANG environment variable should not be passed to this
+directly as it typically has a .&lt;encoding> suffix.
+
+Example:
+<div><pre><code>(locale-language (string->locale <span class="string">"ja-JP"</span>))</code></pre><div class="result"><code>=> ja</code></div></div><div><a name="h4_locale->string"></a><h4><code>(locale->string locale)</code></h4></div>Returns the serialized string representation of <code>locale</code>.</p><div id="footer"></div></div></body></html>

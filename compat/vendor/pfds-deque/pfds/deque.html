@@ -1,0 +1,50 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-deque">make-deque</a></li><li><a href="#h3_deque-empty?">deque-empty?</a></li><li><a href="#h3_enqueue-front">enqueue-front</a></li><li><a href="#h3_enqueue-rear">enqueue-rear</a></li><li><a href="#h3_dequeue-front">dequeue-front</a></li><li><a href="#h3_dequeue-rear">dequeue-rear</a></li><li><a href="#h3_list->deque">list->deque</a></li><li><a href="#h3_list->deque">deque->list</a></li></ol></div><div id="main"><div><a name="h1_(pfdsdeque)"></a><h1>(pfds deque)</h1></div><p>deque? : any -> boolean
+tests if an object is a deque
+
+deque-length : deque -> non-negative integer
+returns the number of items in the deque<div><a name="h3_make-deque"></a><h3><code>(make-deque)</code></h3></div>make-deque : () -> deque
+returns a deque containing to items<div><a name="h3_deque-empty?"></a><h3><code>(deque-empty? deque)</code></h3></div>deque-empty? : deque -> boolean
+returns true if there are no items in the deque, false otherwise<div><a name="h3_enqueue-front"></a><h3><code>(enqueue-front deque item)</code></h3></div>enqueue-front : deque any -> deque
+returns a new deque with the inserted item at the front<div><a name="h3_enqueue-rear"></a><h3><code>(enqueue-rear deque item)</code></h3></div>enqueue-rear : deque any -> deque
+returns a new deque with the inserted item at the rear<div><a name="h3_dequeue-front"></a><h3><code>(dequeue-front deque)</code></h3></div>dequeue-front : deque -> any queue
+returns two values, the item at the front of the deque, and a new
+deque containing all the other items
+raises an error if the deque is empty<div><a name="h3_dequeue-rear"></a><h3><code>(dequeue-rear deque)</code></h3></div>dequeue-rear : deque -> any queue
+returns two values, the item at the rear of the deque, and a new
+deque containing all the other items
+raises an error if the deque is empty<div><a name="h3_list->deque"></a><h3><code>(list->deque l)</code></h3></div>list->deque : listof(any) -> deque
+returns a deque containing all of the elements in the list. The
+order of the elements in the deque is the same as the order of the
+elements in the list.<div><a name="h3_list->deque"></a><h3><code>(deque->list deq)</code></h3></div>deque->list : deque -> listof(any)
+returns a list containing all the elements of the deque. The order
+of the elements in the list is the same as the order they would be
+dequeued from the front of the deque.</p><div id="footer"></div></div></body></html>

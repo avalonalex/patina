@@ -1,0 +1,45 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_dlist">%dlist</a></li><li><a href="#h3_dlist">compose</a></li><li><a href="#h3_dlist-append">dlist-append</a></li><li><a href="#h3_dlist-append">dlist-cons</a></li><li><a href="#h3_dlist-snoc">dlist-snoc</a></li><li><a href="#h3_dlist->list">dlist->list</a></li><li><a href="#h3_list->dlist">list->dlist</a></li><li><a href="#h3_dlist">dlist</a></li></ol></div><div id="main"><div><a name="h1_(pfdsdifference-list)"></a><h1>(pfds difference-list)</h1></div><p>Repeatedly appending to a list is a common, if inefficient pattern
+in functional programs. Usually the trick we use is to build up the
+list in reverse, and then to reverse it as the last action of a
+function.Dlists are a representation of lists as functions that provide for
+constant time append to either the front or end of a dlist that may
+be used instead.dlist? : any -> boolean
+returns #t if its argument is a dlist, #f otherwise.<div><a name="h3_dlist"></a><h3><code>(%dlist . args)</code></h3></div><div><a name="h3_dlist"></a><h3><code>(compose f g)</code></h3></div><div><a name="h3_dlist-append"></a><h3><code>(dlist-append dl1 dl2)</code></h3></div>dlist-append : dlist dlist -> dlist
+returns a new dlist consisting of all the elements of the first
+dlist, followed by all the items of the second dlist.<div><a name="h3_dlist-append"></a><h3><code>(dlist-cons element dlist)</code></h3></div>dlist-cons : any dlist -> dlist
+returns a new dlist created by prepending the element to the head
+of the dlist argument.<div><a name="h3_dlist-snoc"></a><h3><code>(dlist-snoc dlist element)</code></h3></div>dlist-snoc : dlist any -> dlist
+returns a new dlist created by appending the element to the tail of
+the dlist argument.<div><a name="h3_dlist->list"></a><h3><code>(dlist->list dlist)</code></h3></div>dlist->list : dlist -> listof(any)
+returns a list consisting of all the elements of the dlist.<div><a name="h3_list->dlist"></a><h3><code>(list->dlist list)</code></h3></div>list->dlist : listof(any) -> dlist
+returns a dlist consisting of all the elements of the list.<div><a name="h3_dlist"></a><h3><code>dlist</code></h3></div>dlist : any ... -> dlist
+returns a dlist containing all its arguments.</p><div id="footer"></div></div></body></html>

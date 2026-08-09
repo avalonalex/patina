@@ -1,0 +1,33 @@
+<h1 id="interface-abstraction-for-a-set-of-functions">Interface abstraction for a set of functions</h1>
+<p>This library provides a way to define an interface (a set of procedures with defined names and parameter count), define interface’s implementation(s), and call interface method with specific implementation reference.</p>
+<p>While generally interface abstraction is less needed compared to statically typed and / or object oriented languages, it can be handy in certain contexts, such as when implementing “Ports and Adapters” (also known as “Hexagon”) architecture, which was the main motivation for the creation of this library.</p>
+<p>Report issues at https://github.com/arvyy/r7rs-interface/issues</p>
+<h2 id="usage">Usage</h2>
+<p>Interface is defined with</p>
+<pre><code>(define-interface 
+  interface-implementation-constructor
+  method-signature ...)</code></pre>
+<p>Where <code>method-signature</code> is either</p>
+<ul>
+<li><code>(method-name arg ...)</code></li>
+<li><code>(method-name arg ... . rest)</code></li>
+</ul>
+<p>For example,</p>
+<pre><code>(define-interface
+  foo
+  (bar arg1 arg2))</code></pre>
+<p><code>interface-implementation-constructor</code> is bound to syntax for constructing implementation of this interface, which shall be used so</p>
+<pre><code>(interface-implementation-constructor
+    (method-signature method-body) ...)</code></pre>
+<p>For example (using <code>foo</code> interface from above),</p>
+<pre><code>(define foo-impl
+  (foo
+    ((bar arg1 arg2) (list arg1 arg2))))</code></pre>
+<p>Finally, to invoke interface’s method, call it by supplying implementation instance as a first parameter</p>
+<p>For example,</p>
+<pre><code>(display (bar foo-impl 1 2)) ;; should show &quot;(1 2)&quot;</code></pre>
+<p>During construction of implementation instance, the syntax verifies that</p>
+<ul>
+<li>implementation provides same amount of methods, in same order, with same method names (parameter names are not checked)</li>
+<li>each method provides call-compatible amount of arguments. Implementation method cannot declare more required arguments than there were in interface declaration. The method may declare less required arguments if it also provides a <code>rest</code> argument.</li>
+</ul>

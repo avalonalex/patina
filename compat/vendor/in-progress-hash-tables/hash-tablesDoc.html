@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<meta charset="UTF-8">
+<meta name="description" content="Pre-SRFI Reference Implementation of Hash Tables">
+<meta name="author" content="William D Clinger">
+<meta name="keywords" content="Scheme, R6RS, R7RS, SRFI, hashtables, hash-table">
+
+<title>
+  Pre-SRFI Reference Implementation of Hash Tables
+</title>
+
+<style type="text/css">
+body {
+  height: 100%;
+  color: #000;
+  background-color: #e0f0e8;
+  font-family:  Verdana, Arial, Helvetica, sans-serif;
+  font-size: larger;
+  margin: 5% 15% 0% 15%;
+}
+li {
+  padding-bottom: 5pt
+}
+h1, h2 {
+  color: green;
+}
+img {
+  border-style: none;
+  margin-left: auto;
+  margin-right: auto;
+}
+sub {
+  font-size: 75%;
+}
+sup {
+  font-size: 75%;
+}
+tt,kbd,code {
+  font-size: 14pt;
+}
+pre {
+  font-size: 11pt;
+  background-color: #d8d8d8;
+}
+blockquote {
+  font-size: 120%;
+  color: #0000f0;
+}
+address {
+  font-size: 10pt;
+}
+</style>
+
+</head>
+
+<body>
+
+<!-- start of specific content -->
+
+<div id="maincontent">
+  <h1>
+    Pre-SRFI Reference Implementation of Hash Tables
+  </h1>
+
+  <p>
+    This package contains a preliminary implementation of a
+    <a href="http://trac.sacrideo.us/wg/wiki/HashTablesCowan">hash table API</a>
+    that has been proposed by John Cowan, chair of Working Group 2
+    (R7RS large).
+  </p>
+
+  <h2>
+    Implementation
+  </h2>
+
+  <p>
+    This package imports <code>(scheme base)</code>,
+    <code>(r6rs hashtables)</code>, and
+    <code>(srfi 114 comparators)</code>.  It also imports
+    <code>(scheme char)</code> if that library is available.
+  </p>
+
+  <h2>
+    Tests
+  </h2>
+
+  <p>
+    <code>in-progress/hash/tables-test.sps</code>
+    tests both <code>(in-progress hash tables)</code> and
+    <code>(in-progress hash bimaps)</code>,
+    so both of those libraries will have to be downloaded before
+    their test program can be run.
+  </p>
+
+  <h2>
+    Bugs
+  </h2>
+
+  <p>
+    Please report bugs found within <code>(in-progress *)</code> libraries at
+    <a href="https://github.com/larcenists/larceny">Larceny's GitHub site</a>.
+  </p>
+
+</div>
+
+<!-- p>
+For debugging: 
+<a href="http://validator.w3.org/check/referer">
+Click here to validate.
+</a>
+</p -->
+
+</body>
+</html>

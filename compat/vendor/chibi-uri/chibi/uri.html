@@ -1,0 +1,51 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_(make-urischeme[userhostportpathqueryfragment])">make-uri</a></li><li><a href="#h3_uri-with-scheme">uri-with-scheme</a></li><li><a href="#h3_uri-with-user">uri-with-user</a></li><li><a href="#h3_uri-with-host">uri-with-host</a></li><li><a href="#h3_uri-with-path">uri-with-path</a></li><li><a href="#h3_uri-with-query">uri-with-query</a></li><li><a href="#h3_uri-with-fragment">uri-with-fragment</a></li><li><a href="#h3_string->path-uri">string->path-uri</a></li><li><a href="#h3_string->uri">string->uri</a></li><li><a href="#h3_uri->string">uri->string</a></li><li><a href="#h3_uri-has-scheme?">uri-has-scheme?</a></li><li><a href="#h3_(uri-encodestr[plus?])">uri-encode</a></li><li><a href="#h3_(uri-decodestr[plus?])">uri-decode</a></li><li><a href="#h3_(uri-query->aliststr[plus?])">uri-query->alist</a></li><li><a href="#h3_(uri-alist->queryls[plus?])">uri-alist->query</a></li><li><a href="#h3_uri-resolve">uri-resolve</a></li></ol></div><div id="main"><div><a name="h1_(chibiuri)"></a><h1>(chibi uri)</h1></div><p>Library for parsing and constructing URI objects.Accessors for the URI type.<div><a name="h3_(make-urischeme[userhostportpathqueryfragment])"></a><h3><code>(make-uri scheme [user host port path query fragment])</code></h3></div><div><a name="h3_uri-with-scheme"></a><h3><code>(uri-with-scheme u scheme)</code></h3></div><div><a name="h3_uri-with-user"></a><h3><code>(uri-with-user u user)</code></h3></div><div><a name="h3_uri-with-host"></a><h3><code>(uri-with-host u host)</code></h3></div><div><a name="h3_uri-with-path"></a><h3><code>(uri-with-path u path)</code></h3></div><div><a name="h3_uri-with-query"></a><h3><code>(uri-with-query u query)</code></h3></div><div><a name="h3_uri-with-fragment"></a><h3><code>(uri-with-fragment u fragment)</code></h3></div>Functional updaters - returns a new uri identical to <code>u</code>
+with only the specified field changed.<div><a name="h3_string->path-uri"></a><h3><code>(string->path-uri scheme str . o)</code></h3></div>Parses a string with a default scheme and returns a new URI
+object.  If the string does not begin with a scheme it is take to
+be a simple path URI with the default scheme.  This is a
+lightweight permissive parser.<div><a name="h3_string->uri"></a><h3><code>(string->uri str . o)</code></h3></div>Parses a string and returns a new URI object.  If the string does
+not have a scheme, returns false.<div><a name="h3_uri->string"></a><h3><code>(uri->string uri . o)</code></h3></div>Convert a URI object to a string.  Returns #f if the uri has no scheme.<div><a name="h3_uri-has-scheme?"></a><h3><code>(uri-has-scheme? url)</code></h3></div>Returns true iff the given URI string has a scheme.<div><a name="h3_(uri-encodestr[plus?])"></a><h3><code>(uri-encode str [plus?])</code></h3></div>
+Return the URI encoded version of the string <code>str</code>,
+using hex escapes as needed and replacing spaces with "+"
+iff the optional argument <code>plus?</code> is true.<div><a name="h3_(uri-decodestr[plus?])"></a><h3><code>(uri-decode str [plus?])</code></h3></div>
+Decodes any URI hex escapes in the given string, and
+translates any pluses ("+") to space iff the optional
+argument <code>plus?</code> is true.<div><a name="h3_(uri-query->aliststr[plus?])"></a><h3><code>(uri-query->alist str [plus?])</code></h3></div>
+Parses the query part of a URI as a delimited list of
+URI encoded <code>VAR=VALUE</code> pairs, decodes them and
+returns the result as an alist.<div><a name="h3_(uri-alist->queryls[plus?])"></a><h3><code>(uri-alist->query ls [plus?])</code></h3></div>
+The reverse of the above, formats the alist as a URI
+query string.<div><a name="h3_uri-resolve"></a><h3><code>(uri-resolve path orig-uri)</code></h3></div>Returns a new URI from <code>path</code>, a string or URI object, as
+would be interpreted from as a reference from <code>uri</code>.  Thus if
+any components of <code>path</code> are missing, or if <code>path</code> is a
+raw path, it is taken relative to <code>uri</code>.</p><div id="footer"></div></div></body></html>

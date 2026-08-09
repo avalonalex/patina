@@ -1,0 +1,41 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_edit-distance">edit-distance</a></li><li><a href="#h3_find-nearest-edits">find-nearest-edits</a></li></ol></div><div id="main"><div><a name="h1_(chibiedit-distance)"></a><h1>(chibi edit-distance)</h1></div><div><a name="h3_edit-distance"></a><h3><code>(edit-distance s1 s2)</code></h3></div>Returns the levenshtein distance between s1 and s2 - a cost of
+1 per character insertion, deletion or update.  Runs in
+quadratic time and linear memory.
+
+<div><pre><code>(edit-distance <span class="string">"same"</span> <span class="string">"same"</span>)</code></pre><div class="result"><code>=> 0</code></div></div>
+<div><pre><code>(edit-distance <span class="string">"same"</span> <span class="string">"sand"</span>)</code></pre><div class="result"><code>=> 2</code></div></div>
+<div><pre><code>(edit-distance <span class="string">"Saturday"</span> <span class="string">"Sunday"</span>)</code></pre><div class="result"><code>=> 3</code></div></div><div><a name="h3_find-nearest-edits"></a><h3><code>(find-nearest-edits str str-ls [max-distance])</code></h3></div>Returns a list of strings in <code>str-ls</code> with the smallest
+edit distance to <code>str</code>, preserving order.  If
+<code>max-distance</code> is provided and positive, only return if
+the edits are less or equal to that distance.<div id="footer"></div></div></body></html>

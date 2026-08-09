@@ -1,0 +1,27 @@
+;; Time-stamp: <2021-04-10 21:56:29 lockywolf>
+;; ssize_t lgetxattr(const char *path, const char *name,
+;;                     void *value, size_t size);
+
+
+
+(c-system-include "sys/xattr.h")
+
+(define-c long (%lgetxattr-size lgetxattr)
+   ((const string) (const string) (const pointer maybe-null value NULL void)
+    (value 0 size_t)))
+
+(define-c long (%lgetxattr-value! lgetxattr)
+   ((const string) (const string) string (size_t)))
+
+;;>int lsetxattr(const char *path, const char *name,
+;;>                   void *value, size_t size, int flags);
+
+
+(define-c long (%lsetxattr lsetxattr)
+  ((const string) (const string) bytevector size_t int))
+
+;; Local Variables:
+;; mode: scheme
+;; scheme-program-name: "chibi-ffi"
+;; End:
+

@@ -1,0 +1,94 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_(assq-reflskey[default])">assq-ref</a></li><li><a href="#h3_mime-type-from-extension">mime-type-from-extension</a></li><li><a href="#h2_RFC2822Headers">RFC2822 Headers</a></li><li><a href="#h3_(mime-header-foldkonsknil[source[limit[kons-from]]])">mime-header-fold</a></li><li><a href="#h3_(mime-headers->list[source])">mime-headers->list</a></li><li><a href="#h3_(mime-parse-content-typestr)">mime-parse-content-type</a></li><li><a href="#h3_(mime-decode-headerstr)">mime-decode-header</a></li><li><a href="#h3_mime-write-headers">mime-write-headers</a></li><li><a href="#h2_RFC2045MIMEEncoding">RFC2045 MIME Encoding</a></li><li><a href="#h3_(mime-message-foldsrckonsknil[downupheaders])">mime-message-fold</a></li><li><a href="#h3_(mime-message->sxml[src[headers]])">mime-message->sxml</a></li></ol></div><div id="main"><div><a name="h1_(chibimime)"></a><h1>(chibi mime)</h1></div><p>A library to parse MIME headers and bodies into SXML.<div><a name="h3_(assq-reflskey[default])"></a><h3><code>(assq-ref ls key [default])</code></h3></div>
+Returns the <code><span>cdr</span></code> of the cell in <code>ls</code> whose
+<code><span>car</span></code> is <code><span>eq?</span></code> to <code>key</code>, or <code>default</code>
+if not found.  Useful for retrieving values associated with
+MIME headers.<div><a name="h3_mime-type-from-extension"></a><h3><code>(mime-type-from-extension ext)</code></h3></div><div><a name="h2_RFC2822Headers"></a><h2>RFC2822 Headers</h2></div>
+<div><a name="h3_(mime-header-foldkonsknil[source[limit[kons-from]]])"></a><h3><code>(mime-header-fold kons knil [source [limit [kons-from]]])</code></h3></div>
+
+Performs a fold operation on the MIME headers of source which can be
+either a string or port, and defaults to current-input-port.  <code>kons</code>
+is called on the three values:
+   <code>(kons <span>header</span> <span>value</span> <span>accumulator</span>)</code>
+where accumulator begins with <code>knil</code>.  Neither the header nor the
+value are modified, except wrapped lines are handled for the value.
+
+The optional procedure <code>kons-from</code> is a procedure to be called when
+the first line of the headers is an "From &lt;address> &lt;date>" line, to
+enable this procedure to be used as-is on mbox files and the like.
+It defaults to <code>kons</code>, and if such a line is found the fold will begin
+with <code>(kons-from '<span>%from</span> <span>&lt;address></span> (kons-from '<span>%date</span> <span>&lt;date></span> <span>knil</span>))</code>.
+
+The optional <code>limit</code> gives a limit on the number of headers to read.<div><a name="h3_(mime-headers->list[source])"></a><h3><code>(mime-headers->list [source])</code></h3></div>
+Return an alist of the MIME headers from source with headers all
+downcased.<div><a name="h3_(mime-parse-content-typestr)"></a><h3><code>(mime-parse-content-type str)</code></h3></div>
+Parses <code>str</code> as a Content-Type style-value returning the list
+<code>(type (attr <span>.</span> <span>val</span>) <span>...</span>)</code>.
+<div><pre><code>(mime-parse-content-type <span class="string">"text/html; CHARSET=UTF-8; filename=index.html"</span>)
+</code></pre><div class="result"><code>=> (text/html (charset . "UTF-8") (filename . "index.html"))</code></div></div><div><a name="h3_(mime-decode-headerstr)"></a><h3><code>(mime-decode-header str)</code></h3></div>
+Replace all occurrences of RFC1522 =?ENC?...?= escapes in <code>str</code> with
+the appropriate decoded and charset converted value.<div><a name="h3_mime-write-headers"></a><h3><code>(mime-write-headers headers out)</code></h3></div>Write out an alist of headers in mime format.<div><a name="h2_RFC2045MIMEEncoding"></a><h2>RFC2045 MIME Encoding</h2></div>
+<div><a name="h3_(mime-message-foldsrckonsknil[downupheaders])"></a><h3><code>(mime-message-fold src kons knil [down up headers])</code></h3></div>
+Performs a tree fold operation on the given string or port
+<code>src</code> as a MIME body corresponding to the headers give in
+<code>headers</code>.  If <code>headers</code> are false or not provided they
+are first read from <code>src</code>.
+
+<code>kons</code> is called on the successive values:
+
+<pre><code>(kons <span>parent-headers</span> <span>part-headers</span> <span>part-body</span> <span>accumulator</span>)</code></pre>
+
+where <code>part-headers</code> are the headers for the given MIME part (the
+original headers for single-part MIME), <code>part-body</code> is the
+appropriately decoded and charset-converted body of the message,
+and the <code>accumulator</code> begins with <code>knil</code>.
+
+If a multipart body is found, then a tree fold is performed,
+calling <code>down</code> once to get a new accumulator to pass to
+<code>kons</code>, and <code>up</code> on the result when returning.  Their
+signatures are:
+
+<pre><code>(down <span>headers</span> <span>seed</span>)</code></pre>
+<pre><code>(up <span>headers</span> <span>parent-seed</span> <span>seed</span>)</code></pre>
+
+The default <code>down</code> simply returns null, and the default
+<code>up</code> wraps the seed in the following sxml:
+
+<pre><code> ((mime (@ <span>headers</span> <span>...</span>)
+    <span>seed</span> <span>...</span>)
+  <span>parent-seed</span> <span>...</span>)
+</code></pre><div><a name="h3_(mime-message->sxml[src[headers]])"></a><h3><code>(mime-message->sxml [src [headers]])</code></h3></div>
+
+Parse the given source as a MIME message and return
+the result as an SXML object of the form:
+<code>(mime (@ (header <span>.</span> <span>value</span>) <span>...</span>) <span>parts</span> <span>...</span>)</code>.</p><div id="footer"></div></div></body></html>

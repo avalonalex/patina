@@ -1,0 +1,5980 @@
+{
+  "generated": "2026-08-08",
+  "source": "snow-fort.org /s/repo.scm",
+  "purpose": "compatibility test corpus only: not a dependency of Patina, not shipped with it, and not an endorsement of any package",
+  "selection": "every snow-fort package whose licence is permissive or non-standard-permissive, ranked by dependency in-degree; copyleft and licence-unknown packages excluded",
+  "policy": "unmodified upstream extractions; provenance recorded here, not inside the trees",
+  "packages": [
+    {
+      "library": "chibi test",
+      "slug": "chibi-test",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/test/0.9.0/chibi-test-0.9.0.tgz",
+      "tarball_sha256": "86997714be7fb6ade1b094d91727f9c9becd9051a41d1703986643d1ed09865d",
+      "popularity_indegree": 43,
+      "provides": [
+        "chibi test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi diff",
+        "chibi term ansi",
+        "chicken",
+        "scheme base",
+        "scheme complex",
+        "scheme process-context",
+        "scheme time",
+        "scheme write"
+      ],
+      "description": "Simple but extensible testing framework with advanced reporting.",
+      "files": [
+        "chibi/test.html",
+        "chibi/test.scm",
+        "chibi/test.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 1",
+      "slug": "srfi-1",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/1/0.1.0/srfi-1-0.1.0.tgz",
+      "tarball_sha256": "c1c8d0204697134170a1d749d77afdc1395dc793250bde3731ae7cf5db43ac7d",
+      "popularity_indegree": 40,
+      "provides": [
+        "srfi 1"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme cxr",
+        "srfi 227",
+        "srfi 8"
+      ],
+      "description": "SRFI-1",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/1.scm",
+        "srfi/1.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 60",
+      "slug": "srfi-60",
+      "version": "2026.03.13",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/60/2026.03.13/srfi-60-2026.03.13.tgz",
+      "tarball_sha256": "74eb0b846efdf2b1d9774f6d8ad6fc6a07609f49c063c02b2a3facf8ead5875e",
+      "popularity_indegree": 31,
+      "provides": [
+        "srfi 60"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI-60",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/60.scm",
+        "srfi/60.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib common",
+      "slug": "slib-common",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "slib-family-inference",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/common/SLIB-3b5-r7rs/slib-common-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "3f40923df702c9517b9066f30434bccbc6c9fa67d9b6c12f6ab3737eacd3eaf0",
+      "popularity_indegree": 20,
+      "provides": [
+        "slib common"
+      ],
+      "depends": [
+        "chibi process",
+        "kawa lib system",
+        "primitives system",
+        "sagittarius process",
+        "scheme base",
+        "scheme file",
+        "scheme write"
+      ],
+      "description": "SLIB core functions",
+      "files": [
+        "package.scm",
+        "slib-common.html",
+        "slib/common.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi string",
+      "slug": "chibi-string",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/string/0.9.0/chibi-string-0.9.0.tgz",
+      "tarball_sha256": "86a73c53b2e7a4e1201ff10115a5488890993c0020051b3abe0fc785a077ec11",
+      "popularity_indegree": 16,
+      "provides": [
+        "chibi string",
+        "chibi string-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi ast",
+        "chibi char-set base",
+        "chibi test",
+        "scheme base",
+        "scheme char",
+        "srfi 1",
+        "srfi 13",
+        "srfi 14"
+      ],
+      "description": "A cursor-oriented string library.",
+      "files": [
+        "chibi/string-test.sld",
+        "chibi/string.html",
+        "chibi/string.scm",
+        "chibi/string.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 69",
+      "slug": "srfi-69",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/69/0.1.0/srfi-69-0.1.0.tgz",
+      "tarball_sha256": "5e066ee4fa9c5d9a8ca0753def37d56cf977ccd84d7f265f48436f7cd6253513",
+      "popularity_indegree": 16,
+      "provides": [
+        "srfi 69"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme complex",
+        "scheme cxr"
+      ],
+      "description": "SRFI-69",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/69.scm",
+        "srfi/69.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 27",
+      "slug": "srfi-27",
+      "version": "2025.12.14",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/27/2025.12.14/srfi-27-2025.12.14.tgz",
+      "tarball_sha256": "b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5",
+      "popularity_indegree": 9,
+      "provides": [
+        "srfi 27"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme complex",
+        "scheme time",
+        "scheme write"
+      ],
+      "description": "SRFI-27",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/27.scm",
+        "srfi/27.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 63",
+      "slug": "srfi-63",
+      "version": "1.0.0",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/srfi/63/1.0.0/srfi-63-1.0.0.tgz",
+      "tarball_sha256": "0b8a805dd242438a45acbce96aa3c4fc6ce7e15ca7051ea07bd75a3f88cd403f",
+      "popularity_indegree": 9,
+      "provides": [
+        "srfi 63"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Homogeneous and Heterogeneous Arrays",
+      "files": [
+        "package.scm",
+        "srfi-63.html",
+        "srfi/63.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi filesystem",
+      "slug": "chibi-filesystem",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/filesystem/0.9.0/chibi-filesystem-0.9.0.tgz",
+      "tarball_sha256": "dad608a7fbc00fe8e9929ff6124edad13bedfdc58cc14042be29b33f64c13483",
+      "popularity_indegree": 8,
+      "provides": [
+        "chibi filesystem",
+        "chibi filesystem-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi string",
+        "chibi test",
+        "chicken",
+        "posix",
+        "sagittarius",
+        "scheme base",
+        "scheme file",
+        "scheme write",
+        "srfi 1",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "Interface to the filesystem and file descriptor objects.",
+      "files": [
+        "chibi/filesystem-test.sld",
+        "chibi/filesystem.html",
+        "chibi/filesystem.scm",
+        "chibi/filesystem.sld",
+        "chibi/filesystem.stub",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": true
+    },
+    {
+      "library": "pfds list-helpers",
+      "slug": "pfds-list-helpers",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/list-helpers/1.0.0/pfds-list-helpers-1.0.0.tgz",
+      "tarball_sha256": "0eb459e05b775a90f6b2a6a7435d19aa6369f99709b8d501a960149e05e21517",
+      "popularity_indegree": 8,
+      "provides": [
+        "pfds list-helpers"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "List utility functions",
+      "files": [
+        "package.scm",
+        "pfds/list-helpers.html",
+        "pfds/list-helpers.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi optional",
+      "slug": "chibi-optional",
+      "version": "0.9.1.3",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/optional/0.9.1.3/chibi-optional-0.9.1.3.tgz",
+      "tarball_sha256": "30b58c0bbecbe37560fc24086417d2ab908536b74d8775670da55f1eb6971e9c",
+      "popularity_indegree": 7,
+      "provides": [
+        "chibi optional",
+        "chibi optional-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi test",
+        "scheme base",
+        "scheme write"
+      ],
+      "description": "Syntax to support optional and named keyword arguments.",
+      "files": [
+        "chibi/optional-test.sld",
+        "chibi/optional.html",
+        "chibi/optional.scm",
+        "chibi/optional.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi pathname",
+      "slug": "chibi-pathname",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/pathname/0.9.0/chibi-pathname-0.9.0.tgz",
+      "tarball_sha256": "424aa360577d7cac0ceb4e7e6cbf8943ffe958870338d5b0fef1c22789a07186",
+      "popularity_indegree": 7,
+      "provides": [
+        "chibi pathname",
+        "chibi pathname-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi string",
+        "chibi test",
+        "scheme base"
+      ],
+      "description": "A general, non-filesystem-specific pathname library.",
+      "files": [
+        "chibi/pathname-test.sld",
+        "chibi/pathname.html",
+        "chibi/pathname.scm",
+        "chibi/pathname.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi match",
+      "slug": "chibi-match",
+      "version": "0.9.1",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/match/0.9.1/chibi-match-0.9.1.tgz",
+      "tarball_sha256": "badcfca91bdfc1a7831aed444a9fe4af317e1429216c725fc1b67e1864111ca4",
+      "popularity_indegree": 6,
+      "provides": [
+        "chibi match",
+        "chibi match-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi test",
+        "scheme base"
+      ],
+      "description": "A portable hygienic pattern matcher.",
+      "files": [
+        "chibi/match-test.sld",
+        "chibi/match.html",
+        "chibi/match.sld",
+        "chibi/match/match.scm",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 95",
+      "slug": "srfi-95",
+      "version": "0.1.0",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/95/0.1.0/srfi-95-0.1.0.tgz",
+      "tarball_sha256": "92f4169c3cc7fc7adb62f172087c28d3dad2281ebb575f298639ae2f333e2591",
+      "popularity_indegree": 6,
+      "provides": [
+        "srfi 95"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 63"
+      ],
+      "description": "SRFI-95",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/95.scm",
+        "srfi/95.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi bytevector",
+      "slug": "chibi-bytevector",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/bytevector/0.9.0/chibi-bytevector-0.9.0.tgz",
+      "tarball_sha256": "7b5ee7c108d0272cdef87b82e6c2931f941c7d3654ce115a51db6e639873297d",
+      "popularity_indegree": 5,
+      "provides": [
+        "chibi bytevector",
+        "chibi bytevector-test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "scheme bytevector",
+        "scheme inexact",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "Additional bytevector utilities.",
+      "files": [
+        "chibi/bytevector-test.sld",
+        "chibi/bytevector.html",
+        "chibi/bytevector.scm",
+        "chibi/bytevector.sld",
+        "chibi/ieee-754.scm",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi char-set",
+      "slug": "chibi-char-set",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/char-set/0.9.0/chibi-char-set-0.9.0.tgz",
+      "tarball_sha256": "c88004fb0d8a06efa0993ebe847b4d8ddd5815d29d7f788d0a5ed38f5ae5df7c",
+      "popularity_indegree": 5,
+      "provides": [
+        "chibi char-set",
+        "chibi char-set base",
+        "chibi char-set extras"
+      ],
+      "depends": [
+        "chibi",
+        "chibi iset",
+        "chibi iset base",
+        "scheme base"
+      ],
+      "description": "A minimal character set library.",
+      "files": [
+        "chibi/char-set.html",
+        "chibi/char-set.sld",
+        "chibi/char-set/base.sld",
+        "chibi/char-set/extras.scm",
+        "chibi/char-set/extras.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 64",
+      "slug": "srfi-64",
+      "version": "0.2.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/64/0.2.1/srfi-64-0.2.1.tgz",
+      "tarball_sha256": "f3ec28b4ce2b6f2fe432d81ac9afbf96c0359cbc6e0f2f3b935793994329f887",
+      "popularity_indegree": 5,
+      "provides": [
+        "srfi 64"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda",
+        "scheme complex",
+        "scheme eval",
+        "scheme file",
+        "scheme process-context",
+        "scheme read",
+        "scheme write"
+      ],
+      "description": "SRFI-64",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/64.scm",
+        "srfi/64.sld",
+        "test.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs unicode-reference unicode0",
+      "slug": "r6rs-unicode-reference-unicode0",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/unicode-reference/unicode0/0.0.1/r6rs-unicode-reference-unicode0-0.0.1.tgz",
+      "tarball_sha256": "1450a1e3defa951e407d4acb9151dc6aca3a5993b620dc7b2c05cd531c8951c4",
+      "popularity_indegree": 4,
+      "provides": [
+        "r6rs unicode-reference unicode0"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Helper library for (rnrs unicode).",
+      "files": [
+        "package.scm",
+        "r6rs/unicode-reference/unicode0.body.scm",
+        "r6rs/unicode-reference/unicode0.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs unicode-reference unicode1",
+      "slug": "r6rs-unicode-reference-unicode1",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/unicode-reference/unicode1/0.0.1/r6rs-unicode-reference-unicode1-0.0.1.tgz",
+      "tarball_sha256": "ed65f577c1928918c734406431a63b5c31278794793cf40fa8035c339e677fb9",
+      "popularity_indegree": 4,
+      "provides": [
+        "r6rs unicode-reference unicode1"
+      ],
+      "depends": [
+        "r6rs unicode-reference unicode0",
+        "scheme base"
+      ],
+      "description": "Helper library for (rnrs unicode).",
+      "files": [
+        "package.scm",
+        "r6rs/unicode-reference/unicode1.body.scm",
+        "r6rs/unicode-reference/unicode1.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 14",
+      "slug": "srfi-14",
+      "version": "0.1.0",
+      "license": "MIT-Scheme-old",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/14/0.1.0/srfi-14-0.1.0.tgz",
+      "tarball_sha256": "de94f90d7b032ea554ed51b4cbce942b22df6fefe68497d661b9c26e3c7e690e",
+      "popularity_indegree": 4,
+      "provides": [
+        "srfi 14"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme write",
+        "srfi 60",
+        "srfi :14 char-sets"
+      ],
+      "description": "SRFI-14",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/14.scm",
+        "srfi/14.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 19",
+      "slug": "srfi-19",
+      "version": "1.0.2",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/19/1.0.2/srfi-19-1.0.2.tgz",
+      "tarball_sha256": "3ca65aacd2d39eeba2b937ec8d9a8ff41d3d93384ab08da436fea7603822bfbc",
+      "popularity_indegree": 4,
+      "provides": [
+        "srfi 19"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme cxr",
+        "scheme file",
+        "scheme read",
+        "scheme time",
+        "scheme write",
+        "srfi 8"
+      ],
+      "description": "SRFI-19",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/19.scm",
+        "srfi/19.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi assert",
+      "slug": "chibi-assert",
+      "version": "0.10.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/assert/0.10.0/chibi-assert-0.10.0.tgz",
+      "tarball_sha256": "b3901ce23329748eb423fe3f2dcffed63253dc1366a17cb8279025038139b921",
+      "popularity_indegree": 3,
+      "provides": [
+        "chibi assert",
+        "chibi assert-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi test",
+        "scheme base"
+      ],
+      "description": "A nice assert macro.",
+      "files": [
+        "chibi/assert-test.sld",
+        "chibi/assert.html",
+        "chibi/assert.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib color",
+      "slug": "slib-color",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/color/SLIB-3b5-r7rs/slib-color-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "76e9b75bc288e6e3c94c760c4ff5bd8d6b378adc07c5440afc842b957ff0daf2",
+      "popularity_indegree": 3,
+      "provides": [
+        "slib color"
+      ],
+      "depends": [
+        "scheme base",
+        "slib color-space",
+        "slib printf",
+        "slib scanf",
+        "slib string-case"
+      ],
+      "description": "Color data type",
+      "files": [
+        "package.scm",
+        "slib-color.html",
+        "slib/color.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib filename",
+      "slug": "slib-filename",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/filename/SLIB-3b5-r7rs/slib-filename-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "924adc1bad2f2f2d7f8607caad240ef0575c5b0bcc0f9f935a4ca7e66195b2a1",
+      "popularity_indegree": 3,
+      "provides": [
+        "slib filename"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme file",
+        "slib common"
+      ],
+      "description": "String matching for filenames (glob, a la BASH)",
+      "files": [
+        "package.scm",
+        "slib-filename.html",
+        "slib/filename.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib printf",
+      "slug": "slib-printf",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/printf/SLIB-3b5-r7rs/slib-printf-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "c86aa3efe26f514cbd11aeb03ade2ee1b3c6ac028db52c6b2454c20d378ac924",
+      "popularity_indegree": 3,
+      "provides": [
+        "slib printf"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme complex",
+        "scheme write",
+        "slib generic-write"
+      ],
+      "description": "Implementation of standard C functions",
+      "files": [
+        "package.scm",
+        "slib-printf.html",
+        "slib/printf.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib scanf",
+      "slug": "slib-scanf",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/scanf/SLIB-3b5-r7rs/slib-scanf-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "8bbb523308395d2109eba4d29435ed87d34a7b861e0e8ea1ae95cb6b26d064ae",
+      "popularity_indegree": 3,
+      "provides": [
+        "slib scanf"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda",
+        "scheme char",
+        "scheme cxr",
+        "slib common",
+        "slib string-port"
+      ],
+      "description": "Implementation of POSIX-style formatted input",
+      "files": [
+        "package.scm",
+        "slib-scanf.html",
+        "slib/scanf.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib string-case",
+      "slug": "slib-string-case",
+      "version": "SLIB-3b5-r7rs",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/string-case/SLIB-3b5-r7rs/slib-string-case-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "d1e81607bd042ef694ff1ddbcc61e6a11e7b0af08dd70e228e23afcb40ac24f8",
+      "popularity_indegree": 3,
+      "provides": [
+        "slib string-case"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "slib common",
+        "srfi 13"
+      ],
+      "description": "String casing functions",
+      "files": [
+        "package.scm",
+        "slib-string-case.html",
+        "slib/string-case.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib time-core",
+      "slug": "slib-time-core",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/time-core/SLIB-3b5-r7rs/slib-time-core-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "3385839c98ab9b1bc68347baee280b8071dd73b1aed3ee3d1547161b9ced3630",
+      "popularity_indegree": 3,
+      "provides": [
+        "slib time-core"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme time"
+      ],
+      "description": "Core time conversion routines",
+      "files": [
+        "package.scm",
+        "slib-time.html",
+        "slib/time-core.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 106",
+      "slug": "srfi-106",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/106/0.1.0/srfi-106-0.1.0.tgz",
+      "tarball_sha256": "bec44ed8b61cfb8f19bb5fdff8dbcfc1f2048dcb2c4c70fb3a2ae55c9bb52687",
+      "popularity_indegree": 3,
+      "provides": [
+        "srfi 106"
+      ],
+      "depends": [
+        "foreign c",
+        "scheme base",
+        "scheme process-context",
+        "scheme write"
+      ],
+      "description": "SRFI-106: Basic socket interface",
+      "files": [
+        "package.scm",
+        "srfi/106.scm",
+        "srfi/106.sld",
+        "srfi/106/README.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 180",
+      "slug": "srfi-180",
+      "version": "2026.04.26",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/180/2026.04.26/srfi-180-2026.04.26.tgz",
+      "tarball_sha256": "d2aac6a7f19acacf6e84356387621783af6a2a56adc48623782e901ae7d138be",
+      "popularity_indegree": 3,
+      "provides": [
+        "srfi 180"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda",
+        "scheme char",
+        "scheme inexact",
+        "scheme write",
+        "srfi 145",
+        "srfi 60"
+      ],
+      "description": "SRFI-180",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/180.scm",
+        "srfi/180.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 2",
+      "slug": "srfi-2",
+      "version": "2025.08.27",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/2/2025.08.27/srfi-2-2025.08.27.tgz",
+      "tarball_sha256": "22fba488fff4086855bec542d932b59bf0826b9eb2efb90fc1033a0f419a4386",
+      "popularity_indegree": 3,
+      "provides": [
+        "srfi 2"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme write"
+      ],
+      "description": "SRFI-2",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/2.scm",
+        "srfi/2.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 8",
+      "slug": "srfi-8",
+      "version": "0.1.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/8/0.1.1/srfi-8-0.1.1.tgz",
+      "tarball_sha256": "4a52ac870bd520034afdb65a3a79f86eaf33d215da43ec007c9219d7faba0ab6",
+      "popularity_indegree": 3,
+      "provides": [
+        "srfi 8"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI-8",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/8.scm",
+        "srfi/8.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi base64",
+      "slug": "chibi-base64",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/base64/0.9.0/chibi-base64-0.9.0.tgz",
+      "tarball_sha256": "4f59e38142759554dc417e7b4f132414acd40ae3450a0481b57228a10257fcea",
+      "popularity_indegree": 2,
+      "provides": [
+        "chibi base64",
+        "chibi base64-test"
+      ],
+      "depends": [
+        "chibi io",
+        "chibi string",
+        "chibi test",
+        "scheme base",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "RFC 3548 base64 encoding and decoding utilities.",
+      "files": [
+        "chibi/base64-test.sld",
+        "chibi/base64.html",
+        "chibi/base64.scm",
+        "chibi/base64.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi config",
+      "slug": "chibi-config",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/config/0.9.0/chibi-config-0.9.0.tgz",
+      "tarball_sha256": "c9a6b3fd9a1cfb9a0fa6fcfde31946b492ff1adeb0aca77662fa4c937a2cf7a3",
+      "popularity_indegree": 2,
+      "provides": [
+        "chibi config"
+      ],
+      "depends": [
+        "chibi",
+        "chibi filesystem",
+        "meta",
+        "scheme base",
+        "scheme file",
+        "scheme read",
+        "scheme time",
+        "scheme write",
+        "srfi 1"
+      ],
+      "description": "This is a library for unified configuration management.",
+      "files": [
+        "chibi/config.html",
+        "chibi/config.scm",
+        "chibi/config.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi crypto sha2",
+      "slug": "chibi-crypto-sha2",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/crypto/sha2/0.9.0/chibi-crypto-sha2-0.9.0.tgz",
+      "tarball_sha256": "e5d6f3c5d0f5bdfb72d9cb2f1c3d1b2ac691ac0c92826fb4a9c5b7450b5aff85",
+      "popularity_indegree": 2,
+      "provides": [
+        "chibi crypto sha2",
+        "chibi crypto sha2-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi bytevector",
+        "chibi test",
+        "scheme base",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "Implementation of the SHA-2 (Secure Hash Algorithm) cryptographic hash.",
+      "files": [
+        "chibi/crypto/crypto.stub",
+        "chibi/crypto/sha2-native.scm",
+        "chibi/crypto/sha2-test.sld",
+        "chibi/crypto/sha2.c",
+        "chibi/crypto/sha2.html",
+        "chibi/crypto/sha2.scm",
+        "chibi/crypto/sha2.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": true
+    },
+    {
+      "library": "chibi parse",
+      "slug": "chibi-parse",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/parse/0.9.0/chibi-parse-0.9.0.tgz",
+      "tarball_sha256": "66cd0a9d1ca07559f5f1ccbef05939921bfb9967049c2c2691031a43b56e3a17",
+      "popularity_indegree": 2,
+      "provides": [
+        "chibi parse",
+        "chibi parse common",
+        "chibi parse-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi char-set",
+        "chibi char-set ascii",
+        "chibi test",
+        "scheme base",
+        "scheme char",
+        "scheme file",
+        "srfi 14",
+        "srfi 9"
+      ],
+      "description": "A parser combinator library with optional memoization and convenient syntax.",
+      "files": [
+        "chibi/parse-test.sld",
+        "chibi/parse.html",
+        "chibi/parse.sld",
+        "chibi/parse/common.html",
+        "chibi/parse/common.scm",
+        "chibi/parse/common.sld",
+        "chibi/parse/parse.scm",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi quoted-printable",
+      "slug": "chibi-quoted-printable",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/quoted-printable/0.9.0/chibi-quoted-printable-0.9.0.tgz",
+      "tarball_sha256": "9f7f9e3013139b36249b594e510feac1a2a4fc2b6a20c1974ebc559ff037a17d",
+      "popularity_indegree": 2,
+      "provides": [
+        "chibi quoted-printable",
+        "chibi quoted-printable-test"
+      ],
+      "depends": [
+        "chibi io",
+        "chibi string",
+        "chibi test",
+        "scheme base",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "RFC 2045 quoted printable encoding and decoding utilities.",
+      "files": [
+        "chibi/quoted-printable-test.sld",
+        "chibi/quoted-printable.html",
+        "chibi/quoted-printable.scm",
+        "chibi/quoted-printable.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi regexp",
+      "slug": "chibi-regexp",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/regexp/0.9.0/chibi-regexp-0.9.0.tgz",
+      "tarball_sha256": "7bfed63982d55c7c272d32ddca295993a6196c37ef426d7bd90eafe3b8856c5e",
+      "popularity_indegree": 2,
+      "provides": [
+        "chibi regexp",
+        "chibi regexp pcre",
+        "chibi regexp-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi char-set",
+        "chibi char-set ascii",
+        "chibi char-set boundary",
+        "chibi char-set full",
+        "chibi match",
+        "chibi string",
+        "chibi test",
+        "scheme base",
+        "scheme char",
+        "scheme cxr",
+        "scheme file",
+        "scheme write",
+        "srfi 1",
+        "srfi 14",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60",
+        "srfi 69",
+        "srfi 9"
+      ],
+      "description": "A regular expression engine implementing SRFI 115 using a non-backtracking Thompson NFA algorithm.",
+      "files": [
+        "chibi/regexp-test.sld",
+        "chibi/regexp.html",
+        "chibi/regexp.scm",
+        "chibi/regexp.sld",
+        "chibi/regexp/pcre.html",
+        "chibi/regexp/pcre.scm",
+        "chibi/regexp/pcre.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi show",
+      "slug": "chibi-show",
+      "version": "0.7.3.1",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/show/0.7.3.1/chibi-show-0.7.3.1.tgz",
+      "tarball_sha256": "4a2c64802000eca62d36320de97480bc2f333e62517a987a0ff0af6d9b3d4194",
+      "popularity_indegree": 2,
+      "provides": [
+        "chibi show",
+        "chibi show base",
+        "chibi show pretty",
+        "chibi show-test"
+      ],
+      "depends": [
+        "chibi monad environment",
+        "chibi string",
+        "chibi test",
+        "scheme base",
+        "scheme char",
+        "scheme complex",
+        "scheme inexact",
+        "scheme read",
+        "scheme write",
+        "srfi 1",
+        "srfi 69"
+      ],
+      "description": "A library of procedures for formatting Scheme objects to text in various ways, and for easily concatenating, composing and extending these formatters.",
+      "files": [
+        "chibi/show-test.sld",
+        "chibi/show.html",
+        "chibi/show.sld",
+        "chibi/show/base.scm",
+        "chibi/show/base.sld",
+        "chibi/show/pretty.html",
+        "chibi/show/pretty.scm",
+        "chibi/show/pretty.sld",
+        "chibi/show/show.scm",
+        "chibi/show/write.scm",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi term ansi",
+      "slug": "chibi-term-ansi",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/term/ansi/0.9.0/chibi-term-ansi-0.9.0.tgz",
+      "tarball_sha256": "805e33d6b87c6d54337bf0c89002f13c323e6d836291d2e88a252140d1552599",
+      "popularity_indegree": 2,
+      "provides": [
+        "chibi term ansi",
+        "chibi term ansi-test"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme process-context",
+        "scheme write"
+      ],
+      "description": "A library to use ANSI escape codes to format text and background color, font weigh, and underlining.",
+      "files": [
+        "chibi/term/ansi-test.sld",
+        "chibi/term/ansi.html",
+        "chibi/term/ansi.scm",
+        "chibi/term/ansi.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds lazy-list",
+      "slug": "pfds-lazy-list",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/lazy-list/1.0.0/pfds-lazy-list-1.0.0.tgz",
+      "tarball_sha256": "db4fcc889545c34716dff6c0420f9a5fcee2a3dee8f31416c1bc08462b74252f",
+      "popularity_indegree": 2,
+      "provides": [
+        "pfds lazy-list"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme lazy"
+      ],
+      "description": "Odd lazy lists",
+      "files": [
+        "package.scm",
+        "pfds/lazy-list.html",
+        "pfds/lazy-list.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs hashtables",
+      "slug": "r6rs-hashtables",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/hashtables/0.0.1/r6rs-hashtables-0.0.1.tgz",
+      "tarball_sha256": "d93f85d56c7eadb1e1603bf95988302bd1e111e3247bb1ddba7d271148633b12",
+      "popularity_indegree": 2,
+      "provides": [
+        "r6rs hashtables"
+      ],
+      "depends": [
+        "rnrs hashtables",
+        "scheme base",
+        "scheme char",
+        "scheme complex",
+        "scheme cxr",
+        "scheme inexact",
+        "srfi 69",
+        "srfi 69 basic-hash-tables",
+        "srfi :69",
+        "srfi :69 basic-hash-tables"
+      ],
+      "description": "Port of (rnrs hashtables) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/hashtables.atop69.scm",
+        "r6rs/hashtables.body69.scm",
+        "r6rs/hashtables.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs unicode-reference unicode2",
+      "slug": "r6rs-unicode-reference-unicode2",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/unicode-reference/unicode2/0.0.1/r6rs-unicode-reference-unicode2-0.0.1.tgz",
+      "tarball_sha256": "e46d3fd17c6305c35542ae783a578f5f2324e67d140b6bd84168ddd42190b24c",
+      "popularity_indegree": 2,
+      "provides": [
+        "r6rs unicode-reference unicode2"
+      ],
+      "depends": [
+        "r6rs unicode-reference unicode0",
+        "r6rs unicode-reference unicode1",
+        "scheme base"
+      ],
+      "description": "Helper library for (rnrs unicode).",
+      "files": [
+        "package.scm",
+        "r6rs/unicode-reference/unicode2.body.scm",
+        "r6rs/unicode-reference/unicode2.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs unicode-reference unicode3",
+      "slug": "r6rs-unicode-reference-unicode3",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/unicode-reference/unicode3/0.0.1/r6rs-unicode-reference-unicode3-0.0.1.tgz",
+      "tarball_sha256": "62fba6dbb3ddd123b392a538e01aa1db0bff1b8939505a7071619297f0af17ff",
+      "popularity_indegree": 2,
+      "provides": [
+        "r6rs unicode-reference unicode3"
+      ],
+      "depends": [
+        "r6rs unicode-reference unicode0",
+        "r6rs unicode-reference unicode1",
+        "r6rs unicode-reference unicode2",
+        "scheme base"
+      ],
+      "description": "Helper library for (rnrs unicode).",
+      "files": [
+        "package.scm",
+        "r6rs/unicode-reference/unicode3.body.scm",
+        "r6rs/unicode-reference/unicode3.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib array-for-each",
+      "slug": "slib-array-for-each",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/array-for-each/SLIB-3b5-r7rs/slib-array-for-each-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "e06f684faa4b4207a845c260a94be08acd7bf999494319e093d8c092a52aed1b",
+      "popularity_indegree": 2,
+      "provides": [
+        "slib array-for-each"
+      ],
+      "depends": [
+        "scheme base",
+        "slib common",
+        "srfi 1",
+        "srfi 63"
+      ],
+      "description": "Applicative routines for arrays/matrices",
+      "files": [
+        "package.scm",
+        "slib-array-foreach.html",
+        "slib/array-for-each.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib byte",
+      "slug": "slib-byte",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/byte/SLIB-3b5-r7rs/slib-byte-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "af4560b3df5a0d66398ddabbcfe576d0d073403c2795391718f55c8710ac7c0f",
+      "popularity_indegree": 2,
+      "provides": [
+        "slib byte"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 63"
+      ],
+      "description": "Arrays of small integers, not necessarily chars",
+      "files": [
+        "package.scm",
+        "slib-byte.html",
+        "slib/byte.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib color-space",
+      "slug": "slib-color-space",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/color-space/SLIB-3b5-r7rs/slib-color-space-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "cb2afbb291d44c4389e3e72d82ae1e147970454855a9ea006db50db4a59d8b62",
+      "popularity_indegree": 2,
+      "provides": [
+        "slib color-space"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme cxr",
+        "scheme file",
+        "scheme inexact",
+        "scheme read",
+        "srfi 60",
+        "srfi 95"
+      ],
+      "description": "Color-space conversions",
+      "files": [
+        "package.scm",
+        "slib-color-space.html",
+        "slib/color-space.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib generic-write",
+      "slug": "slib-generic-write",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "slib-family-inference",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/generic-write/SLIB-3b5-r7rs/slib-generic-write-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "31e2c198c67b4334d45a95011912990bc261013e36a211cdc51670368e93a129",
+      "popularity_indegree": 2,
+      "provides": [
+        "slib generic-write"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Generic write",
+      "files": [
+        "package.scm",
+        "slib-generic-write.html",
+        "slib/generic-write.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib pretty-print",
+      "slug": "slib-pretty-print",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "slib-family-inference",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/pretty-print/SLIB-3b5-r7rs/slib-pretty-print-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "ca76f30ada0dc85e99ac1442cb7f2ff72bd203c4917d0c483308e38029c56393",
+      "popularity_indegree": 2,
+      "provides": [
+        "slib pretty-print"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme write",
+        "slib common",
+        "slib generic-write"
+      ],
+      "description": "Pretty printing",
+      "files": [
+        "package.scm",
+        "slib-pretty-print.html",
+        "slib/pretty-print.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib string-port",
+      "slug": "slib-string-port",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/string-port/SLIB-3b5-r7rs/slib-string-port-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "a36d8f1643a41db17fc8e9f1971148d997fcfc4ecf745a9ee4bc007a56c72c83",
+      "popularity_indegree": 2,
+      "provides": [
+        "slib string-port"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Portable string ports",
+      "files": [
+        "package.scm",
+        "slib-string-port.html",
+        "slib/string-port.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib string-search",
+      "slug": "slib-string-search",
+      "version": "SLIB-3b5-r7rs",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/string-search/SLIB-3b5-r7rs/slib-string-search-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "b32f539326abebc0ac8169a2dd1085944ce244ae8e29eee9ae79c6a886662d7c",
+      "popularity_indegree": 2,
+      "provides": [
+        "slib string-search"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "slib alist",
+        "srfi 13"
+      ],
+      "description": "Functions for working with and searching within strings",
+      "files": [
+        "package.scm",
+        "slib-strsearch.html",
+        "slib/string-search.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib subarray",
+      "slug": "slib-subarray",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/subarray/SLIB-3b5-r7rs/slib-subarray-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "1125a4a2fa9400291c8e3a4e8b68471573f5813ea0aefc0ab3a7ca4ca75dedc7",
+      "popularity_indegree": 2,
+      "provides": [
+        "slib subarray"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme cxr",
+        "srfi 63"
+      ],
+      "description": "Accessing parts of arrays",
+      "files": [
+        "package.scm",
+        "slib-subarray.html",
+        "slib/subarray.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib time-zone",
+      "slug": "slib-time-zone",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/time-zone/SLIB-3b5-r7rs/slib-time-zone-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "60bcdd2a1254ff42eda3e5c04a4cc18d7114698b1639a752ec338e448e1dc4f7",
+      "popularity_indegree": 2,
+      "provides": [
+        "slib time-zone"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme cxr",
+        "scheme file",
+        "slib common",
+        "slib scanf",
+        "slib time-core",
+        "slib tzfile"
+      ],
+      "description": "Compute timezones and DST from TZ environment variable",
+      "files": [
+        "package.scm",
+        "slib-time.html",
+        "slib/time-zone.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 39",
+      "slug": "srfi-39",
+      "version": "2025.08.27",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/39/2025.08.27/srfi-39-2025.08.27.tgz",
+      "tarball_sha256": "74652534407b544466532091a341fb301eb78e0f5175685c5c8c8e86fbd59ac3",
+      "popularity_indegree": 2,
+      "provides": [
+        "srfi 39"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI-39",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/39.scm",
+        "srfi/39.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi binary-record",
+      "slug": "chibi-binary-record",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/binary-record/0.9.0/chibi-binary-record-0.9.0.tgz",
+      "tarball_sha256": "5d338215b14c981954035bab32b9b99282f9f2b19af105266e79a00bca22ddf9",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi binary-record"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 1",
+        "srfi 13",
+        "srfi 130",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "",
+      "files": [
+        "chibi/binary-record-chicken.scm",
+        "chibi/binary-record.html",
+        "chibi/binary-record.scm",
+        "chibi/binary-record.sld",
+        "chibi/binary-types.scm",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi char-set boundary",
+      "slug": "chibi-char-set-boundary",
+      "version": "0.9.0",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/char-set/boundary/0.9.0/chibi-char-set-boundary-0.9.0.tgz",
+      "tarball_sha256": "6a913ae82de56424910491e4d0456fd46fb5914c1634b973df93fb2df96b7f25",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi char-set boundary"
+      ],
+      "depends": [
+        "chibi",
+        "chibi char-set",
+        "scheme base",
+        "srfi 14"
+      ],
+      "description": "Char-sets used for TR29 word boundaries.",
+      "files": [
+        "chibi/char-set/boundary.html",
+        "chibi/char-set/boundary.scm",
+        "chibi/char-set/boundary.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi crypto md5",
+      "slug": "chibi-crypto-md5",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/crypto/md5/0.9.0/chibi-crypto-md5-0.9.0.tgz",
+      "tarball_sha256": "609d538c6621a6b84834967cd60ed3bcfd910d56a67e193ea189f2606aea7c1f",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi crypto md5",
+        "chibi crypto md5-test"
+      ],
+      "depends": [
+        "chibi bytevector",
+        "chibi test",
+        "scheme base",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "Implementation of the MD5 (Message Digest) cryptographic hash.",
+      "files": [
+        "chibi/crypto/md5-test.sld",
+        "chibi/crypto/md5.html",
+        "chibi/crypto/md5.scm",
+        "chibi/crypto/md5.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi crypto rsa",
+      "slug": "chibi-crypto-rsa",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/crypto/rsa/0.9.0/chibi-crypto-rsa-0.9.0.tgz",
+      "tarball_sha256": "4eaee568f7898429d744a5ddd95c4d46b3a8402fd6dfe571443e7806ad9ce794",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi crypto rsa",
+        "chibi crypto rsa-test"
+      ],
+      "depends": [
+        "chibi bytevector",
+        "chibi crypto sha2",
+        "chibi math prime",
+        "chibi test",
+        "scheme base",
+        "srfi 151",
+        "srfi 27",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "RSA public key cryptography implementation.",
+      "files": [
+        "chibi/crypto/rsa-test.sld",
+        "chibi/crypto/rsa.html",
+        "chibi/crypto/rsa.scm",
+        "chibi/crypto/rsa.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi diff",
+      "slug": "chibi-diff",
+      "version": "0.9.1.3",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/diff/0.9.1.3/chibi-diff-0.9.1.3.tgz",
+      "tarball_sha256": "07b62a03d280924f0bd42ca6375c752884a480779984dd7e9889e150f892fbac",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi diff",
+        "chibi diff-test"
+      ],
+      "depends": [
+        "chibi io",
+        "chibi optional",
+        "chibi term ansi",
+        "chibi test",
+        "scheme base",
+        "scheme write",
+        "srfi 1"
+      ],
+      "description": "",
+      "files": [
+        "chibi/diff-test.sld",
+        "chibi/diff.html",
+        "chibi/diff.scm",
+        "chibi/diff.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi edit-distance",
+      "slug": "chibi-edit-distance",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/edit-distance/0.9.0/chibi-edit-distance-0.9.0.tgz",
+      "tarball_sha256": "1534158ba2963dbb4a5b37831e94a7a3007afa105a7134c011f710f1afbf36b9",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi edit-distance",
+        "chibi edit-distance-test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "srfi 130"
+      ],
+      "description": "",
+      "files": [
+        "chibi/edit-distance-test.sld",
+        "chibi/edit-distance.html",
+        "chibi/edit-distance.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi iset",
+      "slug": "chibi-iset",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/iset/0.9.0/chibi-iset-0.9.0.tgz",
+      "tarball_sha256": "33e536d20db603e24f489fdafd4996b3832ff29c7245e0f1bf59e52bac9c95dd",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi iset",
+        "chibi iset base",
+        "chibi iset iterators",
+        "chibi iset constructors",
+        "chibi iset optimize",
+        "chibi iset-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi test",
+        "scheme base",
+        "scheme write",
+        "srfi 1",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60",
+        "srfi 9"
+      ],
+      "description": "A space efficient integer set (iset) implementation, optimized for minimal space usage and fast membership lookup.",
+      "files": [
+        "chibi/iset-test.sld",
+        "chibi/iset.html",
+        "chibi/iset.sld",
+        "chibi/iset/base.scm",
+        "chibi/iset/base.sld",
+        "chibi/iset/constructors.scm",
+        "chibi/iset/constructors.sld",
+        "chibi/iset/iterators.scm",
+        "chibi/iset/iterators.sld",
+        "chibi/iset/optimize.html",
+        "chibi/iset/optimize.scm",
+        "chibi/iset/optimize.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi math prime",
+      "slug": "chibi-math-prime",
+      "version": "0.10.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/math/prime/0.10.0/chibi-math-prime-0.10.0.tgz",
+      "tarball_sha256": "82628af19ec37dae8189b73ddab540958feba524c61da0e74f0ce0602e042d61",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi math prime",
+        "chibi math prime-test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "scheme inexact",
+        "srfi 151",
+        "srfi 27",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "Prime and number theoretic utilities.",
+      "files": [
+        "chibi/math/prime-test.sld",
+        "chibi/math/prime.html",
+        "chibi/math/prime.scm",
+        "chibi/math/prime.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi mime",
+      "slug": "chibi-mime",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/mime/0.9.0/chibi-mime-0.9.0.tgz",
+      "tarball_sha256": "3f15743a4116eb95368449c0717b476040e6eba8af8bcf551023a19c7fcbcf8f",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi mime",
+        "chibi mime-test"
+      ],
+      "depends": [
+        "chibi base64",
+        "chibi quoted-printable",
+        "chibi string",
+        "chibi test",
+        "scheme base",
+        "scheme char",
+        "scheme write"
+      ],
+      "description": "A library to parse MIME headers and bodies into SXML.",
+      "files": [
+        "chibi/mime-test.sld",
+        "chibi/mime.html",
+        "chibi/mime.scm",
+        "chibi/mime.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi monad environment",
+      "slug": "chibi-monad-environment",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/monad/environment/0.9.0/chibi-monad-environment-0.9.0.tgz",
+      "tarball_sha256": "ae4abff382dbe3db6d1c8a6e5bcfa237c16f6dd7faeb45f160358acf63a00e22",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi monad environment"
+      ],
+      "depends": [
+        "chibi",
+        "scheme base"
+      ],
+      "description": "A Scheme take on the environment (reader) monad, focusing more on being efficient and convenient than pure.",
+      "files": [
+        "chibi/monad/environment.html",
+        "chibi/monad/environment.scm",
+        "chibi/monad/environment.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi net dns",
+      "slug": "chibi-net-dns",
+      "version": "0.2",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/net/dns/0.2/chibi-net-dns-0.2.tgz",
+      "tarball_sha256": "f1f07da380168e9107600760ce9dfee5ec8c1f656f3b6f7fdd5182f13ca41e0a",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi net dns",
+        "chibi net dns-test"
+      ],
+      "depends": [
+        "chibi net",
+        "chibi optional",
+        "chibi test",
+        "scheme base",
+        "scheme file",
+        "scheme write",
+        "srfi 130",
+        "srfi 26",
+        "srfi 27",
+        "srfi 33",
+        "srfi 95"
+      ],
+      "description": "Domain Name Service library, with high-level utilities for address, mx and text record lookups.",
+      "files": [
+        "chibi/net/dns-test.sld",
+        "chibi/net/dns.html",
+        "chibi/net/dns.scm",
+        "chibi/net/dns.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi ssl",
+      "slug": "chibi-ssl",
+      "version": "0.1",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/ssl/0.1/chibi-ssl-0.1.tgz",
+      "tarball_sha256": "85531baae0523140bfda7ebcd971ea30b7e242b6ba0874a1815cec9a7660a13d",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi ssl",
+        "chibi ssl-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi io",
+        "chibi test",
+        "scheme base",
+        "srfi 33"
+      ],
+      "description": "Basic bindings for establishing SSL connections.",
+      "files": [
+        "chibi/ssl-test.sld",
+        "chibi/ssl.html",
+        "chibi/ssl.scm",
+        "chibi/ssl.sld",
+        "chibi/ssl.stub",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": true
+    },
+    {
+      "library": "chibi sxml",
+      "slug": "chibi-sxml",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/sxml/0.9.0/chibi-sxml-0.9.0.tgz",
+      "tarball_sha256": "cec4438595978dfcc4ffa5c41b77178d14609490b2d1da4551e42cd960262cc4",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi sxml"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme write"
+      ],
+      "description": "Utilities to convert sxml to xml or plain text.",
+      "files": [
+        "chibi/sxml.html",
+        "chibi/sxml.scm",
+        "chibi/sxml.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi tar",
+      "slug": "chibi-tar",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/tar/0.9.0/chibi-tar-0.9.0.tgz",
+      "tarball_sha256": "86c5248f8206d4f059ba66c91460ef5eb9497d40d6fd90d4258583c71f49cf4a",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi tar",
+        "chibi tar-test"
+      ],
+      "depends": [
+        "chibi binary-record",
+        "chibi filesystem",
+        "chibi pathname",
+        "chibi string",
+        "chibi system",
+        "chibi test",
+        "scheme base",
+        "scheme file",
+        "scheme time",
+        "scheme write",
+        "srfi 1",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "",
+      "files": [
+        "chibi/tar-test.sld",
+        "chibi/tar.html",
+        "chibi/tar.scm",
+        "chibi/tar.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi temp-file",
+      "slug": "chibi-temp-file",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/temp-file/0.9.0/chibi-temp-file-0.9.0.tgz",
+      "tarball_sha256": "c400a25de2c4109a6e569f014eab360844e31041239ae6e2afed5d40e16d1f60",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi temp-file"
+      ],
+      "depends": [
+        "chibi filesystem",
+        "chibi pathname",
+        "chibi process",
+        "posix",
+        "scheme base",
+        "scheme time",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "",
+      "files": [
+        "chibi/temp-file.html",
+        "chibi/temp-file.scm",
+        "chibi/temp-file.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi term edit-line",
+      "slug": "chibi-term-edit-line",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/term/edit-line/0.9.0/chibi-term-edit-line-0.9.0.tgz",
+      "tarball_sha256": "0af16f80400b5d4382117d0ff361681956aa962e4688972b4d4ddaf48a41b385",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi term edit-line"
+      ],
+      "depends": [
+        "chibi",
+        "chibi ast",
+        "chibi stty",
+        "scheme base",
+        "scheme char",
+        "scheme write",
+        "srfi 151",
+        "srfi 33",
+        "srfi 60"
+      ],
+      "description": "",
+      "files": [
+        "chibi/term/edit-line.html",
+        "chibi/term/edit-line.scm",
+        "chibi/term/edit-line.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi uri",
+      "slug": "chibi-uri",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/uri/0.9.0/chibi-uri-0.9.0.tgz",
+      "tarball_sha256": "cfec051a399439452c8754ab3ff7440e93b152de35514fa4f4407925de537750",
+      "popularity_indegree": 1,
+      "provides": [
+        "chibi uri",
+        "chibi uri-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi pathname",
+        "chibi string",
+        "chibi test",
+        "scheme base",
+        "scheme char",
+        "srfi 9"
+      ],
+      "description": "Library for parsing and constructing URI objects.",
+      "files": [
+        "chibi/uri-test.sld",
+        "chibi/uri.html",
+        "chibi/uri.scm",
+        "chibi/uri.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "in-progress hash tables",
+      "slug": "in-progress-hash-tables",
+      "version": "0.0.3",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/in-progress/hash/tables/0.0.3/in-progress-hash-tables-0.0.3.tgz",
+      "tarball_sha256": "5e81ab5a8b106d0e54bbd501610ecf15d39e4ed0b430c72a3a332208fb83e20c",
+      "popularity_indegree": 1,
+      "provides": [
+        "in-progress hash tables"
+      ],
+      "depends": [
+        "r6rs hashtables",
+        "scheme base",
+        "scheme char",
+        "srfi 114 comparators"
+      ],
+      "description": "Hash tables (HashTablesCowan).",
+      "files": [
+        "hash-tablesDoc.html",
+        "in-progress/hash/tables-test.sps",
+        "in-progress/hash/tables.body.scm",
+        "in-progress/hash/tables.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "lassik shell-quote",
+      "slug": "lassik-shell-quote",
+      "version": "0.2",
+      "license": "ISC",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/lassi.io/lassi/lassik/shell-quote/0.2/distfiles/lassik-shell-quote-0.2.tgz",
+      "tarball_sha256": "e985951f02a17d120e73a4e935a1aa9af9756e42ad72fe143cd5397a549dbc33",
+      "popularity_indegree": 1,
+      "provides": [
+        "lassik shell-quote"
+      ],
+      "depends": [
+        "chibi match",
+        "scheme base",
+        "scheme char"
+      ],
+      "description": "Scheme DSL to build shell command lines",
+      "files": [
+        "lassik/shell-quote-test.scm",
+        "lassik/shell-quote.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "lassik unpack-assoc",
+      "slug": "lassik-unpack-assoc",
+      "version": "0.2",
+      "license": "ISC",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/lassi.io/lassi/lassik/unpack-assoc/0.2/distfiles/lassik-unpack-assoc-0.2.tgz",
+      "tarball_sha256": "6e67c4e5c2f0756f38ae4b065c0bfe8dc86f0532373d899cdbff4fbcd9d18302",
+      "popularity_indegree": 1,
+      "provides": [
+        "lassik unpack-assoc"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Alist/hash-table destructuring case macros",
+      "files": [
+        "lassik/unpack-assoc.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds alist",
+      "slug": "pfds-alist",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/alist/1.0.0/pfds-alist-1.0.0.tgz",
+      "tarball_sha256": "e8c227fcf3c10f355df8d1c22860e0e6c54103c356bd707ed914028b3568b92e",
+      "popularity_indegree": 1,
+      "provides": [
+        "pfds alist"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Convenience functions for working with association lists",
+      "files": [
+        "package.scm",
+        "pfds/alist.html",
+        "pfds/alist.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds bitwise",
+      "slug": "pfds-bitwise",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/bitwise/1.0.0/pfds-bitwise-1.0.0.tgz",
+      "tarball_sha256": "8654930f5a5a66df9120f3a8b7276cfa0ca36e65ea4579966b3e711422afab93",
+      "popularity_indegree": 1,
+      "provides": [
+        "pfds bitwise"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 60"
+      ],
+      "description": "Bitwise arithmetic utilities",
+      "files": [
+        "package.scm",
+        "pfds/bitwise.html",
+        "pfds/bitwise.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds bounded-balance-tree",
+      "slug": "pfds-bounded-balance-tree",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/bounded-balance-tree/1.0.0/pfds-bounded-balance-tree-1.0.0.tgz",
+      "tarball_sha256": "7ae6f64b9c5614ee38238b4459b558eaebd267c6824bc66354ab7cb39b2a04d6",
+      "popularity_indegree": 1,
+      "provides": [
+        "pfds bounded-balance-tree"
+      ],
+      "depends": [
+        "pfds list-helpers",
+        "scheme base",
+        "scheme case-lambda"
+      ],
+      "description": "Bounded balance tree",
+      "files": [
+        "package.scm",
+        "pfds/bounded-balance-tree.html",
+        "pfds/bounded-balance-tree.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds fingertree",
+      "slug": "pfds-fingertree",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/fingertree/1.0.0/pfds-fingertree-1.0.0.tgz",
+      "tarball_sha256": "d2398c150e60b0f9c5214287720fef78b8ce0b9bce6733f67490a388685855b2",
+      "popularity_indegree": 1,
+      "provides": [
+        "pfds fingertree"
+      ],
+      "depends": [
+        "pfds list-helpers",
+        "scheme base",
+        "scheme cxr"
+      ],
+      "description": "Fingertree: A simple general-purpose data structure",
+      "files": [
+        "package.scm",
+        "pfds/fingertree.html",
+        "pfds/fingertree.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds vector",
+      "slug": "pfds-vector",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/vector/1.0.0/pfds-vector-1.0.0.tgz",
+      "tarball_sha256": "44dcbfec253b1f38f28b4a742e251a8a64daf25235c521b40ba0ad00f742058c",
+      "popularity_indegree": 1,
+      "provides": [
+        "pfds vector"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Some utility functions for working with vectors",
+      "files": [
+        "package.scm",
+        "pfds/vector.html",
+        "pfds/vector.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs base",
+      "slug": "r6rs-base",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/base/0.0.1/r6rs-base-0.0.1.tgz",
+      "tarball_sha256": "c3b23446ad2d17ff377006e9756a5e27a89dcd1ab65792e49e01efd5424a6c0d",
+      "popularity_indegree": 1,
+      "provides": [
+        "r6rs base"
+      ],
+      "depends": [
+        "rnrs base",
+        "scheme base",
+        "scheme complex",
+        "scheme cxr",
+        "scheme inexact"
+      ],
+      "description": "Port of (rnrs base) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/base.body.scm",
+        "r6rs/base.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs lists",
+      "slug": "r6rs-lists",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/lists/0.0.1/r6rs-lists-0.0.1.tgz",
+      "tarball_sha256": "46507daa47b2226eeac6e00418301d6e9c46940a744ec9f0e07ac4efb93bb49e",
+      "popularity_indegree": 1,
+      "provides": [
+        "r6rs lists"
+      ],
+      "depends": [
+        "rnrs lists",
+        "scheme base",
+        "scheme case-lambda"
+      ],
+      "description": "Port of (rnrs lists) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/lists.body.scm",
+        "r6rs/lists.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs sorting",
+      "slug": "r6rs-sorting",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/sorting/0.0.1/r6rs-sorting-0.0.1.tgz",
+      "tarball_sha256": "75235b206c41016a825fbba98d7f6c27ee46a4da089eb13e4585751cfdfb5ef9",
+      "popularity_indegree": 1,
+      "provides": [
+        "r6rs sorting"
+      ],
+      "depends": [
+        "rnrs sorting",
+        "scheme base"
+      ],
+      "description": "Port of (rnrs sorting) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/sorting.body.scm",
+        "r6rs/sorting.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs unicode-reference unicode4",
+      "slug": "r6rs-unicode-reference-unicode4",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/unicode-reference/unicode4/0.0.1/r6rs-unicode-reference-unicode4-0.0.1.tgz",
+      "tarball_sha256": "85d46c2a686c606aa504245abf55036de6baac5675a809bca74ac469b1a75222",
+      "popularity_indegree": 1,
+      "provides": [
+        "r6rs unicode-reference unicode4"
+      ],
+      "depends": [
+        "r6rs unicode-reference unicode0",
+        "r6rs unicode-reference unicode1",
+        "r6rs unicode-reference unicode2",
+        "r6rs unicode-reference unicode3",
+        "scheme base"
+      ],
+      "description": "Helper library for (rnrs unicode).",
+      "files": [
+        "package.scm",
+        "r6rs/unicode-reference/unicode4.body.scm",
+        "r6rs/unicode-reference/unicode4.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib alist",
+      "slug": "slib-alist",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/alist/SLIB-3b5-r7rs/slib-alist-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "09a4b313597abc146f89c8bc836e9c00f30c4ccca8562b526f3bad995cbac0cc",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib alist"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme cxr"
+      ],
+      "description": "Some functions for working with association lists",
+      "files": [
+        "package.scm",
+        "slib-alist.html",
+        "slib/alist.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib coerce",
+      "slug": "slib-coerce",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/coerce/SLIB-3b5-r7rs/slib-coerce-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "3a4dd47d5b061045471fc8e055a2ca43e457bc9a8cb9471ef3364d7e8a5bad6d",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib coerce"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 63"
+      ],
+      "description": "Implementation of COMMON-LISP COERCE and TYPE-OF",
+      "files": [
+        "package.scm",
+        "slib-coerce.html",
+        "slib/coerce.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib common-list-functions",
+      "slug": "slib-common-list-functions",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/common-list-functions/SLIB-3b5-r7rs/slib-common-list-functions-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "9f58eb7ece12785a4e9ee1f4cc77e85ab1db4854d3cfdeb4f65cbb767950168b",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib common-list-functions"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Some common list functions",
+      "files": [
+        "package.scm",
+        "slib/common-list-functions.html",
+        "slib/common-list-functions.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib directory",
+      "slug": "slib-directory",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/directory/SLIB-3b5-r7rs/slib-directory-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "1fa7ce53dd543eb0b1ee4a24e7f09cdc792a94cd03891384f38b770380c9294c",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib directory"
+      ],
+      "depends": [
+        "chibi filesystem",
+        "chibi pathname",
+        "file util",
+        "kawa base",
+        "kawa lib files",
+        "kawa lib ports",
+        "primitives current-directory list-directory",
+        "sagittarius",
+        "scheme base",
+        "scheme case-lambda",
+        "slib common",
+        "slib filename",
+        "srfi 1",
+        "srfi 59",
+        "util file"
+      ],
+      "description": "Directories",
+      "files": [
+        "package.scm",
+        "slib-directory.html",
+        "slib/directory.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib format",
+      "slug": "slib-format",
+      "version": "SLIB-3b5-r7rs",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/format/SLIB-3b5-r7rs/slib-format-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "5fa9e9b5a66ad7fb896fcd37c4b97e1c450c7133b2b7b917ee3d19cddf7d4cbb",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib format"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme complex",
+        "scheme cxr",
+        "scheme write",
+        "slib common",
+        "slib pretty-print",
+        "slib string-case",
+        "slib string-port"
+      ],
+      "description": "Common LISP text output formatter",
+      "files": [
+        "package.scm",
+        "slib-format.html",
+        "slib/format.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib modular",
+      "slug": "slib-modular",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/modular/SLIB-3b5-r7rs/slib-modular-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "d45a4c32b22163eef93b74ae42529a52165ca3dea034bd3410c9a46f88d5738e",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib modular"
+      ],
+      "depends": [
+        "scheme base",
+        "slib common"
+      ],
+      "description": "Modular fixnum arithmetic",
+      "files": [
+        "package.scm",
+        "slib-modular.html",
+        "slib/modular.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib rev2-procedures",
+      "slug": "slib-rev2-procedures",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/rev2-procedures/SLIB-3b5-r7rs/slib-rev2-procedures-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "9a65b6ef513df1fb6c7b3bb1f0e43d2f67736b3880d3937f68a905f87b6d7ef1",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib rev2-procedures"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 1"
+      ],
+      "description": "Implementation of some R2RS procedures eliminated in subsequence versions",
+      "files": [
+        "package.scm",
+        "slib-rev2.html",
+        "slib/rev2-procedures.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib soundex",
+      "slug": "slib-soundex",
+      "version": "SLIB-3b5-r7rs",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/soundex/SLIB-3b5-r7rs/slib-soundex-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "8d8b3e194c39791adcfcba0347d6d147be3e4969b34856129e96bd903f86d442",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib soundex"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "srfi 1"
+      ],
+      "description": "Original Soundex algorithm",
+      "files": [
+        "package.scm",
+        "slib-soundex.html",
+        "slib/soundex.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib tzfile",
+      "slug": "slib-tzfile",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/tzfile/SLIB-3b5-r7rs/slib-tzfile-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "6f77c976ba6e41b0a5d65383d0c2217786fb0fe7fd34ebb5cbc0d5f5c784b8f3",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib tzfile"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme file",
+        "slib byte",
+        "slib common"
+      ],
+      "description": "Read sysV style (binary) timezone file",
+      "files": [
+        "package.scm",
+        "slib-time.html",
+        "slib/tzfile.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib xml-parse",
+      "slug": "slib-xml-parse",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/xml-parse/SLIB-3b5-r7rs/slib-xml-parse-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "14f514013c32cfa82f3b976c2a40b7d5450f777349ded314c4aeb82ca9ceb291",
+      "popularity_indegree": 1,
+      "provides": [
+        "slib xml-parse"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme cxr",
+        "slib common",
+        "slib rev2-procedures",
+        "slib string-search",
+        "srfi 1"
+      ],
+      "description": "XML parsing and conversion to SXML",
+      "files": [
+        "package.scm",
+        "slib-xml-parse.html",
+        "slib/xml-parse.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 11",
+      "slug": "srfi-11",
+      "version": "0.1.2",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/11/0.1.2/srfi-11-0.1.2.tgz",
+      "tarball_sha256": "5499b58a4bbb52379feac361c56c4fca8ee777cb578c210665d7fa814f797811",
+      "popularity_indegree": 1,
+      "provides": [
+        "srfi 11"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI-11",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/11.scm",
+        "srfi/11.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 145",
+      "slug": "srfi-145",
+      "version": "2026.03.13",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/145/2026.03.13/srfi-145-2026.03.13.tgz",
+      "tarball_sha256": "c9750a0b7d28dde4b5ad2dca893534cff8d139d7d26b4450a847d7783e04cf65",
+      "popularity_indegree": 1,
+      "provides": [
+        "srfi 145"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI-145",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/145.scm",
+        "srfi/145.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 166",
+      "slug": "srfi-166",
+      "version": "0.8.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/srfi/166/0.8.0/srfi-166-0.8.0.tgz",
+      "tarball_sha256": "e132a68c070c157ebfc8291b0be8f84f45ee85b92e4f80ac12faabd0c3872523",
+      "popularity_indegree": 1,
+      "provides": [
+        "srfi 166",
+        "srfi 166 base",
+        "srfi 166 pretty",
+        "srfi 166 color",
+        "srfi 166 columnar",
+        "srfi 166 unicode",
+        "chibi show shared"
+      ],
+      "depends": [
+        "chibi",
+        "chibi optional",
+        "scheme base",
+        "scheme char",
+        "scheme complex",
+        "scheme file",
+        "scheme inexact",
+        "scheme repl",
+        "scheme write",
+        "srfi 1",
+        "srfi 117",
+        "srfi 130",
+        "srfi 151",
+        "srfi 165",
+        "srfi 69"
+      ],
+      "description": "",
+      "files": [
+        "chibi/show/shared.sld",
+        "package.scm",
+        "srfi/166.sld",
+        "srfi/166/base.scm",
+        "srfi/166/base.sld",
+        "srfi/166/color.scm",
+        "srfi/166/color.sld",
+        "srfi/166/column.scm",
+        "srfi/166/columnar.sld",
+        "srfi/166/pretty.scm",
+        "srfi/166/pretty.sld",
+        "srfi/166/show.scm",
+        "srfi/166/unicode.scm",
+        "srfi/166/unicode.sld",
+        "srfi/166/width.scm",
+        "srfi/166/write.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 26",
+      "slug": "srfi-26",
+      "version": "0.1.0",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/26/0.1.0/srfi-26-0.1.0.tgz",
+      "tarball_sha256": "9c3c282c52b52d9b16a64de96d7afdaa1a8155cf3555a3343cac77a4fab1ceaf",
+      "popularity_indegree": 1,
+      "provides": [
+        "srfi 26"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI-26",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/26.scm",
+        "srfi/26.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 28",
+      "slug": "srfi-28",
+      "version": "0.9",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/lassi.io/lassi/srfi/28/0.9/srfi-28-0.9.tgz",
+      "tarball_sha256": "9452791e67a806afb10efa202d458a6b2919613008e6b293e97ff8fa412900b0",
+      "popularity_indegree": 1,
+      "provides": [
+        "srfi 28"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme write"
+      ],
+      "description": "SRFI 28: Basic Format Strings",
+      "files": [
+        "package.scm",
+        "srfi/28.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 41",
+      "slug": "srfi-41",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/41/0.1.0/srfi-41-0.1.0.tgz",
+      "tarball_sha256": "c6bbc9b5d856f1ebdb3d9ce75d9542cc32050b13b82eb3e53fd9a8b96b67fdc2",
+      "popularity_indegree": 1,
+      "provides": [
+        "srfi 41"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI-41",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/41.scm",
+        "srfi/41.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 42",
+      "slug": "srfi-42",
+      "version": "0.1.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/42/0.1.1/srfi-42-0.1.1.tgz",
+      "tarball_sha256": "735d9e898ee184dffe355ab19d0bd6de9a831d78564c17af77d8e52bdba5abdd",
+      "popularity_indegree": 1,
+      "provides": [
+        "srfi 42"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme complex",
+        "scheme cxr",
+        "scheme read",
+        "stklos"
+      ],
+      "description": "SRFI-42",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/42.scm",
+        "srfi/42.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "arvyy interface",
+      "slug": "arvyy-interface",
+      "version": "1.0.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/nma.arvydas.silanskas/arvyy/interface/1.0.0/arvyy-interface-1.0.0.tgz",
+      "tarball_sha256": "7e22daa7d0b2e57cc3a34ed0149a2cfc856a6b06c9708dbdb0b49da7573ef290",
+      "popularity_indegree": 0,
+      "provides": [
+        "arvyy interface",
+        "arvyy interface-test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "srfi 64"
+      ],
+      "description": "Interface abstraction for a set of functions",
+      "files": [
+        "arvyy/interface-test.sld",
+        "arvyy/interface.scm",
+        "arvyy/interface.sld",
+        "package.scm",
+        "readme.html",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "arvyy mustache",
+      "slug": "arvyy-mustache",
+      "version": "1.0.2",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/nma.arvydas.silanskas/arvyy/mustache/1.0.2/arvyy-mustache-1.0.2.tgz",
+      "tarball_sha256": "ea8085f6313851249dc41e86a5c455225f73f351046994296fe7fc6144f05d16",
+      "popularity_indegree": 0,
+      "provides": [
+        "arvyy mustache",
+        "arvyy mustache collection",
+        "arvyy mustache executor",
+        "arvyy mustache lookup",
+        "arvyy mustache parser",
+        "arvyy mustache tokenizer",
+        "arvyy mustache-test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "scheme case-lambda",
+        "scheme cxr",
+        "scheme write",
+        "srfi 1",
+        "srfi 41",
+        "srfi 64"
+      ],
+      "description": "Mustache templating 1.2.1 implementation",
+      "files": [
+        "arvyy/mustache-impl.scm",
+        "arvyy/mustache-test.sld",
+        "arvyy/mustache-test/comments.scm",
+        "arvyy/mustache-test/delimiters.scm",
+        "arvyy/mustache-test/implementation-specific.scm",
+        "arvyy/mustache-test/interpolation.scm",
+        "arvyy/mustache-test/inverted.scm",
+        "arvyy/mustache-test/partials.scm",
+        "arvyy/mustache-test/sections.scm",
+        "arvyy/mustache.sld",
+        "arvyy/mustache/collection.sld",
+        "arvyy/mustache/executor-impl.scm",
+        "arvyy/mustache/executor.sld",
+        "arvyy/mustache/lookup.sld",
+        "arvyy/mustache/parser-impl.scm",
+        "arvyy/mustache/parser.sld",
+        "arvyy/mustache/tokenizer-impl.scm",
+        "arvyy/mustache/tokenizer.sld",
+        "package.scm",
+        "readme.html",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi app",
+      "slug": "chibi-app",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/app/0.9.0/chibi-app-0.9.0.tgz",
+      "tarball_sha256": "b477ea370b1b0bf805fbe7a8c0d0919330da0360e615ea8953d0f6f7e367f3bd",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi app",
+        "chibi app-test"
+      ],
+      "depends": [
+        "chibi config",
+        "chibi edit-distance",
+        "chibi string",
+        "chibi test",
+        "scheme base",
+        "scheme process-context",
+        "scheme read",
+        "scheme write",
+        "srfi 1"
+      ],
+      "description": "Unified command-line option parsing and config management.",
+      "files": [
+        "chibi/app-test.sld",
+        "chibi/app.html",
+        "chibi/app.scm",
+        "chibi/app.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi html-parser",
+      "slug": "chibi-html-parser",
+      "version": "0.5.7",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/html-parser/0.5.7/chibi-html-parser-0.5.7.tgz",
+      "tarball_sha256": "509c4b4b79bde75c97b9f18cdf1a0c3f4ffd482b39439775bfdcae9c4dfa2a3a",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi html-parser"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme cxr",
+        "scheme write"
+      ],
+      "description": "A permissive HTML parser supporting scalable streaming with a tree folding interface.",
+      "files": [
+        "chibi/html-parser.html",
+        "chibi/html-parser.scm",
+        "chibi/html-parser.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi irregex",
+      "slug": "chibi-irregex",
+      "version": "0.9.3",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/irregex/0.9.3/chibi-irregex-0.9.3.tgz",
+      "tarball_sha256": "50f7bbcb06d6f608aaff1784d63018ae5f5d32a62329eb24785bc922e0a91538",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi irregex"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme cxr"
+      ],
+      "description": "A portable and efficient R[4567]RS implementation of regular expressions, supporting both POSIX syntax with various (irregular) PCRE extensions, as well as SCSH's SRE syntax.",
+      "files": [
+        "irregex.html",
+        "irregex.scm",
+        "irregex.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi locale",
+      "slug": "chibi-locale",
+      "version": "0.1",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/locale/0.1/chibi-locale-0.1.tgz",
+      "tarball_sha256": "13e7b773189ffec0f480305e1472361a9de310c8136ddffa84485e72846aa4b0",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi locale",
+        "chibi locale-test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "srfi 130"
+      ],
+      "description": "A lightweight library for representing locale information and serializing to and from strings.",
+      "files": [
+        "chibi/locale-test.sld",
+        "chibi/locale.html",
+        "chibi/locale.scm",
+        "chibi/locale.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi math linalg",
+      "slug": "chibi-math-linalg",
+      "version": "0.3",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/math/linalg/0.3/chibi-math-linalg-0.3.tgz",
+      "tarball_sha256": "55783898d0668465f3a7adf3102580dc4ad144b3845935539387b2db858994b0",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi math linalg",
+        "chibi math linalg-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi assert",
+        "chibi optional",
+        "chibi test",
+        "scheme base",
+        "scheme inexact",
+        "scheme list",
+        "scheme write",
+        "srfi 160 base",
+        "srfi 231",
+        "srfi 231 base",
+        "srfi 33"
+      ],
+      "description": "",
+      "files": [
+        "chibi/math/blas.stub",
+        "chibi/math/linalg-test.sld",
+        "chibi/math/linalg.scm",
+        "chibi/math/linalg.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": true
+    },
+    {
+      "library": "chibi math stats",
+      "slug": "chibi-math-stats",
+      "version": "0.1",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/math/stats/0.1/chibi-math-stats-0.1.tgz",
+      "tarball_sha256": "861d9c98e6c5aaedf385d459c989b6d9d7dddbbbd966e6f450a6dc8dc21b5856",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi math stats",
+        "chibi math stats-test"
+      ],
+      "depends": [
+        "chibi optional",
+        "chibi test",
+        "scheme base",
+        "scheme comparator",
+        "scheme flonum",
+        "scheme hash-table",
+        "scheme inexact",
+        "scheme list",
+        "scheme mapping",
+        "scheme set",
+        "scheme sort",
+        "scheme vector",
+        "scheme write",
+        "srfi 27",
+        "srfi 95"
+      ],
+      "description": "Statistics is the branch of mathematics dealing with the collection and analysis of data.",
+      "files": [
+        "chibi/math/stats-test.sld",
+        "chibi/math/stats.html",
+        "chibi/math/stats.scm",
+        "chibi/math/stats.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi mecab",
+      "slug": "chibi-mecab",
+      "version": "0.1",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/mecab/0.1/chibi-mecab-0.1.tgz",
+      "tarball_sha256": "167b88e4415c0e531ae8ce233536ca2a6288fe5f1a056b95acb294777c628f06",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi mecab",
+        "chibi mecab-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi assert",
+        "chibi optional",
+        "chibi test",
+        "scheme base",
+        "srfi 130"
+      ],
+      "description": "A wrapper around MeCab, a part-of-speech and morphological analyzer for Japanese.",
+      "files": [
+        "chibi/mecab-test.sld",
+        "chibi/mecab.html",
+        "chibi/mecab.sld",
+        "chibi/mecab.stub",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": true
+    },
+    {
+      "library": "chibi net smtp",
+      "slug": "chibi-net-smtp",
+      "version": "0.1",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/net/smtp/0.1/chibi-net-smtp-0.1.tgz",
+      "tarball_sha256": "b66d31adce32558c658f53d7f564313821a698d6bbd9dc3aec88b3ebbc39b738",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi net smtp",
+        "chibi net smtp-test"
+      ],
+      "depends": [
+        "chibi base64",
+        "chibi mime",
+        "chibi net",
+        "chibi net dns",
+        "chibi optional",
+        "chibi pathname",
+        "chibi process",
+        "chibi quoted-printable",
+        "chibi regexp",
+        "chibi ssl",
+        "chibi string",
+        "chibi system",
+        "chibi test",
+        "chibi time",
+        "scheme base",
+        "scheme char",
+        "scheme file",
+        "srfi 1",
+        "srfi 2",
+        "srfi 69"
+      ],
+      "description": "Easy mail interface.",
+      "files": [
+        "chibi/net/smtp-test.sld",
+        "chibi/net/smtp.html",
+        "chibi/net/smtp.scm",
+        "chibi/net/smtp.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi scribble",
+      "slug": "chibi-scribble",
+      "version": "0.9.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/scribble/0.9.0/chibi-scribble-0.9.0.tgz",
+      "tarball_sha256": "0f93bfa2f0267f3557499fdf9023e3a4d772a290fe971898f289327c71e0e7c1",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi scribble",
+        "chibi scribble-test"
+      ],
+      "depends": [
+        "chibi string",
+        "chibi test",
+        "scheme base",
+        "scheme char",
+        "scheme read",
+        "scheme write"
+      ],
+      "description": "A library used for parsing \"scribble\" format, introduced by Racket and the format used to write this manual.",
+      "files": [
+        "chibi/scribble-test.sld",
+        "chibi/scribble.html",
+        "chibi/scribble.scm",
+        "chibi/scribble.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi snow commands",
+      "slug": "chibi-snow-commands",
+      "version": "0.0.0",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/pclouds/chibi/snow/commands/0.0.0/./chibi-snow-commands-0.0.0.tgz",
+      "tarball_sha256": "c33106b879b787dd282bd6f01d3968e70224ac88fe61b71fca05d8f9bbea16a8",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi snow commands",
+        "chibi snow fort",
+        "chibi snow interface",
+        "chibi snow package",
+        "chibi snow utils"
+      ],
+      "depends": [
+        "chibi",
+        "chibi ast",
+        "chibi bytevector",
+        "chibi char-set",
+        "chibi config",
+        "chibi crypto md5",
+        "chibi crypto rsa",
+        "chibi crypto sha2",
+        "chibi doc",
+        "chibi filesystem",
+        "chibi io",
+        "chibi log",
+        "chibi match",
+        "chibi modules",
+        "chibi net http",
+        "chibi net servlet",
+        "chibi pathname",
+        "chibi process",
+        "chibi regexp",
+        "chibi show",
+        "chibi show pretty",
+        "chibi string",
+        "chibi sxml",
+        "chibi system",
+        "chibi tar",
+        "chibi temp-file",
+        "chibi term edit-line",
+        "chibi uri",
+        "chibi zlib",
+        "sagittarius",
+        "scheme base",
+        "scheme char",
+        "scheme eval",
+        "scheme file",
+        "scheme lazy",
+        "scheme load",
+        "scheme process-context",
+        "scheme read",
+        "scheme time",
+        "scheme write",
+        "srfi 1",
+        "srfi 115",
+        "srfi 151",
+        "srfi 18",
+        "srfi 27",
+        "srfi 33",
+        "srfi 60",
+        "srfi 95"
+      ],
+      "description": "",
+      "files": [
+        "chibi/snow/commands.scm",
+        "chibi/snow/commands.sld",
+        "chibi/snow/fort.scm",
+        "chibi/snow/fort.sld",
+        "chibi/snow/interface.scm",
+        "chibi/snow/interface.sld",
+        "chibi/snow/package.scm",
+        "chibi/snow/package.sld",
+        "chibi/snow/utils.scm",
+        "chibi/snow/utils.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi voting",
+      "slug": "chibi-voting",
+      "version": "0.1",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/voting/0.1/chibi-voting-0.1.tgz",
+      "tarball_sha256": "a7ef21109198f47310fc5f385a928dcaf178adf8e5fdc52c414babf53169eebe",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi voting",
+        "chibi voting-test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "scheme hash-table",
+        "scheme list",
+        "scheme sort",
+        "scheme vector",
+        "srfi 227"
+      ],
+      "description": "Preferential voting utilities to help come to reasonable decisions when there are more than 2 options.",
+      "files": [
+        "chibi/voting-test.sld",
+        "chibi/voting.html",
+        "chibi/voting.scm",
+        "chibi/voting.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chibi xgboost",
+      "slug": "chibi-xgboost",
+      "version": "0.1",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/xgboost/0.1/chibi-xgboost-0.1.tgz",
+      "tarball_sha256": "82c2d83275436b8fe6c688088fe90193acbc0c64b04b08bfc5eb2c20adc348a5",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi xgboost",
+        "chibi xgboost-test"
+      ],
+      "depends": [
+        "chibi",
+        "chibi string",
+        "chibi test",
+        "scheme base",
+        "scheme write",
+        "srfi 160 base"
+      ],
+      "description": "",
+      "files": [
+        "chibi/xgboost-test.sld",
+        "chibi/xgboost.html",
+        "chibi/xgboost.sld",
+        "chibi/xgboost/interface.scm",
+        "chibi/xgboost/xgboost.stub",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": true
+    },
+    {
+      "library": "chibi xlib",
+      "slug": "chibi-xlib",
+      "version": "0.1",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/xlib/0.1/chibi-xlib-0.1.tgz",
+      "tarball_sha256": "bc35e1811909489ea7b2e121c4a2ba34e5cca41e7c9c8082bfd783774651aea2",
+      "popularity_indegree": 0,
+      "provides": [
+        "chibi xlib"
+      ],
+      "depends": [
+        "chibi"
+      ],
+      "description": "Minimal xlib bindings.",
+      "files": [
+        "chibi/xlib.html",
+        "chibi/xlib.sld",
+        "chibi/xlib.stub",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": true
+    },
+    {
+      "library": "chrisoei cint",
+      "slug": "chrisoei-cint",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/chris.oei/chrisoei/cint/0.1.0/chrisoei-cint-0.1.0.tgz",
+      "tarball_sha256": "0f2b8a03afc0be7a27b7a64e808ee8df7d36570e47df3ef7e266c4c631db9b3d",
+      "popularity_indegree": 0,
+      "provides": [
+        "chrisoei cint"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Compute cint coefficients",
+      "files": [
+        "cint-test.scm",
+        "cint.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "chrisoei test",
+      "slug": "chrisoei-test",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/chris.oei/chrisoei/test/0.0.1/chrisoei-test-0.0.1.tgz",
+      "tarball_sha256": "2b0f7c600778c88752cf48ab6f5685c5674d9e4aa15c913622eaa9be1ebbcd5a",
+      "popularity_indegree": 0,
+      "provides": [
+        "chrisoei test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base"
+      ],
+      "description": "Additional testing utilities",
+      "files": [
+        "chrisoei/test.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "comparators",
+      "slug": "comparators",
+      "version": "1.0.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/kwortman/comparators/1.0.0/comparators-1.0.0.tgz",
+      "tarball_sha256": "d5169f6dc6c2d77c410b667b1e3ecb2793920655f4ec133a8dabdf9b6304d8b3",
+      "popularity_indegree": 0,
+      "provides": [
+        "comparators"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda"
+      ],
+      "description": "SRFI 128: Comparators (reduced) reference implementation",
+      "files": [
+        "comparators-impl.scm",
+        "comparators.sld",
+        "default.scm",
+        "package.scm",
+        "srfi-128/comparators/comparators-test.scm",
+        "srfi-128/srfi-128.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "edn",
+      "slug": "edn",
+      "version": "0.2.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/edwinwatkeys.com/edwin/edn/0.2.0/./edn-0.2.0.tgz",
+      "tarball_sha256": "7c8e71ed0d1bf248fd15bd1a2ea173afba411b0082a58f107acbe15529ca9249",
+      "popularity_indegree": 0,
+      "provides": [
+        "edn",
+        "edn-test"
+      ],
+      "depends": [
+        "chibi parse",
+        "chibi test",
+        "scheme base",
+        "scheme char"
+      ],
+      "description": "EDN is a data format from the Clojure ecosystem.",
+      "files": [
+        "edn-test.sld",
+        "edn.html",
+        "edn.sld",
+        "edn/edn.scm",
+        "edn/test.scm",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "generators",
+      "slug": "generators",
+      "version": "1.0.2",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/kwortman/generators/1.0.2/generators-1.0.2.tgz",
+      "tarball_sha256": "629ff012704991d4ad34848790313140d71dce5fda36049eb7f5af98cd7b7847",
+      "popularity_indegree": 0,
+      "provides": [
+        "generators"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda"
+      ],
+      "description": "SRFI 121: Generators reference implementation",
+      "files": [
+        "generators-impl.scm",
+        "generators.sld",
+        "package.scm",
+        "srfi-121/srfi-121.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "in-progress hash bimaps",
+      "slug": "in-progress-hash-bimaps",
+      "version": "0.0.3",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/in-progress/hash/bimaps/0.0.3/in-progress-hash-bimaps-0.0.3.tgz",
+      "tarball_sha256": "c8f0c936144233ddfae0311cdc188b29ee5a8080390975e660a8a329a009ae34",
+      "popularity_indegree": 0,
+      "provides": [
+        "in-progress hash bimaps"
+      ],
+      "depends": [
+        "in-progress hash tables",
+        "r6rs hashtables",
+        "scheme base"
+      ],
+      "description": "Bimaps (HashTablesCowan).",
+      "files": [
+        "bimapsDoc.html",
+        "in-progress/hash/bimaps.body.scm",
+        "in-progress/hash/bimaps.sld",
+        "in-progress/hash/tables-test.sps",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "independentresearch xattr",
+      "slug": "independentresearch-xattr",
+      "version": "0.2",
+      "license": "CC0-1.0",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/lockywolf/independentresearch/xattr/0.2/independentresearch-xattr-0.2.tgz",
+      "tarball_sha256": "b579f63f541d6a3abfb46c04772c3079faaf1d21637c1d32a10b5543ff616972",
+      "popularity_indegree": 0,
+      "provides": [
+        "independentresearch xattr"
+      ],
+      "depends": [
+        "chibi",
+        "scheme small"
+      ],
+      "description": "",
+      "files": [
+        "independentresearch/xattr.html",
+        "independentresearch/xattr.scm",
+        "independentresearch/xattr.sld",
+        "independentresearch/xattr.stub",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": true
+    },
+    {
+      "library": "jkode sassy",
+      "slug": "jkode-sassy",
+      "version": "0.2.1",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/jkode/sassy/0.2.1/jkode-sassy-0.2.1.tgz",
+      "tarball_sha256": "c3e3038470986238d40ce98ad6eb0a078d9fb8b7f71cb241bc28a84fb5c79e95",
+      "popularity_indegree": 0,
+      "provides": [
+        "jkode sassy",
+        "jkode sassy-test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "scheme char",
+        "scheme cxr",
+        "scheme eval",
+        "scheme file",
+        "scheme read",
+        "scheme repl",
+        "scheme write",
+        "srfi 1",
+        "srfi 142",
+        "srfi 69",
+        "srfi 98"
+      ],
+      "description": "A portable assembler for x86 processors",
+      "files": [
+        "jkode/sassy-test.sld",
+        "jkode/sassy.sld",
+        "jkode/sassy/api.scm",
+        "jkode/sassy/elf.scm",
+        "jkode/sassy/extras.scm",
+        "jkode/sassy/flat-bin.scm",
+        "jkode/sassy/intern.scm",
+        "jkode/sassy/macros.scm",
+        "jkode/sassy/main.scm",
+        "jkode/sassy/numbers.scm",
+        "jkode/sassy/opcodes.scm",
+        "jkode/sassy/operands.scm",
+        "jkode/sassy/other/srfi-56-pieces.scm",
+        "jkode/sassy/parse.scm",
+        "jkode/sassy/push-stacks.scm",
+        "jkode/sassy/text-block.scm",
+        "jkode/sassy/text.scm",
+        "jkode/sassy/units.scm",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "lassik dockerfile",
+      "slug": "lassik-dockerfile",
+      "version": "0.2",
+      "license": "ISC",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/lassi.io/lassi/lassik/dockerfile/0.2/distfiles/lassik-dockerfile-0.2.tgz",
+      "tarball_sha256": "fbaa87155f3d5910af8bb6b1513464520a526990ca40ed43f423ed27c485c4a0",
+      "popularity_indegree": 0,
+      "provides": [
+        "lassik dockerfile"
+      ],
+      "depends": [
+        "chibi match",
+        "lassik shell-quote",
+        "lassik unpack-assoc",
+        "scheme base",
+        "scheme write",
+        "srfi 1"
+      ],
+      "description": "Scheme DSL to build Dockerfiles",
+      "files": [
+        "lassik/dockerfile-test.scm",
+        "lassik/dockerfile.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "lassik string-inflection",
+      "slug": "lassik-string-inflection",
+      "version": "0.2",
+      "license": "ISC",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/lassi.io/lassi/lassik/string-inflection/0.2/distfiles/lassik-string-inflection-0.2.tgz",
+      "tarball_sha256": "c9ad9fe11d0c5243609382d365b4ae3d81b9177ddebcb47abe76aaf1a83352ff",
+      "popularity_indegree": 0,
+      "provides": [
+        "lassik string-inflection"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char"
+      ],
+      "description": "lisp-case under_score CapsUpper capsLower",
+      "files": [
+        "lassik/string-inflection-test.scm",
+        "lassik/string-inflection.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "lassik trivial-tar-writer",
+      "slug": "lassik-trivial-tar-writer",
+      "version": "0.2",
+      "license": "ISC",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/lassi.io/lassi/lassik/trivial-tar-writer/0.2/distfiles/lassik-trivial-tar-writer-0.2.tgz",
+      "tarball_sha256": "dcb512851622b17b7eb6e8bd868f78bb4bcabd33f480a9f7260970196bf4a568",
+      "popularity_indegree": 0,
+      "provides": [
+        "lassik trivial-tar-writer"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Simplest way to output uncompressed .tar file",
+      "files": [
+        "lassik/trivial-tar-writer.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "lightweight-testing",
+      "slug": "lightweight-testing",
+      "version": "0.1",
+      "license": "Apache-2.0",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/tutanota.com/flynn16/lightweight-testing/0.1/lightweight-testing-0.1.tgz",
+      "tarball_sha256": "17294025cf29ab76f41c51c5b8562961eff3b6a3a1ada2f6221b7f38e4a4223c",
+      "popularity_indegree": 0,
+      "provides": [
+        "lightweight-testing"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "scheme write"
+      ],
+      "description": "SRFI-78 implemented as a wrapper around (chibi test)",
+      "files": [
+        "lightweight-testing.scm",
+        "lightweight-testing.sld",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "macduffie json",
+      "slug": "macduffie-json",
+      "version": "0.9.5",
+      "license": "Expat",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/taknamay/macduffie/json/0.9.5/macduffie-json-0.9.5.tgz",
+      "tarball_sha256": "e8dccf8e8c63f088d826b0e92357dbc2998356f616b4390433b438b26a08b4e2",
+      "popularity_indegree": 0,
+      "provides": [
+        "macduffie json"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme file",
+        "scheme inexact",
+        "scheme read",
+        "scheme write",
+        "srfi 69"
+      ],
+      "description": "JSON reader and writer",
+      "files": [
+        "json.body.scm",
+        "json.sld",
+        "json.xhtml",
+        "package.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "okmij ssax",
+      "slug": "okmij-ssax",
+      "version": "5.4",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/okmij/ssax/5.4/okmij-ssax-5.4.tgz",
+      "tarball_sha256": "9a78a099fff4584c10c9444d41b808fe7029b5dfa2d3e5ece4c7a08e5e33b2c1",
+      "popularity_indegree": 0,
+      "provides": [
+        "okmij ssax",
+        "okmij ssax-test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base",
+        "scheme char",
+        "scheme cxr",
+        "scheme write",
+        "srfi 1",
+        "srfi 130"
+      ],
+      "description": "Functional XML parsing framework",
+      "files": [
+        "SXML.html",
+        "okmij/SSAX.scm",
+        "okmij/input-parse.scm",
+        "okmij/look-for-str.scm",
+        "okmij/myenv-scm.scm",
+        "okmij/ssax-test.sld",
+        "okmij/ssax.sld",
+        "package.scm",
+        "run-tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds deque",
+      "slug": "pfds-deque",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/deque/1.0.0/pfds-deque-1.0.0.tgz",
+      "tarball_sha256": "a5deddf48523c167649660fc9e41acf2cce77f185525a1f6d4cfa9589f7f868b",
+      "popularity_indegree": 0,
+      "provides": [
+        "pfds deque"
+      ],
+      "depends": [
+        "pfds lazy-list",
+        "pfds list-helpers",
+        "scheme base"
+      ],
+      "description": "Purely functional deques",
+      "files": [
+        "package.scm",
+        "pfds/deque.html",
+        "pfds/deque.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds difference-list",
+      "slug": "pfds-difference-list",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/difference-list/1.0.0/pfds-difference-list-1.0.0.tgz",
+      "tarball_sha256": "82a9e6db6f63ac1ab14fd87835e438a0a5486572a450a65c0b8eda0873c72a8c",
+      "popularity_indegree": 0,
+      "provides": [
+        "pfds difference-list"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Difference lists",
+      "files": [
+        "package.scm",
+        "pfds/difference-list.html",
+        "pfds/difference-list.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds fector",
+      "slug": "pfds-fector",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/fector/1.0.0/pfds-fector-1.0.0.tgz",
+      "tarball_sha256": "ff0bb61c97b4a59b51c40f589d4b481a97759c09de197c0891386d6b0fa39f53",
+      "popularity_indegree": 0,
+      "provides": [
+        "pfds fector"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda"
+      ],
+      "description": "Functional vectors",
+      "files": [
+        "package.scm",
+        "pfds/fector.html",
+        "pfds/fector.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds hash-array-mapped-trie",
+      "slug": "pfds-hash-array-mapped-trie",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/hash-array-mapped-trie/1.0.0/pfds-hash-array-mapped-trie-1.0.0.tgz",
+      "tarball_sha256": "f549c8715d94b83037af786618b5ab08600d75ce9ffa40a841cb07e8f918931d",
+      "popularity_indegree": 0,
+      "provides": [
+        "pfds hash-array-mapped-trie"
+      ],
+      "depends": [
+        "pfds alist",
+        "pfds bitwise",
+        "pfds list-helpers",
+        "pfds vector",
+        "scheme base",
+        "scheme case-lambda",
+        "srfi 60"
+      ],
+      "description": "Hash array mapped tries",
+      "files": [
+        "package.scm",
+        "pfds/hash-array-mapped-trie.html",
+        "pfds/hash-array-mapped-trie.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds heap",
+      "slug": "pfds-heap",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/heap/1.0.0/pfds-heap-1.0.0.tgz",
+      "tarball_sha256": "5b9ec02fd7f9ff022f67aeee6e6aa4109e14bb3a0d096b33512d3d9265f49bb5",
+      "popularity_indegree": 0,
+      "provides": [
+        "pfds heap"
+      ],
+      "depends": [
+        "pfds list-helpers",
+        "scheme base"
+      ],
+      "description": "Heap data structure",
+      "files": [
+        "package.scm",
+        "pfds/heap.html",
+        "pfds/heap.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds priority-search-queue",
+      "slug": "pfds-priority-search-queue",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/priority-search-queue/1.0.0/pfds-priority-search-queue-1.0.0.tgz",
+      "tarball_sha256": "47a90b0983d3c8cf9c5d87a65fba104671adcefa386e76f9db1b05d0206b38dc",
+      "popularity_indegree": 0,
+      "provides": [
+        "pfds priority-search-queue"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Priority search queues",
+      "files": [
+        "package.scm",
+        "pfds/priority-search-queue.html",
+        "pfds/priority-search-queue.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds queue",
+      "slug": "pfds-queue",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/queue/1.0.0/pfds-queue-1.0.0.tgz",
+      "tarball_sha256": "b9da21328abf243ff4efe9215d5720f0fffaf4e552f51a49519993347882c60f",
+      "popularity_indegree": 0,
+      "provides": [
+        "pfds queue"
+      ],
+      "depends": [
+        "pfds lazy-list",
+        "pfds list-helpers",
+        "scheme base"
+      ],
+      "description": "Purely functional queues",
+      "files": [
+        "package.scm",
+        "pfds/queue.html",
+        "pfds/queue.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds sequence",
+      "slug": "pfds-sequence",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/sequence/1.0.0/pfds-sequence-1.0.0.tgz",
+      "tarball_sha256": "6ac52b1e000c41406c34220aae9466288824556c0b0d8f4b9bf475d433038cc4",
+      "popularity_indegree": 0,
+      "provides": [
+        "pfds sequence"
+      ],
+      "depends": [
+        "pfds fingertree",
+        "pfds list-helpers",
+        "scheme base"
+      ],
+      "description": "Purely functional sequences",
+      "files": [
+        "package.scm",
+        "pfds/sequence.html",
+        "pfds/sequence.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "pfds set",
+      "slug": "pfds-set",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/pfds/set/1.0.0/pfds-set-1.0.0.tgz",
+      "tarball_sha256": "c71a6da9a21c6994b6801920511141a93c181c741017d0cfb24ec2cde523db7b",
+      "popularity_indegree": 0,
+      "provides": [
+        "pfds set"
+      ],
+      "depends": [
+        "pfds bounded-balance-tree",
+        "pfds list-helpers",
+        "scheme base"
+      ],
+      "description": "Purely functional sets",
+      "files": [
+        "package.scm",
+        "pfds/set.html",
+        "pfds/set.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "postgresql",
+      "slug": "postgresql",
+      "version": "17.09.26",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/ymail.com/ktakashi/postgresql/17.09.26/postgresql-17.09.26.tgz",
+      "tarball_sha256": "d6d800b041ae02ef0c341a47bd23316a94dc26cab819c7d8425ddf84066ba0d1",
+      "popularity_indegree": 0,
+      "provides": [
+        "postgresql",
+        "postgresql apis",
+        "postgresql buffer",
+        "postgresql conditions",
+        "postgresql digest md5",
+        "postgresql messages",
+        "postgresql misc bytevectors",
+        "postgresql misc io",
+        "postgresql misc socket",
+        "postgresql misc ssl"
+      ],
+      "depends": [
+        "binary io",
+        "chibi bytevector",
+        "chibi filesystem",
+        "chibi net",
+        "chibi process",
+        "gauche base",
+        "math",
+        "rfc tls",
+        "rnrs",
+        "sagittarius",
+        "sagittarius control",
+        "scheme base",
+        "scheme case-lambda",
+        "scheme char",
+        "scheme cxr",
+        "scheme write",
+        "srfi 106",
+        "srfi 19",
+        "srfi 33",
+        "srfi 60",
+        "util bytevector"
+      ],
+      "description": "R7RS portable PostgreSQL binding",
+      "files": [
+        "README.md",
+        "package.scm",
+        "postgresql.sld",
+        "postgresql/apis.sld",
+        "postgresql/buffer.sld",
+        "postgresql/conditions.sld",
+        "postgresql/digest/md5.scm",
+        "postgresql/digest/md5.sld",
+        "postgresql/messages.sld",
+        "postgresql/misc/bytevectors.sld",
+        "postgresql/misc/io.sld",
+        "postgresql/misc/socket.sld",
+        "postgresql/misc/ssl.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs arithmetic fixnums",
+      "slug": "r6rs-arithmetic-fixnums",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/arithmetic/fixnums/0.0.1/r6rs-arithmetic-fixnums-0.0.1.tgz",
+      "tarball_sha256": "a2839d9592f23c3859ace50bd3132dc37c2691702a382e873c76156b782a6378",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs arithmetic fixnums"
+      ],
+      "depends": [
+        "r6rs base",
+        "rnrs arithmetic fixnums",
+        "scheme base",
+        "scheme case-lambda"
+      ],
+      "description": "Port of (rnrs arithmetic fixnums) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/arithmetic/fixnums.body.scm",
+        "r6rs/arithmetic/fixnums.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs bytevectors",
+      "slug": "r6rs-bytevectors",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/bytevectors/0.0.1/r6rs-bytevectors-0.0.1.tgz",
+      "tarball_sha256": "404c59936cd1b67bba8dd58219a535a71fa39d18be034ae7e8b1faad41eb782f",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs bytevectors"
+      ],
+      "depends": [
+        "rnrs bytevectors",
+        "scheme base",
+        "scheme inexact"
+      ],
+      "description": "Port of (rnrs bytevectors) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/bytevectors.body.scm",
+        "r6rs/bytevectors.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs control",
+      "slug": "r6rs-control",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/control/0.0.1/r6rs-control-0.0.1.tgz",
+      "tarball_sha256": "b38fb48bac18d46a9a84ecd4ba64ca83d272abf3d789307a49a93a4230965a6a",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs control"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda"
+      ],
+      "description": "Port of (rnrs control) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/control.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs enums",
+      "slug": "r6rs-enums",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/enums/0.0.1/r6rs-enums-0.0.1.tgz",
+      "tarball_sha256": "f86c2a234a75fc494f088d831e17cfe23328f5244ea6677bda44dc6451affcbd",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs enums"
+      ],
+      "depends": [
+        "r6rs lists",
+        "r6rs sorting",
+        "rnrs enums",
+        "scheme base"
+      ],
+      "description": "Port of (rnrs enums) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/enums.body.scm",
+        "r6rs/enums.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs eval",
+      "slug": "r6rs-eval",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/eval/0.0.1/r6rs-eval-0.0.1.tgz",
+      "tarball_sha256": "b0e87f14188769d21f5f1c96e4f8a5b4e4dda4d57a8509d313c4da2b6e12f57c",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs eval"
+      ],
+      "depends": [
+        "scheme eval"
+      ],
+      "description": "Port of (rnrs eval) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/eval.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs exceptions",
+      "slug": "r6rs-exceptions",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/exceptions/0.0.1/r6rs-exceptions-0.0.1.tgz",
+      "tarball_sha256": "9555ee076c379a3f622b9ca2812cf3332a9d9afecd115d7e3b2ddda8aaa9b97f",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs exceptions"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Port of (rnrs exceptions) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/exceptions.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs files",
+      "slug": "r6rs-files",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/files/0.0.1/r6rs-files-0.0.1.tgz",
+      "tarball_sha256": "6b674bf8735431e5a1cc809018d0d19b6ffc02ca56781328290de413db5829ef",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs files"
+      ],
+      "depends": [
+        "scheme file"
+      ],
+      "description": "Port of (rnrs files) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/files.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs io simple",
+      "slug": "r6rs-io-simple",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/io/simple/0.0.1/r6rs-io-simple-0.0.1.tgz",
+      "tarball_sha256": "7f49ae295e3f6fa420e2ccfdbf446dc46cc814bdfb436046191bd8e146346b00",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs io simple"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme file",
+        "scheme read",
+        "scheme write"
+      ],
+      "description": "Port of (rnrs io simple) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/io/simple.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs mutable-pairs",
+      "slug": "r6rs-mutable-pairs",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/mutable-pairs/0.0.1/r6rs-mutable-pairs-0.0.1.tgz",
+      "tarball_sha256": "850c349b4aadeda7c8c52afcf0b9f237b0b641f70d9786f77490cbf4b13e8bf1",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs mutable-pairs"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Port of (rnrs mutable-pairs) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/mutable-pairs.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs mutable-strings",
+      "slug": "r6rs-mutable-strings",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/mutable-strings/0.0.1/r6rs-mutable-strings-0.0.1.tgz",
+      "tarball_sha256": "c5f3a290e89314f1572cd7f31ab3238bd4e3c8b0883ebf281b56e174b13031a1",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs mutable-strings"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Port of (rnrs mutable-strings) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/mutable-strings.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs programs",
+      "slug": "r6rs-programs",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/programs/0.0.1/r6rs-programs-0.0.1.tgz",
+      "tarball_sha256": "b10955572de97a44524ce699dbf6c7607c75bb6000ba845051b1e927bd72370b",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs programs"
+      ],
+      "depends": [
+        "scheme process-context"
+      ],
+      "description": "Port of (rnrs programs) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/programs.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs r5rs",
+      "slug": "r6rs-r5rs",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/r5rs/0.0.1/r6rs-r5rs-0.0.1.tgz",
+      "tarball_sha256": "a049e687207b76608448460b70eca530d0b495a8348bff5953fa911abf73772a",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs r5rs"
+      ],
+      "depends": [
+        "scheme r5rs"
+      ],
+      "description": "Port of (rnrs r5rs) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/r5rs.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "r6rs unicode",
+      "slug": "r6rs-unicode",
+      "version": "0.0.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/ccs.neu.edu/will/r6rs/unicode/0.0.1/r6rs-unicode-0.0.1.tgz",
+      "tarball_sha256": "0da7ecacbc53ef8ce918b7383bc5309d8bb171cfa3db41e9f229a266faf46650",
+      "popularity_indegree": 0,
+      "provides": [
+        "r6rs unicode"
+      ],
+      "depends": [
+        "r6rs unicode-reference unicode1",
+        "r6rs unicode-reference unicode3",
+        "r6rs unicode-reference unicode4",
+        "rnrs unicode",
+        "scheme char"
+      ],
+      "description": "Port of (rnrs unicode) to R7RS.",
+      "files": [
+        "package.scm",
+        "r6rs/unicode.sld",
+        "r6rsDoc.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "rebottled cl-pdf",
+      "slug": "rebottled-cl-pdf",
+      "version": "1.0.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/rebottled/cl-pdf/1.0.0/rebottled-cl-pdf-1.0.0.tgz",
+      "tarball_sha256": "9a0a91a9bef0f2311c47ee8fd0c719aafc81ba88bf3e800e4e977608cb7a78df",
+      "popularity_indegree": 0,
+      "provides": [
+        "rebottled cl-pdf",
+        "rebottled cl-pdf-utils"
+      ],
+      "depends": [
+        "rebottled pregexp",
+        "robin statistics",
+        "scheme base",
+        "scheme case-lambda",
+        "scheme cxr",
+        "scheme file",
+        "scheme inexact",
+        "slib common-list-functions",
+        "slib format"
+      ],
+      "description": "Low level functions for generating PDF files",
+      "files": [
+        "package.scm",
+        "rebottled-pdf.html",
+        "rebottled/cl-pdf-utils.sld",
+        "rebottled/cl-pdf.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "rebottled pstk",
+      "slug": "rebottled-pstk",
+      "version": "1.7.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/rebottled/pstk/1.7.0/rebottled-pstk-1.7.0.tgz",
+      "tarball_sha256": "2377f19584f9d6117d83009db07b6cde1e947ed280b25a7acb4d2dfddb383e0d",
+      "popularity_indegree": 0,
+      "provides": [
+        "rebottled pstk"
+      ],
+      "depends": [
+        "chibi filesystem",
+        "chibi match",
+        "chibi process",
+        "gauche process",
+        "rnrs io ports",
+        "sagittarius process",
+        "scheme base",
+        "scheme cxr",
+        "scheme read",
+        "scheme write"
+      ],
+      "description": "Portable Scheme Interface to the Tk GUI Toolkit",
+      "files": [
+        "package.scm",
+        "rebottled-pstk.html",
+        "rebottled/pstk.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "retropikzel pstk",
+      "slug": "retropikzel-pstk",
+      "version": "1.0.8",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/pstk/1.0.8/retropikzel-pstk-1.0.8.tgz",
+      "tarball_sha256": "645ac9d902bf88abcf1ceabfaa39414dd547c669fc1d3085c0b65d52e07a5779",
+      "popularity_indegree": 0,
+      "provides": [
+        "retropikzel pstk"
+      ],
+      "depends": [
+        "kawa base",
+        "retropikzel named-pipes",
+        "retropikzel system",
+        "scheme base",
+        "scheme cxr",
+        "scheme file",
+        "scheme process-context",
+        "scheme read",
+        "scheme write",
+        "srfi 170",
+        "srfi 88"
+      ],
+      "description": "Use Tk GUI from Scheme",
+      "files": [
+        "package.scm",
+        "retropikzel/pstk.scm",
+        "retropikzel/pstk.sld",
+        "retropikzel/pstk/README.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib array-interpolate",
+      "slug": "slib-array-interpolate",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/array-interpolate/SLIB-3b5-r7rs/slib-array-interpolate-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "87eb635b0583859bb3a64a9eb2418e2f70e324d5144f4124d9cc21539e90ede4",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib array-interpolate"
+      ],
+      "depends": [
+        "scheme base",
+        "slib array-for-each",
+        "slib subarray",
+        "srfi 63"
+      ],
+      "description": "Interpolated array access",
+      "files": [
+        "package.scm",
+        "slib-array-interpolate.html",
+        "slib/array-interpolate.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib byte-number",
+      "slug": "slib-byte-number",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/byte-number/SLIB-3b5-r7rs/slib-byte-number-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "56e83d15dfdcb7bc651ef5e60925fdd28c7eb63e358235e37d650deeeccf7b4e",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib byte-number"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme complex",
+        "scheme inexact",
+        "slib byte",
+        "slib common",
+        "srfi 60"
+      ],
+      "description": "Byte integer and IEEE floating-point conversions",
+      "files": [
+        "package.scm",
+        "slib-byte-number.html",
+        "slib/byte-number.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib chapter-order",
+      "slug": "slib-chapter-order",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/chapter-order/SLIB-3b5-r7rs/slib-chapter-order-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "f1f321f2e00e1779e06adb02c17ab4a1c50a57b1bab92176d4e68b6933745d38",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib chapter-order"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char"
+      ],
+      "description": "Chapter ordering",
+      "files": [
+        "package.scm",
+        "slib-chapter-order.html",
+        "slib/chapter-order.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib charplot",
+      "slug": "slib-charplot",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/charplot/SLIB-3b5-r7rs/slib-charplot-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "5b7e056be7ec3e5f5898e87d9ce8818bdd6f431af65eaeb0ba14404f7a107e8b",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib charplot"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme cxr",
+        "slib array-for-each",
+        "slib common",
+        "slib printf",
+        "srfi 63"
+      ],
+      "description": "Plotting histograms/graphs in characters",
+      "files": [
+        "package.scm",
+        "slib-charplot.html",
+        "slib/charplot.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib common-lisp-time",
+      "slug": "slib-common-lisp-time",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/common-lisp-time/SLIB-3b5-r7rs/slib-common-lisp-time-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "8aa7b829aa67f19c081937fd3ae682c514c809dde46cc3e49916f17f9cc074b3",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib common-lisp-time"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme process-context",
+        "slib common",
+        "slib time-core",
+        "slib time-zone"
+      ],
+      "description": "Common-Lisp time conversion routines",
+      "files": [
+        "package.scm",
+        "slib-time.html",
+        "slib/common-lisp-time.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib daylight",
+      "slug": "slib-daylight",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/daylight/SLIB-3b5-r7rs/slib-daylight-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "f08b8e1ed909de19b0b627c66931fb2fd5379aa693a88baa377218eee458a292",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib daylight"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme cxr",
+        "scheme inexact",
+        "slib color-space"
+      ],
+      "description": "Model of sun and sky colors",
+      "files": [
+        "package.scm",
+        "slib-daylight.html",
+        "slib/daylight.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib determinant",
+      "slug": "slib-determinant",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/determinant/SLIB-3b5-r7rs/slib-determinant-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "34a1cdaeb1097f62e686caeb20718a9dd668f97856e82ce409cfe3256a187c7c",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib determinant"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 63"
+      ],
+      "description": "Matrix Algebra",
+      "files": [
+        "package.scm",
+        "slib-determinant.html",
+        "slib/determinant.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib dynamic",
+      "slug": "slib-dynamic",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "slib-family-inference",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/dynamic/SLIB-3b5-r7rs/slib-dynamic-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "2df9ed42deee17c638537d0317963546225e341aff83eb01645873be92f0b0c5",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib dynamic"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Dynamic data type",
+      "files": [
+        "package.scm",
+        "slib-dynamic.html",
+        "slib/dynamic.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib factor",
+      "slug": "slib-factor",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/factor/SLIB-3b5-r7rs/slib-factor-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "1712e6656c51ab5153e240f0c1154699ef3223d84dc9ffb1f07d7b26b7c98e94",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib factor"
+      ],
+      "depends": [
+        "scheme base",
+        "slib common",
+        "slib modular",
+        "srfi 27"
+      ],
+      "description": "Factorization, prime test and generation",
+      "files": [
+        "package.scm",
+        "slib-factor.html",
+        "slib/factor.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib fourier-transform",
+      "slug": "slib-fourier-transform",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/fourier-transform/SLIB-3b5-r7rs/slib-fourier-transform-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "545b74a2e601d88b9960c0bc6772f1c805b0d8e774af20c831d7bd3bf8596ae1",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib fourier-transform"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme inexact",
+        "slib subarray",
+        "srfi 1",
+        "srfi 60",
+        "srfi 63"
+      ],
+      "description": "Discrete Fourier Transform",
+      "files": [
+        "package.scm",
+        "slib-fourier.html",
+        "slib/fourier-transform.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib line-io",
+      "slug": "slib-line-io",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/line-io/SLIB-3b5-r7rs/slib-line-io-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "6b5a434f4ca35cb74916578076778a1d8628dbe8720362ac496b58925d60e5af",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib line-io"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda",
+        "scheme file",
+        "scheme write",
+        "slib common",
+        "slib filename"
+      ],
+      "description": "Line oriented input/output functions",
+      "files": [
+        "package.scm",
+        "slib-line-io.html",
+        "slib/line-io.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib math-integer",
+      "slug": "slib-math-integer",
+      "version": "SLIB-3b5-r7rs-1",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/math-integer/SLIB-3b5-r7rs-1/slib-math-integer-SLIB-3b5-r7rs-1.tgz",
+      "tarball_sha256": "af23642e7566b3522f9091288569144c80eef03439ce322dd30ec299484a240c",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib math-integer"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 60"
+      ],
+      "description": "Mathematical functions restricted to exact integers",
+      "files": [
+        "package.scm",
+        "slib-math-integer.html",
+        "slib/math-integer.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib math-real",
+      "slug": "slib-math-real",
+      "version": "SLIB-3b5-r7rs-1",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/math-real/SLIB-3b5-r7rs-1/slib-math-real-SLIB-3b5-r7rs-1.tgz",
+      "tarball_sha256": "2ffeb7b868551916d418bdf9f1c947e799f489ab479f534f9ee5ba09addaa380",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib math-real"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme complex",
+        "scheme inexact",
+        "slib common"
+      ],
+      "description": "Mathematical functions restricted to real numbers",
+      "files": [
+        "package.scm",
+        "slib-math-real.html",
+        "slib/math-real.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib minimize",
+      "slug": "slib-minimize",
+      "version": "SLIB-3b5-r7rs",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/minimize/SLIB-3b5-r7rs/slib-minimize-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "93ca3ffaef94cd90d6d495c2b3c0db750e1a16850aa8443725cb98116754bb14",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib minimize"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme inexact",
+        "slib common"
+      ],
+      "description": "Finds minimum value of a function",
+      "files": [
+        "package.scm",
+        "slib-minimize.html",
+        "slib/minimize.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib nbs-iscc",
+      "slug": "slib-nbs-iscc",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "slib-family-inference",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/nbs-iscc/SLIB-3b5-r7rs/slib-nbs-iscc-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "c65be8de29e72af4878583c48e875f48d54833167fe0287757978d4b171e91c5",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib nbs-iscc"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "slib color",
+        "srfi 69"
+      ],
+      "description": "NBS/ISCC Color System",
+      "files": [
+        "package.scm",
+        "slib-nbs-iscc.html",
+        "slib/nbs-iscc.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib posix-time",
+      "slug": "slib-posix-time",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/posix-time/SLIB-3b5-r7rs/slib-posix-time-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "1d3721a1cd6de2ec183bd7bc107047524baf47389e4886edf2ba6f2eb29f71c3",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib posix-time"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme process-context",
+        "slib time-core",
+        "slib time-zone"
+      ],
+      "description": "POSIX time conversion routines",
+      "files": [
+        "package.scm",
+        "slib-time.html",
+        "slib/posix-time.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib pprint-file",
+      "slug": "slib-pprint-file",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/pprint-file/SLIB-3b5-r7rs/slib-pprint-file-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "ceba258740a178650d21d0c5f5dd60366c472cf93281a669f11556a111e7e587",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib pprint-file"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme file",
+        "scheme read",
+        "scheme write",
+        "slib common",
+        "slib pretty-print"
+      ],
+      "description": "Pretty print a Scheme file",
+      "files": [
+        "package.scm",
+        "slib-pprint-file.html",
+        "slib/pprint-file.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib queue",
+      "slug": "slib-queue",
+      "version": "SLIB-3b5-r7rs",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/queue/SLIB-3b5-r7rs/slib-queue-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "a0d035502d72b9c8ac5ee23a2445cf94a312408be11e009d52b22b43904631f4",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib queue"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Queue/Stack data structure",
+      "files": [
+        "package.scm",
+        "slib-queue.html",
+        "slib/queue.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib random-inexact",
+      "slug": "slib-random-inexact",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/random-inexact/SLIB-3b5-r7rs/slib-random-inexact-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "ada77b92756718b4867f0a4925ec97f6a39c2089359871a77f2b3176bd9de15d",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib random-inexact"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme inexact",
+        "srfi 27"
+      ],
+      "description": "Pseudo-Random inexact real numbers",
+      "files": [
+        "package.scm",
+        "slib-random-inexact.html",
+        "slib/random-inexact.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib rationalize",
+      "slug": "slib-rationalize",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "slib-family-inference",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/rationalize/SLIB-3b5-r7rs/slib-rationalize-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "ad97f49209172ea1be0ec1eb9059bc593349fc1f5d6e17605bffa5721ce61e40",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib rationalize"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Find simplest number ratios",
+      "files": [
+        "package.scm",
+        "slib-rationalize.html",
+        "slib/rationalize.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib resene",
+      "slug": "slib-resene",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/resene/SLIB-3b5-r7rs/slib-resene-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "d78d83e8ce9d1ad4681fff6284cbb07686d4917f5e5b4c8f0e1e3d435c058fe3",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib resene"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "slib color",
+        "srfi 69"
+      ],
+      "description": "Resene Color System",
+      "files": [
+        "package.scm",
+        "slib-resene.html",
+        "slib/resene.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib saturate",
+      "slug": "slib-saturate",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "slib-family-inference",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/saturate/SLIB-3b5-r7rs/slib-saturate-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "97d5a99446a70f5f715311a464f6ecc382eeb718e1f9b3e52a32865a784e8d9e",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib saturate"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "slib color",
+        "srfi 69"
+      ],
+      "description": "Saturated Color Dictionary",
+      "files": [
+        "package.scm",
+        "slib-saturate.html",
+        "slib/saturate.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib topological-sort",
+      "slug": "slib-topological-sort",
+      "version": "SLIB-3b5-r7rs",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/topological-sort/SLIB-3b5-r7rs/slib-topological-sort-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "8f8039cd024f360b9ab1800e41ef66b1fdb1fc5b3e998e309c0c5186a95ea5b2",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib topological-sort"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 69"
+      ],
+      "description": "Topological sort",
+      "files": [
+        "package.scm",
+        "slib-topological-sort.html",
+        "slib/topological-sort.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib tree",
+      "slug": "slib-tree",
+      "version": "SLIB-3b5-r7rs",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/tree/SLIB-3b5-r7rs/slib-tree-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "215900d6e5c6fff4e9f77000c6061b3dc126cb9ac2c6430f343cb589ac073827",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib tree"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "Implementation of COMMON LISP tree functions",
+      "files": [
+        "package.scm",
+        "slib-tree.html",
+        "slib/tree.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "slib uri",
+      "slug": "slib-uri",
+      "version": "SLIB-3b5-r7rs",
+      "license": "SLIB-Jaffer",
+      "license_class": "NONSTANDARD",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/peterlane.info/peter/slib/uri/SLIB-3b5-r7rs/slib-uri-SLIB-3b5-r7rs.tgz",
+      "tarball_sha256": "dd009379a2b642fab5fb42a13122169bbf044343930cebf05930012bc45aa30f",
+      "popularity_indegree": 0,
+      "provides": [
+        "slib uri"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda",
+        "scheme char",
+        "scheme cxr",
+        "slib coerce",
+        "slib common",
+        "slib directory",
+        "slib printf",
+        "slib scanf",
+        "slib string-case",
+        "slib string-search",
+        "srfi 1"
+      ],
+      "description": "Construct and decode Uniform Resource Identifiers",
+      "files": [
+        "package.scm",
+        "slib-uri.html",
+        "slib/uri.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 128",
+      "slug": "srfi-128",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/128/0.1.0/srfi-128-0.1.0.tgz",
+      "tarball_sha256": "ee7308c60840b2705d943daa6b195e91ebe56acac7246cbb75b91d7d233a171a",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 128"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda",
+        "scheme char",
+        "scheme complex",
+        "scheme inexact"
+      ],
+      "description": "SRFI-128",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/128.scm",
+        "srfi/128.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 156",
+      "slug": "srfi-156",
+      "version": "1.0.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/fisher.cx/robert/srfi/156/1.0.0/srfi-156-1.0.0.tgz",
+      "tarball_sha256": "73f53cc757e2fbe59ef48395c2d2ab94cad6b2a7febd8d0db53110e28e664fd1",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 156",
+        "srfi 156 test"
+      ],
+      "depends": [
+        "chibi test",
+        "scheme base"
+      ],
+      "description": "Reference implementation of SRFI-156: Syntactic combiners for binary predicates",
+      "files": [
+        "package.scm",
+        "run-tests.scm",
+        "srfi/156.html",
+        "srfi/156.sld",
+        "srfi/156/test.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 16",
+      "slug": "srfi-16",
+      "version": "0.1.0",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/16/0.1.0/srfi-16-0.1.0.tgz",
+      "tarball_sha256": "30bf5f0a2412a471510493de2c8801967ffd5527051d0433d3a35bcbeea9244f",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 16"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI-16",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/16.scm",
+        "srfi/16.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 175",
+      "slug": "srfi-175",
+      "version": "1.1",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/lassi.io/lassi/srfi/175/1.1/srfi-175-1.1.tgz",
+      "tarball_sha256": "6d96cfe5474f47d1bd24949ae7057c393746ed6624a9691c92e9a607da877c1c",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 175"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI 175: ASCII character library",
+      "files": [
+        "package.scm",
+        "srfi/175.scm",
+        "srfi/175.sld",
+        "srfi/tests.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 179",
+      "slug": "srfi-179",
+      "version": "0.10.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/srfi/179/0.10.0/srfi-179-0.10.0.tgz",
+      "tarball_sha256": "385a8694e60277d99e9ab9605ccb38616166eedb94a60bed9a38ceb1d482b5a1",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 179",
+        "srfi 179 base",
+        "srfi 179 test"
+      ],
+      "depends": [
+        "chibi assert",
+        "chibi test",
+        "scheme base",
+        "scheme complex",
+        "scheme cxr",
+        "scheme file",
+        "scheme list",
+        "scheme read",
+        "scheme sort",
+        "scheme vector",
+        "scheme write",
+        "srfi 143",
+        "srfi 144",
+        "srfi 160 base",
+        "srfi 27"
+      ],
+      "description": "",
+      "files": [
+        "package.scm",
+        "run-tests.scm",
+        "srfi/179.sld",
+        "srfi/179/base.scm",
+        "srfi/179/base.sld",
+        "srfi/179/test.sld",
+        "srfi/179/transforms.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 197",
+      "slug": "srfi-197",
+      "version": "1.3",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/upr.edu/jantony.velazquez/srfi/197/1.3/srfi-197-1.3.tgz",
+      "tarball_sha256": "a83a96a7db33f51f6ca747c1cfc109010b96b2972c09c8a3acc6696bf4dba54d",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 197"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI 197: Pipeline Operators",
+      "files": [
+        "package.scm",
+        "srfi-197.html",
+        "srfi-197.scm",
+        "srfi-197.sld",
+        "test-r7rs.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 235",
+      "slug": "srfi-235",
+      "version": "1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/upr.edu/jantony.velazquez/srfi/235/1.0/srfi-235-1.0.tgz",
+      "tarball_sha256": "c5c4bd3121d47de1eb8b6eaa29f754bbf9cee74a1b3719173a18919f45f2d46a",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 235"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda",
+        "srfi 1",
+        "srfi srfi-1"
+      ],
+      "description": "SRFI 235: Combinators",
+      "files": [
+        "package.scm",
+        "srfi-235-test.scm",
+        "srfi-235.html",
+        "srfi/235-impl.scm",
+        "srfi/235.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 25",
+      "slug": "srfi-25",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/25/0.1.0/srfi-25-0.1.0.tgz",
+      "tarball_sha256": "120b7f6d9e59ec64a64224327feaa681bc620d060bf15129055d28640c334ede",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 25"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme write"
+      ],
+      "description": "SRFI-25",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/25.scm",
+        "srfi/25.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 31",
+      "slug": "srfi-31",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/31/0.1.0/srfi-31-0.1.0.tgz",
+      "tarball_sha256": "d38eda9edfdc5bc08c31c1a1f2229c0679151475aa7800543a9168949f92d574",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 31"
+      ],
+      "depends": [
+        "scheme base"
+      ],
+      "description": "SRFI-31",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/31.scm",
+        "srfi/31.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 37",
+      "slug": "srfi-37",
+      "version": "0.1.0",
+      "license": "BSD",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/37/0.1.0/srfi-37-0.1.0.tgz",
+      "tarball_sha256": "1ccc9a6e51546804755608049f8755a536dd699f8385998910d9309de655b52e",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 37"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 11"
+      ],
+      "description": "SRFI-37",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/37.scm",
+        "srfi/37.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 38",
+      "slug": "srfi-38",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "spdx",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/38/0.1.0/srfi-38-0.1.0.tgz",
+      "tarball_sha256": "0013a7e78490500d5e71ccf24ef3572999bddd07300e31beefbdecc7ce93d8f9",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 38"
+      ],
+      "depends": [
+        "chibi",
+        "chibi ast",
+        "scheme base",
+        "scheme char",
+        "scheme cxr",
+        "scheme write",
+        "srfi 69"
+      ],
+      "description": "SRFI-38",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/38.chibi.scm",
+        "srfi/38.scm",
+        "srfi/38.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 43",
+      "slug": "srfi-43",
+      "version": "0.1.0",
+      "license": "public-domain",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "licence-text",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/43/0.1.0/srfi-43-0.1.0.tgz",
+      "tarball_sha256": "bca41d06d711a2de31a76ea76a7ec1350b997b526989fd497dccdeafe62803bd",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 43"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme cxr",
+        "srfi 227",
+        "srfi 8"
+      ],
+      "description": "SRFI-43",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/43.scm",
+        "srfi/43.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 51",
+      "slug": "srfi-51",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "text-match",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/51/0.1.0/srfi-51-0.1.0.tgz",
+      "tarball_sha256": "0a1fdba72102b1a3a62c5d86a3706fd1652562cd3874b5f35cd29b620dd59276",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 51"
+      ],
+      "depends": [
+        "scheme base",
+        "srfi 1"
+      ],
+      "description": "SRFI-51",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/51.scm",
+        "srfi/51.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 78",
+      "slug": "srfi-78",
+      "version": "0.1",
+      "license": "CC0-1.0",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "index-field",
+      "upstream_url": "http://snow-fort.org/s/gmail.com/lockywolf/srfi/78/0.1/srfi-78-0.1.tgz",
+      "tarball_sha256": "83cb79f0eb3daa004202c23b4d1f69f1b7a76c403f09fb4f37afea666037a32b",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 78"
+      ],
+      "depends": [
+        "scheme r5rs",
+        "srfi 23",
+        "srfi 42"
+      ],
+      "description": "",
+      "files": [
+        "package.scm",
+        "srfi/78.sld",
+        "srfi/78/check.scm"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    }
+  ]
+}

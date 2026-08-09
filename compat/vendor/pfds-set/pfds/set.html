@@ -1,0 +1,61 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_set-ordering-procedure">set-ordering-procedure</a></li><li><a href="#h3_set-ordering-procedure">make-set</a></li><li><a href="#h3_set-member?">set-member?</a></li><li><a href="#h3_set-insert">set-insert</a></li><li><a href="#h3_set-remove">set-remove</a></li><li><a href="#h3_set-size">set-size</a></li><li><a href="#h3_proper-subset?">set&lt;?</a></li><li><a href="#h3_set>=?">set>=?</a></li><li><a href="#h3_set>?">set>?</a></li><li><a href="#h3_set>?">set=?</a></li><li><a href="#h3_subset?">subset?</a></li><li><a href="#h3_proper-subset?">proper-subset?</a></li><li><a href="#h3_set-map">set-map</a></li><li><a href="#h3_set-fold">set-fold</a></li><li><a href="#h3_list->set">list->set</a></li><li><a href="#h3_set->list">set->list</a></li><li><a href="#h3_set-union">set-union</a></li><li><a href="#h3_set-intersection">set-intersection</a></li><li><a href="#h3_set-difference">set-difference</a></li></ol></div><div id="main"><div><a name="h1_(pfdsset)"></a><h1>(pfds set)</h1></div><p>set? : any -> boolean
+returns #t if the object is a set, #f otherwise<div><a name="h3_set-ordering-procedure"></a><h3><code>(set-ordering-procedure set)</code></h3></div>set-ordering-procedure : set -> (any any -> boolean)
+returns the ordering procedure used internally by the set.<div><a name="h3_set-ordering-procedure"></a><h3><code>(make-set &lt;)</code></h3></div>make-set : (any any -> boolean) -> set
+returns a new empty set ordered by the &lt; procedure<div><a name="h3_set-member?"></a><h3><code>(set-member? set element)</code></h3></div>set-member? : set any -> boolean
+returns true if element is in the set<div><a name="h3_set-insert"></a><h3><code>(set-insert set element)</code></h3></div>set-insert : set any -> set
+returns a new set created by inserting element into the set argument<div><a name="h3_set-remove"></a><h3><code>(set-remove set element)</code></h3></div>set-remove : set element -> set
+returns a new set created by removing element from the set<div><a name="h3_set-size"></a><h3><code>(set-size set)</code></h3></div>set-size : set -> non-negative integer
+returns the number of elements in the setset&lt;=? : set set -> boolean
+returns #t if set1 is a subset of set2, #f otherwise, i.e. if all
+elements of set1 are in set2.<div><a name="h3_proper-subset?"></a><h3><code>(set&lt;? set1 set2)</code></h3></div>set&lt;? : set set -> boolean
+returns #t if set1 is a proper subset of set2, #f otherwise. That
+is, if all elements of set1 are in set2, and there is at least one
+element of set2 not in set1.<div><a name="h3_set>=?"></a><h3><code>(set>=? set1 set2)</code></h3></div>set>=? : set set -> boolean
+returns #t if set2 is a subset of set1, #f otherwise.<div><a name="h3_set>?"></a><h3><code>(set>? set1 set2)</code></h3></div>set>? : set set -> boolean
+returns #t if set2 is a proper subset of set1, #f otherwise.<div><a name="h3_set>?"></a><h3><code>(set=? set1 set2)</code></h3></div>set=? : set set -> boolean
+returns #t if every element of set1 is in set2, and vice versa, #f
+otherwise.<div><a name="h3_subset?"></a><h3><code>subset?</code></h3></div>subset? : set set -> boolean
+same as set&lt;=?<div><a name="h3_proper-subset?"></a><h3><code>proper-subset?</code></h3></div>proper-subset? : set set -> boolean
+same as set&lt;?<div><a name="h3_set-map"></a><h3><code>(set-map proc set)</code></h3></div>set-map : (any -> any) set -> set
+returns the new set created by applying proc to each element of the set<div><a name="h3_set-fold"></a><h3><code>(set-fold proc base set)</code></h3></div>set-fold : (any any -> any) any set -> any
+returns the value obtained by iterating the procedure over each
+element of the set and an accumulator value. The value of the
+accumulator is initially base, and the return value of proc is used
+as the accumulator for the next iteration.<div><a name="h3_list->set"></a><h3><code>(list->set list &lt;)</code></h3></div>list->set : Listof(any) (any any -> any) -> set
+returns the set containing all the elements of the list, ordered by &lt;.<div><a name="h3_set->list"></a><h3><code>(set->list set)</code></h3></div>set->list : set -> Listof(any)
+returns all the elements of the set as a list<div><a name="h3_set-union"></a><h3><code>(set-union set1 set2)</code></h3></div>set-union : set set -> set
+returns the union of set1 and set2, i.e. contains all elements of
+set1 and set2.<div><a name="h3_set-intersection"></a><h3><code>(set-intersection set1 set2)</code></h3></div>set-intersection : set set -> set
+returns the intersection of set1 and set2, i.e. the set of all
+items that are in both set1 and set2.<div><a name="h3_set-difference"></a><h3><code>(set-difference set1 set2)</code></h3></div>set-difference : set set -> set
+returns the difference of set1 and set2, i.e. the set of all items
+in set1 that are not in set2.</p><div id="footer"></div></div></body></html>

@@ -1,0 +1,48 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h2_Additionalaccessors">Additional accessors</a><ol><li><a href="#h3_bytevector-u16-ref-le">bytevector-u16-ref-le</a></li><li><a href="#h3_bytevector-u16-ref-be">bytevector-u16-ref-be</a></li><li><a href="#h3_bytevector-u32-ref-le">bytevector-u32-ref-le</a></li><li><a href="#h3_bytevector-u32-ref-be">bytevector-u32-ref-be</a></li></ol></li><li><a href="#h2_Bignumencodings">Bignum encodings</a><ol><li><a href="#h3_bytevector-ber-ref">bytevector-ber-ref</a></li><li><a href="#h3_bytevector-ber-set!">bytevector-ber-set!</a></li></ol></li><li><a href="#h2_Integerconversion">Integer conversion</a><ol><li><a href="#h3_integer->bytevector">integer->bytevector</a></li><li><a href="#h3_bytevector->integer">bytevector->integer</a></li><li><a href="#h3_bytevector-pad-left">bytevector-pad-left</a></li></ol></li><li><a href="#h2_Hexstringconversion">Hex string conversion</a><ol><li><a href="#h3_integer->hex-string">integer->hex-string</a></li><li><a href="#h3_hex-string->integer">hex-string->integer</a></li><li><a href="#h3_bytevector->hex-string">bytevector->hex-string</a></li><li><a href="#h3_hex-string->bytevector">hex-string->bytevector</a></li></ol></li></ol></div><div id="main"><div><a name="h1_(chibibytevector)"></a><h1>(chibi bytevector)</h1></div><p>Additional bytevector utilities.<div><a name="h2_Additionalaccessors"></a><h2>Additional accessors</h2></div><div><a name="h3_bytevector-u16-ref-le"></a><h3><code>(bytevector-u16-ref-le bv i)</code></h3></div>
+Retrieve a 16-bit unsigned integer value from the given bytevector
+<code>bv</code> at offset <code>i</code>, in little-endian order.<div><a name="h3_bytevector-u16-ref-be"></a><h3><code>(bytevector-u16-ref-be bv i)</code></h3></div>Retrieve a 16-bit unsigned integer value from the given bytevector
+<code>bv</code> at offset <code>i</code>, in big-endian order.<div><a name="h3_bytevector-u32-ref-le"></a><h3><code>(bytevector-u32-ref-le bv i)</code></h3></div>Retrieve a 32-bit unsigned integer value from the given bytevector
+<code>bv</code> at offset <code>i</code>, in little-endian order.<div><a name="h3_bytevector-u32-ref-be"></a><h3><code>(bytevector-u32-ref-be bv i)</code></h3></div>Retrieve a 32-bit unsigned integer value from the given bytevector
+<code>bv</code> at offset <code>i</code>, in big-endian order.<div><a name="h2_Bignumencodings"></a><h2>Bignum encodings</h2></div><div><a name="h3_bytevector-ber-ref"></a><h3><code>(bytevector-ber-ref bv [i end])</code></h3></div>
+A BER compressed integer (X.209) is an unsigned integer in base 128,
+most significant digit first, where the high bit is set on all but the
+final (least significant) byte.  Thus any size integer can be
+encoded, but the encoding is efficient and small integers don't take
+up any more space than they would in normal char/short/int encodings.<div><a name="h3_bytevector-ber-set!"></a><h3><code>(bytevector-ber-set! bv n [start end])</code></h3></div><div><a name="h2_Integerconversion"></a><h2>Integer conversion</h2></div><div><a name="h3_integer->bytevector"></a><h3><code>(integer->bytevector n)</code></h3></div>
+Convert an unsigned integer <code>n</code> to a bytevector representing
+the base-256 big-endian form (the zero index holds the MSB).<div><a name="h3_bytevector->integer"></a><h3><code>(bytevector->integer bv)</code></h3></div>The inverse of <code><span>integer->bytevector</span></code>.  Convert a bytevector
+representing the base-256 big-endian form (the zero index holds
+the MSB) to the corresponding unsigned integer.<div><a name="h3_bytevector-pad-left"></a><h3><code>(bytevector-pad-left bv len)</code></h3></div>Utility to pad a bytevector with zeros.  Padding is added to the
+left so as not to change the big-endian value.<div><a name="h2_Hexstringconversion"></a><h2>Hex string conversion</h2></div><div><a name="h3_integer->hex-string"></a><h3><code>(integer->hex-string n)</code></h3></div>
+Big-endian conversion, guaranteed padded to even length.<div><a name="h3_hex-string->integer"></a><h3><code>(hex-string->integer str)</code></h3></div><div><a name="h3_bytevector->hex-string"></a><h3><code>(bytevector->hex-string bv)</code></h3></div><div><a name="h3_hex-string->bytevector"></a><h3><code>(hex-string->bytevector str)</code></h3></div></p><div id="footer"></div></div></body></html>

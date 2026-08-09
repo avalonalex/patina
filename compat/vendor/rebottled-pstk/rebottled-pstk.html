@@ -1,0 +1,1627 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"
+    "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<meta http-equiv="Content-Type" content="application/xhtml+xml; charset=UTF-8" />
+<meta name="generator" content="AsciiDoc 8.6.9" />
+<title>Documentation for PS/Tk</title>
+<style type="text/css">
+/*
+ * AsciiDoc 'volnitsky' theme for xhtml11 and html5 backends.
+ * Based on css from http://volnitsky.com, which was in turn based on default
+ * theme from AsciiDoc
+ *
+ * FIXME: The styling is still a bit rough in places.
+ *
+ */
+
+/* Default font. */
+body {
+  font-family: Georgia,"Times New Roman",Times,serif;
+}
+
+/* Title font. */
+h1, h2, h3, h4, h5, h6,
+div.title, caption.title,
+thead, p.table.header,
+#toctitle,
+#author, #revnumber, #revdate, #revremark,
+#footer {
+  font-family: Candara,Arial,sans-serif;
+}
+
+
+#toc a {
+    border-bottom: 1px dotted #999999;
+    color: #3A3A4D !important;
+    text-decoration: none !important;
+}
+#toc a:hover {
+    border-bottom: 1px solid #6D4100;
+    color: #6D4100 !important;
+    text-decoration: none !important;
+}
+a { color: #666688; text-decoration: none; border-bottom: 1px dotted #666688; }
+a:visited { color: #615FA0; border-bottom: 1px dotted #615FA0; }
+a:hover { color: #6D4100; border-bottom: 1px solid #6D4100; }
+
+em {
+  font-style: italic;
+  color: #444466;
+}
+
+strong {
+  font-weight: bold;
+  color: #444466;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: #666688;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+  letter-spacing:+0.15em;
+}
+
+h1, h2, h3 { border-bottom: 2px solid #ccd; }
+h2 { padding-top: 0.5em; }
+h3 { float: left; }
+h3 + * { clear: left; }
+
+div.sectionbody {
+  margin-left: 0;
+}
+
+hr {
+  border: 1px solid #444466;
+}
+
+p {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+ul, ol, li > p {
+  margin-top: 0;
+}
+
+pre {
+  padding: 0;
+  margin: 0;
+}
+
+#author {
+  color: #444466;
+  font-weight: bold;
+  font-size: 1.1em;
+}
+
+#footer {
+  font-size: small;
+  border-top: 2px solid silver;
+  padding-top: 0.5em;
+  margin-top: 4.0em;
+}
+
+#footer-text {
+  float: left;
+  padding-bottom: 0.5em;
+}
+
+#footer-badges {
+  float: right;
+  padding-bottom: 0.5em;
+}
+
+#preamble {
+  margin-top: 1.5em;
+  margin-bottom: 1.5em;
+}
+
+div.tableblock, div.imageblock, div.exampleblock, div.verseblock,
+div.quoteblock, div.literalblock, div.listingblock, div.sidebarblock,
+div.admonitionblock {
+  margin-top: 1.5em;
+  margin-bottom: 1.5em;
+}
+
+div.admonitionblock {
+  margin-top: 2.5em;
+  margin-bottom: 2.5em;
+}
+
+div.content { /* Block element content. */
+  padding: 0;
+}
+
+/* Block element titles. */
+div.title, caption.title {
+  color: #444466;
+  font-weight: bold;
+  text-align: left;
+  margin-top: 1.0em;
+  margin-bottom: 0.5em;
+}
+div.title + * {
+  margin-top: 0;
+}
+
+td div.title:first-child {
+  margin-top: 0.0em;
+}
+div.content div.title:first-child {
+  margin-top: 0.0em;
+}
+div.content + div.title {
+  margin-top: 0.0em;
+}
+
+div.sidebarblock > div.content {
+  background: #ffffee;
+  border: 1px solid silver;
+  padding: 0.5em;
+}
+
+div.listingblock > div.content {
+  border: 1px solid silver;
+  background: #f4f4f4;
+  padding: 0.5em;
+}
+
+div.quoteblock {
+  padding-left: 2.0em;
+  margin-right: 10%;
+}
+div.quoteblock > div.attribution {
+  padding-top: 0.5em;
+  text-align: right;
+}
+
+div.verseblock {
+  padding-left: 2.0em;
+  margin-right: 10%;
+}
+div.verseblock > pre.content {
+  font-family: inherit;
+}
+div.verseblock > div.attribution {
+  padding-top: 0.75em;
+  text-align: left;
+}
+/* DEPRECATED: Pre version 8.2.7 verse style literal block. */
+div.verseblock + div.attribution {
+  text-align: left;
+}
+
+div.admonitionblock .icon {
+  vertical-align: top;
+  font-size: 1.1em;
+  font-weight: bold;
+  text-decoration: underline;
+  color: #444466;
+  padding-right: 0.5em;
+}
+div.admonitionblock td.content {
+  padding-left: 0.5em;
+  border-left: 2px solid silver;
+}
+
+div.exampleblock > div.content {
+  border-left: 2px solid silver;
+  padding: 0.5em;
+}
+
+div.imageblock div.content { padding-left: 0; }
+span.image img { border-style: none; }
+a.image:visited { color: white; }
+
+dl {
+  margin-top: 0.8em;
+  margin-bottom: 0.8em;
+}
+dt {
+  margin-top: 0.5em;
+  margin-bottom: 0;
+  font-style: normal;
+  color: #444466;
+}
+dd > *:first-child {
+  margin-top: 0.1em;
+}
+
+ul, ol {
+    list-style-position: outside;
+}
+ol.arabic {
+  list-style-type: decimal;
+}
+ol.loweralpha {
+  list-style-type: lower-alpha;
+}
+ol.upperalpha {
+  list-style-type: upper-alpha;
+}
+ol.lowerroman {
+  list-style-type: lower-roman;
+}
+ol.upperroman {
+  list-style-type: upper-roman;
+}
+
+div.compact ul, div.compact ol,
+div.compact p, div.compact p,
+div.compact div, div.compact div {
+  margin-top: 0.1em;
+  margin-bottom: 0.1em;
+}
+
+div.tableblock > table {
+  border: 3px solid #444466;
+}
+thead {
+  font-weight: bold;
+  color: #444466;
+}
+tfoot {
+  font-weight: bold;
+}
+td > div.verse {
+  white-space: pre;
+}
+p.table {
+  margin-top: 0;
+}
+/* Because the table frame attribute is overriden by CSS in most browsers. */
+div.tableblock > table[frame="void"] {
+  border-style: none;
+}
+div.tableblock > table[frame="hsides"] {
+  border-left-style: none;
+  border-right-style: none;
+}
+div.tableblock > table[frame="vsides"] {
+  border-top-style: none;
+  border-bottom-style: none;
+}
+
+
+div.hdlist {
+  margin-top: 0.8em;
+  margin-bottom: 0.8em;
+}
+div.hdlist tr {
+  padding-bottom: 15px;
+}
+dt.hdlist1.strong, td.hdlist1.strong {
+  font-weight: bold;
+}
+td.hdlist1 {
+  vertical-align: top;
+  font-style: normal;
+  padding-right: 0.8em;
+  color: #444466;
+}
+td.hdlist2 {
+  vertical-align: top;
+}
+div.hdlist.compact tr {
+  margin: 0;
+  padding-bottom: 0;
+}
+
+.comment {
+  background: yellow;
+}
+
+@media print {
+  #footer-badges { display: none; }
+}
+
+#toctitle {
+  color: #666688;
+  font-size: 1.2em;
+  font-weight: bold;
+  margin-top: 1.0em;
+  margin-bottom: 0.1em;
+}
+
+div.toclevel1, div.toclevel2, div.toclevel3, div.toclevel4 { margin-top: 0; margin-bottom: 0; }
+div.toclevel1 { margin-top: 0.3em; margin-left: 0; font-size: 1.0em; }
+div.toclevel2 { margin-top: 0.25em; margin-left: 2em; font-size: 0.9em; }
+div.toclevel3 { margin-left: 4em; font-size: 0.8em; }
+div.toclevel4 { margin-left: 6em; font-size: 0.8em; }
+
+body {
+  margin: 1em 5%;
+  max-width:  55em;
+  padding-left: 0;
+
+}
+
+.monospaced, tt, div.listingblock > div.content {
+  font-family:  Consolas, "Andale Mono", "Courier New", monospace;
+  color: #004400;
+  background: #f4f4f4;
+  max-width: 80em;
+  line-height: 1.2em;
+}
+
+.paragraph p  {
+  line-height: 1.5em;
+  margin-top: 1em;
+}
+
+.paragraph p, li, dd, .content { max-width: 45em; }
+.admonitionblock               { max-width: 35em; }
+
+div.sectionbody div.ulist > ul > li {
+  list-style-type: square;
+  color: #aaa;
+}
+  div.sectionbody div.ulist >  ul > li > * {
+    color: black;
+    /*font-size: 50%;*/
+  }
+
+
+div.sectionbody div.ulist > ul > li div.ulist > ul > li {
+  color: #ccd ;
+}
+  div.sectionbody div.ulist > ul > li div.ulist > ul > li > * {
+    color: black ;
+  }
+
+em {
+  font-style: normal ! important;
+  font-weight: bold ! important;
+  color: #662222   ! important;
+  letter-spacing:+0.08em ! important;
+}
+
+
+/*
+ * html5 specific
+ *
+ * */
+
+table.tableblock {
+  margin-top: 1.0em;
+  margin-bottom: 1.5em;
+}
+thead, p.tableblock.header {
+  font-weight: bold;
+  color: #666688;
+}
+p.tableblock {
+  margin-top: 0;
+}
+table.tableblock {
+  border-width: 3px;
+  border-spacing: 0px;
+  border-style: solid;
+  border-color: #444466;
+  border-collapse: collapse;
+}
+th.tableblock, td.tableblock {
+  border-width: 1px;
+  padding: 4px;
+  border-style: solid;
+  border-color: #444466;
+}
+
+table.tableblock.frame-topbot {
+  border-left-style: hidden;
+  border-right-style: hidden;
+}
+table.tableblock.frame-sides {
+  border-top-style: hidden;
+  border-bottom-style: hidden;
+}
+table.tableblock.frame-none {
+  border-style: hidden;
+}
+
+th.tableblock.halign-left, td.tableblock.halign-left {
+  text-align: left;
+}
+th.tableblock.halign-center, td.tableblock.halign-center {
+  text-align: center;
+}
+th.tableblock.halign-right, td.tableblock.halign-right {
+  text-align: right;
+}
+
+th.tableblock.valign-top, td.tableblock.valign-top {
+  vertical-align: top;
+}
+th.tableblock.valign-middle, td.tableblock.valign-middle {
+  vertical-align: middle;
+}
+th.tableblock.valign-bottom, td.tableblock.valign-bottom {
+  vertical-align: bottom;
+}
+
+
+
+
+</style>
+<script type="text/javascript">
+/*<![CDATA[*/
+var asciidoc = {  // Namespace.
+
+/////////////////////////////////////////////////////////////////////
+// Table Of Contents generator
+/////////////////////////////////////////////////////////////////////
+
+/* Author: Mihai Bazon, September 2002
+ * http://students.infoiasi.ro/~mishoo
+ *
+ * Table Of Content generator
+ * Version: 0.4
+ *
+ * Feel free to use this script under the terms of the GNU General Public
+ * License, as long as you do not remove or alter this notice.
+ */
+
+ /* modified by Troy D. Hanson, September 2006. License: GPL */
+ /* modified by Stuart Rackham, 2006, 2009. License: GPL */
+
+// toclevels = 1..4.
+toc: function (toclevels) {
+
+  function getText(el) {
+    var text = "";
+    for (var i = el.firstChild; i != null; i = i.nextSibling) {
+      if (i.nodeType == 3 /* Node.TEXT_NODE */) // IE doesn't speak constants.
+        text += i.data;
+      else if (i.firstChild != null)
+        text += getText(i);
+    }
+    return text;
+  }
+
+  function TocEntry(el, text, toclevel) {
+    this.element = el;
+    this.text = text;
+    this.toclevel = toclevel;
+  }
+
+  function tocEntries(el, toclevels) {
+    var result = new Array;
+    var re = new RegExp('[hH]([1-'+(toclevels+1)+'])');
+    // Function that scans the DOM tree for header elements (the DOM2
+    // nodeIterator API would be a better technique but not supported by all
+    // browsers).
+    var iterate = function (el) {
+      for (var i = el.firstChild; i != null; i = i.nextSibling) {
+        if (i.nodeType == 1 /* Node.ELEMENT_NODE */) {
+          var mo = re.exec(i.tagName);
+          if (mo && (i.getAttribute("class") || i.getAttribute("className")) != "float") {
+            result[result.length] = new TocEntry(i, getText(i), mo[1]-1);
+          }
+          iterate(i);
+        }
+      }
+    }
+    iterate(el);
+    return result;
+  }
+
+  var toc = document.getElementById("toc");
+  if (!toc) {
+    return;
+  }
+
+  // Delete existing TOC entries in case we're reloading the TOC.
+  var tocEntriesToRemove = [];
+  var i;
+  for (i = 0; i < toc.childNodes.length; i++) {
+    var entry = toc.childNodes[i];
+    if (entry.nodeName.toLowerCase() == 'div'
+     && entry.getAttribute("class")
+     && entry.getAttribute("class").match(/^toclevel/))
+      tocEntriesToRemove.push(entry);
+  }
+  for (i = 0; i < tocEntriesToRemove.length; i++) {
+    toc.removeChild(tocEntriesToRemove[i]);
+  }
+
+  // Rebuild TOC entries.
+  var entries = tocEntries(document.getElementById("content"), toclevels);
+  for (var i = 0; i < entries.length; ++i) {
+    var entry = entries[i];
+    if (entry.element.id == "")
+      entry.element.id = "_toc_" + i;
+    var a = document.createElement("a");
+    a.href = "#" + entry.element.id;
+    a.appendChild(document.createTextNode(entry.text));
+    var div = document.createElement("div");
+    div.appendChild(a);
+    div.className = "toclevel" + entry.toclevel;
+    toc.appendChild(div);
+  }
+  if (entries.length == 0)
+    toc.parentNode.removeChild(toc);
+},
+
+
+/////////////////////////////////////////////////////////////////////
+// Footnotes generator
+/////////////////////////////////////////////////////////////////////
+
+/* Based on footnote generation code from:
+ * http://www.brandspankingnew.net/archive/2005/07/format_footnote.html
+ */
+
+footnotes: function () {
+  // Delete existing footnote entries in case we're reloading the footnodes.
+  var i;
+  var noteholder = document.getElementById("footnotes");
+  if (!noteholder) {
+    return;
+  }
+  var entriesToRemove = [];
+  for (i = 0; i < noteholder.childNodes.length; i++) {
+    var entry = noteholder.childNodes[i];
+    if (entry.nodeName.toLowerCase() == 'div' && entry.getAttribute("class") == "footnote")
+      entriesToRemove.push(entry);
+  }
+  for (i = 0; i < entriesToRemove.length; i++) {
+    noteholder.removeChild(entriesToRemove[i]);
+  }
+
+  // Rebuild footnote entries.
+  var cont = document.getElementById("content");
+  var spans = cont.getElementsByTagName("span");
+  var refs = {};
+  var n = 0;
+  for (i=0; i<spans.length; i++) {
+    if (spans[i].className == "footnote") {
+      n++;
+      var note = spans[i].getAttribute("data-note");
+      if (!note) {
+        // Use [\s\S] in place of . so multi-line matches work.
+        // Because JavaScript has no s (dotall) regex flag.
+        note = spans[i].innerHTML.match(/\s*\[([\s\S]*)]\s*/)[1];
+        spans[i].innerHTML =
+          "[<a id='_footnoteref_" + n + "' href='#_footnote_" + n +
+          "' title='View footnote' class='footnote'>" + n + "</a>]";
+        spans[i].setAttribute("data-note", note);
+      }
+      noteholder.innerHTML +=
+        "<div class='footnote' id='_footnote_" + n + "'>" +
+        "<a href='#_footnoteref_" + n + "' title='Return to text'>" +
+        n + "</a>. " + note + "</div>";
+      var id =spans[i].getAttribute("id");
+      if (id != null) refs["#"+id] = n;
+    }
+  }
+  if (n == 0)
+    noteholder.parentNode.removeChild(noteholder);
+  else {
+    // Process footnoterefs.
+    for (i=0; i<spans.length; i++) {
+      if (spans[i].className == "footnoteref") {
+        var href = spans[i].getElementsByTagName("a")[0].getAttribute("href");
+        href = href.match(/#.*/)[0];  // Because IE return full URL.
+        n = refs[href];
+        spans[i].innerHTML =
+          "[<a href='#_footnote_" + n +
+          "' title='View footnote' class='footnote'>" + n + "</a>]";
+      }
+    }
+  }
+},
+
+install: function(toclevels) {
+  var timerId;
+
+  function reinstall() {
+    asciidoc.footnotes();
+    if (toclevels) {
+      asciidoc.toc(toclevels);
+    }
+  }
+
+  function reinstallAndRemoveTimer() {
+    clearInterval(timerId);
+    reinstall();
+  }
+
+  timerId = setInterval(reinstall, 500);
+  if (document.addEventListener)
+    document.addEventListener("DOMContentLoaded", reinstallAndRemoveTimer, false);
+  else
+    window.onload = reinstallAndRemoveTimer;
+}
+
+}
+asciidoc.install(2);
+/*]]>*/
+</script>
+</head>
+<body class="article">
+<div id="header">
+<h1>Documentation for PS/Tk</h1>
+<div id="toc">
+  <div id="toctitle">Table of Contents</div>
+  <noscript><p><b>JavaScript must be enabled in your browser to display the table of contents.</b></p></noscript>
+</div>
+</div>
+<div id="content">
+<div id="preamble">
+<div class="sectionbody">
+<div class="paragraph"><p>For more information including compatibility, examples and test cases,
+see <a href="https://github.com/petercrlane/r7rs-libs">https://github.com/petercrlane/r7rs-libs</a></p></div>
+</div>
+</div>
+<div class="sect1">
+<h2 id="_ps_tk_tk_graphical_user_interface_toolkit">1. PS/Tk: Tk Graphical User Interface Toolkit</h2>
+<div class="sectionbody">
+<div class="paragraph"><p>To use the library: <code>(import (rebottled pstk))</code></p></div>
+<div class="paragraph"><p>The PS/Tk library enables a Scheme program to interact with Tk, to create
+cross-platform graphical user interfaces.  Virtually all of Tcl/Tk is available
+through Scheme.  Other examples of using Tk in this way include
+<a href="http://www.peter-herth.de/ltk/">LTk</a> from Lisp,
+<a href="https://wiki.python.org/moin/TkInter">Tkinter</a> from Python,
+Perl/Tk and Ruby/Tk.</p></div>
+<div class="paragraph"><p></p></div>
+<div class="paragraph"><p>PS/Tk must communicate with the separate Tcl/Tk program, a process managed in
+an implementation-specific manner.  The current R7RS version of PS/Tk has
+support for, and has been tested on, the following:</p></div>
+<div class="ulist"><ul>
+<li>
+<p>
+Chibi Scheme: under Linux (calls to "/bin/sh")
+</p>
+</li>
+<li>
+<p>
+Gauche Scheme: under Linux (calls to "/bin/sh")
+</p>
+</li>
+<li>
+<p>
+Sagittarius Scheme: under Linux and Windows.  (Should work on Mac OS too.)
+</p>
+</li>
+</ul></div>
+<div class="paragraph"><p>Further Scheme versions or platforms can be added by extending the
+<code>cond-expand</code> statement in the source code.</p></div>
+<div class="paragraph"><p>For more information:</p></div>
+<div class="ulist"><ul>
+<li>
+<p>
+Several small examples of using the library are available from
+  <a href="https://github.com/petercrlane/r7rs-libs/tree/master/rebottled-examples/pstk">a
+  github repository</a>.
+</p>
+</li>
+<li>
+<p>
+Some notes on using PS/Tk with Sagittarius Scheme on Linux and Windows:
+  <a href="http://peterlane.info/notes/gui-programs-with-sagittarius-scheme.html">http://peterlane.info/notes/gui-programs-with-sagittarius-scheme.html</a>
+</p>
+</li>
+<li>
+<p>
+Documentation about Tk: <a href="https://www.tcl.tk/man/tcl8.6/TkCmd/contents.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/contents.htm</a>
+</p>
+</li>
+<li>
+<p>
+Some documentation on using Tk from various languages: <a href="http://www.tkdocs.com/">http://www.tkdocs.com/</a>
+</p>
+</li>
+</ul></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/pstk-win.jpg" alt="http://peterlane.info/images/pstk-win.jpg" width="500" />
+</div>
+</div>
+<div class="sect2">
+<h3 id="_simple_example">1.1. Simple Example</h3>
+<div class="paragraph"><p>Get started with the following program:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>import <span style="color: #FF0000">(</span>scheme base<span style="color: #FF0000">)</span>
+        <span style="color: #FF0000">(</span>scheme write<span style="color: #FF0000">)</span>
+        <span style="color: #FF0000">(</span>rebottled pstk<span style="color: #FF0000">))</span>
+
+<span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">let</span></span> <span style="color: #FF0000">((</span>tk <span style="color: #FF0000">(</span>tk-start<span style="color: #FF0000">)))</span>                                                  <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;1&gt;</b></span></span>
+  <span style="color: #FF0000">(</span>tk/pack <span style="color: #FF0000">(</span>tk 'create-widget                                           <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;2&gt;</b></span></span>
+               'button 'text: <span style="color: #FF0000">"Hello"</span>
+               'command: <span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">lambda</span></span> <span style="color: #FF0000">()</span> <span style="color: #FF0000">(</span>display <span style="color: #FF0000">"Hello world"</span><span style="color: #FF0000">)</span> <span style="color: #FF0000">(</span>newline<span style="color: #FF0000">)))</span> <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;3&gt;</b></span></span>
+           'padx: <span style="color: #993399">20</span> 'pady: <span style="color: #993399">20</span><span style="color: #FF0000">)</span>
+  <span style="color: #FF0000">(</span>tk-event-loop tk<span style="color: #FF0000">))</span>                                                   <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;4&gt;</b></span></span></tt></pre></div></div>
+<div class="colist arabic"><ol>
+<li>
+<p>
+Starts the TK shell working.  The returned value is used to interact with the shell.
+</p>
+</li>
+<li>
+<p>
+Creates a button with a label and command, and packs it onto the default frame.
+</p>
+</li>
+<li>
+<p>
+Commands are given as Scheme functions of zero arguments.
+</p>
+</li>
+<li>
+<p>
+Starts the TK event loop.
+</p>
+</li>
+</ol></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/pstk-hello.png" alt="http://peterlane.info/images/pstk-hello.png" width="100" />
+</div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_working_with_widgets">1.2. Working with Widgets</h3>
+<div class="paragraph"><p>The example above shows how widgets are created by sending instructions to the Tk process.
+The manner of operation is very close to, but a little different to that used in Tcl/Tk itself.
+In this section, some descriptions and examples are given to help in translating the Tcl/Tk
+documentation into Scheme.</p></div>
+<div class="paragraph"><p>In Tk, widgets are created using appropriately named functions, providing a name for the new
+widget as a string.  Tk parses this string to work out the parent widget and provide some
+structure.  In PS/Tk we instead represent widgets as functions; these functions take a
+<em>command</em> and associated arguments.  Commands that the widgets respond to include:</p></div>
+<div class="ulist"><ul>
+<li>
+<p>
+get-id: returns the Tk id
+</p>
+</li>
+<li>
+<p>
+create-widget: used to create a child widget
+</p>
+</li>
+<li>
+<p>
+configure: used to alter parameters of a widget
+</p>
+</li>
+<li>
+<p>
+cget: returns value of a configuration option
+</p>
+</li>
+</ul></div>
+<div class="paragraph"><p>For example, having created a button, we can later change the displayed text using <code>configure</code>,
+or retrieve the text using <code>cget</code>:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>hello 'configure 'text: <span style="color: #FF0000">"Goodbye"</span><span style="color: #FF0000">)</span>
+<span style="color: #FF0000">()</span>
+sash&gt; <span style="color: #FF0000">(</span>hello 'cget 'text:<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"Goodbye"</span></tt></pre></div></div>
+<div class="paragraph"><p>Apart from representing widgets as functions, most of the Tk parameters and functions
+map across into Scheme.  Consider the Tcl/Tk equivalent of the example program above:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>button <span style="color: #990000">.</span>hello <span style="color: #990000">-</span>text Hello <span style="color: #990000">-</span>command <span style="color: #FF0000">{</span><span style="font-weight: bold"><span style="color: #0000FF">puts</span></span> stdout <span style="color: #FF0000">"Hello world"</span><span style="color: #FF0000">}</span>
+pack <span style="color: #990000">.</span>hello <span style="color: #990000">-</span>padx <span style="color: #993399">20</span> <span style="color: #990000">-</span>pady <span style="color: #993399">20</span></tt></pre></div></div>
+<div class="paragraph"><p>The first line creates a widget named ".hello".  The "." means it is attached to the top-most
+frame.  The widget is referred to in the second line, which packs the widget into the frame.</p></div>
+<div class="paragraph"><p>Comparing the second line with the Scheme program illustrates how direct most conversions
+can be:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>pack <span style="color: #990000">&lt;</span>widget<span style="color: #990000">-</span>name<span style="color: #990000">&gt;</span> <span style="color: #990000">-</span>padx <span style="color: #993399">20</span> <span style="color: #990000">-</span>pady <span style="color: #993399">20</span></tt></pre></div></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>tk/pack &lt;widget-value&gt; 'padx: <span style="color: #993399">20</span> 'pady: <span style="color: #993399">20</span><span style="color: #FF0000">)</span></tt></pre></div></div>
+<div class="paragraph"><p>Notice these three principles:</p></div>
+<div class="olist arabic"><ol class="arabic">
+<li>
+<p>
+Instead of a string for the widget name, we have what is returned by creating the
+  widget (a function); for the top-most frame ("." in tcl/tk) we have the return value
+  of <code>tk-start</code> (called <code>tk</code> here).
+</p>
+</li>
+<li>
+<p>
+The parameters <code>-padx</code> are converted to symbols with a trailing colon <code>'padx:</code>
+</p>
+</li>
+<li>
+<p>
+The function name <code>pack</code> becomes <code>tk/pack</code>
+</p>
+</li>
+</ol></div>
+<div class="paragraph"><p>In addition, Scheme values are converted to Tcl values.  So Scheme&#8217;s #t/#f are
+Tcl&#8217;s "1"/"0", symbols can be used in place of strings, etc.</p></div>
+<div class="paragraph"><p>Creating a widget is done through the <code>create-widget</code> command mentioned above:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>button <span style="color: #990000">.</span>hello <span style="color: #990000">-</span>text Hello <span style="color: #990000">-</span>command <span style="color: #FF0000">{</span><span style="font-weight: bold"><span style="color: #0000FF">puts</span></span> stdout <span style="color: #FF0000">"Hello world"</span><span style="color: #FF0000">}</span></tt></pre></div></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">define</span></span> <span style="font-weight: bold"><span style="color: #000000">hello</span></span>
+  <span style="color: #FF0000">(</span>tk 'create-widget 'button
+      'text: <span style="color: #FF0000">"Hello"</span>
+      'command: <span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">lambda</span></span> <span style="color: #FF0000">()</span> <span style="color: #FF0000">(</span>display <span style="color: #FF0000">"Hello world"</span><span style="color: #FF0000">)</span> <span style="color: #FF0000">(</span>newline<span style="color: #FF0000">))))</span></tt></pre></div></div>
+<div class="paragraph"><p>Instead of calling a <code>button</code> function, as in Tcl, the parent widget&#8217;s function
+is requested to create a button widget.  The parameters defining the button are
+the same as in the Tcl example, just mapped to Scheme equivalents.  This call
+returns a function defining the new button, which we can name in a Scheme
+variable.</p></div>
+<div class="paragraph"><p>Notice how the command <code>'create-widget</code> is passed as a symbol without a
+trailing colon; compare with how the parameter <code>'text:</code> is given.</p></div>
+<div class="paragraph"><p>This use of symbols as commands arises elsewhere, for example with <code>winfo</code>:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>winfo screenwidth <span style="color: #990000">.</span>           <span style="font-style: italic"><span style="color: #9A1900"># TCL version</span></span></tt></pre></div></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>tk/winfo 'screenwidth tk<span style="color: #FF0000">)</span>    <span style="font-style: italic"><span style="color: #9A1900">; Scheme version</span></span></tt></pre></div></div>
+<div class="paragraph"><p>All the Tk widgets can be created and used in this way.  For a list of
+available widgets see any Tk documentation or
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/contents.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/contents.htm</a>.</p></div>
+</div>
+<div class="sect2">
+<h3 id="_tk_functions">1.3. Tk Functions</h3>
+<div class="paragraph"><p>These functions map directly onto underlying Tk functions.  The names start <code>tk/</code>
+with the remainder of the name mapping onto the Tk equivalent function:</p></div>
+<div class="ulist"><ul>
+<li>
+<p>
+<code>tk/bell</code> is equivalent to Tk&#8217;s <code>bell</code>
+</p>
+</li>
+<li>
+<p>
+<code>tk/choose-color</code> is equivalent to Tk&#8217;s <code>tk_chooseColor</code>
+</p>
+</li>
+</ul></div>
+<div class="sect3">
+<h4 id="_code_tk_after_code">1.3.1. <code>tk/after</code></h4>
+<div class="paragraph"><p><code>tk/after</code> takes a time in milliseconds and an optional function.  After the
+given time, it calls the function or continues processing.</p></div>
+<div class="paragraph"><p>In the analogue clock example, the function to redraw the hands in the clock uses <code>tk/after</code>
+to delay for a second before calling itself to draw the hands in the new position and repeating.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">define</span></span> <span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #000000">hands</span></span> canvas<span style="color: #FF0000">)</span>
+
+  <span style="font-style: italic"><span style="color: #9A1900">; code to redraw the clock</span></span>
+
+  <span style="color: #FF0000">(</span>tk/after <span style="color: #993399">1000</span> <span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">lambda</span></span> <span style="color: #FF0000">()</span> <span style="color: #FF0000">(</span>hands canvas<span style="color: #FF0000">))))</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_appname_code">1.3.2. <code>tk/appname</code></h4>
+<div class="paragraph"><p><code>tk/appname</code> gets or sets the application name.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/appname<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"tclsh"</span>
+sash&gt; <span style="color: #FF0000">(</span>tk/appname <span style="color: #FF0000">"new name set"</span><span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"new name set"</span>
+sash&gt; <span style="color: #FF0000">(</span>tk/appname<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"new name set"</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_bell_code">1.3.3. <code>tk/bell</code></h4>
+<div class="paragraph"><p><code>tk/bell</code> rings the bell.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_bgerror_code">1.3.4. <code>tk/bgerror</code></h4>
+<div class="paragraph"><p><code>tk/bgerror</code> is used to tell the Tcl process that an error has occurred.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_bind_code">1.3.5. <code>tk/bind</code></h4>
+<div class="paragraph"><p><code>tk/bind</code> binds actions to events.  For example, a function can be called
+when a mouse button is clicked, or a key pressed.  First argument is a window, or the symbol
+<code>all</code>; second argument is the pattern for the event to bind to; and third argument is
+the function to call.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>tk/bind 'all <span style="color: #FF0000">"&lt;Button-1&gt;"</span> `<span style="color: #FF0000">(</span>,<span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">lambda</span></span> <span style="color: #FF0000">(</span>x<span style="color: #FF0000">)</span> <span style="color: #FF0000">(</span>display x<span style="color: #FF0000">)</span> <span style="color: #FF0000">(</span>newline<span style="color: #FF0000">)</span> <span style="color: #009900">#f</span><span style="color: #FF0000">)</span> %x<span style="color: #FF0000">))</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_bindtags_code">1.3.6. <code>tk/bindtags</code></h4>
+<div class="paragraph"><p><code>tk/bindtags</code> gets or sets the binding tags of a given window.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_caret_code">1.3.7. <code>tk/caret</code></h4>
+<div class="paragraph"><p><code>tk/caret</code> is used to query or set the current caret position in a given window.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/caret tk<span style="color: #FF0000">)</span>                            <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;1&gt;</b></span></span>
+<span style="color: #FF0000">"-height 0 -x 0 -y 0"</span>
+sash&gt; <span style="color: #FF0000">(</span>tk/caret tk 'height: <span style="color: #993399">10</span> 'x: <span style="color: #993399">2</span> 'y: <span style="color: #993399">3</span><span style="color: #FF0000">)</span>    <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;2&gt;</b></span></span>
+<span style="color: #FF0000">""</span></tt></pre></div></div>
+<div class="colist arabic"><ol>
+<li>
+<p>
+<code>tk</code> refers to the default, or top-most window, as it is the value returned by <code>tk-start</code>.
+</p>
+</li>
+<li>
+<p>
+Sets the height or x/y position of the caret in the given window.
+</p>
+</li>
+</ol></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_choose_color_code">1.3.8. <code>tk/choose-color</code></h4>
+<div class="paragraph"><p><code>tk/choose-color</code> opens a dialog from which to select a colour.  Returns the
+RGB code of the selected colour, or "" if cancel is clicked.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/choose-color<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"#7ce679"</span></tt></pre></div></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/color-chooser.png" alt="http://peterlane.info/images/color-chooser.png" width="300" />
+</div>
+</div>
+<div class="paragraph"><p>Optional parameters let you select the <code>initialcolor</code> <code>parent</code> and <code>title</code>.
+See the Tk documentation for details:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/chooseColor.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/chooseColor.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_choose_directory_code">1.3.9. <code>tk/choose-directory</code></h4>
+<div class="paragraph"><p><code>tk/choose-directory</code> opens a dialog from which to select a directory.
+Returns the directory name as a string or "" if cancel is clicked.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/choose-directory<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"/home/peter/Software/r7rs-libs"</span></tt></pre></div></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/directory-chooser.png" alt="http://peterlane.info/images/directory-chooser.png" width="300" />
+</div>
+</div>
+<div class="paragraph"><p>Optional parameters let you select the <code>initialdir</code> <code>parent</code> <code>title</code> and
+whether the chosen directory must exist.  See the Tk documentation for details:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/chooseDirectory.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/chooseDirectory.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_clipboard_code">1.3.10. <code>tk/clipboard</code></h4>
+<div class="paragraph"><p><code>tk/clipboard</code> provides access to the clipboard, with its parameter
+specifying an action: <code>append</code> <code>clear</code> <code>get</code></p></div>
+<div class="paragraph"><p>See Tk documentation for details: <a href="https://www.tcl.tk/man/tcl8.6/TkCmd/clipboard.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/clipboard.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_destroy_code">1.3.11. <code>tk/destroy</code></h4>
+<div class="paragraph"><p><code>tk/destroy</code> deletes the window or windows given as arguments.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_event_code">1.3.12. <code>tk/event</code></h4>
+<div class="paragraph"><p><code>tk/event</code> is used to create and manage events.</p></div>
+<div class="paragraph"><p>See the Tk documentation for details: <a href="https://www.tcl.tk/man/tcl8.6/TkCmd/event.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/event.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_focus_code">1.3.13. <code>tk/focus</code></h4>
+<div class="paragraph"><p><code>tk/focus</code> manages the input focus.</p></div>
+<div class="paragraph"><p>See the Tk documentation for details:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/focus.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/focus.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_focus_follows_mouse_code">1.3.14. <code>tk/focus-follows-mouse</code></h4>
+<div class="paragraph"><p><code>tk/focus-follows-mouse</code> changes the focus status so it follows the mouse
+rather than changes with a click.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_focus_next_code">1.3.15. <code>tk/focus-next</code></h4>
+<div class="paragraph"><p><code>tk/focus-next</code> returns the next window from the given window, in the focus
+order.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_focus_prev_code">1.3.16. <code>tk/focus-prev</code></h4>
+<div class="paragraph"><p><code>tk/focus-prev</code> returns the previous window from the given window, in the
+focus order.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_get_open_file_code">1.3.17. <code>tk/get-open-file</code></h4>
+<div class="paragraph"><p><code>tk/get-open-file</code> opens a dialog from which the user can select
+a file.  Returns the file path in a string or "" if cancel is clicked.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/get-open-file<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"/home/peter/Software/r7rs-libs/rebottled-examples/pstk/example-menu.sps"</span></tt></pre></div></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/pstk-open-file-chooser.png" alt="http://peterlane.info/images/pstk-open-file-chooser.png" width="300" />
+</div>
+</div>
+<div class="paragraph"><p>Optional parameters let you select the <code>initialdir</code> <code>parent</code> <code>title</code> <code>filetypes</code> etc.
+See the Tk documentation for details:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/getOpenFile.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/getOpenFile.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_get_save_file_code">1.3.18. <code>tk/get-save-file</code></h4>
+<div class="paragraph"><p><code>tk/get-save-file</code> opens a dialog from which the user can select
+a file.  Returns the file path in a string or "" if cancel is clicked.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/get-save-file<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"/home/peter/Software/r7rs-libs/rebottled-examples/pstk/newfile.txt"</span></tt></pre></div></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/pstk-save-file-chooser.png" alt="http://peterlane.info/images/pstk-save-file-chooser.png" width="300" />
+</div>
+</div>
+<div class="paragraph"><p>Optional parameters let you select the <code>initialdir</code> <code>parent</code> <code>title</code> <code>filetypes</code> etc.
+See the Tk documentation for details:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/getSaveFile.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/getSaveFile.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_grab_code">1.3.19. <code>tk/grab</code></h4>
+<div class="paragraph"><p><code>tk/grab</code> provides a way to redirect mouse or keyboard events to specific
+windows.</p></div>
+<div class="paragraph"><p>See Tk documentation for details:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/grab.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/grab.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_grid_code">1.3.20. <code>tk/grid</code></h4>
+<div class="paragraph"><p><code>tk/grid</code> is the first of three techniques used to place widgets within a frame.
+This geometry manager is probably the most important of the three, and can be used to arrange
+widgets by row and column.</p></div>
+<div class="paragraph"><p>The following sample, taken from the example "example-temp-conversion.sps" illustrates some of
+the possibilities:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>  <span style="color: #FF0000">(</span>tk/grid celsius 'column: <span style="color: #993399">2</span> 'row: <span style="color: #993399">1</span> 'sticky: 'we 'padx: <span style="color: #993399">5</span> 'pady: <span style="color: #993399">5</span><span style="color: #FF0000">)</span> <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;1&gt;</b></span></span>
+  <span style="color: #FF0000">(</span>tk/grid label 'column: <span style="color: #993399">2</span> 'row: <span style="color: #993399">2</span> 'sticky: 'we 'padx: <span style="color: #993399">5</span> 'pady: <span style="color: #993399">5</span><span style="color: #FF0000">)</span>   <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;2&gt;</b></span></span>
+  <span style="color: #FF0000">(</span>tk/grid button 'column: <span style="color: #993399">2</span> 'row: <span style="color: #993399">3</span> 'sticky: 'we 'padx: <span style="color: #993399">5</span> 'pady: <span style="color: #993399">5</span><span style="color: #FF0000">)</span>
+  <span style="color: #FF0000">(</span>tk/grid <span style="color: #FF0000">(</span>tk 'create-widget 'label 'text: <span style="color: #FF0000">"celsius"</span><span style="color: #FF0000">)</span>
+           'column: <span style="color: #993399">3</span> 'row: <span style="color: #993399">1</span> 'sticky: 'w 'padx: <span style="color: #993399">5</span> 'pady: <span style="color: #993399">5</span><span style="color: #FF0000">)</span>          <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;3&gt;</b></span></span>
+  <span style="color: #FF0000">(</span>tk/grid <span style="color: #FF0000">(</span>tk 'create-widget 'label 'text: <span style="color: #FF0000">"is"</span><span style="color: #FF0000">)</span>
+           'column: <span style="color: #993399">1</span> 'row: <span style="color: #993399">2</span> 'sticky: 'e 'padx: <span style="color: #993399">5</span> 'pady: <span style="color: #993399">5</span><span style="color: #FF0000">)</span>          <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;4&gt;</b></span></span>
+  <span style="color: #FF0000">(</span>tk/grid <span style="color: #FF0000">(</span>tk 'create-widget 'label 'text: <span style="color: #FF0000">"fahrenheit"</span><span style="color: #FF0000">)</span>
+           'column: <span style="color: #993399">3</span> 'row: <span style="color: #993399">2</span> 'sticky: 'w 'padx: <span style="color: #993399">5</span> 'pady: <span style="color: #993399">5</span><span style="color: #FF0000">)</span></tt></pre></div></div>
+<div class="colist arabic"><ol>
+<li>
+<p>
+Places the <code>celsius</code> widget in row 1, column 2.  The <code>sticky</code> option means the widget
+    will fill the space in the horizontal direction.  The <code>pad</code> options place some space
+    around the widget.  Note, rows and columns are indexed from 1.
+</p>
+</li>
+<li>
+<p>
+Similarly, the <code>label</code> is placed in column 2 row 2.
+</p>
+</li>
+<li>
+<p>
+This option only has <code>w</code> for the <code>sticky</code> option: the text label is left-justified.
+</p>
+</li>
+<li>
+<p>
+With the <code>e</code> option for <code>sticky</code>, this label is right-justified.
+</p>
+</li>
+</ol></div>
+<div class="paragraph"><p>The final layout is:</p></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/pstk-temp.png" alt="http://peterlane.info/images/pstk-temp.png" width="200" />
+</div>
+</div>
+<div class="paragraph"><p>For more of the many options, see: <a href="https://www.tcl.tk/man/tcl8.6/TkCmd/grid.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/grid.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_image_code">1.3.21. <code>tk/image</code></h4>
+<div class="paragraph"><p><code>tk/image</code> used to create, delete and query images.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">define</span></span> <span style="font-weight: bold"><span style="color: #000000">im</span></span> <span style="color: #FF0000">(</span>tk/image 'create 'photo 'file: <span style="color: #FF0000">"doc/pstk-hello.png"</span><span style="color: #FF0000">))</span>  <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;1&gt;</b></span></span>
+#&lt;unspecified&gt;
+sash&gt; <span style="color: #FF0000">(</span>tk/pack <span style="color: #FF0000">(</span>tk 'create-widget 'label 'image: im<span style="color: #FF0000">))</span>                    <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;2&gt;</b></span></span>
+<span style="color: #FF0000">""</span></tt></pre></div></div>
+<div class="colist arabic"><ol>
+<li>
+<p>
+Loads an image from a file.  The type should be <code>photo</code> or <code>bitmap</code>.
+</p>
+</li>
+<li>
+<p>
+Puts the image onto a label in the current frame.
+</p>
+</li>
+</ol></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/pstk-image.png" alt="http://peterlane.info/images/pstk-image.png" width="100" />
+</div>
+</div>
+<div class="paragraph"><p>See the Tk documentation for more details:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/image.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/image.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_lower_code">1.3.22. <code>tk/lower</code></h4>
+<div class="paragraph"><p><code>tk/lower</code> lowers the given window below all its siblings in the current stacking order.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_message_box_code">1.3.23. <code>tk/message-box</code></h4>
+<div class="paragraph"><p><code>tk/message-box</code> displays a Tk message box.  These dialogs can be straightforward
+or display a range of options and an icon.</p></div>
+<div class="paragraph"><p>The simplest information box shows a given message, and adds an "OK" button:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/message-box 'message: <span style="color: #FF0000">"Hello"</span><span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"ok"</span>                                        <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;1&gt;</b></span></span></tt></pre></div></div>
+<div class="colist arabic"><ol>
+<li>
+<p>
+The function returns the string label of the clicked button.
+</p>
+</li>
+</ol></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/pstk-box1.png" alt="http://peterlane.info/images/pstk-box1.png" width="100" />
+</div>
+</div>
+<div class="paragraph"><p>We can also add a title to the box, and select an icon from one of: <code>(error info question warning)</code>
+The type of box specifies the buttons.  The choices are:</p></div>
+<div class="ulist"><ul>
+<li>
+<p>
+"abortretryignore" - which displays three buttons, "abort" "retry" "ignore"
+</p>
+</li>
+<li>
+<p>
+"ok" - which displays one button "ok"
+</p>
+</li>
+<li>
+<p>
+"okcancel" - which displays two buttons "ok" or "cancel"
+</p>
+</li>
+<li>
+<p>
+"retrycancel"
+</p>
+</li>
+<li>
+<p>
+"yesno"
+</p>
+</li>
+<li>
+<p>
+"yesnocancel"
+</p>
+</li>
+</ul></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/message-box 'title: <span style="color: #FF0000">"Error on opening file"</span> 'icon: 'question 'message: <span style="color: #FF0000">"What to do now?"</span> 'type: <span style="color: #FF0000">"abortretryignore"</span><span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"ignore"</span>
+sash&gt; <span style="color: #FF0000">(</span>tk/message-box 'title: <span style="color: #FF0000">"Error on opening file"</span> 'icon: 'question 'message: <span style="color: #FF0000">"What to do now?"</span> 'type: <span style="color: #FF0000">"abortretryignore"</span><span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"abort"</span></tt></pre></div></div>
+<div class="imageblock">
+<div class="content">
+<img src="http://peterlane.info/images/pstk-box2.png" alt="http://peterlane.info/images/pstk-box2.png" width="200" />
+</div>
+</div>
+<div class="paragraph"><p>For a full set of options, see the Tk documentation: <a href="https://www.tcl.tk/man/tcl8.6/TkCmd/messageBox.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/messageBox.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_option_code">1.3.24. <code>tk/option</code></h4>
+<div class="paragraph"><p><code>tk/option</code> is used to add or retrieve window options to or from the option database.</p></div>
+<div class="paragraph"><p>For details see the Tk documentation: <a href="https://www.tcl.tk/man/tcl8.6/TkCmd/option.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/option.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_pack_code">1.3.25. <code>tk/pack</code></h4>
+<div class="paragraph"><p><code>tk/pack</code> is the second of three techniques used to place widgets within a frame.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>tk/pack command ...<span style="color: #FF0000">)</span></tt></pre></div></div>
+<div class="paragraph"><p>The tk <code>pack</code> command takes a number of options to control the order and
+spacing of widgets placed within a frame.  For the Tk documentation, see:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/pack.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/pack.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_place_code">1.3.26. <code>tk/place</code></h4>
+<div class="paragraph"><p><code>tk/place</code> is the third of three techniques used to place widgets within a frame.
+It provides a way to place widgets at specific coordinates.  For the Tk documentation, see:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/place.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/place.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_popup_code">1.3.27. <code>tk/popup</code></h4>
+<div class="paragraph"><p><code>tk/popup</code> takes three arguments, a menu and x/y coordinates.  The function
+pops up a menu at the given position.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_raise_code">1.3.28. <code>tk/raise</code></h4>
+<div class="paragraph"><p><code>tk/raise</code> raises the given window above its siblings in the current stacking order.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_scaling_code">1.3.29. <code>tk/scaling</code></h4>
+<div class="paragraph"><p><code>tk/scaling</code> is used to get or set the number of pixels per point on a display.  An
+optional <code>displayof</code> argument is used to specify a window.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/scaling<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"1.3333333333333333"</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_selection_code">1.3.30. <code>tk/selection</code></h4>
+<div class="paragraph"><p><code>tk/selection</code> provides access to the X selection (e.g. text highlighted with the mouse).</p></div>
+<div class="paragraph"><p>In the following image, the text "get-save" was highlighted with the mouse, and returned by calling
+the function with the symbol <code>'get</code>:</p></div>
+<div class="paragraph"><p><span class="image">
+<img src="http://peterlane.info/images/pstk-selection.png" alt="http://peterlane.info/images/pstk-selection.png" width="150" />
+</span></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_update_code">1.3.31. <code>tk/update</code></h4>
+<div class="paragraph"><p><code>tk/update</code> updates any pending events - "Use with extreme care" (Nils Holm)</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_useinputmethods_code">1.3.32. <code>tk/useinputmethods</code></h4>
+<div class="paragraph"><p><code>tk/useinputmethods</code> is used for XIM filtering.
+According to the <a href="http://wiki.tcl.tk/8695">Tcl wiki</a>, this is useful in some locales, such as
+Japanese or Korean, to use particular input devices.  This only works under X.</p></div>
+<div class="listingblock">
+<div class="content">
+<pre><code>(tk/useinputmethods ['displayof: window] [boolean])</code></pre>
+</div></div>
+<div class="paragraph"><p>For querying:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/useinputmethods<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"1"</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_wait_code">1.3.33. <code>tk/wait</code></h4>
+<div class="paragraph"><p><code>tk/wait</code> is a general-purpose wait function, where the arguments
+specify events to wait for.  In case of visibility/window types,
+<code>tk-wait-for-window</code> and <code>tk-wait-until-visible</code> are better choices.  This
+function can also wait for changes to variables.</p></div>
+<div class="paragraph"><p>See the Tk documentation for details:
+<a href="https://www.tcl.tk/man/tcl8.6/TkCmd/tkwait.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/tkwait.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_windowingsystem_code">1.3.34. <code>tk/windowingsystem</code></h4>
+<div class="paragraph"><p><code>tk/windowingsystem</code> returns a string naming the underlying window system.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/windowingsystem<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"x11"</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_winfo_code">1.3.35. <code>tk/winfo</code></h4>
+<div class="paragraph"><p><code>tk/winfo</code> is used to find out information about windows currently being
+managed by tk.  For example, the screen width and height can be found using:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/winfo 'screenwidth tk<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"1920"</span>                                    <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;1&gt;</b></span></span>
+sash&gt; <span style="color: #FF0000">(</span>tk/winfo 'screenheight tk<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"1080"</span></tt></pre></div></div>
+<div class="colist arabic"><ol>
+<li>
+<p>
+The values are returned as <em>strings</em>, use <code>string&#8594;number</code> to convert to numbers.
+</p>
+</li>
+</ol></div>
+<div class="paragraph"><p>Similarly, information about a named window:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk/winfo 'x tk<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"860"</span>
+sash&gt; <span style="color: #FF0000">(</span>tk/winfo 'y tk<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">"464"</span></tt></pre></div></div>
+<div class="paragraph"><p>There are many kinds of information that may be queried.  For a full list, see the
+Tk documentation: <a href="https://www.tcl.tk/man/tcl8.6/TkCmd/winfo.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/winfo.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_wm_code">1.3.36. <code>tk/wm</code></h4>
+<div class="paragraph"><p><code>tk/wm</code> is used to communicate with the Window Manager of the operating system.
+A simple use is to set the title of the top-most window:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>  <span style="color: #FF0000">(</span>tk/wm 'title tk <span style="color: #FF0000">"GMT Clock"</span><span style="color: #FF0000">)</span></tt></pre></div></div>
+<div class="paragraph"><p>More complex uses include fixing a window&#8217;s size, specifying an operating-system-specific window
+type or setting an icon.
+For the Tk documentation, see: <a href="https://www.tcl.tk/man/tcl8.6/TkCmd/wm.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/wm.htm</a></p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_ttk_available_themes_code">1.3.37. <code>ttk/available-themes</code></h4>
+<div class="paragraph"><p><code>ttk/available-themes</code> returns a list of the available themes.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">define</span></span> <span style="font-weight: bold"><span style="color: #000000">tk</span></span> <span style="color: #FF0000">(</span>tk-start<span style="color: #FF0000">))</span>
+#&lt;unspecified&gt;
+sash&gt; <span style="color: #FF0000">(</span>ttk/available-themes<span style="color: #FF0000">)</span>
+<span style="color: #FF0000">(</span><span style="color: #FF0000">"clam"</span> <span style="color: #FF0000">"alt"</span> <span style="color: #FF0000">"default"</span> <span style="color: #FF0000">"classic"</span><span style="color: #FF0000">)</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_ttk_map_widgets_code">1.3.38. <code>ttk-map-widgets</code></h4>
+<div class="paragraph"><p>Tile is an alternative set of widgets for Tk supporting a more attractive set of themes
+as well as some additional widgets, such as a treeview.</p></div>
+<div class="paragraph"><p><code>ttk-map-widgets</code> is used to map native Tk widgets to their TTk equivalents.
+To use all the Tile widgets, call:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>ttk-map-widgets 'all<span style="color: #FF0000">)</span></tt></pre></div></div>
+<div class="paragraph"><p>(A value of <code>none</code> will not use any Tile widgets.  Alternatively, list the specific widgets
+you want to map.)</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_ttk_set_theme_code">1.3.39. <code>ttk/set-theme</code></h4>
+<div class="paragraph"><p><code>ttk/set-theme</code> is used to set the theme to one of those available.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>ttk/set-theme <span style="color: #FF0000">"classic"</span><span style="color: #FF0000">)</span>
+<span style="color: #FF0000">""</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_ttk_style_code">1.3.40. <code>ttk/style</code></h4>
+<div class="paragraph"><p><code>ttk/style</code> is used to query or change the Tk style database.  For
+the Tk documentation, see: <a href="https://www.tcl.tk/man/tcl8.6/TkCmd/ttk_style.htm">https://www.tcl.tk/man/tcl8.6/TkCmd/ttk_style.htm</a></p></div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_ps_tk_functions">1.4. PS/Tk Functions</h3>
+<div class="paragraph"><p>These functions are included within the library but do not have direct Tk equivalents.
+(The function names start "tk-".)</p></div>
+<div class="sect3">
+<h4 id="_code_tk_end_code">1.4.1. <code>tk-end</code></h4>
+<div class="paragraph"><p><code>tk-end</code> is used to shutdown the Tk process, and effectively end the program.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>tk-end<span style="color: #FF0000">)</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_eval_code">1.4.2. <code>tk-eval</code></h4>
+<div class="paragraph"><p><code>tk-eval</code> evaluates a piece of TCL code, provided as a string.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt>sash&gt; <span style="color: #FF0000">(</span>tk-eval <span style="color: #FF0000">"bell"</span><span style="color: #FF0000">)</span>
+<span style="color: #FF0000">""</span>
+sash&gt; <span style="color: #FF0000">(</span>tk-eval <span style="color: #FF0000">"puts 3"</span><span style="color: #FF0000">)</span>
+
+An error occurred inside Tcl/Tk
+ --&gt; <span style="color: #993399">3</span>
+#&lt;unspecified&gt;</tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_event_loop_code">1.4.3. <code>tk-event-loop</code></h4>
+<div class="paragraph"><p><code>tk-event-loop</code> is used to enter the TK event loop.  It takes the <code>tk</code>
+value returned from <code>tk-start</code> as a parameter, and does not end until <code>tk-end</code> is called.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>tk-event-loop tk<span style="color: #FF0000">)</span></tt></pre></div></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_start_code">1.4.4. <code>tk-start</code></h4>
+<div class="paragraph"><p><code>tk-start</code> is used to initiate the Tk process.  It returns a
+function used to send commands to Tk.  An optional argument names the tcl/tk
+program to use: on Linux, this program is "tclsh", but for easy distribution,
+you may wish to use "tclkit".</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">let</span></span> <span style="color: #FF0000">((</span>tk <span style="color: #FF0000">(</span>tk-start <span style="color: #FF0000">"tclkit"</span><span style="color: #FF0000">)))</span> ...<span style="color: #FF0000">)</span>  <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;1&gt;</b></span></span></tt></pre></div></div>
+<div class="colist arabic"><ol>
+<li>
+<p>
+Starts the Tk program called "tclkit" and stores the result in the <code>tk</code> variable.
+</p>
+</li>
+</ol></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_var_code_code_tk_get_var_code_code_tk_set_var_code">1.4.5. <code>tk-var</code> <code>tk-get-var</code> <code>tk-set-var!</code></h4>
+<div class="paragraph"><p>These three functions work as a group and deal with how variables
+are linked to widget controls.</p></div>
+<div class="paragraph"><p><code>tk-var</code> is used to register a new <code>tk-var</code> with the given symbol name.</p></div>
+<div class="paragraph"><p><code>tk-get-var</code> is used to retrieve the value of a <code>tk-var</code></p></div>
+<div class="paragraph"><p><code>tk-set-var!</code> is used to change the value of a <code>tk-var</code></p></div>
+<div class="paragraph"><p>For example:</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>tk-var 'cb-value<span style="color: #FF0000">)</span>                                    <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;1&gt;</b></span></span>
+<span style="color: #FF0000">(</span>tk 'create-widget 'checkbutton 'text: <span style="color: #FF0000">"Check me"</span>
+               'variable: <span style="color: #FF0000">(</span>tk-var 'cb-value<span style="color: #FF0000">))</span>         <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;2&gt;</b></span></span>
+<span style="color: #FF0000">(</span>display <span style="color: #FF0000">(</span>tk-get-var 'cb-value<span style="color: #FF0000">))</span>                      <span style="font-style: italic"><span style="color: #9A1900">; <b>&lt;3&gt;</b></span></span></tt></pre></div></div>
+<div class="colist arabic"><ol>
+<li>
+<p>
+Set up symbol <code>cb-value</code> as the name of variable
+</p>
+</li>
+<li>
+<p>
+Associates the <code>cb-value</code> variable with the check button
+</p>
+</li>
+<li>
+<p>
+Retrieves the <code>cb-value</code> value to display the check button&#8217;s state
+</p>
+</li>
+</ol></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_wait_for_window_code">1.4.6. <code>tk-wait-for-window</code></h4>
+<div class="paragraph"><p><code>tk-wait-for-window</code> waits until the given window is destroyed (such as a dialog
+being closed).</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_wait_until_visible_code">1.4.7. <code>tk-wait-until-visible</code></h4>
+<div class="paragraph"><p><code>tk-wait-until-visible</code> waits until the given window becomes visible.</p></div>
+</div>
+<div class="sect3">
+<h4 id="_code_tk_with_lock_code">1.4.8. <code>tk-with-lock</code></h4>
+<div class="paragraph"><p><code>tk-with-lock</code> is used to protect functions which are working with
+state in a multi-threaded environment.</p></div>
+<div class="listingblock">
+<div class="content"><!-- Generator: GNU source-highlight 3.1.8
+by Lorenzo Bettini
+http://www.lorenzobettini.it
+http://www.gnu.org/software/src-highlite -->
+<pre><tt><span style="color: #FF0000">(</span>tk 'create-widget 'button
+    'command: <span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">lambda</span></span> <span style="color: #FF0000">()</span>
+                <span style="color: #FF0000">(</span>tk-with-lock
+                  <span style="color: #FF0000">(</span><span style="font-weight: bold"><span style="color: #0000FF">lambda</span></span> <span style="color: #FF0000">()</span> do-something-critical<span style="color: #FF0000">))))</span></tt></pre></div></div>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_history">1.5. History</h3>
+<div class="paragraph"><p>The PSTK library has had a long history in the Scheme community and, in one
+form or another, is available for many Scheme implementations.  The current
+file includes its history starting from an implementation of Chicken/Tk by
+Wolf-Dieter Busch from 2004 based on earlier code by Sven Hartrumpf from 1997.
+Nils Holm made the library portable, and so created PSTK.  Ken Dickey created
+an R6RS version.</p></div>
+<div class="paragraph"><p>Some links to versions for other Scheme implementations and documentation:</p></div>
+<div class="ulist"><ul>
+<li>
+<p>
+<a href="http://snow.iro.umontreal.ca/?tab=Packages">http://snow.iro.umontreal.ca/?tab=Packages</a>
+</p>
+</li>
+<li>
+<p>
+<a href="https://sourceforge.net/projects/pstk/">https://sourceforge.net/projects/pstk/</a>
+</p>
+</li>
+<li>
+<p>
+<a href="http://mirror.informatimago.com/scheme/www.t3x.org/pstk/pstk.html">http://mirror.informatimago.com/scheme/www.t3x.org/pstk/pstk.html</a>
+</p>
+</li>
+</ul></div>
+</div>
+</div>
+</div>
+</div>
+<div id="footnotes"><hr /></div>
+<div id="footer">
+<div id="footer-text">
+Last updated
+ 2017-05-28 12:19:25 BST
+</div>
+</div>
+</body>
+</html>

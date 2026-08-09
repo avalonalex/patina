@@ -1,0 +1,145 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.output { color: #000; background-color: beige; width: 100%; padding: 3px}
+.error { color: #000; background-color: #F0B0B0; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_run-application">run-application</a></li><li><a href="#h3_parse-option">parse-option</a></li><li><a href="#h3_parse-options">parse-options</a></li><li><a href="#h3_parse-app">parse-app</a></li><li><a href="#h3_app-help">app-help</a></li><li><a href="#h3_app-help-command">app-help-command</a></li></ol></div><div id="main"><div><a name="h1_(chibiapp)"></a><h1>(chibi app)</h1></div><p>Unified command-line option parsing and config management.<div><a name="h3_run-application"></a><h3><code>(run-application spec [args config])</code></h3></div>The high-level interface.  Given an application spec <code>spec</code>,
+parses the given command-line arguments <code>args</code> into a config
+object, prepended to the existing object <code>config</code> if given.
+Then runs the corresponding command (or sub-command) procedure
+from <code>spec</code>.
+
+The app spec should be a list of the form:
+
+<code>(&lt;command> [<span>&lt;doc-string></span>] <span>&lt;clauses></span> <span>...</span>)</code>
+
+where clauses can be any of:
+
+<ul><li><code>(@ <span>&lt;opt-spec></span>)</code> - option spec, described below</li><li><code>(begin: <span>&lt;begin-proc></span>)</code> - procedure to run before main</li><li><code>(end: <span>&lt;end-proc></span>)</code> - procedure to run after main</li><li><code>(&lt;proc> <span>args</span> <span>...</span>)</code> - main procedure (args only for documentation)</li><li><code><span>&lt;app-spec></span></code> - a subcommand described by the nested spec</li><li><code>(or <span>&lt;app-spec></span> <span>...</span>)</code> - an alternate list of subcommands</li></ul>
+
+For subcommands the symbolic command name must match, though it is
+ignored for the initial spec (i.e. the application name is not
+checked).  The <code><span>begin</span></code> and <code><span>end</span></code> procedures can be
+useful for loading and saving state common to all subcommands.
+
+The <code><span>opt-spec</span></code> describes command-line options, and is a
+simple list with each opt of the form:
+
+<code>(&lt;name> <span>&lt;type></span> [(&lt;aliases> <span>...</span>)] [<span>&lt;doc-string></span>])</code>
+
+where <code><span>&lt;name></span></code> is a symbol name, <code><span>&lt;aliases></span></code> is an
+optional list of strings (for long options) or characters (for
+short options) to serve as aliases in addition to the exact name.
+<code><span>type</span></code> can be any of:
+
+<ul><li><code><span>boolean</span></code> - boolean, associated value optional, allowing <code><span>--noname</span></code> to indicate <code>#f<span>alse</span></code></li><li><code><span>char</span></code> - a single character</li><li><code><span>integer</span></code> - an exact integer</li><li><code><span>real</span></code> - any real number</li><li><code><span>number</span></code> - any real or complex number</li><li><code><span>symbol</span></code> - a symbol</li><li><code><span>string</span></code> - a string</li><li><code><span>sexp</span></code> - a sexp parsed with <code><span>read</span></code></li><li><code>(list <span>&lt;type></span>)</code> - a comma-delimited list of types</li></ul>
+
+Note that the options specs are composed entirely of objects that
+can be read and written, thus for example optionally loaded from
+files, whereas the app specs include embedded procedure objects so
+are typically written with <code><span>quasiquote</span></code>.
+
+Complete Example:
+
+<pre><code>(run-application
+  `(zoo
+    <span class="string">"Zookeeper Application"</span>
+    (@
+     (animals (list <span>symbol</span>) <span class="string">"list of animals to act on (default all)"</span>)
+     (lions <span>boolean</span> (#l<span class="syntaxerror">)</span> <span class="string">"also apply the action to lions"</span><span class="syntaxerror">)</span><span class="syntaxerror">)</span>
+    (or
+     (feed <span class="string">"feed the animals"</span> () (,<span>feed</span> <span>animals</span> <span>...</span>))
+     (wash <span class="string">"wash the animals"</span> (@ (soap <span>boolean</span>)) (,<span>wash</span> <span>animals</span> <span>...</span>))
+     (help <span class="string">"print help"</span> (,<span>app-help-command</span>)))<span class="syntaxerror">)</span>
+  (command-line)
+  (conf-load (string-append (get-environment-variable <span class="string">"HOME"</span>) <span class="string">"/.zoo"</span>))<span class="syntaxerror">)</span>
+</code></pre>
+
+The second and third arguments here are optional, provided to show
+the common pattern of allowing the same options to be specified
+either in a file and/or on the command-line.  The above app can be
+run as:
+
+Feed all animals, including lions:
+<pre class="command"><code>zoo -l feed</code></pre>
+
+Wash the elephants with soap:
+<pre class="command"><code>zoo --animals=elephant wash --soap</code></pre>
+
+Print help:
+<pre class="command"><code>zoo help</code></pre>
+
+The application procedures themselves are of the form:
+
+<code>(proc <span>cfg</span> <span>spec</span> <span>args</span> <span>...</span>)</code>
+
+where <code>cfg</code> is a config object from <code>(chibi <span>config</span>)</code>
+holding the parsed option info, <code>spec</code> is the original app
+spec, and <code>args</code> are the remaining non-option command-line
+arguments.
+
+To retrieve the options for the above example you can use:
+
+<ul><li><code>(conf-get <span>cfg</span> '<span>animals</span>)</code></li><li><code>(conf-get <span>cfg</span> '<span>lions</span>)</code></li><li><code>(conf-get <span>cfg</span> '(command <span>wash</span> <span>soap</span>))</code></li></ul>
+
+Notice that options for subcommands are nested under the
+<code>(command <span>&lt;name></span>)</code> prefix, so that you can use the same
+name for different subcommands without conflict.  This also means
+the subcommand options are distinct from the top-level options, so
+when using subcommands users must always write the command line
+as:
+
+<pre class="command"><code>app [&lt;general options>] &lt;subcommand> [&lt;sub options>]</code></pre>
+
+The ~/.zoo file could then hold an sexp of the form:
+
+<pre><code>((animals (camel <span>elephant</span> <span>rhinocerous</span>))
+ (command
+  (wash
+   (soap #t))))
+</code></pre><div><a name="h3_parse-option"></a><h3><code>(parse-option prefix conf-spec args fail)</code></h3></div>Parse a single command-line argument from <code>args</code> according to
+<code>conf-spec</code>, and returns a list of two values: the
+<code>(name <span>value</span>)</code> for the option, and a list of remaining
+unparsed args.  <code><span>name</span></code> will have the current <code>prefix</code>
+prepended.  If a parse error or unknown option is found, calls
+<code>fail</code> with a single string argument describing the error,
+returning that result.<div><a name="h3_parse-options"></a><h3><code>(parse-options prefix conf-spec orig-args fail)</code></h3></div>Parse a list of command-line arguments into a config object.
+Returns a list whose head is the resulting config object, and tail
+is the list of remaining non-option arguments.  Calls fail on
+error and tries to continue processing from the result.<div><a name="h3_parse-app"></a><h3><code>(parse-app prefix spec opt-spec args config init end . o)</code></h3></div>Parses a list of command-line arguments <code>args</code> according to
+the application spec <code>opt-spec</code>.  Returns a vector of five
+elements:
+
+<ul><li><code><span>proc</span></code> - procedure to run the application</li><li><code><span>config</span></code> - a config object containing all parsed options</li><li><code><span>args</span></code> - a list of remaining unparsed command-line arguments</li><li><code><span>init</span></code> - an optional procedure to call before <code><span>proc</span></code></li><li><code><span>end</span></code> - an optional procedure to call after <code><span>proc</span></code></li></ul>
+
+The config object is prepended to <code>config</code>, with option names
+all prefixed by <code>prefix</code>.  The original <code>spec</code> is used for
+<code><span>app-help</span></code>.<div><a name="h3_app-help"></a><h3><code>(app-help spec args [out])</code></h3></div>Print a help summary for the given application spec <code>spec</code>.<div><a name="h3_app-help-command"></a><h3><code>(app-help-command config spec . args)</code></h3></div>The subcommand form of <code><span>app-help</span></code>.  You can use this as a
+subcommand in an application spec, for example as:
+<pre><code>(help <span class="string">"print help"</span> (,<span>app-help-command</span> <span>args</span> <span>...</span>))</code></pre></p><div id="footer"></div></div></body></html>

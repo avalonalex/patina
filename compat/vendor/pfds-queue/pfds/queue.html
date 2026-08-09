@@ -1,0 +1,46 @@
+<html><head>
+<style type="text/css">
+body {color: #000; background-color: #FFF}
+div#menu  {font-size: smaller; position: absolute; top: 50px; left: 0; width: 190px; height: 100%}
+div#main  {position: absolute; top: 0; left: 200px; width: 540px; height: 100%}
+div#notes {position: relative; top: 2em; left: 570px; max-width: 200px; height: 0px; font-size: smaller;}
+div#footer {padding-bottom: 50px}
+.result { color: #000; background-color: #FFEADF; width: 100%; padding: 3px}
+.command { color: #000; background-color: #FFEADF; width: 100%; padding: 5px}
+.keyword { color: #800080; background-color: inherit; }
+.type { color: #008000; background-color: inherit; }
+.function { color: #0000FF; background-color: inherit; }
+.variable { color: #B8860B; background-color: inherit; }
+.comment { color: #FF0000; background-color: inherit; }
+.string { color: #BC8F8F; background-color: inherit; }
+.attribute { color: #FF5000; background-color: inherit; }
+.preprocessor { color: #FF00FF; background-color: inherit; }
+.builtin { color: #FF00FF; background-color: inherit; }
+.character { color: #0055AA; background-color: inherit; }
+.syntaxerror { color: #FF0000; background-color: inherit; }
+.diff-deleted { color: #5F2121; background-color: inherit; }
+.diff-added { color: #215F21; background-color: inherit; }
+span.paren1 { color: #AAAAAA; background-color: inherit; }
+span.paren2 { color: #888888; background-color: inherit; }
+span.paren3 { color: #666666; background-color: inherit; }
+span.paren4 { color: #444444; background-color: inherit; }
+span.paren5 { color: #222222; background-color: inherit; }
+span.paren6 { color: #000000; background-color: inherit; }
+</style>
+</head><body><div id="menu"><ol><li><a href="#h3_make-queue">make-queue</a></li><li><a href="#h3_enqueue">enqueue</a></li><li><a href="#h3_dequeue">dequeue</a></li><li><a href="#h3_queue-empty?">queue-empty?</a></li><li><a href="#h3_list->queue">list->queue</a></li><li><a href="#h3_list->queue">queue->list</a></li></ol></div><div id="main"><div><a name="h1_(pfdsqueue)"></a><h1>(pfds queue)</h1></div><p>queue? : any -> boolean
+tests if an object is a queue
+
+queue-length : queue -> non-negative integer
+returns the number of items in the queue<div><a name="h3_make-queue"></a><h3><code>(make-queue)</code></h3></div>make-queue : () -> queue
+returns a queue containing no items<div><a name="h3_enqueue"></a><h3><code>(enqueue queue item)</code></h3></div>enqueue : queue any -> queue
+returns a new queue with the enqueued item at the end<div><a name="h3_dequeue"></a><h3><code>(dequeue queue)</code></h3></div>dequeue : queue -> value queue
+returns two values, the item at the front of the queue, and a new
+queue containing the all the other items
+raises an error if the queue is empty<div><a name="h3_queue-empty?"></a><h3><code>(queue-empty? queue)</code></h3></div>queue-empty? : queue -> boolean
+returns true if there are no items in the queue, false otherwise<div><a name="h3_list->queue"></a><h3><code>(list->queue list)</code></h3></div>list->queue : listof(any) -> queue
+returns a list containing all the items in the queue. The order of
+the items in the list is the same as the order in the queue.
+For any list l, (equal? (queue->list (list->queue l)) l) is #t.<div><a name="h3_list->queue"></a><h3><code>(queue->list queue)</code></h3></div>queue->list : queue -> listof(any)
+returns a queue containing all the items in the list. The order of
+the elements in the queue is the same as the order of the elements
+in the list.</p><div id="footer"></div></div></body></html>
