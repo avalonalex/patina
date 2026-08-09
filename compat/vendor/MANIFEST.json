@@ -1,8 +1,9 @@
 {
   "generated": "2026-08-08",
   "source": "snow-fort.org /s/repo.scm",
+  "built_by": "compat/tools/build_corpus.py",
   "purpose": "compatibility test corpus only: not a dependency of Patina, not shipped with it, and not an endorsement of any package",
-  "selection": "every snow-fort package whose licence is permissive or non-standard-permissive, ranked by dependency in-degree; copyleft, licence-unknown, and document-licence-only packages excluded",
+  "selection": "every snow-fort package whose licence is permissive or non-standard-permissive, ranked by dependency in-degree; copyleft, licence-unknown and document-licence-only packages excluded",
   "policy": "unmodified upstream extractions; provenance recorded here, not inside the trees",
   "packages": [
     {
@@ -48,7 +49,7 @@
       "license_evidence": "spdx",
       "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/1/0.1.0/srfi-1-0.1.0.tgz",
       "tarball_sha256": "c1c8d0204697134170a1d749d77afdc1395dc793250bde3731ae7cf5db43ac7d",
-      "popularity_indegree": 40,
+      "popularity_indegree": 39,
       "provides": [
         "srfi 1"
       ],
@@ -509,7 +510,7 @@
       "version": "0.2.1",
       "license": "MIT",
       "license_class": "PERMISSIVE",
-      "license_evidence": "text-match",
+      "license_evidence": "srfi-canonical-document",
       "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/64/0.2.1/srfi-64-0.2.1.tgz",
       "tarball_sha256": "f3ec28b4ce2b6f2fe432d81ac9afbf96c0359cbc6e0f2f3b935793994329f887",
       "popularity_indegree": 5,
@@ -942,33 +943,6 @@
         "package.scm",
         "srfi/180.scm",
         "srfi/180.sld"
-      ],
-      "modified": false,
-      "needs_ffi": false
-    },
-    {
-      "library": "srfi 2",
-      "slug": "srfi-2",
-      "version": "2025.08.27",
-      "license": "MIT",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "srfi-canonical-document",
-      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/2/2025.08.27/srfi-2-2025.08.27.tgz",
-      "tarball_sha256": "22fba488fff4086855bec542d932b59bf0826b9eb2efb90fc1033a0f419a4386",
-      "popularity_indegree": 3,
-      "provides": [
-        "srfi 2"
-      ],
-      "depends": [
-        "scheme base",
-        "scheme write"
-      ],
-      "description": "SRFI-2",
-      "files": [
-        "README.html",
-        "package.scm",
-        "srfi/2.scm",
-        "srfi/2.sld"
       ],
       "modified": false,
       "needs_ffi": false
@@ -1704,6 +1678,33 @@
         "package.scm",
         "slib-time.html",
         "slib/time-zone.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 2",
+      "slug": "srfi-2",
+      "version": "2025.08.27",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/2/2025.08.27/srfi-2-2025.08.27.tgz",
+      "tarball_sha256": "22fba488fff4086855bec542d932b59bf0826b9eb2efb90fc1033a0f419a4386",
+      "popularity_indegree": 2,
+      "provides": [
+        "srfi 2"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme write"
+      ],
+      "description": "SRFI-2",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/2.scm",
+        "srfi/2.sld"
       ],
       "modified": false,
       "needs_ffi": false
@@ -5788,7 +5789,7 @@
       "version": "1.3",
       "license": "MIT",
       "license_class": "PERMISSIVE",
-      "license_evidence": "licence-text",
+      "license_evidence": "text-match",
       "upstream_url": "http://snow-fort.org/s/upr.edu/jantony.velazquez/srfi/197/1.3/srfi-197-1.3.tgz",
       "tarball_sha256": "a83a96a7db33f51f6ca747c1cfc109010b96b2972c09c8a3acc6696bf4dba54d",
       "popularity_indegree": 0,
@@ -5815,7 +5816,7 @@
       "version": "1.0",
       "license": "MIT",
       "license_class": "PERMISSIVE",
-      "license_evidence": "text-match",
+      "license_evidence": "srfi-canonical-document",
       "upstream_url": "http://snow-fort.org/s/upr.edu/jantony.velazquez/srfi/235/1.0/srfi-235-1.0.tgz",
       "tarball_sha256": "c5c4bd3121d47de1eb8b6eaa29f754bbf9cee74a1b3719173a18919f45f2d46a",
       "popularity_indegree": 0,

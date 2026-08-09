@@ -73,8 +73,34 @@ Note: the snow-fort index's `sha-256` field is the author's *signature* digest, 
 - Composition skews toward a few prolific sources: slib 51, chibi 47, srfi 35, r6rs 22, pfds 16. A
   high pass rate concentrated in one family is not broad compatibility.
 
+## Files here
+
+| File | What it is |
+|---|---|
+| `INVENTORY.md` | **Per-package table: version, licence, in-degree, libraries provided.** Generated. |
+| `MANIFEST.json` | Machine-readable provenance, including `tarball_sha256` for every package. Generated. |
+| `REVIEW-QUEUE.json` | Packages excluded by licence, with versions and in-degrees. Generated. |
+| `LICENSES.md` | Licence inventory, the two non-standard licences in full, and the obligations. Hand-written. |
+| `README.md` | This file. Hand-written. |
+
+Package **versions** are recorded in `INVENTORY.md` and `MANIFEST.json`. They are upstream's version
+strings, captured at vendoring time; the exact bytes are pinned by `tarball_sha256`, which is what to
+compare against if you need to know whether a tree still matches what upstream published.
+
 ## Regenerating
 
-The corpus was produced by fetching `http://snow-fort.org/s/repo.scm`, downloading each package,
-resolving licences (SPDX tag > index `license` field > licence body text > canonical SRFI document),
-and extracting the acceptable ones. `MANIFEST.json` carries everything needed to re-fetch and verify.
+```sh
+python3 compat/tools/build_corpus.py            # full run; downloads are cached in compat/.cache/
+python3 compat/tools/build_corpus.py --offline  # cache only, no network
+python3 compat/tools/build_corpus.py --check    # rebuild into a temp dir and diff against this one
+```
+
+The tool fetches `http://snow-fort.org/s/repo.scm`, deduplicates to the highest version per package,
+ranks by in-degree, resolves each licence, and vendors the acceptable ones. It regenerates the three
+generated files above and **leaves `README.md` and `LICENSES.md` alone** — an earlier version deleted
+them, so that exclusion is now explicit in the code.
+
+`--check` exits non-zero on any drift, which makes it usable as a CI guard once the corpus is
+expected to be stable. Note that `--offline` resolves fewer licences than a networked run, because
+SRFI packages whose snowball carries no licence text are resolved against their canonical SRFI
+document; without network those fall back to unknown and are dropped from the corpus.
