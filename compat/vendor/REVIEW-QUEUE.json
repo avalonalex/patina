@@ -1,6 +1,7 @@
 [
   {
     "library": "rapid test",
+    "version": "0.1.3",
     "pop": 23,
     "license": "GPL",
     "bucket": "COPYLEFT",
@@ -9,6 +10,7 @@
   },
   {
     "library": "foreign c",
+    "version": "0.23.1",
     "pop": 12,
     "license": null,
     "bucket": "UNKNOWN",
@@ -17,6 +19,7 @@
   },
   {
     "library": "rapid receive",
+    "version": "0.1.0",
     "pop": 12,
     "license": "GPL-3.0",
     "bucket": "COPYLEFT",
@@ -25,6 +28,7 @@
   },
   {
     "library": "rapid list",
+    "version": "0.1.0",
     "pop": 10,
     "license": "GPL",
     "bucket": "COPYLEFT",
@@ -32,15 +36,8 @@
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/list/0.1.0/rapid-list-0.1.0.tgz"
   },
   {
-    "library": "rapid assume",
-    "pop": 9,
-    "license": "GPL",
-    "bucket": "COPYLEFT",
-    "size_kb": 13,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/assume/0.1.0/rapid-assume-0.1.0.tgz"
-  },
-  {
     "library": "rapid comparator",
+    "version": "0.1.1",
     "pop": 9,
     "license": "GPL-3.0",
     "bucket": "COPYLEFT",
@@ -48,7 +45,17 @@
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/comparator/0.1.1/rapid-comparator-0.1.1.tgz"
   },
   {
+    "library": "rapid assume",
+    "version": "0.1.0",
+    "pop": 9,
+    "license": "GPL",
+    "bucket": "COPYLEFT",
+    "size_kb": 13,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/assume/0.1.0/rapid-assume-0.1.0.tgz"
+  },
+  {
     "library": "retropikzel system",
+    "version": "1.1.5",
     "pop": 6,
     "license": null,
     "bucket": "UNKNOWN",
@@ -56,31 +63,8 @@
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/system/1.1.5/retropikzel-system-1.1.5.tgz"
   },
   {
-    "library": "rapid and-let",
-    "pop": 5,
-    "license": "GPL",
-    "bucket": "COPYLEFT",
-    "size_kb": 12,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/and-let/0.1.0/rapid-and-let-0.1.0.tgz"
-  },
-  {
-    "library": "rapid mapping",
-    "pop": 5,
-    "license": "GPL-3.0",
-    "bucket": "COPYLEFT",
-    "size_kb": 72,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/mapping/0.1.1/rapid-mapping-0.1.1.tgz"
-  },
-  {
-    "library": "rapid set",
-    "pop": 5,
-    "license": "GPL-3.0",
-    "bucket": "COPYLEFT",
-    "size_kb": 70,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/set/0.1.0/rapid-set-0.1.0.tgz"
-  },
-  {
     "library": "rapid syntax",
+    "version": "0.1.2",
     "pop": 5,
     "license": "GPL-3.0",
     "bucket": "COPYLEFT",
@@ -88,15 +72,35 @@
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/syntax/0.1.2/rapid-syntax-0.1.2.tgz"
   },
   {
-    "library": "bcaine misc-util",
-    "pop": 4,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 6,
-    "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/misc-util/1.0.1/bcaine-misc-util-1.0.1.tgz"
+    "library": "rapid set",
+    "version": "0.1.0",
+    "pop": 5,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 70,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/set/0.1.0/rapid-set-0.1.0.tgz"
+  },
+  {
+    "library": "rapid mapping",
+    "version": "0.1.1",
+    "pop": 5,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 72,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/mapping/0.1.1/rapid-mapping-0.1.1.tgz"
+  },
+  {
+    "library": "rapid and-let",
+    "version": "0.1.0",
+    "pop": 5,
+    "license": "GPL",
+    "bucket": "COPYLEFT",
+    "size_kb": 12,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/and-let/0.1.0/rapid-and-let-0.1.0.tgz"
   },
   {
     "library": "cyclone iset base",
+    "version": "1.0",
     "pop": 4,
     "license": null,
     "bucket": "UNKNOWN",
@@ -104,7 +108,17 @@
     "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/base/1.0/cyclone-iset-base-1.0.tgz"
   },
   {
+    "library": "bcaine misc-util",
+    "version": "1.0.1",
+    "pop": 4,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 6,
+    "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/misc-util/1.0.1/bcaine-misc-util-1.0.1.tgz"
+  },
+  {
     "library": "rapid vicinity",
+    "version": "0.1.0",
     "pop": 4,
     "license": "GPL-3.0",
     "bucket": "COPYLEFT",
@@ -112,23 +126,8 @@
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/vicinity/0.1.0/rapid-vicinity-0.1.0.tgz"
   },
   {
-    "library": "bcaine format",
-    "pop": 3,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 6,
-    "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/format/0.0.1/bcaine-format-0.0.1.tgz"
-  },
-  {
-    "library": "cyclone iset iterators",
-    "pop": 3,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 11,
-    "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/iterators/1.0/cyclone-iset-iterators-1.0.tgz"
-  },
-  {
     "library": "retropikzel named-pipes",
+    "version": "1.0.3",
     "pop": 3,
     "license": null,
     "bucket": "UNKNOWN",
@@ -136,7 +135,35 @@
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/named-pipes/1.0.3/retropikzel-named-pipes-1.0.3.tgz"
   },
   {
+    "library": "cyclone iset iterators",
+    "version": "1.0",
+    "pop": 3,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 11,
+    "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/iterators/1.0/cyclone-iset-iterators-1.0.tgz"
+  },
+  {
+    "library": "bcaine format",
+    "version": "0.0.1",
+    "pop": 3,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 6,
+    "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/format/0.0.1/bcaine-format-0.0.1.tgz"
+  },
+  {
+    "library": "retropikzel net",
+    "version": "1.0.0",
+    "pop": 2,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 9,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/net/1.0.0/retropikzel-net-1.0.0.tgz"
+  },
+  {
     "library": "cyclone iset constructors",
+    "version": "1.0",
     "pop": 2,
     "license": null,
     "bucket": "UNKNOWN",
@@ -144,7 +171,35 @@
     "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/constructors/1.0/cyclone-iset-constructors-1.0.tgz"
   },
   {
+    "library": "robin statistics",
+    "version": "1.0.0",
+    "pop": 2,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 76,
+    "url": "http://snow-fort.org/s/peterlane.info/peter/robin/statistics/1.0.0/robin-statistics-1.0.0.tgz"
+  },
+  {
+    "library": "rebottled pregexp",
+    "version": "20050502",
+    "pop": 2,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 53,
+    "url": "http://snow-fort.org/s/peterlane.info/peter/rebottled/pregexp/20050502/rebottled-pregexp-20050502.tgz"
+  },
+  {
+    "library": "rapid read",
+    "version": "0.1.3",
+    "pop": 2,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 55,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/read/0.1.3/rapid-read-0.1.3.tgz"
+  },
+  {
     "library": "rapid analyze-library",
+    "version": "0.1.0",
     "pop": 2,
     "license": "GPL-3.0",
     "bucket": "COPYLEFT",
@@ -153,6 +208,7 @@
   },
   {
     "library": "rapid format",
+    "version": "0.1.0",
     "pop": 2,
     "license": "GPL-3.0",
     "bucket": "COPYLEFT",
@@ -161,6 +217,7 @@
   },
   {
     "library": "rapid generator",
+    "version": "0.1.0",
     "pop": 2,
     "license": "GPL-3.0",
     "bucket": "COPYLEFT",
@@ -168,111 +225,8 @@
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/generator/0.1.0/rapid-generator-0.1.0.tgz"
   },
   {
-    "library": "rapid read",
-    "pop": 2,
-    "license": "GPL-3.0",
-    "bucket": "COPYLEFT",
-    "size_kb": 55,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/read/0.1.3/rapid-read-0.1.3.tgz"
-  },
-  {
-    "library": "rebottled pregexp",
-    "pop": 2,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 53,
-    "url": "http://snow-fort.org/s/peterlane.info/peter/rebottled/pregexp/20050502/rebottled-pregexp-20050502.tgz"
-  },
-  {
-    "library": "retropikzel net",
-    "pop": 2,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 9,
-    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/net/1.0.0/retropikzel-net-1.0.0.tgz"
-  },
-  {
-    "library": "robin statistics",
-    "pop": 2,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 76,
-    "url": "http://snow-fort.org/s/peterlane.info/peter/robin/statistics/1.0.0/robin-statistics-1.0.0.tgz"
-  },
-  {
-    "library": "bcaine defstruct",
-    "pop": 1,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 13,
-    "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/defstruct/0.0.1/bcaine-defstruct-0.0.1.tgz"
-  },
-  {
-    "library": "c2foreign-c sdl2",
-    "pop": 1,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 139,
-    "url": "http://snow-fort.org/s/iki.fi/retropikzel/c2foreign-c/sdl2/0.2.3/c2foreign-c-sdl2-0.2.3.tgz"
-  },
-  {
-    "library": "c2foreign-c sdl2-image",
-    "pop": 1,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 15,
-    "url": "http://snow-fort.org/s/iki.fi/retropikzel/c2foreign-c/sdl2-image/0.2.3/c2foreign-c-sdl2-image-0.2.3.tgz"
-  },
-  {
-    "library": "rapid box",
-    "pop": 1,
-    "license": "GPL",
-    "bucket": "COPYLEFT",
-    "size_kb": 12,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/box/0.1.1/rapid-box-0.1.1.tgz"
-  },
-  {
-    "library": "rapid graph",
-    "pop": 1,
-    "license": "GPL-3.0",
-    "bucket": "COPYLEFT",
-    "size_kb": 30,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/graph/0.1.0/rapid-graph-0.1.0.tgz"
-  },
-  {
-    "library": "rapid identity",
-    "pop": 1,
-    "license": "GPL",
-    "bucket": "COPYLEFT",
-    "size_kb": 12,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/identity/0.1.0/rapid-identity-0.1.0.tgz"
-  },
-  {
-    "library": "rapid match",
-    "pop": 1,
-    "license": "GPL-3.0",
-    "bucket": "COPYLEFT",
-    "size_kb": 35,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/match/0.1.5/rapid-match-0.1.5.tgz"
-  },
-  {
-    "library": "rapid quasiquote",
-    "pop": 1,
-    "license": "GPL",
-    "bucket": "COPYLEFT",
-    "size_kb": 25,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/quasiquote/0.1.1/rapid-quasiquote-0.1.1.tgz"
-  },
-  {
-    "library": "rapid rbtree",
-    "pop": 1,
-    "license": "GPL-3.0",
-    "bucket": "COPYLEFT",
-    "size_kb": 29,
-    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/rbtree/0.1.0/rapid-rbtree-0.1.0.tgz"
-  },
-  {
     "library": "retropikzel compile-r7rs",
+    "version": "1.4.5",
     "pop": 1,
     "license": null,
     "bucket": "UNKNOWN",
@@ -280,11 +234,498 @@
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/compile-r7rs/1.4.5/retropikzel-compile-r7rs-1.4.5.tgz"
   },
   {
+    "library": "c2foreign-c sdl2-image",
+    "version": "0.2.3",
+    "pop": 1,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 15,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/c2foreign-c/sdl2-image/0.2.3/c2foreign-c-sdl2-image-0.2.3.tgz"
+  },
+  {
+    "library": "c2foreign-c sdl2",
+    "version": "0.2.3",
+    "pop": 1,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 139,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/c2foreign-c/sdl2/0.2.3/c2foreign-c-sdl2-0.2.3.tgz"
+  },
+  {
     "library": "retropikzel debug",
+    "version": "1.0.0",
     "pop": 1,
     "license": null,
     "bucket": "UNKNOWN",
     "size_kb": 6,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/debug/1.0.0/retropikzel-debug-1.0.0.tgz"
+  },
+  {
+    "library": "bcaine defstruct",
+    "version": "0.0.1",
+    "pop": 1,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 13,
+    "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/defstruct/0.0.1/bcaine-defstruct-0.0.1.tgz"
+  },
+  {
+    "library": "rapid match",
+    "version": "0.1.5",
+    "pop": 1,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 35,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/match/0.1.5/rapid-match-0.1.5.tgz"
+  },
+  {
+    "library": "rapid graph",
+    "version": "0.1.0",
+    "pop": 1,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 30,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/graph/0.1.0/rapid-graph-0.1.0.tgz"
+  },
+  {
+    "library": "rapid rbtree",
+    "version": "0.1.0",
+    "pop": 1,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 29,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/rbtree/0.1.0/rapid-rbtree-0.1.0.tgz"
+  },
+  {
+    "library": "rapid identity",
+    "version": "0.1.0",
+    "pop": 1,
+    "license": "GPL",
+    "bucket": "COPYLEFT",
+    "size_kb": 12,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/identity/0.1.0/rapid-identity-0.1.0.tgz"
+  },
+  {
+    "library": "rapid quasiquote",
+    "version": "0.1.1",
+    "pop": 1,
+    "license": "GPL",
+    "bucket": "COPYLEFT",
+    "size_kb": 25,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/quasiquote/0.1.1/rapid-quasiquote-0.1.1.tgz"
+  },
+  {
+    "library": "rapid box",
+    "version": "0.1.1",
+    "pop": 1,
+    "license": "GPL",
+    "bucket": "COPYLEFT",
+    "size_kb": 12,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/box/0.1.1/rapid-box-0.1.1.tgz"
+  },
+  {
+    "library": "retropikzel test-r7rs",
+    "version": "1.6.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 15,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/test-r7rs/1.6.0/retropikzel-test-r7rs-1.6.0.tgz"
+  },
+  {
+    "library": "retropikzel dot-locking",
+    "version": "1.0.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 16,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/dot-locking/1.0.1/retropikzel-dot-locking-1.0.1.tgz"
+  },
+  {
+    "library": "retropikzel tap",
+    "version": "0.3.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 15,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/tap/0.3.1/retropikzel-tap-0.3.1.tgz"
+  },
+  {
+    "library": "retropikzel junit",
+    "version": "0.3.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 16,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/junit/0.3.1/retropikzel-junit-0.3.1.tgz"
+  },
+  {
+    "library": "retropikzel file-append",
+    "version": "0.3.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 7,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/file-append/0.3.1/retropikzel-file-append-0.3.1.tgz"
+  },
+  {
+    "library": "retropikzel download-file",
+    "version": "1.0.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 9,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/download-file/1.0.0/retropikzel-download-file-1.0.0.tgz"
+  },
+  {
+    "library": "retropikzel xml2scm",
+    "version": "0.1.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 8,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/xml2scm/0.1.0/retropikzel-xml2scm-0.1.0.tgz"
+  },
+  {
+    "library": "retropikzel json2scm",
+    "version": "0.1.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 8,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/json2scm/0.1.0/retropikzel-json2scm-0.1.0.tgz"
+  },
+  {
+    "library": "retropikzel c2foreign-c",
+    "version": "1.0.3",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 20,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/c2foreign-c/1.0.3/retropikzel-c2foreign-c-1.0.3.tgz"
+  },
+  {
+    "library": "retropikzel spite",
+    "version": "0.3.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 30,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/spite/0.3.0/retropikzel-spite-0.3.0.tgz"
+  },
+  {
+    "library": "srfi 5",
+    "version": "0.1.0",
+    "pop": 0,
+    "license": "SRFI-document-licence",
+    "bucket": "DOCUMENT-ONLY",
+    "size_kb": 10,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/5/0.1.0/srfi-5-0.1.0.tgz"
+  },
+  {
+    "library": "retropikzel shell",
+    "version": "1.0.2",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 7,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/shell/1.0.2/retropikzel-shell-1.0.2.tgz"
+  },
+  {
+    "library": "retropikzel leb128",
+    "version": "1.1.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 13,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/leb128/1.1.1/retropikzel-leb128-1.1.1.tgz"
+  },
+  {
+    "library": "retropikzel ctrf",
+    "version": "1.2.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 14,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/ctrf/1.2.1/retropikzel-ctrf-1.2.1.tgz"
+  },
+  {
+    "library": "retropikzel mouth",
+    "version": "1.0.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 7,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/mouth/1.0.0/retropikzel-mouth-1.0.0.tgz"
+  },
+  {
+    "library": "retropikzel fcgi",
+    "version": "0.1.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 16,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/fcgi/0.1.1/retropikzel-fcgi-0.1.1.tgz"
+  },
+  {
+    "library": "retropikzel requests",
+    "version": "0.10.3",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 16,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/requests/0.10.3/retropikzel-requests-0.10.3.tgz"
+  },
+  {
+    "library": "retropikzel scgi",
+    "version": "1.1.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 22,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/scgi/1.1.0/retropikzel-scgi-1.1.0.tgz"
+  },
+  {
+    "library": "retropikzel cgi",
+    "version": "1.2.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 21,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/cgi/1.2.0/retropikzel-cgi-1.2.0.tgz"
+  },
+  {
+    "library": "nitrate",
+    "version": "1.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 109,
+    "url": "http://snow-fort.org/s/mcgoron.com/code/nitrate/1.0/nitrate-1.0.tgz"
+  },
+  {
+    "library": "retropikzel hello",
+    "version": "1.2.3",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 8,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/hello/1.2.3/retropikzel-hello-1.2.3.tgz"
+  },
+  {
+    "library": "retropikzel gtk-server",
+    "version": "0.1.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 11,
+    "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/gtk-server/0.1.1/retropikzel-gtk-server-0.1.1.tgz"
+  },
+  {
+    "library": "nytpu contracts",
+    "version": "0.1.1",
+    "pop": 0,
+    "license": "MPL-2.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 24,
+    "url": "http://snow-fort.org/s/nytpu.com/alex/nytpu/contracts/0.1.1/nytpu-contracts-0.1.1.tgz"
+  },
+  {
+    "library": "nytpu getopt",
+    "version": "1.2.0",
+    "pop": 0,
+    "license": "MPL-2.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 20,
+    "url": "http://snow-fort.org/s/nytpu.com/alex/nytpu/getopt/1.2.0/nytpu-getopt-1.2.0.tgz"
+  },
+  {
+    "library": "fisherro pipe",
+    "version": "1.0.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 12,
+    "url": "http://snow-fort.org/s/fisher.cx/robert/fisherro/pipe/1.0.0/fisherro-pipe-1.0.0.tgz"
+  },
+  {
+    "library": "thunknyc expand-braces",
+    "version": "0.1.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 10,
+    "url": "http://snow-fort.org/s/poseur.com/edw/thunknyc/expand-braces/0.1.1/thunknyc-expand-braces-0.1.1.tgz"
+  },
+  {
+    "library": "thunknyc json",
+    "version": "0.1.3",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 11,
+    "url": "http://snow-fort.org/s/poseur.com/edw/thunknyc/json/0.1.3/thunknyc-json-0.1.3.tgz"
+  },
+  {
+    "library": "chibi sqlite3",
+    "version": "0.7",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 22,
+    "url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/sqlite3/0.7/chibi-sqlite3-0.7.tgz"
+  },
+  {
+    "library": "cyclone iset",
+    "version": "1.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 13,
+    "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/1.0/cyclone-iset-1.0.tgz"
+  },
+  {
+    "library": "cyclone iset optimize",
+    "version": "1.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 10,
+    "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/optimize/1.0/cyclone-iset-optimize-1.0.tgz"
+  },
+  {
+    "library": "bcaine obj",
+    "version": "0.0.7",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 49,
+    "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/obj/0.0.7/bcaine-obj-0.0.7.tgz"
+  },
+  {
+    "library": "bcaine sld-stub-expand",
+    "version": "0.0.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 8,
+    "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/sld-stub-expand/0.0.1/bcaine-sld-stub-expand-0.0.1.tgz"
+  },
+  {
+    "library": "yasos",
+    "version": "1.0.1",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 7,
+    "url": "http://snow-fort.org/s/gmail.com/taknamay/yasos/1.0.1/yasos-1.0.1.tgz"
+  },
+  {
+    "library": "robin directory",
+    "version": "1.0.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 44,
+    "url": "http://snow-fort.org/s/peterlane.info/peter/robin/directory/1.0.0/robin-directory-1.0.0.tgz"
+  },
+  {
+    "library": "rebottled schelog",
+    "version": "20150602",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 41,
+    "url": "http://snow-fort.org/s/peterlane.info/peter/rebottled/schelog/20150602/rebottled-schelog-20150602.tgz"
+  },
+  {
+    "library": "slib wt-tree",
+    "version": "SLIB-3b5-r7rs-1",
+    "pop": 0,
+    "license": "GPL",
+    "bucket": "COPYLEFT",
+    "size_kb": 50,
+    "url": "http://snow-fort.org/s/peterlane.info/peter/slib/wt-tree/SLIB-3b5-r7rs-1/slib-wt-tree-SLIB-3b5-r7rs-1.tgz"
+  },
+  {
+    "library": "robin text",
+    "version": "1.0.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 75,
+    "url": "http://snow-fort.org/s/peterlane.info/peter/robin/text/1.0.0/robin-text-1.0.0.tgz"
+  },
+  {
+    "library": "robin logger",
+    "version": "1.0.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 31,
+    "url": "http://snow-fort.org/s/peterlane.info/peter/robin/logger/1.0.0/robin-logger-1.0.0.tgz"
+  },
+  {
+    "library": "robin disjoint-set",
+    "version": "1.0.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 37,
+    "url": "http://snow-fort.org/s/peterlane.info/peter/robin/disjoint-set/1.0.0/robin-disjoint-set-1.0.0.tgz"
+  },
+  {
+    "library": "robin abbrev",
+    "version": "1.0.0",
+    "pop": 0,
+    "license": null,
+    "bucket": "UNKNOWN",
+    "size_kb": 28,
+    "url": "http://snow-fort.org/s/peterlane.info/peter/robin/abbrev/1.0.0/robin-abbrev-1.0.0.tgz"
+  },
+  {
+    "library": "rapid vector",
+    "version": "0.1.0",
+    "pop": 0,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 72,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/vector/0.1.0/rapid-vector-0.1.0.tgz"
+  },
+  {
+    "library": "rapid args-fold",
+    "version": "0.1.0",
+    "pop": 0,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 18,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/args-fold/0.1.0/rapid-args-fold-0.1.0.tgz"
+  },
+  {
+    "library": "rapid eliminate-mutable-variables",
+    "version": "0.1.0",
+    "pop": 0,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 17,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/eliminate-mutable-variables/0.1.0/rapid-eliminate-mutable-variables-0.1.0.tgz"
+  },
+  {
+    "library": "rapid fix-letrec",
+    "version": "0.1.0",
+    "pop": 0,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 23,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/fix-letrec/0.1.0/rapid-fix-letrec-0.1.0.tgz"
+  },
+  {
+    "library": "rapid library-definition",
+    "version": "0.1.2",
+    "pop": 0,
+    "license": "GPL-3.0",
+    "bucket": "COPYLEFT",
+    "size_kb": 46,
+    "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/library-definition/0.1.2/rapid-library-definition-0.1.2.tgz"
   }
 ]
