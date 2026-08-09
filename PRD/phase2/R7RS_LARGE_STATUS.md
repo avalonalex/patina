@@ -26,32 +26,33 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 
 | SRFI | Library Name | Description | `(srfi n)` | `(scheme …)` alias |
 |------|-------------|-------------|------------|--------------------|
-| SRFI 1 | `(scheme list)` | List library | ✅ shipped | ❌ missing |
+| SRFI 1 | `(scheme list)` | List library | ✅ shipped | ✅ shipped |
 | SRFI 14 | `(scheme charset)` | Character sets | ❌ | ❌ |
 | SRFI 41 | `(scheme stream)` | Streams (lazy lists) | ❌ | ❌ |
 | SRFI 101 | `(scheme rlist)` | Random-access lists | ❌ | ❌ |
-| SRFI 111 | `(scheme box)` | Boxes (single-value containers) | ✅ shipped | ❌ missing |
-| SRFI 113 | `(scheme set)` | Sets and bags | ✅ shipped | ❌ missing |
+| SRFI 111 | `(scheme box)` | Boxes (single-value containers) | ✅ shipped | ✅ shipped |
+| SRFI 113 | `(scheme set)` | Sets and bags | ✅ shipped | ✅ shipped |
 | SRFI 116 | `(scheme ilist)` | Immutable lists | ❌ | ❌ |
 | SRFI 117 | `(scheme list-queue)` | List queues | ❌ | ❌ |
 | SRFI 121 | `(scheme generator)` | Generators | — superseded by SRFI 158 | — |
 | SRFI 124 | `(scheme ephemeron)` | Ephemerons | ❌ | ❌ |
 | SRFI 125 | `(scheme hash-table)` | Hash tables | ❌ (SRFI 69 shipped instead) | ❌ |
 | SRFI 127 | `(scheme lseq)` | Lazy sequences | ❌ | ❌ |
-| SRFI 128 | `(scheme comparator)` | Comparators | ✅ shipped | ❌ missing |
-| SRFI 132 | `(scheme sort)` | Sort libraries | ✅ shipped | ❌ missing |
-| SRFI 133 | `(scheme vector)` | Vector library | ✅ shipped | ❌ missing |
+| SRFI 128 | `(scheme comparator)` | Comparators | ✅ shipped | ✅ shipped |
+| SRFI 132 | `(scheme sort)` | Sort libraries | ✅ shipped | ✅ shipped |
+| SRFI 133 | `(scheme vector)` | Vector library | ✅ shipped | ✅ shipped |
 | SRFI 134 | `(scheme ideque)` | Immutable deques | ❌ | ❌ |
 | SRFI 135 | `(scheme text)` | Immutable texts | ❌ | ❌ |
 
-**Red status: 6 of 17 shipped** (7 counting SRFI 158 standing in for the superseded 121).
+**Red status: 6 of 17 shipped**, all reachable under both `(srfi n)` and their `(scheme …)` names (7 counting SRFI 158 standing in for the superseded 121).
 
 **Notes:**
 - SRFI 129 (titlecase) was voted down
 - SRFI 13 (strings) marked for reballoting
-- **No `(scheme …)` alias libraries exist yet.** Six Red SRFIs are implemented but only reachable as
-  `(srfi n)`. The aliases are the actual R7RS-large deliverable and are nearly free — a `.sld` that
-  re-exports an existing library. This is the cheapest R7RS-large progress available.
+- The `(scheme …)` alias libraries landed in `lib/scheme/{list,box,set,comparator,sort,vector,generator}.sld`.
+  Each is a pure re-export of its backing `(srfi n)` — same bindings, not a second copy.
+  `crates/patina-tests/tests/r7rs_large_aliases.rs` asserts the export sets stay identical, which is
+  the drift this hand-listed approach otherwise invites.
 
 ---
 
@@ -67,12 +68,12 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 146 | `(scheme mapping)` | Mappings | ❌ | ❌ |
 | SRFI 146 | `(scheme mapping hash)` | Hash mappings | ❌ | ❌ |
 | SRFI 151 | `(scheme bitwise)` | Bitwise operations | ❌ | ❌ |
-| SRFI 158 | `(scheme generator)` | Generators (supersedes SRFI 121) | ✅ shipped | ❌ missing |
+| SRFI 158 | `(scheme generator)` | Generators (supersedes SRFI 121) | ✅ shipped | ✅ shipped |
 | SRFI 159 | `(scheme show)` | Formatting/show | ❌ | ❌ |
 | SRFI 160 | `(scheme vector @)` | Numeric vectors (u8, s8, f64, etc.) | ❌ | ❌ |
 | R6RS | `(scheme bytevector)` | Bytevectors (R6RS compatible) | 🚧 Partial | ❌ |
 
-**Tangerine status: 1 of 7 shipped.**
+**Tangerine status: 1 of 7 shipped**, reachable under both names.
 
 **Numeric Tower Requirements:**
 - Unbounded exact integers ✅ (BigInt support)
@@ -164,8 +165,7 @@ Highest-value first:
 
 1. **Bitwise — SRFI 151 + 60/33 shims.** The largest gap in the ecosystem (in-degree 31) and
    standard-track. Needs Rust primitives; a portable-Scheme implementation would be unusably slow.
-2. **`(scheme …)` alias libraries for the six Red SRFIs already shipped.** Near-zero cost, and the
-   only thing currently standing between Patina and real Red-edition coverage.
+2. ~~`(scheme …)` alias libraries for the shipped SRFIs~~ — **done**; see the tables above.
 3. **SRFI 125 hash tables**, superseding the shipped SRFI 69 (in-degree 16); keep 69 as an alias.
 4. **SRFI 27 random** — runtime-forced, in-degree 9.
 5. **SRFI 143 fixnums** — must match the VM's representation.
