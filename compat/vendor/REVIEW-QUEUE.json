@@ -112,14 +112,6 @@
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/vicinity/0.1.0/rapid-vicinity-0.1.0.tgz"
   },
   {
-    "library": "srfi 170",
-    "pop": 4,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 35,
-    "url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/170/0.2.4/srfi-170-0.2.4.tgz"
-  },
-  {
     "library": "bcaine format",
     "pop": 3,
     "license": null,
@@ -142,14 +134,6 @@
     "bucket": "UNKNOWN",
     "size_kb": 15,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/named-pipes/1.0.3/retropikzel-named-pipes-1.0.3.tgz"
-  },
-  {
-    "library": "srfi 227",
-    "pop": 3,
-    "license": null,
-    "bucket": "UNKNOWN",
-    "size_kb": 12,
-    "url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/227/0.1.2/srfi-227-0.1.2.tgz"
   },
   {
     "library": "cyclone iset constructors",

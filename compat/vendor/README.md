@@ -2,7 +2,7 @@
 
 **This directory is test data. It is not part of Patina.**
 
-194 third-party Scheme packages from [snow-fort.org](http://snow-fort.org), vendored so Patina can be
+197 third-party Scheme packages from [snow-fort.org](http://snow-fort.org), vendored so Patina can be
 measured against real-world R7RS code (Track L — `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`).
 
 ## Purpose, and what this is not
@@ -33,10 +33,11 @@ vendored; there is no popularity cutoff, since at 8 MB the tail costs nothing an
 
 | Bucket | Packages | Vendored |
 |---|---|---|
-| Permissive (BSD 67, MIT 55, public-domain 17, ISC 5, CC0 2, Apache-2.0 1, Expat 1) | 148 | yes |
+| Permissive (BSD 67, MIT 58, public-domain 17, ISC 5, CC0 2, Apache-2.0 1, Expat 1) | 151 | yes |
 | Non-standard permissive (SLIB/Jaffer 45, old MIT-Scheme 1) | 46 | yes — see `LICENSES.md` |
 | Copyleft (GPL-3.0 18, GPL 8, MPL-2.0 2) | 28 | **no** |
-| No licence statement found | 56 | **no** |
+| No licence statement found | 53 | **no** |
+| Document licence only (`srfi 5`) | 1 | **no** — see `LICENSES.md` |
 
 Copyleft is excluded to keep this MIT-licensed repository's licence story simple, not because of any
 judgement about the code. Packages with no discoverable licence are excluded because absence of a

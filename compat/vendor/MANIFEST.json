@@ -2,7 +2,7 @@
   "generated": "2026-08-08",
   "source": "snow-fort.org /s/repo.scm",
   "purpose": "compatibility test corpus only: not a dependency of Patina, not shipped with it, and not an endorsement of any package",
-  "selection": "every snow-fort package whose licence is permissive or non-standard-permissive, ranked by dependency in-degree; copyleft and licence-unknown packages excluded",
+  "selection": "every snow-fort package whose licence is permissive or non-standard-permissive, ranked by dependency in-degree; copyleft, licence-unknown, and document-licence-only packages excluded",
   "policy": "unmodified upstream extractions; provenance recorded here, not inside the trees",
   "packages": [
     {
@@ -621,6 +621,38 @@
       "needs_ffi": false
     },
     {
+      "library": "srfi 170",
+      "slug": "srfi-170",
+      "version": "0.2.4",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/170/0.2.4/srfi-170-0.2.4.tgz",
+      "tarball_sha256": "c5e70a6cb64e20afba51ff2df21de809420328f57c2489b08d6a08d2c3c5e2fc",
+      "popularity_indegree": 4,
+      "provides": [
+        "srfi 170"
+      ],
+      "depends": [
+        "foreign c",
+        "scheme base",
+        "scheme char",
+        "scheme file",
+        "scheme process-context",
+        "scheme write",
+        "srfi 19"
+      ],
+      "description": "Implementation of SRFI 170 - POSIX API using (foreign c)",
+      "files": [
+        "package.scm",
+        "srfi/170.scm",
+        "srfi/170.sld",
+        "srfi/170/README.html"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
       "library": "srfi 19",
       "slug": "srfi-19",
       "version": "1.0.2",
@@ -937,6 +969,33 @@
         "package.scm",
         "srfi/2.scm",
         "srfi/2.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 227",
+      "slug": "srfi-227",
+      "version": "0.1.2",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/227/0.1.2/srfi-227-0.1.2.tgz",
+      "tarball_sha256": "7fadcb948419b49404ea6307885ca097a94a6d2c6cf290c54b8269189e411e28",
+      "popularity_indegree": 3,
+      "provides": [
+        "srfi 227"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme case-lambda"
+      ],
+      "description": "SRFI-227",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/227.scm",
+        "srfi/227.sld"
       ],
       "modified": false,
       "needs_ffi": false
@@ -5803,6 +5862,35 @@
         "package.scm",
         "srfi/25.scm",
         "srfi/25.sld"
+      ],
+      "modified": false,
+      "needs_ffi": false
+    },
+    {
+      "library": "srfi 29",
+      "slug": "srfi-29",
+      "version": "0.1.0",
+      "license": "MIT",
+      "license_class": "PERMISSIVE",
+      "license_evidence": "srfi-canonical-document",
+      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/29/0.1.0/srfi-29-0.1.0.tgz",
+      "tarball_sha256": "84078b43e523ff0f599e2138422958794e858395f21fd27fc02473bb077bc2cf",
+      "popularity_indegree": 0,
+      "provides": [
+        "srfi 29"
+      ],
+      "depends": [
+        "scheme base",
+        "scheme char",
+        "scheme write",
+        "srfi 28"
+      ],
+      "description": "SRFI-29",
+      "files": [
+        "README.html",
+        "package.scm",
+        "srfi/29.scm",
+        "srfi/29.sld"
       ],
       "modified": false,
       "needs_ffi": false

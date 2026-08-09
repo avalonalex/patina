@@ -12,7 +12,7 @@ terms are, how each was determined, and what obligations they place on this repo
 | Licence | Packages | Class |
 |---|---|---|
 | BSD | 67 | permissive |
-| MIT | 55 | permissive |
+| MIT | 58 | permissive |
 | SLIB (Aubrey Jaffer) | 45 | **non-standard permissive** |
 | public domain | 17 | permissive |
 | ISC | 5 | permissive |
@@ -21,8 +21,8 @@ terms are, how each was determined, and what obligations they place on this repo
 | Apache-2.0 | 1 | permissive |
 | Expat | 1 | permissive |
 
-**Excluded and not vendored:** GPL-3.0 (18), GPL (8), MPL-2.0 (2), and 56 packages with no
-discoverable licence. Listed in `REVIEW-QUEUE.json`.
+**Excluded and not vendored:** GPL-3.0 (18), GPL (8), MPL-2.0 (2), 53 packages with no discoverable
+licence, and `(srfi 5)` under a document-only licence (see below). Listed in `REVIEW-QUEUE.json`.
 
 ## How each licence was determined
 
@@ -35,7 +35,7 @@ auditable.
 | `licence-text` — full licence body matched in a shipped file | 53 | high |
 | `index-field` — the `license` field in snow-fort's `repo.scm` | 98 | good (author-declared, unverified) |
 | `text-match` — a licence grant paragraph matched in a shipped file | 19 | good |
-| `srfi-canonical-document` — the MIT grant published in the defining SRFI at srfi.schemers.org | 6 | good |
+| `srfi-canonical-document` — the MIT grant published in the defining SRFI at srfi.schemers.org | 9 | good |
 | `slib-family-inference` — **inferred**, see caveat below | 7 | weakest |
 
 **Caveat on inference.** Snowballs generally contain no `LICENSE` file — only sources, `package.scm`,
@@ -44,9 +44,28 @@ carry no notice in any shipped file; they were classified as SLIB/Jaffer because
 same `SLIB-3b5-r7rs` distribution by the same author as the 38 that do. That is a reasonable
 inference, not a verified fact. If it matters, confirm against SLIB upstream.
 
-Four SRFI packages (`srfi 5`, `srfi 29`, `srfi 170`, `srfi 227`) were left excluded because no grant
-was found on their canonical SRFI pages. That is probably a page-format problem rather than a genuine
-absence of licence, and they are worth rechecking by hand.
+## The two SRFI licence regimes
+
+SRFIs do not all use the same licence, and the difference matters when vendoring the reference
+implementation as code:
+
+| Regime | Tell-tale wording | Usable as software? |
+|---|---|---|
+| **MIT** — most SRFIs | "Permission is hereby granted, free of charge… to deal in the Software without restriction" | yes |
+| **SRFI document licence** — early SRFIs | "This document and translations of it may be copied and furnished to others… However, this document itself may not be modified in any way" | no — it is a *documentation* licence |
+
+The second is derived from the IETF/W3C document licence. It permits copying and redistributing the
+document, and derivative works that "assist in its implementation", but it never cleanly grants
+software rights to the reference code and forbids modifying the document itself.
+
+**`(srfi 5)` (Andy Gaynor, 1999) is under the document licence and is therefore not vendored.** Other
+implementations do ship these old reference implementations, but the grant is ambiguous enough that
+it is not worth muddying this repository's licence story for a library with an in-degree of 0. To
+recheck any SRFI by hand: read the Copyright section at the bottom of
+`https://srfi.schemers.org/srfi-N/srfi-N.html`, then the `LICENSE` file in
+`github.com/scheme-requests-for-implementation/srfi-N`, and finally the reference implementation's
+own header — which can differ from the document. `(srfi 170)`, for instance, is MIT overall but
+carries BSD-3-Clause on the parts derived from scsh.
 
 ## Non-standard permissive licences
 
