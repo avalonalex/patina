@@ -1032,10 +1032,12 @@ fn dispatch_one_instruction(
             let globals = frame_globals(state);
             let val = match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
                 Some(slot) => globals.slot_value(slot),
-                // Not local to this environment: parent-chain lookup.
+                // Not a local slot. Fall back to the full lookup rather than
+                // straight to the parent: `get` also follows macro-expansion
+                // aliases recorded on this environment, which is how a template
+                // reaches a binding private to the library that defined it.
                 None => globals
-                    .parent()
-                    .and_then(|p| p.get(name))
+                    .get(name)
                     .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
             };
             state.set_reg_at(base, dst, val);

@@ -21,6 +21,13 @@ pub struct ScopedBinding {
 /// created, and redefining a name overwrites its slot in place. The VM's
 /// per-site global caches rest on this invariant (see `GlobalCacheEntry`
 /// in patina-vm), so every mutation must go through these methods.
+/// Where a macro-expansion alias points: the environment holding the real
+/// binding, and the name it has there.
+type AliasTarget = (Rc<Environment>, Rc<str>);
+
+/// Alias name -> the binding it forwards to.
+type AliasBindings = FxHashMap<String, AliasTarget>;
+
 #[derive(Debug, Default)]
 struct Bindings {
     map: FxHashMap<String, u32>,
@@ -107,6 +114,18 @@ pub struct Environment {
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
     scoped_bindings: Rc<RefCell<FxHashMap<String, Vec<ScopedBinding>>>>,
+    /// Bindings installed by macro expansion that point at a binding in
+    /// another environment instead of holding a value.
+    ///
+    /// A `syntax-rules` template may reference a name bound where the macro was
+    /// *defined* — typically a library-private helper — which does not exist
+    /// where the macro is *used*. Expansion renames such a reference to a
+    /// unique name and records the alias here, so the use site can resolve it.
+    ///
+    /// The indirection is deliberate: resolving through the alias on every
+    /// lookup means a later `set!` on the original binding is visible, which
+    /// copying the value at expansion time would silently freeze.
+    alias_bindings: Rc<RefCell<AliasBindings>>,
     parent: Option<Rc<Environment>>,
 }
 
@@ -123,6 +142,7 @@ impl Environment {
             bindings: Rc::new(RefCell::new(Bindings::default())),
             env_id: fresh_env_id(),
             scoped_bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            alias_bindings: Rc::new(RefCell::new(FxHashMap::default())),
             parent: None,
         }
     }
@@ -134,6 +154,7 @@ impl Environment {
             bindings: Rc::new(RefCell::new(Bindings::default())),
             env_id: fresh_env_id(),
             scoped_bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            alias_bindings: Rc::new(RefCell::new(FxHashMap::default())),
             parent: Some(parent),
         }
     }
@@ -223,12 +244,36 @@ impl Environment {
     /// For the simple name-based lookup for identifiers.
     pub fn get(&self, name: &str) -> Option<TaggedValue> {
         if let Some(tv) = self.bindings.borrow().get(name) {
-            Some(tv)
-        } else if let Some(parent) = &self.parent {
-            parent.get(name)
-        } else {
-            None
+            return Some(tv);
         }
+        // Follow a macro-expansion alias into the environment the macro was
+        // defined in. Checked after real bindings so a local definition always
+        // wins, and before the parent so the alias is not shadowed by an
+        // unrelated outer binding of the same (unique) name.
+        let alias = self.alias_bindings.borrow().get(name).cloned();
+        if let Some((target_env, target_name)) = alias {
+            return target_env.get(&target_name);
+        }
+        if let Some(parent) = &self.parent {
+            return parent.get(name);
+        }
+        None
+    }
+
+    /// Install a macro-expansion alias: `alias` resolves to `target_name` as
+    /// bound in `target_env`, looked up afresh on every access.
+    ///
+    /// `alias` is expected to be a name expansion generated and therefore
+    /// unique, so this cannot shadow anything the program itself wrote.
+    pub fn define_alias(&self, alias: String, target_env: Rc<Environment>, target_name: Rc<str>) {
+        self.alias_bindings
+            .borrow_mut()
+            .insert(alias, (target_env, target_name));
+    }
+
+    /// Whether `name` is a macro-expansion alias installed in this environment.
+    pub fn has_alias(&self, name: &str) -> bool {
+        self.alias_bindings.borrow().contains_key(name)
     }
 
     /// Define a binding with a scope set (for scope-based hygiene)

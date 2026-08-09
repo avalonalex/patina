@@ -132,6 +132,15 @@ fn stamp_expansion_source(
 /// macro calls, even if a macro with that name exists in the environment.
 /// This handles cases like `(let ((let odd?)) (let 8))` where the inner `let`
 /// should call the variable, not expand the macro.
+/// Monotonic counter for the unique names given to definition-environment
+/// aliases. Never reused, so an alias cannot collide with a user binding or
+/// with an alias from another expansion.
+fn next_alias_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 pub struct Desugarer {
     /// Optional environment for macro lookup
     /// If None, macros cannot be expanded (will cause desugar errors)
@@ -281,6 +290,77 @@ impl Desugarer {
         }
     }
 
+    /// Rewrite free identifiers in a macro expansion that only the macro's
+    /// definition environment can resolve.
+    ///
+    /// A `syntax-rules` template may name a helper that is private to the
+    /// library defining the macro. The expansion carries only the bare name, so
+    /// at the use site it compiles to a global load that is not there. For each
+    /// such name this installs a uniquely-named alias in the use-site
+    /// environment pointing back at the definition environment, and rewrites
+    /// the reference to use it.
+    ///
+    /// Deliberately conservative: a name the use site *can* already resolve is
+    /// left untouched. Preferring the definition binding in that case would be
+    /// more faithful to R7RS, but it would also change the meaning of macros
+    /// that resolve correctly today, so it is left for a separate change.
+    fn link_definition_env_refs(
+        &self,
+        expanded: patina_core::TaggedValue,
+        definition_env: Option<&std::rc::Rc<patina_runtime::Environment>>,
+        template_symbols: &std::collections::HashSet<std::rc::Rc<str>>,
+        shared_heap: &patina_core::SharedHeap,
+    ) -> patina_core::TaggedValue {
+        let (Some(def_env), Some(use_env)) = (definition_env, self.env.clone()) else {
+            return expanded;
+        };
+        // Same environment: nothing can be missing.
+        if def_env.env_id() == use_env.env_id() || template_symbols.is_empty() {
+            return expanded;
+        }
+        self.link_refs_impl(expanded, def_env, &use_env, template_symbols, shared_heap)
+    }
+
+    fn link_refs_impl(
+        &self,
+        tv: patina_core::TaggedValue,
+        def_env: &std::rc::Rc<patina_runtime::Environment>,
+        use_env: &std::rc::Rc<patina_runtime::Environment>,
+        template_symbols: &std::collections::HashSet<std::rc::Rc<str>>,
+        shared_heap: &patina_core::SharedHeap,
+    ) -> patina_core::TaggedValue {
+        if tv.is_pair() {
+            let (car, cdr) = shared_heap.borrow().get_pair(tv);
+            let new_car = self.link_refs_impl(car, def_env, use_env, template_symbols, shared_heap);
+            let new_cdr = self.link_refs_impl(cdr, def_env, use_env, template_symbols, shared_heap);
+            if new_car == car && new_cdr == cdr {
+                return tv;
+            }
+            return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
+        }
+
+        let name = {
+            let heap = shared_heap.borrow();
+            heap.get_symbol_name(tv)
+                .map(std::rc::Rc::from)
+                .or_else(|| utils::get_identifier_info(tv, &heap).map(|(n, _)| n))
+        };
+        let Some(name) = name else { return tv };
+
+        // Only names the template itself mentions are eligible: anything else
+        // arrived by pattern-variable substitution and belongs to the caller.
+        if !template_symbols.contains(&name) {
+            return tv;
+        }
+        // Resolvable at the use site, or not known to the definition env: leave it.
+        if use_env.get(&name).is_some() || def_env.get(&name).is_none() {
+            return tv;
+        }
+
+        let alias = format!("{}.{}", name, next_alias_id());
+        use_env.define_alias(alias.clone(), def_env.clone(), name);
+        shared_heap.borrow_mut().intern_symbol(&alias)
+    }
     /// Look up the source location for a TaggedValue in the source map
     fn lookup_source(&self, tv: TaggedValue) -> Option<SourceLocation> {
         self.source_map
@@ -450,6 +530,17 @@ impl Desugarer {
                 &self.current_scopes,
             )
             .map_err(|e| DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e)))?;
+
+            // Referential transparency: a template's free identifiers denote what
+            // they were bound to where the macro was *defined*. Link any that the
+            // use site cannot resolve back to the definition environment before
+            // desugaring, otherwise they become bare global loads here and fail.
+            let expanded_tagged = self.link_definition_env_refs(
+                expanded_tagged,
+                compiled_macro.definition_env.as_ref(),
+                &compiled_macro.template_symbols,
+                shared_heap,
+            );
 
             // Phase 4: stamp expanded pairs + record macro expansion chain
             if let (Some(src), Some(sm)) = (&call_site_source, &self.source_map) {

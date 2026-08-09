@@ -503,6 +503,49 @@ pub struct CompiledMacro {
     /// This heap is allocated at compile time and must be used (or merged into) the
     /// expansion-time heap so that literal TaggedValues remain valid.
     pub heap: SharedHeap,
+
+    /// Free identifier names appearing in this macro's templates.
+    ///
+    /// Only these may be relinked to `definition_env`. Identifiers that arrive
+    /// by pattern-variable substitution are the caller's code and belong to the
+    /// use site; after expansion both look alike in the output tree, so the
+    /// distinction has to be recorded here, where the templates are still
+    /// separable from the arguments.
+    pub template_symbols: std::collections::HashSet<Rc<str>>,
+
+    /// The environment this macro was defined in, when one was available.
+    ///
+    /// A template's free identifiers denote whatever they were bound to *here*,
+    /// not at the use site — R7RS referential transparency. Without this the
+    /// expansion emits a bare name that is resolved in the importing program,
+    /// so a macro could only ever reference bindings its caller happened to
+    /// have. Library-private helpers are the common casualty.
+    pub definition_env: Option<Rc<crate::environment::Environment>>,
+}
+
+impl Template {
+    /// Visit every free identifier name in this template.
+    ///
+    /// Pattern variables (`Template::Var`) are excluded by construction: they
+    /// are substituted from the macro call, not introduced by the template.
+    pub fn for_each_symbol(&self, f: &mut dyn FnMut(Rc<str>)) {
+        match self {
+            Template::Symbol(id) => f(id.name().clone()),
+            Template::List(items) | Template::Vector(items) => {
+                for i in items {
+                    i.for_each_symbol(f);
+                }
+            }
+            Template::DottedList { templates, tail } => {
+                for i in templates {
+                    i.for_each_symbol(f);
+                }
+                tail.for_each_symbol(f);
+            }
+            Template::Ellipsis { subtemplate, .. } => subtemplate.for_each_symbol(f),
+            Template::Literal(_) | Template::Var(_) => {}
+        }
+    }
 }
 
 impl CompiledMacro {
@@ -514,6 +557,17 @@ impl CompiledMacro {
             rule.pattern.for_each_literal(f);
             rule.template.for_each_literal(f);
         }
+    }
+
+    /// Collect the free identifier names mentioned by every rule's template.
+    pub fn collect_template_symbols(rules: &[CompiledRule]) -> std::collections::HashSet<Rc<str>> {
+        let mut out = std::collections::HashSet::new();
+        for rule in rules {
+            rule.template.for_each_symbol(&mut |name| {
+                out.insert(name);
+            });
+        }
+        out
     }
 }
 
