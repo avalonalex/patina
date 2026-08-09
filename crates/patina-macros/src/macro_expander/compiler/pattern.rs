@@ -38,10 +38,11 @@ impl Compiler {
             if let Some(tail_value) = tail {
                 // Dotted list pattern: (keyword p1 p2 . rest)
                 // First element is keyword (wildcard), rest are normal patterns
+                // The items before the dot may carry ellipses -- `(kw x ... . r)`
+                // is a valid R7RS rule pattern -- so they go through the same
+                // ellipsis-aware compiler the proper-list rule path uses.
                 let mut patterns = vec![Pattern::Wildcard];
-                for item in items.iter().skip(1) {
-                    patterns.push(self.compile_pattern(*item, level)?);
-                }
+                patterns.extend(self.compile_pattern_items(&items[1..], level)?);
                 let tail_pattern = Box::new(self.compile_pattern(tail_value, level)?);
                 Ok(Pattern::DottedList {
                     patterns,
@@ -156,10 +157,10 @@ impl Compiler {
                 let elements: Vec<TaggedValue> =
                     (0..len).map(|i| heap.vector_ref(form, i)).collect();
                 drop(heap);
-                let mut patterns = Vec::new();
-                for item in elements {
-                    patterns.push(self.compile_pattern(item, level)?);
-                }
+                // Vector patterns carry ellipses just like list ones --
+                // `#(x ...)` is valid -- so this shares the ellipsis-aware
+                // item compiler.
+                let patterns = self.compile_pattern_items(&elements, level)?;
                 Ok(Pattern::Vector(patterns))
             } else {
                 // Literal value (boolean, number, string, character, etc.)

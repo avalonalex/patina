@@ -126,10 +126,9 @@ impl Compiler {
             let len = heap.vector_len(form);
             let elements: Vec<TaggedValue> = (0..len).map(|i| heap.vector_ref(form, i)).collect();
             drop(heap);
-            let mut templates = Vec::new();
-            for item in elements {
-                templates.push(self.compile_template(item, level)?);
-            }
+            // Vector templates carry ellipses just like list ones -- `#(x ...)`
+            // is valid -- so this shares the ellipsis-aware item compiler.
+            let templates = self.compile_template_items(&elements, level)?;
             Ok(Template::Vector(templates))
         } else {
             // Literal value
@@ -154,10 +153,12 @@ impl Compiler {
         tail: TaggedValue,
         level: usize,
     ) -> Result<Template, MacroError> {
-        let mut templates = Vec::new();
-        for item in items {
-            templates.push(self.compile_template(*item, level)?);
-        }
+        // The items before the dot can themselves carry ellipses: `(x ... . tail)`
+        // is a valid R7RS template (R7RS 4.3.2), so this has to go through the
+        // same ellipsis-aware path as the proper-list case. Compiling each item
+        // directly at `level` instead would report any ellipsis variable as
+        // "level 1 used at level 0".
+        let templates = self.compile_template_items(items, level)?;
 
         let tail_template = Box::new(self.compile_template(tail, level)?);
 
