@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2026-08-09 16:17:29
+**Generated:** 2026-08-09 16:52:09
 **Backend:** tree-walker
 **Test Suite:** chibi-scheme r7rs-tests.scm, reported by upstream `(chibi test)`
 
@@ -8,9 +8,9 @@
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | 1201 | 100.0% |
+| ✅ Passed | 1226 | 100.0% |
 | ❌ Failed | 0 | 0.0% |
-| **Total** | **1201** | **100%** |
+| **Total** | **1226** | **100%** |
 
 Subgroups passed: **18/18**
 
@@ -34,19 +34,14 @@ they cannot drift from what the framework actually asserted.
 | ✅ | 6.7 Strings | 130 | 130 | 0 |
 | ✅ | 6.8 Vectors | 43 | 43 | 0 |
 | ✅ | 6.9 Bytevectors | 39 | 39 | 0 |
+| ✅ | 6.10 Control Features | 34 | 34 | 0 |
+| ✅ | 6.11 Exceptions | 30 | 30 | 0 |
 | ✅ | 6.12 Environments and evaluation | 5 | 5 | 0 |
+| ✅ | Read syntax | 93 | 93 | 0 |
 | ✅ | Numeric syntax | 220 | 220 | 0 |
+| ✅ | 6.14 System interface | 13 | 13 | 0 |
 
 **Legend:** ✅ = all passing, ⚠️ = partial, ❌ = none passing
-
-## Errors
-
-A test that crashes never reaches its assertion, so these are not
-included in the failure count above.
-
-```
-  15 Error: Undefined variable: k_50
-```
 
 ## Full Output
 

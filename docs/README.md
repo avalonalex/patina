@@ -23,5 +23,5 @@ Documentation for **completed and implemented features** in Patina.
 ## Current Status
 
 Both backends achieve **100% R7RS-small compliance**:
-- **Tree-walker:** 1163/1163 chibi r7rs-tests.scm passing
-- **VM backend:** 1163/1163 chibi r7rs-tests.scm passing
+- **VM backend:** 1226/1226 chibi r7rs-tests.scm passing
+- **Tree-walker:** 1226/1226 chibi r7rs-tests.scm passing

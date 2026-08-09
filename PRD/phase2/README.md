@@ -1,6 +1,6 @@
 # Phase 2: VM Backend
 
-**Status:** Phase 2A complete — 1163/1163 R7RS chibi tests passing (100%)
+**Status:** Phase 2A complete — 1226/1226 R7RS chibi tests passing (100%)
 **Goal:** Register-based bytecode VM implementing the `Backend` trait.
 
 ---
@@ -42,7 +42,7 @@ Not in scope for Phase 2A but tracked here.
 - ✅ Execution loop — all instructions, call dispatch
 - ✅ Control primitives — continuations, exceptions, dynamic-wind, values
 - ✅ `Backend` trait impl — `Interpreter<VmBackend>` passes all tests
-- ✅ R7RS compliance — 1163/1163 chibi tests passing
+- ✅ R7RS compliance — 1226/1226 chibi tests passing
 
 ### Phase 2B — Performance (future)
 

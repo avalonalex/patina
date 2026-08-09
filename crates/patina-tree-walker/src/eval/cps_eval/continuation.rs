@@ -147,13 +147,27 @@ impl<'a> CpsEvaluator<'a> {
                         ))
                     }
 
-                    // Other special continuations - not yet implemented
-                    ContValue::CallWithValuesConsumer { .. }
-                    | ContValue::ForceCache { .. }
-                    | ContValue::DynamicWindSetup { .. }
-                    | ContValue::DynamicWindAfterDone { .. }
-                    | ContValue::ExceptionHandlerCleanup { .. }
-                    | ContValue::RaiseHandlerReturn { .. } => None,
+                    // Effect-carrying wrappers: capture straight through to the
+                    // continuation underneath.
+                    //
+                    // These used to return None, which dropped the whole entry
+                    // from the captured environment. The body being captured
+                    // still referred to that binder, so re-entering the
+                    // continuation died with "Undefined variable: k_N" -- which
+                    // is what a `guard` nested inside another exception handler
+                    // did, since with-exception-handler installs an
+                    // ExceptionHandlerCleanup around its thunk.
+                    //
+                    // The wrapper's effect is not preserved. That is consistent
+                    // with the escape path, which already rebuilds the handler
+                    // and wind state rather than replaying it (see the
+                    // ContinuationEscape arm in mod.rs).
+                    other => other.wrapped_cont().and_then(|inner| {
+                        let unwrapped = ContEnv::new().insert(name.clone(), inner.clone());
+                        Self::capture_cont_bindings(&unwrapped, dynamic_winds, heap)
+                            .into_iter()
+                            .next()
+                    }),
                 }
             })
             .collect()

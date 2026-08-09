@@ -259,6 +259,35 @@ pub(super) enum ContValue {
     },
 }
 
+impl ContValue {
+    /// The continuation this one decorates, if it decorates one.
+    ///
+    /// Several variants wrap another continuation to attach an effect that runs
+    /// on the way out -- popping an exception handler, caching a forced
+    /// promise, running a `dynamic-wind` thunk, delivering multiple values.
+    /// Capturing a continuation cannot serialize the effect, but it must not
+    /// lose the continuation underneath: the body being captured still refers
+    /// to that binder by name, and dropping it strands the reference.
+    ///
+    /// `DynamicWindCleanup` is deliberately absent -- it has bespoke
+    /// serialization that preserves the wind identity, so it must not be
+    /// silently unwrapped to its inner continuation.
+    pub(super) fn wrapped_cont(&self) -> Option<&ContValue> {
+        match self {
+            ContValue::CallWithValuesConsumer { original_cont, .. }
+            | ContValue::ForceCache { original_cont, .. }
+            | ContValue::DynamicWindAfterDone { original_cont, .. }
+            | ContValue::ExceptionHandlerCleanup { original_cont }
+            | ContValue::RaiseHandlerReturn { original_cont, .. } => Some(original_cont),
+            ContValue::DynamicWindSetup { cleanup_cont, .. } => Some(cleanup_cont),
+            ContValue::Local { .. }
+            | ContValue::Captured(_)
+            | ContValue::Halt
+            | ContValue::DynamicWindCleanup { .. } => None,
+        }
+    }
+}
+
 // ==================== StepResult ====================
 
 /// Result of a single evaluation step (for trampoline)

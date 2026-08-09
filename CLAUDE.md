@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-Patina is an R7RS-small Scheme interpreter written in Rust. The default backend is a register-based bytecode VM (`patina-vm`). A CPS tree-walking interpreter (`patina-tree-walker`) is also available via `--tree-walker`. Both backends pass 1163/1163 chibi R7RS tests.
+Patina is an R7RS-small Scheme interpreter written in Rust. The default backend is a register-based bytecode VM (`patina-vm`). A CPS tree-walking interpreter (`patina-tree-walker`) is also available via `--tree-walker`. Both backends pass 1226/1226 chibi R7RS tests.
 
 All runtime values are `TaggedValue` — NaN-boxed 8-byte `Copy` types. No `Value` enum exists (fully removed). Macros and derived forms (`let`, `cond`, `do`, etc.) are implemented in Scheme (`lib/scheme/base/*.scm`), not as special forms.
 
@@ -150,7 +150,7 @@ if let Some(v) = v { heap.borrow()... }
 
 **Phase 1 complete** — Tree-walker: 100% R7RS compliance.
 
-**Phase 2 complete** — Bytecode VM (`patina-vm/`) is the default backend. 1163/1163 R7RS tests pass.
+**Phase 2 complete** — Bytecode VM (`patina-vm/`) is the default backend. 1226/1226 R7RS tests pass.
 **Phase 3:** `syntax-case` procedural macros — see `PRD/phase2/SYNTAX_CASE_DESIGN.md`.
 **Phase 4:** Gradual typing (Typed Racket-style).
 **Phase 5+:** Reactive streams, miniKanren logic programming.

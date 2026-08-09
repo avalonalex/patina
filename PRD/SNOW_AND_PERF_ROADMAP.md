@@ -12,7 +12,7 @@ This is the **cross-track overview**. Per-item detail lives in the two track PRD
 
 ## Context
 
-Patina's two backends (register VM default + CPS tree-walker) both pass 1163/1163 chibi R7RS tests. The next goals are to (1) **consume existing Snow libraries** and (2) **improve VM performance without sacrificing educational clarity too much**. These run as **parallel, interleaved tracks**.
+Patina's two backends (register VM default + CPS tree-walker) both pass 1226/1226 chibi R7RS tests. The next goals are to (1) **consume existing Snow libraries** and (2) **improve VM performance without sacrificing educational clarity too much**. These run as **parallel, interleaved tracks**.
 
 ### Assessment summary
 - **Performance.** The VM is a clean *first-generation* register machine (~4.2× the tree-walker). Hot path is heavy: string-`HashMap` primitive dispatch, string-hashed globals, per-call free-var `Vec` clones, **no GC** (arenas never reclaim). The `CallPrimitive` fast-path opcode exists but is unwired. Criterion benches measure the tree-walker, not the VM. → **Track P.**
@@ -56,7 +56,7 @@ GC (P6) is the cross-cutting unblocker: real Snow workloads run long enough that
 ---
 
 ## Verification (end to end)
-- Routine: `cargo build --release && ./scripts/run_chibi_tests.sh` after every item (must stay 1163/1163).
+- Routine: `cargo build --release && ./scripts/run_chibi_tests.sh` after every item (must stay 1226/1226).
 - Perf: `cargo bench -p patina-tests` (VM-backed after P0) vs baseline; `./scripts/bench_compare.sh` cross-check.
 - GC: dual CI lanes (`--no-default-features` vs `--features gc`) + `--gc-stress`.
 - Snow: the L3 integration tests load and exercise real packages.

@@ -25,7 +25,7 @@ Two consequences worth stating plainly:
   development can produce on a substantial project (an interpreter with a
   bytecode VM, hygienic macros, and a full numeric tower) — not a hardened
   production Scheme.
-- **It is tested like it matters anyway.** 1163/1163 of the chibi-scheme
+- **It is tested like it matters anyway.** 1226/1226 of the chibi-scheme
   R7RS suite on both backends, ~1,400 integration tests, and differential
   testing between the two backends gate every change.
 
@@ -39,7 +39,7 @@ Patina is an educational and experimental Scheme interpreter with ambitious goal
 
 Our primary focus is complete conformance to the R7RS-small specification. We validate against the comprehensive [Chibi Scheme](https://github.com/ashinn/chibi-scheme) test suite maintained by Alex Shinn, chairman of the R7RS Small Language committee.
 
-**Current status**: 100% of chibi r7rs-tests.scm passing (1163/1163 tests) on both backends.
+**Current status**: 100% of chibi r7rs-tests.scm passing (1226/1226 tests) on both backends.
 
 ### Modular Architecture
 

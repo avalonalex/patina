@@ -1,6 +1,6 @@
 # Patina VM: Instruction Set Architecture
 
-**Status:** Implemented — Phase 2A complete, 1163/1163 R7RS chibi tests passing
+**Status:** Implemented — Phase 2A complete, 1226/1226 R7RS chibi tests passing
 **See also:** [VM_COMPILER.md](./VM_COMPILER.md), [VM_RUNTIME.md](./VM_RUNTIME.md), [VM_DECISIONS.md](./VM_DECISIONS.md)
 
 ---

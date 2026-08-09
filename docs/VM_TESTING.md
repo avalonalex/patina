@@ -1,6 +1,6 @@
 # Patina VM: Testing
 
-**Status:** All tests passing — 1163/1163 R7RS chibi tests, ~1400 internal tests
+**Status:** All tests passing — 1226/1226 R7RS chibi tests on both backends, ~1400 internal tests
 
 ---
 
@@ -44,7 +44,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 ### Layer 4 — R7RS Compliance
 
 `./scripts/run_chibi_tests.sh` runs the chibi `r7rs-tests.scm` suite
-(1163 tests) against the VM backend (the default). This is the primary
+(1226 tests) against the VM backend (the default). This is the primary
 correctness gate. `./scripts/run_chibi_tests_tree_walker.sh` runs the same suite
 against the tree-walker backend.
 
