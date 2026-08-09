@@ -130,11 +130,43 @@ where
         actual: patina_core::format_tagged(input, heap),
     })?;
 
+    match_elements_with_ellipsis(
+        patterns,
+        &input_list,
+        env,
+        level,
+        num_pvars,
+        heap,
+        match_impl,
+        "list pattern",
+    )
+}
+
+/// Match a pattern sequence containing an ellipsis against a slice of elements.
+///
+/// Shared by the list and vector paths. Both container kinds admit the same
+/// `p ... q` shape, and the algorithm is purely index-based, so the only thing
+/// that differed between them was how the elements were obtained -- which is
+/// the caller's job.
+#[allow(clippy::too_many_arguments)]
+fn match_elements_with_ellipsis<F>(
+    patterns: &[Pattern],
+    input_list: &[TaggedValue],
+    env: &mut MatchEnv,
+    level: usize,
+    num_pvars: usize,
+    heap: &Heap,
+    match_impl: F,
+    what: &str,
+) -> Result<(), MatchError>
+where
+    F: Fn(&Pattern, TaggedValue, &mut MatchEnv, usize, &Heap) -> Result<(), MatchError>,
+{
     // Check if we have enough elements
     let min_required = count_min_required(patterns);
     if input_list.len() < min_required {
         return Err(MatchError::TooFewElements {
-            pattern: "list pattern".to_string(),
+            pattern: what.to_string(),
             expected: min_required,
             actual: input_list.len(),
         });
@@ -212,6 +244,7 @@ pub fn match_vector_tagged<F>(
     input: TaggedValue,
     env: &mut MatchEnv,
     level: usize,
+    num_pvars: usize,
     heap: &Heap,
     match_impl: F,
 ) -> Result<(), MatchError>
@@ -222,7 +255,24 @@ where
     if input.is_vector() {
         let input_len = heap.vector_len(input);
 
-        // Require exact size match (no ellipsis in vectors yet)
+        // `#(x ...)` is a valid pattern, so an ellipsis makes the vector length
+        // variable. Defer to the same element walk the list path uses.
+        if patterns.iter().any(|p| p.is_ellipsis()) {
+            let elements: Vec<TaggedValue> =
+                (0..input_len).map(|i| heap.vector_ref(input, i)).collect();
+            return match_elements_with_ellipsis(
+                patterns,
+                &elements,
+                env,
+                level,
+                num_pvars,
+                heap,
+                match_impl,
+                "vector pattern",
+            );
+        }
+
+        // Without an ellipsis the length is fixed, so check it up front.
         if patterns.len() != input_len {
             return Err(MatchError::VectorSizeMismatch {
                 expected: patterns.len(),

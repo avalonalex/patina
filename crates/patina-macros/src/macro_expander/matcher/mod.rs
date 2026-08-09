@@ -252,6 +252,7 @@ impl Matcher {
                     input,
                     env,
                     level,
+                    self.num_pvars,
                     heap,
                     |p, i, e, l, h| self.match_impl_tagged(p, i, e, l, h),
                 )
