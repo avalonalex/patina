@@ -352,8 +352,19 @@ impl Desugarer {
         if !template_symbols.contains(&name) {
             return tv;
         }
-        // Resolvable at the use site, or not known to the definition env: leave it.
-        if use_env.get(&name).is_some() || def_env.get(&name).is_none() {
+        // The definition environment decides. R7RS 4.3.2: a free identifier in a
+        // template refers to the binding in scope where the macro was written,
+        // so a use-site binding of the same name must not displace it.
+        let Some(def_value) = def_env.get(&name) else {
+            return tv;
+        };
+
+        // Both environments agree on the value -- overwhelmingly the common
+        // case, since most template references are to primitives that were
+        // copied into both. Relinking would be a no-op, so skip the alias and
+        // the symbol allocation rather than paying for them on every expansion
+        // of `let`, `cond`, `do` and friends.
+        if use_env.get(&name) == Some(def_value) {
             return tv;
         }
 

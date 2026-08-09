@@ -187,12 +187,17 @@ fn test_substituted_identifiers_still_resolve_at_the_use_site() {
     assert_eq!(exported_fixnum(&eval, "uselog", "r"), 7);
 }
 
-/// A use-site binding of a template name keeps winning. Preferring the
-/// definition binding would be more faithful, but it would change the meaning
-/// of macros that resolve correctly today, so the relinking is deliberately
-/// limited to names the use site cannot resolve at all.
+/// The definition binding wins over a same-named binding at the use site.
+///
+/// R7RS 4.3.2: a free identifier in a template refers to the binding in scope
+/// where the macro was written. `(t amb)` and `(t useamb)` each define
+/// `shared`; `pick` must reach the one it was written next to.
+///
+/// Patina briefly did the opposite — the first cut of the definition-environment
+/// fix only relinked names the use site could not resolve at all, which left
+/// this case silently capturing. Fixed while the cost of changing was still low.
 #[test]
-fn test_use_site_binding_is_not_displaced() {
+fn test_definition_binding_wins_over_use_site() {
     let (eval, _t) = eval_with_libs(&[
         (
             "amb.sld",
@@ -213,5 +218,9 @@ fn test_use_site_binding_is_not_displaced() {
                    (define r (pick))))"#,
         ),
     ]);
-    assert_eq!(exported_fixnum(&eval, "useamb", "r"), 2);
+    assert_eq!(
+        exported_fixnum(&eval, "useamb", "r"),
+        1,
+        "template's `shared` must be the one defined alongside the macro"
+    );
 }
