@@ -99,7 +99,7 @@ test with `(chibi test)`, which Patina **already ships**. Primitive-backed work 
 `crates/patina-runtime/src/stdlib/internal_*.rs`, registered in *both* the primitive registry and the
 library builder; aligns with `PRD/PARALLEL_TRACKS.md` Track B3.
 - **Porting patterns to reapply** (from `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`): import `(scheme r5rs)` for R5RS naming (`exact->inexact` etc.); shim `:optional`/`let-optionals`/`receive`/`check-arg`; treat form-feed as whitespace (already fixed); defer arity rejection so `guard` can catch `apply` errors (already fixed); watch the VM control-op edge cases in `PRD/phase2/INSTRUCTION_LEVEL_CONTROL_OPS.md`.
-- **Acceptance:** one integration test per SRFI exercising its headline forms; `./scripts/run_chibi_tests.sh` stays 1163/1163.
+- **Acceptance:** one integration test per SRFI exercising its headline forms; `./scripts/run_chibi_tests.sh` stays 1226/1226.
 
 ### L2 — Bundle the common `(chibi …)` libraries
 Third-party packages frequently `(import (chibi …))`; today only `(chibi test)` exists. Port from the pinned chibi checkout the harness already fetches (locally mirrored at `~/Project/reference/chibi-scheme`), in the order L0.75/L3 dictate. Each ported library also brings its upstream `*-test.sld` suite, which drops straight into the L3 corpus:
@@ -156,16 +156,23 @@ reconciling them would discard the only evidence of how. Measured today:
 
 | Library | Divergence from upstream |
 |---|---|
-| `(chibi test)` | **Missing 26 exports** — `test-group`, `test-exit`, `test-run`, `test-equal`, `test-group-ref`, the `current-test-*` parameters. Patina ships two counter hooks upstream lacks. |
+| `(chibi test)` | ✅ **Done** — replaced with a verbatim upstream import. The subset counted 1163 tests where the framework counts 1226, and reported three failures as passes. |
 | `(srfi 1)` | Does not re-export the 26 `c[ad]+r` accessors upstream does; exports `make-list`/`list-copy`, which upstream leaves to `(scheme base)`. 74 lines of real drift, rest whitespace. |
 | `(srfi 128)` | Missing `%salt%` (internal, not in the SRFI — likely correct to keep out). |
 | `(srfi 8)`, `(srfi 69)` | Identical. Ready to un-duplicate now. |
 
-**`(chibi test)` first.** It was written as a hack — the minimum needed to get the chibi R7RS suite
-running under Patina — and it is now the **most-depended library in the ecosystem** (in-degree 43),
-so its 26 missing exports will block corpus packages directly. Replace it with a proper import of
-upstream. Care required: the 1163-test R7RS suite runs on it, so this lands as its own PR where any
-regression is attributable.
+**`(chibi test)` is done.** It was written as a hack — the minimum needed to get the chibi R7RS
+suite running — and was replaced with a verbatim upstream import once the template-ellipsis (#37) and
+macro-hygiene (#38) bugs blocking its dependency closure were fixed.
+
+Adopting it changed the headline number, and for the better: the subset counted **1163** tests where
+the framework counts **1226**, and it silently reported three failures as passes. Those three were a
+real `eqv?` bug on `+nan.0` and `-0.0`, fixed alongside. The subset also special-cased NaN in its own
+comparator — the harness was concealing a defect in the thing it existed to measure.
+
+It also made a pre-existing backend gap visible: the tree-walker errors on 15 tests with
+`Undefined variable: k_N`, a CPS bug on nested `guard` across a procedure boundary. Repro and
+analysis in §6.
 
 **Steps:** reconcile each port against its vendored reference → remove the vendored copy → let
 `build_corpus.py` exclude bundled libraries automatically via `bundled_libraries()` → delete
@@ -173,7 +180,7 @@ regression is attributable.
 exist only to make the interim state safe.
 
 - **Acceptance:** no package in `compat/vendor/` is flagged `bundled_by_patina`; the drift guard and
-  the flag are deleted; `./scripts/run_chibi_tests.sh` still reports 1163/1163.
+  the flag are deleted; `./scripts/run_chibi_tests.sh` still reports 1226/1226.
 
 ---
 
@@ -184,7 +191,45 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 **Self-containment invariant.** At no point does the track acquire a build-, test-, or CI-time dependency on another Scheme implementation or package manager. The chibi checkout is corpus *data* pinned by commit, not tooling. Anything that would violate this belongs in §3. See `PRD/SNOW_AND_PERF_ROADMAP.md` for the M1–M4 interleave with Track P; note that Track P's GC (P6) is the cross-cutting unblocker that lets L3's real packages run long-running without leaking.
 
-## 6. Risks & mitigations
+## 6. Known defects surfaced by this track
+
+**Tree-walker: nested `guard` across a procedure boundary** — ✅ **fixed**. Was 15 errors in the
+R7RS suite, all `Undefined variable: k_N`. Pre-existing (reproduced on `main` before this track) and
+invisible until upstream `(chibi test)` was adopted, because its applier calls every test thunk from
+inside its own `guard`.
+
+Cause: `capture_cont_bindings` returned `None` for the six `ContValue` variants that decorate another
+continuation with an effect — popping an exception handler, caching a forced promise, running a wind
+thunk, delivering multiple values. Returning `None` dropped the whole entry from the captured
+continuation environment, so the captured body's reference to that binder was stranded. Those
+variants now capture through to the continuation they wrap, via one shared
+`ContValue::wrapped_cont()` rule rather than six arms. The wrapper's effect is still not serialized,
+which matches the escape path's existing behaviour of rebuilding handler and wind state.
+
+The VM was never affected: `call/cc` snapshots whole machine state instead of serializing
+continuations name by name, so there is no per-variant case to leave unimplemented.
+
+```scheme
+(define (run thunk)
+  (guard (e (#t (list 'outer e)))
+    (list 'ok (thunk))))
+
+(run (lambda () (guard (x (else 'inner)) (error "boom"))))
+;; tree-walker => Error: Undefined variable: k_7
+;; VM          => (ok inner)
+```
+
+`(chibi test)` hits it because `test-default-applier` calls the test thunk from inside its own
+`guard`, so every suite test whose body uses `guard` trips it — which is why the errors cluster in
+6.10 Control Features and 6.11 Exceptions. A single `guard`, a `guard` under `dynamic-wind`, a
+`guard` under `call/cc`, and two sequential `guard`s all work; only the nesting-across-a-call case
+fails.
+
+**Bare `@` rejected as an identifier** — 9 corpus packages, including `(chibi match)`. Patina is
+strictly correct per R7RS 7.1.1 (`@` is a ⟨special subsequent⟩, not an ⟨initial⟩); chibi and Gauche
+accept it. A deliberate strictness decision rather than a bug, but it needs making explicitly.
+
+## 7. Risks & mitigations
 - **Per-new-SRFI friction** (non-R7RS constructs, R5RS naming, control-op edges) → apply the resolved patterns in `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`; import each reference implementation incrementally with its own test.
 - **The pass rate has a ceiling well below 100%** — a meaningful share of Snow packages import `(chibi ast)` or other C-backed/FFI libraries and can never pass while FFI is deferred. → Have the L3 harness classify these as *out-of-scope* rather than *failing*, and report the achievable denominator alongside the raw one, so the number is not misread as a defect count.
 - **Coupling the track to another implementation's tooling** — depending on `snow-chibi` would put an interactive tool and chibi's release cadence on our critical path, and a fork of its implementation tables would need perpetual rebasing. → Avoided by construction: the harness depends on the snowball / `package.scm` / repo-index *formats*, which are stable s-expressions, not on chibi's code. See the self-containment invariant in §5.
@@ -194,8 +239,9 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 - **New filesystem/process primitives** → implement behind the `FileSystem` trait for testability and future WASM.
 - **Stale tracking docs** → reconcile `PRD/phase2/R7RS_LARGE_STATUS.md` (says SRFIs "not started") with `PRD/PARALLEL_TRACKS.md` (9 done) when updating SRFI status.
 
-## 7. Verification (track-wide)
-- Routine: `cargo build --release && ./scripts/run_chibi_tests.sh` (must stay 1163/1163) after every item.
+## 8. Verification (track-wide)
+- Routine: `cargo build --release && ./scripts/run_chibi_tests.sh` (must stay 1226/1226) after every item.
+  `./scripts/run_chibi_tests_tree_walker.sh` must likewise stay 1226/1226.
 - Per-library: a focused integration test exercising headline forms.
 - End-to-end: `cargo run -p patina-compat -- run` — the "N of M" number is the track's headline metric and is expected to move monotonically upward.
 - Self-containment: the harness must produce that number on a machine with **no other Scheme installed** and, for tier 0, **no network**. This is a standing acceptance criterion, not a one-time check.

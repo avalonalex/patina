@@ -835,6 +835,8 @@ Original plan: **P0** → **P1** → **P2 → P3** → **P4 → P5**, with **P6*
 - **GC risks** → covered in `docs/GC_DESIGN.md` §9–11 (hazards, feature-flag lanes, `--gc-stress`, poison mode).
 
 ## 7. Verification (track-wide)
-- Routine: `cargo build --release && ./scripts/run_chibi_tests.sh` (must stay 1163/1163) after every item.
+- Routine: `cargo build --release && ./scripts/run_chibi_tests.sh` (must stay 1226/1226) after every item.
+  Historical figures below say 1163: that was the hand-written `(chibi test)` subset, which counted
+  63 fewer tests than the upstream framework now bundled. Those measurements stand as recorded.
 - Perf: `cargo bench -p patina-tests` (VM-backed after P0) vs baseline; `./scripts/bench_compare.sh` cross-check.
 - Quality gate: `cargo clippy --all-targets --all-features -- -D warnings` and `cargo fmt`.

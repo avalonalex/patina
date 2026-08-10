@@ -4,7 +4,7 @@ This directory contains all design documents for Patina's macro system evolution
 
 ## Current State
 
-Patina has a complete R7RS-small `syntax-rules` implementation with Racket-style scope-set hygiene (1163/1163 chibi tests passing). The macro expander lives in `crates/patina-macros/`.
+Patina has a complete R7RS-small `syntax-rules` implementation with Racket-style scope-set hygiene (1226/1226 chibi tests passing). The macro expander lives in `crates/patina-macros/`.
 
 ## Document Index
 

@@ -38,12 +38,29 @@ pub struct CpsContinuation {
     /// These need to be reinstalled when the continuation is invoked
     pub dynamic_winds: Vec<DynamicWindRecord>,
 
-    /// Captured continuation bindings that were in scope when this continuation
-    /// was captured. Each entry is (name, continuation) representing a let-cont
-    /// binding that the continuation body may reference.
-    /// This is a Vec of boxed CpsContinuations rather than a HashMap to avoid
-    /// circular type dependencies and to keep patina-core dependency-free.
-    pub captured_cont_bindings: Vec<(Rc<str>, Rc<CpsContinuation>)>,
+    /// The continuation environment in scope where this was captured.
+    ///
+    /// The body may reference let-cont bindings by name, so re-entry has to
+    /// restore them. This holds the evaluator's own `ContEnv` -- an `Rc` cons
+    /// list, so capturing is a refcount bump and restoring is a move.
+    ///
+    /// It used to be a `Vec<(Rc<str>, Rc<CpsContinuation>)>` projection, on the
+    /// stated grounds of keeping this crate dependency-free. That did not hold
+    /// -- every payload of `ContValue` is already a `patina-core` type -- and
+    /// the projection could only express `ContValue::Local`, so the other
+    /// variants were either encoded under sentinel names or silently dropped.
+    pub captured_cont_env: crate::cont_value::ContEnv,
+
+    /// The continuation value to resume into, when it is not simply the
+    /// `body`/`param`/`env` triple above.
+    ///
+    /// Effect-carrying variants -- `DynamicWindCleanup` above all -- cannot be
+    /// flattened into a body: re-entry has to re-establish the wind cleanup, not
+    /// just jump to the expression underneath. They used to be encoded as fake
+    /// bindings named `__dw_after__` / `__dw_wind_id__` / `__dw_original__`
+    /// behind a `__dynamic_wind_cleanup__` marker body, which three separate
+    /// places had to recognise and decode. Now the value is simply stored.
+    pub resume: Option<crate::cont_value::ContValue>,
 }
 
 /// Global counter for generating unique dynamic-wind IDs

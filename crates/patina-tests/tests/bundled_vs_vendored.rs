@@ -39,7 +39,8 @@ struct Guarded {
     only_bundled: &'static [&'static str],
     /// Exports upstream has that Patina does not, and why.
     only_vendored: &'static [&'static str],
-    /// Why the divergence is acceptable. Documentation, not logic.
+    /// Why this entry reads as it does: the divergence it accepts, or why
+    /// there is none. Documentation, not logic.
     rationale: &'static str,
 }
 
@@ -47,35 +48,6 @@ const CXR: &[&str] = &[
     "caaaar", "caaadr", "caadar", "caaddr", "caadr", "caar", "cadaar", "cadadr", "cadar", "caddar",
     "cadddr", "caddr", "cadr", "cdaaar", "cdaadr", "cdaar", "cdadar", "cdaddr", "cdadr", "cdar",
     "cddaar", "cddadr", "cddar", "cdddar", "cddddr", "cddr",
-];
-
-const CHIBI_TEST_EXTRA: &[&str] = &[
-    "current-column-width",
-    "current-test-applier",
-    "current-test-comparator",
-    "current-test-epsilon",
-    "current-test-filters",
-    "current-test-group",
-    "current-test-group-filters",
-    "current-test-group-removers",
-    "current-test-group-reporter",
-    "current-test-removers",
-    "current-test-reporter",
-    "current-test-skipper",
-    "current-test-verbosity",
-    "test-equal",
-    "test-exit",
-    "test-failure-count",
-    "test-get-name!",
-    "test-group",
-    "test-group-inc!",
-    "test-group-name",
-    "test-group-push!",
-    "test-group-ref",
-    "test-group-set!",
-    "test-propagate-info",
-    "test-run",
-    "test-syntax-error",
 ];
 
 const GUARDED: &[Guarded] = &[
@@ -115,16 +87,42 @@ const GUARDED: &[Guarded] = &[
         rationale: "%salt% is an internal hash parameter upstream exposes; not part of the SRFI \
                     128 specification and deliberately not re-exported.",
     },
+    // Imported verbatim rather than ported -- the L4 end state. Byte-identical,
+    // so there is nothing to reconcile and they can leave the corpus as soon as
+    // the exclusion mechanism lands.
+    Guarded {
+        library: "chibi term ansi",
+        bundled: "lib/chibi/term/ansi.sld",
+        vendored: "compat/vendor/chibi-term-ansi/chibi/term/ansi.sld",
+        only_bundled: &[],
+        only_vendored: &[],
+        rationale: "Byte-identical upstream import.",
+    },
+    Guarded {
+        library: "chibi optional",
+        bundled: "lib/chibi/optional.sld",
+        vendored: "compat/vendor/chibi-optional/chibi/optional.sld",
+        only_bundled: &[],
+        only_vendored: &[],
+        rationale: "Byte-identical upstream import.",
+    },
+    Guarded {
+        library: "chibi diff",
+        bundled: "lib/chibi/diff.sld",
+        vendored: "compat/vendor/chibi-diff/chibi/diff.sld",
+        only_bundled: &[],
+        only_vendored: &[],
+        rationale: "Byte-identical upstream import.",
+    },
     Guarded {
         library: "chibi test",
         bundled: "lib/chibi/test.sld",
         vendored: "compat/vendor/chibi-test/chibi/test.sld",
-        only_bundled: &["test-increment-failed", "test-increment-passed"],
-        only_vendored: CHIBI_TEST_EXTRA,
-        rationale: "Patina implements the subset of (chibi test) the R7RS suite needs, plus two \
-                    counter hooks of its own. The upstream extras are test-runner configuration \
-                    and grouping that nothing in the corpus has required yet — expect this gap to \
-                    shrink as corpus packages ask for them.",
+        only_bundled: &[],
+        only_vendored: &[],
+        rationale: "Byte-identical upstream import. Patina previously shipped a \
+                    hand-written subset that under-reported the R7RS suite by 63 \
+                    tests and could not express three of its failures.",
     },
 ];
 

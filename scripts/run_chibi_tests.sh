@@ -1,258 +1,199 @@
 #!/bin/bash
-# Run chibi-scheme r7rs test suite with Patina interpreter
-# Generates compatibility report
+# Run the chibi-scheme r7rs test suite under Patina and generate a report.
+#
+#   ./scripts/run_chibi_tests.sh                 # VM backend (default)
+#   ./scripts/run_chibi_tests.sh --tree-walker   # CPS tree-walker backend
+#
+# Exits non-zero if any test fails or errors, so CI and the wrapper script can
+# gate on it.
+#
+# The suite reports itself through (chibi test), which Patina bundles verbatim
+# from upstream, so the totals are the framework's own rather than a count this
+# script derives -- they cannot drift from what was actually asserted.
 
-set -e
+set -eo pipefail
 
-# Colors for output
+# Data paths are repo-relative; work from the repo root however we were invoked.
+cd "$(dirname "$0")/.."
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Paths
+BACKEND_ARGS=()
+BACKEND_NAME="VM"
+SUFFIX=""
+for arg in "$@"; do
+    case "$arg" in
+        --tree-walker)
+            BACKEND_ARGS=(--tree-walker)
+            BACKEND_NAME="tree-walker"
+            SUFFIX="_tree_walker"
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--tree-walker]"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $arg" >&2
+            echo "Usage: $0 [--tree-walker]" >&2
+            exit 2
+            ;;
+    esac
+done
+
 PATINA_BIN="./target/release/patina"
 TEST_FILE="scheme_tests/chibi/r7rs-tests.scm"
 REPORT_DIR="scheme_tests/reports"
-RESULTS_FILE="${REPORT_DIR}/results.txt"
-COMPAT_REPORT="${REPORT_DIR}/compatibility.md"
+RESULTS_FILE="${REPORT_DIR}/results${SUFFIX}.txt"
+COMPAT_REPORT="${REPORT_DIR}/compatibility${SUFFIX}.md"
 
-# Check if binary exists
 if [ ! -f "$PATINA_BIN" ]; then
     echo -e "${RED}Error: Patina binary not found at $PATINA_BIN${NC}"
     echo "Please build with: cargo build --release"
     exit 1
 fi
-
-# Check if test file exists
 if [ ! -f "$TEST_FILE" ]; then
     echo -e "${RED}Error: Test file not found at $TEST_FILE${NC}"
     exit 1
 fi
 
-# Create reports directory if it doesn't exist
 mkdir -p "$REPORT_DIR"
 
-echo -e "${GREEN}Running chibi-scheme r7rs test suite...${NC}"
+echo -e "${GREEN}Running chibi-scheme r7rs test suite (${BACKEND_NAME} backend)...${NC}"
 echo "Test file: $TEST_FILE"
-echo "Results will be saved to: $RESULTS_FILE"
+echo "Results:   $RESULTS_FILE"
 echo ""
 
-# Run the tests and capture output
-# VM backend is the default
-if "$PATINA_BIN" "$TEST_FILE" > "$RESULTS_FILE" 2>&1; then
-    echo -e "${GREEN}Tests completed successfully${NC}"
+# (chibi test) exits non-zero when any test fails; keep going so the report is
+# still written. It also colourises, so strip escapes on the way to disk -- the
+# saved log stays readable and every parse below sees the same plain text.
+if "$PATINA_BIN" "${BACKEND_ARGS[@]}" "$TEST_FILE" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$RESULTS_FILE"; then
+    echo -e "${GREEN}Suite completed${NC}"
 else
-    echo -e "${YELLOW}Tests completed with errors (exit code: $?)${NC}"
+    echo -e "${YELLOW}Suite completed with failures${NC}"
 fi
 
-# Parse results and generate report
-echo ""
-echo -e "${GREEN}Generating compatibility report...${NC}"
+# Grand totals are the framework's own tally, emitted unindented at column 0;
+# per-section tallies are indented, so anchoring on ^ tells them apart.
+read -r PASS_COUNT TRUE_TOTAL SUBGROUPS <<<"$(awk '
+    /^[0-9]+ out of [0-9]+ .*tests passed/      { p = $1; t = $4 }
+    /^[0-9]+ out of [0-9]+ .*subgroups? passed/ { s = $1 "/" $4 }
+    END { print p + 0, t + 0, (s ? s : "n/a") }
+' "$RESULTS_FILE")"
 
-# Count test results from output
-# Strategy: track each section and its "Tests run:" line. For sections that contain
-# subsections (like 6.13 Input and output), the parent emits a cumulative total after
-# the subsections. We detect parent sections by checking if another "Running test suite:"
-# appears before the first "Tests run:" for a section.
-#
-# We use the LAST "Tests run:" line before each new "Running test suite:" or EOF.
-# For leaf sections this is the only line; for parent sections this is the cumulative total.
-# We skip the top-level "R7RS" section to avoid double-counting.
-COUNTS=$(awk '
-    /^Running test suite:/ {
-        # Emit pending counts from previous section (if any)
-        if (section != "" && section != "R7RS" && have_counts) {
-            total += last_total
-            passed += last_passed
-            failed += last_failed
-            errors += last_errors
-        }
-        section = $0
-        sub(/^Running test suite: /, "", section)
-        have_counts = 0
-    }
-    /^Tests run:/ {
-        line = $0
-        gsub(/,/, "", line)
-        split(line, parts)
-        last_total = 0; last_passed = 0; last_failed = 0; last_errors = 0
-        for (i = 1; i <= length(parts); i++) {
-            if (parts[i] == "run:") last_total = parts[i+1]+0
-            if (parts[i] == "Passed:") last_passed = parts[i+1]+0
-            if (parts[i] == "Failed:") last_failed = parts[i+1]+0
-            if (parts[i] == "Errors:") last_errors = parts[i+1]+0
-        }
-        have_counts = 1
-    }
-    END {
-        # Emit last section
-        if (section != "" && section != "R7RS" && have_counts) {
-            total += last_total
-            passed += last_passed
-            failed += last_failed
-            errors += last_errors
-        }
-        print passed+0, failed+0, total+0, errors+0
-    }
-' "$RESULTS_FILE")
+FAIL_COUNT=$((TRUE_TOTAL - PASS_COUNT))
+# A test that crashes the interpreter never reaches an assertion, so it is
+# counted separately from a test that ran and disagreed.
+ERROR_COUNT=$(grep -c "^Error" "$RESULTS_FILE" || true)
 
-PASS_COUNT=$(echo "$COUNTS" | awk '{print $1}')
-FAIL_COUNT=$(echo "$COUNTS" | awk '{print $2}')
-TOTAL_COUNT=$(echo "$COUNTS" | awk '{print $3}')
-ERROR_COUNT=$(echo "$COUNTS" | awk '{print $4}')
+if [ "$TRUE_TOTAL" -eq 0 ]; then
+    echo -e "${RED}Could not parse a total from the suite output.${NC}"
+    echo "This usually means the run aborted early — see $RESULTS_FILE"
+    exit 1
+fi
 
-# TRUE_TOTAL is the total from the framework
-TRUE_TOTAL=$TOTAL_COUNT
+pct() { awk -v n="$1" -v t="$TRUE_TOTAL" 'BEGIN { printf "%.1f%%", n / t * 100 }'; }
 
-# Count lines that start with "FAIL:" for detailed failure reporting
-ADDITIONAL_FAILS=$(grep -c "^FAIL:" "$RESULTS_FILE" 2>/dev/null | head -1); ADDITIONAL_FAILS=${ADDITIONAL_FAILS:-0}
-
-# Generate section breakdown
-# Parse "Running test suite: X" followed immediately by "Tests run: ..." lines
-# Skip cumulative totals from parent sections
+# Section breakdown: each group prints "<name>: <dots>" and then its own tally.
+# Two-state pairing is load-bearing: a section with subgroups emits its own
+# cumulative tally after theirs, and clearing `name` stops that being credited
+# to the next section.
 SECTION_BREAKDOWN=$(awk '
-    /^Running test suite:/ {
-        section = $0
-        sub(/^Running test suite: /, "", section)
-        saw_suite = 1
+    /^ +.*: *\.*$/ {
+        name = $0
+        sub(/^ +/, "", name)
+        sub(/: *\.*$/, "", name)
+        next
     }
-    /^Tests run:/ && saw_suite == 1 {
-        if (section != "" && section != "R7RS") {
-            # Parse: Tests run: X, Passed: Y, Failed: Z[, Errors: W]
-            line = $0
-            gsub(/,/, "", line)
-            split(line, parts)
-            total = 0; passed = 0; failed = 0; errors = 0
-            for (i = 1; i <= length(parts); i++) {
-                if (parts[i] == "run:") total = parts[i+1]
-                if (parts[i] == "Passed:") passed = parts[i+1]
-                if (parts[i] == "Failed:") failed = parts[i+1]
-                if (parts[i] == "Errors:") errors = parts[i+1]
-            }
-            # Determine status emoji
-            if (errors > 0 || failed > 0) {
-                if (passed == total) status = "✅"
-                else if (passed > 0) status = "⚠️"
-                else status = "❌"
-            } else {
-                status = "✅"
-            }
-            printf "| %s | %s | %d | %d | %d | %d |\n", status, section, total, passed, failed, errors
-        }
-        section = ""
-        saw_suite = 0
+    /^ +[0-9]+ out of [0-9]+ .*tests passed/ {
+        if (name == "") next
+        passed = $1; total = $4; failed = total - passed
+        status = (failed == 0) ? "✅" : ((passed == 0) ? "❌" : "⚠️")
+        printf "| %s | %s | %d | %d | %d |\n", status, name, total, passed, failed
+        name = ""
     }
 ' "$RESULTS_FILE")
 
-# Generate markdown report
 cat > "$COMPAT_REPORT" << EOF
 # Patina R7RS Compatibility Report
 
 **Generated:** $(date '+%Y-%m-%d %H:%M:%S')
-**Test Suite:** chibi-scheme r7rs-tests.scm
+**Backend:** $BACKEND_NAME
+**Test Suite:** chibi-scheme r7rs-tests.scm, reported by upstream \`(chibi test)\`
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ Passed | $PASS_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($PASS_COUNT/$TRUE_TOTAL)*100}") |
-| ❌ Failed | $FAIL_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($FAIL_COUNT/$TRUE_TOTAL)*100}") |
-| ⚠️ Error (crashed) | $ERROR_COUNT | $(awk "BEGIN {printf \"%.1f%%\", ($ERROR_COUNT/$TRUE_TOTAL)*100}") |
+| ✅ Passed | $PASS_COUNT | $(pct "$PASS_COUNT") |
+| ❌ Failed | $FAIL_COUNT | $(pct "$FAIL_COUNT") |
 | **Total** | **$TRUE_TOTAL** | **100%** |
 
-**Note:** "Error" means the test crashed before assertions could run (usually missing features like call/cc, guard).
+Subgroups passed: **$SUBGROUPS**
+
+Counts come from \`(chibi test)\` itself rather than being re-derived here, so
+they cannot drift from what the framework actually asserted.
 
 ## Section Breakdown
 
-| Status | Section | Total | Passed | Failed | Errors |
-|--------|---------|-------|--------|--------|--------|
+| Status | Section | Total | Passed | Failed |
+|--------|---------|-------|--------|--------|
 $SECTION_BREAKDOWN
 
-**Legend:** ✅ = All passing, ⚠️ = Partial, ❌ = None passing
-
-## Failed Tests
+**Legend:** ✅ = all passing, ⚠️ = partial, ❌ = none passing
 
 EOF
 
-# Add failed test details if any
-if [ "$ADDITIONAL_FAILS" -gt 0 ]; then
-    echo "### Test Failures" >> "$COMPAT_REPORT"
-    echo "" >> "$COMPAT_REPORT"
-    echo "\`\`\`" >> "$COMPAT_REPORT"
-    grep "^FAIL:" "$RESULTS_FILE" >> "$COMPAT_REPORT" || true
-    echo "\`\`\`" >> "$COMPAT_REPORT"
-    echo "" >> "$COMPAT_REPORT"
+if [ "$FAIL_COUNT" -gt 0 ]; then
+    {
+        echo "## Failures"
+        echo ""
+        echo '```'
+        grep -A2 "FAIL:" "$RESULTS_FILE" || true
+        echo '```'
+        echo ""
+    } >> "$COMPAT_REPORT"
 fi
 
-# Add error details if any
 if [ "$ERROR_COUNT" -gt 0 ]; then
-    echo "### Errors" >> "$COMPAT_REPORT"
-    echo "" >> "$COMPAT_REPORT"
-    echo "\`\`\`" >> "$COMPAT_REPORT"
-    grep "^Error:" "$RESULTS_FILE" >> "$COMPAT_REPORT" || true
-    echo "\`\`\`" >> "$COMPAT_REPORT"
-    echo "" >> "$COMPAT_REPORT"
+    {
+        echo "## Errors"
+        echo ""
+        echo "A test that crashes never reaches its assertion, so these are not"
+        echo "included in the failure count above."
+        echo ""
+        echo '```'
+        grep "^Error" "$RESULTS_FILE" | sort | uniq -c | sort -rn || true
+        echo '```'
+        echo ""
+    } >> "$COMPAT_REPORT"
 fi
 
-# Add full results link
 cat >> "$COMPAT_REPORT" << EOF
+## Full Output
 
-## Full Results
-
-See [results.txt](./results.txt) for complete test output.
-
-## Notes
-
-This report tracks Patina's compatibility with the R7RS-small specification
-using the chibi-scheme test suite. The goal is to reach 100% compatibility
-with all R7RS-small features.
-
-### Known Limitations
-
-- \`(scheme load)\` library not yet implemented
-- See \`docs/FEATURE_STATUS.md\` for detailed compliance matrix
-
-### Next Steps
-
-See \`docs/FEATURE_STATUS.md\` for detailed R7RS compliance matrix and
-\`PRD/phase1/IMPLEMENTATION_STATUS.md\` for roadmap.
+See \`$(basename "$RESULTS_FILE")\` in this directory.
 EOF
 
-echo -e "${GREEN}Report generated: $COMPAT_REPORT${NC}"
 echo ""
-echo "=== Summary ==="
-PASS_PCT=$(awk -v p="$PASS_COUNT" -v t="$TRUE_TOTAL" 'BEGIN {printf "%.1f", (p/t)*100}')
-FAIL_PCT=$(awk -v f="$FAIL_COUNT" -v t="$TRUE_TOTAL" 'BEGIN {printf "%.1f", (f/t)*100}')
-ERROR_PCT=$(awk -v e="$ERROR_COUNT" -v t="$TRUE_TOTAL" 'BEGIN {printf "%.1f", (e/t)*100}')
-echo -e "  Passed: ${GREEN}$PASS_COUNT${NC} ($PASS_PCT%)"
-echo -e "  Failed: ${RED}$FAIL_COUNT${NC} ($FAIL_PCT%)"
-echo -e "  Errors: ${YELLOW}$ERROR_COUNT${NC} ($ERROR_PCT%)"
-echo -e "  Total:  $TRUE_TOTAL"
+echo -e "${GREEN}=== R7RS Compatibility Summary (${BACKEND_NAME}) ===${NC}"
+echo -e "  Passed: ${GREEN}${PASS_COUNT}${NC} ($(pct "$PASS_COUNT"))"
+if [ "$FAIL_COUNT" -gt 0 ]; then
+    echo -e "  Failed: ${RED}${FAIL_COUNT}${NC} ($(pct "$FAIL_COUNT"))"
+else
+    echo -e "  Failed: ${GREEN}0${NC} (0.0%)"
+fi
+if [ "$ERROR_COUNT" -gt 0 ]; then
+    echo -e "  Errors: ${RED}${ERROR_COUNT}${NC} (crashed before asserting)"
+fi
+echo "  Total:  $TRUE_TOTAL"
+echo "  Subgroups: $SUBGROUPS"
 echo ""
-echo "=== Section Breakdown ==="
-printf "%-40s %6s %6s %6s %6s\n" "Section" "Total" "Pass" "Fail" "Error"
-printf "%-40s %6s %6s %6s %6s\n" "----------------------------------------" "------" "------" "------" "------"
-echo "$SECTION_BREAKDOWN" | while IFS='|' read -r _ status section total passed failed errors _; do
-    # Skip empty lines
-    [ -z "$section" ] && continue
-    # Trim whitespace
-    section=$(echo "$section" | xargs)
-    total=$(echo "$total" | xargs)
-    passed=$(echo "$passed" | xargs)
-    failed=$(echo "$failed" | xargs)
-    errors=$(echo "$errors" | xargs)
-    # Color based on status
-    if [ "$errors" -gt 0 ] || [ "$failed" -gt 0 ]; then
-        if [ "$passed" -eq "$total" ]; then
-            color=$GREEN
-        elif [ "$passed" -gt 0 ]; then
-            color=$YELLOW
-        else
-            color=$RED
-        fi
-    else
-        color=$GREEN
-    fi
-    printf "${color}%-40s %6s %6s %6s %6s${NC}\n" "$section" "$total" "$passed" "$failed" "$errors"
-done
+echo "Report: $COMPAT_REPORT"
+
+# Non-zero exit means the suite regressed; CI and the wrapper rely on it.
+if [ "$FAIL_COUNT" -gt 0 ] || [ "$ERROR_COUNT" -gt 0 ]; then
+    exit 1
+fi

@@ -44,7 +44,7 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: Build release
       run: cargo build --release
-    - name: Run chibi r7rs-tests (must be 1163/1163)
+    - name: Run chibi r7rs-tests (must be 1226/1226)
       run: ./scripts/run_chibi_tests.sh
 
   # The two GC lanes (docs/GC_DESIGN.md §10 stage 4b): the chibi suite must
