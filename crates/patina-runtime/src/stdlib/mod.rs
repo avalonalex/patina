@@ -34,6 +34,7 @@
 //! - Standard .sld format for all user-facing libraries
 
 // === Internal libraries (patina internal ...) ===
+mod internal_bitwise;
 mod internal_bytevectors;
 mod internal_chars;
 mod internal_control;
@@ -52,6 +53,7 @@ mod internal_system;
 mod internal_time;
 mod internal_vectors;
 
+pub use internal_bitwise::build_internal_bitwise;
 pub use internal_bytevectors::build_internal_bytevectors;
 pub use internal_chars::build_internal_chars;
 pub use internal_control::build_internal_control;

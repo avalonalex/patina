@@ -181,6 +181,14 @@ impl Evaluator {
             vec![
                 "patina".to_string(),
                 "internal".to_string(),
+                "bitwise".to_string(),
+            ],
+            stdlib::build_internal_bitwise,
+        );
+        rust_loader.register(
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
                 "control".to_string(),
             ],
             stdlib::build_internal_control,
@@ -835,16 +843,25 @@ impl Evaluator {
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_set(import_set, &temp_env)?;
 
-                // Apply renames
-                for (old_name, new_name) in renames {
-                    if let Some(value) = temp_env.get(old_name) {
-                        lib_env.define(new_name.clone(), value);
-                    } else {
+                // R7RS 5.6.1: `rename` is the source import set with the listed
+                // identifiers renamed -- every *other* export still comes
+                // through. Defining only the renamed ones dropped the rest, so
+                // `(rename (srfi 151) (bitwise-if bitwise-merge))` bound
+                // bitwise-merge and nothing else. The sibling
+                // `process_import_for_eval` below and the VM both had this
+                // right; only the library-loading path did not.
+                for (old_name, _) in renames {
+                    if temp_env.get(old_name).is_none() {
                         return Err(patina_runtime::LibraryError::ParseError {
                             file: String::new(),
                             message: format!("Identifier '{}' not found for rename", old_name),
                         });
                     }
+                }
+                let rename_map: std::collections::HashMap<_, _> = renames.iter().cloned().collect();
+                for (name, value) in temp_env.bindings() {
+                    let final_name = rename_map.get(&name).unwrap_or(&name);
+                    lib_env.define(final_name.clone(), value);
                 }
                 Ok(())
             }

@@ -225,6 +225,10 @@ impl VmBackend {
             stdlib::build_internal_bytevectors,
         );
         rust_loader.register(
+            vec!["patina".into(), "internal".into(), "bitwise".into()],
+            stdlib::build_internal_bitwise,
+        );
+        rust_loader.register(
             vec!["patina".into(), "internal".into(), "control".into()],
             stdlib::build_internal_control,
         );

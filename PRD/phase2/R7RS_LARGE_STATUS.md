@@ -67,13 +67,13 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 143 | `(scheme fixnum)` | Fixnums | ❌ | ❌ |
 | SRFI 146 | `(scheme mapping)` | Mappings | ❌ | ❌ |
 | SRFI 146 | `(scheme mapping hash)` | Hash mappings | ❌ | ❌ |
-| SRFI 151 | `(scheme bitwise)` | Bitwise operations | ❌ | ❌ |
+| SRFI 151 | `(scheme bitwise)` | Bitwise operations | ✅ shipped | ✅ shipped |
 | SRFI 158 | `(scheme generator)` | Generators (supersedes SRFI 121) | ✅ shipped | ✅ shipped |
 | SRFI 159 | `(scheme show)` | Formatting/show | ❌ | ❌ |
 | SRFI 160 | `(scheme vector @)` | Numeric vectors (u8, s8, f64, etc.) | ❌ | ❌ |
 | R6RS | `(scheme bytevector)` | Bytevectors (R6RS compatible) | 🚧 Partial | ❌ |
 
-**Tangerine status: 1 of 7 shipped**, reachable under both names.
+**Tangerine status: 2 of 7 shipped**, reachable under both names.
 
 **Numeric Tower Requirements:**
 - Unbounded exact integers ✅ (BigInt support)
@@ -163,8 +163,9 @@ Patina a slow package manager for code it does not need to own.
 The policy fixes the *set*; measured dependency in-degree over `compat/vendor/` fixes the *order*.
 Highest-value first:
 
-1. **Bitwise — SRFI 151 + 60/33 shims.** The largest gap in the ecosystem (in-degree 31) and
-   standard-track. Needs Rust primitives; a portable-Scheme implementation would be unusably slow.
+1. ~~Bitwise — SRFI 151 + 60/33 shims~~ — **done**. Core operators are Rust primitives in
+   `(patina internal bitwise)`; the ~30 derived procedures are Scheme. `(srfi 60)` (in-degree 31)
+   and `(srfi 33)` (19) are renames over the same bindings, not separate ports.
 2. ~~`(scheme …)` alias libraries for the shipped SRFIs~~ — **done**; see the tables above.
 3. **SRFI 125 hash tables**, superseding the shipped SRFI 69 (in-degree 16); keep 69 as an alias.
 4. **SRFI 27 random** — runtime-forced, in-degree 9.
