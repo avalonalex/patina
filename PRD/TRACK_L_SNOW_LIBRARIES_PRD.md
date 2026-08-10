@@ -236,6 +236,31 @@ fails.
 strictly correct per R7RS 7.1.1 (`@` is a ⟨special subsequent⟩, not an ⟨initial⟩); chibi and Gauche
 accept it. A deliberate strictness decision rather than a bug, but it needs making explicitly.
 
+**Rust registry primitives ignore the import set at top level** — ❌ **open**, own PR. A program that
+imports only `(scheme base)` can still call primitives no imported library exports:
+
+```scheme
+(import (scheme base))
+(cadddr '(1 2 3 4))      ;; => 4      -- (scheme cxr)
+(bit-count 12)           ;; => 2      -- (srfi 151)
+(arithmetic-shift 1 10)  ;; => 1024   -- (srfi 151)
+(bitwise-and 12 10)      ;; => 8      -- (srfi 151)
+```
+
+Scheme-level exports *are* scoped correctly — `list-sort` and `bitwise-nand` are unbound under the
+same import — so this is specific to the primitive registry: registered primitives land in the
+top-level environment regardless of what was imported. Inside a `define-library` imports are
+enforced properly, which is the whole reason this went unnoticed.
+
+That asymmetry is also a testing hazard, and it already cost us one bug. `(srfi 132)`'s
+`vector-merge` called `cadddr` without importing `(scheme cxr)`; it failed only inside the library,
+while any script-level check of the same expression passed. Library code cannot be validated by
+top-level scripts until this is fixed.
+
+Adjacent and lower-stakes: `lib/scheme/base.sld` exports the eight three-deep `cxr` procedures
+(`caaar`…`cdddr`) as a documented extension, where R7RS-small puts them only in `(scheme cxr)`.
+Worth settling in the same PR while the cost of tightening is still low.
+
 ## 7. Risks & mitigations
 - **Per-new-SRFI friction** (non-R7RS constructs, R5RS naming, control-op edges) → apply the resolved patterns in `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`; import each reference implementation incrementally with its own test.
 - **The pass rate has a ceiling well below 100%** — a meaningful share of Snow packages import `(chibi ast)` or other C-backed/FFI libraries and can never pass while FFI is deferred. → Have the L3 harness classify these as *out-of-scope* rather than *failing*, and report the achievable denominator alongside the raw one, so the number is not misread as a defect count.
