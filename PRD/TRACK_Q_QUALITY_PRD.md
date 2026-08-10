@@ -70,6 +70,19 @@ signature of no differential testing. Same source file, both release binaries at
 Every direct call of these forms works on both backends, which is why 1226/1226
 does not catch any of it — the chibi suite never takes one as a value.
 
+**Update 2026-08-10 — the table above was re-measured at `2d4ce29` and two rows
+have moved.** `(apply values (list 7))` now returns `7` on *both* backends; the
+VM arity failure recorded at `7a6a797` is gone. `(apply call/cc ...)` still fails
+on both, which makes it a shared conformance gap rather than a divergence — the
+differential harness cannot see it, so Q2 must not read backend *agreement* as
+correctness. The four genuine divergences that remain (`define`-bound `call/cc`,
+`call/cc` through a higher-order procedure, `apply dynamic-wind`, `apply
+with-exception-handler`) are now committed as executable quarantine tests in
+`crates/patina-tests/tests/backend_divergence.rs`, which supersedes this table as
+the live inventory. Each pins both backends' current behaviour and is written to
+**fail when the bug is fixed**, forcing collapse into a plain both-backends
+assertion. Prefer that file over this section when starting Q2.
+
 **Shared root cause with an open Track L defect.** `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
 §6 records that Rust registry primitives ignore the import set at top level.
 That is the same disagreement seen from the other side: the compiler's
@@ -108,21 +121,53 @@ together even if they land as separate PRs.
 
 ## 4. Work items
 
-### Q0 — Gate the VM integration lane in CI  *(small; do first)*
-Add a CI job running `cargo test --package patina-tests --features vm-backend
---tests`. Measured green today (48 binaries / 1,142 tests / 0 failures), so this
-is coverage banked at the cost of one job, not a fixing exercise.
+### Q0 — Gate the VM integration lane in CI  *(small; do first)*  ✅ **done 2026-08-10 — superseded in approach**
 
-Keep it a **separate job** rather than folding the feature into the default: the
-tree-walker lane must keep running too, and the point is that both are gated.
+Original plan: add a second CI job running `cargo test --package patina-tests
+--features vm-backend --tests`, keeping it separate so both lanes stay gated.
 
-- **Acceptance:** CI fails if the VM lane fails. Both lanes visible as distinct
-  named jobs. `SKIP_CHIBI_TESTS=1` handled the same way as the existing job.
+**What shipped instead: the test suite is parametrized, and the feature flag is
+gone.** The helpers in `crates/patina-tests/tests/common/mod.rs` are now generic
+over `B: Backend` and run *every* program on both backends, holding both to the
+same expectation. This is strictly better than two lanes and was a smaller diff:
 
-### Q1 — Cross-backend differential harness  *(the centrepiece)*
+- **No new CI job, and one build instead of two.** The existing
+  `cargo test --all --lib --tests` now covers both backends, so the second
+  feature-variant compile the original plan required never happens.
+- **No test call-site edits.** Only `common/mod.rs` changed; the ~690 helper
+  call sites became ~1,380 assertions untouched.
+- **It subsumes most of Q1 for free** — see that item.
+
+The two lanes would have given *coverage* on both backends but not *agreement*:
+each lane checks its own hardcoded expectations, so a divergence still only
+surfaces where someone happened to write a test for it.
+
+- **Acceptance (met):** 48 binaries / 1,142 tests / 0 failures with both backends
+  exercised per test; `SKIP_CHIBI_TESTS=1` unchanged; both chibi lanes 1226/1226;
+  clippy clean.
+
+### Q1 — Cross-backend differential harness  *(the centrepiece)*  🟡 **largely delivered by Q0's parametrization**
+
 One corpus, both backends, assert identical outcomes — value *and* error class,
 not just exit status. This is what makes "two backends implement the same
 language" a checked claim instead of a stated one.
+
+**Status 2026-08-10.** Q0's parametrized helpers deliver the core of this: the
+corpus is the *existing* ~1,142-test suite rather than a hand-written third
+list, which is exactly what §6's "becomes a second place to enumerate cases"
+risk warned against. Error class is covered too — `assert_eval_error` now
+requires *both* backends to reject, so one backend erroring where the other
+succeeds is a failure. Verified by mutation: injecting the §1.2 `call/cc`
+divergence fails with `[tree-walker] failed to evaluate … Undefined variable`.
+The §1.2 seed lives in `crates/patina-tests/tests/backend_divergence.rs`.
+
+Remaining under this item:
+- **The 22 test files that construct interpreters directly** (`hygiene.rs`,
+  `scheme_base.rs`, `numeric_operations.rs`, `record_types.rs`, the SRFI
+  suites, …) still run tree-walker-only. Some are legitimately backend-specific
+  (`interpreter_api.rs` uses `evaluator()`, which is not on the `Backend`
+  trait), but most are plain R7RS coverage that should be parametrized.
+- **The chibi report diff** below is still unwritten.
 
 - A table-driven test in `crates/patina-tests/` taking a list of program
   snippets and asserting `tree_walker(p) == vm(p)` for each, including the error

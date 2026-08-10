@@ -9,8 +9,8 @@
 ```
 Layer 4: R7RS compliance (chibi-scheme r7rs-tests.scm)
             ↑ ./scripts/run_chibi_tests.sh (VM, default)
-Layer 3: Shared integration tests
-            ↑ cargo test --package patina-tests --features vm-backend
+Layer 3: Shared integration tests — every case runs on BOTH backends
+            ↑ cargo test --package patina-tests
 Layer 2: VM-specific unit tests
             ↑ cargo test --package patina-vm
 Layer 1: Crate-level unit tests (compiler passes, runtime)
@@ -26,8 +26,8 @@ cargo build --release && ./scripts/run_chibi_tests.sh
 # R7RS compliance — tree-walker
 cargo build --release && ./scripts/run_chibi_tests_tree_walker.sh
 
-# VM acceptance (shared integration tests)
-cargo test --package patina-tests --features vm-backend
+# Shared integration tests (runs every case on both backends)
+cargo test --package patina-tests
 
 # VM crate unit tests
 cargo test --package patina-vm
@@ -50,8 +50,16 @@ against the tree-walker backend.
 
 ### Layer 3 — Shared Integration Tests
 
-`patina-tests` crate with `vm-backend` feature flag. Tests use
-`Interpreter<VmBackend>` instead of `Interpreter<TreeWalkerBackend>`.
+The helpers in `crates/patina-tests/tests/common/mod.rs` evaluate each program
+on **both** backends and hold both to the same expectation, so a divergence
+fails a test instead of waiting to be found by hand. There is no backend
+feature flag — one `cargo test` run covers the tree-walker and the VM.
+
+A *known* divergence is quarantined explicitly with the `_on` helper variants
+(`assert_program_eval_to_on(On::Vm, …)`), each commented with the reason and a
+pointer to the tracking doc. Those call sites are the inventory of known
+backend divergences — Track Q §7's track-level metric — and
+`rg 'On::(Vm|TreeWalker)' crates/patina-tests` lists them all.
 
 ### Layer 2 — VM Unit Tests
 

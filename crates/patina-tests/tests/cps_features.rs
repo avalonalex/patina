@@ -792,14 +792,18 @@ fn test_backtracking_pythagorean_triple() {
 
 // =============================================================================
 // Instruction-level control ops: call-with-values + call/cc
-// (VM-only: the tree-walker has a separate issue with multi-value continuations)
+//
+// KNOWN DIVERGENCE — these three run on the VM only. The tree-walker mishandles
+// a continuation invoked with multiple values; see
+// PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md. Drop the `On::Vm` argument once
+// that is fixed, so both backends are held to the same expectation again.
 // =============================================================================
 
 #[test]
-#[cfg(feature = "vm-backend")]
 fn test_callcc_multi_value_through_call_with_values() {
     // call/cc continuation invoked with multiple values
-    assert_program_eval_to(
+    assert_program_eval_to_on(
+        On::Vm,
         r#"
         (call-with-values
           (lambda ()
@@ -812,9 +816,9 @@ fn test_callcc_multi_value_through_call_with_values() {
 }
 
 #[test]
-#[cfg(feature = "vm-backend")]
 fn test_callcc_single_value_through_call_with_values() {
-    assert_program_eval_to(
+    assert_program_eval_to_on(
+        On::Vm,
         r#"
         (call-with-values
           (lambda ()
@@ -827,10 +831,10 @@ fn test_callcc_single_value_through_call_with_values() {
 }
 
 #[test]
-#[cfg(feature = "vm-backend")]
 fn test_callcc_abort_pattern_through_call_with_values() {
     // Pattern used by SRFI 1 %cars+cdrs
-    assert_program_eval_to(
+    assert_program_eval_to_on(
+        On::Vm,
         r#"
         (call-with-values
           (lambda ()
