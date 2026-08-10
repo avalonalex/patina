@@ -1,9 +1,10 @@
 //! Garbage collection through real evaluation — **VM** backend.
 //!
 //! The backend-independent cases live in `common::gc_shared_tests!` and are
-//! invoked here against `eval_program_vm`, so the VM is covered in the same
-//! test lane as the tree-walker regardless of which backend the
-//! feature-switched helpers select.
+//! invoked here against `eval_program_vm`, with `gc_tree_walker.rs` doing the
+//! same for the tree-walker. The shared cases take a single-backend evaluator
+//! because several assert on `(gc-stats)` counters, which legitimately differ
+//! between the backends.
 //!
 //! This file keeps only the tests that target VM machinery a heap scan cannot
 //! reach: the continuation side tables, `CallFrame::closure` (a bare

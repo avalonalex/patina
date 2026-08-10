@@ -48,7 +48,23 @@ The tree-walker likely needs an analogous fix in its CPS evaluator — the conti
 
 ## Tests
 
-Three tests in `crates/patina-tests/tests/cps_features.rs` are gated to `#[cfg(feature = "vm-backend")]` due to this bug:
-- `test_callcc_multi_value_through_call_with_values`
-- `test_callcc_single_value_through_call_with_values`
-- `test_callcc_abort_pattern_through_call_with_values`
+**Two** tests in `crates/patina-tests/tests/backend_divergence.rs` are
+quarantined to the VM by this bug:
+- `callcc_multi_value_through_call_with_values`
+- `callcc_abort_pattern_through_call_with_values`
+
+They were among three `#[cfg(feature = "vm-backend")]` tests in
+`cps_features.rs` until the `vm-backend` feature was removed on 2026-08-10.
+The third — `test_callcc_single_value_through_call_with_values` — turned out
+**not to be affected by this bug at all**: the tree-walker returns `42`
+correctly. It had been swept into the gate along with its two neighbours, and
+was only caught when the quarantine was changed to assert that the tree-walker
+actually fails. It is now a plain both-backends test back in `cps_features.rs`.
+The scope of this bug is *multi-value* continuation returns, as the title says.
+
+Each is written as `assert_divergence(code, On::Vm, expected, "…")`, which
+asserts the VM's correct answer **and** that the tree-walker still fails. So
+**fixing this bug will make those three tests fail** — that is intentional. The
+panic message tells you to replace each `assert_divergence` call with a plain
+`assert_program_eval_to`, which puts both backends back under the same
+expectation. Delete this section at the same time.

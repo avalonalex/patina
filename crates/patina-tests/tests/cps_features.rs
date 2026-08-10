@@ -792,27 +792,19 @@ fn test_backtracking_pythagorean_triple() {
 
 // =============================================================================
 // Instruction-level control ops: call-with-values + call/cc
-// (VM-only: the tree-walker has a separate issue with multi-value continuations)
+//
+// The two *multi-value* continuation cases are a KNOWN BACKEND DIVERGENCE and
+// live in `backend_divergence.rs` with the rest of the quarantine registry, so
+// one grep finds every opted-out behaviour. See
+// PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md.
+//
+// The single-value case below is *not* affected by that bug — it was swept into
+// the old `#[cfg(feature = "vm-backend")]` gate with its two neighbours, and
+// `assert_divergence` caught it the first time the quarantine was made to prove
+// the tree-walker actually fails.
 // =============================================================================
 
 #[test]
-#[cfg(feature = "vm-backend")]
-fn test_callcc_multi_value_through_call_with_values() {
-    // call/cc continuation invoked with multiple values
-    assert_program_eval_to(
-        r#"
-        (call-with-values
-          (lambda ()
-            (call-with-current-continuation
-              (lambda (k) (k 1 2))))
-          (lambda (a b) (list a b)))
-        "#,
-        "(1 2)",
-    );
-}
-
-#[test]
-#[cfg(feature = "vm-backend")]
 fn test_callcc_single_value_through_call_with_values() {
     assert_program_eval_to(
         r#"
@@ -823,23 +815,6 @@ fn test_callcc_single_value_through_call_with_values() {
           (lambda (x) x))
         "#,
         "42",
-    );
-}
-
-#[test]
-#[cfg(feature = "vm-backend")]
-fn test_callcc_abort_pattern_through_call_with_values() {
-    // Pattern used by SRFI 1 %cars+cdrs
-    assert_program_eval_to(
-        r#"
-        (call-with-values
-          (lambda ()
-            (call-with-current-continuation
-              (lambda (abort)
-                (abort '() '()))))
-          (lambda (cars cdrs) (list 'cars cars 'cdrs cdrs)))
-        "#,
-        "(cars () cdrs ())",
     );
 }
 

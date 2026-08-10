@@ -3,11 +3,29 @@
 //! Provides utilities for writing concise tests comparing Patina output
 //! against expected values.
 //!
-//! When the `vm-backend` feature is enabled, all helpers use VmBackend
-//! instead of the tree-walker. This allows running the full test suite
-//! against the VM with:
+//! # Every helper here runs on both backends
 //!
-//!     cargo test --package patina-tests --features vm-backend
+//! Patina's central architectural claim is that the tree-walker and the VM
+//! implement the same language. These helpers make that a *checked* claim
+//! rather than a stated one: each one evaluates the program on both backends
+//! and holds both to the same expectation, so a divergence fails a test
+//! instead of waiting to be found by hand. The failure message always names
+//! which backend produced what, because the culprit is usually the backend
+//! you were not thinking about.
+//!
+//! Note the scope: this covers the tests that *use these helpers*. Several
+//! test files still construct an interpreter directly and remain
+//! tree-walker-only — porting them is tracked as Q1 in
+//! `PRD/TRACK_Q_QUALITY_PRD.md`. Prefer these helpers in new tests.
+//!
+//! A known divergence is declared with [`assert_divergence`], which pins the
+//! working backend's answer *and* requires the other to still fail:
+//!
+//!     assert_divergence(code, On::Vm, "(1 2)", "PRD/bugs/SOME_BUG.md");
+//!
+//! Fixing the bug makes that test fail, which is the point — the quarantine
+//! retires itself instead of outliving the defect. `rg assert_divergence
+//! crates/patina-tests` is the complete inventory.
 
 #![allow(dead_code)]
 // `gc_shared_tests!` is used only by the GC test binaries; every other test
@@ -15,20 +33,52 @@
 #![allow(unused_macros)]
 
 use patina_core::tagged_value::TaggedValue;
+use patina_interpreter::{Interpreter, TreeWalkInterpreter};
 use patina_primitives::primitives::io::datum_writer::format_write_tagged;
+use patina_runtime::Backend;
+use patina_vm::VmBackend;
 use std::cell::RefCell;
 
 // ─── Backend selection ───────────────────────────────────────────────────────
 
-#[cfg(not(feature = "vm-backend"))]
-use patina_interpreter::TreeWalkInterpreter;
+/// The backend a quarantined divergence currently *works* on. The other one is
+/// asserted to still fail, so fixing it retires the quarantine automatically.
+///
+/// This is deliberately two-valued: "both backends" is not expressible, because
+/// a quarantine that quarantines nothing is just [`assert_program_eval_to`].
+#[derive(Clone, Copy)]
+pub enum On {
+    TreeWalker,
+    Vm,
+}
 
-#[cfg(feature = "vm-backend")]
-use patina_interpreter::Interpreter;
-#[cfg(feature = "vm-backend")]
-use patina_runtime::Backend;
-#[cfg(feature = "vm-backend")]
-use patina_vm::VmBackend;
+/// Which backends one run covers. Private — tests never select backends
+/// directly, they either use a plain both-backends helper or declare a
+/// divergence with [`assert_divergence`].
+#[derive(Clone, Copy)]
+enum Which {
+    Both,
+    TreeWalker,
+    Vm,
+}
+
+impl On {
+    /// The backend that behaves correctly today.
+    fn working(self) -> Which {
+        match self {
+            On::TreeWalker => Which::TreeWalker,
+            On::Vm => Which::Vm,
+        }
+    }
+
+    /// The backend that is still broken.
+    fn broken(self) -> Which {
+        match self {
+            On::TreeWalker => Which::Vm,
+            On::Vm => Which::TreeWalker,
+        }
+    }
+}
 
 /// Format a TaggedValue for display (backend-agnostic).
 fn display_tagged(tv: TaggedValue, heap: &RefCell<patina_core::heap::Heap>) -> String {
@@ -44,138 +94,188 @@ fn display_tagged(tv: TaggedValue, heap: &RefCell<patina_core::heap::Heap>) -> S
     format_write_tagged(tv, heap)
 }
 
-// ─── Tree-walker helpers (default) ───────────────────────────────────────────
+/// What one backend did with a program: the `write`-formatted value, or the
+/// error rendered as a string.
+type Outcome = Result<String, String>;
 
-#[cfg(not(feature = "vm-backend"))]
-fn make_interp() -> TreeWalkInterpreter {
-    TreeWalkInterpreter::new_tree_walker()
+/// Whether the code is a whole program (`eval_program`) or a single
+/// expression (`eval_str`). The two entry points differ in how they treat
+/// multiple top-level forms, so tests must keep using the one they chose.
+#[derive(Clone, Copy)]
+enum Mode {
+    Expr,
+    Program,
 }
 
-#[cfg(not(feature = "vm-backend"))]
-fn interp_display(interp: &TreeWalkInterpreter, tv: TaggedValue) -> String {
-    interp.display_tagged(tv)
+/// Run `code` on one backend, capturing either its value or its error.
+///
+/// Generic over `B: Backend` — `global_env()` is on the trait and
+/// `display_tagged` is the same writer for both backends, so one body serves
+/// the tree-walker and the VM.
+fn run_on<B: Backend>(interp: Interpreter<B>, code: &str, mode: Mode) -> Outcome {
+    let result = match mode {
+        Mode::Expr => interp.eval_str(code),
+        Mode::Program => interp.eval_program(code),
+    };
+    match result {
+        Ok(tv) => Ok(display_tagged(tv, interp.backend().global_env().heap())),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
-// ─── VM backend helpers ──────────────────────────────────────────────────────
-
-#[cfg(feature = "vm-backend")]
-fn make_interp() -> Interpreter<VmBackend> {
-    Interpreter::new(VmBackend::new())
+/// Run `code` on each backend `which` selects, labelled for failure messages.
+///
+/// Matched exhaustively rather than tested with `!=`, so adding a backend is a
+/// compile error here instead of silently defaulting to running both.
+fn outcomes(which: Which, code: &str, mode: Mode) -> Vec<(&'static str, Outcome)> {
+    let tree_walker = || {
+        (
+            "tree-walker",
+            run_on(TreeWalkInterpreter::new_tree_walker(), code, mode),
+        )
+    };
+    let vm = || ("vm", run_on(Interpreter::new(VmBackend::new()), code, mode));
+    match which {
+        Which::Both => vec![tree_walker(), vm()],
+        Which::TreeWalker => vec![tree_walker()],
+        Which::Vm => vec![vm()],
+    }
 }
 
-#[cfg(feature = "vm-backend")]
-fn interp_display(interp: &Interpreter<VmBackend>, tv: TaggedValue) -> String {
-    let heap = interp.backend().global_env().heap();
-    display_tagged(tv, heap)
+/// Assert every selected backend evaluates `code` to `expected`.
+fn expect_value(which: Which, code: &str, expected: &str, mode: Mode) {
+    for (backend, outcome) in outcomes(which, code, mode) {
+        match outcome {
+            Ok(actual) => assert_eq!(
+                actual, expected,
+                "\n[{backend}] wrong result\nProgram:\n{code}\nExpected: {expected}\nGot: {actual}"
+            ),
+            Err(e) => panic!("\n[{backend}] failed to evaluate\nProgram:\n{code}\nError: {e}"),
+        }
+    }
 }
 
-// ─── Public helpers (backend-agnostic) ───────────────────────────────────────
+/// Assert every selected backend rejects `code`.
+///
+/// One backend erroring where the other succeeds is itself a divergence — the
+/// exact shape of the control-operator cluster in Track Q §1.2 — so this is a
+/// stronger check than the single-backend version it replaces.
+fn expect_error(which: Which, code: &str, mode: Mode) {
+    for (backend, outcome) in outcomes(which, code, mode) {
+        if let Ok(value) = outcome {
+            panic!("\n[{backend}] expected an error\nProgram:\n{code}\nGot: {value}");
+        }
+    }
+}
+
+// ─── Public helpers ──────────────────────────────────────────────────────────
 
 /// Assert that evaluating a Scheme expression produces the expected result
+/// on both backends.
 pub fn assert_eval_to(expr: &str, expected: &str) {
-    let interp = make_interp();
-    let result = interp
-        .eval_str(expr)
-        .unwrap_or_else(|e| panic!("Failed to evaluate '{}': {}", expr, e));
-
-    let result_str = interp_display(&interp, result);
-
-    assert_eq!(
-        result_str, expected,
-        "\nExpression: {}\nExpected: {}\nGot: {}",
-        expr, expected, result_str
-    );
+    expect_value(Which::Both, expr, expected, Mode::Expr);
 }
 
-/// Assert that evaluating a Scheme expression produces an error
+/// Assert that evaluating a Scheme expression produces an error on both backends
 pub fn assert_eval_error(expr: &str) {
-    let interp = make_interp();
-    let result = interp.eval_str(expr);
-
-    assert!(
-        result.is_err(),
-        "Expected error for '{}', but got: {:?}",
-        expr,
-        result.unwrap()
-    );
+    expect_error(Which::Both, expr, Mode::Expr);
 }
 
-/// Evaluate multiple expressions in sequence, return last result
+/// Pin a **known divergence** between the backends: `works_on` must produce
+/// `expected`, and the other backend must still fail. `tracking` names the
+/// document that records the bug — a mandatory argument, so a quarantine
+/// cannot be written without saying where it is tracked.
+///
+/// This is the only way to opt a test out of both-backends coverage, and it is
+/// designed to **fail when the bug is fixed**: repairing the broken backend
+/// trips the second assertion, whose message tells the fixer to replace this
+/// call with a plain [`assert_program_eval_to`]. Asserting only the working
+/// side would let a quarantine outlive its bug forever, which is how an
+/// exception list becomes a permanent excuse.
+pub fn assert_divergence(code: &str, works_on: On, expected: &str, tracking: &str) {
+    expect_value(works_on.working(), code, expected, Mode::Program);
+
+    for (backend, outcome) in outcomes(works_on.broken(), code, Mode::Program) {
+        if let Ok(value) = outcome {
+            panic!(
+                "\n[{backend}] NO LONGER DIVERGES — it now returns {value}.\n\
+                 \n\
+                 This quarantine has done its job. Replace the assert_divergence \
+                 call with\n    \
+                 assert_program_eval_to(code, {expected:?});\n\
+                 so both backends are held to the same expectation, and update \
+                 {tracking}.\n\
+                 \nProgram:\n{code}"
+            );
+        }
+    }
+}
+
+/// Evaluate multiple expressions in sequence on both backends, assert the two
+/// agree, and return the shared result.
+///
+/// The agreement check is what makes callers that compare the return value
+/// against their own expectation differential for free.
 pub fn eval_program(code: &str) -> String {
-    let interp = make_interp();
-    let result = interp
-        .eval_program(code)
-        .unwrap_or_else(|e| panic!("Failed to evaluate program: {}", e));
-    interp_display(&interp, result)
+    let tw = run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program);
+    let vm = run_on(Interpreter::new(VmBackend::new()), code, Mode::Program);
+
+    // Both failing is a shared bug in the program under test, not a
+    // divergence — report both errors, since the two backends can fail for
+    // different reasons and showing only one hides half the evidence.
+    if let (Err(a), Err(b)) = (&tw, &vm) {
+        panic!("\nFailed to evaluate program:\n{code}\ntree-walker: {a}\nvm: {b}");
+    }
+
+    // Agreement is on *values*: `expect_error` deliberately does not compare
+    // error text, so neither does this.
+    let show = |o: &Outcome| match o {
+        Ok(v) => v.clone(),
+        Err(e) => format!("errored: {e}"),
+    };
+    assert!(
+        tw.as_ref().ok() == vm.as_ref().ok(),
+        "\nbackends disagree\nProgram:\n{code}\ntree-walker: {}\nvm: {}",
+        show(&tw),
+        show(&vm)
+    );
+
+    tw.expect("checked non-error above")
 }
 
-/// Evaluate a program on the VM backend *explicitly* — not the
-/// feature-switched default — and `write` the result. For tests that
+/// Evaluate a program on the tree-walker only and `write` the result. For
+/// tests that target tree-walker-specific machinery.
+pub fn eval_program_tree_walker(code: &str) -> String {
+    match run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program) {
+        Ok(v) => v,
+        Err(e) => panic!("Failed to evaluate program: {e}\n{code}"),
+    }
+}
+
+/// Evaluate a program on the VM only and `write` the result. For tests that
 /// exercise VM-only machinery (CallPrimitive deopt, inline opcodes).
 pub fn eval_program_vm(code: &str) -> String {
-    use patina_interpreter::Backend as _;
-    let interp = patina_interpreter::Interpreter::new(patina_vm::VmBackend::new());
-    let result = interp
-        .eval_program(code)
-        .unwrap_or_else(|e| panic!("Failed to evaluate program: {e}\n{code}"));
-    let heap = interp.backend().global_env().heap();
-    format_write_tagged(result, heap)
+    match run_on(Interpreter::new(VmBackend::new()), code, Mode::Program) {
+        Ok(v) => v,
+        Err(e) => panic!("Failed to evaluate program: {e}\n{code}"),
+    }
 }
 
-/// Assert that a multi-expression program produces expected result
+/// Assert that a multi-expression program produces expected result on both backends
 pub fn assert_program_eval_to(code: &str, expected: &str) {
-    let result = eval_program(code);
-    assert_eq!(
-        result, expected,
-        "\nProgram:\n{}\nExpected: {}\nGot: {}",
-        code, expected, result
-    );
+    expect_value(Which::Both, code, expected, Mode::Program);
 }
 
-/// Assert that evaluating a multi-expression program produces an error
+/// Assert that evaluating a multi-expression program produces an error on both backends
 pub fn assert_program_eval_error(code: &str) {
-    let interp = make_interp();
-    let result = interp.eval_program(code);
-
-    assert!(
-        result.is_err(),
-        "Expected error for program, but got: {:?}",
-        result.unwrap()
-    );
+    expect_error(Which::Both, code, Mode::Program);
 }
 
-/// Assert that evaluating an expression with (scheme char) imported produces expected result
+/// Assert that evaluating an expression with (scheme char) imported produces
+/// expected result on both backends
 pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
     let code = format!("(import (scheme char)) {}", expr);
-    let interp = make_interp();
-    let result = interp
-        .eval_program(&code)
-        .unwrap_or_else(|e| panic!("Failed to evaluate '{}': {}", expr, e));
-
-    let result_str = interp_display(&interp, result);
-
-    assert_eq!(
-        result_str, expected,
-        "\nExpression: {}\nExpected: {}\nGot: {}",
-        expr, expected, result_str
-    );
-}
-
-/// Assert that a multi-expression program produces expected result
-/// This function now always uses CPS evaluation (the default mode).
-/// The `use_cps` parameter is kept for backward compatibility but is ignored.
-#[allow(unused_variables)]
-pub fn assert_program_eval_to_with_cps(code: &str, expected: &str, use_cps: bool) {
-    let interp = make_interp();
-    let result = interp
-        .eval_program(code)
-        .unwrap_or_else(|e| panic!("Failed to evaluate program: {}", e));
-    let result_str = interp_display(&interp, result);
-    assert_eq!(
-        result_str, expected,
-        "\nProgram:\n{}\nExpected: {}\nGot: {}",
-        code, expected, result_str
-    );
+    expect_value(Which::Both, &code, expected, Mode::Program);
 }
 
 // ─── Shared GC test suite ────────────────────────────────────────────────────
@@ -189,7 +289,13 @@ pub fn assert_program_eval_to_with_cps(code: &str, expected: &str, use_cps: bool
 /// only the tests that target machinery unique to it.
 ///
 /// `$eval` is a `fn(&str) -> String` that evaluates a program and `write`s the
-/// result (`eval_program` or `eval_program_vm`).
+/// result: `eval_program_tree_walker` or `eval_program_vm`.
+///
+/// These take a *single-backend* evaluator on purpose. Several cases read
+/// `(gc-stats)` counters, which legitimately differ between the backends —
+/// the same workload frees 12295 pairs on the VM and 12294 on the
+/// tree-walker — so routing them through the agreement-asserting
+/// `eval_program` would fail on a difference that is not a divergence.
 macro_rules! gc_shared_tests {
     ($eval:path) => {
         /// Pull one `(gc-stats)` field out of the alist the primitive returns.

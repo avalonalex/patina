@@ -1,15 +1,19 @@
 //! Garbage collection through real evaluation — **tree-walker** backend.
 //!
 //! The backend-independent cases live in `common::gc_shared_tests!` and are
-//! invoked here against the feature-switched helper (tree-walker by default).
-//! This file keeps only the tests that target tree-walker machinery.
-//! See `docs/GC_DESIGN.md` §5.1.
+//! invoked here against `eval_program_tree_walker`, with `gc_vm.rs` doing the
+//! same for the VM. That split is deliberate: several cases assert on
+//! `(gc-stats)` counters, which legitimately differ between the backends, so
+//! the both-backends helpers cannot serve them. Everything in this file is
+//! therefore tree-walker-only — use `eval_program_tree_walker`, not
+//! `assert_program_eval_to`, or the timing guard below silently measures the
+//! VM too. See `docs/GC_DESIGN.md` §5.1.
 
 #[macro_use]
 mod common;
 use common::*;
 
-gc_shared_tests!(eval_program);
+gc_shared_tests!(eval_program_tree_walker);
 
 #[test]
 fn closure_environment_survives_collection() {
@@ -27,7 +31,7 @@ fn closure_environment_survives_collection() {
         (c)
         (c)
     "#;
-    assert_program_eval_to(code, "3");
+    assert_eq!(eval_program_tree_walker(code), "3");
 }
 
 #[test]
@@ -39,7 +43,7 @@ fn collection_inside_higher_order_primitive() {
         (import (patina debug))
         (map (lambda (x) (gc) (* x x)) '(1 2 3 4))
     "#;
-    assert_program_eval_to(code, "(1 4 9 16)");
+    assert_eq!(eval_program_tree_walker(code), "(1 4 9 16)");
 }
 
 #[test]
@@ -58,7 +62,7 @@ fn deeply_nested_continuations_collect_promptly() {
         (nest 30)
     "#;
     let start = std::time::Instant::now();
-    assert_program_eval_to(code, "30");
+    assert_eq!(eval_program_tree_walker(code), "30");
     let elapsed = start.elapsed();
     assert!(
         elapsed.as_secs() < 10,

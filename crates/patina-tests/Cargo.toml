@@ -17,9 +17,6 @@ patina-tree-walker = { path = "../patina-tree-walker" }
 patina-vm = { path = "../patina-vm" }
 patina-primitives = { path = "../patina-primitives" }
 
-[features]
-vm-backend = []
-
 [dev-dependencies]
 assert_matches = "1.5"
 tempfile = "3"

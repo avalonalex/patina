@@ -83,13 +83,12 @@ fn test_call_with_values_multiple_uses() {
 }
 
 // 6.10 Control features - dynamic-wind with call/cc re-entry
-// These tests require CPS mode (use_cps: true) for proper continuation support
 
 #[test]
 fn test_dynamic_wind_with_callcc_reentry() {
     // Classic test from R7RS - captures continuation inside dynamic-wind body
     // and re-invokes it, checking that before/after thunks run correctly
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (let ((path '()) (c #f))
           (let ((add (lambda (s) (set! path (cons s path)))))
@@ -104,7 +103,6 @@ fn test_dynamic_wind_with_callcc_reentry() {
                 (reverse path))))
         "#,
         "(connect talk1 disconnect connect talk2 disconnect)",
-        true, // use_cps: required for call/cc and dynamic-wind
     );
 }
 
@@ -115,7 +113,7 @@ fn test_dynamic_wind_with_callcc_reentry() {
 #[test]
 fn test_with_exception_handler_basic() {
     // Basic test: handler catches exception and escapes via call/cc
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (call-with-current-continuation
           (lambda (k)
@@ -124,35 +122,32 @@ fn test_with_exception_handler_basic() {
               (lambda () (raise 'boom)))))
         "#,
         "caught",
-        true,
     );
 }
 
 #[test]
 fn test_with_exception_handler_no_exception() {
     // When no exception is raised, thunk's result is returned
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (with-exception-handler
           (lambda (x) 'never-called)
           (lambda () 42))
         "#,
         "42",
-        true,
     );
 }
 
 #[test]
 fn test_raise_continuable_basic() {
     // raise-continuable allows handler to return a value
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (with-exception-handler
           (lambda (con) 42)
           (lambda () (+ (raise-continuable "should be a number") 23)))
         "#,
         "65",
-        true,
     );
 }
 
@@ -160,7 +155,7 @@ fn test_raise_continuable_basic() {
 fn test_with_exception_handler_nested() {
     // Nested handlers - inner handler catches exception.
     // Fixed by properly reifying ExceptionHandlerCleanup in call/cc capture.
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (call-with-current-continuation
           (lambda (outer-k)
@@ -174,14 +169,13 @@ fn test_with_exception_handler_nested() {
                       (lambda () (raise 'boom)))))))))
         "#,
         "inner-caught",
-        true,
     );
 }
 
 #[test]
 fn test_with_exception_handler_with_callcc_escape() {
     // Handler uses call/cc to escape, preserving the continuation
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (let ((result '()))
           (call-with-current-continuation
@@ -197,7 +191,6 @@ fn test_with_exception_handler_with_callcc_escape() {
           result)
         "#,
         "(handled before)",
-        true,
     );
 }
 
@@ -208,20 +201,19 @@ fn test_with_exception_handler_with_callcc_escape() {
 #[test]
 fn test_guard_basic_else() {
     // guard with else clause catches any exception
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (guard (exn (else 'caught))
           (raise 'boom))
         "#,
         "caught",
-        true,
     );
 }
 
 #[test]
 fn test_guard_condition_match() {
     // guard with specific condition that matches
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (guard (exn
                 ((eq? exn 'specific) 'matched)
@@ -229,14 +221,13 @@ fn test_guard_condition_match() {
           (raise 'specific))
         "#,
         "matched",
-        true,
     );
 }
 
 #[test]
 fn test_guard_condition_no_match() {
     // guard with condition that doesn't match, falls through to else
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (guard (exn
                 ((eq? exn 'specific) 'matched)
@@ -244,41 +235,38 @@ fn test_guard_condition_no_match() {
           (raise 'different))
         "#,
         "other",
-        true,
     );
 }
 
 #[test]
 fn test_guard_no_exception() {
     // guard when no exception is raised
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (guard (exn (else 'caught))
           (+ 1 2))
         "#,
         "3",
-        true,
     );
 }
 
 #[test]
 fn test_guard_multiple_body_exprs() {
     // guard with multiple body expressions
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (guard (exn (else 'caught))
           (define x 10)
           (+ x 5))
         "#,
         "15",
-        true,
     );
 }
 
 #[test]
 fn test_guard_catches_error() {
     // guard catches error procedure (R7RS 6.11)
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (guard (exn
                 ((error-object? exn) (error-object-message exn))
@@ -286,14 +274,13 @@ fn test_guard_catches_error() {
           (error "test message"))
         "#,
         "\"test message\"",
-        true,
     );
 }
 
 #[test]
 fn test_guard_error_with_irritants() {
     // guard catches error with irritants
-    assert_program_eval_to_with_cps(
+    assert_program_eval_to(
         r#"
         (guard (exn
                 ((error-object? exn) (error-object-irritants exn))
@@ -301,6 +288,5 @@ fn test_guard_error_with_irritants() {
           (error "msg" 1 2 3))
         "#,
         "(1 2 3)",
-        true,
     );
 }
