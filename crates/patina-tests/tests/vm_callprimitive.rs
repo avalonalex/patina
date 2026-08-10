@@ -1,7 +1,7 @@
 //! Semantic tests for `CallPrimitive` dispatch on the VM backend (Track P P2).
 //!
-//! These run against `VmBackend` explicitly (not the feature-switched common
-//! helpers): the deopt behavior under test only exists in the VM.
+//! These run against `VmBackend` explicitly rather than the both-backends
+//! common helpers: the deopt behavior under test only exists in the VM.
 
 mod common;
 use common::eval_program_vm as eval;

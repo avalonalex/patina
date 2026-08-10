@@ -3,7 +3,7 @@
 //! Provides utilities for writing concise tests comparing Patina output
 //! against expected values.
 //!
-//! # Every helper runs on both backends
+//! # Every helper here runs on both backends
 //!
 //! Patina's central architectural claim is that the tree-walker and the VM
 //! implement the same language. These helpers make that a *checked* claim
@@ -13,13 +13,19 @@
 //! which backend produced what, because the culprit is usually the backend
 //! you were not thinking about.
 //!
-//! A known divergence is opted out explicitly with the `_on` variants:
+//! Note the scope: this covers the tests that *use these helpers*. Several
+//! test files still construct an interpreter directly and remain
+//! tree-walker-only — porting them is tracked as Q1 in
+//! `PRD/TRACK_Q_QUALITY_PRD.md`. Prefer these helpers in new tests.
 //!
-//!     assert_program_eval_to_on(On::Vm, code, expected);  // tree-walker bug: see PRD/bugs/...
+//! A known divergence is declared with [`assert_divergence`], which pins the
+//! working backend's answer *and* requires the other to still fail:
 //!
-//! Those call sites are the inventory of known divergences — keep each one
-//! commented with the reason and a pointer, and delete it when the bug is
-//! fixed. `rg 'On::(Vm|TreeWalker)' crates/patina-tests` lists them all.
+//!     assert_divergence(code, On::Vm, "(1 2)", "PRD/bugs/SOME_BUG.md");
+//!
+//! Fixing the bug makes that test fail, which is the point — the quarantine
+//! retires itself instead of outliving the defect. `rg assert_divergence
+//! crates/patina-tests` is the complete inventory.
 
 #![allow(dead_code)]
 // `gc_shared_tests!` is used only by the GC test binaries; every other test
@@ -35,17 +41,43 @@ use std::cell::RefCell;
 
 // ─── Backend selection ───────────────────────────────────────────────────────
 
-/// Which backends a helper exercises. `Both` is the default and the only
-/// value that should appear in new tests; the single-backend variants exist
-/// to quarantine a *known* divergence until it is fixed.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// The backend a quarantined divergence currently *works* on. The other one is
+/// asserted to still fail, so fixing it retires the quarantine automatically.
+///
+/// This is deliberately two-valued: "both backends" is not expressible, because
+/// a quarantine that quarantines nothing is just [`assert_program_eval_to`].
+#[derive(Clone, Copy)]
 pub enum On {
-    /// Both backends must agree. The default for every plain helper.
-    Both,
-    /// Tree-walker only — the VM diverges. Requires a comment saying why.
     TreeWalker,
-    /// VM only — the tree-walker diverges. Requires a comment saying why.
     Vm,
+}
+
+/// Which backends one run covers. Private — tests never select backends
+/// directly, they either use a plain both-backends helper or declare a
+/// divergence with [`assert_divergence`].
+#[derive(Clone, Copy)]
+enum Which {
+    Both,
+    TreeWalker,
+    Vm,
+}
+
+impl On {
+    /// The backend that behaves correctly today.
+    fn working(self) -> Which {
+        match self {
+            On::TreeWalker => Which::TreeWalker,
+            On::Vm => Which::Vm,
+        }
+    }
+
+    /// The backend that is still broken.
+    fn broken(self) -> Which {
+        match self {
+            On::TreeWalker => Which::Vm,
+            On::Vm => Which::TreeWalker,
+        }
+    }
 }
 
 /// Format a TaggedValue for display (backend-agnostic).
@@ -69,7 +101,7 @@ type Outcome = Result<String, String>;
 /// Whether the code is a whole program (`eval_program`) or a single
 /// expression (`eval_str`). The two entry points differ in how they treat
 /// multiple top-level forms, so tests must keep using the one they chose.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum Mode {
     Expr,
     Program,
@@ -91,24 +123,28 @@ fn run_on<B: Backend>(interp: Interpreter<B>, code: &str, mode: Mode) -> Outcome
     }
 }
 
-/// Run `code` on each backend `on` selects, labelled for failure messages.
-fn outcomes(on: On, code: &str, mode: Mode) -> Vec<(&'static str, Outcome)> {
-    let mut out = Vec::with_capacity(2);
-    if on != On::Vm {
-        out.push((
+/// Run `code` on each backend `which` selects, labelled for failure messages.
+///
+/// Matched exhaustively rather than tested with `!=`, so adding a backend is a
+/// compile error here instead of silently defaulting to running both.
+fn outcomes(which: Which, code: &str, mode: Mode) -> Vec<(&'static str, Outcome)> {
+    let tree_walker = || {
+        (
             "tree-walker",
             run_on(TreeWalkInterpreter::new_tree_walker(), code, mode),
-        ));
+        )
+    };
+    let vm = || ("vm", run_on(Interpreter::new(VmBackend::new()), code, mode));
+    match which {
+        Which::Both => vec![tree_walker(), vm()],
+        Which::TreeWalker => vec![tree_walker()],
+        Which::Vm => vec![vm()],
     }
-    if on != On::TreeWalker {
-        out.push(("vm", run_on(Interpreter::new(VmBackend::new()), code, mode)));
-    }
-    out
 }
 
 /// Assert every selected backend evaluates `code` to `expected`.
-fn expect_value(on: On, code: &str, expected: &str, mode: Mode) {
-    for (backend, outcome) in outcomes(on, code, mode) {
+fn expect_value(which: Which, code: &str, expected: &str, mode: Mode) {
+    for (backend, outcome) in outcomes(which, code, mode) {
         match outcome {
             Ok(actual) => assert_eq!(
                 actual, expected,
@@ -124,8 +160,8 @@ fn expect_value(on: On, code: &str, expected: &str, mode: Mode) {
 /// One backend erroring where the other succeeds is itself a divergence — the
 /// exact shape of the control-operator cluster in Track Q §1.2 — so this is a
 /// stronger check than the single-backend version it replaces.
-fn expect_error(on: On, code: &str, mode: Mode) {
-    for (backend, outcome) in outcomes(on, code, mode) {
+fn expect_error(which: Which, code: &str, mode: Mode) {
+    for (backend, outcome) in outcomes(which, code, mode) {
         if let Ok(value) = outcome {
             panic!("\n[{backend}] expected an error\nProgram:\n{code}\nGot: {value}");
         }
@@ -137,22 +173,42 @@ fn expect_error(on: On, code: &str, mode: Mode) {
 /// Assert that evaluating a Scheme expression produces the expected result
 /// on both backends.
 pub fn assert_eval_to(expr: &str, expected: &str) {
-    expect_value(On::Both, expr, expected, Mode::Expr);
-}
-
-/// [`assert_eval_to`] restricted to one backend — for a known divergence only.
-pub fn assert_eval_to_on(on: On, expr: &str, expected: &str) {
-    expect_value(on, expr, expected, Mode::Expr);
+    expect_value(Which::Both, expr, expected, Mode::Expr);
 }
 
 /// Assert that evaluating a Scheme expression produces an error on both backends
 pub fn assert_eval_error(expr: &str) {
-    expect_error(On::Both, expr, Mode::Expr);
+    expect_error(Which::Both, expr, Mode::Expr);
 }
 
-/// [`assert_eval_error`] restricted to one backend — for a known divergence only.
-pub fn assert_eval_error_on(on: On, expr: &str) {
-    expect_error(on, expr, Mode::Expr);
+/// Pin a **known divergence** between the backends: `works_on` must produce
+/// `expected`, and the other backend must still fail. `tracking` names the
+/// document that records the bug — a mandatory argument, so a quarantine
+/// cannot be written without saying where it is tracked.
+///
+/// This is the only way to opt a test out of both-backends coverage, and it is
+/// designed to **fail when the bug is fixed**: repairing the broken backend
+/// trips the second assertion, whose message tells the fixer to replace this
+/// call with a plain [`assert_program_eval_to`]. Asserting only the working
+/// side would let a quarantine outlive its bug forever, which is how an
+/// exception list becomes a permanent excuse.
+pub fn assert_divergence(code: &str, works_on: On, expected: &str, tracking: &str) {
+    expect_value(works_on.working(), code, expected, Mode::Program);
+
+    for (backend, outcome) in outcomes(works_on.broken(), code, Mode::Program) {
+        if let Ok(value) = outcome {
+            panic!(
+                "\n[{backend}] NO LONGER DIVERGES — it now returns {value}.\n\
+                 \n\
+                 This quarantine has done its job. Replace the assert_divergence \
+                 call with\n    \
+                 assert_program_eval_to(code, {expected:?});\n\
+                 so both backends are held to the same expectation, and update \
+                 {tracking}.\n\
+                 \nProgram:\n{code}"
+            );
+        }
+    }
 }
 
 /// Evaluate multiple expressions in sequence on both backends, assert the two
@@ -164,22 +220,27 @@ pub fn eval_program(code: &str) -> String {
     let tw = run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program);
     let vm = run_on(Interpreter::new(VmBackend::new()), code, Mode::Program);
 
-    match (tw, vm) {
-        (Ok(a), Ok(b)) => {
-            assert_eq!(
-                a, b,
-                "\nbackends disagree\nProgram:\n{code}\ntree-walker: {a}\nvm: {b}"
-            );
-            a
-        }
-        (Err(a), Err(_)) => panic!("\nFailed to evaluate program:\n{code}\nError: {a}"),
-        (Ok(a), Err(b)) => {
-            panic!("\nbackends disagree\nProgram:\n{code}\ntree-walker: {a}\nvm errored: {b}")
-        }
-        (Err(a), Ok(b)) => {
-            panic!("\nbackends disagree\nProgram:\n{code}\ntree-walker errored: {a}\nvm: {b}")
-        }
+    // Both failing is a shared bug in the program under test, not a
+    // divergence — report both errors, since the two backends can fail for
+    // different reasons and showing only one hides half the evidence.
+    if let (Err(a), Err(b)) = (&tw, &vm) {
+        panic!("\nFailed to evaluate program:\n{code}\ntree-walker: {a}\nvm: {b}");
     }
+
+    // Agreement is on *values*: `expect_error` deliberately does not compare
+    // error text, so neither does this.
+    let show = |o: &Outcome| match o {
+        Ok(v) => v.clone(),
+        Err(e) => format!("errored: {e}"),
+    };
+    assert!(
+        tw.as_ref().ok() == vm.as_ref().ok(),
+        "\nbackends disagree\nProgram:\n{code}\ntree-walker: {}\nvm: {}",
+        show(&tw),
+        show(&vm)
+    );
+
+    tw.expect("checked non-error above")
 }
 
 /// Evaluate a program on the tree-walker only and `write` the result. For
@@ -202,37 +263,19 @@ pub fn eval_program_vm(code: &str) -> String {
 
 /// Assert that a multi-expression program produces expected result on both backends
 pub fn assert_program_eval_to(code: &str, expected: &str) {
-    expect_value(On::Both, code, expected, Mode::Program);
-}
-
-/// [`assert_program_eval_to`] restricted to one backend — known divergence only.
-pub fn assert_program_eval_to_on(on: On, code: &str, expected: &str) {
-    expect_value(on, code, expected, Mode::Program);
+    expect_value(Which::Both, code, expected, Mode::Program);
 }
 
 /// Assert that evaluating a multi-expression program produces an error on both backends
 pub fn assert_program_eval_error(code: &str) {
-    expect_error(On::Both, code, Mode::Program);
-}
-
-/// [`assert_program_eval_error`] restricted to one backend — known divergence only.
-pub fn assert_program_eval_error_on(on: On, code: &str) {
-    expect_error(on, code, Mode::Program);
+    expect_error(Which::Both, code, Mode::Program);
 }
 
 /// Assert that evaluating an expression with (scheme char) imported produces
 /// expected result on both backends
 pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
     let code = format!("(import (scheme char)) {}", expr);
-    expect_value(On::Both, &code, expected, Mode::Program);
-}
-
-/// Assert that a multi-expression program produces expected result
-/// This function now always uses CPS evaluation (the default mode).
-/// The `use_cps` parameter is kept for backward compatibility but is ignored.
-#[allow(unused_variables)]
-pub fn assert_program_eval_to_with_cps(code: &str, expected: &str, use_cps: bool) {
-    expect_value(On::Both, code, expected, Mode::Program);
+    expect_value(Which::Both, &code, expected, Mode::Program);
 }
 
 // ─── Shared GC test suite ────────────────────────────────────────────────────
@@ -246,7 +289,13 @@ pub fn assert_program_eval_to_with_cps(code: &str, expected: &str, use_cps: bool
 /// only the tests that target machinery unique to it.
 ///
 /// `$eval` is a `fn(&str) -> String` that evaluates a program and `write`s the
-/// result (`eval_program` or `eval_program_vm`).
+/// result: `eval_program_tree_walker` or `eval_program_vm`.
+///
+/// These take a *single-backend* evaluator on purpose. Several cases read
+/// `(gc-stats)` counters, which legitimately differ between the backends —
+/// the same workload frees 12295 pairs on the VM and 12294 on the
+/// tree-walker — so routing them through the agreement-asserting
+/// `eval_program` would fail on a difference that is not a divergence.
 macro_rules! gc_shared_tests {
     ($eval:path) => {
         /// Pull one `(gc-stats)` field out of the alist the primitive returns.

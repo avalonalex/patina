@@ -327,11 +327,14 @@ is the proof that they were needed.
 
 - Routine after every item: `cargo build --release && ./scripts/run_chibi_tests.sh`
   and `./scripts/run_chibi_tests_tree_walker.sh` — both must stay 1226/1226.
-- `cargo test --all --lib --tests` **and** `cargo test --package patina-tests
-  --features vm-backend --tests` must both pass (Q0 makes the second one CI's
-  responsibility rather than a human's).
+- `cargo test --all --lib --tests` must pass. Since Q0 this covers **both**
+  backends: the `patina-tests` helpers run every program on the tree-walker and
+  the VM. There is no longer a `vm-backend` feature or a second command.
 - Quality gate unchanged: `cargo clippy --all-targets --all-features -- -D warnings`
   and `cargo fmt`.
 - Track-level metric: **the number of behaviours that differ between the two
-  backends, as reported by Q1's harness.** It starts at the §1.2 table and is
-  expected to reach — and stay at — zero.
+  backends.** This is now a literal count —
+  `rg -c assert_divergence crates/patina-tests/tests/backend_divergence.rs` —
+  and it is expected to reach, and stay at, zero. It stands at **6**: the four
+  §1.2 control-operator rows plus two multi-value continuation cases from
+  `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`.
