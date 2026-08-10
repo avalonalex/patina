@@ -4,28 +4,36 @@
 #   ./scripts/run_chibi_tests.sh                 # VM backend (default)
 #   ./scripts/run_chibi_tests.sh --tree-walker   # CPS tree-walker backend
 #
+# Exits non-zero if any test fails or errors, so CI and the wrapper script can
+# gate on it.
+#
 # The suite reports itself through (chibi test), which Patina bundles verbatim
-# from upstream, so the totals here are the framework's own -- not a count this
-# script derives. That matters: the previous hand-written (chibi test) subset
-# under-reported by 63 tests and silently swallowed failures it could not
-# express.
+# from upstream, so the totals are the framework's own rather than a count this
+# script derives -- they cannot drift from what was actually asserted.
 
-set -e
+set -eo pipefail
+
+# Data paths are repo-relative; work from the repo root however we were invoked.
+cd "$(dirname "$0")/.."
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-BACKEND_FLAG=""
+BACKEND_ARGS=()
 BACKEND_NAME="VM"
 SUFFIX=""
 for arg in "$@"; do
     case "$arg" in
         --tree-walker)
-            BACKEND_FLAG="--tree-walker"
+            BACKEND_ARGS=(--tree-walker)
             BACKEND_NAME="tree-walker"
             SUFFIX="_tree_walker"
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--tree-walker]"
+            exit 0
             ;;
         *)
             echo "Unknown option: $arg" >&2
@@ -59,27 +67,26 @@ echo "Results:   $RESULTS_FILE"
 echo ""
 
 # (chibi test) exits non-zero when any test fails; keep going so the report is
-# still written.
-if "$PATINA_BIN" $BACKEND_FLAG "$TEST_FILE" > "$RESULTS_FILE" 2>&1; then
+# still written. It also colourises, so strip escapes on the way to disk -- the
+# saved log stays readable and every parse below sees the same plain text.
+if "$PATINA_BIN" "${BACKEND_ARGS[@]}" "$TEST_FILE" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$RESULTS_FILE"; then
     echo -e "${GREEN}Suite completed${NC}"
 else
-    echo -e "${YELLOW}Suite completed with failures (exit code: $?)${NC}"
+    echo -e "${YELLOW}Suite completed with failures${NC}"
 fi
 
-# (chibi test) colourises its output; every downstream reader wants it plain.
-PLAIN=$(sed 's/\x1b\[[0-9;]*m//g' "$RESULTS_FILE")
-
-# Grand total: the framework's own final tally, emitted unindented at column 0.
-# Section tallies are indented, so anchoring on ^ distinguishes them.
-read -r PASS_COUNT TRUE_TOTAL <<<"$(printf '%s\n' "$PLAIN" \
-    | awk '/^[0-9]+ out of [0-9]+ .*tests passed/ { p=$1; t=$4 } END { print p+0, t+0 }')"
-SUBGROUPS=$(printf '%s\n' "$PLAIN" \
-    | awk '/^[0-9]+ out of [0-9]+ .*subgroups? passed/ { print $1"/"$4 }' | tail -1)
+# Grand totals are the framework's own tally, emitted unindented at column 0;
+# per-section tallies are indented, so anchoring on ^ tells them apart.
+read -r PASS_COUNT TRUE_TOTAL SUBGROUPS <<<"$(awk '
+    /^[0-9]+ out of [0-9]+ .*tests passed/      { p = $1; t = $4 }
+    /^[0-9]+ out of [0-9]+ .*subgroups? passed/ { s = $1 "/" $4 }
+    END { print p + 0, t + 0, (s ? s : "n/a") }
+' "$RESULTS_FILE")"
 
 FAIL_COUNT=$((TRUE_TOTAL - PASS_COUNT))
 # A test that crashes the interpreter never reaches an assertion, so it is
 # counted separately from a test that ran and disagreed.
-ERROR_COUNT=$(printf '%s\n' "$PLAIN" | grep -c "^Error" || true)
+ERROR_COUNT=$(grep -c "^Error" "$RESULTS_FILE" || true)
 
 if [ "$TRUE_TOTAL" -eq 0 ]; then
     echo -e "${RED}Could not parse a total from the suite output.${NC}"
@@ -87,15 +94,17 @@ if [ "$TRUE_TOTAL" -eq 0 ]; then
     exit 1
 fi
 
-pct() { awk "BEGIN {printf \"%.1f%%\", ($1/$TRUE_TOTAL)*100}"; }
+pct() { awk -v n="$1" -v t="$TRUE_TOTAL" 'BEGIN { printf "%.1f%%", n / t * 100 }'; }
 
 # Section breakdown: each group prints "<name>: <dots>" and then its own tally.
-SECTION_BREAKDOWN=$(printf '%s\n' "$PLAIN" | awk '
-    /^ +[^ ].*: *\.*$/ {
-        line = $0
-        sub(/^ +/, "", line)
-        sub(/: *\.*$/, "", line)
-        if (line != "") name = line
+# Two-state pairing is load-bearing: a section with subgroups emits its own
+# cumulative tally after theirs, and clearing `name` stops that being credited
+# to the next section.
+SECTION_BREAKDOWN=$(awk '
+    /^ +.*: *\.*$/ {
+        name = $0
+        sub(/^ +/, "", name)
+        sub(/: *\.*$/, "", name)
         next
     }
     /^ +[0-9]+ out of [0-9]+ .*tests passed/ {
@@ -105,7 +114,7 @@ SECTION_BREAKDOWN=$(printf '%s\n' "$PLAIN" | awk '
         printf "| %s | %s | %d | %d | %d |\n", status, name, total, passed, failed
         name = ""
     }
-')
+' "$RESULTS_FILE")
 
 cat > "$COMPAT_REPORT" << EOF
 # Patina R7RS Compatibility Report
@@ -122,7 +131,7 @@ cat > "$COMPAT_REPORT" << EOF
 | ❌ Failed | $FAIL_COUNT | $(pct "$FAIL_COUNT") |
 | **Total** | **$TRUE_TOTAL** | **100%** |
 
-Subgroups passed: **${SUBGROUPS:-n/a}**
+Subgroups passed: **$SUBGROUPS**
 
 Counts come from \`(chibi test)\` itself rather than being re-derived here, so
 they cannot drift from what the framework actually asserted.
@@ -142,7 +151,7 @@ if [ "$FAIL_COUNT" -gt 0 ]; then
         echo "## Failures"
         echo ""
         echo '```'
-        printf '%s\n' "$PLAIN" | grep -A2 "FAIL:" || true
+        grep -A2 "FAIL:" "$RESULTS_FILE" || true
         echo '```'
         echo ""
     } >> "$COMPAT_REPORT"
@@ -156,7 +165,7 @@ if [ "$ERROR_COUNT" -gt 0 ]; then
         echo "included in the failure count above."
         echo ""
         echo '```'
-        printf '%s\n' "$PLAIN" | grep "^Error" | sort | uniq -c | sort -rn || true
+        grep "^Error" "$RESULTS_FILE" | sort | uniq -c | sort -rn || true
         echo '```'
         echo ""
     } >> "$COMPAT_REPORT"
@@ -180,8 +189,11 @@ if [ "$ERROR_COUNT" -gt 0 ]; then
     echo -e "  Errors: ${RED}${ERROR_COUNT}${NC} (crashed before asserting)"
 fi
 echo "  Total:  $TRUE_TOTAL"
-echo "  Subgroups: ${SUBGROUPS:-n/a}"
+echo "  Subgroups: $SUBGROUPS"
 echo ""
 echo "Report: $COMPAT_REPORT"
 
-[ "$FAIL_COUNT" -eq 0 ] && [ "$ERROR_COUNT" -eq 0 ]
+# Non-zero exit means the suite regressed; CI and the wrapper rely on it.
+if [ "$FAIL_COUNT" -gt 0 ] || [ "$ERROR_COUNT" -gt 0 ]; then
+    exit 1
+fi

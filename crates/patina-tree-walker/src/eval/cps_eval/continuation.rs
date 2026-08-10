@@ -27,150 +27,147 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Vec<(Rc<str>, Rc<CpsContinuation>)> {
         cont_env
             .iter()
-            .filter_map(|(name, cont_val)| {
-                match cont_val {
-                    ContValue::Local {
-                        param,
-                        body,
-                        env,
-                        cont_env: nested_cont_env,
-                    } => {
-                        // Recursively capture nested cont_env
-                        let nested_bindings =
-                            Self::capture_cont_bindings(nested_cont_env, dynamic_winds, heap);
-                        Some((
-                            name.clone(),
-                            Rc::new(CpsContinuation {
-                                body: body.clone(),
-                                param: param.clone(),
-                                env: env.clone(),
-                                prompt_tag: None,
-                                dynamic_winds: dynamic_winds.to_vec(),
-                                captured_cont_bindings: nested_bindings,
-                            }),
-                        ))
-                    }
-                    ContValue::Captured(k) => Some((name.clone(), k.clone())),
-                    ContValue::Halt => None, // Halt doesn't need to be captured
-
-                    // DynamicWindCleanup needs special handling - serialize to CpsContinuation
-                    ContValue::DynamicWindCleanup {
-                        after,
-                        wind_id,
-                        original_cont,
-                    } => {
-                        // Recursively capture the original continuation
-                        let orig_bindings = match original_cont.as_ref() {
-                            ContValue::Local {
-                                param,
-                                body,
-                                env,
-                                cont_env: nested_cont_env,
-                            } => {
-                                let nested = Self::capture_cont_bindings(
-                                    nested_cont_env,
-                                    dynamic_winds,
-                                    heap,
-                                );
-                                vec![(
-                                    Rc::from("__dw_original__") as Rc<str>,
-                                    Rc::new(CpsContinuation {
-                                        body: body.clone(),
-                                        param: param.clone(),
-                                        env: env.clone(),
-                                        prompt_tag: None,
-                                        dynamic_winds: dynamic_winds.to_vec(),
-                                        captured_cont_bindings: nested,
-                                    }),
-                                )]
-                            }
-                            ContValue::DynamicWindCleanup { .. } => {
-                                // Nested DynamicWindCleanup - recursively capture
-                                let temp_env = ContEnv::new()
-                                    .insert(Rc::from("__inner__"), original_cont.as_ref().clone());
-                                if let Some((_, k)) =
-                                    Self::capture_cont_bindings(&temp_env, dynamic_winds, heap)
-                                        .into_iter()
-                                        .next()
-                                {
-                                    vec![(Rc::from("__dw_original__"), k)]
-                                } else {
-                                    vec![]
-                                }
-                            }
-                            ContValue::Halt => vec![],
-                            _ => vec![],
-                        };
-
-                        // Build the captured bindings
-                        let mut bindings = orig_bindings;
-                        bindings.push((
-                            Rc::from("__dw_after__"),
-                            Rc::new(CpsContinuation {
-                                body: CpsExpr::rc(CpsExprKind::Literal(*after)), // already TaggedValue
-                                param: Rc::from("__unused__"),
-                                env: Rc::new(Environment::new()),
-                                prompt_tag: None,
-                                dynamic_winds: vec![],
-                                captured_cont_bindings: vec![],
-                            }),
-                        ));
-                        bindings.push((
-                            Rc::from("__dw_wind_id__"),
-                            Rc::new(CpsContinuation {
-                                body: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::fixnum(
-                                    *wind_id as i64,
-                                ))),
-                                param: Rc::from("__unused__"),
-                                env: Rc::new(Environment::new()),
-                                prompt_tag: None,
-                                dynamic_winds: vec![],
-                                captured_cont_bindings: vec![],
-                            }),
-                        ));
-
-                        // Create marker symbol
-                        let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
-                        Some((
-                            name.clone(),
-                            Rc::new(CpsContinuation {
-                                // Special marker body
-                                body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(
-                                    CpsExprKind::Literal(marker),
-                                ))),
-                                param: Rc::from("__dw_value__"),
-                                env: Rc::new(Environment::new()),
-                                prompt_tag: None,
-                                dynamic_winds: dynamic_winds.to_vec(),
-                                captured_cont_bindings: bindings,
-                            }),
-                        ))
-                    }
-
-                    // Effect-carrying wrappers: capture straight through to the
-                    // continuation underneath.
-                    //
-                    // These used to return None, which dropped the whole entry
-                    // from the captured environment. The body being captured
-                    // still referred to that binder, so re-entering the
-                    // continuation died with "Undefined variable: k_N" -- which
-                    // is what a `guard` nested inside another exception handler
-                    // did, since with-exception-handler installs an
-                    // ExceptionHandlerCleanup around its thunk.
-                    //
-                    // The wrapper's effect is not preserved. That is consistent
-                    // with the escape path, which already rebuilds the handler
-                    // and wind state rather than replaying it (see the
-                    // ContinuationEscape arm in mod.rs).
-                    other => other.wrapped_cont().and_then(|inner| {
-                        let unwrapped = ContEnv::new().insert(name.clone(), inner.clone());
-                        Self::capture_cont_bindings(&unwrapped, dynamic_winds, heap)
-                            .into_iter()
-                            .next()
-                    }),
-                }
-            })
+            .filter_map(|(name, cont_val)| Self::capture_one(name, cont_val, dynamic_winds, heap))
             .collect()
+    }
+
+    /// Serialize one continuation-environment entry.
+    ///
+    /// Split out so the nested cases can recurse on a single binding instead of
+    /// building a throwaway one-entry `ContEnv` to call back through.
+    fn capture_one(
+        name: &Rc<str>,
+        cont_val: &ContValue,
+        dynamic_winds: &[DynamicWindRecord],
+        heap: &SharedHeap,
+    ) -> Option<(Rc<str>, Rc<CpsContinuation>)> {
+        {
+            match cont_val {
+                ContValue::Local {
+                    param,
+                    body,
+                    env,
+                    cont_env: nested_cont_env,
+                } => {
+                    // Recursively capture nested cont_env
+                    let nested_bindings =
+                        Self::capture_cont_bindings(nested_cont_env, dynamic_winds, heap);
+                    Some((
+                        name.clone(),
+                        Rc::new(CpsContinuation {
+                            body: body.clone(),
+                            param: param.clone(),
+                            env: env.clone(),
+                            prompt_tag: None,
+                            dynamic_winds: dynamic_winds.to_vec(),
+                            captured_cont_bindings: nested_bindings,
+                        }),
+                    ))
+                }
+                ContValue::Captured(k) => Some((name.clone(), k.clone())),
+                ContValue::Halt => None, // Halt doesn't need to be captured
+
+                // DynamicWindCleanup needs special handling - serialize to CpsContinuation
+                ContValue::DynamicWindCleanup {
+                    after,
+                    wind_id,
+                    original_cont,
+                } => {
+                    // Recursively capture the original continuation
+                    let orig_bindings = match original_cont.as_ref() {
+                        ContValue::Local {
+                            param,
+                            body,
+                            env,
+                            cont_env: nested_cont_env,
+                        } => {
+                            let nested =
+                                Self::capture_cont_bindings(nested_cont_env, dynamic_winds, heap);
+                            vec![(
+                                Rc::from("__dw_original__") as Rc<str>,
+                                Rc::new(CpsContinuation {
+                                    body: body.clone(),
+                                    param: param.clone(),
+                                    env: env.clone(),
+                                    prompt_tag: None,
+                                    dynamic_winds: dynamic_winds.to_vec(),
+                                    captured_cont_bindings: nested,
+                                }),
+                            )]
+                        }
+                        ContValue::DynamicWindCleanup { .. } => {
+                            let inner = Rc::from("__dw_original__");
+                            Self::capture_one(&inner, original_cont, dynamic_winds, heap)
+                                .map(|(n, k)| vec![(n, k)])
+                                .unwrap_or_default()
+                        }
+                        ContValue::Halt => vec![],
+                        _ => vec![],
+                    };
+
+                    // Build the captured bindings
+                    let mut bindings = orig_bindings;
+                    bindings.push((
+                        Rc::from("__dw_after__"),
+                        Rc::new(CpsContinuation {
+                            body: CpsExpr::rc(CpsExprKind::Literal(*after)), // already TaggedValue
+                            param: Rc::from("__unused__"),
+                            env: Rc::new(Environment::new()),
+                            prompt_tag: None,
+                            dynamic_winds: vec![],
+                            captured_cont_bindings: vec![],
+                        }),
+                    ));
+                    bindings.push((
+                        Rc::from("__dw_wind_id__"),
+                        Rc::new(CpsContinuation {
+                            body: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::fixnum(
+                                *wind_id as i64,
+                            ))),
+                            param: Rc::from("__unused__"),
+                            env: Rc::new(Environment::new()),
+                            prompt_tag: None,
+                            dynamic_winds: vec![],
+                            captured_cont_bindings: vec![],
+                        }),
+                    ));
+
+                    // Create marker symbol
+                    let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
+                    Some((
+                        name.clone(),
+                        Rc::new(CpsContinuation {
+                            // Special marker body
+                            body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(
+                                CpsExprKind::Literal(marker),
+                            ))),
+                            param: Rc::from("__dw_value__"),
+                            env: Rc::new(Environment::new()),
+                            prompt_tag: None,
+                            dynamic_winds: dynamic_winds.to_vec(),
+                            captured_cont_bindings: bindings,
+                        }),
+                    ))
+                }
+
+                // Effect-carrying wrappers: capture straight through to the
+                // continuation underneath. Dropping the entry instead
+                // strands the binder its body refers to -- see
+                // tests/nested_exception_handlers.rs.
+                //
+                // The wrapper's effect is NOT preserved, and neither is the
+                // dynamic state around it: the escape path in mod.rs resets
+                // `exception_handlers` and `prompt_stack` to empty on
+                // re-entry rather than restoring what was captured, because
+                // `CpsContinuation` has nowhere to store them. Re-entering
+                // a continuation captured under a handler therefore loses
+                // that handler. Pre-existing and separately tracked; the VM
+                // does restore both (see `VmContinuation`).
+                other => other
+                    .wrapped_cont()
+                    .and_then(|inner| Self::capture_one(name, inner, dynamic_winds, heap)),
+            }
+        }
     }
 
     /// Restore continuation bindings from a captured continuation
@@ -420,23 +417,16 @@ impl<'a> CpsEvaluator<'a> {
                 })
             }
 
-            ContValue::ExceptionHandlerCleanup { original_cont } => {
-                // ExceptionHandlerCleanup just pops an exception handler and forwards
-                // the value to original_cont. When captured by call/cc, we need to
-                // preserve the original_cont chain. Since exception handlers are managed
-                // separately (not in the continuation), we can simply reify original_cont.
-                self.reify_continuation(original_cont, cont_env, dynamic_winds)
-            }
-
-            // Other special continuations that need similar treatment
-            ContValue::CallWithValuesConsumer { .. }
-            | ContValue::ForceCache { .. }
-            | ContValue::DynamicWindSetup { .. }
-            | ContValue::DynamicWindAfterDone { .. }
-            | ContValue::RaiseHandlerReturn { .. } => {
-                // For now, these return a placeholder. They could be enhanced similarly.
-                // TODO: Implement proper capture for these special continuations
-                Rc::new(CpsContinuation {
+            // Effect-carrying wrappers reify as the continuation they wrap, by
+            // the same rule `capture_cont_bindings` uses. Five of these used to
+            // reify as a placeholder that discarded the continuation and
+            // returned unspecified.
+            other => match other.wrapped_cont() {
+                Some(inner) => self.reify_continuation(inner, cont_env, dynamic_winds),
+                // Only reachable if a new ContValue variant is added and
+                // `wrapped_cont` returns None for it; keep the old placeholder
+                // rather than panicking in the evaluator.
+                None => Rc::new(CpsContinuation {
                     body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Literal(
                         TaggedValue::UNSPECIFIED,
                     )))),
@@ -449,8 +439,8 @@ impl<'a> CpsEvaluator<'a> {
                         dynamic_winds,
                         heap,
                     ),
-                })
-            }
+                }),
+            },
         }
     }
 

@@ -39,7 +39,8 @@ struct Guarded {
     only_bundled: &'static [&'static str],
     /// Exports upstream has that Patina does not, and why.
     only_vendored: &'static [&'static str],
-    /// Why the divergence is acceptable. Documentation, not logic.
+    /// Why this entry reads as it does: the divergence it accepts, or why
+    /// there is none. Documentation, not logic.
     rationale: &'static str,
 }
 
@@ -86,9 +87,9 @@ const GUARDED: &[Guarded] = &[
         rationale: "%salt% is an internal hash parameter upstream exposes; not part of the SRFI \
                     128 specification and deliberately not re-exported.",
     },
-    // Imported verbatim from the vendored copy rather than ported, which is the
-    // L4 end state: byte-identical, so there is nothing to reconcile and these
-    // three can leave the corpus as soon as the exclusion mechanism lands.
+    // Imported verbatim rather than ported -- the L4 end state. Byte-identical,
+    // so there is nothing to reconcile and they can leave the corpus as soon as
+    // the exclusion mechanism lands.
     Guarded {
         library: "chibi term ansi",
         bundled: "lib/chibi/term/ansi.sld",
