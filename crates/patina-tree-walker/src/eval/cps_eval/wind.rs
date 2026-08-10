@@ -137,7 +137,8 @@ impl<'a> CpsEvaluator<'a> {
             env: self.evaluator.global_env.clone(),
             prompt_tag: None,
             dynamic_winds: vec![],
-            captured_cont_bindings: vec![],
+            captured_cont_env: ContEnv::new(),
+            resume: None,
         })
     }
 

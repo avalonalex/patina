@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # GC differential lane (docs/GC_DESIGN.md §11): the chibi suite must produce
-# byte-identical output with GC opted out (PATINA_GC=0), under the default
-# adaptive mode, and under PATINA_GC_STRESS=1, on both backends. Any
-# divergence is a lost root or a reclamation bug, never an acceptable
-# difference.
+# identical output with GC opted out (PATINA_GC=0), under the default adaptive
+# mode, and under GC stress, on both backends. Any divergence is a
+# lost root or a reclamation bug, never an acceptable difference.
+#
+# Two things are normalised away before comparing, and only two: the ANSI colour
+# codes (chibi test) emits, and the wall-clock duration it prints per section.
+# The duration is genuinely nondeterministic -- two runs of the *same* binary
+# differ -- so leaving it in would make the lane fail always rather than never.
+# Everything else, including every pass/fail count and every reported value, is
+# compared exactly.
 #
 # Usage: scripts/run_gc_differential.sh [path-to-patina-binary]
 # Default binary: target/release/patina (build it first).
@@ -15,18 +21,39 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 BIN="${1:-target/release/patina}"
+
+# How often the stress lane collects, in allocations. `1` collects at nearly
+# every safe point and is the most thorough setting, but the suite now runs
+# under upstream (chibi test), which allocates far more per test than the
+# hand-written subset it replaced -- at `1` the suite goes from 0.15s to 103s,
+# and the debug lane from minutes to over half an hour.
+#
+# 16 keeps collection roughly 4000x more frequent than the adaptive default
+# (which collects about every 65k allocations) for 13x less runtime. Override
+# to 1 when hunting a specific lost root.
+#
+# Note the reclamation proof below asserts >1000 collections over 20k
+# allocations, so it holds only while this stays <= 16.
+STRESS="${PATINA_GC_STRESS_INTERVAL:-16}"
 SUITE=scheme_tests/chibi/r7rs-tests.scm
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
+
+# Strip colour, and blank the per-section duration -- the only nondeterministic
+# field in the output.
+normalise() {
+    sed -e 's/\x1b\[[0-9;]*m//g' \
+        -e 's/ in [0-9][0-9.e-]* seconds\./ in TIME seconds./'
+}
 
 fail=0
 for backend_flag in "" "--tree-walker"; do
     name=${backend_flag:-"vm"}
     name=${name#--}
 
-    PATINA_GC=0 "$BIN" $backend_flag "$SUITE" > "$OUT/$name-off.txt" 2>&1
-    "$BIN" $backend_flag "$SUITE" > "$OUT/$name-default.txt" 2>&1
-    PATINA_GC_STRESS=1 "$BIN" $backend_flag "$SUITE" > "$OUT/$name-stress.txt" 2>&1
+    PATINA_GC=0 "$BIN" $backend_flag "$SUITE" 2>&1 | normalise > "$OUT/$name-off.txt"
+    "$BIN" $backend_flag "$SUITE" 2>&1 | normalise > "$OUT/$name-default.txt"
+    PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "$SUITE" 2>&1 | normalise > "$OUT/$name-stress.txt"
 
     for lane in default stress; do
         if diff -u "$OUT/$name-off.txt" "$OUT/$name-$lane.txt" > "$OUT/diff.txt"; then
@@ -55,7 +82,7 @@ for backend_flag in "" "--tree-walker"; do
       (begin (display "STRESS RECLAMATION BROKEN: ") (write stats) (newline)
              (exit 1))))
 EOF
-    if PATINA_GC_STRESS=1 "$BIN" $backend_flag "$OUT/churn-stress.scm"; then
+    if PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "$OUT/churn-stress.scm"; then
         echo "OK   $name stress reclamation proof"
     else
         echo "FAIL $name stress lane did not actually collect"

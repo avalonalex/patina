@@ -15,6 +15,7 @@
 //! and enable type-safe representations (no `dyn Any` needed).
 
 pub mod compiled_macro;
+pub mod cont_value;
 pub mod continuation;
 pub mod core_expr;
 pub mod cps_expr;
@@ -56,7 +57,10 @@ pub use heap::gc::{
     run_mark_phase, ArenaCounts, Collector, GcController, GcDeferGuard, GcMode, GcRoots, GcStats,
     GcVisitor, MarkBits, MarkSweepCollector,
 };
-pub use heap::{new_shared_heap, GcFreedBits, Heap, SharedHeap};
+pub use heap::{
+    gc::{trace_cont_env, trace_cont_value, trace_exception_handler},
+    new_shared_heap, GcFreedBits, Heap, SharedHeap,
+};
 pub use tagged_value::TaggedValue;
 pub use vfs::{FileSystem, MemoryFs, NativeFs, OverlayFs};
 

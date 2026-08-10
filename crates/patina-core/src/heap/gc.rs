@@ -34,6 +34,7 @@ use rustc_hash::FxHashSet;
 use std::cell::{Cell, RefCell};
 
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap};
+use crate::cont_value::{ContEnv, ContValue, ExceptionHandler};
 use crate::continuation::{CpsContinuation, DynamicWindRecord};
 use crate::environment::Environment;
 use crate::library::Library;
@@ -704,9 +705,7 @@ impl<'h> GcVisitor<'h> {
         self.visit_expr_literals(&k.body);
         self.visit_env(&k.env);
         self.visit_winds(&k.dynamic_winds);
-        for (_, captured) in &k.captured_cont_bindings {
-            self.visit_continuation(captured);
-        }
+        trace_cont_env(&k.captured_cont_env, self);
     }
 }
 
@@ -933,6 +932,118 @@ impl Collector for MarkSweepCollector {
 // ============================================================================
 // Tests
 // ============================================================================
+
+// ── Continuation-value tracing ───────────────────────────────────────────
+//
+// Moved here with ContValue itself: CpsContinuation stores a ContEnv, so the
+// collector has to be able to walk one.
+
+/// Trace a continuation environment.
+///
+/// Deduped by chain identity: `ContEnv` is a persistent `Rc` list and every
+/// `ContValue::Local` captures the chain below it, so an un-memoized walk is
+/// exponential (`2ⁿ − 1` node visits — measured at 6.8 s for one collection
+/// at nesting depth 26). Skipping an already-seen chain is safe: its entries,
+/// and therefore its whole tail, were traced when it was first seen.
+pub fn trace_cont_env(cont_env: &ContEnv, visitor: &mut GcVisitor<'_>) {
+    if !visitor.visit_once(cont_env.gc_identity()) {
+        return;
+    }
+    for (_, value) in cont_env.iter() {
+        trace_cont_value(value, visitor);
+    }
+}
+
+/// Trace a continuation value, walking the `Box<ContValue>` chain
+/// iteratively — most variants differ only in what they visit before handing
+/// off to the continuation they wrap.
+pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
+    let mut cont = cont;
+    loop {
+        cont = match cont {
+            ContValue::Halt => return,
+
+            ContValue::Local {
+                body,
+                env,
+                cont_env,
+                ..
+            } => {
+                visitor.visit_expr_literals(body);
+                visitor.visit_env(env);
+                trace_cont_env(cont_env, visitor);
+                return;
+            }
+
+            ContValue::Captured(k) => return visitor.visit_continuation(k),
+
+            ContValue::CallWithValuesConsumer {
+                consumer,
+                original_cont,
+            } => {
+                visitor.visit(*consumer);
+                original_cont
+            }
+
+            ContValue::ForceCache {
+                promise,
+                original_cont,
+            } => {
+                visitor.visit_promise(promise);
+                original_cont
+            }
+
+            ContValue::DynamicWindCleanup {
+                after,
+                original_cont,
+                ..
+            } => {
+                visitor.visit(*after);
+                original_cont
+            }
+
+            ContValue::DynamicWindSetup {
+                wind_record,
+                body,
+                cleanup_cont,
+            } => {
+                visitor.visit_wind(wind_record);
+                visitor.visit(*body);
+                cleanup_cont
+            }
+
+            ContValue::DynamicWindAfterDone {
+                result_value,
+                original_cont,
+            } => {
+                visitor.visit(*result_value);
+                original_cont
+            }
+
+            ContValue::ExceptionHandlerCleanup { original_cont } => original_cont,
+
+            ContValue::RaiseHandlerReturn {
+                original_exception,
+                original_cont,
+                popped_handler,
+                ..
+            } => {
+                if let Some(exception) = original_exception {
+                    visitor.visit(*exception);
+                }
+                if let Some(handler) = popped_handler {
+                    trace_exception_handler(handler, visitor);
+                }
+                original_cont
+            }
+        };
+    }
+}
+
+pub fn trace_exception_handler(handler: &ExceptionHandler, visitor: &mut GcVisitor<'_>) {
+    visitor.visit(handler.handler);
+    visitor.visit_winds(&handler.dynamic_winds);
+}
 
 #[cfg(test)]
 mod tests {

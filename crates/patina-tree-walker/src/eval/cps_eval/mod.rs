@@ -75,7 +75,7 @@ mod wind;
 use crate::eval::error::EvalError;
 use patina_core::Environment;
 use patina_core::TaggedValue;
-use patina_core::cps_expr::{CpsExpr, CpsExprKind};
+use patina_core::cps_expr::CpsExpr;
 use patina_core::{GcController, GcDeferGuard};
 use std::rc::Rc;
 use tracing::debug;
@@ -285,53 +285,40 @@ impl<'a> CpsEvaluator<'a> {
                             "Continuation escape"
                         );
 
-                        // Check if this is a special DynamicWindCleanup continuation
-                        let heap = self.evaluator.global_env.heap();
-                        let marker = heap.borrow_mut().intern_symbol("__dynamic_wind_cleanup__");
-                        let is_dw_cleanup = matches!(
-                            &k.body.as_ref().kind,
-                            CpsExprKind::Halt(inner) if matches!(
-                                &inner.as_ref().kind,
-                                CpsExprKind::Literal(v) if *v == marker
-                            )
-                        );
-
-                        // value_tagged is already a TaggedValue - no conversion needed
-
-                        if is_dw_cleanup {
-                            // Reconstruct the DynamicWindCleanup continuation
-                            let new_cont = self.restore_dynamic_wind_cleanup(&k)?;
-                            let restored_cont_env =
-                                self.restore_cont_bindings(&k.captured_cont_bindings);
-                            current_step = self.invoke_continuation_step(
-                                new_cont,
-                                value_tagged,
-                                k.env.clone(),
-                                restored_cont_env,
-                                Vec::new(),
-                                k.dynamic_winds.clone(),
-                                Vec::new(),
-                            )?;
-                        } else {
-                            // Normal continuation - resume with the escaped continuation
-                            let restored_cont_env =
-                                self.restore_cont_bindings(&k.captured_cont_bindings);
-                            let new_cont = ContValue::Local {
+                        // Resume the captured continuation. The
+                        // `__dynamic_wind_cleanup__` sentinel that used to be
+                        // sniffed for here is gone: a captured continuation now
+                        // carries its real ContEnv, so there is nothing to
+                        // decode and one path serves every case.
+                        //
+                        // NOTE: `exception_handlers` and `prompt_stack` are
+                        // reset rather than restored -- CpsContinuation does not
+                        // carry them, so re-entering a continuation captured
+                        // under a handler loses that handler. The VM restores
+                        // both from its snapshot. Pre-existing divergence,
+                        // tracked separately; storing them here is now
+                        // straightforward since the type can hold them.
+                        // `resume` holds an effect-carrying continuation that
+                        // must be re-established rather than jumped past; the
+                        // common case flattens to a Local.
+                        let new_cont = match &k.resume {
+                            Some(cont) => cont.clone(),
+                            None => ContValue::Local {
                                 param: k.param.clone(),
                                 body: k.body.clone(),
                                 env: k.env.clone(),
-                                cont_env: restored_cont_env.clone(),
-                            };
-                            current_step = self.invoke_continuation_step(
-                                new_cont,
-                                value_tagged,
-                                k.env.clone(),
-                                restored_cont_env,
-                                Vec::new(),
-                                k.dynamic_winds.clone(),
-                                Vec::new(),
-                            )?;
-                        }
+                                cont_env: k.captured_cont_env.clone(),
+                            },
+                        };
+                        current_step = self.invoke_continuation_step(
+                            new_cont,
+                            value_tagged,
+                            k.env.clone(),
+                            k.captured_cont_env.clone(),
+                            Vec::new(),
+                            k.dynamic_winds.clone(),
+                            Vec::new(),
+                        )?;
                     } else {
                         return Err(EvalError::InternalError(
                             "ContinuationEscape without pending data".to_string(),
@@ -395,7 +382,7 @@ mod tests {
     use super::*;
     use patina_core::ScopeSet;
     use patina_core::TaggedValue;
-    use patina_core::cps_expr::CpsPrimitive;
+    use patina_core::cps_expr::{CpsExprKind, CpsPrimitive};
 
     fn make_test_evaluator() -> super::super::Evaluator {
         super::super::Evaluator::new()
