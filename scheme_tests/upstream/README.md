@@ -15,6 +15,7 @@ All copied unmodified from chibi-scheme's `lib/`, BSD (Alex Shinn).
 |---|---|
 | `srfi/151/test.sld` | 0 — 145 assertions |
 | `srfi/143/test.sld` | 0 — 141 assertions |
+| `srfi/132/test.sld` | 0 |
 | `srfi/133/test.sld` | 0 |
 | `srfi/113/test.sld` | 0 |
 | `srfi/158/test.sld` | 1 — the suite calls `with-input-from-string`, a chibi extension Patina does not provide |
@@ -24,8 +25,8 @@ does a fix until the number is lowered. An expectations table, not a skip list.
 
 ## What running them found
 
-Four defects, none of which the hand-written tests beside these libraries had
-caught. Three are fixed; one is recorded below.
+Six defects, none of which the hand-written tests beside these libraries had
+caught. All are fixed.
 
 - **SRFI 113 `set-unfold` / `bag-unfold` took their arguments in the wrong
   order** — fixed. The SRFI orders them `(comparator stop? mapper successor
@@ -42,19 +43,38 @@ caught. Three are fixed; one is recorded below.
   spot-check works. All four now live in `lib/scheme/base/higher_order.scm`
   alongside them. This also removed a VM/tree-walker divergence in SRFI 158.
 
-- **SRFI 132 sort — still open.** `list-stable-sort` is **not stable**: equal
-  elements under the comparator come back reordered, which is the one property
-  distinguishing it from `list-sort`. `list-merge!` drops elements from its
-  first argument entirely — `(list-merge! > '(9 7 5 3 1) '(9 6 3 0))` returns
-  `(9 9 6 3 0)` instead of nine. `vector-merge` errors on empty vectors with
-  explicit ranges. Not in the table below because its suite aborts (see next
-  section), so it cannot be ratcheted yet.
+- **SRFI 132 sort — three defects, all in a hand-written port.** Patina's
+  `(srfi 132)` was a ~100-line port rather than the reference implementation,
+  and each defect was ours alone — no spec ambiguity, nothing another R7RS
+  implementation would hit:
+
+  1. `list-stable-sort` was **not stable** — the one property distinguishing it
+     from `list-sort`. The merge took a cell from `ls2` and then recursed as
+     `(%list-merge less (cdr ls2) ls1)`, putting `ls2`'s remainder in the `ls1`
+     position. Ties are broken in favour of `ls1`, so swapping the arguments
+     swapped which input wins them, and equal elements came back reordered.
+  2. `list-merge!` dropped elements: `(list-merge! > '(9 7 5 3 1) '(9 6 3 0))`
+     returned five instead of nine, because its splice loop discarded the
+     result of one recursive call.
+  3. `vector-merge` raised `unbound variable: cadddr` — its optional-argument
+     parsing used `caddr`/`cadddr`, which `(scheme base)` does not export. This
+     is the defect that kept the suite from finishing, so it was previously
+     recorded here as the *suite's* missing `(scheme cxr)` import. It was ours.
+
+  Rather than patch a port that had three bugs in a hundred lines, `(srfi 132)`
+  is now Olin Shivers' reference implementation with John Cowan's SRFI 132
+  modifications, unmodified from
+  [srfi-132](https://github.com/scheme-requests-for-implementation/srfi-132).
+  Patina already bundles his SRFI-1 reference the same way. It needed one
+  two-line `assert` shim and nothing else, and passed this suite on the first
+  run — which is the argument for using it: the sort algorithms are not where
+  Patina should be spending its own correctness budget.
+
+  Both were checked against the suite. Reintroducing defect 1 into the old port
+  turned the suite red with 2 failures, so the 0 in the table is not vacuous.
 
 ## Suites not included, and why
 
-- **SRFI 132** — its suite uses `cadddr` without importing `(scheme cxr)`, so it
-  aborts partway and cannot produce a trustworthy count. The defects above were
-  observed before it aborted and are real regardless.
 - **SRFI 1, SRFI 69** — their suites import `(chibi)`, chibi's implementation
   core, which Patina does not provide.
 - **SRFI 128** — its suite does not parse here; worth investigating whether that

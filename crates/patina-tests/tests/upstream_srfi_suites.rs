@@ -25,6 +25,7 @@ use std::path::PathBuf;
 const SUITES: &[(&str, &str, i64)] = &[
     ("(srfi 151 test)", "SRFI 151 bitwise", 0),
     ("(srfi 143 test)", "SRFI 143 fixnum", 0),
+    ("(srfi 132 test)", "SRFI 132 sort", 0),
     ("(srfi 133 test)", "SRFI 133 vector", 0),
     ("(srfi 113 test)", "SRFI 113 set", 0),
     // The one remaining failure is the suite calling `with-input-from-string`,
