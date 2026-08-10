@@ -71,11 +71,6 @@ pub use internal_time::build_internal_time;
 pub use internal_vectors::build_internal_vectors;
 
 // === User-facing utility libraries ===
-mod chibi_test;
 mod patina_debug;
 
-pub use chibi_test::{
-    build_chibi_test_primitives, test_begin, test_end, test_increment_error, test_increment_failed,
-    test_increment_passed,
-};
 pub use patina_debug::build_patina_debug;

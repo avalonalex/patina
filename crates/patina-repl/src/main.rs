@@ -249,7 +249,6 @@ fn eval_program_resilient_vm(
     source_name: &str,
 ) -> patina_core::TaggedValue {
     use patina_interpreter::{ParseError, Parser, SourceMap};
-    use patina_runtime::stdlib::test_increment_error;
 
     let mut result = patina_core::TaggedValue::UNSPECIFIED;
     let heap = interp.backend().global_env().heap();
@@ -260,7 +259,6 @@ fn eval_program_resilient_vm(
             Ok(p) => p,
             Err(e) => {
                 eprintln!("Error: {}", e);
-                test_increment_error();
                 return result;
             }
         };
@@ -287,14 +285,12 @@ fn eval_program_resilient_vm(
                         } else {
                             eprintln!("Error: {}", e);
                         }
-                        test_increment_error();
                     }
                 }
             }
             Err(ParseError::UnexpectedEof) => break,
             Err(e) => {
                 eprintln!("Error: {}", e);
-                test_increment_error();
             }
         }
     }
