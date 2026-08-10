@@ -233,16 +233,14 @@ def load_index(offline: bool) -> list[dict]:
 def bundled_libraries() -> set[str]:
     """Library names Patina ships itself, read from lib/ rather than hardcoded.
 
-    Used only to flag vendored packages that duplicate a bundled library, so the
-    drift guard in crates/patina-tests/tests/bundled_vs_vendored.rs can check
-    the port against its upstream reference.
+    These are excluded from the corpus. Patina's copy is canonical, so a
+    vendored duplicate has no role: nothing tests it, and anything importing it
+    resolves to the bundled version anyway.
 
-    TODO(L4): this is interim. Once each bundled port is a faithful import of
-    upstream, the bundled version becomes canonical and packages in this set
-    should be *excluded* from the corpus rather than flagged -- change the
-    `sel` filter below to drop them, then delete this function's flag, the
-    drift guard, and the `bundled_by_patina` field. See
-    PRD/TRACK_L_SNOW_LIBRARIES_PRD.md section L4.
+    Keeping both was briefly useful as a drift check, but the premise expired.
+    Patina's `(srfi 60)` is a rename over SRFI 151 while the vendored one is
+    Jaffer's SLIB implementation -- different implementations by design, so
+    comparing them measures a decision rather than a defect.
     """
     out = set()
     for sld in (ROOT / "lib").rglob("*.sld"):
@@ -302,8 +300,20 @@ def build(target: Path, offline: bool) -> dict:
             if p["name"][0] == "slib" and p["bucket"] == "UNKNOWN":
                 p["licence"], p["evidence"], p["bucket"] = "SLIB-Jaffer", "slib-family-inference", "NONSTANDARD"
 
-    sel = sorted((p for p in pkgs if p["bucket"] in ("PERMISSIVE", "NONSTANDARD")),
-                 key=lambda p: (-p["pop"], " ".join(p["name"])))
+    # Packages whose library Patina bundles are excluded: the bundled copy is
+    # canonical, so a vendored duplicate is dead weight that only raises the
+    # question of which one a test resolved against.
+    bundled = bundled_libraries()
+    sel = sorted(
+        (p for p in pkgs
+         if p["bucket"] in ("PERMISSIVE", "NONSTANDARD")
+         and not (bundled & {" ".join(l) for l in p["libs"]})),
+        key=lambda p: (-p["pop"], " ".join(p["name"])))
+    dropped = sorted({" ".join(p["name"]) for p in pkgs
+                      if p["bucket"] in ("PERMISSIVE", "NONSTANDARD")
+                      and (bundled & {" ".join(l) for l in p["libs"]})})
+    if dropped:
+        print(f"excluded {len(dropped)} package(s) Patina bundles: {', '.join(dropped)}")
 
     target.mkdir(parents=True, exist_ok=True)
     for entry in target.iterdir():                    # never delete the hand-written docs
@@ -328,10 +338,6 @@ def build(target: Path, offline: bool) -> dict:
             "depends": [" ".join(d) for d in p["deps"]], "description": p["desc"][:200],
             "files": files, "modified": False,
             "needs_ffi": any(f.endswith((".stub", ".c")) for f in files),
-            # Patina ships its own port of this library. Such packages are not
-            # merely corpus subjects: the vendored copy is the canonical
-            # upstream reference that the bundled port is checked against.
-            "bundled_by_patina": bundled_libraries() & {" ".join(l) for l in p["libs"]} != set(),
         })
 
     (target / "MANIFEST.json").write_text(json.dumps({

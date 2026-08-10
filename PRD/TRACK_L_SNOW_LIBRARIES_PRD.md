@@ -142,10 +142,17 @@ build break. Bundled libraries are the opposite: they are part of what Patina sh
 
 ---
 
-### L4 — Make bundled ports canonical, then drop their vendored duplicates  *(TODO — interim state)*
+### L4 — Make bundled ports canonical, then drop their vendored duplicates  *(done)*
 
-`compat/vendor/` currently contains five packages Patina also bundles — `(chibi test)`, `(srfi 1)`,
-`(srfi 8)`, `(srfi 69)`, `(srfi 128)`. **This duplication is temporary and should be removed.**
+✅ **Done.** `build_corpus.py` now excludes any package whose library Patina bundles, computed from
+`lib/` rather than listed, and the corpus dropped from 197 to 188. The drift guard
+(`bundled_vs_vendored.rs`) and the `bundled_by_patina` manifest field are deleted.
+
+The guard was worth having while it lasted — it caught `(chibi test)` missing 26 upstream exports —
+but its premise expired when `(srfi 60)` was bundled: Patina's is a rename over SRFI 151 while the
+vendored one is Jaffer's SLIB implementation, so comparing them measures a deliberate decision rather
+than a defect. Keeping both would also have meant answering, for every corpus run, which copy a test
+resolved against.
 
 **Target state:** every bundled library is a faithful import of its upstream reference rather than a
 subset or a local adaptation; the **bundled version is canonical**; and the vendored duplicate is
