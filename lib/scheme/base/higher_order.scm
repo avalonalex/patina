@@ -54,3 +54,66 @@
             (begin
               (apply proc (%map-cars lists))
               (loop (%map-cdrs lists)))))))
+
+;; (string-map proc string1 string2 ...) / (string-for-each proc string1 ...)
+;; (vector-map proc vec1 ...)           / (vector-for-each proc vec1 ...)
+;;
+;; Defined here rather than used from (patina internal strings) and
+;; (patina internal vectors) for the same reason `map` and `for-each` are: a
+;; Rust higher-order primitive calls back into Scheme from inside a Rust frame,
+;; and a continuation captured there does not survive. That made
+;; `(make-for-each-generator string-for-each "abc")` -- a coroutine generator
+;; yielding from the callback -- drop its first element silently.
+(define (%shortest-string strings)
+  (let loop ((ss (cdr strings)) (n (string-length (car strings))))
+    (if (null? ss) n (loop (cdr ss) (min n (string-length (car ss)))))))
+
+(define (string-for-each proc . strings)
+  (if (null? strings)
+      (error "string-for-each: requires at least one string argument")
+      (let ((n (%shortest-string strings)))
+        (let loop ((i 0))
+          (if (< i n)
+              (begin
+                (apply proc (map (lambda (s) (string-ref s i)) strings))
+                (loop (+ i 1)))
+              (if #f #f))))))
+
+(define (string-map proc . strings)
+  (if (null? strings)
+      (error "string-map: requires at least one string argument")
+      (let* ((n (%shortest-string strings))
+             (out (make-string n)))
+        (let loop ((i 0))
+          (if (< i n)
+              (begin
+                (string-set! out i (apply proc (map (lambda (s) (string-ref s i)) strings)))
+                (loop (+ i 1)))
+              out)))))
+
+(define (%shortest-vector vectors)
+  (let loop ((vs (cdr vectors)) (n (vector-length (car vectors))))
+    (if (null? vs) n (loop (cdr vs) (min n (vector-length (car vs)))))))
+
+(define (vector-for-each proc . vectors)
+  (if (null? vectors)
+      (error "vector-for-each: requires at least one vector argument")
+      (let ((n (%shortest-vector vectors)))
+        (let loop ((i 0))
+          (if (< i n)
+              (begin
+                (apply proc (map (lambda (v) (vector-ref v i)) vectors))
+                (loop (+ i 1)))
+              (if #f #f))))))
+
+(define (vector-map proc . vectors)
+  (if (null? vectors)
+      (error "vector-map: requires at least one vector argument")
+      (let* ((n (%shortest-vector vectors))
+             (out (make-vector n)))
+        (let loop ((i 0))
+          (if (< i n)
+              (begin
+                (vector-set! out i (apply proc (map (lambda (v) (vector-ref v i)) vectors)))
+                (loop (+ i 1)))
+              out)))))

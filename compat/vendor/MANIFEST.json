@@ -1,103 +1,11 @@
 {
-  "generated": "2026-08-08",
+  "generated": "2026-08-09",
   "source": "snow-fort.org /s/repo.scm",
   "built_by": "compat/tools/build_corpus.py",
   "purpose": "compatibility test corpus only: not a dependency of Patina, not shipped with it, and not an endorsement of any package",
   "selection": "every snow-fort package whose licence is permissive or non-standard-permissive, ranked by dependency in-degree; copyleft, licence-unknown and document-licence-only packages excluded",
   "policy": "unmodified upstream extractions; provenance recorded here, not inside the trees",
   "packages": [
-    {
-      "library": "chibi test",
-      "slug": "chibi-test",
-      "version": "0.9.0",
-      "license": "BSD",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "index-field",
-      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/test/0.9.0/chibi-test-0.9.0.tgz",
-      "tarball_sha256": "86997714be7fb6ade1b094d91727f9c9becd9051a41d1703986643d1ed09865d",
-      "popularity_indegree": 43,
-      "provides": [
-        "chibi test"
-      ],
-      "depends": [
-        "chibi",
-        "chibi diff",
-        "chibi term ansi",
-        "chicken",
-        "scheme base",
-        "scheme complex",
-        "scheme process-context",
-        "scheme time",
-        "scheme write"
-      ],
-      "description": "Simple but extensible testing framework with advanced reporting.",
-      "files": [
-        "chibi/test.html",
-        "chibi/test.scm",
-        "chibi/test.sld",
-        "package.scm"
-      ],
-      "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": true
-    },
-    {
-      "library": "srfi 1",
-      "slug": "srfi-1",
-      "version": "0.1.0",
-      "license": "MIT",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "spdx",
-      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/1/0.1.0/srfi-1-0.1.0.tgz",
-      "tarball_sha256": "c1c8d0204697134170a1d749d77afdc1395dc793250bde3731ae7cf5db43ac7d",
-      "popularity_indegree": 39,
-      "provides": [
-        "srfi 1"
-      ],
-      "depends": [
-        "scheme base",
-        "scheme cxr",
-        "srfi 227",
-        "srfi 8"
-      ],
-      "description": "SRFI-1",
-      "files": [
-        "README.html",
-        "package.scm",
-        "srfi/1.scm",
-        "srfi/1.sld"
-      ],
-      "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": true
-    },
-    {
-      "library": "srfi 60",
-      "slug": "srfi-60",
-      "version": "2026.03.13",
-      "license": "SLIB-Jaffer",
-      "license_class": "NONSTANDARD",
-      "license_evidence": "licence-text",
-      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/60/2026.03.13/srfi-60-2026.03.13.tgz",
-      "tarball_sha256": "74eb0b846efdf2b1d9774f6d8ad6fc6a07609f49c063c02b2a3facf8ead5875e",
-      "popularity_indegree": 31,
-      "provides": [
-        "srfi 60"
-      ],
-      "depends": [
-        "scheme base"
-      ],
-      "description": "SRFI-60",
-      "files": [
-        "README.html",
-        "package.scm",
-        "srfi/60.scm",
-        "srfi/60.sld"
-      ],
-      "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
-    },
     {
       "library": "slib common",
       "slug": "slib-common",
@@ -127,8 +35,7 @@
         "slib/common.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi string",
@@ -165,38 +72,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
-    },
-    {
-      "library": "srfi 69",
-      "slug": "srfi-69",
-      "version": "0.1.0",
-      "license": "MIT",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "text-match",
-      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/69/0.1.0/srfi-69-0.1.0.tgz",
-      "tarball_sha256": "5e066ee4fa9c5d9a8ca0753def37d56cf977ccd84d7f265f48436f7cd6253513",
-      "popularity_indegree": 16,
-      "provides": [
-        "srfi 69"
-      ],
-      "depends": [
-        "scheme base",
-        "scheme char",
-        "scheme complex",
-        "scheme cxr"
-      ],
-      "description": "SRFI-69",
-      "files": [
-        "README.html",
-        "package.scm",
-        "srfi/69.scm",
-        "srfi/69.sld"
-      ],
-      "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": true
+      "needs_ffi": false
     },
     {
       "library": "srfi 27",
@@ -225,8 +101,7 @@
         "srfi/27.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 63",
@@ -251,8 +126,7 @@
         "srfi/63.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi filesystem",
@@ -294,8 +168,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": true,
-      "bundled_by_patina": false
+      "needs_ffi": true
     },
     {
       "library": "pfds list-helpers",
@@ -320,41 +193,7 @@
         "pfds/list-helpers.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
-    },
-    {
-      "library": "chibi optional",
-      "slug": "chibi-optional",
-      "version": "0.9.1.3",
-      "license": "BSD",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "index-field",
-      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/optional/0.9.1.3/chibi-optional-0.9.1.3.tgz",
-      "tarball_sha256": "30b58c0bbecbe37560fc24086417d2ab908536b74d8775670da55f1eb6971e9c",
-      "popularity_indegree": 7,
-      "provides": [
-        "chibi optional",
-        "chibi optional-test"
-      ],
-      "depends": [
-        "chibi",
-        "chibi test",
-        "scheme base",
-        "scheme write"
-      ],
-      "description": "Syntax to support optional and named keyword arguments.",
-      "files": [
-        "chibi/optional-test.sld",
-        "chibi/optional.html",
-        "chibi/optional.scm",
-        "chibi/optional.sld",
-        "package.scm",
-        "run-tests.scm"
-      ],
-      "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": true
+      "needs_ffi": false
     },
     {
       "library": "chibi pathname",
@@ -386,8 +225,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi match",
@@ -418,8 +256,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 95",
@@ -446,8 +283,7 @@
         "srfi/95.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi bytevector",
@@ -483,8 +319,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi char-set",
@@ -517,8 +352,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 64",
@@ -552,8 +386,7 @@
         "test.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs unicode-reference unicode0",
@@ -579,8 +412,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs unicode-reference unicode1",
@@ -607,8 +439,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 14",
@@ -638,8 +469,7 @@
         "srfi/14.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 170",
@@ -671,8 +501,7 @@
         "srfi/170/README.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 19",
@@ -705,8 +534,7 @@
         "srfi/19.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi assert",
@@ -736,8 +564,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib color",
@@ -766,8 +593,7 @@
         "slib/color.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib filename",
@@ -795,8 +621,7 @@
         "slib/filename.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib printf",
@@ -825,8 +650,7 @@
         "slib/printf.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib scanf",
@@ -856,8 +680,7 @@
         "slib/scanf.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib string-case",
@@ -885,8 +708,7 @@
         "slib/string-case.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib time-core",
@@ -912,8 +734,7 @@
         "slib/time-core.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 106",
@@ -942,8 +763,7 @@
         "srfi/106/README.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 180",
@@ -975,8 +795,7 @@
         "srfi/180.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 227",
@@ -1003,35 +822,7 @@
         "srfi/227.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
-    },
-    {
-      "library": "srfi 8",
-      "slug": "srfi-8",
-      "version": "0.1.1",
-      "license": "MIT",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "text-match",
-      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/8/0.1.1/srfi-8-0.1.1.tgz",
-      "tarball_sha256": "4a52ac870bd520034afdb65a3a79f86eaf33d215da43ec007c9219d7faba0ab6",
-      "popularity_indegree": 3,
-      "provides": [
-        "srfi 8"
-      ],
-      "depends": [
-        "scheme base"
-      ],
-      "description": "SRFI-8",
-      "files": [
-        "README.html",
-        "package.scm",
-        "srfi/8.scm",
-        "srfi/8.sld"
-      ],
-      "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": true
+      "needs_ffi": false
     },
     {
       "library": "chibi base64",
@@ -1066,8 +857,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi config",
@@ -1101,8 +891,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi crypto sha2",
@@ -1140,8 +929,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": true,
-      "bundled_by_patina": false
+      "needs_ffi": true
     },
     {
       "library": "chibi parse",
@@ -1182,8 +970,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi quoted-printable",
@@ -1218,8 +1005,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi regexp",
@@ -1271,8 +1057,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi show",
@@ -1319,40 +1104,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
-    },
-    {
-      "library": "chibi term ansi",
-      "slug": "chibi-term-ansi",
-      "version": "0.9.0",
-      "license": "BSD",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "index-field",
-      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/term/ansi/0.9.0/chibi-term-ansi-0.9.0.tgz",
-      "tarball_sha256": "805e33d6b87c6d54337bf0c89002f13c323e6d836291d2e88a252140d1552599",
-      "popularity_indegree": 2,
-      "provides": [
-        "chibi term ansi",
-        "chibi term ansi-test"
-      ],
-      "depends": [
-        "scheme base",
-        "scheme process-context",
-        "scheme write"
-      ],
-      "description": "A library to use ANSI escape codes to format text and background color, font weigh, and underlining.",
-      "files": [
-        "chibi/term/ansi-test.sld",
-        "chibi/term/ansi.html",
-        "chibi/term/ansi.scm",
-        "chibi/term/ansi.sld",
-        "package.scm",
-        "run-tests.scm"
-      ],
-      "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": true
+      "needs_ffi": false
     },
     {
       "library": "pfds lazy-list",
@@ -1378,8 +1130,7 @@
         "pfds/lazy-list.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs hashtables",
@@ -1415,8 +1166,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs unicode-reference unicode2",
@@ -1444,8 +1194,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs unicode-reference unicode3",
@@ -1474,8 +1223,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib array-for-each",
@@ -1503,8 +1251,7 @@
         "slib/array-for-each.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib byte",
@@ -1530,8 +1277,7 @@
         "slib/byte.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib color-space",
@@ -1562,8 +1308,7 @@
         "slib/color-space.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib generic-write",
@@ -1588,8 +1333,7 @@
         "slib/generic-write.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib pretty-print",
@@ -1617,8 +1361,7 @@
         "slib/pretty-print.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib string-port",
@@ -1643,8 +1386,7 @@
         "slib/string-port.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib string-search",
@@ -1672,8 +1414,7 @@
         "slib/string-search.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib subarray",
@@ -1700,8 +1441,7 @@
         "slib/subarray.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib time-zone",
@@ -1733,8 +1473,7 @@
         "slib/time-zone.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 2",
@@ -1761,8 +1500,7 @@
         "srfi/2.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 39",
@@ -1788,8 +1526,7 @@
         "srfi/39.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi binary-record",
@@ -1823,8 +1560,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi char-set boundary",
@@ -1853,8 +1589,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi crypto md5",
@@ -1888,8 +1623,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi crypto rsa",
@@ -1926,44 +1660,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
-    },
-    {
-      "library": "chibi diff",
-      "slug": "chibi-diff",
-      "version": "0.9.1.3",
-      "license": "BSD",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "index-field",
-      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/diff/0.9.1.3/chibi-diff-0.9.1.3.tgz",
-      "tarball_sha256": "07b62a03d280924f0bd42ca6375c752884a480779984dd7e9889e150f892fbac",
-      "popularity_indegree": 1,
-      "provides": [
-        "chibi diff",
-        "chibi diff-test"
-      ],
-      "depends": [
-        "chibi io",
-        "chibi optional",
-        "chibi term ansi",
-        "chibi test",
-        "scheme base",
-        "scheme write",
-        "srfi 1"
-      ],
-      "description": "",
-      "files": [
-        "chibi/diff-test.sld",
-        "chibi/diff.html",
-        "chibi/diff.scm",
-        "chibi/diff.sld",
-        "package.scm",
-        "run-tests.scm"
-      ],
-      "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": true
+      "needs_ffi": false
     },
     {
       "library": "chibi edit-distance",
@@ -1993,8 +1690,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi iset",
@@ -2043,8 +1739,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi math prime",
@@ -2079,8 +1774,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi mime",
@@ -2115,8 +1809,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi monad environment",
@@ -2143,8 +1836,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi net dns",
@@ -2183,8 +1875,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi ssl",
@@ -2218,8 +1909,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": true,
-      "bundled_by_patina": false
+      "needs_ffi": true
     },
     {
       "library": "chibi sxml",
@@ -2246,8 +1936,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi tar",
@@ -2289,8 +1978,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi temp-file",
@@ -2324,8 +2012,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi term edit-line",
@@ -2359,8 +2046,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi uri",
@@ -2395,8 +2081,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "in-progress hash tables",
@@ -2426,8 +2111,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "lassik shell-quote",
@@ -2454,8 +2138,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "lassik unpack-assoc",
@@ -2479,8 +2162,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds alist",
@@ -2505,8 +2187,7 @@
         "pfds/alist.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds bitwise",
@@ -2532,8 +2213,7 @@
         "pfds/bitwise.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds bounded-balance-tree",
@@ -2560,8 +2240,7 @@
         "pfds/bounded-balance-tree.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds fingertree",
@@ -2588,8 +2267,7 @@
         "pfds/fingertree.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds vector",
@@ -2614,8 +2292,7 @@
         "pfds/vector.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs base",
@@ -2645,8 +2322,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs lists",
@@ -2674,8 +2350,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs sorting",
@@ -2702,8 +2377,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs unicode-reference unicode4",
@@ -2733,8 +2407,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib alist",
@@ -2760,8 +2433,7 @@
         "slib/alist.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib coerce",
@@ -2787,8 +2459,7 @@
         "slib/coerce.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib common-list-functions",
@@ -2813,8 +2484,7 @@
         "slib/common-list-functions.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib directory",
@@ -2853,8 +2523,7 @@
         "slib/directory.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib format",
@@ -2887,8 +2556,7 @@
         "slib/format.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib modular",
@@ -2914,8 +2582,7 @@
         "slib/modular.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib rev2-procedures",
@@ -2941,8 +2608,7 @@
         "slib/rev2-procedures.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib soundex",
@@ -2969,8 +2635,7 @@
         "slib/soundex.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib tzfile",
@@ -2998,8 +2663,7 @@
         "slib/tzfile.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib xml-parse",
@@ -3030,8 +2694,7 @@
         "slib/xml-parse.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 11",
@@ -3057,8 +2720,7 @@
         "srfi/11.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 145",
@@ -3084,8 +2746,7 @@
         "srfi/145.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 166",
@@ -3143,8 +2804,7 @@
         "srfi/166/write.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 26",
@@ -3170,8 +2830,7 @@
         "srfi/26.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 28",
@@ -3196,8 +2855,7 @@
         "srfi/28.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 41",
@@ -3223,8 +2881,7 @@
         "srfi/41.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 42",
@@ -3254,8 +2911,7 @@
         "srfi/42.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "arvyy interface",
@@ -3286,8 +2942,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "arvyy mustache",
@@ -3343,8 +2998,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi app",
@@ -3381,8 +3035,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi html-parser",
@@ -3411,8 +3064,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi irregex",
@@ -3440,8 +3092,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi locale",
@@ -3472,8 +3123,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi math linalg",
@@ -3513,8 +3163,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": true,
-      "bundled_by_patina": false
+      "needs_ffi": true
     },
     {
       "library": "chibi math stats",
@@ -3557,8 +3206,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi mecab",
@@ -3592,8 +3240,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": true,
-      "bundled_by_patina": false
+      "needs_ffi": true
     },
     {
       "library": "chibi net smtp",
@@ -3641,8 +3288,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi scribble",
@@ -3676,8 +3322,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi snow commands",
@@ -3761,8 +3406,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi voting",
@@ -3797,8 +3441,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chibi xgboost",
@@ -3833,8 +3476,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": true,
-      "bundled_by_patina": false
+      "needs_ffi": true
     },
     {
       "library": "chibi xlib",
@@ -3860,8 +3502,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": true,
-      "bundled_by_patina": false
+      "needs_ffi": true
     },
     {
       "library": "chrisoei cint",
@@ -3886,8 +3527,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "chrisoei test",
@@ -3912,8 +3552,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "comparators",
@@ -3942,8 +3581,7 @@
         "srfi-128/srfi-128.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "edn",
@@ -3976,8 +3614,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "generators",
@@ -4004,8 +3641,7 @@
         "srfi-121/srfi-121.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "in-progress hash bimaps",
@@ -4034,8 +3670,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "independentresearch xattr",
@@ -4063,8 +3698,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": true,
-      "bundled_by_patina": false
+      "needs_ffi": true
     },
     {
       "library": "jkode sassy",
@@ -4119,8 +3753,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "lassik dockerfile",
@@ -4150,8 +3783,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "lassik string-inflection",
@@ -4177,8 +3809,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "lassik trivial-tar-writer",
@@ -4202,8 +3833,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "lightweight-testing",
@@ -4230,8 +3860,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "macduffie json",
@@ -4263,8 +3892,7 @@
         "package.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "okmij ssax",
@@ -4302,8 +3930,7 @@
         "run-tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds deque",
@@ -4330,8 +3957,7 @@
         "pfds/deque.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds difference-list",
@@ -4356,8 +3982,7 @@
         "pfds/difference-list.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds fector",
@@ -4383,8 +4008,7 @@
         "pfds/fector.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds hash-array-mapped-trie",
@@ -4415,8 +4039,7 @@
         "pfds/hash-array-mapped-trie.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds heap",
@@ -4442,8 +4065,7 @@
         "pfds/heap.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds priority-search-queue",
@@ -4468,8 +4090,7 @@
         "pfds/priority-search-queue.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds queue",
@@ -4496,8 +4117,7 @@
         "pfds/queue.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds sequence",
@@ -4524,8 +4144,7 @@
         "pfds/sequence.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "pfds set",
@@ -4552,8 +4171,7 @@
         "pfds/set.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "postgresql",
@@ -4617,8 +4235,7 @@
         "postgresql/misc/ssl.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs arithmetic fixnums",
@@ -4647,8 +4264,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs bytevectors",
@@ -4676,8 +4292,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs control",
@@ -4703,8 +4318,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs enums",
@@ -4733,8 +4347,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs eval",
@@ -4759,8 +4372,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs exceptions",
@@ -4785,8 +4397,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs files",
@@ -4811,8 +4422,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs io simple",
@@ -4840,8 +4450,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs mutable-pairs",
@@ -4866,8 +4475,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs mutable-strings",
@@ -4892,8 +4500,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs programs",
@@ -4918,8 +4525,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs r5rs",
@@ -4944,8 +4550,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "r6rs unicode",
@@ -4974,8 +4579,7 @@
         "r6rsDoc.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "rebottled cl-pdf",
@@ -5010,8 +4614,7 @@
         "rebottled/cl-pdf.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "rebottled pstk",
@@ -5045,8 +4648,7 @@
         "rebottled/pstk.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "retropikzel pstk",
@@ -5082,8 +4684,7 @@
         "retropikzel/pstk/README.html"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib array-interpolate",
@@ -5111,8 +4712,7 @@
         "slib/array-interpolate.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib byte-number",
@@ -5142,8 +4742,7 @@
         "slib/byte-number.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib chapter-order",
@@ -5169,8 +4768,7 @@
         "slib/chapter-order.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib charplot",
@@ -5200,8 +4798,7 @@
         "slib/charplot.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib common-lisp-time",
@@ -5230,8 +4827,7 @@
         "slib/common-lisp-time.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib daylight",
@@ -5259,8 +4855,7 @@
         "slib/daylight.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib determinant",
@@ -5286,8 +4881,7 @@
         "slib/determinant.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib dynamic",
@@ -5312,8 +4906,7 @@
         "slib/dynamic.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib factor",
@@ -5341,8 +4934,7 @@
         "slib/factor.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib fourier-transform",
@@ -5372,8 +4964,7 @@
         "slib/fourier-transform.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib line-io",
@@ -5403,8 +4994,7 @@
         "slib/line-io.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib math-integer",
@@ -5430,8 +5020,7 @@
         "slib/math-integer.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib math-real",
@@ -5459,8 +5048,7 @@
         "slib/math-real.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib minimize",
@@ -5487,8 +5075,7 @@
         "slib/minimize.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib nbs-iscc",
@@ -5516,8 +5103,7 @@
         "slib/nbs-iscc.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib posix-time",
@@ -5546,8 +5132,7 @@
         "slib/posix-time.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib pprint-file",
@@ -5578,8 +5163,7 @@
         "slib/pprint-file.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib queue",
@@ -5604,8 +5188,7 @@
         "slib/queue.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib random-inexact",
@@ -5632,8 +5215,7 @@
         "slib/random-inexact.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib rationalize",
@@ -5658,8 +5240,7 @@
         "slib/rationalize.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib resene",
@@ -5687,8 +5268,7 @@
         "slib/resene.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib saturate",
@@ -5716,8 +5296,7 @@
         "slib/saturate.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib topological-sort",
@@ -5743,8 +5322,7 @@
         "slib/topological-sort.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib tree",
@@ -5769,8 +5347,7 @@
         "slib/tree.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "slib uri",
@@ -5806,39 +5383,7 @@
         "slib/uri.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
-    },
-    {
-      "library": "srfi 128",
-      "slug": "srfi-128",
-      "version": "0.1.0",
-      "license": "MIT",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "spdx",
-      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/128/0.1.0/srfi-128-0.1.0.tgz",
-      "tarball_sha256": "ee7308c60840b2705d943daa6b195e91ebe56acac7246cbb75b91d7d233a171a",
-      "popularity_indegree": 0,
-      "provides": [
-        "srfi 128"
-      ],
-      "depends": [
-        "scheme base",
-        "scheme case-lambda",
-        "scheme char",
-        "scheme complex",
-        "scheme inexact"
-      ],
-      "description": "SRFI-128",
-      "files": [
-        "README.html",
-        "package.scm",
-        "srfi/128.scm",
-        "srfi/128.sld"
-      ],
-      "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": true
+      "needs_ffi": false
     },
     {
       "library": "srfi 156",
@@ -5867,8 +5412,7 @@
         "srfi/156/test.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 16",
@@ -5894,8 +5438,7 @@
         "srfi/16.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 175",
@@ -5921,8 +5464,7 @@
         "srfi/tests.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 179",
@@ -5967,8 +5509,7 @@
         "srfi/179/transforms.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 197",
@@ -5995,8 +5536,7 @@
         "test-r7rs.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 235",
@@ -6026,8 +5566,7 @@
         "srfi/235.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 25",
@@ -6054,8 +5593,7 @@
         "srfi/25.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 29",
@@ -6084,8 +5622,7 @@
         "srfi/29.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 31",
@@ -6111,8 +5648,7 @@
         "srfi/31.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 37",
@@ -6139,8 +5675,7 @@
         "srfi/37.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 38",
@@ -6173,8 +5708,7 @@
         "srfi/38.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 43",
@@ -6203,8 +5737,7 @@
         "srfi/43.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 51",
@@ -6231,8 +5764,7 @@
         "srfi/51.sld"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     },
     {
       "library": "srfi 78",
@@ -6259,8 +5791,7 @@
         "srfi/78/check.scm"
       ],
       "modified": false,
-      "needs_ffi": false,
-      "bundled_by_patina": false
+      "needs_ffi": false
     }
   ]
 }

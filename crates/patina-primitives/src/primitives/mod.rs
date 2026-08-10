@@ -1,6 +1,7 @@
 //! Primitive procedure implementations
 
 mod arithmetic;
+mod bitwise;
 mod bytevectors;
 mod characters;
 mod continuations;
@@ -27,6 +28,7 @@ mod vectors;
 use crate::registry::PrimitiveRegistry;
 
 pub fn register_all(registry: &mut PrimitiveRegistry) {
+    bitwise::register(registry);
     arithmetic::register(registry);
     bytevectors::register(registry);
     characters::register(registry);

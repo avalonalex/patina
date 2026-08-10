@@ -142,10 +142,17 @@ build break. Bundled libraries are the opposite: they are part of what Patina sh
 
 ---
 
-### L4 — Make bundled ports canonical, then drop their vendored duplicates  *(TODO — interim state)*
+### L4 — Make bundled ports canonical, then drop their vendored duplicates  *(done)*
 
-`compat/vendor/` currently contains five packages Patina also bundles — `(chibi test)`, `(srfi 1)`,
-`(srfi 8)`, `(srfi 69)`, `(srfi 128)`. **This duplication is temporary and should be removed.**
+✅ **Done.** `build_corpus.py` now excludes any package whose library Patina bundles, computed from
+`lib/` rather than listed, and the corpus dropped from 197 to 188. The drift guard
+(`bundled_vs_vendored.rs`) and the `bundled_by_patina` manifest field are deleted.
+
+The guard was worth having while it lasted — it caught `(chibi test)` missing 26 upstream exports —
+but its premise expired when `(srfi 60)` was bundled: Patina's is a rename over SRFI 151 while the
+vendored one is Jaffer's SLIB implementation, so comparing them measures a deliberate decision rather
+than a defect. Keeping both would also have meant answering, for every corpus run, which copy a test
+resolved against.
 
 **Target state:** every bundled library is a faithful import of its upstream reference rather than a
 subset or a local adaptation; the **bundled version is canonical**; and the vendored duplicate is
@@ -228,6 +235,57 @@ fails.
 **Bare `@` rejected as an identifier** — 9 corpus packages, including `(chibi match)`. Patina is
 strictly correct per R7RS 7.1.1 (`@` is a ⟨special subsequent⟩, not an ⟨initial⟩); chibi and Gauche
 accept it. A deliberate strictness decision rather than a bug, but it needs making explicitly.
+
+**Rust registry primitives ignore the import set at top level** — ❌ **open**, own PR. A program that
+imports only `(scheme base)` can still call primitives no imported library exports:
+
+```scheme
+(import (scheme base))
+(cadddr '(1 2 3 4))      ;; => 4      -- (scheme cxr)
+(bit-count 12)           ;; => 2      -- (srfi 151)
+(arithmetic-shift 1 10)  ;; => 1024   -- (srfi 151)
+(bitwise-and 12 10)      ;; => 8      -- (srfi 151)
+```
+
+Scheme-level exports *are* scoped correctly — `list-sort` and `bitwise-nand` are unbound under the
+same import — so this is specific to the primitive registry: registered primitives land in the
+top-level environment regardless of what was imported. Inside a `define-library` imports are
+enforced properly, which is the whole reason this went unnoticed.
+
+That asymmetry is also a testing hazard, and it already cost us one bug. `(srfi 132)`'s
+`vector-merge` called `cadddr` without importing `(scheme cxr)`; it failed only inside the library,
+while any script-level check of the same expression passed. Library code cannot be validated by
+top-level scripts until this is fixed.
+
+Adjacent and lower-stakes: `lib/scheme/base.sld` exports the eight three-deep `cxr` procedures
+(`caaar`…`cdddr`) as a documented extension, where R7RS-small puts them only in `(scheme cxr)`.
+Worth settling in the same PR while the cost of tightening is still low.
+
+**The standard port procedures are not parameter objects** — ❌ **open**, own PR. R7RS §6.13.1:
+`current-input-port`, `current-output-port` and `current-error-port` "are parameter objects, which
+can be overridden with `parameterize`". Patina implements all three as plain 0-argument procedures,
+so `parameterize` rejects them:
+
+```scheme
+(parameterize ((current-input-port (open-input-string "a b c"))) (read))
+;; => Invalid syntax: current-input-port expects exactly 0 arguments, got 1
+```
+
+`make-parameter` and `parameterize` work correctly for user-defined parameters, so the machinery
+exists; only the three built-ins are outside it. They are backed by Rust-side global state
+(`get_current_output_port` / `set_current_output_port` in `primitives/io/ports.rs`) that other
+primitives read directly, so the fix has to make that global read through the parameter's dynamic
+binding rather than merely accepting a second arity — which is why this is its own PR and not an
+inline fix.
+
+This is the one non-zero entry in the reference-suite expectations table: SRFI 158's suite defines
+`with-input-from-string` as `(parameterize ((current-input-port (open-input-string str))) (thunk))`,
+which is pure R7RS. It was previously recorded as the suite depending on a chibi extension. It is
+not — the extension is three lines of standard Scheme, and it is our `parameterize` that refuses it.
+Lower the SRFI 158 expectation to 0 when this lands.
+
+Redirecting the current ports is also a capability the L3 harness will want directly, for capturing
+a package's output without touching the real stdout.
 
 ## 7. Risks & mitigations
 - **Per-new-SRFI friction** (non-R7RS constructs, R5RS naming, control-op edges) → apply the resolved patterns in `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`; import each reference implementation incrementally with its own test.

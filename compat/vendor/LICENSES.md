@@ -11,15 +11,17 @@ terms are, how each was determined, and what obligations they place on this repo
 
 | Licence | Packages | Class |
 |---|---|---|
-| BSD | 67 | permissive |
-| MIT | 58 | permissive |
-| SLIB (Aubrey Jaffer) | 45 | **non-standard permissive** |
+| BSD | 63 | permissive |
+| MIT | 54 | permissive |
+| SLIB (Aubrey Jaffer) | 44 | **non-standard permissive** |
 | public domain | 17 | permissive |
 | ISC | 5 | permissive |
 | CC0-1.0 | 2 | permissive |
 | MIT Scheme, 1988–1995 form | 1 | **non-standard permissive** |
 | Apache-2.0 | 1 | permissive |
 | Expat | 1 | permissive |
+
+**Also excluded:** nine packages whose library Patina bundles itself — see `README.md`.
 
 **Excluded and not vendored:** GPL-3.0 (18), GPL (8), MPL-2.0 (2), 53 packages with no discoverable
 licence, and `(srfi 5)` under a document-only licence (see below). Listed in `REVIEW-QUEUE.json`.
@@ -140,7 +142,6 @@ vendored unmodified and only executed as a test input, so there are no improveme
 
 | Package | In-degree | Licence | Evidence |
 |---|---|---|---|
-| `(srfi 60)` | 31 | SLIB-Jaffer | licence-text |
 | `(slib common)` | 20 | SLIB-Jaffer | slib-family-inference |
 | `(srfi 63)` | 9 | SLIB-Jaffer | licence-text |
 | `(srfi 14)` | 4 | MIT-Scheme-old | licence-text |

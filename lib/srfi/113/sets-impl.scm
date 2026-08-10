@@ -155,11 +155,15 @@
             (sob-increment! result (mapper seed) 1)
             (loop (successor seed)))))))
 
-(define (set-unfold continue? mapper successor seed comparator)
-  (sob-unfold continue? mapper successor seed comparator #f))
+;; SRFI 113 orders these (comparator stop? mapper successor seed) -- the
+;; comparator first, and a *stop* predicate rather than a continue predicate.
+;; Patina had the comparator last and named the predicate `continue?`, so every
+;; caller written against the SRFI got an argument-order error.
+(define (set-unfold comparator stop? mapper successor seed)
+  (sob-unfold stop? mapper successor seed comparator #f))
 
-(define (bag-unfold continue? mapper successor seed comparator)
-  (sob-unfold continue? mapper successor seed comparator #t))
+(define (bag-unfold comparator stop? mapper successor seed)
+  (sob-unfold stop? mapper successor seed comparator #t))
 
 ;;; Predicates
 
