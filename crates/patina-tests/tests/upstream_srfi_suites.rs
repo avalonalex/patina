@@ -15,10 +15,23 @@
 use patina_interpreter::TreeWalkInterpreter;
 use std::path::PathBuf;
 
-/// A bundled library and the reference suite that exercises it.
-const SUITES: &[(&str, &str)] = &[
-    ("(srfi 151 test)", "SRFI 151 bitwise"),
-    ("(srfi 143 test)", "SRFI 143 fixnum"),
+/// A bundled library, its reference suite, and the number of assertions that
+/// suite currently fails against Patina.
+///
+/// An expectations table, not a skip list. The count is asserted exactly in
+/// both directions, so fixing a library fails this test until the number is
+/// lowered — which is the point. A non-zero entry is a defect in *our* port,
+/// recorded rather than hidden.
+const SUITES: &[(&str, &str, i64)] = &[
+    ("(srfi 151 test)", "SRFI 151 bitwise", 0),
+    ("(srfi 143 test)", "SRFI 143 fixnum", 0),
+    ("(srfi 133 test)", "SRFI 133 vector", 0),
+    // Non-zero entries are defects in Patina's port, recorded rather than
+    // hidden. See scheme_tests/upstream/README.md.
+    ("(srfi 113 test)", "SRFI 113 set", 2),
+    // 1 on the tree-walker, which is what this harness runs; the VM fails 2.
+    // That divergence is itself a finding -- see the README.
+    ("(srfi 158 test)", "SRFI 158 generator", 1),
 ];
 
 fn upstream_root() -> PathBuf {
@@ -57,18 +70,24 @@ fn failures_in(library: &str) -> i64 {
 }
 
 #[test]
-fn test_upstream_suites_pass() {
-    let mut failed = Vec::new();
-    for (library, description) in SUITES {
-        let failures = failures_in(library);
-        if failures != 0 {
-            failed.push(format!("{description}: {failures} assertion(s)"));
+fn test_upstream_suites_match_expectations() {
+    let mut drift = Vec::new();
+    for (library, description, expected) in SUITES {
+        let actual = failures_in(library);
+        if actual > *expected {
+            drift.push(format!(
+                "{description}: {actual} failures, was {expected} — a regression"
+            ));
+        } else if actual < *expected {
+            drift.push(format!(
+                "{description}: {actual} failures, was {expected} — fixed, lower the expectation"
+            ));
         }
     }
     assert!(
-        failed.is_empty(),
-        "reference suites reported failures:\n  - {}",
-        failed.join("\n  - ")
+        drift.is_empty(),
+        "reference suites drifted:\n  - {}",
+        drift.join("\n  - ")
     );
 }
 
