@@ -25,7 +25,7 @@ does a fix until the number is lowered. An expectations table, not a skip list.
 
 ## What running them found
 
-Six defects, none of which the hand-written tests beside these libraries had
+Five defects, none of which the hand-written tests beside these libraries had
 caught. All are fixed.
 
 - **SRFI 113 `set-unfold` / `bag-unfold` took their arguments in the wrong
