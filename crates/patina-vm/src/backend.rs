@@ -269,12 +269,6 @@ impl VmBackend {
             stdlib::build_internal_r5rs,
         );
 
-        // === Test framework ===
-        rust_loader.register(
-            vec!["chibi".into(), "test".into(), "primitives".into()],
-            stdlib::build_chibi_test_primitives,
-        );
-
         // === Patina extensions ===
         rust_loader.register(
             vec!["patina".into(), "debug".into()],

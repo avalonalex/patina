@@ -60,7 +60,7 @@ pub use patina_frontend::{
 };
 pub use patina_ir::CoreExpr;
 pub use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
-pub use patina_runtime::{Arity, Backend, Environment, Procedure, stdlib::test_increment_error};
+pub use patina_runtime::{Arity, Backend, Environment, Procedure};
 pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker};
 
 /// Format any `InterpreterError` with source context.
@@ -262,7 +262,6 @@ impl<B: Backend> Interpreter<B> {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("Error: {}", e);
-                test_increment_error();
                 return result;
             }
         };
@@ -275,15 +274,12 @@ impl<B: Backend> Interpreter<B> {
                     Err(e) => {
                         // Print error and continue
                         eprintln!("Error: {}", e);
-                        // Track this error in the test framework
-                        test_increment_error();
                     }
                 },
                 Err(ParseError::UnexpectedEof) => break,
                 Err(e) => {
                     // Print parse error and continue
                     eprintln!("Error: {}", e);
-                    test_increment_error();
                     // Try to recover by skipping to the next expression
                     // (for now, we just stop on parse errors)
                     break;
@@ -429,7 +425,6 @@ impl Interpreter<TreeWalker> {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("Error: {}", e);
-                    test_increment_error();
                     return result;
                 }
             };
@@ -448,14 +443,12 @@ impl Interpreter<TreeWalker> {
                         Ok(val) => result = val,
                         Err(e) => {
                             eprintln!("Error: {}", e);
-                            test_increment_error();
                         }
                     }
                 }
                 Err(ParseError::UnexpectedEof) => break,
                 Err(e) => {
                     eprintln!("Error: {}", e);
-                    test_increment_error();
                     break;
                 }
             }
@@ -550,7 +543,6 @@ impl Interpreter<TreeWalker> {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("Error: {}", e);
-                    test_increment_error();
                     return result;
                 }
             };
@@ -571,14 +563,12 @@ impl Interpreter<TreeWalker> {
                                 "Error: {}",
                                 format_eval_error_with_source(&e, &source_map.borrow())
                             );
-                            test_increment_error();
                         }
                     }
                 }
                 Err(ParseError::UnexpectedEof) => break,
                 Err(e) => {
                     eprintln!("Error: {}", e);
-                    test_increment_error();
                     break;
                 }
             }

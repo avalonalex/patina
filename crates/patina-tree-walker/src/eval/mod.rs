@@ -281,16 +281,6 @@ impl Evaluator {
         // (scheme cxr)            -> lib/scheme/cxr.sld
         // (scheme r5rs)           -> lib/scheme/r5rs.sld
 
-        // === Test framework ===
-        rust_loader.register(
-            vec![
-                "chibi".to_string(),
-                "test".to_string(),
-                "primitives".to_string(),
-            ],
-            stdlib::build_chibi_test_primitives,
-        );
-
         // === Patina extensions ===
         rust_loader.register(
             vec!["patina".to_string(), "debug".to_string()],

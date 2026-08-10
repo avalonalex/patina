@@ -1,16 +1,16 @@
-//! Tests for (chibi test) framework
+//! Tests for the (chibi test) framework.
 //!
-//! Note: These tests are temporarily commented out as they require the module
-//! system (import) which is not yet implemented.
+//! These were `#[ignore]`d as "requires the module system", which stopped being
+//! true long before the ignore was removed. They now exercise the real upstream
+//! `(chibi test)` that Patina bundles, rather than the hand-written subset that
+//! used to stand in for it.
 
 use patina_interpreter::TreeWalkInterpreter;
 
 #[test]
-#[ignore = "Requires module system (import)"]
 fn test_chibi_test_framework_loads() {
     let interp = TreeWalkInterpreter::new_tree_walker();
 
-    // Test that we can import (chibi test) - now a Rust library
     let result = interp.eval_program(
         r#"
         (import (scheme base) (chibi test))
@@ -25,7 +25,6 @@ fn test_chibi_test_framework_loads() {
 }
 
 #[test]
-#[ignore = "Requires module system (import)"]
 fn test_chibi_test_basic_functionality() {
     let interp = TreeWalkInterpreter::new_tree_walker();
 

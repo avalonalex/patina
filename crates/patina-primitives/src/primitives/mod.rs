@@ -20,7 +20,6 @@ mod records;
 mod strings;
 mod symbols;
 mod system;
-mod test;
 mod time;
 mod values;
 mod vectors;
@@ -42,7 +41,6 @@ pub fn register_all(registry: &mut PrimitiveRegistry) {
     values::register(registry);
     io::register(registry);
     debug::register(registry);
-    test::register(registry);
     lazy::register(registry);
     parameters::register(registry);
     system::register(registry);
