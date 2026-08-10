@@ -16,26 +16,39 @@ All copied unmodified from chibi-scheme's `lib/`, BSD (Alex Shinn).
 | `srfi/151/test.sld` | 0 — 145 assertions |
 | `srfi/143/test.sld` | 0 — 141 assertions |
 | `srfi/133/test.sld` | 0 |
-| `srfi/113/test.sld` | **2** |
-| `srfi/158/test.sld` | **1** on the tree-walker, **2** on the VM |
+| `srfi/113/test.sld` | 0 |
+| `srfi/158/test.sld` | 1 — the suite calls `with-input-from-string`, a chibi extension Patina does not provide |
 
 The counts are asserted exactly, in both directions: a regression fails, and so
 does a fix until the number is lowered. An expectations table, not a skip list.
 
 ## What running them found
 
-Four defects in Patina, none of which the hand-written tests next to these
-libraries had caught:
+Four defects, none of which the hand-written tests beside these libraries had
+caught. Three are fixed; one is recorded below.
 
-- **SRFI 113 sets** — 2 failing assertions.
-- **SRFI 158 generators** — fails 2 assertions on the VM but only 1 on the
-  tree-walker. A backend divergence is worth more attention than the count.
-- **SRFI 132 sort** — `list-stable-sort` is **not stable**: equal elements under
-  the comparator come back reordered, which is the one property that
-  distinguishes it from `list-sort`. `list-merge!` drops elements from its first
-  argument entirely — `(list-merge! > '(9 7 5 3 1) '(9 6 3 0))` returns
-  `(9 9 6 3 0)` instead of nine elements. `vector-merge` errors on empty vectors
-  with explicit ranges.
+- **SRFI 113 `set-unfold` / `bag-unfold` took their arguments in the wrong
+  order** — fixed. The SRFI orders them `(comparator stop? mapper successor
+  seed)`; Patina had the comparator last and inverted the predicate's sense,
+  naming it `continue?`. Any caller written against the spec got an
+  argument-order error.
+
+- **Higher-order Rust primitives were not continuation-safe** — fixed.
+  `string-for-each`, `string-map`, `vector-for-each` and `vector-map` called
+  back into Scheme from inside a Rust frame, and a continuation captured there
+  did not survive: `(make-for-each-generator string-for-each "abc")` silently
+  dropped its first element. `map` and `for-each` over lists were already
+  defined in Scheme and unaffected, which is why the bug hid — the obvious
+  spot-check works. All four now live in `lib/scheme/base/higher_order.scm`
+  alongside them. This also removed a VM/tree-walker divergence in SRFI 158.
+
+- **SRFI 132 sort — still open.** `list-stable-sort` is **not stable**: equal
+  elements under the comparator come back reordered, which is the one property
+  distinguishing it from `list-sort`. `list-merge!` drops elements from its
+  first argument entirely — `(list-merge! > '(9 7 5 3 1) '(9 6 3 0))` returns
+  `(9 9 6 3 0)` instead of nine. `vector-merge` errors on empty vectors with
+  explicit ranges. Not in the table below because its suite aborts (see next
+  section), so it cannot be ratcheted yet.
 
 ## Suites not included, and why
 

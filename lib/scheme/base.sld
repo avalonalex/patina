@@ -87,7 +87,6 @@
     substring string-append
     string->list list->string
     string-copy string-copy! string-fill!
-    ;; Note: string-map, string-for-each are in (patina internal strings)
 
     ;; === Vectors (§6.8) ===
     vector?

@@ -26,11 +26,10 @@ const SUITES: &[(&str, &str, i64)] = &[
     ("(srfi 151 test)", "SRFI 151 bitwise", 0),
     ("(srfi 143 test)", "SRFI 143 fixnum", 0),
     ("(srfi 133 test)", "SRFI 133 vector", 0),
-    // Non-zero entries are defects in Patina's port, recorded rather than
-    // hidden. See scheme_tests/upstream/README.md.
-    ("(srfi 113 test)", "SRFI 113 set", 2),
-    // 1 on the tree-walker, which is what this harness runs; the VM fails 2.
-    // That divergence is itself a finding -- see the README.
+    ("(srfi 113 test)", "SRFI 113 set", 0),
+    // The one remaining failure is the suite calling `with-input-from-string`,
+    // which is a chibi extension rather than R7RS, so Patina does not provide
+    // it. Not a defect in (srfi 158).
     ("(srfi 158 test)", "SRFI 158 generator", 1),
 ];
 
