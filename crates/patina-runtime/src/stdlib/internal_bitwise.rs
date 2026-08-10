@@ -30,6 +30,8 @@ pub fn build_internal_bitwise(_name: Vec<String>, env: Rc<Environment>) -> Vec<S
         ("bit-count", Arity::Exact(1)),
         ("integer-length", Arity::Exact(1)),
         ("bit-set?", Arity::Exact(2)),
+        // SRFI 143 derives its fixnum range from this.
+        ("fixnum?", Arity::Exact(1)),
     ];
 
     let mut exports = Vec::new();

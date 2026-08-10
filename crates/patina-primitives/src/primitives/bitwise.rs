@@ -150,6 +150,16 @@ fn bit_set_p(heap: &SharedHeap, args: &[TaggedValue]) -> PrimResult {
     Ok(TaggedValue::boolean(n.bit(index as u64)))
 }
 
+/// Whether a value is a fixnum — an exact integer small enough to be immediate
+/// rather than heap-allocated.
+///
+/// SRFI 143 needs this to derive `fx-width` from the representation instead of
+/// hardcoding it, so the library cannot claim a range the tagging does not
+/// actually provide.
+fn is_fixnum(_heap: &SharedHeap, args: &[TaggedValue]) -> PrimResult {
+    Ok(TaggedValue::boolean(args[0].is_fixnum()))
+}
+
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
     use crate::registry::PrimitiveFn;
 
@@ -202,6 +212,13 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         Arity::Exact(1),
         "Number of bits needed to represent the argument, excluding sign.",
         integer_length,
+    ));
+    registry.register(PrimitiveFn::new_heap(
+        "patina.internal.bitwise",
+        "fixnum?",
+        Arity::Exact(1),
+        "Whether the value is an immediate exact integer rather than a bignum.",
+        is_fixnum,
     ));
     registry.register(PrimitiveFn::new_heap(
         "patina.internal.bitwise",

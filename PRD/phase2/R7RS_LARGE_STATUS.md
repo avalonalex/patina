@@ -64,7 +64,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI | Library Name | Description | `(srfi n)` | `(scheme …)` alias |
 |------|-------------|-------------|------------|--------------------|
 | SRFI 115 | `(scheme regex)` | Regular expressions | ❌ | ❌ |
-| SRFI 143 | `(scheme fixnum)` | Fixnums | ❌ | ❌ |
+| SRFI 143 | `(scheme fixnum)` | Fixnums | ✅ shipped | ✅ shipped |
 | SRFI 146 | `(scheme mapping)` | Mappings | ❌ | ❌ |
 | SRFI 146 | `(scheme mapping hash)` | Hash mappings | ❌ | ❌ |
 | SRFI 151 | `(scheme bitwise)` | Bitwise operations | ✅ shipped | ✅ shipped |
@@ -73,7 +73,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 160 | `(scheme vector @)` | Numeric vectors (u8, s8, f64, etc.) | ❌ | ❌ |
 | R6RS | `(scheme bytevector)` | Bytevectors (R6RS compatible) | 🚧 Partial | ❌ |
 
-**Tangerine status: 2 of 7 shipped**, reachable under both names.
+**Tangerine status: 3 of 7 shipped**, reachable under both names.
 
 **Numeric Tower Requirements:**
 - Unbounded exact integers ✅ (BigInt support)
@@ -169,7 +169,9 @@ Highest-value first:
 2. ~~`(scheme …)` alias libraries for the shipped SRFIs~~ — **done**; see the tables above.
 3. **SRFI 125 hash tables**, superseding the shipped SRFI 69 (in-degree 16); keep 69 as an alias.
 4. **SRFI 27 random** — runtime-forced, in-degree 9.
-5. **SRFI 143 fixnums** — must match the VM's representation.
+5. ~~SRFI 143 fixnums~~ — **done**. Mostly renames over SRFI 151 and `(scheme base)`; the part that
+   had to be right is `fx-width` / `fx-greatest` / `fx-least`, derived by probing `fixnum?` rather
+   than hardcoded so the library cannot claim a range the tagging does not provide.
 6. **SRFI 14 char-sets** (in-degree 4), then the remaining Red data structures (41, 101, 116, 117,
    124, 127, 134, 135) and Tangerine (146, 159, 160), which are standard-track but show little
    ecosystem demand.
