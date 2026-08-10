@@ -261,6 +261,32 @@ Adjacent and lower-stakes: `lib/scheme/base.sld` exports the eight three-deep `c
 (`caaar`…`cdddr`) as a documented extension, where R7RS-small puts them only in `(scheme cxr)`.
 Worth settling in the same PR while the cost of tightening is still low.
 
+**The standard port procedures are not parameter objects** — ❌ **open**, own PR. R7RS §6.13.1:
+`current-input-port`, `current-output-port` and `current-error-port` "are parameter objects, which
+can be overridden with `parameterize`". Patina implements all three as plain 0-argument procedures,
+so `parameterize` rejects them:
+
+```scheme
+(parameterize ((current-input-port (open-input-string "a b c"))) (read))
+;; => Invalid syntax: current-input-port expects exactly 0 arguments, got 1
+```
+
+`make-parameter` and `parameterize` work correctly for user-defined parameters, so the machinery
+exists; only the three built-ins are outside it. They are backed by Rust-side global state
+(`get_current_output_port` / `set_current_output_port` in `primitives/io/ports.rs`) that other
+primitives read directly, so the fix has to make that global read through the parameter's dynamic
+binding rather than merely accepting a second arity — which is why this is its own PR and not an
+inline fix.
+
+This is the one non-zero entry in the reference-suite expectations table: SRFI 158's suite defines
+`with-input-from-string` as `(parameterize ((current-input-port (open-input-string str))) (thunk))`,
+which is pure R7RS. It was previously recorded as the suite depending on a chibi extension. It is
+not — the extension is three lines of standard Scheme, and it is our `parameterize` that refuses it.
+Lower the SRFI 158 expectation to 0 when this lands.
+
+Redirecting the current ports is also a capability the L3 harness will want directly, for capturing
+a package's output without touching the real stdout.
+
 ## 7. Risks & mitigations
 - **Per-new-SRFI friction** (non-R7RS constructs, R5RS naming, control-op edges) → apply the resolved patterns in `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`; import each reference implementation incrementally with its own test.
 - **The pass rate has a ceiling well below 100%** — a meaningful share of Snow packages import `(chibi ast)` or other C-backed/FFI libraries and can never pass while FFI is deferred. → Have the L3 harness classify these as *out-of-scope* rather than *failing*, and report the achievable denominator alongside the raw one, so the number is not misread as a defect count.

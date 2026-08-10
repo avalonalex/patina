@@ -18,15 +18,15 @@ All copied unmodified from chibi-scheme's `lib/`, BSD (Alex Shinn).
 | `srfi/132/test.sld` | 0 |
 | `srfi/133/test.sld` | 0 |
 | `srfi/113/test.sld` | 0 |
-| `srfi/158/test.sld` | 1 — the suite calls `with-input-from-string`, a chibi extension Patina does not provide |
+| `srfi/158/test.sld` | 1 — Patina's `current-input-port` is not a parameter object (see below) |
 
 The counts are asserted exactly, in both directions: a regression fails, and so
 does a fix until the number is lowered. An expectations table, not a skip list.
 
 ## What running them found
 
-Five defects, none of which the hand-written tests beside these libraries had
-caught. All are fixed.
+Six defects, none of which the hand-written tests beside these libraries had
+caught. Five are fixed; the sixth is recorded below.
 
 - **SRFI 113 `set-unfold` / `bag-unfold` took their arguments in the wrong
   order** — fixed. The SRFI orders them `(comparator stop? mapper successor
@@ -72,6 +72,23 @@ caught. All are fixed.
 
   Both were checked against the suite. Reintroducing defect 1 into the old port
   turned the suite red with 2 failures, so the 0 in the table is not vacuous.
+
+- **The standard port procedures are not parameter objects** — open, tracked in
+  `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. R7RS §6.13.1 requires
+  `current-input-port`, `current-output-port` and `current-error-port` to be
+  parameter objects overridable with `parameterize`; Patina implements all three
+  as plain 0-argument procedures, so `parameterize` fails on them:
+
+  ```scheme
+  (parameterize ((current-input-port (open-input-string "a b c"))) (read))
+  ;; => Invalid syntax: current-input-port expects exactly 0 arguments, got 1
+  ```
+
+  `make-parameter` and `parameterize` are fine for user-defined parameters; only
+  the three built-in ports are affected. This is the SRFI 158 suite's one
+  failure — it defines its own `with-input-from-string` in exactly these terms,
+  so the entry above is a recorded Patina defect and not, as it previously said
+  here, a chibi extension we decline to provide.
 
 ## Suites not included, and why
 

@@ -28,9 +28,11 @@ const SUITES: &[(&str, &str, i64)] = &[
     ("(srfi 132 test)", "SRFI 132 sort", 0),
     ("(srfi 133 test)", "SRFI 133 vector", 0),
     ("(srfi 113 test)", "SRFI 113 set", 0),
-    // The one remaining failure is the suite calling `with-input-from-string`,
-    // which is a chibi extension rather than R7RS, so Patina does not provide
-    // it. Not a defect in (srfi 158).
+    // The one remaining failure is a Patina defect, not a defect in (srfi 158):
+    // `current-input-port` is a plain 0-arg procedure rather than an R7RS
+    // parameter object, so the suite's `(parameterize ((current-input-port ...)))`
+    // fails with "expects exactly 0 arguments, got 1". Same for the output and
+    // error ports. Tracked in the Track L PRD; lower this to 0 when it is fixed.
     ("(srfi 158 test)", "SRFI 158 generator", 1),
 ];
 
