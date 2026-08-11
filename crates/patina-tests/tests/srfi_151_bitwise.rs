@@ -17,6 +17,14 @@ fn srfi151(expr: &str) -> String {
     eval(&format!("(import (scheme base) (srfi 151)) {expr}"))
 }
 
+fn srfi60(expr: &str) -> String {
+    eval(&format!("(import (scheme base) (srfi 60)) {expr}"))
+}
+
+fn srfi33(expr: &str) -> String {
+    eval(&format!("(import (scheme base) (srfi 33)) {expr}"))
+}
+
 // ─── Core operators ──────────────────────────────────────────────────────────
 
 #[test]
@@ -92,6 +100,19 @@ fn test_derived_logical_operators() {
     assert_eq!(srfi151("(bitwise-if 3 1 8)"), "9");
 }
 
+/// N-ary eqv must fold pairwise. Complementing a seeded xor once at the end
+/// coincidentally agrees for odd argument counts and is wrong for every even
+/// one, so even arities and the zero-argument identity are the cases that bite.
+#[test]
+fn test_bitwise_eqv_folds_pairwise() {
+    assert_eq!(srfi151("(bitwise-eqv 37 12)"), "-42"); // the SRFI 151 example
+    assert_eq!(srfi151("(bitwise-eqv 12 10)"), "-7");
+    assert_eq!(srfi151("(bitwise-eqv)"), "-1");
+    assert_eq!(srfi151("(bitwise-eqv 42)"), "42");
+    assert_eq!(srfi151("(bitwise-eqv 1 2 4)"), "7");
+    assert_eq!(srfi151("(bitwise-eqv 1 2 4 8)"), "-16"); // eqv(7, 8)
+}
+
 #[test]
 fn test_conversion_round_trip() {
     assert_eq!(srfi151("(bits->list 6)"), "(#f #t #t)");
@@ -115,37 +136,62 @@ fn test_fold_and_unfold() {
 /// not a substitute.
 #[test]
 fn test_srfi_60_spellings() {
-    let s = |e: &str| eval(&format!("(import (scheme base) (srfi 60)) {e}"));
-    assert_eq!(s("(logand 12 10)"), "8");
-    assert_eq!(s("(logior 12 10)"), "14");
-    assert_eq!(s("(logxor 12 10)"), "6");
-    assert_eq!(s("(lognot 12)"), "-13");
-    assert_eq!(s("(ash 1 10)"), "1024");
-    assert_eq!(s("(logcount 12)"), "2");
-    assert_eq!(s("(logbit? 2 12)"), "#t");
-    assert_eq!(s("(log2-binary-factors 8)"), "3");
-    assert_eq!(s("(integer->list 6)"), "(#f #t #t)");
-    assert_eq!(s("(booleans->integer #f #t #t)"), "6");
+    assert_eq!(srfi60("(logand 12 10)"), "8");
+    assert_eq!(srfi60("(logior 12 10)"), "14");
+    assert_eq!(srfi60("(logxor 12 10)"), "6");
+    assert_eq!(srfi60("(lognot 12)"), "-13");
+    assert_eq!(srfi60("(ash 1 10)"), "1024");
+    assert_eq!(srfi60("(logcount 12)"), "2");
+    assert_eq!(srfi60("(logbit? 2 12)"), "#t");
+    assert_eq!(srfi60("(log2-binary-factors 8)"), "3");
+}
+
+/// SRFI 60's list conversions are MSB-first — the opposite of SRFI 151's
+/// bits->list family, which is why 151 renamed them. `(integer->list 6)` is
+/// `(#t #t #f)` here and `(bits->list 6)` is `(#f #t #t)`.
+#[test]
+fn test_srfi_60_conversions_are_msb_first() {
+    assert_eq!(srfi60("(integer->list 6)"), "(#t #t #f)");
+    assert_eq!(srfi60("(integer->list 6 5)"), "(#f #f #t #t #f)");
+    assert_eq!(srfi60("(list->integer '(#t #t #f))"), "6");
+    assert_eq!(srfi60("(list->integer (integer->list 12345))"), "12345");
+    assert_eq!(srfi60("(booleans->integer #t #f #t #f)"), "10");
 }
 
 /// SRFI 60 exports both spellings of eight operators -- `logand` *and*
 /// `bitwise-and`, `ash` *and* `arithmetic-shift`. Easy to lose one half.
 #[test]
 fn test_srfi_60_exports_both_spellings() {
-    let s = |e: &str| eval(&format!("(import (scheme base) (srfi 60)) {e}"));
-    assert_eq!(s("(bitwise-and 12 10)"), "8");
-    assert_eq!(s("(arithmetic-shift 1 4)"), "16");
-    assert_eq!(s("(bit-count 12)"), "2");
-    assert_eq!(s("(list (logand 12 10) (bitwise-and 12 10))"), "(8 8)");
+    assert_eq!(srfi60("(bitwise-and 12 10)"), "8");
+    assert_eq!(srfi60("(arithmetic-shift 1 4)"), "16");
+    assert_eq!(srfi60("(bit-count 12)"), "2");
+    assert_eq!(srfi60("(list (logand 12 10) (bitwise-and 12 10))"), "(8 8)");
 }
 
 #[test]
 fn test_srfi_33_spellings() {
-    let s = |e: &str| eval(&format!("(import (scheme base) (srfi 33)) {e}"));
-    assert_eq!(s("(bitwise-merge 3 1 8)"), "9");
-    assert_eq!(s("(any-bits-set? 12 10)"), "#t");
-    assert_eq!(s("(all-bits-set? 4 6)"), "#t");
-    assert_eq!(s("(extract-bit-field 4 0 255)"), "15");
+    assert_eq!(srfi33("(bitwise-merge 3 1 8)"), "9");
+    assert_eq!(srfi33("(any-bits-set? 12 10)"), "#t");
+    assert_eq!(srfi33("(all-bits-set? 4 6)"), "#t");
+}
+
+/// All five SRFI 33 field operations, with chibi's `(srfi 33)` as the ground
+/// truth for signatures and semantics — that is the implementation the corpus
+/// packages were written against. In particular `copy-bit-field` takes
+/// `(size position from to)` like its siblings, not SRFI 60's
+/// `(to from start end)`.
+#[test]
+fn test_srfi_33_field_operations() {
+    assert_eq!(srfi33("(extract-bit-field 4 0 255)"), "15");
+    assert_eq!(srfi33("(extract-bit-field 4 8 #xA55A)"), "5");
+    assert_eq!(srfi33("(replace-bit-field 4 0 5 255)"), "245");
+    assert_eq!(srfi33("(copy-bit-field 4 0 255 0)"), "240");
+    // test-bit-field? / clear-bit-field are renames of SRFI 151's
+    // bit-field-any? / bit-field-clear, so they take (n start end) — chibi's
+    // (srfi 33) makes the same choice.
+    assert_eq!(srfi33("(test-bit-field? 10 1 2)"), "#t");
+    assert_eq!(srfi33("(test-bit-field? 10 2 3)"), "#f");
+    assert_eq!(srfi33("(clear-bit-field 15 0 2)"), "12");
 }
 
 /// R7RS-large names this `(scheme bitwise)`.

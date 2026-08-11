@@ -35,14 +35,20 @@
     (define ash arithmetic-shift)
     (define rotate-bit-field bit-field-rotate)
     (define reverse-bit-field bit-field-reverse)
-    (define integer->list bits->list)
-    (define list->integer list->bits)
     (define log2-binary-factors first-set-bit)
 
-    ;; Three that SRFI 60 adds.
+    ;; SRFI 60's list conversions are MSB-first; SRFI 151's bits->list family
+    ;; is LSB-first, and 151 renamed them precisely because the order differs.
+    ;; Aliasing instead of reversing silently flips every bit pattern.
+    (define (integer->list k . len)
+      (reverse (apply bits->list k len)))
+    (define (list->integer bools)
+      (list->bits (reverse bools)))
+    (define (booleans->integer . bools)
+      (list->integer bools))
+
+    ;; One more that SRFI 60 adds.
     (define (copy-bit-field to from start end)
       (bitwise-if (arithmetic-shift (- (arithmetic-shift 1 (- end start)) 1) start)
                   (arithmetic-shift from start)
-                  to))
-    (define (booleans->integer . bools)
-      (list->bits bools))))
+                  to))))

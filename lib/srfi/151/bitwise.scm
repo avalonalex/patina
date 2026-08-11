@@ -7,8 +7,15 @@
 ;;; `make-nary` / `bitwise-complement` scaffolding is gone and the operators
 ;;; below call the n-ary primitives directly.
 
+;; Folded pairwise as in the reference implementation. N-ary eqv is NOT
+;; (bitwise-not (bitwise-xor -1 args ...)): complementing once at the end
+;; double-complements for even argument counts ((bitwise-eqv 37 12) must be
+;; -42, and the zero-argument identity is -1).
 (define (bitwise-eqv . args)
-  (bitwise-not (apply bitwise-xor -1 args)))
+  (let lp ((args args) (res -1))
+    (if (null? args)
+        res
+        (lp (cdr args) (bitwise-not (bitwise-xor res (car args)))))))
 (define (bitwise-nand i j) (bitwise-not (bitwise-and i j)))
 (define (bitwise-nor i j) (bitwise-not (bitwise-ior i j)))
 
