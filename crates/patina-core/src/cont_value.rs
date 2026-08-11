@@ -182,9 +182,14 @@ pub enum ContValue {
         /// that were in scope when the let-cont was evaluated.
         cont_env: ContEnv,
     },
-    /// A captured first-class continuation (used when re-invoking serialized continuations)
-    /// Currently only matched, not constructed - will be used when continuation serialization is implemented
-    #[allow(dead_code)]
+    /// A captured first-class continuation.
+    ///
+    /// Never constructed by the current evaluator: `reify_continuation`
+    /// flattens a `Local` into the `CpsContinuation`'s own fields and stores
+    /// effect-carrying wrappers in its `resume` field instead. Retained
+    /// because first-class continuation work (Track Q Q2) will construct it;
+    /// invoking one decodes the `CpsContinuation` with the same decoder the
+    /// escape path uses (`continuation_cont_value` in the tree-walker).
     Captured(Rc<CpsContinuation>),
     /// The halt continuation - returns final value
     Halt,
@@ -244,33 +249,4 @@ pub enum ContValue {
         /// The handler that was popped, so it can be re-pushed after continuable raise
         popped_handler: Option<ExceptionHandler>,
     },
-}
-
-impl ContValue {
-    /// The continuation this one decorates, if it decorates one.
-    ///
-    /// Several variants wrap another continuation to attach an effect that runs
-    /// on the way out -- popping an exception handler, caching a forced
-    /// promise, running a `dynamic-wind` thunk, delivering multiple values.
-    /// Capture and reification both unwrap to the inner continuation: the
-    /// effect cannot be serialized, but the continuation underneath must not be
-    /// lost.
-    ///
-    /// `DynamicWindCleanup` is deliberately absent -- it has bespoke
-    /// serialization that preserves the wind identity, so it must not be
-    /// silently unwrapped.
-    pub fn wrapped_cont(&self) -> Option<&ContValue> {
-        match self {
-            ContValue::CallWithValuesConsumer { original_cont, .. }
-            | ContValue::ForceCache { original_cont, .. }
-            | ContValue::DynamicWindAfterDone { original_cont, .. }
-            | ContValue::ExceptionHandlerCleanup { original_cont }
-            | ContValue::RaiseHandlerReturn { original_cont, .. } => Some(original_cont),
-            ContValue::DynamicWindSetup { cleanup_cont, .. } => Some(cleanup_cont),
-            ContValue::Local { .. }
-            | ContValue::Captured(_)
-            | ContValue::Halt
-            | ContValue::DynamicWindCleanup { .. } => None,
-        }
-    }
 }

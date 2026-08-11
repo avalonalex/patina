@@ -14,22 +14,26 @@ use patina_core::{CpsContinuation, DynamicWindRecord};
 use patina_core::{Environment, ScopeSet};
 use std::rc::Rc;
 
-impl<'a> CpsEvaluator<'a> {
-    /// Capture continuation bindings for serialization into a CpsContinuation
-    ///
-    /// When call/cc captures the current continuation, we need to serialize
-    /// the cont_env so it can be restored when the continuation is invoked.
-    /// Capture the continuation environment in scope at a `call/cc`.
-    ///
-    /// An `Rc` bump. This used to be ~150 lines that projected `ContEnv` into a
-    /// `Vec<(Rc<str>, Rc<CpsContinuation>)>`, which could only represent
-    /// `ContValue::Local`; everything else was encoded under sentinel names
-    /// (`__dw_after__`, `__dw_wind_id__`, `__dw_original__`) or dropped. The
-    /// matching decoder and its sentinel sniffing are gone with it.
-    pub(super) fn capture_cont_bindings(cont_env: &ContEnv) -> ContEnv {
-        cont_env.clone()
+/// The `ContValue` a reified `CpsContinuation` stands for: the stored
+/// effect-carrying wrapper when present, else a `Local` rebuilt from the
+/// flattened fields.
+///
+/// The single decoder for both re-entry paths — the escape handler in `mod.rs`
+/// and the `Captured` arm of `invoke_continuation_step` — so the two cannot
+/// drift apart.
+pub(super) fn continuation_cont_value(k: &CpsContinuation) -> ContValue {
+    match &k.resume {
+        Some(cont) => cont.clone(),
+        None => ContValue::Local {
+            param: k.param.clone(),
+            body: k.body.clone(),
+            env: k.env.clone(),
+            cont_env: k.captured_cont_env.clone(),
+        },
     }
+}
 
+impl<'a> CpsEvaluator<'a> {
     pub(super) fn reify_continuation(
         &self,
         cont: &ContValue,
@@ -48,7 +52,7 @@ impl<'a> CpsEvaluator<'a> {
                 env: env.clone(),
                 prompt_tag: None,
                 dynamic_winds: dynamic_winds.to_vec(),
-                captured_cont_env: Self::capture_cont_bindings(local_cont_env),
+                captured_cont_env: local_cont_env.clone(),
                 resume: None,
             }),
 
@@ -63,7 +67,7 @@ impl<'a> CpsEvaluator<'a> {
                 env: self.evaluator.global_env.clone(),
                 prompt_tag: None,
                 dynamic_winds: vec![],
-                captured_cont_env: Self::capture_cont_bindings(cont_env),
+                captured_cont_env: cont_env.clone(),
                 resume: None,
             }),
 
@@ -84,7 +88,7 @@ impl<'a> CpsEvaluator<'a> {
                 env: self.evaluator.global_env.clone(),
                 prompt_tag: None,
                 dynamic_winds: dynamic_winds.to_vec(),
-                captured_cont_env: Self::capture_cont_bindings(cont_env),
+                captured_cont_env: cont_env.clone(),
                 resume: Some(other.clone()),
             }),
         }
@@ -147,23 +151,27 @@ impl<'a> CpsEvaluator<'a> {
             }
 
             ContValue::Captured(k) => {
-                // This is a captured continuation being invoked
-                // Run dynamic-wind handlers to travel from current to captured context
+                // Travel between dynamic extents, then decode through the same
+                // `continuation_cont_value` the escape path uses. Before this
+                // delegation the arm evaluated `k.body` with the *caller's*
+                // cont_env and ignored `resume` entirely — a resume-carrying
+                // continuation would have evaluated its sentinel Halt body and
+                // died on `__resume_value__`. Unreachable today (nothing
+                // constructs `Captured`), load-bearing for Q2's first-class
+                // continuation work.
                 self.run_wind_handlers(&dynamic_winds, &k.dynamic_winds)?;
-
-                // Bind value and evaluate body
-                let new_env = Rc::new(Environment::with_parent(k.env.clone()));
-                new_env.define(k.param.to_string(), value);
-
-                // Return Continue step instead of recursive call
-                Ok(StepResult::Continue {
-                    expr: k.body.as_ref().clone(),
-                    env: new_env,
-                    cont_env,
+                let decoded = continuation_cont_value(&k);
+                let captured_cont_env = k.captured_cont_env.clone();
+                let captured_winds = k.dynamic_winds.clone();
+                self.invoke_continuation_step(
+                    decoded,
+                    value,
+                    _env,
+                    captured_cont_env,
                     prompt_stack,
-                    dynamic_winds: k.dynamic_winds.clone(),
+                    captured_winds,
                     exception_handlers,
-                })
+                )
             }
 
             ContValue::Halt => {
