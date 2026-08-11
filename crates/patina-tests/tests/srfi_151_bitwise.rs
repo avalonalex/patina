@@ -167,3 +167,27 @@ fn test_all_three_libraries_agree() {
         "(8 8)"
     );
 }
+
+/// Audit item A6 (PRD/AUDIT_2026_08_10_PRD.md): an absurd left-shift count must
+/// raise a catchable Scheme error. num-bigint allocates the result up front, so
+/// unguarded this was a ~137 GB allocation — a process abort rather than an
+/// error, and inconsistent with the bignum-count rejection beside it.
+#[test]
+fn test_arithmetic_shift_rejects_absurd_counts() {
+    // A fixnum count past the cap is a catchable error, not an abort.
+    assert_eq!(
+        srfi151("(guard (e (#t 'caught)) (arithmetic-shift 1 (expt 2 40)))"),
+        "caught"
+    );
+    // A bignum count is rejected just as catchably.
+    assert_eq!(
+        srfi151("(guard (e (#t 'caught)) (arithmetic-shift 1 (expt 2 80)))"),
+        "caught"
+    );
+    // Generous-but-sane counts still work, and huge right shifts are harmless.
+    assert_eq!(
+        srfi151("(integer-length (arithmetic-shift 1 100000))"),
+        "100001"
+    );
+    assert_eq!(srfi151("(arithmetic-shift 123 (- (expt 2 40)))"), "0");
+}

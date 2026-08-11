@@ -93,6 +93,18 @@ fn arithmetic_shift(heap: &SharedHeap, args: &[TaggedValue]) -> PrimResult {
         })?;
         (n, count)
     };
+    // num-bigint allocates the whole result up front, so an unguarded absurd
+    // left-shift count ((expt 2 40) bits is ~137 GB) aborts the process in the
+    // allocator instead of raising. Cap it at 2^30 bits — a 128 MiB integer,
+    // far beyond any legitimate program — so the failure stays a catchable
+    // Scheme error, consistent with the bignum-count rejection above. Right
+    // shifts only ever shrink the operand and need no cap.
+    const MAX_LEFT_SHIFT: i64 = 1 << 30;
+    if count > MAX_LEFT_SHIFT {
+        return Err(EvalError::TypeError(format!(
+            "arithmetic-shift: shift count {count} exceeds the supported maximum of {MAX_LEFT_SHIFT}"
+        )));
+    }
     let shifted = if count >= 0 {
         n << (count as usize)
     } else {
