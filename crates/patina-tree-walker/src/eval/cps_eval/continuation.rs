@@ -3,7 +3,7 @@
 //! This module contains functions for:
 //! - Continuation invocation and dispatch
 //! - Continuation reification (converting to first-class values)
-//! - Continuation binding capture and restore
+//! - Decoding a reified continuation for re-entry (`continuation_cont_value`)
 
 use super::CpsEvaluator;
 use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
