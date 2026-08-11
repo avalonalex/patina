@@ -112,6 +112,30 @@ fn test_carry_operators() {
     );
 }
 
+/// The exact half-point: a wide result of precisely 2^(fx-width-1) must land on
+/// fx-least with a carry of 1. A round-based balanced division puts it on the
+/// excluded endpoint +2^(fx-width-1) instead (round is half-to-even), returning
+/// a non-fixnum from the operators that exist to handle this boundary.
+#[test]
+fn test_carry_operators_at_the_half_point() {
+    assert_eq!(
+        fx("(call-with-values (lambda () (fx+/carry fx-greatest 1 0)) \
+            (lambda (r c) (list (fixnum? r) (eqv? r fx-least) c)))"),
+        "(#t #t 1)"
+    );
+    assert_eq!(
+        fx("(call-with-values (lambda () (fx-/carry fx-least 1 0)) \
+            (lambda (r c) (list (fixnum? r) (eqv? r fx-greatest) c)))"),
+        "(#t #t -1)"
+    );
+    // The multiplicative half-point: fx-least * 1 + 0 stays put with no carry.
+    assert_eq!(
+        fx("(call-with-values (lambda () (fx*/carry fx-least 1 0)) \
+            (lambda (r c) (list (eqv? r fx-least) c)))"),
+        "(#t 0)"
+    );
+}
+
 #[test]
 fn test_fxsqrt_returns_root_and_remainder() {
     assert_eq!(

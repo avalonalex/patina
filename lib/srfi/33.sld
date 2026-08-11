@@ -28,7 +28,9 @@
       (bitwise-ior
        (bitwise-and n (bitwise-not (arithmetic-shift (mask size) position)))
        (arithmetic-shift newfield position)))
-    (define (copy-bit-field to from start end)
-      (bitwise-merge (arithmetic-shift (mask (- end start)) start)
-                     (arithmetic-shift from start)
-                     to))))
+    ;; SRFI 33's signature is (size position from to) — the (to from start end)
+    ;; shape belongs to SRFI 60, and this library's other field ops already use
+    ;; the size/position convention. Body verbatim from chibi's (srfi 33), the
+    ;; implementation the corpus packages were written against.
+    (define (copy-bit-field size position from to)
+      (bitwise-merge (arithmetic-shift (mask size) position) to from))))

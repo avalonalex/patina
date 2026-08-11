@@ -38,13 +38,18 @@
 (define fx-greatest (- (expt 2 (- fx-width 1)) 1))
 (define fx-least (- (expt 2 (- fx-width 1))))
 
-;; Balanced division, from SRFI 141: the remainder lands in [-d/2, d/2), which
+;; Balanced division, as in SRFI 141: the remainder lands in [-d/2, d/2), which
 ;; is what the carry operators need to split a wide result into a fixnum result
 ;; plus a carry. Defined here rather than importing SRFI 141 for one procedure.
+;;
+;; Computed via floor-based modulo, NOT (round (/ n d)): round's half-to-even
+;; tie break puts an exactly-half remainder on the excluded endpoint +d/2, so
+;; (fx+/carry fx-greatest 1 0) would return the non-fixnum 2^60 instead of
+;; (fx-least 1) — the exact boundary the carry operators exist to handle.
 (define (balanced/ n d)
-  (let* ((q (round (/ n d)))
-         (r (- n (* q d))))
-    (values (exact q) (exact r))))
+  (let* ((r0 (modulo n d))
+         (r (if (>= r0 (quotient d 2)) (- r0 d) r0)))
+    (values (quotient (- n r) d) r)))
 
 (define (fx+/carry i j k)
   (call-with-values (lambda () (balanced/ (+ i j k) (expt 2 fx-width)))

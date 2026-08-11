@@ -232,10 +232,16 @@
 
 (define random-seed 0)
 
+;; PATINA LOCAL EDIT: upstream uses SRFI 27's (random-integer n) here. This
+;; linear congruential generator replaces it using only (scheme base)
+;; arithmetic — the earlier fxwrap+/fxwrap* version used identifiers that are
+;; not bound in this library and crashed every range >= just-sort-it-threshold.
+;; The state stays within 24 bits, so every intermediate fits in a fixnum.
+;; Quality only affects pivot choice, never correctness.
 (define (random-int n)
   (set! random-seed
-    (fxand (fxwrap+ (fxwrap* random-seed 1140671485) 12820163) #xffffff))
-  (fxremainder random-seed n))
+    (modulo (+ (* random-seed 1140671485) 12820163) #x1000000))
+  (remainder random-seed n))
 
 ;;; Counts how many elements within the range are less than the pivot
 ;;; and how many are equal to the pivot, returning both of those counts.
