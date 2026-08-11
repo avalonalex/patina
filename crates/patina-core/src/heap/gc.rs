@@ -706,6 +706,16 @@ impl<'h> GcVisitor<'h> {
         self.visit_env(&k.env);
         self.visit_winds(&k.dynamic_winds);
         trace_cont_env(&k.captured_cont_env, self);
+        // Today `resume` always aliases a value that is also reachable through
+        // `captured_cont_env` — every reify site stores the wrapper it read out
+        // of that same cont_env — so this trace is redundant. But that is an
+        // aliasing accident of the current construction sites, not an invariant
+        // anything enforces. Trace it explicitly so cont-env pruning, or a
+        // wrapper constructed outside the cont_env, cannot silently unroot the
+        // consumer procedures, thunks, promises and exception payloads it holds.
+        if let Some(resume) = &k.resume {
+            trace_cont_value(resume, self);
+        }
     }
 }
 
@@ -930,10 +940,8 @@ impl Collector for MarkSweepCollector {
 }
 
 // ============================================================================
-// Tests
+// Continuation-value tracing
 // ============================================================================
-
-// ── Continuation-value tracing ───────────────────────────────────────────
 //
 // Moved here with ContValue itself: CpsContinuation stores a ContEnv, so the
 // collector has to be able to walk one.
@@ -1040,10 +1048,16 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
     }
 }
 
+/// Trace an exception handler: the handler procedure itself and the dynamic
+/// winds `raise` unwinds before invoking it.
 pub fn trace_exception_handler(handler: &ExceptionHandler, visitor: &mut GcVisitor<'_>) {
     visitor.visit(handler.handler);
     visitor.visit_winds(&handler.dynamic_winds);
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {

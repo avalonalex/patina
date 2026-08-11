@@ -17,7 +17,8 @@
 //! the divergence list will look for them.
 //!
 //! Sources: `PRD/TRACK_Q_QUALITY_PRD.md` §1.2, re-measured at `2d4ce29`
-//! (2026-08-10), and `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`.
+//! (2026-08-10), `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`, and
+//! `PRD/AUDIT_2026_08_10_PRD.md` B3 (measured 2026-08-10).
 //!
 //! Shared root cause of the §1.2 cluster: R7RS §6.10 makes `call/cc`,
 //! `dynamic-wind`, `values` and `with-exception-handler` ordinary procedures,
@@ -31,6 +32,7 @@ use common::*;
 
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
 const CALLCC_MULTI_VALUES: &str = "PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md";
+const HANDLER_REENTRY: &str = "PRD/AUDIT_2026_08_10_PRD.md B3";
 
 // ─── call/cc in value position (Track Q §1.2) ────────────────────────────────
 
@@ -131,6 +133,38 @@ fn callcc_abort_pattern_through_call_with_values() {
         On::Vm,
         "(cars () cdrs ())",
         CALLCC_MULTI_VALUES,
+    );
+}
+
+// ─── Continuation re-entry loses the handler stack (audit B3) ────────────────
+
+/// Re-entering a continuation captured under `with-exception-handler` keeps
+/// the handler on the VM (restored from its snapshot) but loses it on the
+/// tree-walker: the escape path in `cps_eval/mod.rs` resets
+/// `exception_handlers` to empty because `CpsContinuation` does not carry
+/// them. Tree-walker: `unhandled continuable exception: boom`. The fix is to
+/// store the handler stack (and `prompt_stack`) on `CpsContinuation` and
+/// restore both on re-entry, as the VM does.
+#[test]
+fn reentered_continuation_keeps_exception_handler() {
+    assert_divergence(
+        r#"
+        (define saved #f)
+        (define entered #f)
+        (define (run)
+          (with-exception-handler
+            (lambda (e) 42)
+            (lambda ()
+              (call/cc (lambda (k) (set! saved k) #f))
+              (raise-continuable 'boom))))
+        (let ((first (run)))
+          (if entered
+              (list 'second-pass first)
+              (begin (set! entered #t) (saved #f))))
+        "#,
+        On::Vm,
+        "(second-pass 42)",
+        HANDLER_REENTRY,
     );
 }
 

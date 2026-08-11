@@ -80,7 +80,7 @@ use patina_core::{GcController, GcDeferGuard};
 use std::rc::Rc;
 use tracing::debug;
 
-use types::{ContEnv, ContValue, StepResult, take_pending_escape};
+use types::{ContEnv, StepResult, take_pending_escape};
 
 /// CPS Evaluator state
 ///
@@ -295,21 +295,15 @@ impl<'a> CpsEvaluator<'a> {
                         // reset rather than restored -- CpsContinuation does not
                         // carry them, so re-entering a continuation captured
                         // under a handler loses that handler. The VM restores
-                        // both from its snapshot. Pre-existing divergence,
-                        // tracked separately; storing them here is now
+                        // both from its snapshot. Quarantined as a known
+                        // divergence in crates/patina-tests/tests/
+                        // backend_divergence.rs (reentered_continuation_keeps_
+                        // exception_handler); storing them here is now
                         // straightforward since the type can hold them.
                         // `resume` holds an effect-carrying continuation that
                         // must be re-established rather than jumped past; the
                         // common case flattens to a Local.
-                        let new_cont = match &k.resume {
-                            Some(cont) => cont.clone(),
-                            None => ContValue::Local {
-                                param: k.param.clone(),
-                                body: k.body.clone(),
-                                env: k.env.clone(),
-                                cont_env: k.captured_cont_env.clone(),
-                            },
-                        };
+                        let new_cont = continuation::continuation_cont_value(&k);
                         current_step = self.invoke_continuation_step(
                             new_cont,
                             value_tagged,
