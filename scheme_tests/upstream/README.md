@@ -11,17 +11,20 @@ is 145 assertions against the 13 in
 
 All copied unmodified from chibi-scheme's `lib/`, BSD (Alex Shinn).
 
-| Suite | Failing assertions |
-|---|---|
-| `srfi/151/test.sld` | 0 — 145 assertions |
-| `srfi/143/test.sld` | 0 — 141 assertions |
-| `srfi/132/test.sld` | 0 |
-| `srfi/133/test.sld` | 0 |
-| `srfi/113/test.sld` | 0 |
-| `srfi/158/test.sld` | 1 — Patina's `current-input-port` is not a parameter object (see below) |
+| Suite | Assertions | Failing |
+|---|---|---|
+| `srfi/151/test.sld` | 145 | 0 |
+| `srfi/143/test.sld` | 141 | 0 |
+| `srfi/132/test.sld` | 221 | 0 |
+| `srfi/133/test.sld` | 93 | 0 |
+| `srfi/113/test.sld` | 253 | 0 |
+| `srfi/158/test.sld` | 76 | 1 — Patina's `current-input-port` is not a parameter object (see below) |
 
-The counts are asserted exactly, in both directions: a regression fails, and so
-does a fix until the number is lowered. An expectations table, not a skip list.
+Both columns are enforced by `upstream_srfi_suites.rs`, not prose: the failure
+count is asserted exactly, in both directions — a regression fails, and so does
+a fix until the number is lowered — and the assertion count is a floor, so a
+run that `TEST_FILTER`-skips its way to zero failures also fails. An
+expectations table, not a skip list. Every suite runs on both backends.
 
 ## What running them found
 

@@ -10,31 +10,28 @@
 //! the hand-written subset it replaced could not express `test-group` or report
 //! a failure count, so these suites had nothing to run on.
 //!
-//! Add an entry when Patina bundles a library whose upstream suite exists.
+//! Each suite runs on **both backends**, and two numbers are checked per run:
+//!
+//! - the failure count, exactly and in both directions — a regression fails,
+//!   and so does a fix until the expectation is lowered;
+//! - a floor on the assertions actually run. `(chibi test)` honors
+//!   `TEST_FILTER`/`TEST_GROUP_FILTER`/`TEST_GROUP_REMOVE` from the
+//!   environment, so without the floor a filtered or skip-everything run
+//!   reports zero failures and looks like a pass.
+//!
+//! The count comes from a wrapper installed around `current-test-reporter`
+//! rather than from a patch to the framework — the bundled `(chibi test)`
+//! stays verbatim (see `scheme_tests/upstream/README.md`).
+//!
+//! Add a `suite_test!` entry when Patina bundles a library whose upstream
+//! suite exists; one `#[test]` per suite, so a load failure in one cannot
+//! hide the others.
 
-use patina_interpreter::TreeWalkInterpreter;
+use patina_interpreter::{Interpreter, TreeWalkInterpreter};
+use patina_primitives::primitives::io::datum_writer::format_display_tagged;
+use patina_runtime::Backend;
+use patina_vm::VmBackend;
 use std::path::PathBuf;
-
-/// A bundled library, its reference suite, and the number of assertions that
-/// suite currently fails against Patina.
-///
-/// An expectations table, not a skip list. The count is asserted exactly in
-/// both directions, so fixing a library fails this test until the number is
-/// lowered — which is the point. A non-zero entry is a defect in *our* port,
-/// recorded rather than hidden.
-const SUITES: &[(&str, &str, i64)] = &[
-    ("(srfi 151 test)", "SRFI 151 bitwise", 0),
-    ("(srfi 143 test)", "SRFI 143 fixnum", 0),
-    ("(srfi 132 test)", "SRFI 132 sort", 0),
-    ("(srfi 133 test)", "SRFI 133 vector", 0),
-    ("(srfi 113 test)", "SRFI 113 set", 0),
-    // The one remaining failure is a Patina defect, not a defect in (srfi 158):
-    // `current-input-port` is a plain 0-arg procedure rather than an R7RS
-    // parameter object, so the suite's `(parameterize ((current-input-port ...)))`
-    // fails with "expects exactly 0 arguments, got 1". Same for the output and
-    // error ports. Tracked in the Track L PRD; lower this to 0 when it is fixed.
-    ("(srfi 158 test)", "SRFI 158 generator", 1),
-];
 
 fn upstream_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -45,11 +42,77 @@ fn upstream_root() -> PathBuf {
         .join("upstream")
 }
 
-/// Load a suite, run it, and report how many assertions it failed.
+/// Wrap `body` (test forms or a suite's `(run-tests)`) so the program's value
+/// is `"<failures> <assertions-run>"`.
 ///
-/// `(chibi test)` tracks this itself, so the count comes from the framework
-/// rather than from scraping its output.
-fn failures_in(library: &str) -> i64 {
+/// Both numbers are the framework's own: the failure count is its global
+/// parameter, and the assertion count is taken by wrapping the reporter it
+/// calls once per non-skipped assertion.
+fn harness_program(imports: &str, body: &str) -> String {
+    format!(
+        "(import (scheme base) (chibi test) {imports}) \
+         (define assertions-run 0) \
+         (current-test-reporter \
+           (let ((default (current-test-reporter))) \
+             (lambda (status info) \
+               (unless (eq? status 'SKIP) \
+                 (set! assertions-run (+ assertions-run 1))) \
+               (default status info)))) \
+         {body} \
+         (string-append (number->string (test-failure-count)) \
+                        \" \" \
+                        (number->string assertions-run))"
+    )
+}
+
+/// Run `program` and return `(failures, assertions_run)`.
+fn counts_on<B: Backend>(interp: &Interpreter<B>, label: &str, program: &str) -> (i64, i64) {
+    let value = interp
+        .eval_program(program)
+        .unwrap_or_else(|e| panic!("[{label}] failed to run: {e}"));
+    let text = format_display_tagged(value, interp.backend().global_env().heap());
+    let mut parts = text.split_whitespace();
+    let mut next_int = || {
+        parts
+            .next()
+            .and_then(|n| n.parse::<i64>().ok())
+            .unwrap_or_else(|| panic!("[{label}] expected two integers, got {text:?}"))
+    };
+    (next_int(), next_int())
+}
+
+/// Run one suite on one backend, hold it to the expectations table, and
+/// return how many assertions ran (for the cross-backend agreement check).
+fn assert_suite<B: Backend>(
+    interp: &Interpreter<B>,
+    backend: &str,
+    library: &str,
+    expected_failures: i64,
+    min_assertions: i64,
+) -> i64 {
+    let label = format!("{library} on {backend}");
+    let program = harness_program(library, "(run-tests)");
+    let (failures, assertions) = counts_on(interp, &label, &program);
+    assert!(
+        assertions >= min_assertions,
+        "[{label}] ran {assertions} assertions, expected at least {min_assertions} — \
+         a filter (TEST_FILTER et al.) or a framework change is skipping tests"
+    );
+    if failures != expected_failures {
+        let verdict = if failures > expected_failures {
+            "a regression"
+        } else {
+            "fixed, lower the expectation"
+        };
+        panic!("[{label}] {failures} failures, was {expected_failures} — {verdict}");
+    }
+    assertions
+}
+
+/// Run one suite on both backends. Failure counts agree by construction (both
+/// are pinned to the same expectation), so the assertions-run count is the one
+/// number the backends could silently diverge on — compare it too.
+fn check_suite(library: &str, expected_failures: i64, min_assertions: i64) {
     let root = upstream_root();
     assert!(
         root.is_dir(),
@@ -57,62 +120,76 @@ fn failures_in(library: &str) -> i64 {
         root.display()
     );
 
-    let interp = TreeWalkInterpreter::new_tree_walker();
-    interp.backend().evaluator().add_library_search_path(root);
-
-    let program =
-        format!("(import (scheme base) (chibi test) {library}) (run-tests) (test-failure-count)");
-    let value = interp
-        .eval_program(&program)
-        .unwrap_or_else(|e| panic!("{library} failed to run: {e:?}"));
-    interp
-        .display_tagged(value)
-        .parse()
-        .expect("test-failure-count should return an integer")
-}
-
-#[test]
-fn test_upstream_suites_match_expectations() {
-    let mut drift = Vec::new();
-    for (library, description, expected) in SUITES {
-        let actual = failures_in(library);
-        if actual > *expected {
-            drift.push(format!(
-                "{description}: {actual} failures, was {expected} — a regression"
-            ));
-        } else if actual < *expected {
-            drift.push(format!(
-                "{description}: {actual} failures, was {expected} — fixed, lower the expectation"
-            ));
-        }
-    }
-    assert!(
-        drift.is_empty(),
-        "reference suites drifted:\n  - {}",
-        drift.join("\n  - ")
+    let tw = TreeWalkInterpreter::new_tree_walker();
+    tw.backend()
+        .evaluator()
+        .add_library_search_path(root.clone());
+    let tw_assertions = assert_suite(
+        &tw,
+        "tree-walker",
+        library,
+        expected_failures,
+        min_assertions,
     );
-}
 
-/// Proves the harness can actually report a failure.
-///
-/// Without this, `test_upstream_suites_pass` is vacuous: a `test-failure-count`
-/// that always returned 0 — or a `run-tests` that quietly did nothing — would
-/// look exactly like a clean run. A deliberately failing assertion through the
-/// same path has to come back as 1.
-///
-/// It prints one `FAIL:` line during the run. That is the point of it.
-#[test]
-fn test_harness_reports_failures() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-    let value = interp
-        .eval_program(
-            "(import (scheme base) (chibi test)) \
-             (test-begin \"deliberate\") (test 1 2) (test-end) (test-failure-count)",
-        )
-        .expect("self-check should run");
+    let vm = Interpreter::new(VmBackend::new());
+    vm.backend().add_library_search_path(root);
+    let vm_assertions = assert_suite(&vm, "vm", library, expected_failures, min_assertions);
+
     assert_eq!(
-        interp.display_tagged(value),
-        "1",
-        "a failing assertion must be counted, or a zero from the real suites means nothing"
+        tw_assertions, vm_assertions,
+        "[{library}] the backends disagree on how many assertions ran"
     );
+}
+
+macro_rules! suite_test {
+    ($name:ident, $library:expr, $expected_failures:expr, $min_assertions:expr) => {
+        #[test]
+        fn $name() {
+            check_suite($library, $expected_failures, $min_assertions);
+        }
+    };
+}
+
+// The expectations table: (test name, library, expected failures, minimum
+// assertions run). Not a skip list — a non-zero failure entry is a defect in
+// *our* port, recorded rather than hidden, and the assertion floor is the
+// count the suite ran when the expectation was recorded (2026-08-12).
+suite_test!(srfi_151_bitwise, "(srfi 151 test)", 0, 145);
+suite_test!(srfi_143_fixnum, "(srfi 143 test)", 0, 141);
+suite_test!(srfi_132_sort, "(srfi 132 test)", 0, 221);
+suite_test!(srfi_133_vector, "(srfi 133 test)", 0, 93);
+suite_test!(srfi_113_set, "(srfi 113 test)", 0, 253);
+// The one remaining failure is a Patina defect, not a defect in (srfi 158):
+// `current-input-port` is a plain 0-arg procedure rather than an R7RS
+// parameter object, so the suite's `(parameterize ((current-input-port ...)))`
+// fails with "expects exactly 0 arguments, got 1". Same for the output and
+// error ports. Tracked in the Track L PRD; lower this to 0 when it is fixed.
+suite_test!(srfi_158_generator, "(srfi 158 test)", 1, 76);
+
+/// Proves the harness can actually report a failure — and actually counts.
+///
+/// Without this, the suite tests are vacuous twice over: a
+/// `test-failure-count` that always returned 0 would look like a clean run,
+/// and an assertion counter stuck at 0 would never trip a floor set at or
+/// below the real count. One deliberate failure and two passes through the
+/// same harness have to come back as exactly `1 3`.
+///
+/// It prints one `FAIL:` line per backend during the run. That is the point.
+#[test]
+fn test_harness_reports_failures_and_counts() {
+    fn expect_one_failure_of_three<B: Backend>(interp: &Interpreter<B>, label: &str) {
+        let body = "(test-begin \"deliberate\") (test 1 2) (test 3 3) (test 5 5) (test-end)";
+        assert_eq!(
+            counts_on(interp, label, &harness_program("", body)),
+            (1, 3),
+            "a failing assertion must be counted, or the real suites' numbers mean nothing"
+        );
+    }
+
+    let tw = TreeWalkInterpreter::new_tree_walker();
+    expect_one_failure_of_three(&tw, "self-check on tree-walker");
+
+    let vm = Interpreter::new(VmBackend::new());
+    expect_one_failure_of_three(&vm, "self-check on vm");
 }
