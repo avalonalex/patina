@@ -325,6 +325,15 @@ impl VmBackend {
         self.library_registry.borrow().search_paths().to_vec()
     }
 
+    /// Add a library search path (for testing).
+    ///
+    /// Counterpart of `Evaluator::add_library_search_path` on the
+    /// tree-walker, so tests that resolve libraries outside `lib/` (the
+    /// upstream SRFI suites) can run on both backends.
+    pub fn add_library_search_path(&self, path: std::path::PathBuf) {
+        self.library_registry.borrow_mut().add_search_path(path);
+    }
+
     /// Compile a source string to bytecode and disassemble it to stdout.
     ///
     /// Used by the `(vm-compile ...)` REPL special form.

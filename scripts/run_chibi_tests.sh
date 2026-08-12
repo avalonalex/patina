@@ -43,6 +43,14 @@ for arg in "$@"; do
     esac
 done
 
+# The grand total is pinned, not just the failure count: (chibi test) honors
+# TEST_FILTER/TEST_GROUP_FILTER/TEST_GROUP_REMOVE from the environment, and a
+# truncated test file or a skip-inducing framework change shrinks the total
+# silently — "0 failures out of fewer tests" must not pass. Update this
+# deliberately when the suite grows. To run a filtered subset while debugging,
+# invoke the binary on the test file directly instead of through this script.
+EXPECTED_TOTAL=1226
+
 PATINA_BIN="./target/release/patina"
 TEST_FILE="scheme_tests/chibi/r7rs-tests.scm"
 REPORT_DIR="scheme_tests/reports"
@@ -194,6 +202,16 @@ echo ""
 echo "Report: $COMPAT_REPORT"
 
 # Non-zero exit means the suite regressed; CI and the wrapper rely on it.
+# The total is checked as well as the failure count — a shrunken run with zero
+# failures is a silent gap, not a pass. Checked last so the report above is
+# still written and the summary still printed for whoever debugs the drift.
+if [ "$TRUE_TOTAL" -ne "$EXPECTED_TOTAL" ]; then
+    echo -e "${RED}Suite ran $TRUE_TOTAL tests; expected exactly $EXPECTED_TOTAL.${NC}"
+    echo "Either tests were filtered/skipped (check TEST_FILTER, TEST_GROUP_FILTER,"
+    echo "TEST_GROUP_REMOVE in the environment and the integrity of $TEST_FILE),"
+    echo "or the suite grew — update EXPECTED_TOTAL in this script deliberately."
+    exit 1
+fi
 if [ "$FAIL_COUNT" -gt 0 ] || [ "$ERROR_COUNT" -gt 0 ]; then
     exit 1
 fi

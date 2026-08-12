@@ -46,4 +46,13 @@ tracing = "0.1.44"
 # Benchmarking
 criterion = { version = "0.8.2", features = ["html_reports"] }
 
+# Tests interpret real Scheme (every integration test boots a full interpreter
+# and loads (scheme base)), which is unusably slow at opt-level 0. Measured
+# 2026-08-12 on the full patina-tests package, run time with binaries prebuilt:
+# opt-level 0 → 32.6s, opt-level 1 → 7.5s (~4.3x). Adding [profile.dev]
+# opt-level = 1 gained nothing further (7.2s) and would slow every debug
+# `cargo build`, so only the test profile is raised.
+[profile.test]
+opt-level = 1
+
 # No main package anymore - workspace only
