@@ -44,12 +44,13 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: Build release
       run: cargo build --release
-    # The script pins the grand total (EXPECTED_TOTAL): a filtered or
-    # truncated run fails even with zero failures. Both backend lanes share
+    # The script requires every test to pass AND pins the grand total
+    # (EXPECTED_TOTAL, the single statement of the expected count): a filtered
+    # or truncated run fails even with zero failures. Both backend lanes share
     # the release build above.
-    - name: Run chibi r7rs-tests, VM backend (must be 1226/1226)
+    - name: Run chibi r7rs-tests, VM backend
       run: ./scripts/run_chibi_tests.sh
-    - name: Run chibi r7rs-tests, tree-walker backend (must be 1226/1226)
+    - name: Run chibi r7rs-tests, tree-walker backend
       run: ./scripts/run_chibi_tests_tree_walker.sh
 
   # The two GC lanes (docs/GC_DESIGN.md §10 stage 4b): the chibi suite must

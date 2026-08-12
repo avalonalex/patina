@@ -50,7 +50,7 @@ fn upstream_root() -> PathBuf {
 /// calls once per non-skipped assertion.
 fn harness_program(imports: &str, body: &str) -> String {
     format!(
-        "(import (scheme base) (chibi test){imports}) \
+        "(import (scheme base) (chibi test) {imports}) \
          (define assertions-run 0) \
          (current-test-reporter \
            (let ((default (current-test-reporter))) \
@@ -69,45 +69,49 @@ fn harness_program(imports: &str, body: &str) -> String {
 fn counts_on<B: Backend>(interp: &Interpreter<B>, label: &str, program: &str) -> (i64, i64) {
     let value = interp
         .eval_program(program)
-        .unwrap_or_else(|e| panic!("[{label}] failed to run: {e:?}"));
+        .unwrap_or_else(|e| panic!("[{label}] failed to run: {e}"));
     let text = format_display_tagged(value, interp.backend().global_env().heap());
-    let mut parts = text.split_whitespace().map(|n| {
-        n.parse::<i64>()
-            .unwrap_or_else(|_| panic!("[{label}] expected two integers, got {text:?}"))
-    });
-    let failures = parts.next().expect("failure count");
-    let assertions = parts.next().expect("assertion count");
-    (failures, assertions)
+    let mut parts = text.split_whitespace();
+    let mut next_int = || {
+        parts
+            .next()
+            .and_then(|n| n.parse::<i64>().ok())
+            .unwrap_or_else(|| panic!("[{label}] expected two integers, got {text:?}"))
+    };
+    (next_int(), next_int())
 }
 
-/// Run one suite on one backend and hold it to the expectations table.
+/// Run one suite on one backend, hold it to the expectations table, and
+/// return how many assertions ran (for the cross-backend agreement check).
 fn assert_suite<B: Backend>(
     interp: &Interpreter<B>,
     backend: &str,
     library: &str,
     expected_failures: i64,
     min_assertions: i64,
-) {
+) -> i64 {
     let label = format!("{library} on {backend}");
-    let program = harness_program(&format!(" {library}"), "(run-tests)");
+    let program = harness_program(library, "(run-tests)");
     let (failures, assertions) = counts_on(interp, &label, &program);
     assert!(
         assertions >= min_assertions,
         "[{label}] ran {assertions} assertions, expected at least {min_assertions} — \
          a filter (TEST_FILTER et al.) or a framework change is skipping tests"
     );
-    match failures.cmp(&expected_failures) {
-        std::cmp::Ordering::Greater => {
-            panic!("[{label}] {failures} failures, was {expected_failures} — a regression")
-        }
-        std::cmp::Ordering::Less => panic!(
-            "[{label}] {failures} failures, was {expected_failures} — fixed, lower the expectation"
-        ),
-        std::cmp::Ordering::Equal => {}
+    if failures != expected_failures {
+        let verdict = if failures > expected_failures {
+            "a regression"
+        } else {
+            "fixed, lower the expectation"
+        };
+        panic!("[{label}] {failures} failures, was {expected_failures} — {verdict}");
     }
+    assertions
 }
 
-/// Run one suite on both backends.
+/// Run one suite on both backends. Failure counts agree by construction (both
+/// are pinned to the same expectation), so the assertions-run count is the one
+/// number the backends could silently diverge on — compare it too.
 fn check_suite(library: &str, expected_failures: i64, min_assertions: i64) {
     let root = upstream_root();
     assert!(
@@ -120,7 +124,7 @@ fn check_suite(library: &str, expected_failures: i64, min_assertions: i64) {
     tw.backend()
         .evaluator()
         .add_library_search_path(root.clone());
-    assert_suite(
+    let tw_assertions = assert_suite(
         &tw,
         "tree-walker",
         library,
@@ -130,15 +134,14 @@ fn check_suite(library: &str, expected_failures: i64, min_assertions: i64) {
 
     let vm = Interpreter::new(VmBackend::new());
     vm.backend().add_library_search_path(root);
-    assert_suite(&vm, "vm", library, expected_failures, min_assertions);
+    let vm_assertions = assert_suite(&vm, "vm", library, expected_failures, min_assertions);
+
+    assert_eq!(
+        tw_assertions, vm_assertions,
+        "[{library}] the backends disagree on how many assertions ran"
+    );
 }
 
-/// The expectations table: `(test name, library, expected failures, minimum
-/// assertions run)`.
-///
-/// Not a skip list — a non-zero failure entry is a defect in *our* port,
-/// recorded rather than hidden, and the assertion floor is the count the suite
-/// ran when the expectation was recorded (2026-08-12).
 macro_rules! suite_test {
     ($name:ident, $library:expr, $expected_failures:expr, $min_assertions:expr) => {
         #[test]
@@ -148,6 +151,10 @@ macro_rules! suite_test {
     };
 }
 
+// The expectations table: (test name, library, expected failures, minimum
+// assertions run). Not a skip list — a non-zero failure entry is a defect in
+// *our* port, recorded rather than hidden, and the assertion floor is the
+// count the suite ran when the expectation was recorded (2026-08-12).
 suite_test!(srfi_151_bitwise, "(srfi 151 test)", 0, 145);
 suite_test!(srfi_143_fixnum, "(srfi 143 test)", 0, 141);
 suite_test!(srfi_132_sort, "(srfi 132 test)", 0, 221);
@@ -171,20 +178,18 @@ suite_test!(srfi_158_generator, "(srfi 158 test)", 1, 76);
 /// It prints one `FAIL:` line per backend during the run. That is the point.
 #[test]
 fn test_harness_reports_failures_and_counts() {
-    let body = "(test-begin \"deliberate\") (test 1 2) (test 3 3) (test 5 5) (test-end)";
-    let program = harness_program("", body);
+    fn expect_one_failure_of_three<B: Backend>(interp: &Interpreter<B>, label: &str) {
+        let body = "(test-begin \"deliberate\") (test 1 2) (test 3 3) (test 5 5) (test-end)";
+        assert_eq!(
+            counts_on(interp, label, &harness_program("", body)),
+            (1, 3),
+            "a failing assertion must be counted, or the real suites' numbers mean nothing"
+        );
+    }
 
     let tw = TreeWalkInterpreter::new_tree_walker();
-    assert_eq!(
-        counts_on(&tw, "self-check on tree-walker", &program),
-        (1, 3),
-        "a failing assertion must be counted, or the real suites' numbers mean nothing"
-    );
+    expect_one_failure_of_three(&tw, "self-check on tree-walker");
 
     let vm = Interpreter::new(VmBackend::new());
-    assert_eq!(
-        counts_on(&vm, "self-check on vm", &program),
-        (1, 3),
-        "a failing assertion must be counted, or the real suites' numbers mean nothing"
-    );
+    expect_one_failure_of_three(&vm, "self-check on vm");
 }

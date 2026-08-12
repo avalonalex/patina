@@ -51,7 +51,9 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 # 2026-08-12 on the full patina-tests package, run time with binaries prebuilt:
 # opt-level 0 → 32.6s, opt-level 1 → 7.5s (~4.3x). Adding [profile.dev]
 # opt-level = 1 gained nothing further (7.2s) and would slow every debug
-# `cargo build`, so only the test profile is raised.
+# `cargo build`, so only the test profile is raised. The dev- and test-profile
+# artifacts coexist under target/debug (verified: alternating `cargo build` /
+# `cargo test` rebuilds nothing), so the split costs disk, not recompiles.
 [profile.test]
 opt-level = 1
 
