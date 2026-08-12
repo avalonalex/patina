@@ -40,9 +40,12 @@ impl ApplyContext for Evaluator {
         use patina_frontend::Desugarer;
 
         let desugarer = Desugarer::with_env(env.clone()).with_fs(self.fs.clone());
+        // Bad syntax handed to the `eval` primitive is the caller's error,
+        // raised while the program runs — catchable, like the VM's path.
+        // (`EvalError::DesugarError` is only for the Backend::eval entry.)
         let core_expr = desugarer
             .desugar_tagged(expr, self.global_env.heap())
-            .map_err(|e| EvalError::InternalError(format!("eval: desugar error: {}", e)))?;
+            .map_err(|e| EvalError::InvalidSyntax(format!("eval: desugar error: {}", e)))?;
 
         eval_cps(&core_expr, env.clone(), self)
     }

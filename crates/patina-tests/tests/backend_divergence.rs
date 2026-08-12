@@ -192,3 +192,18 @@ fn apply_callcc_fails_on_both() {
 fn apply_values_agrees() {
     assert_program_eval_to("(apply values (list 7))", "7");
 }
+
+/// Bad syntax handed to the `eval` primitive is the *caller's* error, raised
+/// while the program runs — catchable, on both backends. The tree-walker used
+/// to wrap it in a non-catchable `InternalError` (so this program died) while
+/// the VM caught it; converged when the D3 error-class work relabeled the
+/// eval-primitive path as `InvalidSyntax`. `EvalError::DesugarError` stays
+/// reserved for the `Backend::eval` entry, where nothing is running yet.
+#[test]
+fn evaled_bad_syntax_is_catchable_on_both() {
+    assert_program_eval_to(
+        "(import (scheme eval) (scheme repl)) \
+         (guard (e (#t 'caught)) (eval '(if) (interaction-environment)))",
+        "caught",
+    );
+}

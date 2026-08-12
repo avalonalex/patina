@@ -16,6 +16,7 @@
 //! - **Non-catchable**: Stay in Rust, cannot be caught in Scheme
 //!   - `InternalError`: Interpreter bugs
 //!   - `ContinuationEscape`: Control flow mechanism
+//!   - `DesugarError`: The program was rejected before it ran
 
 use patina_core::error::SourceLocation;
 use patina_core::{ErrorDetail, ErrorKind, ExceptionKind};
@@ -41,7 +42,13 @@ pub enum EvalError {
     /// backend, so a desugar failure has to travel through `EvalError`. This
     /// variant keeps its identity as a before-run rejection — wrapping it in
     /// `InternalError` (as the backend once did) mis-states the stage and
-    /// reads as an interpreter bug.
+    /// reads as an interpreter bug. It is non-catchable because no handler
+    /// can be installed before the program runs.
+    ///
+    /// **Produced only at the `Backend::eval` entry point.** A desugar
+    /// failure reached from *inside* a running program — the `eval`
+    /// primitive — is a runtime failure: use the catchable `InvalidSyntax`
+    /// there, as the VM's equivalent path does.
     #[error("Desugar error: {0}")]
     DesugarError(String),
 
@@ -126,9 +133,6 @@ impl EvalError {
     pub fn is_catchable(&self) -> bool {
         match self {
             EvalError::WithLocation { error, .. } => error.is_catchable(),
-            // DesugarError happens before evaluation starts, so no handler
-            // can be installed when it fires; keep it non-catchable like the
-            // InternalError it used to be wrapped in.
             _ => !matches!(
                 self,
                 EvalError::InternalError(_)
@@ -145,6 +149,9 @@ impl EvalError {
             EvalError::NotAProcedure(_) => ErrorKind::Application,
             EvalError::WrongArity { .. } => ErrorKind::Arity,
             EvalError::InvalidSyntax(_) => ErrorKind::Syntax,
+            // Syntax is for *reporting* only: catchability is decided by
+            // stage (see is_catchable's blacklist), not by this kind, so
+            // ErrorKind::is_catchable must not be consulted for this variant.
             EvalError::DesugarError(_) => ErrorKind::Syntax,
             EvalError::TypeError(_) => ErrorKind::Type,
             EvalError::DivisionByZero => ErrorKind::Domain,

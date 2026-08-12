@@ -104,12 +104,9 @@ fn display_tagged(tv: TaggedValue, heap: &RefCell<patina_core::heap::Heap>) -> S
 /// rejecting a program before it runs while the other fails it at run time is
 /// a real divergence, not a wording difference.
 ///
-/// Two buckets is the finest split the VM supports today: its structured
-/// `VmError` is flattened to a string at the `Backend` boundary
-/// (`From<VmError> for VmBackendError` — forced, because `Backend::Error`
-/// must be `Send + Sync` and `VmError` holds `Symbol = Rc<str>`), so
-/// per-variant classes stop existing there. Refining this split means
-/// carrying a class across that boundary first.
+/// Two buckets is all the VM's `Backend` boundary preserves today — see
+/// `VmBackendError`, whose `Runtime` variant carries only a rendered string.
+/// Refining this split means carrying a class across that boundary first.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ErrorClass {
     /// The pipeline rejected the program before it ran: lex, parse, desugar,
@@ -127,15 +124,26 @@ trait ClassifyError {
 }
 
 impl ClassifyError for patina_runtime::EvalError {
-    // `Backend::eval` desugars internally, so the tree-walker's before-run
-    // rejections arrive as `EvalError::DesugarError` rather than through
-    // `InterpreterError`'s frontend variants. Everything else comes out of
-    // the running evaluator.
+    // Desugar failures arrive here rather than via `InterpreterError::Desugar`
+    // — see `EvalError::DesugarError`. Matched exhaustively so adding a
+    // variant forces a classification decision instead of silently defaulting
+    // to AtRuntime.
     fn class(&self) -> ErrorClass {
+        use patina_runtime::EvalError::*;
         match self {
-            patina_runtime::EvalError::WithLocation { error, .. } => error.class(),
-            patina_runtime::EvalError::DesugarError(_) => ErrorClass::BeforeRun,
-            _ => ErrorClass::AtRuntime,
+            WithLocation { error, .. } => error.class(),
+            DesugarError(_) => ErrorClass::BeforeRun,
+            UndefinedVariable(_)
+            | NotAProcedure(_)
+            | WrongArity { .. }
+            | InvalidSyntax(_)
+            | TypeError(_)
+            | DivisionByZero
+            | IndexOutOfBounds(_)
+            | IOError(_)
+            | InternalError(_)
+            | ContinuationEscape
+            | SchemeException { .. } => ErrorClass::AtRuntime,
         }
     }
 }
@@ -237,13 +245,11 @@ fn expect_value(which: Which, code: &str, expected: &str, mode: Mode) {
     }
 }
 
-/// Assert every selected backend rejects `code` — at the same stage.
+/// Assert every selected backend rejects `code` — at the same [`ErrorClass`].
 ///
 /// One backend erroring where the other succeeds is itself a divergence — the
 /// exact shape of the control-operator cluster in Track Q §1.2 — so this is a
-/// stronger check than the single-backend version it replaces. When both
-/// reject, their [`ErrorClass`]es must also agree: "both fail, for different
-/// kinds of reason" is mode drift, not a pass (audit D3).
+/// stronger check than the single-backend version it replaces.
 fn expect_error(which: Which, code: &str, mode: Mode) {
     let mut failures = Vec::new();
     for (backend, outcome) in outcomes(which, code, mode) {
@@ -252,13 +258,18 @@ fn expect_error(which: Which, code: &str, mode: Mode) {
             Err(e) => failures.push((backend, e)),
         }
     }
-    if let [(b1, e1), (b2, e2)] = &failures[..] {
-        assert_eq!(
-            e1.class, e2.class,
-            "\nbackends both fail, but at different stages\nProgram:\n{code}\n\
-             [{b1}] {:?}: {}\n[{b2}] {:?}: {}",
-            e1.class, e1.message, e2.class, e2.message
-        );
+    // Every backend must reject at the same stage as the first — written over
+    // the rest of the list, not a two-element pattern, so a third backend
+    // joins the check instead of silently disabling it.
+    if let Some(((b1, e1), rest)) = failures.split_first() {
+        for (b2, e2) in rest {
+            assert_eq!(
+                e1.class, e2.class,
+                "\nbackends both fail, but at different stages\nProgram:\n{code}\n\
+                 [{b1}] {:?}: {}\n[{b2}] {:?}: {}",
+                e1.class, e1.message, e2.class, e2.message
+            );
+        }
     }
 }
 
