@@ -112,9 +112,11 @@ impl<'a> CpsEvaluator<'a> {
                 (detail.kind.to_exception_kind(), msg)
             }
 
-            // Internal errors and continuation escapes are not catchable
-            // (handled by is_catchable() check above)
-            EvalError::InternalError(_) | EvalError::ContinuationEscape => {
+            // Internal errors, continuation escapes, and desugar rejections
+            // are not catchable (handled by is_catchable() check above)
+            EvalError::InternalError(_)
+            | EvalError::ContinuationEscape
+            | EvalError::DesugarError(_) => {
                 unreachable!("Non-catchable errors should have been filtered")
             }
         };

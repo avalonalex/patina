@@ -16,6 +16,7 @@
 //! - **Non-catchable**: Stay in Rust, cannot be caught in Scheme
 //!   - `InternalError`: Interpreter bugs
 //!   - `ContinuationEscape`: Control flow mechanism
+//!   - `DesugarError`: The program was rejected before it ran
 
 use patina_core::error::SourceLocation;
 use patina_core::{ErrorDetail, ErrorKind, ExceptionKind};
@@ -34,6 +35,22 @@ pub enum EvalError {
 
     #[error("Invalid syntax: {0}")]
     InvalidSyntax(String),
+
+    /// The desugarer rejected the form before evaluation began.
+    ///
+    /// `Backend::eval` receives raw datums and desugars them inside the
+    /// backend, so a desugar failure has to travel through `EvalError`. This
+    /// variant keeps its identity as a before-run rejection — wrapping it in
+    /// `InternalError` (as the backend once did) mis-states the stage and
+    /// reads as an interpreter bug. It is non-catchable because no handler
+    /// can be installed before the program runs.
+    ///
+    /// **Produced only at the `Backend::eval` entry point.** A desugar
+    /// failure reached from *inside* a running program — the `eval`
+    /// primitive — is a runtime failure: use the catchable `InvalidSyntax`
+    /// there, as the VM's equivalent path does.
+    #[error("Desugar error: {0}")]
+    DesugarError(String),
 
     #[error("Type error: {0}")]
     TypeError(String),
@@ -118,7 +135,9 @@ impl EvalError {
             EvalError::WithLocation { error, .. } => error.is_catchable(),
             _ => !matches!(
                 self,
-                EvalError::InternalError(_) | EvalError::ContinuationEscape
+                EvalError::InternalError(_)
+                    | EvalError::ContinuationEscape
+                    | EvalError::DesugarError(_)
             ),
         }
     }
@@ -130,6 +149,10 @@ impl EvalError {
             EvalError::NotAProcedure(_) => ErrorKind::Application,
             EvalError::WrongArity { .. } => ErrorKind::Arity,
             EvalError::InvalidSyntax(_) => ErrorKind::Syntax,
+            // Syntax is for *reporting* only: catchability is decided by
+            // stage (see is_catchable's blacklist), not by this kind, so
+            // ErrorKind::is_catchable must not be consulted for this variant.
+            EvalError::DesugarError(_) => ErrorKind::Syntax,
             EvalError::TypeError(_) => ErrorKind::Type,
             EvalError::DivisionByZero => ErrorKind::Domain,
             EvalError::IndexOutOfBounds(_) => ErrorKind::Bounds,
