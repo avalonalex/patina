@@ -21,7 +21,7 @@
 //! A known divergence is declared with [`assert_divergence`], which pins the
 //! working backend's answer *and* requires the other to still fail:
 //!
-//!     assert_divergence(code, On::Vm, "(1 2)", "PRD/bugs/SOME_BUG.md");
+//!     assert_divergence(code, On::Vm, "(1 2)", ErrorClass::AtRuntime, "PRD/bugs/SOME_BUG.md");
 //!
 //! Fixing the bug makes that test fail, which is the point — the quarantine
 //! retires itself instead of outliving the defect. `rg assert_divergence
@@ -33,7 +33,7 @@
 #![allow(unused_macros)]
 
 use patina_core::tagged_value::TaggedValue;
-use patina_interpreter::{Interpreter, TreeWalkInterpreter};
+use patina_interpreter::{Interpreter, InterpreterError, TreeWalkInterpreter};
 use patina_primitives::primitives::io::datum_writer::format_write_tagged;
 use patina_runtime::Backend;
 use patina_vm::VmBackend;
@@ -94,9 +94,74 @@ fn display_tagged(tv: TaggedValue, heap: &RefCell<patina_core::heap::Heap>) -> S
     format_write_tagged(tv, heap)
 }
 
+// ─── Error classes ───────────────────────────────────────────────────────────
+
+/// The coarse class of a failure, compared between backends (audit D3).
+///
+/// Error *text* is deliberately not compared: the backends legitimately word
+/// the same failure differently, so pinning prose would turn every message
+/// improvement into a test break. The *stage* is compared — one backend
+/// rejecting a program before it runs while the other fails it at run time is
+/// a real divergence, not a wording difference.
+///
+/// Two buckets is the finest split the VM supports today: its structured
+/// `VmError` is flattened to a string at the `Backend` boundary
+/// (`From<VmError> for VmBackendError` — forced, because `Backend::Error`
+/// must be `Send + Sync` and `VmError` holds `Symbol = Rc<str>`), so
+/// per-variant classes stop existing there. Refining this split means
+/// carrying a class across that boundary first.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ErrorClass {
+    /// The pipeline rejected the program before it ran: lex, parse, desugar,
+    /// or VM compile.
+    BeforeRun,
+    /// The program was accepted and failed during evaluation.
+    AtRuntime,
+}
+
+/// How a backend's error maps onto [`ErrorClass`]. Implemented per concrete
+/// error type because the class is no longer recoverable from the rendered
+/// message.
+trait ClassifyError {
+    fn class(&self) -> ErrorClass;
+}
+
+impl ClassifyError for patina_runtime::EvalError {
+    // `Backend::eval` desugars internally, so the tree-walker's before-run
+    // rejections arrive as `EvalError::DesugarError` rather than through
+    // `InterpreterError`'s frontend variants. Everything else comes out of
+    // the running evaluator.
+    fn class(&self) -> ErrorClass {
+        match self {
+            patina_runtime::EvalError::WithLocation { error, .. } => error.class(),
+            patina_runtime::EvalError::DesugarError(_) => ErrorClass::BeforeRun,
+            _ => ErrorClass::AtRuntime,
+        }
+    }
+}
+
+impl ClassifyError for patina_vm::VmBackendError {
+    fn class(&self) -> ErrorClass {
+        match self {
+            patina_vm::VmBackendError::Compile(_) | patina_vm::VmBackendError::Desugar(_) => {
+                ErrorClass::BeforeRun
+            }
+            patina_vm::VmBackendError::Runtime { .. } => ErrorClass::AtRuntime,
+        }
+    }
+}
+
+/// A failure with its coarse class kept next to the rendered message. The
+/// class is asserted; the message is only ever shown.
+#[derive(Debug)]
+struct TestError {
+    class: ErrorClass,
+    message: String,
+}
+
 /// What one backend did with a program: the `write`-formatted value, or the
-/// error rendered as a string.
-type Outcome = Result<String, String>;
+/// classified error.
+type Outcome = Result<String, TestError>;
 
 /// Whether the code is a whole program (`eval_program`) or a single
 /// expression (`eval_str`). The two entry points differ in how they treat
@@ -112,14 +177,28 @@ enum Mode {
 /// Generic over `B: Backend` — `global_env()` is on the trait and
 /// `display_tagged` is the same writer for both backends, so one body serves
 /// the tree-walker and the VM.
-fn run_on<B: Backend>(interp: Interpreter<B>, code: &str, mode: Mode) -> Outcome {
+fn run_on<B: Backend>(interp: Interpreter<B>, code: &str, mode: Mode) -> Outcome
+where
+    B::Error: ClassifyError,
+{
     let result = match mode {
         Mode::Expr => interp.eval_str(code),
         Mode::Program => interp.eval_program(code),
     };
     match result {
         Ok(tv) => Ok(display_tagged(tv, interp.backend().global_env().heap())),
-        Err(e) => Err(e.to_string()),
+        Err(e) => {
+            let class = match &e {
+                InterpreterError::Lex(_)
+                | InterpreterError::Parse(_)
+                | InterpreterError::Desugar(_) => ErrorClass::BeforeRun,
+                InterpreterError::Backend(backend_error) => backend_error.class(),
+            };
+            Err(TestError {
+                class,
+                message: e.to_string(),
+            })
+        }
     }
 }
 
@@ -150,21 +229,36 @@ fn expect_value(which: Which, code: &str, expected: &str, mode: Mode) {
                 actual, expected,
                 "\n[{backend}] wrong result\nProgram:\n{code}\nExpected: {expected}\nGot: {actual}"
             ),
-            Err(e) => panic!("\n[{backend}] failed to evaluate\nProgram:\n{code}\nError: {e}"),
+            Err(e) => panic!(
+                "\n[{backend}] failed to evaluate\nProgram:\n{code}\nError: {}",
+                e.message
+            ),
         }
     }
 }
 
-/// Assert every selected backend rejects `code`.
+/// Assert every selected backend rejects `code` — at the same stage.
 ///
 /// One backend erroring where the other succeeds is itself a divergence — the
 /// exact shape of the control-operator cluster in Track Q §1.2 — so this is a
-/// stronger check than the single-backend version it replaces.
+/// stronger check than the single-backend version it replaces. When both
+/// reject, their [`ErrorClass`]es must also agree: "both fail, for different
+/// kinds of reason" is mode drift, not a pass (audit D3).
 fn expect_error(which: Which, code: &str, mode: Mode) {
+    let mut failures = Vec::new();
     for (backend, outcome) in outcomes(which, code, mode) {
-        if let Ok(value) = outcome {
-            panic!("\n[{backend}] expected an error\nProgram:\n{code}\nGot: {value}");
+        match outcome {
+            Ok(value) => panic!("\n[{backend}] expected an error\nProgram:\n{code}\nGot: {value}"),
+            Err(e) => failures.push((backend, e)),
         }
+    }
+    if let [(b1, e1), (b2, e2)] = &failures[..] {
+        assert_eq!(
+            e1.class, e2.class,
+            "\nbackends both fail, but at different stages\nProgram:\n{code}\n\
+             [{b1}] {:?}: {}\n[{b2}] {:?}: {}",
+            e1.class, e1.message, e2.class, e2.message
+        );
     }
 }
 
@@ -182,9 +276,10 @@ pub fn assert_eval_error(expr: &str) {
 }
 
 /// Pin a **known divergence** between the backends: `works_on` must produce
-/// `expected`, and the other backend must still fail. `tracking` names the
-/// document that records the bug — a mandatory argument, so a quarantine
-/// cannot be written without saying where it is tracked.
+/// `expected`, and the other backend must still fail **at the recorded
+/// stage** (`broken_fails`). `tracking` names the document that records the
+/// bug — a mandatory argument, so a quarantine cannot be written without
+/// saying where it is tracked.
 ///
 /// This is the only way to opt a test out of both-backends coverage, and it is
 /// designed to **fail when the bug is fixed**: repairing the broken backend
@@ -192,12 +287,22 @@ pub fn assert_eval_error(expr: &str) {
 /// call with a plain [`assert_program_eval_to`]. Asserting only the working
 /// side would let a quarantine outlive its bug forever, which is how an
 /// exception list becomes a permanent excuse.
-pub fn assert_divergence(code: &str, works_on: On, expected: &str, tracking: &str) {
+///
+/// The pinned [`ErrorClass`] closes the other escape (audit D3): without it,
+/// *any* failure satisfied the quarantine, so a new, unrelated bug could
+/// silently replace the recorded one and hide behind it.
+pub fn assert_divergence(
+    code: &str,
+    works_on: On,
+    expected: &str,
+    broken_fails: ErrorClass,
+    tracking: &str,
+) {
     expect_value(works_on.working(), code, expected, Mode::Program);
 
     for (backend, outcome) in outcomes(works_on.broken(), code, Mode::Program) {
-        if let Ok(value) = outcome {
-            panic!(
+        match outcome {
+            Ok(value) => panic!(
                 "\n[{backend}] NO LONGER DIVERGES — it now returns {value}.\n\
                  \n\
                  This quarantine has done its job. Replace the assert_divergence \
@@ -206,7 +311,16 @@ pub fn assert_divergence(code: &str, works_on: On, expected: &str, tracking: &st
                  so both backends are held to the same expectation, and update \
                  {tracking}.\n\
                  \nProgram:\n{code}"
-            );
+            ),
+            Err(e) => assert_eq!(
+                e.class, broken_fails,
+                "\n[{backend}] still fails, but at a different stage \
+                 ({broken_fails:?} recorded, now {:?}): {}\n\
+                 The quarantined failure changed mode — check whether the \
+                 original bug (see {tracking}) was replaced by a new one, and \
+                 re-record the class if the change is understood.\nProgram:\n{code}",
+                e.class, e.message
+            ),
         }
     }
 }
@@ -224,14 +338,18 @@ pub fn eval_program(code: &str) -> String {
     // divergence — report both errors, since the two backends can fail for
     // different reasons and showing only one hides half the evidence.
     if let (Err(a), Err(b)) = (&tw, &vm) {
-        panic!("\nFailed to evaluate program:\n{code}\ntree-walker: {a}\nvm: {b}");
+        panic!(
+            "\nFailed to evaluate program:\n{code}\ntree-walker: {}\nvm: {}",
+            a.message, b.message
+        );
     }
 
-    // Agreement is on *values*: `expect_error` deliberately does not compare
-    // error text, so neither does this.
+    // Agreement is on *values*: error text is deliberately not compared (see
+    // `ErrorClass`), and the class needs no check here because both-failing
+    // already panicked above.
     let show = |o: &Outcome| match o {
         Ok(v) => v.clone(),
-        Err(e) => format!("errored: {e}"),
+        Err(e) => format!("errored: {}", e.message),
     };
     assert!(
         tw.as_ref().ok() == vm.as_ref().ok(),
@@ -248,7 +366,7 @@ pub fn eval_program(code: &str) -> String {
 pub fn eval_program_tree_walker(code: &str) -> String {
     match run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program) {
         Ok(v) => v,
-        Err(e) => panic!("Failed to evaluate program: {e}\n{code}"),
+        Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
     }
 }
 
@@ -257,7 +375,7 @@ pub fn eval_program_tree_walker(code: &str) -> String {
 pub fn eval_program_vm(code: &str) -> String {
     match run_on(Interpreter::new(VmBackend::new()), code, Mode::Program) {
         Ok(v) => v,
-        Err(e) => panic!("Failed to evaluate program: {e}\n{code}"),
+        Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
     }
 }
 

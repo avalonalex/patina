@@ -35,6 +35,16 @@ pub enum EvalError {
     #[error("Invalid syntax: {0}")]
     InvalidSyntax(String),
 
+    /// The desugarer rejected the form before evaluation began.
+    ///
+    /// `Backend::eval` receives raw datums and desugars them inside the
+    /// backend, so a desugar failure has to travel through `EvalError`. This
+    /// variant keeps its identity as a before-run rejection — wrapping it in
+    /// `InternalError` (as the backend once did) mis-states the stage and
+    /// reads as an interpreter bug.
+    #[error("Desugar error: {0}")]
+    DesugarError(String),
+
     #[error("Type error: {0}")]
     TypeError(String),
 
@@ -116,9 +126,14 @@ impl EvalError {
     pub fn is_catchable(&self) -> bool {
         match self {
             EvalError::WithLocation { error, .. } => error.is_catchable(),
+            // DesugarError happens before evaluation starts, so no handler
+            // can be installed when it fires; keep it non-catchable like the
+            // InternalError it used to be wrapped in.
             _ => !matches!(
                 self,
-                EvalError::InternalError(_) | EvalError::ContinuationEscape
+                EvalError::InternalError(_)
+                    | EvalError::ContinuationEscape
+                    | EvalError::DesugarError(_)
             ),
         }
     }
@@ -130,6 +145,7 @@ impl EvalError {
             EvalError::NotAProcedure(_) => ErrorKind::Application,
             EvalError::WrongArity { .. } => ErrorKind::Arity,
             EvalError::InvalidSyntax(_) => ErrorKind::Syntax,
+            EvalError::DesugarError(_) => ErrorKind::Syntax,
             EvalError::TypeError(_) => ErrorKind::Type,
             EvalError::DivisionByZero => ErrorKind::Domain,
             EvalError::IndexOutOfBounds(_) => ErrorKind::Bounds,

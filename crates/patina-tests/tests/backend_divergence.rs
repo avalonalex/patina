@@ -44,6 +44,7 @@ fn callcc_bound_with_define() {
         "(define f call/cc) (f (lambda (k) 1))",
         On::Vm,
         "1",
+        ErrorClass::AtRuntime,
         CONTROL_OPS,
     );
 }
@@ -57,6 +58,7 @@ fn callcc_passed_to_higher_order_procedure() {
         "(map (lambda (f) (f (lambda (k) 6))) (list call/cc))",
         On::Vm,
         "(6)",
+        ErrorClass::AtRuntime,
         CONTROL_OPS,
     );
 }
@@ -76,6 +78,7 @@ fn apply_dynamic_wind() {
         "#,
         On::TreeWalker,
         "2",
+        ErrorClass::AtRuntime,
         CONTROL_OPS,
     );
 }
@@ -95,6 +98,7 @@ fn apply_with_exception_handler() {
         "#,
         On::TreeWalker,
         "43",
+        ErrorClass::AtRuntime,
         CONTROL_OPS,
     );
 }
@@ -114,6 +118,7 @@ fn callcc_multi_value_through_call_with_values() {
         "#,
         On::Vm,
         "(1 2)",
+        ErrorClass::AtRuntime,
         CALLCC_MULTI_VALUES,
     );
 }
@@ -132,6 +137,7 @@ fn callcc_abort_pattern_through_call_with_values() {
         "#,
         On::Vm,
         "(cars () cdrs ())",
+        ErrorClass::AtRuntime,
         CALLCC_MULTI_VALUES,
     );
 }
@@ -164,6 +170,7 @@ fn reentered_continuation_keeps_exception_handler() {
         "#,
         On::Vm,
         "(second-pass 42)",
+        ErrorClass::AtRuntime,
         HANDLER_REENTRY,
     );
 }

@@ -108,9 +108,9 @@ impl TreeWalker {
         let internal_heap = self.evaluator.global_env.heap();
         let desugarer = Desugarer::with_env_and_source_map(env.clone(), source_map.clone());
 
-        let core_expr = desugarer.desugar_tagged(expr, internal_heap).map_err(|e| {
-            EvalError::InternalError(format!("Failed to desugar expression: {}", e))
-        })?;
+        let core_expr = desugarer
+            .desugar_tagged(expr, internal_heap)
+            .map_err(|e| EvalError::DesugarError(e.to_string()))?;
 
         eval_cps(&core_expr, env.clone(), &self.evaluator)
     }
@@ -131,9 +131,9 @@ impl Backend for TreeWalker {
         let internal_heap = self.evaluator.global_env.heap();
         let desugarer = Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone());
 
-        let core_expr = desugarer.desugar_tagged(expr, internal_heap).map_err(|e| {
-            EvalError::InternalError(format!("Failed to desugar expression: {}", e))
-        })?;
+        let core_expr = desugarer
+            .desugar_tagged(expr, internal_heap)
+            .map_err(|e| EvalError::DesugarError(e.to_string()))?;
 
         eval_cps(&core_expr, env.clone(), &self.evaluator)
     }
