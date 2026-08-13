@@ -823,6 +823,38 @@ staging `Vec` exists there), which is generational-GC territory
   *replaces* the frame access rather than supplementing it (e.g. frames
   storing a resume pointer rather than an index), not this one.
 
+### P11 — Native sort engine behind `(srfi 132)`  *(future — open only on profile evidence)*
+
+Recorded 2026-08-12 (PR #50), when the bundled SRFI 132 became
+byte-identical to its upstream (provenance-guarded by
+`bundled_provenance.rs`). The reference implementation is portable
+Scheme end to end: `vector-util.scm` reimplements native
+`vector-copy`/`vector-copy!` as interpreted loops, the sorts run as
+Scheme closures per comparison, and quickselect burns a Scheme-level
+MRG32k3a call (bundled `(srfi 27)`) per pivot. Fine for correctness;
+plausibly 10–100× off a native sort if anything hot ever sorts.
+
+**The one rule, from `lib/srfi/132.sld`'s header: swap the engine
+behind the same `.sld`, never fork the files.** Upstream's own
+`(rnrs sorting)` cond-expand branch is the precedent — it substitutes a
+faster engine under the identical API and trims the included files,
+without editing them. A Patina version means native Rust sort
+primitives (registered per the usual three-step recipe) with the `.sld`
+re-exporting them; the bundled reference files stay byte-identical for
+anything not worth a primitive, or get dropped from the includes
+entirely — never patched.
+
+**Gate:** open this only when a profile or benchmark shows sort time —
+e.g. the r7rs-benchmarks `quicksort` lane, or `vector-sort` appearing
+in a §1.6-style profile. Not before: the 221-assertion upstream suite
+runs in 0.24s today, and no known workload sorts on a hot path.
+
+**Bar to clear when it opens:** stability for the `stable` variants,
+the SRFI's side-effect contracts (`vector-sort!` in place,
+`vector-select!` allowed but not required to mutate), and the
+221-assertion upstream suite green on both backends — it validated the
+reference implementation and will validate its replacement.
+
 ---
 
 ## 5. Sequencing within the track
