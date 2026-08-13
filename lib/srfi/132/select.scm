@@ -164,7 +164,7 @@
           ((< size just-sort-it-threshold)
            (vector-ref (vector-sort <? (r7rs-vector-copy v start end)) k))
           (else
-           (let* ((ip (random-int size)) ; PATINA LOCAL EDIT: was random-integer
+           (let* ((ip (random-integer size))
                   (pivot (vector-ref v (+ start ip))))
              (call-with-values
               (lambda () (count-smaller <? pivot v start end 0 0))
@@ -205,7 +205,7 @@
              (values (vector-ref v2 k)
                      (vector-ref v2 (+ k 1)))))
           (else
-           (let* ((ip (random-int size)) ; PATINA LOCAL EDIT: was random-integer
+           (let* ((ip (random-integer size))
                   (pivot (vector-ref v (+ start ip))))
              (call-with-values
               (lambda () (count-smaller <? pivot v start end 0 0))
@@ -229,21 +229,6 @@
                               (k2 (- k count count2)))
                          (copy-bigger! <? pivot v2 0 v start end)
                          (%%vector-select2 <? v2 k2 0 n)))))))))))
-
-;; PATINA LOCAL EDIT: upstream imports (srfi 27) and calls (random-integer n)
-;; at the two pivot-choice sites above. Patina does not provide SRFI 27, so
-;; this linear congruential generator replaces it using only (scheme base)
-;; arithmetic. The state stays within 24 bits, so every intermediate fits in
-;; a fixnum. Quality only affects pivot choice, never correctness. This is
-;; the file's only deviation from upstream; regression-tested by the
-;; >= just-sort-it-threshold cases in crates/patina-tests.
-
-(define random-seed 0)
-
-(define (random-int n)
-  (set! random-seed
-    (modulo (+ (* random-seed 1140671485) 12820163) #x1000000))
-  (remainder random-seed n))
 
 ;;; Counts how many elements within the range are less than the pivot
 ;;; and how many are equal to the pivot, returning both of those counts.

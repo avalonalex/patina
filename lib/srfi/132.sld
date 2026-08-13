@@ -9,30 +9,23 @@
 ;; its use." Each file carries its own notice where upstream has one;
 ;; select.scm is Will Clinger's 2016 addition and has none upstream either.
 ;;
-;; Deviations from upstream (rule: match upstream; mark what cannot match):
+;; Every included .scm file is byte-identical to upstream (verified against
+;; the pinned commit, 2026-08-12; enforced by
+;; crates/patina-tests/tests/bundled_provenance.rs). The one deviation is
+;; this .sld itself, which replaces upstream's sorting/132.sld: upstream
+;; splits the library in two and cond-expands on (rnrs sorting), which
+;; Patina does not provide, so this is a single library over the same source
+;; files, with upstream's own import structure — the (except ...)/(rename ...)
+;; dance that lets vector-util.scm shadow vector-copy/vector-copy!, and
+;; (only (srfi 27) random-integer) for select.scm's pivot choice. The assert
+;; shim below is copied from upstream's own no-(rnrs base) branch.
 ;;
-;; - This .sld replaces upstream's sorting/132.sld. Upstream splits the
-;;   library in two, cond-expands on (rnrs sorting), and imports
-;;   (only (srfi 27) random-integer); Patina provides neither R6RS libraries
-;;   nor SRFI 27, so this is a single library over the same source files,
-;;   with the same (except ...)/(rename ...) import structure upstream uses
-;;   to let vector-util.scm shadow vector-copy/vector-copy!. The assert shim
-;;   below is copied from upstream's own no-(rnrs base) branch.
-;;
-;; - select.scm carries the package's only source edit — a (scheme base) RNG
-;;   replacing SRFI 27's random-integer — at a ";; PATINA LOCAL EDIT" marker.
-;;   Every other included .scm file is byte-identical to upstream
-;;   (verified against the pinned commit, 2026-08-12).
-;;
-;; Long-run: this arrangement — byte-identical sources behind rename-imports,
-;; with the package's pre-R7RS vector helpers shadowing the native ones — is
-;; worth keeping only while this reference implementation is the bundled
-;; sort. Two retirement paths, both better than accumulating edits here:
-;; if Patina gains (srfi 27), drop select.scm's edit and the tree matches
-;; upstream completely; if sort performance ever matters (vector-util.scm
-;; reimplements native vector-copy in portable Scheme), swap the whole
-;; engine — native primitives behind this same .sld, as upstream's own
-;; (rnrs sorting) branch does — rather than forking these files.
+;; Long-run: worth keeping while this reference implementation is the bundled
+;; sort. If sort performance ever matters (vector-util.scm reimplements
+;; native vector-copy in portable Scheme, and quickselect burns a Scheme-level
+;; MRG32k3a call per pivot), swap the whole engine — native primitives behind
+;; this same .sld, as upstream's own (rnrs sorting) branch does — rather than
+;; forking these files.
 
 (define-library (srfi 132)
   (import (except (scheme base) vector-copy vector-copy!)
@@ -40,7 +33,8 @@
                   (vector-copy  r7rs-vector-copy)
                   (vector-copy! r7rs-vector-copy!)
                   (vector-fill! r7rs-vector-fill!))
-          (scheme cxr))
+          (scheme cxr)
+          (only (srfi 27) random-integer))
 
   (export
    list-sorted? vector-sorted?

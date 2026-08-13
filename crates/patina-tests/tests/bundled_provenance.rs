@@ -14,8 +14,9 @@
 //!   1. Restore upstream if at all possible (the provenance records name the
 //!      pinned tarballs/commit to diff against).
 //!   2. If not possible, mark the edit site with `;; PATINA LOCAL EDIT:` and
-//!      describe the deviation in `lib/chibi/PROVENANCE.md` or the library's
-//!      `.sld` header.
+//!      describe the deviation in the tree's provenance home
+//!      (`lib/chibi/PROVENANCE.md`, `lib/srfi/PROVENANCE.md`, or the
+//!      library's `.sld` header).
 //!   3. Re-run with `--nocapture`; the failure message prints the new hash.
 
 use std::path::PathBuf;
@@ -39,10 +40,12 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/chibi/term/ansi.sld", 0xcb7a30ac04c2fb00),
     ("lib/chibi/test.scm", 0x41e9de8d4b7cc1ec),
     ("lib/chibi/test.sld", 0xf810b0f46bc155d7),
-    ("lib/srfi/132.sld", 0x4edefd4109baeabb),
+    ("lib/srfi/27.scm", 0xf12c3dd28221b826),
+    ("lib/srfi/27.sld", 0xa55b16b061696cdf),
+    ("lib/srfi/132.sld", 0x7add8e7cd811f73a),
     ("lib/srfi/132/delndups.scm", 0xabcb04a8827d44f4),
     ("lib/srfi/132/lmsort.scm", 0xf84cd67deda00bb8),
-    ("lib/srfi/132/select.scm", 0xf32fd7edae9559d8),
+    ("lib/srfi/132/select.scm", 0x9c14f2f4637715a2),
     ("lib/srfi/132/sort.scm", 0xf50fca73a351fa49),
     ("lib/srfi/132/sortp.scm", 0xa2f0c01190fcbc5a),
     ("lib/srfi/132/vector-util.scm", 0x5647564455a96fbf),
