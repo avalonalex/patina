@@ -20,12 +20,9 @@
 ;; (only (srfi 27) random-integer) for select.scm's pivot choice. The assert
 ;; shim below is copied from upstream's own no-(rnrs base) branch.
 ;;
-;; Long-run: worth keeping while this reference implementation is the bundled
-;; sort. If sort performance ever matters (vector-util.scm reimplements
-;; native vector-copy in portable Scheme, and quickselect burns a Scheme-level
-;; MRG32k3a call per pivot), swap the whole engine — native primitives behind
-;; this same .sld, as upstream's own (rnrs sorting) branch does — rather than
-;; forking these files.
+;; Long-run: if sort performance ever matters, swap the engine behind this
+;; same .sld — never fork these files. Evidence, gate, and bar:
+;; PRD/TRACK_P_PERFORMANCE_PRD.md item P11.
 
 (define-library (srfi 132)
   (import (except (scheme base) vector-copy vector-copy!)

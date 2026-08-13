@@ -1,25 +1,19 @@
-//! Pin every bundled third-party library file, so an unrecorded edit fails.
+//! Pin every bundled file claimed byte-identical to upstream, so an
+//! unrecorded edit fails. The rule being enforced lives in
+//! `lib/chibi/PROVENANCE.md` § The rule; the failure message below is the
+//! complete update procedure.
 //!
-//! The rule (audit 2026-08-10, group E; see `lib/chibi/PROVENANCE.md`):
-//! bundled library files **match upstream**. When a deviation is unavoidable,
-//! the edit site carries a `;; PATINA LOCAL EDIT:` marker and the tree's
-//! provenance record describes it. This test is what makes the rule stick —
-//! editing a pinned file without updating the hash *and* the record turns
-//! into a test failure instead of a silent fork.
+//! The adapted ports one directory over (SRFI 1, 69, 113, 128, 133, 158, …)
+//! are deliberately not pinned — they are not byte-identical to anything;
+//! see `lib/srfi/PROVENANCE.md` for that boundary.
 //!
 //! The hash is FNV-1a 64 — not tamper-proof, just drift-proof, and stable by
 //! specification (unlike `DefaultHasher`), with no new dependency.
-//!
-//! To update after a *deliberate* change:
-//!   1. Restore upstream if at all possible (the provenance records name the
-//!      pinned tarballs/commit to diff against).
-//!   2. If not possible, mark the edit site with `;; PATINA LOCAL EDIT:` and
-//!      describe the deviation in the tree's provenance home
-//!      (`lib/chibi/PROVENANCE.md`, `lib/srfi/PROVENANCE.md`, or the
-//!      library's `.sld` header).
-//!   3. Re-run with `--nocapture`; the failure message prints the new hash.
 
-use std::path::PathBuf;
+mod common;
+use common::repo_root;
+use std::collections::BTreeSet;
+use std::path::Path;
 
 fn fnv1a(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -42,7 +36,10 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/chibi/test.sld", 0xf810b0f46bc155d7),
     ("lib/srfi/27.scm", 0xf12c3dd28221b826),
     ("lib/srfi/27.sld", 0xa55b16b061696cdf),
-    ("lib/srfi/132.sld", 0x7add8e7cd811f73a),
+    // Unlike every other row, 132.sld is Patina-authored with no upstream to
+    // match — the pin freezes the tree's provenance *record*, so editing the
+    // header is a deliberate act like editing the files it describes.
+    ("lib/srfi/132.sld", 0xe954f0fc6682a300),
     ("lib/srfi/132/delndups.scm", 0xabcb04a8827d44f4),
     ("lib/srfi/132/lmsort.scm", 0xf84cd67deda00bb8),
     ("lib/srfi/132/select.scm", 0x9c14f2f4637715a2),
@@ -56,12 +53,24 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/132/vqsort3.scm", 0xa62eaad1e7385451),
 ];
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .to_path_buf()
+/// The trees whose `.scm`/`.sld` files must ALL appear in [`PINNED`]. The
+/// provenance records say "every file in this tree"; without this, a file
+/// *added* to a pinned tree would be unguarded while the records stay green.
+const PINNED_TREES: &[&str] = &["lib/chibi", "lib/srfi/132"];
+
+fn scheme_files_under(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
+    for entry in std::fs::read_dir(dir).expect("pinned tree should be readable") {
+        let path = entry.expect("readable dir entry").path();
+        if path.is_dir() {
+            scheme_files_under(root, &path, out);
+        } else if matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("scm") | Some("sld")
+        ) {
+            let rel = path.strip_prefix(root).expect("under repo root");
+            out.insert(rel.to_string_lossy().into_owned());
+        }
+    }
 }
 
 #[test]
@@ -81,9 +90,33 @@ fn bundled_files_match_their_provenance_records() {
     assert!(
         drifted.is_empty(),
         "bundled files changed without their provenance being updated:\n  {}\n\
-         Restore upstream if possible; otherwise mark the edit with\n\
-         ';; PATINA LOCAL EDIT:', record it (lib/chibi/PROVENANCE.md or the\n\
-         .sld header), and update the pinned hash in this file.",
+         Restore upstream if possible (the provenance records name the pinned\n\
+         tarballs/commit to diff against). Otherwise: mark the edit site with\n\
+         ';; PATINA LOCAL EDIT:', describe the deviation in the tree's\n\
+         provenance home (lib/chibi/PROVENANCE.md, lib/srfi/PROVENANCE.md, or\n\
+         the library's .sld header), and update the pinned hash above.",
         drifted.join("\n  ")
+    );
+}
+
+#[test]
+fn pinned_trees_have_no_unpinned_files() {
+    let root = repo_root();
+    let mut on_disk = BTreeSet::new();
+    for tree in PINNED_TREES {
+        scheme_files_under(&root, &root.join(tree), &mut on_disk);
+    }
+    // Prefix with the separator so "lib/srfi/132.sld" (a Patina-authored
+    // sibling file) does not count as inside the "lib/srfi/132" tree.
+    let pinned: BTreeSet<String> = PINNED
+        .iter()
+        .map(|(p, _)| p.to_string())
+        .filter(|p| PINNED_TREES.iter().any(|t| p.starts_with(&format!("{t}/"))))
+        .collect();
+    assert_eq!(
+        on_disk, pinned,
+        "the pinned trees and the PINNED table disagree — a file was added to\n\
+         (or removed from) a byte-identical tree without updating this guard\n\
+         and the tree's provenance record"
     );
 }

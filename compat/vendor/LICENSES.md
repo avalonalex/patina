@@ -12,7 +12,7 @@ terms are, how each was determined, and what obligations they place on this repo
 | Licence | Packages | Class |
 |---|---|---|
 | BSD | 63 | permissive |
-| MIT | 54 | permissive |
+| MIT | 53 | permissive |
 | SLIB (Aubrey Jaffer) | 44 | **non-standard permissive** |
 | public domain | 17 | permissive |
 | ISC | 5 | permissive |
