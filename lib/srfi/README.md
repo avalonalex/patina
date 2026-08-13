@@ -55,7 +55,7 @@ to the Patina project.
 - SRFI 133: Removed form-feed characters (now supported by lexer, but kept removed for cleanliness)
 - SRFI 158: carries an inline simplified `any` at the top of `srfi-158-impl.scm`
 - SRFI 33/60/132/143/151: carry the bug fixes from the 2026-08-10 post-merge
-  audit (`PRD/AUDIT_2026_08_10_PRD.md`, group A) — wrong answers found by the
+  audit (`PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md`, group A) — wrong answers found by the
   upstream reference suites, fixed with regression tests
 - This list is best-effort for the adapted ports; only the byte-identical
   trees above are machine-verified against upstream

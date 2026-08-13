@@ -5,7 +5,7 @@
 //! `lib/srfi/132/select.scm`); below that they punt to a full sort. The bundled
 //! reference suite never exceeds ~12 elements, so nothing exercised the
 //! pivot-choosing RNG — which shipped calling unbound identifiers and crashed
-//! every large range (audit item A1, `PRD/AUDIT_2026_08_10_PRD.md`).
+//! every large range (audit item A1, `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md`).
 
 mod common;
 use common::eval_program as eval;

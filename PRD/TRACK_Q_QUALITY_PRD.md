@@ -338,6 +338,6 @@ is the proof that they were needed.
   and it is expected to reach, and stay at, zero. It stands at **7**: the four
   §1.2 control-operator rows, two multi-value continuation cases from
   `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`, and handler loss on
-  continuation re-entry (`PRD/AUDIT_2026_08_10_PRD.md` B3, quarantined
+  continuation re-entry (`PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3, quarantined
   2026-08-10 — previously a comment-only divergence, which is exactly the
   discovery mode this metric exists to end).

@@ -215,7 +215,7 @@ fn test_all_three_libraries_agree() {
     );
 }
 
-/// Audit item A6 (PRD/AUDIT_2026_08_10_PRD.md): an absurd left-shift count must
+/// Audit item A6 (PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md): an absurd left-shift count must
 /// raise a catchable Scheme error. num-bigint allocates the result up front, so
 /// unguarded this was a ~137 GB allocation — a process abort rather than an
 /// error, and inconsistent with the bignum-count rejection beside it.
