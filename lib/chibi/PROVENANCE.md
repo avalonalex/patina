@@ -29,7 +29,9 @@ deliberately-marked local edit, not in silent patches.
 ## The rule (audit 2026-08-10, group E)
 
 Bundled library files **match upstream**. If a change is unavoidable, mark the
-edit site with `;; PATINA LOCAL EDIT:` and record the deviation here (or in
-the library's `.sld` header, as `lib/srfi/132.sld` does) — one home per tree.
-`crates/patina-tests/tests/bundled_provenance.rs` pins every file in this
-tree and in `lib/srfi/132/`, so an unrecorded edit fails the suite.
+edit site with `;; PATINA LOCAL EDIT:` and record the deviation in the tree's
+provenance home — this file, `lib/srfi/PROVENANCE.md`, or the library's `.sld`
+header (as `lib/srfi/132.sld` does); one home per tree. Files claimed
+byte-identical are pinned by
+`crates/patina-tests/tests/bundled_provenance.rs` (its `PINNED` table is the
+authoritative scope), so an unrecorded edit fails the suite.

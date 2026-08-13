@@ -834,8 +834,8 @@ Scheme closures per comparison, and quickselect burns a Scheme-level
 MRG32k3a call (bundled `(srfi 27)`) per pivot. Fine for correctness;
 plausibly 10–100× off a native sort if anything hot ever sorts.
 
-**The one rule, from `lib/srfi/132.sld`'s header: swap the engine
-behind the same `.sld`, never fork the files.** Upstream's own
+**The one rule: swap the engine behind the same `.sld`, never fork the
+files** (`lib/srfi/132.sld`'s header points here). Upstream's own
 `(rnrs sorting)` cond-expand branch is the precedent — it substitutes a
 faster engine under the identical API and trims the included files,
 without editing them. A Patina version means native Rust sort

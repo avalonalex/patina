@@ -80,6 +80,16 @@ impl On {
     }
 }
 
+/// The workspace root, for tests that read repo files (bundled libraries,
+/// upstream suites). Encodes the crates/patina-tests → root distance once.
+pub fn repo_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repo root")
+        .to_path_buf()
+}
+
 /// Format a TaggedValue for display (backend-agnostic).
 fn display_tagged(tv: TaggedValue, heap: &RefCell<patina_core::heap::Heap>) -> String {
     // Unpack multiple values (R7RS: each value displayed on its own line)

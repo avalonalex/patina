@@ -4,11 +4,13 @@
 //! (see `lib/srfi/PROVENANCE.md`); the package ships no test suite, so these
 //! pin its observable behavior. The exact stream values were recorded from
 //! this implementation — MRG32k3a is fully specified, so any change to them
-//! is a generator change, not noise. Every helper runs both backends and
-//! requires them to agree.
+//! is a generator change, not noise. (Known limit: the values pin the port's
+//! arithmetic as-is, faithful bugs included — they were not re-derived from
+//! L'Ecuyer's matrices.) Every helper runs both backends and requires them
+//! to agree.
 
 mod common;
-use common::{assert_program_eval_to, eval_program};
+use common::assert_program_eval_to;
 
 /// `pseudo-randomize!` must select a reproducible, seed-determined stream —
 /// this is SRFI 27's central guarantee, and the exact values pin MRG32k3a.
@@ -60,15 +62,14 @@ fn state_round_trip_replays_the_stream() {
 /// reals land strictly inside (0, 1).
 #[test]
 fn values_respect_their_ranges() {
-    let result = eval_program(
+    assert_program_eval_to(
         "(import (scheme base) (srfi 27)) \
-         (define ok #t) \
-         (do ((i 0 (+ i 1))) ((= i 200)) \
-           (let ((n (random-integer 17)) \
-                 (r (random-real))) \
-             (unless (and (exact? n) (<= 0 n) (< n 17) (< 0 r) (< r 1)) \
-               (set! ok #f)))) \
-         ok",
+         (do ((i 0 (+ i 1)) \
+              (ok #t (and ok \
+                          (let ((n (random-integer 17)) \
+                                (r (random-real))) \
+                            (and (exact? n) (<= 0 n) (< n 17) (< 0 r) (< r 1)))))) \
+             ((= i 200) ok))",
+        "#t",
     );
-    assert_eq!(result, "#t");
 }

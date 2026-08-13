@@ -27,6 +27,9 @@
 //! suite exists; one `#[test]` per suite, so a load failure in one cannot
 //! hide the others.
 
+mod common;
+
+use common::repo_root;
 use patina_interpreter::{Interpreter, TreeWalkInterpreter};
 use patina_primitives::primitives::io::datum_writer::format_display_tagged;
 use patina_runtime::Backend;
@@ -34,12 +37,7 @@ use patina_vm::VmBackend;
 use std::path::PathBuf;
 
 fn upstream_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .join("scheme_tests")
-        .join("upstream")
+    repo_root().join("scheme_tests").join("upstream")
 }
 
 /// Wrap `body` (test forms or a suite's `(run-tests)`) so the program's value
