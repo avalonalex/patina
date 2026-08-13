@@ -6,8 +6,6 @@
 //! - Comparison operations (case-sensitive and case-insensitive)
 //!
 //! Note: UTF-8 conversion happens at I/O boundaries.
-//!
-//! Total: 20 string primitives + 2 helper functions
 
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
@@ -15,15 +13,20 @@ use patina_runtime::SharedHeap;
 
 // ========== TaggedValue Extraction Helpers ==========
 
-/// Get string as Vec<char> for read operations
-fn get_string_as_chars(
+/// Borrow a string's characters for read operations.
+///
+/// Borrowed, not copied: `string-ref` and `string-length` sit inside the
+/// `(scheme base)` higher-order loops, and a per-call copy of the whole
+/// string turned those loops quadratic. Callers that need an owned copy
+/// call `.to_vec()` at their own site.
+fn get_string_as_chars<'h>(
     tv: TaggedValue,
-    heap: &std::cell::Ref<'_, patina_core::Heap>,
+    heap: &'h std::cell::Ref<'_, patina_core::Heap>,
     fn_name: &str,
-) -> Result<Vec<char>, EvalError> {
+) -> Result<&'h [char], EvalError> {
     // Native heap string path
     if tv.is_string() {
-        return Ok(heap.get_string_chars(tv).to_vec());
+        return Ok(heap.get_string_chars(tv));
     }
 
     // Not a string
@@ -303,7 +306,7 @@ where
         let a = get_string_as_chars(args[i], &heap_ref, fn_name)?;
         let b = get_string_as_chars(args[i + 1], &heap_ref, fn_name)?;
 
-        if !cmp(&a, &b) {
+        if !cmp(a, b) {
             return Ok(TaggedValue::FALSE);
         }
     }
@@ -369,8 +372,8 @@ where
         let b_chars = get_string_as_chars(args[i + 1], &heap_ref, fn_name)?;
 
         // Convert Vec<char> to String for case-insensitive comparison
-        let a_str = chars_to_string(&a_chars).to_lowercase();
-        let b_str = chars_to_string(&b_chars).to_lowercase();
+        let a_str = chars_to_string(a_chars).to_lowercase();
+        let b_str = chars_to_string(b_chars).to_lowercase();
 
         if !cmp(&a_str, &b_str) {
             return Ok(TaggedValue::FALSE);
@@ -407,7 +410,7 @@ pub(super) fn substring(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
 
     let heap_ref = heap.borrow();
 
-    let chars = get_string_as_chars(args[0], &heap_ref, "substring")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "substring")?.to_vec();
     let start = get_integer(args[1], &heap_ref, "substring")?;
     let end = get_integer(args[2], &heap_ref, "substring")?;
     drop(heap_ref);
@@ -453,7 +456,7 @@ pub(super) fn string_to_list(
     // Extract chars and indices
     let (chars, start, end) = {
         let heap_ref = heap.borrow();
-        let chars = get_string_as_chars(args[0], &heap_ref, "string->list")?;
+        let chars = get_string_as_chars(args[0], &heap_ref, "string->list")?.to_vec();
 
         let start = if args.len() >= 2 {
             get_integer(args[1], &heap_ref, "string->list")? as usize
@@ -553,7 +556,7 @@ pub(super) fn string_copy(
 
     let heap_ref = heap.borrow();
 
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-copy")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "string-copy")?.to_vec();
 
     if args.len() == 1 {
         // Simple copy
@@ -596,7 +599,7 @@ pub(super) fn string_upcase(
     }
 
     let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-upcase")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "string-upcase")?.to_vec();
     drop(heap_ref);
 
     // Convert to String, uppercase, then back to Vec<char>
@@ -617,7 +620,7 @@ pub(super) fn string_downcase(
     }
 
     let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-downcase")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "string-downcase")?.to_vec();
     drop(heap_ref);
 
     // Convert to String, lowercase, then back to Vec<char>
@@ -645,7 +648,7 @@ pub(super) fn string_foldcase(
     use unicode_casefold::UnicodeCaseFold;
 
     let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-foldcase")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "string-foldcase")?.to_vec();
     drop(heap_ref);
 
     let folded: Vec<char> = chars_to_string(&chars).case_fold().collect();

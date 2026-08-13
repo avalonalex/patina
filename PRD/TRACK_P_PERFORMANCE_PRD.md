@@ -39,6 +39,7 @@ Executed profile-first (macOS `sample`/`samply` on `fib(34)` and `destruc`) rath
 | #157 | Heap-tier handlers take `&[TaggedValue]`; **70 misfiled higher-order handlers reclassified to heap tier**; registration closures → direct fn refs; `call_any`/`call_any_sync` arg copies deleted | **P7 phase 1 as specified** — plus the reclassification the tier split implied (see §P7 findings) | map −6.8%, append −5.4%, fill −5.4%, reverse −6.9%, vectors/sum −11.5%, factorial −4–8%, float_sum −7.9%; fib/tak ±1–2% (layout-scale) |
 | #158 | `CallPrimitive` wired: compile-time resolution of `GlobalRef` callees to registry ids (`primitive_calls.rs`), no callee load / no frame push, tail = `CallPrimitive`+`Return`; redefinition handled by runtime deopt bitset instead of the planned static scan | **P2 items 2–3**, deopt design replaces the spec's shadowing scan (see §P2) | sum −28–33%, map/make/append −21–23%, factorial −13–21%, tak −17%, fib −23% (wall-clock) |
 | #159 | 14 inline opcodes in the dispatch loop (`Add`…`VectorSet`), emitted for exact-arity resolved callees; all fallbacks via `exec_call_primitive`; redefinition design space documented for future work | **P3 as specified** minus dead `Not` (Scheme-defined) | sum −42–46%, vectors/fill −44%, vectors/sum −42%, nqueens/8 −39%, deriv −28–32%, factorial −23–29%, fib −30% / tak −16% (wall-clock). Cumulative with #158, same day: sum 3.2×, nqueens 2.1×, fib 2.0× |
+| #52 (2026-08-12) | Bitwise primitives: all-fixnum i64 fast path (and/ior/xor/not closed over the sign-extended fixnum range; shifts narrow via i128); `(scheme base)` map/for-each/string-map/string-for-each/vector-map/vector-for-each split single-sequence direct loops from the n-ary apply loop; `string-ref`/`string-length` stopped copying the whole string per call (was quadratic in the new loops); four continuation-broken Rust higher-order primitives deleted | **Audit C1–C3** — bitwise fast path is what makes SRFI 143's `fx*` aliases actually fast-fixnum | Interleaved micro A/B: bitwise loop 2.5×, fx loop 2.4×, vector-map 9.8×, string-map 4.7×, single-list map 5.0×; string-map n=160k 2.18s → 0.03s after the string-ref fix |
 
 **Cumulative:** fib(32) 5.68s → 2.37s (**2.4×**); quick r7rs-benchmarks set ~2–2.7× across the board. Standing vs Chibi (same machine): `browse` 2.5× *faster*, `quicksort` 3.6× behind (was 8×), `destruc` 8× behind (was 16×). Full-workload harness runs (validated-correct results, 300s CPU cap): **`compiler` 177.7s, `maze` 150.4s, `matrix` 270.0s — all three now complete under the cap** (all were cap-outs before this wave; `compiler`/`maze`/`matrix` couldn't even *parse* before the #146/#147 lexer fixes). `parsing` still caps out — it is frontend-bound (lexer/parser), not VM-bound.
 
@@ -716,6 +717,12 @@ numeric sign/parity predicates were **implemented in Scheme**
 — LoadGlobal, arity check, register window, frame push, Return — for
 one-instruction work. Call-site counts across the r7rs-benchmarks suite:
 `not` 399, `cadr` 220, `cddr` 91, `caddr` 60, `zero?` 42.
+
+**Exclusion:** higher-order procedures (`map`, `for-each`, and the
+string/vector variants) must stay in Scheme no matter how hot they look — a
+Rust frame drops continuations captured in the callback; see the note at
+`lib/scheme/base/higher_order.scm` and the deletion rationale in
+`crates/patina-runtime/src/stdlib/internal_strings.rs`.
 
 **Landed:** `not` (registry + the `Not` inline opcode P3 specced and
 dropped), all 28 car/cdr compositions — two- through four-deep — via a

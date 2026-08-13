@@ -53,23 +53,23 @@ fn int_result(n: BigInt, heap: &SharedHeap) -> TaggedValue {
 /// complement are *closed* over any power-of-two signed range: the result's
 /// bits above the operands' width are a function of the sign bits alone, so
 /// for fixnum inputs the i64 result equals the infinite-precision result and
-/// is itself a fixnum — no overflow check needed. Returns `None` on the first
-/// non-fixnum argument so the caller falls back to the bignum fold.
+/// is itself a fixnum — no overflow check needed. `identity` is the
+/// operator's identity element, so no first-argument special case is needed
+/// either. Returns `None` on the first non-fixnum argument so the caller
+/// falls back to the bignum fold.
 fn fixnum_fold(
     identity: i64,
     args: &[TaggedValue],
     fx: fn(i64, i64) -> i64,
 ) -> Option<TaggedValue> {
     let mut acc = identity;
-    for (i, arg) in args.iter().enumerate() {
-        let n = arg.as_fixnum()?;
-        acc = if i == 0 { n } else { fx(acc, n) };
+    for arg in args {
+        acc = fx(acc, arg.as_fixnum()?);
     }
     Some(TaggedValue::fixnum(acc))
 }
 
-/// Fold an n-ary bitwise operator over its arguments (bignum slow path —
-/// `fixnum_fold` handles the common all-fixnum case first).
+/// Fold an n-ary bitwise operator over its arguments.
 fn fold(
     name: &'static str,
     identity: i64,
@@ -81,13 +81,15 @@ fn fold(
     if let Some(result) = fixnum_fold(identity, args, fx) {
         return Ok(result);
     }
-    let mut acc = BigInt::from(identity);
-    for (i, arg) in args.iter().enumerate() {
-        let h = heap.borrow();
-        let n = int_arg(name, *arg, &h)?;
-        drop(h);
-        acc = if i == 0 { n } else { op(acc, n) };
+    let Some((first, rest)) = args.split_first() else {
+        return Ok(TaggedValue::fixnum(identity));
+    };
+    let h = heap.borrow();
+    let mut acc = int_arg(name, *first, &h)?;
+    for arg in rest {
+        acc = op(acc, int_arg(name, *arg, &h)?);
     }
+    drop(h);
     Ok(int_result(acc, heap))
 }
 
@@ -211,8 +213,9 @@ fn integer_length(heap: &SharedHeap, args: &[TaggedValue]) -> PrimResult {
 }
 
 fn bit_set_p(heap: &SharedHeap, args: &[TaggedValue]) -> PrimResult {
-    // Fast path: past bit 62 a fixnum is pure sign extension, so clamping the
-    // index to 63 reads the sign bit, which is the infinite-precision answer.
+    // Fast path: bits 60 and above of a fixnum (range ±2^60) are pure sign
+    // extension, so clamping the index to 63 reads the sign bit, which is
+    // the infinite-precision answer.
     if let Some(index) = args[0].as_fixnum()
         && index >= 0
         && let Some(n) = args[1].as_fixnum()

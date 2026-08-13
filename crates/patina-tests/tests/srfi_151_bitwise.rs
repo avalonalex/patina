@@ -61,8 +61,9 @@ fn test_two_complement_semantics() {
     assert_eq!(srfi151("(integer-length 0)"), "0");
 }
 
-/// Must behave identically past the fixnum boundary, since the primitives
-/// promote to bignums rather than special-casing.
+/// Must behave identically past the fixnum boundary. The primitives take an
+/// allocation-free i64 path when every operand is a fixnum and promote to
+/// bignums otherwise, so these pin the slow path and the seam between them.
 #[test]
 fn test_bignum_operands() {
     assert_eq!(
@@ -236,4 +237,50 @@ fn test_arithmetic_shift_rejects_absurd_counts() {
         "100001"
     );
     assert_eq!(srfi151("(arithmetic-shift 123 (- (expt 2 40)))"), "0");
+}
+
+/// Pin the seam between the fixnum fast path and the bignum path (±2^60).
+///
+/// The fast path is sound because and/ior/xor/not are closed over the
+/// sign-extended fixnum range and shifts re-check narrowing — but nothing
+/// else in this suite crosses the boundary, so an edit to either half (or to
+/// `fits_fixnum`) would otherwise pass every test. Values straddle the seam
+/// deliberately: fixnum operands, boundary operands, and results that must
+/// promote.
+#[test]
+fn test_fixnum_bignum_seam() {
+    // fx-greatest = 2^60 - 1, fx-least = -2^60 (61-bit fixnums).
+    let greatest = "1152921504606846975";
+    let least = "-1152921504606846976";
+    // Closure of the fast path at the extremes.
+    assert_eq!(srfi151(&format!("(bitwise-and {least} -1)")), least);
+    assert_eq!(srfi151(&format!("(bitwise-not {least})")), greatest);
+    assert_eq!(srfi151(&format!("(bitwise-not {greatest})")), least);
+    assert_eq!(srfi151(&format!("(bitwise-ior {greatest} {least})")), "-1");
+    assert_eq!(srfi151(&format!("(bitwise-xor {greatest} {least})")), "-1");
+    // Left shifts: the last one that stays a fixnum, and the first that must
+    // promote — the narrowing bail inside the fast path.
+    assert_eq!(srfi151("(arithmetic-shift 1 59)"), "576460752303423488");
+    assert_eq!(srfi151("(arithmetic-shift 1 60)"), "1152921504606846976");
+    assert_eq!(srfi151("(arithmetic-shift -1 60)"), least);
+    assert_eq!(srfi151("(arithmetic-shift -1 61)"), "-2305843009213693952");
+    // Right shifts stay on the fast path even past the width: positive
+    // operands drain to 0, negative ones sign-fill to -1.
+    assert_eq!(srfi151(&format!("(arithmetic-shift {greatest} -100)")), "0");
+    assert_eq!(srfi151(&format!("(arithmetic-shift {least} -100)")), "-1");
+    // Mixed fixnum/bignum operands must fall back, not misclassify.
+    assert_eq!(
+        srfi151(&format!("(bitwise-and (expt 2 61) {greatest})")),
+        "0"
+    );
+    // bit-set? at and past the sign boundary.
+    assert_eq!(srfi151("(bit-set? 60 -1)"), "#t");
+    assert_eq!(srfi151(&format!("(bit-set? 60 {greatest})")), "#f");
+    assert_eq!(srfi151(&format!("(bit-set? 200 {least})")), "#t");
+    // bit-count / integer-length at the extremes. For a negative argument
+    // bit-count counts zero bits: (bitwise-not least) = greatest = 60 ones.
+    assert_eq!(srfi151(&format!("(bit-count {greatest})")), "60");
+    assert_eq!(srfi151(&format!("(bit-count {least})")), "60");
+    assert_eq!(srfi151(&format!("(integer-length {greatest})")), "60");
+    assert_eq!(srfi151(&format!("(integer-length {least})")), "60");
 }

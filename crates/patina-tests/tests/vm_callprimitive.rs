@@ -110,8 +110,14 @@ fn control_primitives_still_intercepted() {
 
 #[test]
 fn higher_order_primitive_through_fast_path() {
-    // vector-map re-enters the VM from a CallPrimitive dispatch.
-    assert_eq!(eval("(vector-map + #(1 2) #(30 40))"), "#(31 42)");
+    // member's predicate form re-enters the VM from a CallPrimitive dispatch.
+    // (vector-map used to be the example here, but it is an ordinary Scheme
+    // closure now — the continuation-broken Rust version was deleted.)
+    assert_eq!(eval("(member 2.0 '(1 2 3) =)"), "(2 3)");
+    assert_eq!(
+        eval("(import (scheme lazy)) (force (delay (+ 20 22)))"),
+        "42"
+    );
 }
 
 #[test]
