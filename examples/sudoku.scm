@@ -23,9 +23,10 @@
 ;;   ./target/release/patina --tree-walker examples/sudoku.scm
 ;;
 ;; The two Inkala grids dominate the runtime: the VM backend solves all
-;; four in about a second, the tree-walker takes half a minute.
+;; four in under a second, the tree-walker in under half a minute.
 
 (import (scheme base)
+        (scheme char)
         (scheme file)
         (scheme write))
 
@@ -56,8 +57,11 @@
 (define (box-of row col)
   (+ (* 3 (quotient row 3)) (quotient col 3)))
 
+(define (cell-index row col)
+  (+ (* row 9) col))
+
 (define (board-ref s row col)
-  (vector-ref (sudoku-board s) (+ (* row 9) col)))
+  (vector-ref (sudoku-board s) (cell-index row col)))
 
 (define (mark! s row col digit used?)
   (table-set! (sudoku-rows s) row digit used?)
@@ -65,11 +69,11 @@
   (table-set! (sudoku-boxes s) (box-of row col) digit used?))
 
 (define (place! s row col digit)
-  (vector-set! (sudoku-board s) (+ (* row 9) col) digit)
+  (vector-set! (sudoku-board s) (cell-index row col) digit)
   (mark! s row col digit #t))
 
 (define (unplace! s row col digit)
-  (vector-set! (sudoku-board s) (+ (* row 9) col) 0)
+  (vector-set! (sudoku-board s) (cell-index row col) 0)
   (mark! s row col digit #f))
 
 (define (board->sudoku board)
@@ -97,14 +101,25 @@
                   (cons digit acc)
                   acc)))))
 
-(define (count-candidates s row col)
-  (let loop ((digit 9) (count 0))
-    (if (zero? digit)
-        count
-        (loop (- digit 1)
-              (if (digit-ok? s row col digit)
-                  (+ count 1)
-                  count)))))
+;; Count a cell's legal digits, giving up once the count reaches
+;; `limit`. This is the solver's hottest loop -- it runs for every empty
+;; cell at every search node -- so unlike `candidates` it binds the
+;; cell's three tables once instead of going through `digit-ok?`, and a
+;; cell that ties the current best is abandoned early (it could never
+;; replace it).
+(define (count-candidates s row col limit)
+  (let ((rows (sudoku-rows s))
+        (cols (sudoku-cols s))
+        (boxes (sudoku-boxes s))
+        (box (box-of row col)))
+    (let loop ((digit 9) (count 0))
+      (cond ((= count limit) count)
+            ((zero? digit) count)
+            ((or (table-ref rows row digit)
+                 (table-ref cols col digit)
+                 (table-ref boxes box digit))
+             (loop (- digit 1) count))
+            (else (loop (- digit 1) (+ count 1)))))))
 
 ;; Find the empty cell with the fewest legal digits (the classic
 ;; most-constrained-cell heuristic). Returns (row . col), or #f when the
@@ -112,17 +127,17 @@
 ;; immediately: zero means this branch is dead, one is a forced move.
 (define (best-empty-cell s)
   (let loop ((idx 0) (best #f) (best-count 10))
-    (if (= idx 81)
-        best
-        (if (zero? (vector-ref (sudoku-board s) idx))
-            (let* ((row (quotient idx 9))
-                   (col (remainder idx 9))
-                   (count (count-candidates s row col)))
-              (cond ((<= count 1) (cons row col))
-                    ((< count best-count)
-                     (loop (+ idx 1) (cons row col) count))
-                    (else (loop (+ idx 1) best best-count))))
-            (loop (+ idx 1) best best-count)))))
+    (cond ((= idx 81) best)
+          ((not (zero? (vector-ref (sudoku-board s) idx)))
+           (loop (+ idx 1) best best-count))
+          (else
+           (let* ((row (quotient idx 9))
+                  (col (remainder idx 9))
+                  (count (count-candidates s row col best-count)))
+             (cond ((<= count 1) (cons row col))
+                   ((< count best-count)
+                    (loop (+ idx 1) (cons row col) count))
+                   (else (loop (+ idx 1) best best-count))))))))
 
 ;; Depth-first search. Mutates the puzzle; returns #t leaving it solved,
 ;; or #f leaving it exactly as it was.
@@ -150,30 +165,27 @@
   (and (>= (string-length line) 9)
        (let loop ((i 0))
          (or (= i 9)
-             (let ((c (string-ref line i)))
-               (and (char<=? #\0 c #\9)
-                    (loop (+ i 1))))))))
+             (and (digit-value (string-ref line i))
+                  (loop (+ i 1)))))))
 
 (define (parse-row! board row line)
   (do ((col 0 (+ col 1)))
       ((= col 9))
-    (vector-set! board (+ (* row 9) col)
-                 (- (char->integer (string-ref line col))
-                    (char->integer #\0)))))
+    (vector-set! board (cell-index row col)
+                 (digit-value (string-ref line col)))))
 
 ;; Read every grid from `port`, returning a list of (name . board)
 ;; pairs. Any non-row line (e.g. "Grid 01") names the grid after it.
 (define (read-grids port)
-  (let loop ((name "Grid") (board #f) (row 0) (grids '()))
+  (let loop ((name "Grid") (board (make-vector 81 0)) (row 0) (grids '()))
     (let ((line (read-line port)))
       (cond ((eof-object? line)
              (reverse grids))
             ((grid-row? line)
-             (let ((board (or board (make-vector 81 0))))
-               (parse-row! board row line)
-               (if (= row 8)
-                   (loop name #f 0 (cons (cons name board) grids))
-                   (loop name board (+ row 1) grids))))
+             (parse-row! board row line)
+             (if (= row 8)
+                 (loop name (make-vector 81 0) 0 (cons (cons name board) grids))
+                 (loop name board (+ row 1) grids)))
             ((string=? line "")
              (loop name board row grids))
             (else
