@@ -18,7 +18,7 @@
 //!
 //! Sources: `PRD/TRACK_Q_QUALITY_PRD.md` §1.2, re-measured at `2d4ce29`
 //! (2026-08-10), `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`, and
-//! `PRD/AUDIT_2026_08_10_PRD.md` B3 (measured 2026-08-10).
+//! `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3 (measured 2026-08-10).
 //!
 //! Shared root cause of the §1.2 cluster: R7RS §6.10 makes `call/cc`,
 //! `dynamic-wind`, `values` and `with-exception-handler` ordinary procedures,
@@ -32,7 +32,7 @@ use common::*;
 
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
 const CALLCC_MULTI_VALUES: &str = "PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md";
-const HANDLER_REENTRY: &str = "PRD/AUDIT_2026_08_10_PRD.md B3";
+const HANDLER_REENTRY: &str = "PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md B3";
 
 // ─── call/cc in value position (Track Q §1.2) ────────────────────────────────
 
