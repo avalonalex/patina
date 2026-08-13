@@ -7,9 +7,6 @@
 ;;; Blah blah blah. Don't you think source files should contain more lines
 ;;; of code than copyright notice?
 
-(define vector-portion-copy vector-copy)
-
-#;
 (define (vector-portion-copy vec start end)
   (let* ((len (vector-length vec))
 	 (new-len (- end start))
@@ -19,14 +16,9 @@
 	((= i end) new)
       (vector-set! new j (vector-ref vec i)))))
 
-#;
 (define (vector-copy vec)
   (vector-portion-copy vec 0 (vector-length vec)))
 
-(define (vector-portion-copy! target src start end)
-  (vector-copy! target 0 src start end))
-
-#;
 (define (vector-portion-copy! target src start end)
   (let ((len (- end start)))
     (do ((i (- len 1) (- i 1))

@@ -89,9 +89,9 @@
                     (v3 (make-vector (- end start count count2))))
                (copy-smaller! < pivot v2 0 v start end)
                (copy-bigger! < pivot v3 0 v start end)
-               (vector-copy! v start v2)
-               (vector-fill! v pivot (+ start count) (+ start count count2))
-               (vector-copy! v (+ start count count2) v3))))))))
+               (r7rs-vector-copy! v start v2)
+               (r7rs-vector-fill! v pivot (+ start count) (+ start count count2))
+               (r7rs-vector-copy! v (+ start count count2) v3))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -162,9 +162,9 @@
                  (else
                   (vector-ref v (+ (- 1 k) start)))))
           ((< size just-sort-it-threshold)
-           (vector-ref (vector-sort <? (vector-copy v start end)) k))
+           (vector-ref (vector-sort <? (r7rs-vector-copy v start end)) k))
           (else
-           (let* ((ip (random-int size))
+           (let* ((ip (random-integer size))
                   (pivot (vector-ref v (+ start ip))))
              (call-with-values
               (lambda () (count-smaller <? pivot v start end 0 0))
@@ -201,11 +201,11 @@
                    (else
                     (values b a)))))
           ((< size just-sort-it-threshold)
-           (let ((v2 (vector-sort <? (vector-copy v start end))))
+           (let ((v2 (vector-sort <? (r7rs-vector-copy v start end))))
              (values (vector-ref v2 k)
                      (vector-ref v2 (+ k 1)))))
           (else
-           (let* ((ip (random-int size))
+           (let* ((ip (random-integer size))
                   (pivot (vector-ref v (+ start ip))))
              (call-with-values
               (lambda () (count-smaller <? pivot v start end 0 0))
@@ -229,19 +229,6 @@
                               (k2 (- k count count2)))
                          (copy-bigger! <? pivot v2 0 v start end)
                          (%%vector-select2 <? v2 k2 0 n)))))))))))
-
-(define random-seed 0)
-
-;; PATINA LOCAL EDIT: upstream uses SRFI 27's (random-integer n) here. This
-;; linear congruential generator replaces it using only (scheme base)
-;; arithmetic — the earlier fxwrap+/fxwrap* version used identifiers that are
-;; not bound in this library and crashed every range >= just-sort-it-threshold.
-;; The state stays within 24 bits, so every intermediate fits in a fixnum.
-;; Quality only affects pivot choice, never correctness.
-(define (random-int n)
-  (set! random-seed
-    (modulo (+ (* random-seed 1140671485) 12820163) #x1000000))
-  (remainder random-seed n))
 
 ;;; Counts how many elements within the range are less than the pivot
 ;;; and how many are equal to the pivot, returning both of those counts.
