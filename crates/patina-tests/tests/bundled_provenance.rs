@@ -39,7 +39,7 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/chibi/term/ansi.sld", 0xcb7a30ac04c2fb00),
     ("lib/chibi/test.scm", 0x41e9de8d4b7cc1ec),
     ("lib/chibi/test.sld", 0xf810b0f46bc155d7),
-    ("lib/srfi/132.sld", 0x94511ef70afebb21),
+    ("lib/srfi/132.sld", 0x4edefd4109baeabb),
     ("lib/srfi/132/delndups.scm", 0xabcb04a8827d44f4),
     ("lib/srfi/132/lmsort.scm", 0xf84cd67deda00bb8),
     ("lib/srfi/132/select.scm", 0xf32fd7edae9559d8),

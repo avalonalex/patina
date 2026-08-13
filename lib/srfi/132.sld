@@ -23,6 +23,16 @@
 ;;   replacing SRFI 27's random-integer — at a ";; PATINA LOCAL EDIT" marker.
 ;;   Every other included .scm file is byte-identical to upstream
 ;;   (verified against the pinned commit, 2026-08-12).
+;;
+;; Long-run: this arrangement — byte-identical sources behind rename-imports,
+;; with the package's pre-R7RS vector helpers shadowing the native ones — is
+;; worth keeping only while this reference implementation is the bundled
+;; sort. Two retirement paths, both better than accumulating edits here:
+;; if Patina gains (srfi 27), drop select.scm's edit and the tree matches
+;; upstream completely; if sort performance ever matters (vector-util.scm
+;; reimplements native vector-copy in portable Scheme), swap the whole
+;; engine — native primitives behind this same .sld, as upstream's own
+;; (rnrs sorting) branch does — rather than forking these files.
 
 (define-library (srfi 132)
   (import (except (scheme base) vector-copy vector-copy!)
