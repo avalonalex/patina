@@ -151,6 +151,14 @@ patina> (when (> 3 2) (display "yes\n"))
 yes
 ```
 
+The `examples/` directory contains complete programs in portable R7RS-small
+Scheme — a sudoku solver (reads puzzles in the [Project Euler problem 96](https://projecteuler.net/problem=96)
+format), N-queens, and an ASCII Mandelbrot renderer:
+
+```bash
+./target/release/patina examples/sudoku.scm
+```
+
 ---
 
 ## Architecture Highlights
