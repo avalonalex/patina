@@ -6,25 +6,27 @@
 //! - Comparison operations (case-sensitive and case-insensitive)
 //!
 //! Note: UTF-8 conversion happens at I/O boundaries.
-//!
-//! Total: 20 string primitives + 2 helper functions
 
-use crate::apply_context::ApplyContext;
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
 
 // ========== TaggedValue Extraction Helpers ==========
 
-/// Get string as Vec<char> for read operations
-fn get_string_as_chars(
+/// Borrow a string's characters for read operations.
+///
+/// Borrowed, not copied: `string-ref` and `string-length` sit inside the
+/// `(scheme base)` higher-order loops, and a per-call copy of the whole
+/// string turned those loops quadratic. Callers that need an owned copy
+/// call `.to_vec()` at their own site.
+fn get_string_as_chars<'h>(
     tv: TaggedValue,
-    heap: &std::cell::Ref<'_, patina_core::Heap>,
+    heap: &'h std::cell::Ref<'_, patina_core::Heap>,
     fn_name: &str,
-) -> Result<Vec<char>, EvalError> {
+) -> Result<&'h [char], EvalError> {
     // Native heap string path
     if tv.is_string() {
-        return Ok(heap.get_string_chars(tv).to_vec());
+        return Ok(heap.get_string_chars(tv));
     }
 
     // Not a string
@@ -304,7 +306,7 @@ where
         let a = get_string_as_chars(args[i], &heap_ref, fn_name)?;
         let b = get_string_as_chars(args[i + 1], &heap_ref, fn_name)?;
 
-        if !cmp(&a, &b) {
+        if !cmp(a, b) {
             return Ok(TaggedValue::FALSE);
         }
     }
@@ -370,8 +372,8 @@ where
         let b_chars = get_string_as_chars(args[i + 1], &heap_ref, fn_name)?;
 
         // Convert Vec<char> to String for case-insensitive comparison
-        let a_str = chars_to_string(&a_chars).to_lowercase();
-        let b_str = chars_to_string(&b_chars).to_lowercase();
+        let a_str = chars_to_string(a_chars).to_lowercase();
+        let b_str = chars_to_string(b_chars).to_lowercase();
 
         if !cmp(&a_str, &b_str) {
             return Ok(TaggedValue::FALSE);
@@ -408,7 +410,7 @@ pub(super) fn substring(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
 
     let heap_ref = heap.borrow();
 
-    let chars = get_string_as_chars(args[0], &heap_ref, "substring")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "substring")?.to_vec();
     let start = get_integer(args[1], &heap_ref, "substring")?;
     let end = get_integer(args[2], &heap_ref, "substring")?;
     drop(heap_ref);
@@ -454,7 +456,7 @@ pub(super) fn string_to_list(
     // Extract chars and indices
     let (chars, start, end) = {
         let heap_ref = heap.borrow();
-        let chars = get_string_as_chars(args[0], &heap_ref, "string->list")?;
+        let chars = get_string_as_chars(args[0], &heap_ref, "string->list")?.to_vec();
 
         let start = if args.len() >= 2 {
             get_integer(args[1], &heap_ref, "string->list")? as usize
@@ -554,7 +556,7 @@ pub(super) fn string_copy(
 
     let heap_ref = heap.borrow();
 
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-copy")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "string-copy")?.to_vec();
 
     if args.len() == 1 {
         // Simple copy
@@ -597,7 +599,7 @@ pub(super) fn string_upcase(
     }
 
     let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-upcase")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "string-upcase")?.to_vec();
     drop(heap_ref);
 
     // Convert to String, uppercase, then back to Vec<char>
@@ -618,7 +620,7 @@ pub(super) fn string_downcase(
     }
 
     let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-downcase")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "string-downcase")?.to_vec();
     drop(heap_ref);
 
     // Convert to String, lowercase, then back to Vec<char>
@@ -646,7 +648,7 @@ pub(super) fn string_foldcase(
     use unicode_casefold::UnicodeCaseFold;
 
     let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-foldcase")?;
+    let chars = get_string_as_chars(args[0], &heap_ref, "string-foldcase")?.to_vec();
     drop(heap_ref);
 
     let folded: Vec<char> = chars_to_string(&chars).case_fold().collect();
@@ -716,104 +718,6 @@ pub(super) fn string_fill(
     Err(EvalError::TypeError(
         "string-fill! expects a string".to_string(),
     ))
-}
-
-// ========== String Higher-Order Functions ==========
-
-/// (string-map proc string1 string2 ...) - Apply proc to each character
-pub(super) fn string_map(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    if args.len() < 2 {
-        return Err(EvalError::WrongArity {
-            expected: "at least 2".to_string(),
-            actual: args.len(),
-        });
-    }
-
-    let heap = ctx.heap();
-    let proc = args[0]; // already TaggedValue
-
-    // Extract all strings
-    let strings: Vec<Vec<char>> = {
-        let heap_ref = heap.borrow();
-        args[1..]
-            .iter()
-            .map(|&tv| get_string_as_chars(tv, &heap_ref, "string-map"))
-            .collect::<Result<_, _>>()?
-    };
-
-    if strings.is_empty() {
-        return Ok(heap.borrow_mut().alloc_string_chars(Vec::new()));
-    }
-
-    let min_len = strings.iter().map(|s| s.len()).min().unwrap_or(0);
-    let mut result: Vec<char> = Vec::with_capacity(min_len);
-
-    for i in 0..min_len {
-        // Characters are immediate TaggedValues — no heap allocation needed
-        let proc_args: Vec<TaggedValue> = strings
-            .iter()
-            .map(|s| TaggedValue::character(s[i]))
-            .collect();
-        // Procedure calls within string-map are not in tail position
-        let result_tv = ctx.apply_proc(proc, proc_args)?;
-        match result_tv.as_char() {
-            Some(c) => result.push(c),
-            None => {
-                return Err(EvalError::TypeError(
-                    "string-map: procedure must return a character".to_string(),
-                ));
-            }
-        }
-    }
-
-    Ok(heap.borrow_mut().alloc_string_chars(result))
-}
-
-/// (string-for-each proc string1 string2 ...) - Apply proc for side effects
-pub(super) fn string_for_each(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    if args.len() < 2 {
-        return Err(EvalError::WrongArity {
-            expected: "at least 2".to_string(),
-            actual: args.len(),
-        });
-    }
-
-    let heap = ctx.heap();
-    let proc = args[0]; // already TaggedValue
-
-    // Extract all strings
-    let strings: Vec<Vec<char>> = {
-        let heap_ref = heap.borrow();
-        args[1..]
-            .iter()
-            .map(|&tv| get_string_as_chars(tv, &heap_ref, "string-for-each"))
-            .collect::<Result<_, _>>()?
-    };
-
-    if strings.is_empty() {
-        return Ok(TaggedValue::UNSPECIFIED);
-    }
-
-    let min_len = strings.iter().map(|s| s.len()).min().unwrap_or(0);
-
-    // string-for-each is guaranteed to call proc in order
-    for i in 0..min_len {
-        // Characters are immediate TaggedValues — no heap allocation needed
-        let proc_args: Vec<TaggedValue> = strings
-            .iter()
-            .map(|s| TaggedValue::character(s[i]))
-            .collect();
-        // Procedure calls within string-for-each are not in tail position
-        ctx.apply_proc(proc, proc_args)?;
-    }
-
-    Ok(TaggedValue::UNSPECIFIED)
 }
 
 /// (string-copy! to at from [start [end]]) - Copy characters from one string to another
@@ -1120,22 +1024,5 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         Arity::Range(3, 5),
         "Copies characters from source string to destination string.",
         string_copy_mutate,
-    ));
-
-    // String higher-order functions (scheme.base)
-    registry.register(PrimitiveFn::new_higher_order(
-        "scheme.base",
-        "string-map",
-        Arity::Min(2),
-        "Applies proc element-wise to strings and returns a string of the results.",
-        string_map,
-    ));
-
-    registry.register(PrimitiveFn::new_higher_order(
-        "scheme.base",
-        "string-for-each",
-        Arity::Min(2),
-        "Applies proc to each element of the strings for its side effects.",
-        string_for_each,
     ));
 }

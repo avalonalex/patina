@@ -164,3 +164,23 @@ fn test_shares_bindings_with_srfi_151() {
         "(8 8)"
     );
 }
+
+/// The fx ops at the representation's own edges — the fast-path seam.
+///
+/// This file's method is to check the boundary rather than trust a constant
+/// (see the module doc); these extend that to the bitwise aliases, whose
+/// shared primitives take an i64 fast path exactly when every operand is a
+/// fixnum.
+#[test]
+fn test_bitwise_aliases_at_the_boundary() {
+    assert_eq!(fx("(fxand fx-least -1)"), "-1152921504606846976");
+    assert_eq!(fx("(fxnot fx-least)"), "1152921504606846975");
+    assert_eq!(fx("(fxnot fx-greatest)"), "-1152921504606846976");
+    assert_eq!(fx("(fxxor fx-greatest fx-least)"), "-1");
+    assert_eq!(fx("(fxarithmetic-shift 1 59)"), "576460752303423488");
+    assert_eq!(fx("(fxarithmetic-shift fx-least -60)"), "-1");
+    assert_eq!(fx("(fxbit-count fx-greatest)"), "60");
+    assert_eq!(fx("(fxlength fx-greatest)"), "60");
+    assert_eq!(fx("(fxbit-set? 60 -1)"), "#t");
+    assert_eq!(fx("(fxbit-set? 60 fx-greatest)"), "#f");
+}

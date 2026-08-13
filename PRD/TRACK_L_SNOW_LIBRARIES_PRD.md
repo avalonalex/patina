@@ -236,7 +236,11 @@ fails.
 strictly correct per R7RS 7.1.1 (`@` is a ⟨special subsequent⟩, not an ⟨initial⟩); chibi and Gauche
 accept it. A deliberate strictness decision rather than a bug, but it needs making explicitly.
 
-**Rust registry primitives ignore the import set at top level** — ❌ **open**, own PR. A program that
+**Rust registry primitives ignore the import set at top level** — ❌ **open**, own PR. (Adjacent
+cleanup landed 2026-08-12, PR #52: the four continuation-broken Rust higher-order primitives were
+*deleted*, removing those instances of the pattern — but deletion was available only because Scheme
+replacements already existed for continuation-safety reasons. The general registry/import-set
+scoping fix below is still required.) A program that
 imports only `(scheme base)` can still call primitives no imported library exports:
 
 ```scheme

@@ -68,18 +68,26 @@ for backend_flag in "" "--tree-walker"; do
     # The lanes above prove nothing if collection never ran (a broken env-var
     # path would pass vacuously): assert both the stress lane and the default
     # adaptive mode actually collect and reclaim on churn workloads.
+    # The reclamation property is a *delta*: the churn itself must not grow
+    # the pairs arena. An absolute arena bound would really be measuring the
+    # bootstrap live-peak, which legitimately grows whenever lib/scheme
+    # grows (it crossed a 10000-pair bound when base's higher-order file
+    # gained its fast paths) — the churn delta is what stress collection
+    # actually guarantees.
     cat > "$OUT/churn-stress.scm" <<'EOF'
 (import (scheme base) (scheme write) (scheme process-context) (patina debug))
+(define arena-before (cdr (assq 'pairs (gc-stats))))
 (define (churn n) (if (> n 0) (begin (cons n n) (churn (- n 1)))))
 (churn 20000)
 (let* ((stats (gc-stats))
        (collections (cdr (assq 'collections stats)))
-       (pairs (cdr (assq 'pairs stats))))
-  (if (and (> collections 1000) (< pairs 10000))
+       (grown (- (cdr (assq 'pairs stats)) arena-before)))
+  (if (and (> collections 1000) (< grown 256))
       (begin (display "stress reclamation ok: ") (write collections)
-             (display " collections, ") (write pairs)
-             (display " pairs") (newline))
-      (begin (display "STRESS RECLAMATION BROKEN: ") (write stats) (newline)
+             (display " collections, arena grew ") (write grown)
+             (display " pairs across 20000 churned conses") (newline))
+      (begin (display "STRESS RECLAMATION BROKEN (arena grew ") (write grown)
+             (display "): ") (write stats) (newline)
              (exit 1))))
 EOF
     if PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "$OUT/churn-stress.scm"; then

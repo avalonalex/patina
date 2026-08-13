@@ -35,9 +35,9 @@ pub fn build_internal_vectors(_name: Vec<String>, env: Rc<Environment>) -> Vec<S
         // Operations
         ("vector-copy", Arity::Range(1, 3)),
         ("vector-append", Arity::Min(0)),
-        // Higher-order
-        ("vector-map", Arity::Min(2)),
-        ("vector-for-each", Arity::Min(2)),
+        // vector-map / vector-for-each deliberately absent — see the note
+        // in internal_strings.rs: the Scheme definitions in
+        // lib/scheme/base/higher_order.scm are the only implementations.
     ];
 
     let mut exports = Vec::new();

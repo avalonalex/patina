@@ -13,7 +13,7 @@
           (patina internal strings)      ; §6.7 Strings
           (patina internal vectors)      ; §6.8 Vectors
           (patina internal bytevectors)  ; §6.9 Bytevectors
-          (patina internal control)      ; §6.10 Control (apply, map, for-each, values, call/cc)
+          (patina internal control)      ; §6.10 Control (apply, values, call/cc; map/for-each are Scheme, in higher_order.scm)
           (patina internal errors)       ; §6.11 Exceptions
           (patina internal io)           ; §6.13 I/O
           (patina internal records)      ; §5.5 Record types

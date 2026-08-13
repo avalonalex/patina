@@ -46,9 +46,11 @@ pub fn build_internal_strings(_name: Vec<String>, env: Rc<Environment>) -> Vec<S
         // Conversion
         ("string->list", Arity::Range(1, 3)),
         ("list->string", Arity::Exact(1)),
-        // Higher-order
-        ("string-map", Arity::Min(2)),
-        ("string-for-each", Arity::Min(2)),
+        // string-map / string-for-each deliberately absent: the live
+        // implementations are Scheme (lib/scheme/base/higher_order.scm) —
+        // a Rust higher-order frame drops captured continuations, so the
+        // Rust versions were deleted rather than left as a second, broken
+        // implementation behind (patina internal strings).
         // Case conversion
         ("string-upcase", Arity::Exact(1)),
         ("string-downcase", Arity::Exact(1)),
