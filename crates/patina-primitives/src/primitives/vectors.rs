@@ -5,7 +5,6 @@
 //! - Mutable vectors via vector-set!
 //! - Conversion operations with lists and strings
 
-use crate::apply_context::ApplyContext;
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
@@ -79,25 +78,6 @@ fn get_string_chars(
         "{} expects a string",
         fn_name
     )))
-}
-
-/// Extract elements from multiple vectors as Vec<Vec<TaggedValue>>.
-fn extract_vectors_as_tagged(
-    vector_args: &[TaggedValue],
-    heap: &std::rc::Rc<std::cell::RefCell<patina_core::Heap>>,
-    fn_name: &str,
-) -> Result<Vec<Vec<TaggedValue>>, EvalError> {
-    // Extract all elements with immutable borrow
-    let heap_ref = heap.borrow();
-    let mut vectors = Vec::new();
-    for &tv in vector_args {
-        vectors.push(
-            heap_ref
-                .try_vector_to_vec(tv)
-                .ok_or_else(|| EvalError::TypeError(format!("{} expects a vector", fn_name)))?,
-        );
-    }
-    Ok(vectors)
 }
 
 // ========== Vector Primitives ==========
@@ -602,71 +582,6 @@ pub(super) fn vector_fill(
     Ok(TaggedValue::UNSPECIFIED)
 }
 
-pub(super) fn vector_map(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    if args.len() < 2 {
-        return Err(EvalError::WrongArity {
-            expected: "at least 2".to_string(),
-            actual: args.len(),
-        });
-    }
-
-    let heap = ctx.heap();
-    let proc = args[0];
-
-    // Extract vector elements as TaggedValues
-    let vectors: Vec<Vec<TaggedValue>> = extract_vectors_as_tagged(&args[1..], heap, "vector-map")?;
-
-    if vectors.is_empty() {
-        return Ok(heap.borrow_mut().alloc_vector(Vec::new()));
-    }
-
-    let min_len = vectors.iter().map(|v| v.len()).min().unwrap_or(0);
-    let mut result = Vec::new();
-
-    for i in 0..min_len {
-        let proc_args: Vec<TaggedValue> = vectors.iter().map(|v| v[i]).collect();
-        let val = ctx.apply_proc(proc, proc_args)?;
-        result.push(val);
-    }
-
-    Ok(heap.borrow_mut().alloc_vector(result))
-}
-
-pub(super) fn vector_for_each(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    if args.len() < 2 {
-        return Err(EvalError::WrongArity {
-            expected: "at least 2".to_string(),
-            actual: args.len(),
-        });
-    }
-
-    let heap = ctx.heap();
-    let proc = args[0];
-
-    // Extract vector elements as TaggedValues
-    let vectors: Vec<Vec<TaggedValue>> =
-        extract_vectors_as_tagged(&args[1..], heap, "vector-for-each")?;
-
-    if vectors.is_empty() {
-        return Ok(TaggedValue::UNSPECIFIED);
-    }
-
-    let min_len = vectors.iter().map(|v| v.len()).min().unwrap_or(0);
-
-    for i in 0..min_len {
-        let proc_args: Vec<TaggedValue> = vectors.iter().map(|v| v[i]).collect();
-        ctx.apply_proc(proc, proc_args)?;
-    }
-
-    Ok(TaggedValue::UNSPECIFIED)
-}
-
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use crate::registry::PrimitiveFn;
     use patina_runtime::Arity;
@@ -786,23 +701,5 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         Arity::Range(2, 4),
         "Stores fill in the elements of vector.",
         vector_fill,
-    ));
-
-    // Vector-map
-    registry.register(PrimitiveFn::new_higher_order(
-        "scheme.base",
-        "vector-map",
-        Arity::Min(2),
-        "Returns a newly allocated vector of the results of applying proc element-wise to the elements of the vectors.",
-        vector_map,
-    ));
-
-    // Vector-for-each
-    registry.register(PrimitiveFn::new_higher_order(
-        "scheme.base",
-        "vector-for-each",
-        Arity::Min(2),
-        "Applies proc element-wise to the elements of the vectors for side effects.",
-        vector_for_each,
     ));
 }

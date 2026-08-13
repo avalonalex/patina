@@ -9,7 +9,6 @@
 //!
 //! Total: 20 string primitives + 2 helper functions
 
-use crate::apply_context::ApplyContext;
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
@@ -718,104 +717,6 @@ pub(super) fn string_fill(
     ))
 }
 
-// ========== String Higher-Order Functions ==========
-
-/// (string-map proc string1 string2 ...) - Apply proc to each character
-pub(super) fn string_map(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    if args.len() < 2 {
-        return Err(EvalError::WrongArity {
-            expected: "at least 2".to_string(),
-            actual: args.len(),
-        });
-    }
-
-    let heap = ctx.heap();
-    let proc = args[0]; // already TaggedValue
-
-    // Extract all strings
-    let strings: Vec<Vec<char>> = {
-        let heap_ref = heap.borrow();
-        args[1..]
-            .iter()
-            .map(|&tv| get_string_as_chars(tv, &heap_ref, "string-map"))
-            .collect::<Result<_, _>>()?
-    };
-
-    if strings.is_empty() {
-        return Ok(heap.borrow_mut().alloc_string_chars(Vec::new()));
-    }
-
-    let min_len = strings.iter().map(|s| s.len()).min().unwrap_or(0);
-    let mut result: Vec<char> = Vec::with_capacity(min_len);
-
-    for i in 0..min_len {
-        // Characters are immediate TaggedValues — no heap allocation needed
-        let proc_args: Vec<TaggedValue> = strings
-            .iter()
-            .map(|s| TaggedValue::character(s[i]))
-            .collect();
-        // Procedure calls within string-map are not in tail position
-        let result_tv = ctx.apply_proc(proc, proc_args)?;
-        match result_tv.as_char() {
-            Some(c) => result.push(c),
-            None => {
-                return Err(EvalError::TypeError(
-                    "string-map: procedure must return a character".to_string(),
-                ));
-            }
-        }
-    }
-
-    Ok(heap.borrow_mut().alloc_string_chars(result))
-}
-
-/// (string-for-each proc string1 string2 ...) - Apply proc for side effects
-pub(super) fn string_for_each(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    if args.len() < 2 {
-        return Err(EvalError::WrongArity {
-            expected: "at least 2".to_string(),
-            actual: args.len(),
-        });
-    }
-
-    let heap = ctx.heap();
-    let proc = args[0]; // already TaggedValue
-
-    // Extract all strings
-    let strings: Vec<Vec<char>> = {
-        let heap_ref = heap.borrow();
-        args[1..]
-            .iter()
-            .map(|&tv| get_string_as_chars(tv, &heap_ref, "string-for-each"))
-            .collect::<Result<_, _>>()?
-    };
-
-    if strings.is_empty() {
-        return Ok(TaggedValue::UNSPECIFIED);
-    }
-
-    let min_len = strings.iter().map(|s| s.len()).min().unwrap_or(0);
-
-    // string-for-each is guaranteed to call proc in order
-    for i in 0..min_len {
-        // Characters are immediate TaggedValues — no heap allocation needed
-        let proc_args: Vec<TaggedValue> = strings
-            .iter()
-            .map(|s| TaggedValue::character(s[i]))
-            .collect();
-        // Procedure calls within string-for-each are not in tail position
-        ctx.apply_proc(proc, proc_args)?;
-    }
-
-    Ok(TaggedValue::UNSPECIFIED)
-}
-
 /// (string-copy! to at from [start [end]]) - Copy characters from one string to another
 pub(super) fn string_copy_mutate(
     heap: &SharedHeap,
@@ -1120,22 +1021,5 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         Arity::Range(3, 5),
         "Copies characters from source string to destination string.",
         string_copy_mutate,
-    ));
-
-    // String higher-order functions (scheme.base)
-    registry.register(PrimitiveFn::new_higher_order(
-        "scheme.base",
-        "string-map",
-        Arity::Min(2),
-        "Applies proc element-wise to strings and returns a string of the results.",
-        string_map,
-    ));
-
-    registry.register(PrimitiveFn::new_higher_order(
-        "scheme.base",
-        "string-for-each",
-        Arity::Min(2),
-        "Applies proc to each element of the strings for its side effects.",
-        string_for_each,
     ));
 }
