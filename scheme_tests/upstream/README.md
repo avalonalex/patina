@@ -104,9 +104,11 @@ caught. Five are fixed; the sixth is recorded below.
   than a test problem. Also worth investigating.
 
 Copied unmodified. They import `(chibi test)`, which Patina bundles verbatim
-from upstream — running them at all is a consequence of that adoption, since
-the hand-written subset it replaced could not express `test-group` or report a
-failure count.
+from the snow-fort 0.9.0 snowball — byte-identical to the sha256-pinned
+tarball recorded in `lib/chibi/PROVENANCE.md`, and guarded by
+`crates/patina-tests/tests/bundled_provenance.rs`. Running these suites at all
+is a consequence of that adoption, since the hand-written subset it replaced
+could not express `test-group` or report a failure count.
 
 Kept here rather than under `lib/` so the shipped library tree stays free of
 test code. The directory is a library search root: `(srfi 151 test)` resolves to
