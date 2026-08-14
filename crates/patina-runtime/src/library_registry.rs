@@ -114,23 +114,30 @@ impl LibraryRegistry {
     ///
     /// Default search paths (in order):
     /// 1. ./lib/ (relative to current directory)
-    /// 2. $PATINA_HOME/lib/ (if PATINA_HOME env var is set)
-    /// 3. Workspace root/lib/ (by walking up from executable to find Cargo.toml workspace)
-    /// 4. Executable directory/../lib/ (relative to binary)
+    /// 2. ./.patina/lib/ (project-local dependency directory)
+    /// 3. $PATINA_HOME/lib/ (if PATINA_HOME env var is set)
+    /// 4. Workspace root/lib/ (by walking up from executable to find Cargo.toml workspace)
+    /// 5. Executable directory/../lib/ (relative to binary)
     pub fn with_default_paths() -> Self {
         let mut registry = Self::new();
 
         // 1. Current directory ./lib/
         registry.add_search_path(PathBuf::from("./lib"));
 
-        // 2. $PATINA_HOME/lib/ if set
+        // 2. Project-local dependency directory ./.patina/lib/ — where a
+        // future fetcher drops third-party libraries (Track L; see
+        // PRD/future/PACKAGE_MANAGER_DESIGN.md). Ahead of the workspace and
+        // executable paths so project dependencies win over installed ones.
+        registry.add_search_path(PathBuf::from("./.patina/lib"));
+
+        // 3. $PATINA_HOME/lib/ if set
         if let Ok(patina_home) = std::env::var("PATINA_HOME") {
             let mut path = PathBuf::from(patina_home);
             path.push("lib");
             registry.add_search_path(path);
         }
 
-        // 3. Workspace root/lib/ - walk up from executable looking for workspace Cargo.toml
+        // 4. Workspace root/lib/ - walk up from executable looking for workspace Cargo.toml
         if let Ok(exe_path) = std::env::current_exe()
             && let Some(workspace_root) = Self::find_workspace_root(&exe_path)
         {
@@ -139,7 +146,7 @@ impl LibraryRegistry {
             registry.add_search_path(lib_path);
         }
 
-        // 4. Executable directory/../lib/
+        // 5. Executable directory/../lib/
         if let Ok(exe_path) = std::env::current_exe()
             && let Some(exe_dir) = exe_path.parent()
         {
@@ -210,6 +217,15 @@ impl LibraryRegistry {
 
         self.libraries.insert(name, library);
         Ok(())
+    }
+
+    /// Register a library, replacing any previous library of the same name.
+    ///
+    /// Used by the inline `define-library` path, where re-evaluating a form
+    /// (typically at the REPL) redefines the library rather than erroring.
+    /// File-based loading keeps `register`'s already-loaded error.
+    pub fn register_or_replace(&mut self, library: Library) {
+        self.libraries.insert(library.name.clone(), library);
     }
 
     /// Check if a library is already loaded
@@ -368,6 +384,29 @@ mod tests {
         assert!(!registry.search_paths.is_empty());
         // Should at least have ./lib
         assert!(registry.search_paths.iter().any(|p| p.ends_with("lib")));
+    }
+
+    #[test]
+    fn test_default_paths_include_project_local_deps() {
+        let registry = LibraryRegistry::with_default_paths();
+        // ./lib first, then the project-local dependency directory — ahead of
+        // any PATINA_HOME/workspace/exe paths, whose presence varies.
+        assert!(registry.search_paths[1].ends_with(".patina/lib"));
+    }
+
+    #[test]
+    fn test_register_or_replace_overwrites() {
+        let mut registry = LibraryRegistry::new();
+        let name = vec!["test".to_string()];
+        registry.register(Library::new(name.clone())).unwrap();
+
+        // A second registration under the same name replaces, not errors —
+        // the replacement's exports are what `get` returns afterwards.
+        let mut replacement = Library::new(name.clone());
+        replacement.export_tagged("v".to_string(), patina_core::TaggedValue::fixnum(2));
+        registry.register_or_replace(replacement);
+
+        assert!(registry.get(&name).unwrap().exports.contains_key("v"));
     }
 
     #[test]

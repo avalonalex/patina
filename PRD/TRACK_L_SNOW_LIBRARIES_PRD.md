@@ -46,7 +46,24 @@ The recurring porting frictions (all *resolved* for the existing 9 SRFIs) are ca
 
 ## 4. Work items
 
-### L0 — Close the loading-gap edge cases  *(small, high-leverage; do first)*
+### L0 — Close the loading-gap edge cases  *(done — 2026-08-13)*
+
+✅ **Done, all five items.** Deviations from the spec worth recording:
+- Unknown clauses warn-and-skip by default; `PATINA_STRICT_LIBRARY_SYNTAX=1` restores the error.
+- The inline `define-library` path is **not** in the desugarer — it stays a datum. Both backends
+  intercept it at their eval entry (beside the existing `Import` special case) and route it through
+  `SchemeLibraryLoader::parse_inline_form`, so the `.sld` and inline paths share one parser and one
+  body-resolution. Includes resolve against the current directory; re-evaluating the form replaces
+  the library (`LibraryRegistry::register_or_replace`), so REPL redefinition works.
+- The shebang is handled in the *lexer* (`#!` followed by `/` or space comments out the line), so it
+  works for any entry point, not just script files; `#!fold-case` is unaffected.
+- Acceptance tests are split: inline/lenient-clause cases in
+  `crates/patina-tests/tests/sld_file_loading.rs` (both backends), while `./.patina/lib/`,
+  beside-the-script resolution, and shebang scripts are end-to-end binary-spawn tests in
+  `crates/patina-repl/tests/script_running.rs` — those behaviours live in the CLI layer and
+  cwd-relative defaults, unreachable from the library API without process-global state.
+
+#### Original spec
 1. **Graceful unknown clauses.** `library_parser.rs:212` hard-errors on any unrecognized `define-library` clause; portable `.sld` files occasionally carry vendor-specific ones. Change to warn-and-skip (behind a strictness flag, default lenient) or a small known-clause allowlist, so one unknown clause doesn't abort the whole load.
 2. **Inline `(define-library …)` code path.** Add desugarer handling so a `define-library` written directly in a script/REPL source (not a discovered `.sld`) is parsed via the existing `library_parser` and registered. Some single-file libs and `package.scm` forms embed it inline.
 3. **`./.patina/lib/` on the search path.** Add the project-local dependency directory to `with_default_paths` in `library_registry.rs` (ahead of the workspace/exe paths) so dependencies can be dropped under a project dir — the forward hook for the eventual fetcher.

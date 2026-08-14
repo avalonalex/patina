@@ -103,16 +103,47 @@ impl TreeWalker {
         env: &Rc<Environment>,
         source_map: &Rc<RefCell<SourceMap>>,
     ) -> Result<TaggedValue, EvalError> {
+        self.eval_datum(expr, env, Some(source_map))
+    }
+
+    /// Shared body of `eval` and `eval_with_source_map` — the two entries
+    /// differ only in desugarer construction.
+    fn eval_datum(
+        &self,
+        expr: TaggedValue,
+        env: &Rc<Environment>,
+        source_map: Option<&Rc<RefCell<SourceMap>>>,
+    ) -> Result<TaggedValue, EvalError> {
         use patina_frontend::Desugarer;
 
         let internal_heap = self.evaluator.global_env.heap();
-        let desugarer = Desugarer::with_env_and_source_map(env.clone(), source_map.clone());
+
+        // An inline (define-library ...) is a library definition, not an
+        // expression — route it to the library loader before desugaring.
+        if patina_frontend::is_define_library_form(expr, internal_heap) {
+            self.evaluator
+                .eval_inline_define_library(expr)
+                .map_err(|e| EvalError::InvalidSyntax(format!("define-library failed: {}", e)))?;
+            return Ok(TaggedValue::UNSPECIFIED);
+        }
+
+        let desugarer = match source_map {
+            Some(sm) => Desugarer::with_env_and_source_map(env.clone(), sm.clone()),
+            None => Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone()),
+        };
 
         let core_expr = desugarer
             .desugar_tagged(expr, internal_heap)
             .map_err(|e| EvalError::DesugarError(e.to_string()))?;
 
         eval_cps(&core_expr, env.clone(), &self.evaluator)
+    }
+
+    /// Add a library search path — counterpart of
+    /// `VmBackend::add_library_search_path`, so callers can treat both
+    /// backends uniformly.
+    pub fn add_library_search_path(&self, path: std::path::PathBuf) {
+        self.evaluator.add_library_search_path(path);
     }
 }
 
@@ -126,16 +157,7 @@ impl Backend for TreeWalker {
     type Error = EvalError;
 
     fn eval(&self, expr: TaggedValue, env: &Rc<Environment>) -> Result<TaggedValue, Self::Error> {
-        use patina_frontend::Desugarer;
-
-        let internal_heap = self.evaluator.global_env.heap();
-        let desugarer = Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone());
-
-        let core_expr = desugarer
-            .desugar_tagged(expr, internal_heap)
-            .map_err(|e| EvalError::DesugarError(e.to_string()))?;
-
-        eval_cps(&core_expr, env.clone(), &self.evaluator)
+        self.eval_datum(expr, env, None)
     }
 
     fn global_env(&self) -> &Rc<Environment> {

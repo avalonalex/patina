@@ -51,7 +51,94 @@ impl SchemeLibraryLoader {
     }
 }
 
+/// Is this datum a `(define-library ...)` form?
+///
+/// Used by the backends to route a top-level inline `define-library` (in a
+/// script or the REPL) to the library loader instead of the desugarer.
+pub fn is_define_library_form(tv: TaggedValue, heap: &SharedHeap) -> bool {
+    if !tv.is_pair() {
+        return false;
+    }
+    let h = heap.borrow();
+    let head = h.car(tv);
+    h.get_symbol_name(head) == Some("define-library")
+}
+
+/// Error label for a `define-library` form that has no backing file.
+const INLINE_SOURCE_LABEL: &str = "<inline define-library>";
+
 impl SchemeLibraryLoader {
+    /// Parse an inline `(define-library ...)` form into a `ParsedLibrary`.
+    ///
+    /// This is the file-less twin of the `.sld` path: the form is already a
+    /// datum on `heap`, and `include`/`include-library-declarations` paths
+    /// resolve against `base_dir` (the running script's directory, or the
+    /// current directory at the REPL) instead of an `.sld` file's directory.
+    pub fn parse_inline_form(
+        &self,
+        lib_form: TaggedValue,
+        base_dir: &Path,
+        heap: SharedHeap,
+        can_load_library: &dyn Fn(&[String]) -> bool,
+    ) -> Result<ParsedLibrary, LibraryError> {
+        let lib_def =
+            LibraryDefinition::from_tagged_with_library_checker(lib_form, &heap, can_load_library)
+                .map_err(|e| LibraryError::ParseError {
+                    file: INLINE_SOURCE_LABEL.to_string(),
+                    message: format!("{:?}", e),
+                })?;
+        self.resolve_definition(lib_def, base_dir, None, heap)
+    }
+
+    /// Resolve a parsed definition's body elements against `base_dir` and
+    /// package the result — the shared tail of the `.sld` and inline paths.
+    ///
+    /// `source` is the `.sld` file when there is one: it seeds include-cycle
+    /// detection (a file must not include itself), labels include errors, and
+    /// is recorded on the resulting `ParsedLibrary`.
+    fn resolve_definition(
+        &self,
+        lib_def: LibraryDefinition,
+        base_dir: &Path,
+        source: Option<PathBuf>,
+        heap: SharedHeap,
+    ) -> Result<ParsedLibrary, LibraryError> {
+        let mut included_files = HashSet::new();
+        if let Some(path) = &source
+            && let Ok(canonical) = self.fs.canonicalize(path)
+        {
+            included_files.insert(canonical);
+        }
+
+        let source_file = source
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(INLINE_SOURCE_LABEL));
+
+        let mut exports = lib_def.exports;
+        let mut imports = lib_def.imports;
+        let mut body = Vec::new();
+
+        self.resolve_body_elements(
+            &lib_def.body_elements,
+            base_dir,
+            &mut included_files,
+            &source_file,
+            &mut exports,
+            &mut imports,
+            &mut body,
+            &heap,
+        )?;
+
+        Ok(ParsedLibrary::new(
+            lib_def.name,
+            imports,
+            body,
+            Some(heap),
+            exports,
+            source,
+        ))
+    }
+
     /// Find the .sld file for a library
     fn find_sld_file(&self, name: &[String], search_paths: &[PathBuf]) -> Option<PathBuf> {
         if name.is_empty() {
@@ -141,41 +228,9 @@ impl SchemeLibraryLoader {
             });
         }
 
-        // Get the directory containing the .sld file for resolving includes
-        let sld_dir = path.parent().unwrap_or(Path::new("."));
-
-        // Resolve body elements (expand includes and include-library-declarations)
-        let mut included_files = HashSet::new();
-        // Add the .sld file itself to prevent self-inclusion
-        if let Ok(canonical) = self.fs.canonicalize(&path) {
-            included_files.insert(canonical);
-        }
-
-        // Start with exports and imports from the main definition
-        let mut exports = lib_def.exports;
-        let mut imports = lib_def.imports;
-        let mut body = Vec::new();
-
-        self.resolve_body_elements(
-            &lib_def.body_elements,
-            sld_dir,
-            &mut included_files,
-            &path,
-            &mut exports,
-            &mut imports,
-            &mut body,
-            &heap,
-        )?;
-
-        // Return parsed library for the evaluator to process
-        Ok(ParsedLibrary::new(
-            lib_def.name,
-            imports,
-            body,
-            Some(heap),
-            exports,
-            Some(path),
-        ))
+        // Includes resolve against the directory containing the .sld file.
+        let sld_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        self.resolve_definition(lib_def, &sld_dir, Some(path), heap)
     }
 
     /// Resolve body elements by expanding includes into actual expressions.

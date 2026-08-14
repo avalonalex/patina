@@ -52,6 +52,15 @@ pub enum BodyElement {
     },
 }
 
+/// Whether unknown `define-library` declarations abort the load.
+///
+/// Default is lenient (warn to stderr and skip the declaration), so one
+/// vendor-specific clause does not make an otherwise-portable library
+/// unloadable. Set `PATINA_STRICT_LIBRARY_SYNTAX=1` to restore the error.
+fn strict_library_syntax() -> bool {
+    std::env::var_os("PATINA_STRICT_LIBRARY_SYNTAX").is_some_and(|v| v != "0")
+}
+
 /// A parsed library definition
 #[derive(Debug, Clone)]
 pub struct LibraryDefinition {
@@ -208,10 +217,23 @@ impl LibraryDefinition {
                     body_elements.push(BodyElement::IncludeLibraryDeclarations { paths });
                     Ok(())
                 }
-                _ => Err(ParseError::InvalidSyntax(format!(
-                    "Unknown library declaration: {}",
-                    keyword
-                ))),
+                _ => {
+                    // Portable .sld files occasionally carry vendor-specific
+                    // declarations. Skipping one keeps the rest of the library
+                    // loadable; aborting the whole load is opt-in.
+                    if strict_library_syntax() {
+                        Err(ParseError::InvalidSyntax(format!(
+                            "Unknown library declaration: {}",
+                            keyword
+                        )))
+                    } else {
+                        eprintln!(
+                            "warning: ignoring unknown library declaration `{}` in define-library",
+                            keyword
+                        );
+                        Ok(())
+                    }
+                }
             }
         } else {
             Err(ParseError::InvalidSyntax(
@@ -678,6 +700,30 @@ mod tests {
             }
             _ => panic!("Expected Prefix variant"),
         }
+    }
+
+    #[test]
+    fn test_unknown_declaration_skipped_leniently() {
+        let heap = test_heap();
+        let lib_def = list(
+            vec![
+                sym("define-library", &heap),
+                list(vec![sym("test", &heap), sym("lib", &heap)], &heap),
+                // A vendor-specific declaration Patina does not know.
+                list(vec![sym("declare", &heap), sym("pure", &heap)], &heap),
+                list(vec![sym("export", &heap), sym("foo", &heap)], &heap),
+                list(vec![sym("begin", &heap), sym("foo-def", &heap)], &heap),
+            ],
+            &heap,
+        );
+
+        let parsed = LibraryDefinition::from_tagged(lib_def, &heap)
+            .expect("unknown declaration must not abort the load");
+
+        // The unknown clause is dropped; everything around it survives.
+        assert_eq!(parsed.name, vec!["test", "lib"]);
+        assert_eq!(parsed.exports.len(), 1);
+        assert_eq!(parsed.body_elements.len(), 1);
     }
 
     // =========================================================================

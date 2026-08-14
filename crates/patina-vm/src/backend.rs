@@ -152,14 +152,44 @@ impl VmBackend {
         _env: &Rc<Environment>,
         source_map: &Rc<RefCell<patina_frontend::SourceMap>>,
     ) -> Result<TaggedValue, VmBackendError> {
-        let desugarer =
-            Desugarer::with_env_and_source_map(Rc::clone(&self.global_env), source_map.clone());
+        self.eval_datum(expr, Some(source_map))
+    }
+
+    /// Shared body of `eval` and `eval_with_source_map` — the two entries
+    /// differ only in desugarer construction.
+    ///
+    /// We always evaluate in the global environment (same as the tree-walker
+    /// does for top-level defines).
+    fn eval_datum(
+        &self,
+        expr: TaggedValue,
+        source_map: Option<&Rc<RefCell<patina_frontend::SourceMap>>>,
+    ) -> Result<TaggedValue, VmBackendError> {
         let heap = self.global_env.heap().clone();
+
+        // An inline (define-library ...) is a library definition, not an
+        // expression — route it to the library loader before desugaring.
+        if patina_frontend::is_define_library_form(expr, &heap) {
+            self.eval_inline_define_library(expr)
+                .map_err(|e| VmBackendError::Runtime {
+                    message: e.to_string(),
+                    location: None,
+                })?;
+            return Ok(TaggedValue::UNSPECIFIED);
+        }
+
+        // Desugar: TaggedValue → CoreExpr.
+        let desugarer = match source_map {
+            Some(sm) => Desugarer::with_env_and_source_map(Rc::clone(&self.global_env), sm.clone()),
+            None => Desugarer::with_env(Rc::clone(&self.global_env))
+                .with_fs(self.state.borrow().fs.clone()),
+        };
         let core_expr = desugarer
             .desugar_tagged(expr, &heap)
             .map_err(|e| VmBackendError::Desugar(e.to_string()))?;
 
-        // Handle Import specially.
+        // Handle Import specially — it's a side-effect that modifies the global
+        // environment and doesn't need compilation/execution.
         if let patina_core::core_expr::CoreExprKind::Import { import_sets } = &core_expr.kind {
             for import_set_tv in import_sets {
                 let import_set = patina_frontend::LibraryDefinition::parse_import_set_tagged(
@@ -179,6 +209,7 @@ impl VmBackend {
             return Ok(TaggedValue::UNSPECIFIED);
         }
 
+        // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
         let registry = Rc::clone(&self.state.borrow().primitive_registry);
         let (top, nested) =
             compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)
@@ -189,6 +220,7 @@ impl VmBackend {
         state.load(top);
         state.load_all(nested);
 
+        // Execute.
         let result = execute(&mut state, top_id)?;
         Ok(result)
     }
@@ -332,6 +364,32 @@ impl VmBackend {
     /// upstream SRFI suites) can run on both backends.
     pub fn add_library_search_path(&self, path: std::path::PathBuf) {
         self.library_registry.borrow_mut().add_search_path(path);
+    }
+
+    /// Evaluate an inline `(define-library ...)` form.
+    ///
+    /// Parses the datum with the same loader the `.sld` path uses (includes
+    /// resolve against the current directory), evaluates the body, and
+    /// registers the library — replacing a previous same-named one, so
+    /// re-evaluating the form at the REPL redefines it.
+    fn eval_inline_define_library(&self, form: TaggedValue) -> Result<(), LibraryError> {
+        let heap = self.global_env.heap().clone();
+        let search_paths = self.library_search_paths();
+        let can_load_library = |lib_name: &[String]| {
+            let loaders = self.loader_registry.borrow();
+            loaders.can_load_with_paths(lib_name, &search_paths)
+        };
+        let loader = SchemeLibraryLoader::new(self.state.borrow().fs.clone());
+        let parsed =
+            loader.parse_inline_form(form, std::path::Path::new("."), heap, &can_load_library)?;
+
+        let name = parsed.name.clone();
+        self.library_registry.borrow_mut().begin_loading(&name)?;
+        let result = self.evaluate_parsed_library(parsed);
+        self.library_registry.borrow_mut().end_loading(&name);
+        let lib = result?;
+        self.library_registry.borrow_mut().register_or_replace(lib);
+        Ok(())
     }
 
     /// Compile a source string to bytecode and disassemble it to stdout.
@@ -653,51 +711,7 @@ impl Backend for VmBackend {
     type Error = VmBackendError;
 
     fn eval(&self, expr: TaggedValue, _env: &Rc<Environment>) -> Result<TaggedValue, Self::Error> {
-        // Desugar: TaggedValue → CoreExpr.
-        // We always evaluate in the global environment; the `env` parameter is
-        // ignored for now (same as the tree-walker does for top-level defines).
-        let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
-            .with_fs(self.state.borrow().fs.clone());
-        let heap = self.global_env.heap().clone();
-        let core_expr = desugarer
-            .desugar_tagged(expr, &heap)
-            .map_err(|e| VmBackendError::Desugar(e.to_string()))?;
-
-        // Handle Import specially — it's a side-effect that modifies the global
-        // environment and doesn't need compilation/execution.
-        if let patina_core::core_expr::CoreExprKind::Import { import_sets } = &core_expr.kind {
-            for import_set_tv in import_sets {
-                let import_set = patina_frontend::LibraryDefinition::parse_import_set_tagged(
-                    *import_set_tv,
-                    &heap,
-                )
-                .map_err(|e| VmBackendError::Runtime {
-                    message: format!("Invalid import set: {}", e),
-                    location: None,
-                })?;
-                self.process_import_set(&import_set, &self.global_env)
-                    .map_err(|e| VmBackendError::Runtime {
-                        message: e.to_string(),
-                        location: None,
-                    })?;
-            }
-            return Ok(TaggedValue::UNSPECIFIED);
-        }
-
-        // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
-        let registry = Rc::clone(&self.state.borrow().primitive_registry);
-        let (top, nested) =
-            compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)
-                .map_err(|e| VmBackendError::Compile(e.to_string()))?;
-
-        let top_id = top.id;
-        let mut state = self.state.borrow_mut();
-        state.load(top);
-        state.load_all(nested);
-
-        // Execute.
-        let result = execute(&mut state, top_id)?;
-        Ok(result)
+        self.eval_datum(expr, None)
     }
 
     fn global_env(&self) -> &Rc<Environment> {
