@@ -255,11 +255,7 @@ impl TaggedValue {
     /// Create a boolean value
     #[inline(always)]
     pub fn boolean(b: bool) -> Self {
-        if b {
-            Self::TRUE
-        } else {
-            Self::FALSE
-        }
+        if b { Self::TRUE } else { Self::FALSE }
     }
 
     /// Extract boolean without checking

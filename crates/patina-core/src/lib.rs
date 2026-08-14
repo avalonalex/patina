@@ -48,18 +48,19 @@ pub use library::Library;
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};
 pub use procedure::{Arity, Procedure};
 pub use pvref::{MatchEnv, MatchValue, PVRef};
-pub use record_type::{next_record_type_id, RecordTypeDescriptor};
+pub use record_type::{RecordTypeDescriptor, next_record_type_id};
 pub use scope::{ScopeId, ScopeSet};
 
 // TaggedValue and heap types for compact value representation
 pub use debug_format::{format_tagged, format_tagged_with_scopes};
 pub use heap::gc::{
-    run_mark_phase, ArenaCounts, Collector, GcController, GcDeferGuard, GcMode, GcRoots, GcStats,
-    GcVisitor, MarkBits, MarkSweepCollector,
+    ArenaCounts, Collector, GcController, GcDeferGuard, GcMode, GcRoots, GcStats, GcVisitor,
+    MarkBits, MarkSweepCollector, run_mark_phase,
 };
 pub use heap::{
+    GcFreedBits, Heap, SharedHeap,
     gc::{trace_cont_env, trace_cont_value, trace_exception_handler},
-    new_shared_heap, GcFreedBits, Heap, SharedHeap,
+    new_shared_heap,
 };
 pub use tagged_value::TaggedValue;
 pub use vfs::{FileSystem, MemoryFs, NativeFs, OverlayFs};

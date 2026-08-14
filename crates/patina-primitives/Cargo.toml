@@ -16,7 +16,6 @@ num-traits = { workspace = true }
 num-complex = { workspace = true }
 
 thiserror = { workspace = true }
-once_cell = { workspace = true }
 unicode-casefold = "0.2"
 tracing = { workspace = true }
 

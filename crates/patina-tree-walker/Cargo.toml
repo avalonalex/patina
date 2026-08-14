@@ -22,9 +22,6 @@ num-complex = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
-# For gensym (thread-safe counter)
-once_cell = { workspace = true }
-
 # Unicode case folding
 unicode-casefold = "0.2"
 

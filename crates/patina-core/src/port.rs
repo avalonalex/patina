@@ -292,10 +292,10 @@ impl Port {
         self.pushback.borrow_mut().clear();
         let mut data = self.data.borrow_mut();
         // Finalize write ports before closing
-        if let PortData::File(ref mut fp) = *data {
-            if let FileHandle::Output(ref mut writer) = fp.handle {
-                let _ = writer.finalize();
-            }
+        if let PortData::File(ref mut fp) = *data
+            && let FileHandle::Output(ref mut writer) = fp.handle
+        {
+            let _ = writer.finalize();
         }
         *data = PortData::Closed;
     }
@@ -321,7 +321,7 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::String(ref mut s) => {
+            PortData::String(s) => {
                 if s.position >= s.content.len() {
                     return Ok(None); // EOF
                 }
@@ -366,7 +366,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     let mut buf = [0u8; 4]; // Max UTF-8 char size
                     match reader.read(&mut buf[..1]) {
@@ -422,7 +422,7 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::Bytevector(ref mut b) => {
+            PortData::Bytevector(b) => {
                 if b.position >= b.content.len() {
                     return Ok(None); // EOF
                 }
@@ -444,7 +444,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     let mut buf = [0u8; 1];
                     match reader.read(&mut buf) {
@@ -500,7 +500,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     let buf = reader.fill_buf()?;
                     if buf.is_empty() {
@@ -546,7 +546,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     let buf = reader.fill_buf()?;
                     Ok(!buf.is_empty())
@@ -579,7 +579,7 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::Bytevector(ref mut b) => {
+            PortData::Bytevector(b) => {
                 b.content.push(byte);
                 Ok(())
             }
@@ -595,7 +595,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an output port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Output(ref mut writer) = fp.handle {
                     writer.write_all(&[byte])
                 } else {
@@ -656,7 +656,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     let buf = reader.fill_buf()?;
                     if buf.is_empty() {
@@ -710,7 +710,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     // Check if buffer has data available
                     let buf = reader.fill_buf()?;
@@ -744,7 +744,7 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::String(ref mut port_data) => {
+            PortData::String(port_data) => {
                 port_data.content.push_str(s);
                 Ok(())
             }
@@ -760,7 +760,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an output port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Output(ref mut writer) = fp.handle {
                     writer.write_all(s.as_bytes())
                 } else {
@@ -807,7 +807,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an output port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Output(ref mut writer) = fp.handle {
                     writer.flush()
                 } else {
@@ -878,7 +878,7 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::Bytevector(ref mut b) => {
+            PortData::Bytevector(b) => {
                 if b.position >= b.content.len() {
                     return Ok(None); // EOF
                 }
@@ -905,7 +905,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     let mut buf = vec![0u8; k];
                     match reader.read(&mut buf) {
@@ -958,7 +958,7 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::Bytevector(ref mut b) => {
+            PortData::Bytevector(b) => {
                 if b.position >= b.content.len() {
                     return Ok(None); // EOF
                 }
@@ -981,7 +981,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     match reader.read(target) {
                         Ok(0) => Ok(None), // EOF
@@ -1017,7 +1017,7 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::Bytevector(ref mut b) => {
+            PortData::Bytevector(b) => {
                 b.content.extend_from_slice(bytes);
                 Ok(())
             }
@@ -1033,7 +1033,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an output port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Output(ref mut writer) = fp.handle {
                     writer.write_all(bytes)
                 } else {
@@ -1086,7 +1086,7 @@ impl Port {
     fn read_line_from_source(&self) -> io::Result<Option<String>> {
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::String(ref mut s) => {
+            PortData::String(s) => {
                 if s.position >= s.content.len() {
                     return Ok(None); // EOF
                 }
@@ -1115,7 +1115,7 @@ impl Port {
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             )),
-            PortData::File(ref mut fp) => {
+            PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     let mut line = String::new();
                     match reader.read_line(&mut line) {
@@ -1171,7 +1171,7 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::String(ref mut s) => {
+            PortData::String(s) => {
                 s.position += chars_consumed;
                 Ok(())
             }
