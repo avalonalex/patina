@@ -38,8 +38,8 @@ fn write_dup_script(dir: &Path) -> String {
 
 #[test]
 fn version_flag_prints_version() {
-    let temp = TempDir::new().unwrap();
-    let (stdout, stderr, ok) = run_patina(temp.path(), &["--version"]);
+    // --version touches no files; any cwd serves.
+    let (stdout, stderr, ok) = run_patina(&std::env::temp_dir(), &["--version"]);
     assert!(ok, "stderr: {}", stderr);
     assert_eq!(
         stdout.trim(),

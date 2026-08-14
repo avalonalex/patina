@@ -70,6 +70,17 @@ fn format_library_name(name: &[String]) -> String {
     format!("({})", name.join(" "))
 }
 
+/// Entries of $PATINA_LIBRARY_PATH, in order. PATH-style splitting
+/// (colon-separated on Unix); empty entries are skipped.
+fn env_library_paths() -> Vec<PathBuf> {
+    match std::env::var_os("PATINA_LIBRARY_PATH") {
+        Some(joined) => std::env::split_paths(&joined)
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 /// Registry for managing loaded Scheme libraries
 ///
 /// Responsibilities:
@@ -122,14 +133,12 @@ impl LibraryRegistry {
     pub fn with_default_paths() -> Self {
         let mut registry = Self::new();
 
-        // 1. $PATINA_LIBRARY_PATH (colon-separated) — the conventional
-        // user override, ahead of the built-in defaults the way
-        // GUILE_LOAD_PATH and CHIBI_MODULE_PATH are. CLI -I flags prepend
-        // in front of even these.
-        if let Ok(lib_path) = std::env::var("PATINA_LIBRARY_PATH") {
-            for dir in lib_path.split(':').filter(|d| !d.is_empty()) {
-                registry.add_search_path(PathBuf::from(dir));
-            }
+        // 1. $PATINA_LIBRARY_PATH — the conventional user override, ahead
+        // of the built-in defaults the way GUILE_LOAD_PATH and
+        // CHIBI_MODULE_PATH are. CLI -I flags prepend in front of even
+        // these.
+        for dir in env_library_paths() {
+            registry.add_search_path(dir);
         }
 
         // 2. Current directory ./lib/
@@ -408,13 +417,14 @@ mod tests {
     #[test]
     fn test_default_paths_include_project_local_deps() {
         let registry = LibraryRegistry::with_default_paths();
-        // Any PATINA_LIBRARY_PATH entries come first, then ./lib, then the
-        // project-local dependency directory — ahead of the
-        // PATINA_HOME/workspace/exe paths, whose presence varies.
-        let env_entries = std::env::var("PATINA_LIBRARY_PATH")
-            .map(|v| v.split(':').filter(|d| !d.is_empty()).count())
-            .unwrap_or(0);
-        assert!(registry.search_paths[env_entries + 1].ends_with(".patina/lib"));
+        // ./lib immediately precedes the project-local dependency directory,
+        // wherever ambient PATINA_LIBRARY_PATH entries shift the pair.
+        let i = registry
+            .search_paths
+            .iter()
+            .position(|p| p.ends_with(".patina/lib"))
+            .expect("./.patina/lib must be a default search path");
+        assert!(registry.search_paths[i - 1].ends_with("lib"));
     }
 
     #[test]
