@@ -113,31 +113,42 @@ impl LibraryRegistry {
     /// Create a library registry with default search paths
     ///
     /// Default search paths (in order):
-    /// 1. ./lib/ (relative to current directory)
-    /// 2. ./.patina/lib/ (project-local dependency directory)
-    /// 3. $PATINA_HOME/lib/ (if PATINA_HOME env var is set)
-    /// 4. Workspace root/lib/ (by walking up from executable to find Cargo.toml workspace)
-    /// 5. Executable directory/../lib/ (relative to binary)
+    /// 1. $PATINA_LIBRARY_PATH entries (colon-separated, if set)
+    /// 2. ./lib/ (relative to current directory)
+    /// 3. ./.patina/lib/ (project-local dependency directory)
+    /// 4. $PATINA_HOME/lib/ (if PATINA_HOME env var is set)
+    /// 5. Workspace root/lib/ (by walking up from executable to find Cargo.toml workspace)
+    /// 6. Executable directory/../lib/ (relative to binary)
     pub fn with_default_paths() -> Self {
         let mut registry = Self::new();
 
-        // 1. Current directory ./lib/
+        // 1. $PATINA_LIBRARY_PATH (colon-separated) — the conventional
+        // user override, ahead of the built-in defaults the way
+        // GUILE_LOAD_PATH and CHIBI_MODULE_PATH are. CLI -I flags prepend
+        // in front of even these.
+        if let Ok(lib_path) = std::env::var("PATINA_LIBRARY_PATH") {
+            for dir in lib_path.split(':').filter(|d| !d.is_empty()) {
+                registry.add_search_path(PathBuf::from(dir));
+            }
+        }
+
+        // 2. Current directory ./lib/
         registry.add_search_path(PathBuf::from("./lib"));
 
-        // 2. Project-local dependency directory ./.patina/lib/ — where a
+        // 3. Project-local dependency directory ./.patina/lib/ — where a
         // future fetcher drops third-party libraries (Track L; see
         // PRD/future/PACKAGE_MANAGER_DESIGN.md). Ahead of the workspace and
         // executable paths so project dependencies win over installed ones.
         registry.add_search_path(PathBuf::from("./.patina/lib"));
 
-        // 3. $PATINA_HOME/lib/ if set
+        // 4. $PATINA_HOME/lib/ if set
         if let Ok(patina_home) = std::env::var("PATINA_HOME") {
             let mut path = PathBuf::from(patina_home);
             path.push("lib");
             registry.add_search_path(path);
         }
 
-        // 4. Workspace root/lib/ - walk up from executable looking for workspace Cargo.toml
+        // 5. Workspace root/lib/ - walk up from executable looking for workspace Cargo.toml
         if let Ok(exe_path) = std::env::current_exe()
             && let Some(workspace_root) = Self::find_workspace_root(&exe_path)
         {
@@ -146,7 +157,7 @@ impl LibraryRegistry {
             registry.add_search_path(lib_path);
         }
 
-        // 5. Executable directory/../lib/
+        // 6. Executable directory/../lib/
         if let Ok(exe_path) = std::env::current_exe()
             && let Some(exe_dir) = exe_path.parent()
         {
@@ -186,17 +197,25 @@ impl LibraryRegistry {
     /// Paths are searched in the order they are added.
     /// Duplicate paths are ignored.
     pub fn add_search_path(&mut self, path: PathBuf) {
-        // Normalize the path
-        if let Ok(canonical) = path.canonicalize() {
-            if !self.search_paths.contains(&canonical) {
-                self.search_paths.push(canonical);
-            }
-        } else {
-            // If canonicalization fails (path doesn't exist yet), just add it
-            if !self.search_paths.contains(&path) {
-                self.search_paths.push(path);
-            }
+        let path = Self::normalize_search_path(path);
+        if !self.search_paths.contains(&path) {
+            self.search_paths.push(path);
         }
+    }
+
+    /// Add a search path at the front, so it is consulted before every
+    /// existing entry (the CLI's `-I`). Duplicate paths are ignored.
+    pub fn prepend_search_path(&mut self, path: PathBuf) {
+        let path = Self::normalize_search_path(path);
+        if !self.search_paths.contains(&path) {
+            self.search_paths.insert(0, path);
+        }
+    }
+
+    /// Canonicalize where possible; a path that does not exist yet is kept
+    /// as given.
+    fn normalize_search_path(path: PathBuf) -> PathBuf {
+        path.canonicalize().unwrap_or(path)
     }
 
     /// Get all configured search paths
@@ -389,9 +408,26 @@ mod tests {
     #[test]
     fn test_default_paths_include_project_local_deps() {
         let registry = LibraryRegistry::with_default_paths();
-        // ./lib first, then the project-local dependency directory — ahead of
-        // any PATINA_HOME/workspace/exe paths, whose presence varies.
-        assert!(registry.search_paths[1].ends_with(".patina/lib"));
+        // Any PATINA_LIBRARY_PATH entries come first, then ./lib, then the
+        // project-local dependency directory — ahead of the
+        // PATINA_HOME/workspace/exe paths, whose presence varies.
+        let env_entries = std::env::var("PATINA_LIBRARY_PATH")
+            .map(|v| v.split(':').filter(|d| !d.is_empty()).count())
+            .unwrap_or(0);
+        assert!(registry.search_paths[env_entries + 1].ends_with(".patina/lib"));
+    }
+
+    #[test]
+    fn test_prepend_search_path_goes_first() {
+        let mut registry = LibraryRegistry::new();
+        registry.add_search_path(PathBuf::from("/nonexistent/a"));
+        registry.prepend_search_path(PathBuf::from("/nonexistent/b"));
+        assert!(registry.search_paths[0].ends_with("b"));
+
+        // Duplicates are ignored rather than moved.
+        registry.prepend_search_path(PathBuf::from("/nonexistent/a"));
+        assert_eq!(registry.search_paths.len(), 2);
+        assert!(registry.search_paths[0].ends_with("b"));
     }
 
     #[test]

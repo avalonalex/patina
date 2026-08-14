@@ -8,52 +8,173 @@ use std::env;
 use std::fs;
 use std::process;
 
+/// Parsed command-line options.
+struct CliOptions {
+    filename: Option<String>,
+    use_tree_walker: bool,
+    dump: bool,
+    trace: bool,
+    /// `-I` directories, in command-line order (first listed = searched first).
+    prepend_paths: Vec<String>,
+    /// `-A` directories, in command-line order.
+    append_paths: Vec<String>,
+    /// `-p` expressions, evaluated in order; each result is printed.
+    eval_exprs: Vec<String>,
+}
+
+fn parse_args(args: &[String]) -> CliOptions {
+    let mut opts = CliOptions {
+        filename: None,
+        use_tree_walker: false,
+        dump: false,
+        trace: false,
+        prepend_paths: Vec::new(),
+        append_paths: Vec::new(),
+        eval_exprs: Vec::new(),
+    };
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                print_help();
+                process::exit(0);
+            }
+            "--version" => {
+                println!("patina {}", env!("CARGO_PKG_VERSION"));
+                process::exit(0);
+            }
+            "--tree-walker" => opts.use_tree_walker = true,
+            "--dump" | "--vm-dump" => opts.dump = true,
+            "--trace" | "--vm-trace" => opts.trace = true,
+            // Accept --vm for backwards compatibility (it's now the default).
+            "--vm" => {}
+            "-A" => opts
+                .append_paths
+                .push(require_value(&mut iter, "-A", "a directory")),
+            "-I" => opts
+                .prepend_paths
+                .push(require_value(&mut iter, "-I", "a directory")),
+            "-p" => opts
+                .eval_exprs
+                .push(require_value(&mut iter, "-p", "an expression")),
+            _ if !arg.starts_with('-') => opts.filename = Some(arg.clone()),
+            _ => {
+                eprintln!("Unknown option: {}", arg);
+                print_help();
+                process::exit(1);
+            }
+        }
+    }
+    opts
+}
+
+/// Take the value following a flag, or exit with a usage error.
+fn require_value(iter: &mut std::slice::Iter<'_, String>, flag: &str, what: &str) -> String {
+    iter.next().cloned().unwrap_or_else(|| {
+        eprintln!("Error: {} requires {}", flag, what);
+        process::exit(1);
+    })
+}
+
+/// Uniform search-path surface over the two backends' inherent methods
+/// (`add_library_search_path` / `prepend_library_search_path` are not on the
+/// `Backend` trait).
+trait LibraryPaths {
+    fn prepend(&self, dir: std::path::PathBuf);
+    fn append(&self, dir: std::path::PathBuf);
+}
+
+impl LibraryPaths for VmBackend {
+    fn prepend(&self, dir: std::path::PathBuf) {
+        self.prepend_library_search_path(dir);
+    }
+    fn append(&self, dir: std::path::PathBuf) {
+        self.add_library_search_path(dir);
+    }
+}
+
+impl LibraryPaths for patina_tree_walker::TreeWalker {
+    fn prepend(&self, dir: std::path::PathBuf) {
+        self.prepend_library_search_path(dir);
+    }
+    fn append(&self, dir: std::path::PathBuf) {
+        self.add_library_search_path(dir);
+    }
+}
+
+/// Apply `-I` / `-A` directories to a backend's library search path.
+fn apply_library_paths(backend: &dyn LibraryPaths, opts: &CliOptions) {
+    // Prepend in reverse so the first -I listed is searched first.
+    for dir in opts.prepend_paths.iter().rev() {
+        backend.prepend(std::path::PathBuf::from(dir));
+    }
+    for dir in &opts.append_paths {
+        backend.append(std::path::PathBuf::from(dir));
+    }
+}
+
+/// `-p` mode: evaluate each expression in order, print each non-unspecified
+/// result (write representation, like the REPL), and exit.
+fn run_eval_print<B: Backend>(interp: &Interpreter<B>, exprs: &[String]) -> !
+where
+    patina_interpreter::InterpreterError<B::Error>: std::fmt::Display,
+{
+    use patina_core::debug_format::format_tagged;
+
+    let heap = interp.backend().global_env().heap().clone();
+    for expr in exprs {
+        match interp.eval_program(expr) {
+            Ok(v) => {
+                if v != patina_core::TaggedValue::UNSPECIFIED {
+                    println!("{}", format_tagged(v, &heap.borrow()));
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            }
+        }
+    }
+    process::exit(0);
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+    let opts = parse_args(&args[1..]);
 
-    let mut filename: Option<String> = None;
-    let mut use_tree_walker = false;
-    let mut dump = false;
-    let mut trace = false;
-
-    for arg in args.iter().skip(1) {
-        if arg == "--help" || arg == "-h" {
-            print_help();
-            process::exit(0);
-        } else if arg == "--tree-walker" {
-            use_tree_walker = true;
-        } else if arg == "--dump" || arg == "--vm-dump" {
-            dump = true;
-        } else if arg == "--trace" || arg == "--vm-trace" {
-            trace = true;
-        } else if arg == "--vm" {
-            // Accept --vm for backwards compatibility (it's now the default).
-            // No-op.
-        } else if !arg.starts_with('-') {
-            filename = Some(arg.clone());
-        } else {
-            eprintln!("Unknown option: {}", arg);
-            print_help();
+    if !opts.eval_exprs.is_empty() {
+        if opts.filename.is_some() || opts.dump || opts.trace {
+            eprintln!("Error: -p cannot be combined with a script file, --dump, or --trace");
             process::exit(1);
+        }
+        if opts.use_tree_walker {
+            let interp = TreeWalkInterpreter::new_tree_walker();
+            apply_library_paths(interp.backend(), &opts);
+            run_eval_print(&interp, &opts.eval_exprs);
+        } else {
+            let interp = Interpreter::new(VmBackend::new());
+            apply_library_paths(interp.backend(), &opts);
+            run_eval_print(&interp, &opts.eval_exprs);
         }
     }
 
-    if let Some(file) = filename {
-        if dump {
+    if let Some(file) = opts.filename.clone() {
+        if opts.dump {
             dump_bytecode_file(&file);
-        } else if trace {
-            run_script_vm_trace(&file);
-        } else if use_tree_walker {
-            run_script_tree_walker(&file);
+        } else if opts.trace {
+            run_script_vm_trace(&file, &opts);
+        } else if opts.use_tree_walker {
+            run_script_tree_walker(&file, &opts);
         } else {
-            run_script_vm(&file);
+            run_script_vm(&file, &opts);
         }
-    } else if dump {
+    } else if opts.dump {
         dump_bytecode_stdin();
-    } else if use_tree_walker {
-        run_repl_tree_walker();
+    } else if opts.use_tree_walker {
+        run_repl_tree_walker(&opts);
     } else {
-        run_repl_vm();
+        run_repl_vm(&opts);
     }
 }
 
@@ -70,10 +191,19 @@ fn print_help() {
     eprintln!("Usage: patina [OPTIONS] [FILE]");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --help         Show this help message");
+    eprintln!("  --help, -h     Show this help message");
+    eprintln!("  --version      Print the version and exit");
     eprintln!("  --tree-walker  Use the tree-walking backend instead of the VM");
     eprintln!("  --dump         Compile to bytecode and disassemble (no execution)");
     eprintln!("  --trace        Execute with instruction-level tracing to stderr");
+    eprintln!("  -I <dir>       Prepend a directory to the library search path");
+    eprintln!("  -A <dir>       Append a directory to the library search path");
+    eprintln!("  -p <expr>      Evaluate an expression, print its result, and exit");
+    eprintln!("                 (repeatable; evaluated in order)");
+    eprintln!();
+    eprintln!("Environment:");
+    eprintln!("  PATINA_LIBRARY_PATH  Colon-separated library directories, searched");
+    eprintln!("                       before the built-in defaults");
     eprintln!();
     eprintln!("If FILE is provided, run it as a script.");
     eprintln!("Otherwise, start an interactive REPL.");
@@ -82,7 +212,7 @@ fn print_help() {
     eprintln!("Use --tree-walker to switch to the CPS tree-walking interpreter.");
 }
 
-fn run_script_tree_walker(filename: &str) {
+fn run_script_tree_walker(filename: &str, opts: &CliOptions) {
     let code = match fs::read_to_string(filename) {
         Ok(content) => content,
         Err(e) => {
@@ -92,6 +222,7 @@ fn run_script_tree_walker(filename: &str) {
     };
 
     let interp = TreeWalkInterpreter::new_tree_walker();
+    apply_library_paths(interp.backend(), opts);
     if let Some(dir) = script_dir(filename) {
         interp.backend().add_library_search_path(dir);
     }
@@ -149,7 +280,7 @@ fn dump_bytecode(code: &str) {
     }
 }
 
-fn run_script_vm_trace(filename: &str) {
+fn run_script_vm_trace(filename: &str, opts: &CliOptions) {
     use patina_vm::tracer::StepTracer;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -169,6 +300,7 @@ fn run_script_vm_trace(filename: &str) {
     let handle = Rc::new(RefCell::new(tracer));
     backend.set_tracer(Some(handle.clone()));
     let interp = Interpreter::new(backend);
+    apply_library_paths(interp.backend(), opts);
     if let Some(dir) = script_dir(filename) {
         interp.backend().add_library_search_path(dir);
     }
@@ -184,7 +316,7 @@ fn run_script_vm_trace(filename: &str) {
     }
 }
 
-fn run_script_vm(filename: &str) {
+fn run_script_vm(filename: &str, opts: &CliOptions) {
     let code = match fs::read_to_string(filename) {
         Ok(content) => content,
         Err(e) => {
@@ -194,6 +326,7 @@ fn run_script_vm(filename: &str) {
     };
 
     let interp = Interpreter::new(VmBackend::new());
+    apply_library_paths(interp.backend(), opts);
     if let Some(dir) = script_dir(filename) {
         interp.backend().add_library_search_path(dir);
     }
@@ -315,9 +448,10 @@ fn eval_program_resilient_vm(
     result
 }
 
-fn run_repl_tree_walker() {
+fn run_repl_tree_walker(opts: &CliOptions) {
     match Repl::new() {
         Ok(mut repl) => {
+            apply_library_paths(repl.interpreter().backend(), opts);
             if let Err(e) = repl.run() {
                 eprintln!("REPL error: {}", e);
                 process::exit(1);
@@ -330,12 +464,13 @@ fn run_repl_tree_walker() {
     }
 }
 
-fn run_repl_vm() {
+fn run_repl_vm(opts: &CliOptions) {
     use patina_core::TaggedValue;
     use patina_core::debug_format::format_tagged;
     use patina_interpreter::{ParseError, Parser, SourceMap};
 
     let interp = Interpreter::new(VmBackend::new());
+    apply_library_paths(interp.backend(), opts);
     let heap = interp.backend().global_env().heap().clone();
 
     println!("Patina Scheme R7RS Interpreter");

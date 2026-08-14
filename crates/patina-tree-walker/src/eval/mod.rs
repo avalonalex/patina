@@ -655,6 +655,11 @@ impl Evaluator {
         self.library_registry.borrow_mut().add_search_path(path);
     }
 
+    /// Add a library search path ahead of every existing one (the CLI's `-I`).
+    pub fn prepend_library_search_path(&self, path: PathBuf) {
+        self.library_registry.borrow_mut().prepend_search_path(path);
+    }
+
     /// Evaluate an inline `(define-library ...)` form.
     ///
     /// Parses the datum with the same loader the `.sld` path uses (includes

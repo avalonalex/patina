@@ -179,9 +179,15 @@ impl Repl {
         })
     }
 
+    /// The REPL's interpreter, for pre-run configuration (library search
+    /// paths from the CLI's `-I`/`-A` flags).
+    pub fn interpreter(&self) -> &TreeWalkInterpreter {
+        &self.interpreter
+    }
+
     pub fn run(&mut self) -> rustyline::Result<()> {
         println!("Patina Scheme R7RS Interpreter");
-        println!("Version 0.1.0");
+        println!("Version {}", env!("CARGO_PKG_VERSION"));
         println!();
         println!("Features:");
         println!("  • Full R7RS continuation support (call/cc, dynamic-wind)");
