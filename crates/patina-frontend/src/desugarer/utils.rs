@@ -111,7 +111,7 @@ pub fn convert_formals_tagged(formals: TaggedValue, shared_heap: &SharedHeap) ->
                     // Improper list with symbol - mixed arity: (x y . rest)
                     check_no_duplicates_scoped(&params, "lambda")?;
                     let rest_param = ScopedParam::simple(Rc::from(rest_name));
-                    if params.iter().any(|p| p.name.as_ref() == rest_name) {
+                    if binds_identifier(&params, rest_name, &rest_param.scopes) {
                         return Err(DesugarError::DuplicateParameter {
                             name: rest_name.to_string(),
                             context: "lambda".to_string(),
@@ -124,7 +124,7 @@ pub fn convert_formals_tagged(formals: TaggedValue, shared_heap: &SharedHeap) ->
                 } else if let Some(id) = get_identifier_info(current, &heap) {
                     // Improper list with identifier - mixed arity: (x y . rest)
                     check_no_duplicates_scoped(&params, "lambda")?;
-                    if params.iter().any(|p| p.name == id.0) {
+                    if binds_identifier(&params, &id.0, &id.1) {
                         return Err(DesugarError::DuplicateParameter {
                             name: id.0.to_string(),
                             context: "lambda".to_string(),
@@ -270,11 +270,25 @@ pub fn parse_define_function_tagged(
     ))
 }
 
-/// Check for duplicate parameters (by name only, for scoped params)
+/// Check for duplicate parameters.
+///
+/// Two parameters collide only when they share a name *and* a scope set. A
+/// recursive macro that introduces the same template identifier on each
+/// expansion produces several params spelled alike, but each carries the
+/// distinct scope of the expansion that introduced it, so they are separate
+/// bindings — comparing names alone would reject hygienic code such as:
+///
+/// ```scheme
+/// (define-syntax gen
+///   (syntax-rules ()
+///     ((_ () (args ...)) (lambda (args ...) (list args ...)))
+///     ((_ (x . rest) (args ...)) (gen rest (args ... a)))))
+/// ((gen (1 2) ()) 10 20)  ;; => (10 20)
+/// ```
 pub fn check_no_duplicates_scoped(params: &[ScopedParam], context: &str) -> Result<()> {
     let mut seen = HashSet::new();
     for param in params {
-        if !seen.insert(param.name.as_ref()) {
+        if !seen.insert((param.name.as_ref(), &param.scopes)) {
             return Err(DesugarError::DuplicateParameter {
                 name: param.name.to_string(),
                 context: context.to_string(),
@@ -282,6 +296,16 @@ pub fn check_no_duplicates_scoped(params: &[ScopedParam], context: &str) -> Resu
         }
     }
     Ok(())
+}
+
+/// Whether `params` already binds the identifier `(name, scopes)`.
+///
+/// The rest parameter of an improper formals list is checked against the fixed
+/// params with the same name-plus-scopes rule as [`check_no_duplicates_scoped`].
+fn binds_identifier(params: &[ScopedParam], name: &str, scopes: &ScopeSet) -> bool {
+    params
+        .iter()
+        .any(|p| p.name.as_ref() == name && &p.scopes == scopes)
 }
 
 /// Extract all parameter names from a Formals structure

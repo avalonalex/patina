@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**126 of 187** vendored packages pass, 2026-08-13); L1/L2 continue against the measured queue
+(**127 of 187** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -187,6 +187,24 @@ block 29, led by `(srfi 130)` ×4, `(chibi)` ×3, `(srfi 114 comparators)`/`(srf
 parser (`(a b #;c)`), transitively blocking 19 packages through srfi-14's reference
 implementation — fixed with the harness landing, moving the baseline 118 → 126.
 
+**Parse-error triage, 2026-08-14 (126 → 127).** Every parse-error bucket was reduced to a minimal
+repro and cross-checked against Gauche and Chez, which is what separates *our* defects from upstream
+code that only chibi accepts. One was ours and is fixed here — **template-introduced identifiers
+were compared by name alone** (§6), unblocking **srfi-156**. The rest of the queue, with verdicts:
+
+| Bucket | Pkgs | Verdict |
+|---|---|---|
+| bare `@` identifier | 9 | Patina is right per R7RS 7.1.1 (`@` is a ⟨special subsequent⟩, not an ⟨initial⟩); chibi and Gauche accept it. Needs the explicit decision recorded in §6, not a silent relaxation. |
+| syntax-rules rule with >2 elements | 5 | **Chez rejects these too.** They are typos in chibi's own sources (e.g. `((_) bv off i)` in `ieee-754.scm`) that only chibi's lenient reader tolerates. Matching chibi here means accepting nonsense. |
+| `syntax-rules` with no literals list | 3 | Upstream-malformed: `(syntax-rules ((_ x) 'x))` sits in `(chibi monad environment)`'s `cond-expand` **else** branch, which chibi itself never takes. Blocks chibi-show and chibi-snow-commands transitively. |
+| `Duplicate parameter 'space' / 'symbol-first'` | 2 | chibi-parse and edn get *past* the §6 fix and now fail deeper, in `grammar-bind`'s `new-symbol?` guard. That guard decides whether a nonterminal is already bound by putting the accumulated names in a `syntax-rules` **literals** list, so it turns on `free-identifier=?` for a template-substituted identifier. A real gap, but its own investigation — not a small fix. |
+| `Expected proper list in feature requirement` | 1 | **Ours, fix pending.** srfi-42 ships `(cond-expand (stklos …) (else #f))`; the inert `#f` is not a list, so it hard-errors instead of taking L0's warn-and-skip path — and reports a message belonging to a shared list helper, which misattributes the problem to the feature requirement. |
+
+**Recorded debt — `report.md` is written by shell redirect.** `run` and `report` print the rendered
+matrix to stdout and only `results.scm` is written to disk, so the committed
+`compat/reports/report.md` goes stale unless the caller redirects into it. Either write both
+artifacts, or stop committing the rendered copy.
+
 #### Original spec
 A new workspace crate, `crates/patina-compat/`, that owns the whole loop. Everything it needs is in this repo; it shells out to nothing but the Patina binary under test.
 
@@ -275,6 +293,29 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 **Self-containment invariant.** At no point does the track acquire a build-, test-, or CI-time dependency on another Scheme implementation or package manager. The chibi checkout is corpus *data* pinned by commit, not tooling. Anything that would violate this belongs in §3. See `PRD/SNOW_AND_PERF_ROADMAP.md` for the M1–M4 interleave with Track P; note that Track P's GC (P6) is the cross-cutting unblocker that lets L3's real packages run long-running without leaking.
 
 ## 6. Known defects surfaced by this track
+
+**Recursive macros could not introduce a fresh binding per expansion** — ✅ **fixed** (2026-08-14).
+Both backends. `check_no_duplicates_scoped` in `patina-frontend/src/desugarer/utils.rs` keyed its
+`HashSet` on the parameter *name*, so two params introduced by different expansions of the same
+template were rejected as duplicates even though their scope sets differed:
+
+```scheme
+(define-syntax gen
+  (syntax-rules ()
+    ((_ () (args ...)) (lambda (args ...) (list args ...)))
+    ((_ (x . rest) (args ...)) (gen rest (args ... a)))))
+((gen (1 2) ()) 10 20)
+;; before => Error: Duplicate parameter 'a' in lambda
+;; after / Gauche / Chez => (10 20)
+```
+
+Nothing downstream needed changing: `ScopeId::fresh()` per expansion already gave each introduced
+`a` its own scope, and both the VM's `alpha_rename` pass and the tree-walker bind params by name
+*and* scopes. Only the eager desugarer check disagreed. The two rest-parameter checks beside it
+compared by name alone for the same reason and now share one `binds_identifier` rule. Genuine
+duplicates — `(lambda (q q) q)`, `(lambda (q . q) q)` — still error. Regression tests in
+`crates/patina-tests/tests/compliance/macros_advanced.rs` run on both backends and include SRFI
+156's `extract-placeholders` shape, which is what surfaced this.
 
 **Tree-walker: nested `guard` across a procedure boundary** — ✅ **fixed**. Was 15 errors in the
 R7RS suite, all `Undefined variable: k_N`. Pre-existing (reproduced on `main` before this track) and
