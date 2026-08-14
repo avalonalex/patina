@@ -1,0 +1,12 @@
+[package]
+name = "patina-compat"
+version = "0.1.0"
+edition = "2024"
+description = "Self-contained third-party compatibility harness for Patina (Track L)"
+
+[dependencies]
+patina-core = { path = "../patina-core" }
+patina-frontend = { path = "../patina-frontend" }
+
+[dev-dependencies]
+tempfile = "3"
