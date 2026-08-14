@@ -6,7 +6,8 @@
 |---|---|
 | pass | 126 |
 | missing-library | 29 |
-| parse-error | 29 |
+| parse-error | 23 |
+| load-error | 6 |
 | unbound-identifier | 1 |
 | wrong-result | 1 |
 | runtime-error | 0 |
@@ -15,7 +16,7 @@
 
 ## Missing libraries — the bundling work queue
 
-| Library | Packages blocked |
+| Library | Packages |
 |---|---|
 | (srfi 130) | 4 |
 | (chibi) | 3 |
@@ -44,14 +45,19 @@
 |---|---|
 | `LexError(UnexpectedChar('@'))` | 9 |
 | `Each syntax-rules rule must have exactly 2 elements (pattern template)` | 5 |
-| `Exported identifier 'duplicate-file-descriptor' not defined` | 4 |
 | `syntax-rules literals must be symbols` | 3 |
 | `Duplicate parameter 'new-tmp' in lambda` | 2 |
-| `Exported identifier 'begin' not defined` | 2 |
 | `#<unknown>` | 1 |
 | `Duplicate parameter 'arg' in lambda` | 1 |
 | `InvalidSyntax("Expected proper list in feature requirement")` | 1 |
 | `Name mismatch in interface implementation (expected, gotten) proc0 proc0` | 1 |
+
+## Load errors
+
+| Error | Packages |
+|---|---|
+| `Exported identifier 'duplicate-file-descriptor' not defined` | 4 |
+| `Exported identifier 'begin' not defined` | 2 |
 
 ## Unbound identifiers
 
@@ -80,7 +86,7 @@
 | chibi-crypto-rsa | test | parse-error |
 | chibi-crypto-sha2 | test | parse-error |
 | chibi-edit-distance | test | missing-library |
-| chibi-filesystem | test | parse-error |
+| chibi-filesystem | test | load-error |
 | chibi-html-parser | probe | parse-error |
 | chibi-irregex | probe | missing-library |
 | chibi-iset | test | pass |
@@ -105,7 +111,7 @@
 | chibi-string | test | pass |
 | chibi-sxml | probe | parse-error |
 | chibi-tar | test | missing-library |
-| chibi-temp-file | probe | parse-error |
+| chibi-temp-file | probe | load-error |
 | chibi-term-edit-line | probe | pass |
 | chibi-uri | test | pass |
 | chibi-voting | test | missing-library |
@@ -145,8 +151,8 @@
 | pfds-set | probe | pass |
 | pfds-vector | probe | pass |
 | postgresql | probe | parse-error |
-| r6rs-arithmetic-fixnums | probe | parse-error |
-| r6rs-base | probe | parse-error |
+| r6rs-arithmetic-fixnums | probe | load-error |
+| r6rs-base | probe | load-error |
 | r6rs-bytevectors | probe | pass |
 | r6rs-control | probe | pass |
 | r6rs-enums | probe | pass |
@@ -185,7 +191,7 @@
 | slib-common-list-functions | probe | pass |
 | slib-daylight | probe | pass |
 | slib-determinant | probe | pass |
-| slib-directory | probe | parse-error |
+| slib-directory | probe | load-error |
 | slib-dynamic | probe | pass |
 | slib-factor | probe | pass |
 | slib-filename | probe | pass |
@@ -219,7 +225,7 @@
 | slib-topological-sort | probe | pass |
 | slib-tree | probe | pass |
 | slib-tzfile | probe | pass |
-| slib-uri | probe | parse-error |
+| slib-uri | probe | load-error |
 | slib-xml-parse | probe | parse-error |
 | srfi-106 | probe | missing-library |
 | srfi-11 | probe | pass |

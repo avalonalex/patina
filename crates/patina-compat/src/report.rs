@@ -11,6 +11,16 @@ use patina_core::SharedHeap;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+/// The detail list a status carries, with its serialization key.
+fn status_detail(status: &Status) -> Option<(&'static str, &[String])> {
+    match status {
+        Status::MissingLibrary(l) | Status::OutOfScope(l) => Some(("missing", l)),
+        Status::UnboundIdentifier(l) => Some(("unbound", l)),
+        Status::ParseError(l) | Status::LoadError(l) => Some(("errors", l)),
+        _ => None,
+    }
+}
+
 /// Serialize results to the s-expression snapshot format.
 pub fn to_sexp(results: &[PackageResult], backend: &str) -> String {
     let mut out = String::new();
@@ -27,29 +37,12 @@ pub fn to_sexp(results: &[PackageResult], backend: &str) -> String {
             r.mode,
             r.status.key()
         );
-        match &r.status {
-            Status::MissingLibrary(libs) | Status::OutOfScope(libs) => {
-                let _ = write!(out, " (missing");
-                for lib in libs {
-                    let _ = write!(out, " \"{}\"", sexp::escape_string(lib));
-                }
-                let _ = write!(out, ")");
+        if let Some((key, items)) = status_detail(&r.status) {
+            let _ = write!(out, " ({}", key);
+            for item in items {
+                let _ = write!(out, " \"{}\"", sexp::escape_string(item));
             }
-            Status::UnboundIdentifier(ids) => {
-                let _ = write!(out, " (unbound");
-                for id in ids {
-                    let _ = write!(out, " \"{}\"", sexp::escape_string(id));
-                }
-                let _ = write!(out, ")");
-            }
-            Status::ParseError(details) => {
-                let _ = write!(out, " (errors");
-                for d in details {
-                    let _ = write!(out, " \"{}\"", sexp::escape_string(d));
-                }
-                let _ = write!(out, ")");
-            }
-            _ => {}
+            let _ = write!(out, ")");
         }
         out.push_str(")\n");
     }
@@ -57,62 +50,75 @@ pub fn to_sexp(results: &[PackageResult], backend: &str) -> String {
     out
 }
 
-/// Parse a results snapshot back into `PackageResult`s (for `report`).
-pub fn from_sexp(source: &str, heap: &SharedHeap) -> Result<Vec<PackageResult>, String> {
+/// Parse a results snapshot back into `PackageResult`s and the backend it
+/// was measured on (for `report`).
+pub fn from_sexp(source: &str, heap: &SharedHeap) -> Result<(Vec<PackageResult>, String), String> {
     let forms = sexp::parse_all(source, heap)?;
     let top = forms
         .first()
         .and_then(|f| sexp::tagged_form(*f, "patina-compat-results", heap))
         .ok_or("not a patina-compat-results file")?;
 
+    let mut backend = "vm".to_string();
     let mut results = Vec::new();
     for section in top {
+        if let Some(rest) = sexp::tagged_form(section, "backend", heap) {
+            if let Some(name) = rest.first().and_then(|tv| sexp::string_value(*tv, heap)) {
+                backend = name;
+            }
+            continue;
+        }
         let Some(rows) = sexp::tagged_form(section, "results", heap) else {
             continue;
         };
         for row in rows {
-            let fields = sexp::list_elements(row, heap).ok_or("malformed result row")?;
-            let mut slug = None;
-            let mut mode = "probe";
-            let mut status_key = None;
-            let mut names = Vec::new();
-            for field in fields {
-                if let Some(rest) = sexp::tagged_form(field, "slug", heap) {
-                    slug = rest.first().and_then(|tv| sexp::string_value(*tv, heap));
-                } else if let Some(rest) = sexp::tagged_form(field, "mode", heap) {
-                    if rest.first().and_then(|tv| sexp::symbol_name(*tv, heap))
-                        == Some("test".to_string())
-                    {
-                        mode = "test";
-                    }
-                } else if let Some(rest) = sexp::tagged_form(field, "status", heap) {
-                    status_key = rest.first().and_then(|tv| sexp::symbol_name(*tv, heap));
-                } else if let Some(rest) = sexp::tagged_form(field, "missing", heap)
-                    .or_else(|| sexp::tagged_form(field, "unbound", heap))
-                    .or_else(|| sexp::tagged_form(field, "errors", heap))
-                {
-                    names = rest
-                        .iter()
-                        .filter_map(|tv| sexp::string_value(*tv, heap))
-                        .collect();
-                }
-            }
-            let slug = slug.ok_or("result row without slug")?;
-            let status = match status_key.as_deref() {
-                Some("pass") => Status::Pass,
-                Some("missing-library") => Status::MissingLibrary(names),
-                Some("parse-error") => Status::ParseError(names),
-                Some("unbound-identifier") => Status::UnboundIdentifier(names),
-                Some("wrong-result") => Status::WrongResult,
-                Some("runtime-error") => Status::RuntimeError,
-                Some("timeout") => Status::Timeout,
-                Some("out-of-scope") => Status::OutOfScope(names),
-                other => return Err(format!("unknown status {:?}", other)),
-            };
-            results.push(PackageResult { slug, mode, status });
+            results.push(parse_result_row(row, heap)?);
         }
     }
-    Ok(results)
+    Ok((results, backend))
+}
+
+fn parse_result_row(
+    row: patina_core::TaggedValue,
+    heap: &SharedHeap,
+) -> Result<PackageResult, String> {
+    let fields = sexp::list_elements(row, heap).ok_or("malformed result row")?;
+    let field = |key: &str| fields.iter().find_map(|f| sexp::tagged_form(*f, key, heap));
+    let field_symbol = |key: &str| {
+        field(key).and_then(|rest| rest.first().and_then(|tv| sexp::symbol_name(*tv, heap)))
+    };
+
+    let slug = field("slug")
+        .and_then(|rest| rest.first().and_then(|tv| sexp::string_value(*tv, heap)))
+        .ok_or("result row without slug")?;
+    let mode = if field_symbol("mode").as_deref() == Some("test") {
+        "test"
+    } else {
+        "probe"
+    };
+    let names: Vec<String> = ["missing", "unbound", "errors"]
+        .iter()
+        .find_map(|key| field(key))
+        .map(|rest| {
+            rest.iter()
+                .filter_map(|tv| sexp::string_value(*tv, heap))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let status = match field_symbol("status").as_deref() {
+        Some("pass") => Status::Pass,
+        Some("missing-library") => Status::MissingLibrary(names),
+        Some("parse-error") => Status::ParseError(names),
+        Some("load-error") => Status::LoadError(names),
+        Some("unbound-identifier") => Status::UnboundIdentifier(names),
+        Some("wrong-result") => Status::WrongResult,
+        Some("runtime-error") => Status::RuntimeError,
+        Some("timeout") => Status::Timeout,
+        Some("out-of-scope") => Status::OutOfScope(names),
+        other => return Err(format!("unknown status {:?}", other)),
+    };
+    Ok(PackageResult { slug, mode, status })
 }
 
 /// Render the markdown report.
@@ -136,54 +142,54 @@ pub fn render(results: &[PackageResult], backend: &str) -> String {
     );
 
     out.push_str("| Status | Packages |\n|---|---|\n");
-    for key in [
-        "pass",
-        "missing-library",
-        "parse-error",
-        "unbound-identifier",
-        "wrong-result",
-        "runtime-error",
-        "timeout",
-        "out-of-scope",
-    ] {
+    for key in Status::KEYS {
         let _ = writeln!(out, "| {} | {} |", key, count(key));
     }
 
-    let missing = histogram(results, |s| match s {
-        Status::MissingLibrary(libs) => Some(libs),
-        _ => None,
-    });
-    if !missing.is_empty() {
-        out.push_str("\n## Missing libraries — the bundling work queue\n\n");
-        out.push_str("| Library | Packages blocked |\n|---|---|\n");
-        for (lib, n) in &missing {
-            let _ = writeln!(out, "| ({}) | {} |", lib, n);
-        }
-    }
-
-    let parse_errors = histogram(results, |s| match s {
-        Status::ParseError(details) => Some(details),
-        _ => None,
-    });
-    if !parse_errors.is_empty() {
-        out.push_str("\n## Parse errors\n\n");
-        out.push_str("| Error | Packages |\n|---|---|\n");
-        for (detail, n) in &parse_errors {
-            let _ = writeln!(out, "| `{}` | {} |", detail, n);
-        }
-    }
-
-    let unbound = histogram(results, |s| match s {
-        Status::UnboundIdentifier(ids) => Some(ids),
-        _ => None,
-    });
-    if !unbound.is_empty() {
-        out.push_str("\n## Unbound identifiers\n\n");
-        out.push_str("| Identifier | Packages |\n|---|---|\n");
-        for (id, n) in &unbound {
-            let _ = writeln!(out, "| {} | {} |", id, n);
-        }
-    }
+    histogram_section(
+        &mut out,
+        results,
+        "Missing libraries — the bundling work queue",
+        "Library",
+        |s| match s {
+            Status::MissingLibrary(l) => Some(l),
+            _ => None,
+        },
+        |name| format!("({})", name),
+    );
+    histogram_section(
+        &mut out,
+        results,
+        "Parse errors",
+        "Error",
+        |s| match s {
+            Status::ParseError(l) => Some(l),
+            _ => None,
+        },
+        |name| format!("`{}`", name),
+    );
+    histogram_section(
+        &mut out,
+        results,
+        "Load errors",
+        "Error",
+        |s| match s {
+            Status::LoadError(l) => Some(l),
+            _ => None,
+        },
+        |name| format!("`{}`", name),
+    );
+    histogram_section(
+        &mut out,
+        results,
+        "Unbound identifiers",
+        "Identifier",
+        |s| match s {
+            Status::UnboundIdentifier(l) => Some(l),
+            _ => None,
+        },
+        |name| name.to_string(),
+    );
 
     out.push_str("\n## Per-package matrix\n\n");
     out.push_str("| Package | Mode | Status |\n|---|---|---|\n");
@@ -193,11 +199,16 @@ pub fn render(results: &[PackageResult], backend: &str) -> String {
     out
 }
 
-/// Count name occurrences across packages, most-blocked first.
-fn histogram<'a, F>(results: &'a [PackageResult], select: F) -> Vec<(String, usize)>
-where
-    F: Fn(&'a Status) -> Option<&'a Vec<String>>,
-{
+/// Append one histogram section (skipped when empty): name occurrences
+/// across packages, most-blocked first.
+fn histogram_section<'a>(
+    out: &mut String,
+    results: &'a [PackageResult],
+    title: &str,
+    column: &str,
+    select: impl Fn(&'a Status) -> Option<&'a Vec<String>>,
+    decorate: impl Fn(&str) -> String,
+) {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for r in results {
         if let Some(names) = select(&r.status) {
@@ -206,12 +217,17 @@ where
             }
         }
     }
-    let mut list: Vec<(String, usize)> = counts
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
-    list.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    list
+    if counts.is_empty() {
+        return;
+    }
+    let mut rows: Vec<(&str, usize)> = counts.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+
+    let _ = writeln!(out, "\n## {}\n", title);
+    let _ = writeln!(out, "| {} | Packages |\n|---|---|", column);
+    for (name, n) in rows {
+        let _ = writeln!(out, "| {} | {} |", decorate(name), n);
+    }
 }
 
 #[cfg(test)]
@@ -241,14 +257,21 @@ mod tests {
                 mode: "probe",
                 status: Status::OutOfScope(vec!["chibi ast".into()]),
             },
+            PackageResult {
+                slug: "e".into(),
+                mode: "probe",
+                status: Status::LoadError(vec!["Exported identifier 'f' not defined".into()]),
+            },
         ];
 
-        let text = to_sexp(&results, "vm");
+        let text = to_sexp(&results, "tree-walker");
         let heap = patina_core::new_shared_heap();
-        let parsed = from_sexp(&text, &heap).unwrap();
+        let (parsed, backend) = from_sexp(&text, &heap).unwrap();
 
-        assert_eq!(parsed.len(), 4);
+        assert_eq!(backend, "tree-walker");
+        assert_eq!(parsed.len(), 5);
         assert_eq!(parsed[0].slug, "a");
+        assert_eq!(parsed[0].mode, "test");
         assert_eq!(parsed[0].status, Status::Pass);
         assert_eq!(
             parsed[1].status,
@@ -261,6 +284,10 @@ mod tests {
         assert_eq!(
             parsed[3].status,
             Status::OutOfScope(vec!["chibi ast".into()])
+        );
+        assert_eq!(
+            parsed[4].status,
+            Status::LoadError(vec!["Exported identifier 'f' not defined".into()])
         );
     }
 

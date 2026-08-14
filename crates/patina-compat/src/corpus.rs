@@ -122,12 +122,14 @@ fn collect_component(
             }
         } else if let Some(clauses) = sexp::tagged_form(*decl, "cond-expand", heap) {
             // Each clause is (condition decl ...); pool depends from every
-            // branch rather than evaluating conditions.
+            // branch rather than evaluating conditions. Snow cond-expand
+            // branches only carry (depends ...), so passing `provides`
+            // through is harmless and keeps one signature.
             for clause in clauses {
                 if let Some(elems) = sexp::list_elements(clause, heap)
                     && elems.len() > 1
                 {
-                    collect_component(&elems[1..], &mut Vec::new(), depends, heap);
+                    collect_component(&elems[1..], provides, depends, heap);
                 }
             }
         }

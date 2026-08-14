@@ -192,13 +192,22 @@ impl Parser {
         Ok(exprs)
     }
 
-    fn parse_expr(&mut self) -> Result<TaggedValue, ParseError> {
-        // Handle datum comments: #; skips the next datum
-        // Multiple #; in a row each skip one datum
+    /// Consume any run of `#;` datum comments, skipping each commented datum.
+    ///
+    /// Datum comments may appear anywhere a datum may — including
+    /// immediately before a closing delimiter, the position the previously
+    /// scattered inline copies of this loop missed. Every datum-position
+    /// loop calls this rather than open-coding the skip.
+    fn skip_datum_comments(&mut self) -> Result<(), ParseError> {
         while self.current_token == Token::DatumComment {
             self.advance()?; // consume #;
             self.skip_datum()?; // skip the commented datum
         }
+        Ok(())
+    }
+
+    fn parse_expr(&mut self) -> Result<TaggedValue, ParseError> {
+        self.skip_datum_comments()?;
 
         match &self.current_token.clone() {
             Token::Boolean(b) => {
@@ -315,10 +324,7 @@ impl Parser {
     /// This parses the datum but discards the result
     fn skip_datum(&mut self) -> Result<(), ParseError> {
         // Handle nested datum comments within the skipped datum
-        while self.current_token == Token::DatumComment {
-            self.advance()?;
-            self.skip_datum()?;
-        }
+        self.skip_datum_comments()?;
 
         match &self.current_token {
             Token::Boolean(_)
@@ -386,6 +392,14 @@ impl Parser {
                 return Err(ParseError::UnexpectedEof);
             }
 
+            // A datum comment may sit immediately before the closing paren
+            // — `(a b #;c)` — so consume comments here rather than letting
+            // parse_expr skip them and then face the bare `)`.
+            self.skip_datum_comments()?;
+            if self.current_token == Token::RightParen {
+                break;
+            }
+
             if self.current_token == Token::Dot {
                 // `( . b)` — including `(#;a . b)` after comment stripping —
                 // has no head and is not a valid dotted list.
@@ -395,20 +409,8 @@ impl Parser {
                 self.advance()?;
                 dotted_tail = Some(self.parse_expr()?);
                 // After the tail, skip any datum comments before )
-                while self.current_token == Token::DatumComment {
-                    self.advance()?;
-                    self.skip_datum()?;
-                }
+                self.skip_datum_comments()?;
                 break;
-            }
-
-            // A datum comment may sit immediately before the closing paren
-            // — `(a b #;c)` — so consume it here rather than letting
-            // parse_expr skip it and then face the bare `)`.
-            if self.current_token == Token::DatumComment {
-                self.advance()?;
-                self.skip_datum()?;
-                continue;
             }
 
             elements.push(self.parse_expr()?);
@@ -440,10 +442,9 @@ impl Parser {
                 return Err(ParseError::UnexpectedEof);
             }
             // As in parse_list: `#(a #;b)` — a datum comment may precede `)`.
-            if self.current_token == Token::DatumComment {
-                self.advance()?;
-                self.skip_datum()?;
-                continue;
+            self.skip_datum_comments()?;
+            if self.current_token == Token::RightParen {
+                break;
             }
             elements.push(self.parse_expr()?);
         }
@@ -466,10 +467,9 @@ impl Parser {
             }
 
             // As in parse_list: a datum comment may appear between bytes.
-            if self.current_token == Token::DatumComment {
-                self.advance()?;
-                self.skip_datum()?;
-                continue;
+            self.skip_datum_comments()?;
+            if self.current_token == Token::RightParen {
+                break;
             }
 
             if let Token::Number(s) = &self.current_token.clone() {

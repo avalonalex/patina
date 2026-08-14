@@ -16,14 +16,7 @@ pub fn parse_all(source: &str, heap: &SharedHeap) -> Result<Vec<TaggedValue>, St
 
 /// A proper list's elements, or None for any other value.
 pub fn list_elements(tv: TaggedValue, heap: &SharedHeap) -> Option<Vec<TaggedValue>> {
-    let h = heap.borrow();
-    let mut out = Vec::new();
-    let mut cur = tv;
-    while cur.is_pair() {
-        out.push(h.car(cur));
-        cur = h.cdr(cur);
-    }
-    if cur.is_null() { Some(out) } else { None }
+    heap.borrow().list_to_vec(tv)
 }
 
 /// The symbol name of `tv`, if it is a symbol.

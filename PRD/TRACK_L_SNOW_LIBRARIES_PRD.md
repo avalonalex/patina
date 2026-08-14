@@ -167,16 +167,25 @@ release binary. Deviations from the spec below, all consequences of L4 vendoring
   meaningful). Cross-package deps resolve via `-A` from each package's transitive closure over
   the corpus's `package.scm` metadata. Packages run from a scratch cwd so their test loggers
   (srfi-64) cannot dirty the byte-identical vendor trees.
-- **A `parse-error` bucket was added** beyond the spec's list: a library that fails to parse
-  leaves every importer unbound, so without the bucket the real cause is misfiled. It found its
-  first defect immediately — see below.
+- **`parse-error` and `load-error` buckets were added** beyond the spec's list. A library that
+  fails to parse leaves every importer unbound, so without the first bucket the real cause is
+  misfiled; and the interpreter wraps load-stage failures (export resolution, library-body
+  evaluation) in the same "Parse error in ..." message as genuine parse errors, so without the
+  second the parser queue is inflated. **Recorded debt:** the durable fix is a distinct
+  `LibraryError` variant for load failures with its own Display — the harness currently splits on
+  message prefixes.
+- **Recorded debt — the CLI's test-file heuristic.** `main.rs` runs any file whose name contains
+  "test" resiliently (exit 0 always), which is why test-mode classification reads output rather
+  than exit status, and why the harness keeps "test" out of its probe and scratch paths (two
+  corpus slugs contain it). An explicit CLI mode flag (`--strict-errors`/`--resilient`) is the
+  deeper fix, in the L0.5 spirit of the CLI growing what the harness needs.
 
-**First measured queue (2026-08-13):** parse errors block 29 packages (bare `@` 9, syntax-rules
-shape restrictions 8, the rest singletons); missing libraries block 29, led by `(srfi 130)` ×4,
-`(chibi)` ×3, `(srfi 114 comparators)`/`(srfi 13)`/`(srfi 64)` ×2 each. The first fix is already
-in: **`#;` datum comments before a closing paren** broke the parser (`(a b #;c)`), transitively
-blocking 19 packages through srfi-14's reference implementation — fixed with the harness landing,
-moving the baseline 118 → 126.
+**First measured queue (2026-08-13):** genuine parse errors block 23 packages (bare `@` 9,
+syntax-rules shape restrictions 8, the rest singletons) and load errors 6 more; missing libraries
+block 29, led by `(srfi 130)` ×4, `(chibi)` ×3, `(srfi 114 comparators)`/`(srfi 13)`/`(srfi 64)`
+×2 each. The first fix is already in: **`#;` datum comments before a closing paren** broke the
+parser (`(a b #;c)`), transitively blocking 19 packages through srfi-14's reference
+implementation — fixed with the harness landing, moving the baseline 118 → 126.
 
 #### Original spec
 A new workspace crate, `crates/patina-compat/`, that owns the whole loop. Everything it needs is in this repo; it shells out to nothing but the Patina binary under test.

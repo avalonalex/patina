@@ -44,8 +44,13 @@ fn print_help() {
     eprintln!("  --jobs <n>        Parallel packages (default: available cores, max 8)");
 }
 
+enum Command {
+    Run,
+    Report,
+}
+
 struct Options {
-    command: String,
+    command: Option<Command>,
     patina: PathBuf,
     vendor: PathBuf,
     results_path: PathBuf,
@@ -55,10 +60,18 @@ struct Options {
     jobs: usize,
 }
 
+/// Take the value following a flag, or exit with a usage error.
+fn require_value(iter: &mut std::slice::Iter<'_, String>, flag: &str) -> String {
+    iter.next().cloned().unwrap_or_else(|| {
+        eprintln!("Error: {} requires a value", flag);
+        process::exit(2);
+    })
+}
+
 fn parse_args() -> Options {
     let root = workspace_root();
     let mut opts = Options {
-        command: String::new(),
+        command: None,
         patina: root.join("target/release/patina"),
         vendor: root.join("compat/vendor"),
         results_path: root.join("compat/reports/results.scm"),
@@ -73,31 +86,30 @@ fn parse_args() -> Options {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        let mut value = |flag: &str| -> String {
-            iter.next().cloned().unwrap_or_else(|| {
-                eprintln!("Error: {} requires a value", flag);
-                process::exit(2);
-            })
-        };
         match arg.as_str() {
-            "run" | "report" => opts.command = arg.clone(),
-            "--patina" => opts.patina = PathBuf::from(value("--patina")),
-            "--vendor" => opts.vendor = PathBuf::from(value("--vendor")),
-            "--results" => opts.results_path = PathBuf::from(value("--results")),
-            "--filter" => opts.filter = Some(value("--filter")),
+            "run" => opts.command = Some(Command::Run),
+            "report" => opts.command = Some(Command::Report),
+            "--patina" => opts.patina = PathBuf::from(require_value(&mut iter, "--patina")),
+            "--vendor" => opts.vendor = PathBuf::from(require_value(&mut iter, "--vendor")),
+            "--results" => opts.results_path = PathBuf::from(require_value(&mut iter, "--results")),
+            "--filter" => opts.filter = Some(require_value(&mut iter, "--filter")),
             "--tree-walker" => opts.tree_walker = true,
             "--timeout" => {
-                let secs: u64 = value("--timeout").parse().unwrap_or_else(|_| {
-                    eprintln!("Error: --timeout expects seconds");
-                    process::exit(2);
-                });
+                let secs: u64 = require_value(&mut iter, "--timeout")
+                    .parse()
+                    .unwrap_or_else(|_| {
+                        eprintln!("Error: --timeout expects seconds");
+                        process::exit(2);
+                    });
                 opts.timeout = Duration::from_secs(secs);
             }
             "--jobs" => {
-                opts.jobs = value("--jobs").parse().unwrap_or_else(|_| {
-                    eprintln!("Error: --jobs expects a number");
-                    process::exit(2);
-                });
+                opts.jobs = require_value(&mut iter, "--jobs")
+                    .parse()
+                    .unwrap_or_else(|_| {
+                        eprintln!("Error: --jobs expects a number");
+                        process::exit(2);
+                    });
             }
             "--help" | "-h" => {
                 print_help();
@@ -110,96 +122,100 @@ fn parse_args() -> Options {
             }
         }
     }
-    if opts.command.is_empty() {
-        print_help();
-        process::exit(2);
-    }
     opts
 }
 
 fn main() {
     let opts = parse_args();
+    match opts.command {
+        Some(Command::Run) => run_command(&opts),
+        Some(Command::Report) => report_command(&opts),
+        None => {
+            print_help();
+            process::exit(2);
+        }
+    }
+}
+
+fn run_command(opts: &Options) {
+    if !opts.patina.is_file() {
+        eprintln!(
+            "Error: patina binary not found at {} (build with `cargo build --release`)",
+            opts.patina.display()
+        );
+        process::exit(2);
+    }
+
+    let heap = patina_core::new_shared_heap();
+    let universe = match corpus::discover(&opts.vendor, &heap) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            process::exit(2);
+        }
+    };
+    // Providers index over the full corpus so a filtered run still resolves
+    // cross-package dependencies.
+    let providers = corpus::providers(&universe);
+    let selected: Vec<&corpus::Package> = universe
+        .iter()
+        .filter(|p| {
+            opts.filter
+                .as_ref()
+                .is_none_or(|f| p.slug.contains(f.as_str()))
+        })
+        .collect();
+    if selected.is_empty() {
+        eprintln!("Error: no packages selected");
+        process::exit(2);
+    }
+
     let backend = if opts.tree_walker {
         "tree-walker"
     } else {
         "vm"
     };
+    let config = RunConfig {
+        patina: opts.patina.clone(),
+        tree_walker: opts.tree_walker,
+        timeout: opts.timeout,
+        jobs: opts.jobs,
+    };
+    let results = run::run_corpus(&selected, &universe, &providers, &config);
 
-    match opts.command.as_str() {
-        "run" => {
-            if !opts.patina.is_file() {
-                eprintln!(
-                    "Error: patina binary not found at {} (build with `cargo build --release`)",
-                    opts.patina.display()
-                );
-                process::exit(2);
-            }
+    let snapshot = report::to_sexp(&results, backend);
+    if let Some(parent) = opts.results_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&opts.results_path, &snapshot) {
+        eprintln!(
+            "warning: could not write {}: {}",
+            opts.results_path.display(),
+            e
+        );
+    } else {
+        eprintln!("results written to {}", opts.results_path.display());
+    }
 
-            let heap = patina_core::new_shared_heap();
-            let universe = match corpus::discover(&opts.vendor, &heap) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    process::exit(2);
-                }
-            };
-            // Providers index over the full corpus so a filtered run still
-            // resolves cross-package dependencies.
-            let providers = corpus::providers(&universe);
-            let selected: Vec<&corpus::Package> = universe
-                .iter()
-                .filter(|p| {
-                    opts.filter
-                        .as_ref()
-                        .is_none_or(|f| p.slug.contains(f.as_str()))
-                })
-                .collect();
-            if selected.is_empty() {
-                eprintln!("Error: no packages selected");
-                process::exit(2);
-            }
+    println!("{}", report::render(&results, backend));
+}
 
-            let config = RunConfig {
-                patina: opts.patina.clone(),
-                tree_walker: opts.tree_walker,
-                timeout: opts.timeout,
-                jobs: opts.jobs,
-            };
-            let results = run::run_corpus(&selected, &universe, &providers, &config);
-
-            let snapshot = report::to_sexp(&results, backend);
-            if let Some(parent) = opts.results_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Err(e) = std::fs::write(&opts.results_path, &snapshot) {
-                eprintln!(
-                    "warning: could not write {}: {}",
-                    opts.results_path.display(),
-                    e
-                );
-            } else {
-                eprintln!("results written to {}", opts.results_path.display());
-            }
-
-            println!("{}", report::render(&results, backend));
+fn report_command(opts: &Options) {
+    let source = match std::fs::read_to_string(&opts.results_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: {}: {}", opts.results_path.display(), e);
+            process::exit(2);
         }
-        "report" => {
-            let source = match std::fs::read_to_string(&opts.results_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Error: {}: {}", opts.results_path.display(), e);
-                    process::exit(2);
-                }
-            };
-            let heap = patina_core::new_shared_heap();
-            match report::from_sexp(&source, &heap) {
-                Ok(results) => println!("{}", report::render(&results, backend)),
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    process::exit(2);
-                }
-            }
+    };
+    let heap = patina_core::new_shared_heap();
+    // The snapshot records which backend it measured; the CLI flag plays no
+    // part in re-rendering.
+    match report::from_sexp(&source, &heap) {
+        Ok((results, backend)) => println!("{}", report::render(&results, &backend)),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            process::exit(2);
         }
-        _ => unreachable!(),
     }
 }
