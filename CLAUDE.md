@@ -23,7 +23,8 @@ patina/
     ├── patina-tree-walker/ # Tree-walking Backend (CPS evaluator, primary backend)
     ├── patina-interpreter/ # High-level Interpreter<B: Backend> API
     ├── patina-repl/        # rustyline REPL + script runner binary
-    └── patina-tests/       # ~1400 integration and compliance tests
+    ├── patina-tests/       # ~1400 integration and compliance tests
+    └── patina-compat/      # third-party compatibility harness over compat/vendor/ (Track L)
 ```
 
 **Dependency flow:**

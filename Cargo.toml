@@ -13,6 +13,7 @@ members = [
     "crates/patina-interpreter",
     "crates/patina-repl",
     "crates/patina-tests",
+    "crates/patina-compat",
 ]
 resolver = "2"
 

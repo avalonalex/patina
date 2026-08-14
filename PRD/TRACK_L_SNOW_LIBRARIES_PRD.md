@@ -2,7 +2,8 @@
 
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
-**Status:** Planning → ready to execute
+**Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
+(**126 of 187** vendored packages pass, 2026-08-13); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -92,7 +93,15 @@ External library directories are currently unusable. This is table stakes for an
 - `PATINA_LIBRARY_PATH` (colon-separated), matching the convention of every other implementation.
 - **Acceptance:** `patina -A <dir> prog.scm` resolves a library from `<dir>`; `patina -p "(features)"` prints the feature list; unit coverage in `crates/patina-tests/`.
 
-### L0.75 — Ecosystem survey  *(cheap; sizes and orders everything after it)*
+### L0.75 — Ecosystem survey  *(done — satisfied by the corpus build, 2026-08-09)*
+
+✅ **Done.** `compat/tools/build_corpus.py` fetches the snow-fort index, ranks every package by
+dependency in-degree, and emits the committed, regenerable artifacts (`MANIFEST.json` with
+per-package `popularity_indegree`/`provides`/`depends`, plus `INVENTORY.md`). L1 was re-ordered
+from that data on 2026-08-08. With L3's harness now live, the *measured failure histograms*
+supersede in-degree as the ordering signal — see L3.
+
+#### Original spec
 Before porting anything, establish what "popular" actually means, as data. Fetch the snow-fort repository index (an s-expression document) and inventory the chibi library tree, then count **import frequency across all packages**. Output a ranked table of imported library names with counts, checked into `compat/`. This single artefact orders L1 and L2 and sets the corpus for L3 — the candidate lists in this PRD are a *hypothesis* to be replaced by it.
 - **Acceptance:** a committed, regenerable frequency table; L1/L2 below re-ordered to match it.
 
@@ -140,7 +149,45 @@ Third-party packages frequently `(import (chibi …))`; today only `(chibi test)
 - **Out of scope permanently:** `(chibi ast)` and the other C-backed libraries (`.c`/`.dylib` in the reference tree) — they need FFI and bound the achievable pass rate. See §6.
 - **Acceptance:** import + smoke-test each library.
 
-### L3 — `patina-compat`: the self-contained compatibility harness  *(the centrepiece)*
+### L3 — `patina-compat`: the self-contained compatibility harness  *(landed 2026-08-13; tier 0 live)*
+
+✅ **The harness exists and the headline number is measured: 126 of 187 vendored packages pass**
+(vm backend; snapshot in `compat/reports/results.scm`, matrix in `compat/reports/report.md`).
+`cargo run -p patina-compat -- run` re-measures on a machine with nothing but this repo and a
+release binary. Deviations from the spec below, all consequences of L4 vendoring the whole corpus:
+
+- **Tier structure collapsed.** The full 187-package snow-fort corpus is vendored (tier 0), so
+  `fetch` is unimplemented — nothing needs the network. The pinned chibi library tree (old tier 1)
+  is the natural follow-up when the corpus needs breadth.
+- **Results are an s-expression**, `compat/reports/results.scm` — read back by the harness with
+  patina-frontend's own parser; no serialization dependency added.
+- **Execution modes:** packages with a `(test "run-tests.scm")` declaration run their own suite
+  (classified from output — the patina CLI runs test-named files resiliently, exit 0 always);
+  the rest get a synthesized import probe of every library they provide (strict mode, exit
+  meaningful). Cross-package deps resolve via `-A` from each package's transitive closure over
+  the corpus's `package.scm` metadata. Packages run from a scratch cwd so their test loggers
+  (srfi-64) cannot dirty the byte-identical vendor trees.
+- **`parse-error` and `load-error` buckets were added** beyond the spec's list. A library that
+  fails to parse leaves every importer unbound, so without the first bucket the real cause is
+  misfiled; and the interpreter wraps load-stage failures (export resolution, library-body
+  evaluation) in the same "Parse error in ..." message as genuine parse errors, so without the
+  second the parser queue is inflated. **Recorded debt:** the durable fix is a distinct
+  `LibraryError` variant for load failures with its own Display — the harness currently splits on
+  message prefixes.
+- **Recorded debt — the CLI's test-file heuristic.** `main.rs` runs any file whose name contains
+  "test" resiliently (exit 0 always), which is why test-mode classification reads output rather
+  than exit status, and why the harness keeps "test" out of its probe and scratch paths (two
+  corpus slugs contain it). An explicit CLI mode flag (`--strict-errors`/`--resilient`) is the
+  deeper fix, in the L0.5 spirit of the CLI growing what the harness needs.
+
+**First measured queue (2026-08-13):** genuine parse errors block 23 packages (bare `@` 9,
+syntax-rules shape restrictions 8, the rest singletons) and load errors 6 more; missing libraries
+block 29, led by `(srfi 130)` ×4, `(chibi)` ×3, `(srfi 114 comparators)`/`(srfi 13)`/`(srfi 64)`
+×2 each. The first fix is already in: **`#;` datum comments before a closing paren** broke the
+parser (`(a b #;c)`), transitively blocking 19 packages through srfi-14's reference
+implementation — fixed with the harness landing, moving the baseline 118 → 126.
+
+#### Original spec
 A new workspace crate, `crates/patina-compat/`, that owns the whole loop. Everything it needs is in this repo; it shells out to nothing but the Patina binary under test.
 
 **Why a Rust crate rather than a shell script:** the repo's existing `scripts/*.sh` shell out to `curl`/`tar` and depend on ambient tooling. A workspace crate matches the repo idiom, gets `cargo test` and CI for free, and keeps fetch/extract/checksum in-process — which is what makes the harness genuinely self-contained and reproducible on a bare machine.
