@@ -1,12 +1,12 @@
 # Patina third-party compatibility (vm backend)
 
-**127 of 187 packages pass** — 127 of 186 achievable (excluding 1 out-of-scope pending FFI).
+**128 of 187 packages pass** — 128 of 186 achievable (excluding 1 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 127 |
+| pass | 128 |
 | missing-library | 29 |
-| parse-error | 22 |
+| parse-error | 21 |
 | load-error | 6 |
 | unbound-identifier | 1 |
 | wrong-result | 1 |
@@ -49,7 +49,6 @@
 | `#<unknown>` | 1 |
 | `Duplicate parameter 'space' in lambda` | 1 |
 | `Duplicate parameter 'symbol-first' in lambda` | 1 |
-| `InvalidSyntax("Expected proper list in feature requirement")` | 1 |
 | `Name mismatch in interface implementation (expected, gotten) proc0 proc0` | 1 |
 
 ## Load errors
@@ -252,7 +251,7 @@
 | srfi-38 | probe | pass |
 | srfi-39 | probe | pass |
 | srfi-41 | probe | pass |
-| srfi-42 | probe | parse-error |
+| srfi-42 | probe | pass |
 | srfi-43 | probe | pass |
 | srfi-51 | probe | pass |
 | srfi-63 | probe | pass |
