@@ -740,18 +740,18 @@ fn test_srfi46_ellipsis_as_literal_with_custom_ellipsis() {
 
 #[test]
 fn test_bound_identifier_equality_in_nested_macros() {
-    // R7RS hygiene test: When an outer macro substitutes a pattern variable
-    // into a nested syntax-rules literals list, the substituted identifier
-    // should match inputs that have the same binding (bound-identifier=?).
+    // The inner literals list `(k)` is written in the outer *template*, so its
+    // `k` is introduced and carries the outer expansion's scopes. The inner
+    // pattern's `x` is substituted from the use site and carries none. They are
+    // spelled alike but are different identifiers, so `x` is NOT a literal --
+    // it is a pattern variable, it matches `z`, and the answer is
+    // `bound-identifier=?`.
     //
-    // In this test:
-    // - Outer macro `m` has pattern variable `x` which gets bound to `k`
-    // - Inner macro `n` has `(k)` in its literals list (via substitution)
-    // - When (n z) is called, z should match the substituted k because
-    //   the substituted k has empty scopes (from outer pattern variable)
-    //   which means it acts as a "super-literal" matching any identifier
-    //
-    // This is the chibi/Gauche behavior for bound-identifier=? semantics.
+    // Verified against Chez Scheme. Note this passes because literal membership
+    // compares identity; it is not the substituted `k` acting as a literal that
+    // matches anything, which would instead answer `free-identifier=?` here and
+    // would break the `(chibi parse)` guard -- see
+    // `test_chibi_parse_new_symbol_guard`.
     assert_program_eval_to(
         r#"
         (let-syntax ((m (syntax-rules ()
@@ -768,9 +768,9 @@ fn test_bound_identifier_equality_in_nested_macros() {
 
 #[test]
 fn test_bound_identifier_with_different_input() {
-    // Variant of the above test: when the outer macro binds x to something
-    // other than k, the behavior should be the same - the substituted
-    // identifier in the literals list matches the input.
+    // Same shape as above with a different name, confirming the outcome follows
+    // from introduced-vs-substituted identity rather than from anything about
+    // the name `k`. Verified against Chez Scheme.
     assert_program_eval_to(
         r#"
         (let-syntax ((m (syntax-rules ()
@@ -962,5 +962,118 @@ fn test_srfi_156_placeholder_shape() {
         (list ((is _ < _) 1 2) ((is _ < _) 2 1))
         "#,
         "(#t #f)",
+    );
+}
+
+// ============================================================================
+// Identifier identity in a macro that writes another macro
+//
+// Every case below is checked against Chez Scheme. The common thread: an
+// identifier's classification inside an inner `syntax-rules` depends on its
+// *identity* -- name plus scopes -- and never on its name alone. An identifier
+// substituted from the outer use site and one introduced by the outer template
+// can be spelled the same and still be different identifiers.
+// ============================================================================
+
+/// A substituted identifier that is not in the inner literals list is an
+/// ordinary pattern variable, so it binds whatever the inner macro is called
+/// with.
+#[test]
+fn test_substituted_identifier_is_a_pattern_variable() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax gen
+          (syntax-rules ()
+            ((_ nm v) (define-syntax nm (syntax-rules () ((_ v) (list v v)))))))
+        (gen m q)
+        (m 5)
+        "#,
+        "(5 5)",
+    );
+}
+
+/// A substituted identifier that *is* in the inner literals list stays a
+/// literal, so it matches only itself.
+#[test]
+fn test_substituted_identifier_in_literals_stays_a_literal() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax gen
+          (syntax-rules ()
+            ((_ nm k)
+             (define-syntax nm
+               (syntax-rules (k) ((_ k) 'got-key) ((_ x) 'other))))))
+        (gen m key)
+        (list (m key) (m zzz))
+        "#,
+        "(got-key other)",
+    );
+}
+
+/// The `new-symbol?` guard from `(chibi parse)`'s `grammar-bind`, reduced.
+///
+/// `syntax-rules` has no way to compare two identifiers, so the guard builds an
+/// inner macro whose literals list holds the names bound so far and calls it
+/// with an identifier that matches nothing. If the name is a literal, rule 1
+/// cannot match and rule 2 answers "already bound"; otherwise the name is a
+/// pattern variable, rule 1 matches, and the answer is "new".
+///
+/// This is what blocked chibi-parse and edn: a literal that matched *any*
+/// identifier made the guard answer "new" every time, so the same grammar
+/// nonterminal got a variable more than once.
+#[test]
+fn test_chibi_parse_new_symbol_guard() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax probe-test
+          (syntax-rules ()
+            ((_ name (lit ...))
+             (let-syntax ((probe (syntax-rules (lit ...)
+                                   ((probe name sk fk) sk)
+                                   ((probe _ sk fk) fk))))
+               (probe random-symbol-to-match 'new 'already)))))
+        (list (probe-test space (space term))
+              (probe-test other (space term)))
+        "#,
+        "(already new)",
+    );
+}
+
+/// The macro-keyword position of a rule is positional, so a substituted macro
+/// name still matches whatever the call spells.
+#[test]
+fn test_substituted_macro_name_still_matches() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax make-wrapper
+          (syntax-rules ()
+            ((_ wrapper-name tag)
+             (define-syntax wrapper-name
+               (syntax-rules ()
+                 ((wrapper-name item (... ...)) '(tag item (... ...))))))))
+        (make-wrapper wrap-with-x x)
+        (wrap-with-x 1 2 3)
+        "#,
+        "(x 1 2 3)",
+    );
+}
+
+/// A substituted identifier is still a duplicate of *itself*.
+///
+/// edn passes a whole expression where `(chibi parse)`'s `grammar-bind` expects
+/// a name, and that expression mentions `ch` twice; substituting it into the
+/// guard's pattern asks for two pattern variables with one identity. Chez
+/// rejects this with the same "duplicate pattern variable ch", so the package
+/// depends on chibi's leniency rather than on anything portable.
+#[test]
+fn test_repeated_substituted_identifier_in_pattern_is_an_error() {
+    assert_program_eval_error(
+        r#"
+        (define-syntax gen
+          (syntax-rules ()
+            ((_ nm blob) (define-syntax nm (syntax-rules () ((_ blob) 'matched))))))
+        (gen m (f ch ch))
+        (m (f 1 2))
+        "#,
     );
 }

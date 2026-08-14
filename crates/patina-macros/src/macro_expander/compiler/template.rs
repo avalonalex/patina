@@ -21,15 +21,14 @@ impl Compiler {
     ) -> Result<Template, MacroError> {
         // Handle all identifier types (Symbol, Identifier)
         if let Some(s) = self.extract_symbol_name(form) {
-            // IMPORTANT: Check for scopes BEFORE checking pattern variables.
-            // Identifiers with non-empty scopes came from outer macro expansion
-            // and should be treated as literals, not as pattern variables.
-            if self.is_substituted_from_outer_macro(form) {
-                return Ok(self.make_literal_template(form));
-            }
-
-            // Check if it's a pattern variable (only for identifiers WITHOUT scopes)
-            if let Some(pvref) = self.pvars.get(&s) {
+            // Check if it's a pattern variable.
+            //
+            // This runs BEFORE the substituted-identifier case below. An
+            // identifier substituted by an outer expansion can legitimately be
+            // this rule's own pattern variable -- the pattern compiler now
+            // classifies it by the literals list alone -- and a rule's own
+            // pattern variable always wins over its spelling.
+            if let Some(pvref) = self.pvars.get(&(s.clone(), self.identifier_scopes(form))) {
                 // Verify level is valid
                 if pvref.level() > level {
                     return Err(MacroError::InvalidSyntax(format!(
@@ -40,6 +39,15 @@ impl Compiler {
                     )));
                 }
                 return Ok(Template::Var(*pvref));
+            }
+
+            // An identifier substituted by an outer expansion, and not this
+            // rule's pattern variable, keeps the identity the outer macro gave
+            // it. Emitting it verbatim preserves that; re-tagging it with this
+            // macro's definition scopes below would rebind it to the wrong
+            // context.
+            if self.is_substituted_from_outer_macro(form) {
+                return Ok(self.make_literal_template(form));
             }
 
             // Not a pattern variable - apply hygiene handling

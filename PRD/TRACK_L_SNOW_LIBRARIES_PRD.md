@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**128 of 187** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
+(**129 of 187** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -198,7 +198,7 @@ unblocking **srfi-42**. The rest of the queue, with verdicts:
 | bare `@` identifier | 9 | Patina is right per R7RS 7.1.1 (`@` is a ⟨special subsequent⟩, not an ⟨initial⟩); chibi and Gauche accept it. Needs the explicit decision recorded in §6, not a silent relaxation. |
 | syntax-rules rule with >2 elements | 5 | **Chez rejects these too.** They are typos in chibi's own sources (e.g. `((_) bv off i)` in `ieee-754.scm`) that only chibi's lenient reader tolerates. Matching chibi here means accepting nonsense. |
 | `syntax-rules` with no literals list | 3 | Upstream-malformed: `(syntax-rules ((_ x) 'x))` sits in `(chibi monad environment)`'s `cond-expand` **else** branch, which chibi itself never takes. Blocks chibi-show and chibi-snow-commands transitively. |
-| `Duplicate parameter 'space' / 'symbol-first'` | 2 | chibi-parse and edn get *past* the §6 fix and now fail deeper, in `grammar-bind`'s `new-symbol?` guard. That guard decides whether a nonterminal is already bound by putting the accumulated names in a `syntax-rules` **literals** list, so it turns on `free-identifier=?` for a template-substituted identifier. A real gap, but its own investigation — not a small fix. |
+| `Duplicate parameter 'space' / 'symbol-first'` | 2 | **Ours — ✅ fixed** (§6, identifier identity). chibi-parse now passes. edn advanced to `duplicate pattern variable ch`, which **Chez raises verbatim on the same input**, so what is left there is chibi leniency, not our defect. |
 | `Expected proper list in feature requirement` | 1 | **Ours — ✅ fixed.** srfi-42 ships `(cond-expand (stklos …) (else #f))`; the inert `#f` is not a list, so it hard-errored instead of taking L0's warn-and-skip path — and reported a message belonging to a shared list helper, misattributing the problem to the feature requirement. A declaration that is not a proper list, or whose head is not a symbol, now takes the same lenient path as an unknown keyword, still strict under `PATINA_STRICT_LIBRARY_SYNTAX=1`. This closes a gap in L0's own policy: leniency covered unrecognized *keywords* but not shapes that are not declarations at all, which is exactly what a cond-expand branch written for another implementation leaves behind. |
 
 **Recorded debt — `report.md` is written by shell redirect.** `run` and `report` print the rendered
@@ -294,6 +294,31 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 **Self-containment invariant.** At no point does the track acquire a build-, test-, or CI-time dependency on another Scheme implementation or package manager. The chibi checkout is corpus *data* pinned by commit, not tooling. Anything that would violate this belongs in §3. See `PRD/SNOW_AND_PERF_ROADMAP.md` for the M1–M4 interleave with Track P; note that Track P's GC (P6) is the cross-cutting unblocker that lets L3's real packages run long-running without leaking.
 
 ## 6. Known defects surfaced by this track
+
+**Identifier identity was decided by name inside a macro that writes a macro** — ✅ **fixed**
+(2026-08-14). Both backends. Three places compared identifiers by name alone, so an identifier
+*substituted* from the outer use site and one *introduced* by the outer template were confused
+whenever they were spelled the same. Every case below was cross-checked against Chez Scheme.
+
+| Site | Was | Now |
+|---|---|---|
+| `matcher/literal.rs` | a pattern literal with empty scopes matched **any** identifier | matches the same identifier, via the general name-and-scopes comparison that was already below it |
+| `compiler/pattern.rs` | any substituted identifier became a *literal* pattern | classified by the literals list alone, per R7RS 4.3.2 — so a substituted identifier that is not a literal is an ordinary pattern variable |
+| `compiler/{helpers,template,escape}.rs` | pattern variables keyed by name | keyed by `(name, scopes)`, so a substituted identifier never collides with an introduced pattern variable spelled alike |
+
+The literals list now keeps the scopes each identifier was written with (`LiteralSpec` in
+`patina-core/src/compiled_macro.rs`); both literals parsers previously discarded them.
+
+This unblocks the `new-symbol?` guard in `(chibi parse)`'s `grammar-bind`. `syntax-rules` cannot
+compare two identifiers, so the guard builds an inner macro whose literals list holds the names bound
+so far and calls it with an identifier that matches nothing: a literal cannot match, so the fallback
+rule answers "already bound", while a non-literal is a pattern variable, matches, and answers "new".
+With a literal that matched anything, the answer was always "new" and the same grammar nonterminal
+got a variable more than once — surfacing as `Duplicate parameter 'space' in lambda`.
+
+Watch the interaction with the fix below: the two `space` parameters were *correct* duplicates, so
+rejecting them was right. The defect was upstream of that, in the guard that should have stopped the
+second one being created.
 
 **Recursive macros could not introduce a fresh binding per expansion** — ✅ **fixed** (2026-08-14).
 Both backends. `check_no_duplicates_scoped` in `patina-frontend/src/desugarer/utils.rs` keyed its

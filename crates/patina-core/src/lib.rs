@@ -36,7 +36,7 @@ pub mod vfs;
 
 // Re-export main types for convenience
 pub use compiled_macro::{
-    CompiledMacro, CompiledRule, Identifier, LiteralBinding, Pattern, Template,
+    CompiledMacro, CompiledRule, Identifier, LiteralBinding, LiteralSpec, Pattern, Template,
 };
 pub use continuation::{CpsContinuation, DynamicWindRecord};
 pub use core_expr::{CoreExpr, CoreExprKind, Formals, LambdaBody, ScopedParam, Symbol};

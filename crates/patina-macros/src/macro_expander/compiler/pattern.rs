@@ -119,21 +119,29 @@ impl Compiler {
         // Handle all identifier types (Symbol, Identifier)
         if let Some(s) = self.extract_symbol_name(form) {
             // R7RS: Check literals FIRST (including _ if it's in the literals list)
-            if self.is_literal(&s) {
+            if self.is_literal_form(form, &s) {
                 return Ok(self.make_literal_pattern(form));
             }
 
-            // Check if this is a SUBSTITUTED identifier (empty scopes) from outer expansion.
-            if self.is_substituted_from_outer_macro(form) {
-                return Ok(self.make_literal_pattern(form));
-            }
-
+            // An identifier substituted by an outer expansion gets no special
+            // treatment here. R7RS 4.3.2 classifies a pattern identifier by the
+            // literals list alone, not by where it came from, so a substituted
+            // identifier that is not a literal is an ordinary pattern variable:
+            //
+            //   (define-syntax gen
+            //     (syntax-rules ()
+            //       ((_ nm v) (define-syntax nm (syntax-rules () ((_ v) (list v v)))))))
+            //   (gen m q)
+            //   (m 5)  ;; => (5 5), because the substituted `q` binds 5
+            //
+            // Treating it as a literal instead made the inner macro match only
+            // the identifier `q` itself, so `(m 5)` had no matching rule.
             if s.as_ref() == WILDCARD {
                 // Underscore is wildcard only if NOT in literals
                 Ok(Pattern::Wildcard)
             } else {
                 // Pattern variable - assign PVREF
-                let pvref = self.add_pvar(s, level)?;
+                let pvref = self.add_pvar(s, self.identifier_scopes(form), level)?;
                 Ok(Pattern::Var(pvref))
             }
         } else {

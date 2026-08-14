@@ -62,6 +62,62 @@ pub struct LiteralBinding {
     pub binding_scopes: Option<ScopeSet>,
 }
 
+/// A literal identifier exactly as it was written in the literals list.
+///
+/// Membership in the literals list is decided by *identifier identity*, not by
+/// name, so the scope set the identifier carried at that point has to survive
+/// parsing. The two spellings that matter come from a macro that writes another
+/// macro:
+///
+/// ```scheme
+/// (let-syntax ((m (syntax-rules ()
+///                   ((m x)
+///                    (let-syntax ((n (syntax-rules (k)      ; k INTRODUCED  -> non-empty scopes
+///                                      ((n x) 'a)           ; x SUBSTITUTED -> empty scopes
+///                                      ((n y) 'b))))
+///                      (n z))))))
+///   (m k))
+/// ```
+///
+/// Both spell `k`, but the literal is introduced by the template while the
+/// pattern identifier is substituted from the use site. They are different
+/// identifiers, so `x` is a pattern variable and the answer is `'a`. Comparing
+/// names alone would call `x` a literal and give `'b`.
+///
+/// A bare symbol carries no scopes and normalizes to an empty scope set, so
+/// ordinary macros written in source compare equal as before.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiteralSpec {
+    /// The literal identifier name
+    pub name: Rc<str>,
+    /// Scope set the identifier carried in the literals list
+    pub scopes: ScopeSet,
+}
+
+impl LiteralSpec {
+    /// Create a spec from a name and the scopes it was written with
+    pub fn new(name: Rc<str>, scopes: ScopeSet) -> Self {
+        Self { name, scopes }
+    }
+
+    /// Whether this literal is the same identifier as `(name, scopes)`
+    pub fn matches(&self, name: &str, scopes: &ScopeSet) -> bool {
+        self.name.as_ref() == name && &self.scopes == scopes
+    }
+}
+
+impl From<&str> for LiteralSpec {
+    fn from(name: &str) -> Self {
+        Self::new(Rc::from(name), ScopeSet::new())
+    }
+}
+
+impl From<Rc<str>> for LiteralSpec {
+    fn from(name: Rc<str>) -> Self {
+        Self::new(name, ScopeSet::new())
+    }
+}
+
 // ============================================================================
 // Pattern
 // ============================================================================

@@ -6,7 +6,7 @@
 //! Used by both TestExpander (for tests) and can be used by patina-frontend's desugarer.
 
 use crate::macro_expander::utils::{get_identifier_name_tagged, list_to_vec_tagged};
-use patina_core::{Heap, TaggedValue};
+use patina_core::{Heap, LiteralSpec, TaggedValue};
 use std::rc::Rc;
 
 /// Parsed components of a syntax-rules form (TaggedValue-based)
@@ -14,8 +14,8 @@ use std::rc::Rc;
 pub struct ParsedSyntaxRules {
     /// Optional custom ellipsis symbol (SRFI-46)
     pub custom_ellipsis: Option<Rc<str>>,
-    /// List of literal identifiers
-    pub literals: Vec<Rc<str>>,
+    /// List of literal identifiers, with the scopes they were written with
+    pub literals: Vec<LiteralSpec>,
     /// List of (pattern, template) pairs as TaggedValue
     pub rules: Vec<(TaggedValue, TaggedValue)>,
 }
@@ -127,14 +127,19 @@ fn is_syntax_rules_keyword(tv: TaggedValue, heap: &Heap) -> bool {
 fn parse_literals_list(
     expr: TaggedValue,
     heap: &Heap,
-) -> Result<Vec<Rc<str>>, SyntaxRulesParseError> {
+) -> Result<Vec<LiteralSpec>, SyntaxRulesParseError> {
     let mut literals = Vec::new();
     let mut current = expr;
 
     while current.is_pair() {
         let car = heap.car(current);
         if let Some(name) = get_identifier_name_tagged(car, heap) {
-            literals.push(name);
+            // Keep the scopes: literal membership is by identifier identity.
+            let scopes = heap
+                .get_identifier_data_any(car)
+                .map(|(_, scopes)| scopes)
+                .unwrap_or_default();
+            literals.push(LiteralSpec::new(name, scopes));
         } else {
             return Err(SyntaxRulesParseError(
                 "Literals must be symbols".to_string(),
@@ -229,8 +234,8 @@ mod tests {
         let parsed = parse_syntax_rules(form, &heap.borrow()).unwrap();
         assert!(parsed.custom_ellipsis.is_none());
         assert_eq!(parsed.literals.len(), 2);
-        assert_eq!(parsed.literals[0].as_ref(), "else");
-        assert_eq!(parsed.literals[1].as_ref(), "=>");
+        assert_eq!(parsed.literals[0].name.as_ref(), "else");
+        assert_eq!(parsed.literals[1].name.as_ref(), "=>");
     }
 
     #[test]

@@ -55,7 +55,7 @@ impl Compiler {
             }
 
             // Check if it's a pattern variable
-            if let Some(pvref) = self.pvars.get(&s) {
+            if let Some(pvref) = self.pvars.get(&(s.clone(), self.identifier_scopes(form))) {
                 // Verify level is valid
                 if pvref.level() > level {
                     return Err(MacroError::InvalidSyntax(format!(
@@ -156,7 +156,7 @@ impl Compiler {
         // Check for symbol
         if let Some(s) = self.extract_symbol_name(form) {
             // Check if it's a pattern variable
-            if let Some(pvref) = self.pvars.get(&s) {
+            if let Some(pvref) = self.pvars.get(&(s.clone(), self.identifier_scopes(form))) {
                 Ok(Template::Var(*pvref))
             } else {
                 // Non-pvar symbol: produce literal Symbol value
