@@ -1,5 +1,8 @@
 /target
-Cargo.lock
+# Cargo.lock is tracked deliberately: this workspace ships a binary, so the
+# lockfile is what makes a build reproducible. Together with
+# rust-toolchain.toml it pins both halves — compiler and dependencies — so a
+# dependency release cannot redden an unrelated pull request.
 .DS_Store
 *.swp
 *~
