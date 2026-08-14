@@ -49,13 +49,12 @@ pub fn library_name(tv: TaggedValue, heap: &SharedHeap) -> Option<String> {
     }
     let mut parts = Vec::with_capacity(elems.len());
     for e in elems {
-        if let Some(s) = symbol_name(e, heap) {
-            parts.push(s);
-        } else if let Some(n) = e.as_fixnum() {
-            parts.push(n.to_string());
-        } else {
-            return None;
-        }
+        // A library-name component is a symbol or a non-negative integer
+        // (R7RS §5.6); anything else means this is not a library name.
+        parts.push(match symbol_name(e, heap) {
+            Some(s) => s,
+            None => e.as_fixnum()?.to_string(),
+        });
     }
     Some(parts.join(" "))
 }
