@@ -155,7 +155,18 @@ impl LibraryDefinition {
         can_load_library: &dyn Fn(&[String]) -> bool,
         heap: &SharedHeap,
     ) -> Result<(), ParseError> {
-        let list = tagged_list_to_vec(tv, heap)?;
+        // A declaration that is not a proper list has no keyword to dispatch
+        // on, so it falls under the same policy as an unknown keyword below:
+        // skip it rather than abort the library. srfi-42 ships
+        // `(cond-expand (stklos ...) (else #f))`, where the `#f` is inert
+        // padding everywhere but stklos.
+        let list = match tagged_list_to_vec(tv, heap) {
+            Ok(list) => list,
+            Err(_) => {
+                let described = heap.borrow().type_name(tv).to_string();
+                return Self::skip_or_reject_declaration(&described);
+            }
+        };
 
         if list.is_empty() {
             return Err(ParseError::InvalidSyntax(
@@ -217,28 +228,33 @@ impl LibraryDefinition {
                     body_elements.push(BodyElement::IncludeLibraryDeclarations { paths });
                     Ok(())
                 }
-                _ => {
-                    // Portable .sld files occasionally carry vendor-specific
-                    // declarations. Skipping one keeps the rest of the library
-                    // loadable; aborting the whole load is opt-in.
-                    if strict_library_syntax() {
-                        Err(ParseError::InvalidSyntax(format!(
-                            "Unknown library declaration: {}",
-                            keyword
-                        )))
-                    } else {
-                        eprintln!(
-                            "warning: ignoring unknown library declaration `{}` in define-library",
-                            keyword
-                        );
-                        Ok(())
-                    }
-                }
+                _ => Self::skip_or_reject_declaration(&keyword),
             }
         } else {
-            Err(ParseError::InvalidSyntax(
-                "Library declaration must start with a symbol".to_string(),
-            ))
+            let described = heap.borrow().type_name(list[0]).to_string();
+            Self::skip_or_reject_declaration(&described)
+        }
+    }
+
+    /// Handle a `define-library` declaration this parser does not implement.
+    ///
+    /// Portable `.sld` files occasionally carry vendor-specific declarations,
+    /// and cond-expand branches meant for other implementations can leave
+    /// shapes that are not declarations at all. Skipping one keeps the rest of
+    /// the library loadable; aborting the whole load is opt-in via
+    /// `PATINA_STRICT_LIBRARY_SYNTAX=1`.
+    fn skip_or_reject_declaration(described: &str) -> Result<(), ParseError> {
+        if strict_library_syntax() {
+            Err(ParseError::InvalidSyntax(format!(
+                "Unknown library declaration: {}",
+                described
+            )))
+        } else {
+            eprintln!(
+                "warning: ignoring unknown library declaration `{}` in define-library",
+                described
+            );
+            Ok(())
         }
     }
 

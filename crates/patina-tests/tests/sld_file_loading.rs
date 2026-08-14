@@ -436,6 +436,45 @@ fn test_sld_with_unknown_clause_loads() {
     assert_eq!(tv.as_fixnum(), Some(42));
 }
 
+/// A declaration that is not a list at all is skipped under the same policy as
+/// an unrecognized keyword.
+///
+/// SRFI 42's `.sld` carries `(cond-expand (stklos ...) (else #f))` — the `#f`
+/// is inert padding for every implementation but stklos, and hard-erroring on
+/// it aborted the whole library.
+#[test]
+fn test_sld_with_non_list_declaration_loads() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    fs::write(
+        lib_dir.join("inert-decl.sld"),
+        r#"
+        (define-library (test inert-decl)
+          (import (scheme base))
+          (cond-expand (stklos (begin (define unreachable 0))) (else #f))
+          (export stable-export)
+          (begin (define stable-export 42)))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "inert-decl".to_string()])
+        .expect("a library with a non-list declaration must still load");
+
+    assert!(lib.exports_identifier("stable-export"));
+    let tv = lib.env.get("stable-export").unwrap();
+    assert_eq!(tv.as_fixnum(), Some(42));
+}
+
 // ============================================================================
 // Include Declaration Tests (R7RS §5.6.1)
 // ============================================================================

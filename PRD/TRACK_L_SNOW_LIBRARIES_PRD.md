@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**127 of 187** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
+(**128 of 187** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -187,10 +187,11 @@ block 29, led by `(srfi 130)` ×4, `(chibi)` ×3, `(srfi 114 comparators)`/`(srf
 parser (`(a b #;c)`), transitively blocking 19 packages through srfi-14's reference
 implementation — fixed with the harness landing, moving the baseline 118 → 126.
 
-**Parse-error triage, 2026-08-14 (126 → 127).** Every parse-error bucket was reduced to a minimal
+**Parse-error triage, 2026-08-14 (126 → 128).** Every parse-error bucket was reduced to a minimal
 repro and cross-checked against Gauche and Chez, which is what separates *our* defects from upstream
-code that only chibi accepts. One was ours and is fixed here — **template-introduced identifiers
-were compared by name alone** (§6), unblocking **srfi-156**. The rest of the queue, with verdicts:
+code that only chibi accepts. Two were ours: **template-introduced identifiers were compared by name
+alone** (§6), unblocking **srfi-156**, and **a non-list library declaration hard-errored** (below),
+unblocking **srfi-42**. The rest of the queue, with verdicts:
 
 | Bucket | Pkgs | Verdict |
 |---|---|---|
@@ -198,7 +199,7 @@ were compared by name alone** (§6), unblocking **srfi-156**. The rest of the qu
 | syntax-rules rule with >2 elements | 5 | **Chez rejects these too.** They are typos in chibi's own sources (e.g. `((_) bv off i)` in `ieee-754.scm`) that only chibi's lenient reader tolerates. Matching chibi here means accepting nonsense. |
 | `syntax-rules` with no literals list | 3 | Upstream-malformed: `(syntax-rules ((_ x) 'x))` sits in `(chibi monad environment)`'s `cond-expand` **else** branch, which chibi itself never takes. Blocks chibi-show and chibi-snow-commands transitively. |
 | `Duplicate parameter 'space' / 'symbol-first'` | 2 | chibi-parse and edn get *past* the §6 fix and now fail deeper, in `grammar-bind`'s `new-symbol?` guard. That guard decides whether a nonterminal is already bound by putting the accumulated names in a `syntax-rules` **literals** list, so it turns on `free-identifier=?` for a template-substituted identifier. A real gap, but its own investigation — not a small fix. |
-| `Expected proper list in feature requirement` | 1 | **Ours, fix pending.** srfi-42 ships `(cond-expand (stklos …) (else #f))`; the inert `#f` is not a list, so it hard-errors instead of taking L0's warn-and-skip path — and reports a message belonging to a shared list helper, which misattributes the problem to the feature requirement. |
+| `Expected proper list in feature requirement` | 1 | **Ours — ✅ fixed.** srfi-42 ships `(cond-expand (stklos …) (else #f))`; the inert `#f` is not a list, so it hard-errored instead of taking L0's warn-and-skip path — and reported a message belonging to a shared list helper, misattributing the problem to the feature requirement. A declaration that is not a proper list, or whose head is not a symbol, now takes the same lenient path as an unknown keyword, still strict under `PATINA_STRICT_LIBRARY_SYNTAX=1`. This closes a gap in L0's own policy: leniency covered unrecognized *keywords* but not shapes that are not declarations at all, which is exactly what a cond-expand branch written for another implementation leaves behind. |
 
 **Recorded debt — `report.md` is written by shell redirect.** `run` and `report` print the rendered
 matrix to stdout and only `results.scm` is written to disk, so the committed

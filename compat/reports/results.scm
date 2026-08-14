@@ -183,7 +183,7 @@
   ((slug "srfi-38") (mode probe) (status pass))
   ((slug "srfi-39") (mode probe) (status pass))
   ((slug "srfi-41") (mode probe) (status pass))
-  ((slug "srfi-42") (mode probe) (status parse-error) (errors "InvalidSyntax(\"Expected proper list in feature requirement\")"))
+  ((slug "srfi-42") (mode probe) (status pass))
   ((slug "srfi-43") (mode probe) (status pass))
   ((slug "srfi-51") (mode probe) (status pass))
   ((slug "srfi-63") (mode probe) (status pass))
