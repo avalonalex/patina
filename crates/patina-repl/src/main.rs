@@ -57,6 +57,15 @@ fn main() {
     }
 }
 
+/// The directory containing the script being run, for program-relative
+/// library resolution: a checked-out package runs without an install step
+/// because its libraries resolve from beside the program.
+fn script_dir(filename: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(filename);
+    let canonical = path.canonicalize().ok()?;
+    canonical.parent().map(|p| p.to_path_buf())
+}
+
 fn print_help() {
     eprintln!("Usage: patina [OPTIONS] [FILE]");
     eprintln!();
@@ -83,6 +92,9 @@ fn run_script_tree_walker(filename: &str) {
     };
 
     let interp = TreeWalkInterpreter::new_tree_walker();
+    if let Some(dir) = script_dir(filename) {
+        interp.backend().evaluator().add_library_search_path(dir);
+    }
     let is_test_file = filename.contains("test") || code.contains("test-begin");
 
     if is_test_file {
@@ -157,6 +169,9 @@ fn run_script_vm_trace(filename: &str) {
     let handle = Rc::new(RefCell::new(tracer));
     backend.set_tracer(Some(handle.clone()));
     let interp = Interpreter::new(backend);
+    if let Some(dir) = script_dir(filename) {
+        interp.backend().add_library_search_path(dir);
+    }
     match interp.eval_program(&code) {
         Ok(_) => process::exit(0),
         Err(e) => {
@@ -179,6 +194,9 @@ fn run_script_vm(filename: &str) {
     };
 
     let interp = Interpreter::new(VmBackend::new());
+    if let Some(dir) = script_dir(filename) {
+        interp.backend().add_library_search_path(dir);
+    }
     let is_test_file = filename.contains("test") || code.contains("test-begin");
 
     if is_test_file {

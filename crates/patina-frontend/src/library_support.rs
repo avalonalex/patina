@@ -51,7 +51,66 @@ impl SchemeLibraryLoader {
     }
 }
 
+/// Is this datum a `(define-library ...)` form?
+///
+/// Used by the backends to route a top-level inline `define-library` (in a
+/// script or the REPL) to the library loader instead of the desugarer.
+pub fn is_define_library_form(tv: TaggedValue, heap: &SharedHeap) -> bool {
+    if !tv.is_pair() {
+        return false;
+    }
+    let h = heap.borrow();
+    let head = h.car(tv);
+    h.get_symbol_name(head) == Some("define-library")
+}
+
 impl SchemeLibraryLoader {
+    /// Parse an inline `(define-library ...)` form into a `ParsedLibrary`.
+    ///
+    /// This is the file-less twin of the `.sld` path: the form is already a
+    /// datum on `heap`, and `include`/`include-library-declarations` paths
+    /// resolve against `base_dir` (the running script's directory, or the
+    /// current directory at the REPL) instead of an `.sld` file's directory.
+    pub fn parse_inline_form(
+        &self,
+        lib_form: TaggedValue,
+        base_dir: &Path,
+        heap: SharedHeap,
+        can_load_library: &dyn Fn(&[String]) -> bool,
+    ) -> Result<ParsedLibrary, LibraryError> {
+        let lib_def =
+            LibraryDefinition::from_tagged_with_library_checker(lib_form, &heap, can_load_library)
+                .map_err(|e| LibraryError::ParseError {
+                    file: "<inline define-library>".to_string(),
+                    message: format!("{:?}", e),
+                })?;
+
+        let mut included_files = HashSet::new();
+        let mut exports = lib_def.exports;
+        let mut imports = lib_def.imports;
+        let mut body = Vec::new();
+
+        self.resolve_body_elements(
+            &lib_def.body_elements,
+            base_dir,
+            &mut included_files,
+            Path::new("<inline define-library>"),
+            &mut exports,
+            &mut imports,
+            &mut body,
+            &heap,
+        )?;
+
+        Ok(ParsedLibrary::new(
+            lib_def.name,
+            imports,
+            body,
+            Some(heap),
+            exports,
+            None,
+        ))
+    }
+
     /// Find the .sld file for a library
     fn find_sld_file(&self, name: &[String], search_paths: &[PathBuf]) -> Option<PathBuf> {
         if name.is_empty() {

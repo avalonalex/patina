@@ -106,6 +106,16 @@ impl TreeWalker {
         use patina_frontend::Desugarer;
 
         let internal_heap = self.evaluator.global_env.heap();
+
+        // An inline (define-library ...) is a library definition, not an
+        // expression — route it to the library loader before desugaring.
+        if patina_frontend::is_define_library_form(expr, internal_heap) {
+            self.evaluator
+                .eval_inline_define_library(expr)
+                .map_err(|e| EvalError::InvalidSyntax(format!("define-library failed: {}", e)))?;
+            return Ok(TaggedValue::UNSPECIFIED);
+        }
+
         let desugarer = Desugarer::with_env_and_source_map(env.clone(), source_map.clone());
 
         let core_expr = desugarer
@@ -129,6 +139,16 @@ impl Backend for TreeWalker {
         use patina_frontend::Desugarer;
 
         let internal_heap = self.evaluator.global_env.heap();
+
+        // An inline (define-library ...) is a library definition, not an
+        // expression — route it to the library loader before desugaring.
+        if patina_frontend::is_define_library_form(expr, internal_heap) {
+            self.evaluator
+                .eval_inline_define_library(expr)
+                .map_err(|e| EvalError::InvalidSyntax(format!("define-library failed: {}", e)))?;
+            return Ok(TaggedValue::UNSPECIFIED);
+        }
+
         let desugarer = Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone());
 
         let core_expr = desugarer

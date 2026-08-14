@@ -7,6 +7,8 @@
 //! - Evaluating library bodies
 //! - Collecting exports
 
+mod common;
+
 use patina_tree_walker::Evaluator;
 use std::path::PathBuf;
 
@@ -354,6 +356,99 @@ fn test_import_modifiers() {
         Some(3),
         "result should be 3 (first + second = 1 + 2)"
     );
+}
+
+// ============================================================================
+// L0: inline define-library (both backends)
+// ============================================================================
+
+#[test]
+fn test_inline_define_library() {
+    common::assert_program_eval_to(
+        r#"
+        (define-library (inline demo)
+          (import (scheme base))
+          (export twice)
+          (begin (define (twice x) (* 2 x))))
+        (import (inline demo))
+        (twice 21)
+        "#,
+        "42",
+    );
+}
+
+#[test]
+fn test_inline_define_library_redefinition_wins() {
+    common::assert_program_eval_to(
+        r#"
+        (define-library (inline redef)
+          (import (scheme base))
+          (export v)
+          (begin (define v 1)))
+        (define-library (inline redef)
+          (import (scheme base))
+          (export v)
+          (begin (define v 2)))
+        (import (inline redef))
+        v
+        "#,
+        "2",
+    );
+}
+
+#[test]
+fn test_inline_define_library_with_unknown_clause() {
+    // Items 1 + 2 together: the vendor-specific (declare ...) clause is
+    // skipped with a warning instead of aborting the definition.
+    common::assert_program_eval_to(
+        r#"
+        (define-library (inline vendor)
+          (import (scheme base))
+          (declare (pure))
+          (export f)
+          (begin (define (f) 'ok)))
+        (import (inline vendor))
+        (f)
+        "#,
+        "ok",
+    );
+}
+
+// ============================================================================
+// L0: unknown declarations in .sld files load leniently
+// ============================================================================
+
+#[test]
+fn test_sld_with_unknown_clause_loads() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    fs::write(
+        lib_dir.join("vendor-clause.sld"),
+        r#"
+        (define-library (test vendor-clause)
+          (import (scheme base))
+          (declare (pure) (no-side-effects))
+          (export stable-export)
+          (begin (define stable-export 42)))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "vendor-clause".to_string()])
+        .expect("a library with an unknown declaration must still load");
+
+    assert!(lib.exports_identifier("stable-export"));
+    let tv = lib.env.get("stable-export").unwrap();
+    assert_eq!(tv.as_fixnum(), Some(42));
 }
 
 // ============================================================================

@@ -628,6 +628,18 @@ impl Lexer {
     /// Read a reader directive like #!fold-case or #!no-fold-case
     /// These directives affect subsequent lexing but don't produce tokens themselves
     fn read_reader_directive(&mut self) -> Result<Token, LexError> {
+        // A shebang (`#!/usr/bin/env patina`) is not a reader directive:
+        // `#!` followed by `/` or a space comments out the rest of the line,
+        // so an installed script runs. `#!fold-case` is unaffected — a
+        // directive name follows its `#!` immediately.
+        if !self.is_at_end() && matches!(self.current_char(), '/' | ' ') {
+            while !self.is_at_end() && self.current_char() != '\n' {
+                self.advance();
+            }
+            self.skip_whitespace_and_comments()?;
+            return self.lex_token();
+        }
+
         // Read the directive name (until whitespace or delimiter)
         let start = self.position;
         while !self.is_at_end()
@@ -1384,6 +1396,33 @@ mod tests {
         let mut lexer = Lexer::new("#!no-fold-case ABC");
         let token = lexer.next_token_kind().unwrap();
         assert_eq!(token, Token::Identifier("ABC".to_string()));
+    }
+
+    #[test]
+    fn test_shebang_line_skipped() {
+        // A leading shebang comments out its whole line, including arguments.
+        let mut lexer = Lexer::new("#!/usr/bin/env patina\n(display 1)");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Identifier("display".to_string())
+        );
+    }
+
+    #[test]
+    fn test_shebang_with_space_skipped() {
+        // `#! /usr/bin/env patina` — the space form some systems use.
+        let mut lexer = Lexer::new("#! /usr/bin/env patina\n42");
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_shebang_only_file_is_eof() {
+        let mut lexer = Lexer::new("#!/usr/bin/env patina\n");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Eof);
     }
 
     #[test]

@@ -655,6 +655,40 @@ impl Evaluator {
         self.library_registry.borrow_mut().add_search_path(path);
     }
 
+    /// Evaluate an inline `(define-library ...)` form.
+    ///
+    /// Parses the datum with the same loader the `.sld` path uses (includes
+    /// resolve against the current directory), evaluates the body, and
+    /// registers the library — replacing a previous same-named one, so
+    /// re-evaluating the form at the REPL redefines it.
+    pub fn eval_inline_define_library(
+        &self,
+        form: patina_core::TaggedValue,
+    ) -> Result<(), patina_runtime::LibraryError> {
+        use patina_frontend::SchemeLibraryLoader;
+
+        let search_paths = self.library_search_paths();
+        let can_load_library = |lib_name: &[String]| {
+            let loaders = self.loader_registry.borrow();
+            loaders.can_load_with_paths(lib_name, &search_paths)
+        };
+        let loader = SchemeLibraryLoader::new(self.fs.clone());
+        let parsed = loader.parse_inline_form(
+            form,
+            std::path::Path::new("."),
+            self.global_env.heap().clone(),
+            &can_load_library,
+        )?;
+
+        let name = parsed.name.clone();
+        self.library_registry.borrow_mut().begin_loading(&name)?;
+        let result = self.evaluate_parsed_library(parsed);
+        self.library_registry.borrow_mut().end_loading(&name);
+        let lib = result?;
+        self.library_registry.borrow_mut().register_or_replace(lib);
+        Ok(())
+    }
+
     /// Evaluate a parsed library
     ///
     /// This method is called after a library is parsed from a .sld file.
