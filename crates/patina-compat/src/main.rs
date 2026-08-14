@@ -54,6 +54,9 @@ struct Options {
     patina: PathBuf,
     vendor: PathBuf,
     results_path: PathBuf,
+    /// Whether `--results` was given, which authorizes writing a snapshot
+    /// even for a filtered (subset) run.
+    results_explicit: bool,
     filter: Option<String>,
     tree_walker: bool,
     timeout: Duration,
@@ -75,6 +78,7 @@ fn parse_args() -> Options {
         patina: root.join("target/release/patina"),
         vendor: root.join("compat/vendor"),
         results_path: root.join("compat/reports/results.scm"),
+        results_explicit: false,
         filter: None,
         tree_walker: false,
         timeout: Duration::from_secs(30),
@@ -91,7 +95,10 @@ fn parse_args() -> Options {
             "report" => opts.command = Some(Command::Report),
             "--patina" => opts.patina = PathBuf::from(require_value(&mut iter, "--patina")),
             "--vendor" => opts.vendor = PathBuf::from(require_value(&mut iter, "--vendor")),
-            "--results" => opts.results_path = PathBuf::from(require_value(&mut iter, "--results")),
+            "--results" => {
+                opts.results_path = PathBuf::from(require_value(&mut iter, "--results"));
+                opts.results_explicit = true;
+            }
             "--filter" => opts.filter = Some(require_value(&mut iter, "--filter")),
             "--tree-walker" => opts.tree_walker = true,
             "--timeout" => {
@@ -183,18 +190,30 @@ fn run_command(opts: &Options) {
     };
     let results = run::run_corpus(&selected, &universe, &providers, &config);
 
-    let snapshot = report::to_sexp(&results, backend);
-    if let Some(parent) = opts.results_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Err(e) = std::fs::write(&opts.results_path, &snapshot) {
-        eprintln!(
-            "warning: could not write {}: {}",
-            opts.results_path.display(),
-            e
-        );
+    // A filtered run measures a subset, so it must not overwrite the
+    // canonical snapshot — that would silently shrink the committed
+    // baseline to whatever was filtered. Pass --results explicitly to
+    // capture a subset run.
+    let write_snapshot = opts.filter.is_none() || opts.results_explicit;
+    if write_snapshot {
+        let snapshot = report::to_sexp(&results, backend);
+        if let Some(parent) = opts.results_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&opts.results_path, &snapshot) {
+            eprintln!(
+                "warning: could not write {}: {}",
+                opts.results_path.display(),
+                e
+            );
+        } else {
+            eprintln!("results written to {}", opts.results_path.display());
+        }
     } else {
-        eprintln!("results written to {}", opts.results_path.display());
+        eprintln!(
+            "filtered run: {} left unchanged (pass --results <file> to save a subset)",
+            opts.results_path.display()
+        );
     }
 
     println!("{}", report::render(&results, backend));
