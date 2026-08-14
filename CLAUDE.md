@@ -39,6 +39,11 @@ patina-tests → patina-interpreter
 
 ## Development Commands
 
+The Rust version is pinned in `rust-toolchain.toml` and rustup applies it
+automatically inside the repo, so local builds and CI use the same compiler.
+Bumping it is a deliberate one-line change — run the full gate below in the
+same PR, since a newer clippy usually finds something.
+
 ```bash
 # Build
 cargo build --release

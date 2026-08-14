@@ -1,0 +1,15 @@
+# The single place the Rust version is declared. rustup honors this file for
+# every cargo invocation inside the repo, so local development and CI compile
+# with the same compiler by construction rather than by coincidence.
+#
+# Why pin at all: CI gates on `cargo clippy -- -D warnings`. On a floating
+# `stable`, a Rust release that adds or widens a lint turns unrelated pull
+# requests red with no code change — which is exactly how clippy::question_mark
+# broke PR #57. Pinning moves that noise to a deliberate one-line bump.
+#
+# Bumping: raise `channel`, then run the full local gate
+# (`cargo test --all --lib --tests`, both chibi scripts, clippy, fmt) and fix
+# whatever the newer lints find in the same PR.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
