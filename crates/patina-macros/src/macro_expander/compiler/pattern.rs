@@ -116,25 +116,25 @@ impl Compiler {
         form: TaggedValue,
         level: usize,
     ) -> Result<Pattern, MacroError> {
-        // Handle all identifier types (Symbol, Identifier)
-        if let Some(s) = self.extract_symbol_name(form) {
+        // Handle all identifier types (Symbol, Identifier). The identity is
+        // read once here and reused for both the literals test and the pattern
+        // variable it may become.
+        if let Some(key) = self.identifier_key(form) {
             // R7RS: Check literals FIRST (including _ if it's in the literals list)
-            if self.is_literal(&s) {
+            if self.is_literal_key(&key) {
                 return Ok(self.make_literal_pattern(form));
             }
 
-            // Check if this is a SUBSTITUTED identifier (empty scopes) from outer expansion.
-            if self.is_substituted_from_outer_macro(form) {
-                return Ok(self.make_literal_pattern(form));
-            }
-
-            if s.as_ref() == WILDCARD {
+            // An identifier substituted by an outer expansion gets no special
+            // treatment here: R7RS 4.3.2 classifies a pattern identifier by the
+            // literals list alone, not by where it came from. See
+            // `IdentifierKey` for why identity is name plus scopes.
+            if key.name.as_ref() == WILDCARD {
                 // Underscore is wildcard only if NOT in literals
                 Ok(Pattern::Wildcard)
             } else {
                 // Pattern variable - assign PVREF
-                let pvref = self.add_pvar(s, level)?;
-                Ok(Pattern::Var(pvref))
+                Ok(Pattern::Var(self.add_pvar(key, level)?))
             }
         } else {
             // Check for pair

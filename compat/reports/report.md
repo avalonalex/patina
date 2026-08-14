@@ -1,12 +1,12 @@
 # Patina third-party compatibility (vm backend)
 
-**128 of 187 packages pass** — 128 of 186 achievable (excluding 1 out-of-scope pending FFI).
+**129 of 187 packages pass** — 129 of 186 achievable (excluding 1 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 128 |
+| pass | 129 |
 | missing-library | 29 |
-| parse-error | 21 |
+| parse-error | 20 |
 | load-error | 6 |
 | unbound-identifier | 1 |
 | wrong-result | 1 |
@@ -47,9 +47,8 @@
 | `Each syntax-rules rule must have exactly 2 elements (pattern template)` | 5 |
 | `syntax-rules literals must be symbols` | 3 |
 | `#<unknown>` | 1 |
-| `Duplicate parameter 'space' in lambda` | 1 |
-| `Duplicate parameter 'symbol-first' in lambda` | 1 |
 | `Name mismatch in interface implementation (expected, gotten) proc0 proc0` | 1 |
+| `ch` | 1 |
 
 ## Load errors
 
@@ -99,7 +98,7 @@
 | chibi-monad-environment | probe | parse-error |
 | chibi-net-dns | test | missing-library |
 | chibi-net-smtp | test | out-of-scope |
-| chibi-parse | test | parse-error |
+| chibi-parse | test | pass |
 | chibi-pathname | test | pass |
 | chibi-quoted-printable | test | pass |
 | chibi-regexp | test | parse-error |

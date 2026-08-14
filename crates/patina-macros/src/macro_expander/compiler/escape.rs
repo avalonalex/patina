@@ -55,7 +55,7 @@ impl Compiler {
             }
 
             // Check if it's a pattern variable
-            if let Some(pvref) = self.pvars.get(&s) {
+            if let Some(pvref) = self.lookup_pvar(form) {
                 // Verify level is valid
                 if pvref.level() > level {
                     return Err(MacroError::InvalidSyntax(format!(
@@ -65,7 +65,7 @@ impl Compiler {
                         level
                     )));
                 }
-                Ok(Template::Var(*pvref))
+                Ok(Template::Var(pvref))
             } else {
                 // In ellipsis escape context: produce plain Symbol values.
                 Ok(self.make_literal_template(form))
@@ -154,10 +154,10 @@ impl Compiler {
         _level: usize,
     ) -> Result<Template, MacroError> {
         // Check for symbol
-        if let Some(s) = self.extract_symbol_name(form) {
+        if self.extract_symbol_name(form).is_some() {
             // Check if it's a pattern variable
-            if let Some(pvref) = self.pvars.get(&s) {
-                Ok(Template::Var(*pvref))
+            if let Some(pvref) = self.lookup_pvar(form) {
+                Ok(Template::Var(pvref))
             } else {
                 // Non-pvar symbol: produce literal Symbol value
                 Ok(self.make_literal_template(form))

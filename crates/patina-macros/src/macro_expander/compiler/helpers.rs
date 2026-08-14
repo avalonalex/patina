@@ -3,6 +3,7 @@
 //! This module contains utility functions used throughout pattern and template
 //! compilation, including symbol extraction, literal checking, and list traversal.
 
+use super::super::IdentifierKey;
 use super::Compiler;
 use crate::error::MacroError;
 use patina_core::TaggedValue;
@@ -13,16 +14,20 @@ impl Compiler {
     /// Add a pattern variable and assign it a PVREF
     ///
     /// # Arguments
-    /// - `name`: Variable name
+    /// - `key`: The variable's identity — name plus the scopes it was written with
     /// - `level`: Ellipsis nesting level
     ///
     /// # Returns
     /// The assigned PVREF
-    pub(super) fn add_pvar(&mut self, name: Rc<str>, level: usize) -> Result<PVRef, MacroError> {
-        if self.pvars.contains_key(&name) {
+    pub(super) fn add_pvar(
+        &mut self,
+        key: IdentifierKey,
+        level: usize,
+    ) -> Result<PVRef, MacroError> {
+        if self.pvars.contains_key(&key) {
             return Err(MacroError::InvalidSyntax(format!(
                 "Duplicate pattern variable: {}",
-                name
+                key.name
             )));
         }
 
@@ -39,15 +44,31 @@ impl Compiler {
         }
 
         let pvref = PVRef::new(level as u8, self.pvar_count as u8);
-        self.pvars.insert(name, pvref);
+        self.pvars.insert(key, pvref);
         self.pvar_count += 1;
 
         Ok(pvref)
     }
 
-    /// Check if a symbol is a literal identifier
-    pub(super) fn is_literal(&self, sym: &Rc<str>) -> bool {
-        self.literal_names.contains(sym)
+    /// The identity of an identifier-or-symbol form, or `None` for anything else.
+    pub(super) fn identifier_key(&self, form: TaggedValue) -> Option<IdentifierKey> {
+        IdentifierKey::from_heap(form, &self.heap.borrow())
+    }
+
+    /// Whether an identifier is one of this macro's literals.
+    ///
+    /// Membership is by identity, so `key` must equal a literal in **both**
+    /// name and scopes — see [`IdentifierKey`] for why the name alone is not
+    /// enough.
+    pub(super) fn is_literal_key(&self, key: &IdentifierKey) -> bool {
+        self.literal_keys.contains(key)
+    }
+
+    /// The PVREF this identifier is bound to, if it is one of this rule's
+    /// pattern variables.
+    pub(super) fn lookup_pvar(&self, form: TaggedValue) -> Option<PVRef> {
+        let key = self.identifier_key(form)?;
+        self.pvars.get(&key).copied()
     }
 
     /// Check if a TaggedValue is the ellipsis symbol
@@ -61,16 +82,24 @@ impl Compiler {
         match &self.ellipsis {
             None => false, // Ellipsis disabled
             Some(ellipsis_sym) => {
-                let heap = self.heap.borrow();
-                let is_ellipsis_match = if let Some(s) = heap.get_symbol_name(form) {
-                    s == ellipsis_sym.as_ref()
-                } else if let Some((name, _)) = heap.get_identifier_data_any(form) {
-                    &name == ellipsis_sym
-                } else {
-                    false
+                let is_ellipsis_match = {
+                    let heap = self.heap.borrow();
+                    if let Some(s) = heap.get_symbol_name(form) {
+                        s == ellipsis_sym.as_ref()
+                    } else if let Some((name, _)) = heap.get_identifier_data_any(form) {
+                        &name == ellipsis_sym
+                    } else {
+                        false
+                    }
                 };
-                // Literals have priority over ellipsis (SRFI-46, R7RS 4.3.2)
-                if is_ellipsis_match && self.literal_names.contains(ellipsis_sym) {
+                // Literals have priority over ellipsis (SRFI-46, R7RS 4.3.2).
+                // Only reached for a token actually spelled like the ellipsis,
+                // so the extra identity read is rare.
+                if is_ellipsis_match
+                    && self
+                        .identifier_key(form)
+                        .is_some_and(|key| self.is_literal_key(&key))
+                {
                     return false;
                 }
                 is_ellipsis_match
@@ -101,14 +130,15 @@ impl Compiler {
     /// - Introduced identifiers (from template): end up with NON-EMPTY scopes
     ///   (they had empty scopes before flip, macro_scope got added)
     ///
-    /// For nested macro hygiene, we need to distinguish:
-    /// 1. Substituted values (EMPTY scopes): Should be treated as literals in inner patterns
-    ///    to prevent the substituted symbol from being reinterpreted as a pattern variable.
-    ///    This is the key for proper nested macro definitions.
-    /// 2. Introduced identifiers (NON-EMPTY scopes): Should become pattern variables
-    ///    in inner patterns. They're new identifiers introduced by the outer template.
+    /// Only the template compiler uses this now, to decide how to emit an
+    /// identifier that is *not* this rule's pattern variable: a substituted one
+    /// already carries the identity the outer macro gave it and is emitted
+    /// verbatim, while any other identifier gets this macro's definition scopes.
     ///
-    /// This function returns true ONLY for substituted values (Identifier with empty scopes).
+    /// Pattern compilation does not consult it. Classification there is by the
+    /// literals list, and pattern-variable identity is (name, scopes) -- which
+    /// distinguishes substituted from introduced identifiers without a
+    /// provenance test.
     pub(super) fn is_substituted_from_outer_macro(&self, form: TaggedValue) -> bool {
         let heap = self.heap.borrow();
         // Check identifier (native or boxed, unified)
@@ -167,14 +197,15 @@ impl Compiler {
     /// Check if a TaggedValue contains any pattern variables
     /// Used to determine if a quoted expression needs template expansion
     pub(super) fn contains_pattern_vars(&self, value: TaggedValue) -> bool {
-        // Handle all identifier types (Symbol, Identifier)
-        if let Some(s) = self.extract_symbol_name(value) {
-            // Skip identifiers with scopes - they came from outer expansion
-            // and shouldn't be treated as pattern variables
-            if self.is_substituted_from_outer_macro(value) {
-                return false;
-            }
-            return self.pvars.contains_key(&s);
+        // Handle all identifier types (Symbol, Identifier).
+        //
+        // A substituted identifier is not skipped: the pattern compiler can
+        // bind one as a pattern variable, and a quoted template that mentions
+        // it does need expansion. The lookup is by identity, so a substituted
+        // identifier does not collide with an introduced pattern variable of
+        // the same name.
+        if let Some(key) = self.identifier_key(value) {
+            return self.pvars.contains_key(&key);
         }
 
         // Check pairs

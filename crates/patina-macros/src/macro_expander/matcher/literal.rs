@@ -102,10 +102,12 @@ pub fn tagged_matches_literal(input: TaggedValue, pattern_lit: TaggedValue, heap
 
     // Check if pattern is an identifier (native or boxed, unified)
     if let Some((pat_name, pat_scopes)) = heap.get_identifier_data_any(pattern_lit) {
-        // Pattern with empty scopes = substituted from outer expansion = matches any identifier
-        if pat_scopes.is_empty() {
-            return heap.get_symbol_or_identifier_name(input).is_some();
-        }
+        // An identifier with empty scopes was substituted from an outer
+        // expansion. It stands for the identifier the outer macro put here, so
+        // it matches that identifier and no other -- which is what the general
+        // comparison below already computes, since an empty scope set is a
+        // subset of every scope set. Matching *any* identifier instead would
+        // make a literals list unable to tell one name from another.
 
         // Check input identifier (native or boxed, unified)
         if let Some((inp_name, inp_scopes)) = heap.get_identifier_data_any(input) {

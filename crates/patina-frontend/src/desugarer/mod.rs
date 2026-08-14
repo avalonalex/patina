@@ -76,6 +76,7 @@ use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
 use patina_core::{SharedHeap, TaggedValue};
 use patina_ir::{CoreExpr, CoreExprKind};
+use patina_macros::IdentifierKey;
 use patina_runtime::{Environment, ScopeId, ScopeSet};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -1728,15 +1729,16 @@ impl Desugarer {
         &self,
         literals_tv: TaggedValue,
         shared_heap: &SharedHeap,
-    ) -> Result<Vec<Rc<str>>> {
+    ) -> Result<Vec<IdentifierKey>> {
         let items = utils::list_to_vec_tagged(literals_tv, shared_heap)?;
         let heap = shared_heap.borrow();
         let mut literals = Vec::new();
         for item in items {
-            if let Some(s) = heap.get_symbol_name(item) {
-                literals.push(Rc::from(s));
-            } else if let Some((name, _)) = utils::get_identifier_info(item, &heap) {
-                literals.push(name);
+            // The scopes are kept, not discarded: literal membership is decided
+            // by identifier identity, so an introduced literal must not match a
+            // substituted pattern identifier of the same name.
+            if let Some(key) = IdentifierKey::from_heap(item, &heap) {
+                literals.push(key);
             } else {
                 return Err(DesugarError::InvalidSyntax(
                     "syntax-rules literals must be symbols".to_string(),
