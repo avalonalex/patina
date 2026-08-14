@@ -879,3 +879,88 @@ fn test_nested_macro_ellipsis_escape_with_pattern_var() {
         "(x 1 2 3)",
     );
 }
+
+// ============================================================================
+// Template-introduced identifiers across recursive expansions
+// ============================================================================
+
+/// A recursive macro that introduces the *same* template identifier on each
+/// expansion must produce a *distinct* binding each time.
+///
+/// The accumulator below spells every parameter `a`, but each one is
+/// introduced by a different expansion and so carries that expansion's scope.
+/// Rejecting them as duplicates broke SRFI 156's `is`/`isnt`, whose
+/// `extract-placeholders` builds a lambda exactly this way.
+///
+/// Verified against Gauche and Chez Scheme, which both return `(10 20)`.
+#[test]
+fn test_recursive_macro_introduces_distinct_params() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax gen
+          (syntax-rules ()
+            ((_ () (args ...)) (lambda (args ...) (list args ...)))
+            ((_ (x . rest) (args ...)) (gen rest (args ... a)))))
+        ((gen (1 2) ()) 10 20)
+        "#,
+        "(10 20)",
+    );
+}
+
+/// The same rule applies to the rest parameter of an improper formals list.
+#[test]
+fn test_recursive_macro_distinct_params_with_rest() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax gen2
+          (syntax-rules ()
+            ((_ () (args ...)) (lambda (args ... . r) (list args ... r)))
+            ((_ (x . rest) (args ...)) (gen2 rest (args ... a)))))
+        ((gen2 (1 2) ()) 10 20 30 40)
+        "#,
+        "(10 20 (30 40))",
+    );
+}
+
+/// Hand-written duplicates share a scope set, so they are still an error.
+#[test]
+fn test_genuine_duplicate_params_still_rejected() {
+    assert_program_eval_error("(lambda (q q) q)");
+    assert_program_eval_error("(lambda (q . q) q)");
+}
+
+/// SRFI 156's reference implementation, reduced to the shape that failed:
+/// each `_` placeholder becomes a fresh lambda parameter named `arg`.
+#[test]
+fn test_srfi_156_placeholder_shape() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax infix/postfix
+          (syntax-rules ()
+            ((infix/postfix x somewhat?) (somewhat? x))
+            ((infix/postfix left related-to? right) (related-to? left right))))
+        (define-syntax extract-placeholders
+          (syntax-rules (_)
+            ((extract-placeholders final () () body)
+             (final (infix/postfix . body)))
+            ((extract-placeholders final () args body)
+             (lambda args (final (infix/postfix . body))))
+            ((extract-placeholders final (_ op . rest) (args ...) (body ...))
+             (extract-placeholders final rest (args ... arg) (body ... arg op)))
+            ((extract-placeholders final (arg op . rest) args (body ...))
+             (extract-placeholders final rest args (body ... arg op)))
+            ((extract-placeholders final (_) (args ...) (body ...))
+             (extract-placeholders final () (args ... arg) (body ... arg)))
+            ((extract-placeholders final (arg) args (body ...))
+             (extract-placeholders final () args (body ... arg)))))
+        (define-syntax identity-syntax
+          (syntax-rules () ((identity-syntax form) form)))
+        (define-syntax is
+          (syntax-rules ()
+            ((is . something)
+             (extract-placeholders identity-syntax something () ()))))
+        (list ((is _ < _) 1 2) ((is _ < _) 2 1))
+        "#,
+        "(#t #f)",
+    );
+}

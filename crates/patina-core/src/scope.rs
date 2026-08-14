@@ -106,7 +106,7 @@ impl std::fmt::Display for ScopeId {
 /// - Use a bitset for small scope IDs (would need scope ID recycling)
 /// - Use Rc-sharing for common scope sets (many identifiers share same scopes)
 /// - Use u32 for ScopeId instead of usize (4B vs 8B per scope)
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct ScopeSet {
     // Inline storage for up to 3 scopes (most identifiers have 0-3 scopes)
     // Kept sorted for efficient is_subset_of operation
