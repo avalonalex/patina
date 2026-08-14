@@ -2,10 +2,11 @@
 //! (Track L, L0): shebang lines, program-relative library resolution, and
 //! the project-local `./.patina/lib/` dependency directory.
 //!
-//! These spawn the real binary because the behaviour under test lives in the
-//! CLI layer (`main.rs`) and in cwd-relative default search paths — neither
-//! is reachable through the library API without changing the process state
-//! test-wide.
+//! The search-path tests spawn the real binary because the behaviour lives in
+//! the CLI layer (`main.rs`) and in cwd-relative default search paths —
+//! neither is reachable through the library API without changing process
+//! state test-wide. The shebang test is a one-spawn acceptance smoke: the
+//! mechanism is in the shared lexer and unit-tested there.
 
 use std::fs;
 use std::path::Path;
@@ -58,7 +59,10 @@ fn shebang_script_runs() {
     )
     .unwrap();
 
-    run_both_backends(temp.path(), script.to_str().unwrap(), "42");
+    // Shebang stripping is lexer-level and backend-independent; one spawn.
+    let (stdout, stderr, ok) = run_patina(temp.path(), &[script.to_str().unwrap()]);
+    assert!(ok, "shebang script failed\nstderr: {}", stderr);
+    assert_eq!(stdout.trim(), "42");
 }
 
 #[test]

@@ -389,18 +389,9 @@ mod tests {
     #[test]
     fn test_default_paths_include_project_local_deps() {
         let registry = LibraryRegistry::with_default_paths();
-        let pos = |suffix: &str| {
-            registry
-                .search_paths
-                .iter()
-                .position(|p| p.ends_with(suffix))
-        };
-
-        let patina_lib = pos(".patina/lib").expect("./.patina/lib must be a default search path");
-        // Project-local dependencies stay ahead of the workspace/exe paths.
-        if let Some(exe_lib) = pos("../lib") {
-            assert!(patina_lib < exe_lib);
-        }
+        // ./lib first, then the project-local dependency directory — ahead of
+        // any PATINA_HOME/workspace/exe paths, whose presence varies.
+        assert!(registry.search_paths[1].ends_with(".patina/lib"));
     }
 
     #[test]
@@ -409,9 +400,13 @@ mod tests {
         let name = vec!["test".to_string()];
         registry.register(Library::new(name.clone())).unwrap();
 
-        // A second registration under the same name replaces, not errors.
-        registry.register_or_replace(Library::new(name.clone()));
-        assert!(registry.is_loaded(&name));
+        // A second registration under the same name replaces, not errors —
+        // the replacement's exports are what `get` returns afterwards.
+        let mut replacement = Library::new(name.clone());
+        replacement.export_tagged("v".to_string(), patina_core::TaggedValue::fixnum(2));
+        registry.register_or_replace(replacement);
+
+        assert!(registry.get(&name).unwrap().exports.contains_key("v"));
     }
 
     #[test]

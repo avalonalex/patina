@@ -93,7 +93,7 @@ fn run_script_tree_walker(filename: &str) {
 
     let interp = TreeWalkInterpreter::new_tree_walker();
     if let Some(dir) = script_dir(filename) {
-        interp.backend().evaluator().add_library_search_path(dir);
+        interp.backend().add_library_search_path(dir);
     }
     let is_test_file = filename.contains("test") || code.contains("test-begin");
 

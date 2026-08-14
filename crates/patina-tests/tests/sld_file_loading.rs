@@ -364,10 +364,13 @@ fn test_import_modifiers() {
 
 #[test]
 fn test_inline_define_library() {
+    // The vendor-specific (declare ...) clause also proves lenient unknown
+    // declarations compose with the inline path.
     common::assert_program_eval_to(
         r#"
         (define-library (inline demo)
           (import (scheme base))
+          (declare (pure))
           (export twice)
           (begin (define (twice x) (* 2 x))))
         (import (inline demo))
@@ -393,24 +396,6 @@ fn test_inline_define_library_redefinition_wins() {
         v
         "#,
         "2",
-    );
-}
-
-#[test]
-fn test_inline_define_library_with_unknown_clause() {
-    // Items 1 + 2 together: the vendor-specific (declare ...) clause is
-    // skipped with a warning instead of aborting the definition.
-    common::assert_program_eval_to(
-        r#"
-        (define-library (inline vendor)
-          (import (scheme base))
-          (declare (pure))
-          (export f)
-          (begin (define (f) 'ok)))
-        (import (inline vendor))
-        (f)
-        "#,
-        "ok",
     );
 }
 
