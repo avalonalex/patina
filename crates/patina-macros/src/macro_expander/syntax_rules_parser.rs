@@ -5,8 +5,9 @@
 //!
 //! Used by both TestExpander (for tests) and can be used by patina-frontend's desugarer.
 
+use crate::macro_expander::IdentifierKey;
 use crate::macro_expander::utils::{get_identifier_name_tagged, list_to_vec_tagged};
-use patina_core::{Heap, LiteralSpec, TaggedValue};
+use patina_core::{Heap, TaggedValue};
 use std::rc::Rc;
 
 /// Parsed components of a syntax-rules form (TaggedValue-based)
@@ -15,7 +16,7 @@ pub struct ParsedSyntaxRules {
     /// Optional custom ellipsis symbol (SRFI-46)
     pub custom_ellipsis: Option<Rc<str>>,
     /// List of literal identifiers, with the scopes they were written with
-    pub literals: Vec<LiteralSpec>,
+    pub literals: Vec<IdentifierKey>,
     /// List of (pattern, template) pairs as TaggedValue
     pub rules: Vec<(TaggedValue, TaggedValue)>,
 }
@@ -127,19 +128,16 @@ fn is_syntax_rules_keyword(tv: TaggedValue, heap: &Heap) -> bool {
 fn parse_literals_list(
     expr: TaggedValue,
     heap: &Heap,
-) -> Result<Vec<LiteralSpec>, SyntaxRulesParseError> {
+) -> Result<Vec<IdentifierKey>, SyntaxRulesParseError> {
     let mut literals = Vec::new();
     let mut current = expr;
 
     while current.is_pair() {
         let car = heap.car(current);
-        if let Some(name) = get_identifier_name_tagged(car, heap) {
-            // Keep the scopes: literal membership is by identifier identity.
-            let scopes = heap
-                .get_identifier_data_any(car)
-                .map(|(_, scopes)| scopes)
-                .unwrap_or_default();
-            literals.push(LiteralSpec::new(name, scopes));
+        // Keep the scopes, not just the name: literal membership is decided by
+        // identifier identity.
+        if let Some(key) = IdentifierKey::from_heap(car, heap) {
+            literals.push(key);
         } else {
             return Err(SyntaxRulesParseError(
                 "Literals must be symbols".to_string(),

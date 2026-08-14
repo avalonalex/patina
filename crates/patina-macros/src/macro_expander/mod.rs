@@ -10,6 +10,7 @@
 pub mod compiler;
 mod debug;
 pub mod expander;
+pub mod identifier_key;
 pub mod interface;
 pub mod matcher;
 pub mod syntax_rules_parser;
@@ -27,6 +28,7 @@ pub use patina_runtime::{Identifier, Pattern, Template};
 // Re-export macro system types
 pub use compiler::{CompiledMacro, CompiledRule, Compiler};
 pub use expander::{ExpandError, Expander};
+pub use identifier_key::IdentifierKey;
 pub use matcher::{MatchError, Matcher};
 pub use syntax_rules_parser::{ParsedSyntaxRules, SyntaxRulesParseError, parse_syntax_rules};
 

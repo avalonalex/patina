@@ -3,33 +3,31 @@
 //! This module contains utility functions used throughout pattern and template
 //! compilation, including symbol extraction, literal checking, and list traversal.
 
+use super::super::IdentifierKey;
 use super::Compiler;
 use crate::error::MacroError;
 use patina_core::TaggedValue;
-use patina_runtime::{PVRef, ScopeSet};
+use patina_runtime::PVRef;
 use std::rc::Rc;
 
 impl Compiler {
     /// Add a pattern variable and assign it a PVREF
     ///
     /// # Arguments
-    /// - `name`: Variable name
-    /// - `scopes`: Scopes the identifier carried, part of its identity
+    /// - `key`: The variable's identity — name plus the scopes it was written with
     /// - `level`: Ellipsis nesting level
     ///
     /// # Returns
     /// The assigned PVREF
     pub(super) fn add_pvar(
         &mut self,
-        name: Rc<str>,
-        scopes: ScopeSet,
+        key: IdentifierKey,
         level: usize,
     ) -> Result<PVRef, MacroError> {
-        let key = (name.clone(), scopes);
         if self.pvars.contains_key(&key) {
             return Err(MacroError::InvalidSyntax(format!(
                 "Duplicate pattern variable: {}",
-                name
+                key.name
             )));
         }
 
@@ -52,36 +50,25 @@ impl Compiler {
         Ok(pvref)
     }
 
-    /// The scope set an identifier carries, normalizing a bare symbol to empty.
-    ///
-    /// Identifier identity is (name, scopes) throughout the compiler: literal
-    /// membership, pattern-variable binding, and pattern-variable reference all
-    /// use it, so they agree on when two identifiers spelled alike are the same.
-    pub(super) fn identifier_scopes(&self, form: TaggedValue) -> ScopeSet {
-        let heap = self.heap.borrow();
-        heap.get_identifier_data_any(form)
-            .map(|(_, scopes)| scopes)
-            .unwrap_or_default()
+    /// The identity of an identifier-or-symbol form, or `None` for anything else.
+    pub(super) fn identifier_key(&self, form: TaggedValue) -> Option<IdentifierKey> {
+        IdentifierKey::from_heap(form, &self.heap.borrow())
     }
 
-    /// Whether a pattern identifier is one of this macro's literals.
+    /// Whether an identifier is one of this macro's literals.
     ///
-    /// R7RS 4.3.2 decides this by identifier identity, so the form must agree
-    /// with a literal in **both** name and scopes. Comparing names alone breaks
-    /// a macro that writes another macro: the inner literals list and the inner
-    /// pattern can spell the same name while one is introduced by the template
-    /// and the other is substituted from the use site, which makes them
-    /// different identifiers. See [`patina_runtime::LiteralSpec`].
-    ///
-    /// A bare symbol carries no scopes and normalizes to an empty scope set.
-    pub(super) fn is_literal_form(&self, form: TaggedValue, name: &str) -> bool {
-        if self.literal_specs.is_empty() {
-            return false;
-        }
-        let scopes = self.identifier_scopes(form);
-        self.literal_specs
-            .iter()
-            .any(|spec| spec.matches(name, &scopes))
+    /// Membership is by identity, so `key` must equal a literal in **both**
+    /// name and scopes — see [`IdentifierKey`] for why the name alone is not
+    /// enough.
+    pub(super) fn is_literal_key(&self, key: &IdentifierKey) -> bool {
+        self.literal_keys.contains(key)
+    }
+
+    /// The PVREF this identifier is bound to, if it is one of this rule's
+    /// pattern variables.
+    pub(super) fn lookup_pvar(&self, form: TaggedValue) -> Option<PVRef> {
+        let key = self.identifier_key(form)?;
+        self.pvars.get(&key).copied()
     }
 
     /// Check if a TaggedValue is the ellipsis symbol
@@ -106,9 +93,13 @@ impl Compiler {
                     }
                 };
                 // Literals have priority over ellipsis (SRFI-46, R7RS 4.3.2).
-                // The borrow above is released first: `is_literal_form` takes
-                // its own.
-                if is_ellipsis_match && self.is_literal_form(form, ellipsis_sym) {
+                // Only reached for a token actually spelled like the ellipsis,
+                // so the extra identity read is rare.
+                if is_ellipsis_match
+                    && self
+                        .identifier_key(form)
+                        .is_some_and(|key| self.is_literal_key(&key))
+                {
                     return false;
                 }
                 is_ellipsis_match
@@ -206,14 +197,15 @@ impl Compiler {
     /// Check if a TaggedValue contains any pattern variables
     /// Used to determine if a quoted expression needs template expansion
     pub(super) fn contains_pattern_vars(&self, value: TaggedValue) -> bool {
-        // Handle all identifier types (Symbol, Identifier)
-        if let Some(s) = self.extract_symbol_name(value) {
-            // A substituted identifier is not skipped: the pattern compiler can
-            // now bind one as a pattern variable, and a quoted template that
-            // mentions it does need expansion. The lookup is by identity, so a
-            // substituted identifier does not collide with an introduced
-            // pattern variable of the same name.
-            return self.pvars.contains_key(&(s, self.identifier_scopes(value)));
+        // Handle all identifier types (Symbol, Identifier).
+        //
+        // A substituted identifier is not skipped: the pattern compiler can
+        // bind one as a pattern variable, and a quoted template that mentions
+        // it does need expansion. The lookup is by identity, so a substituted
+        // identifier does not collide with an introduced pattern variable of
+        // the same name.
+        if let Some(key) = self.identifier_key(value) {
+            return self.pvars.contains_key(&key);
         }
 
         // Check pairs

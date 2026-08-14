@@ -29,12 +29,11 @@ mod template;
 #[cfg(test)]
 mod tests;
 
+use super::IdentifierKey;
 use super::utils::ELLIPSIS;
 use crate::error::MacroError;
 use patina_core::{SharedHeap, TaggedValue};
-use patina_runtime::{
-    Environment, LiteralBinding, LiteralSpec, PVRef, Pattern, ScopeSet, Template,
-};
+use patina_runtime::{Environment, LiteralBinding, PVRef, Pattern, ScopeSet, Template};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -56,9 +55,9 @@ pub struct Compiler {
     /// Literals exactly as written, for identity-based membership tests.
     ///
     /// R7RS 4.3.2 decides literal membership by identifier identity, so a
-    /// pattern identifier is a literal only when it matches one of these in
-    /// both name and scopes. See [`LiteralSpec`].
-    pub(super) literal_specs: Vec<LiteralSpec>,
+    /// pattern identifier is a literal only when it equals one of these in
+    /// both name and scopes. See [`IdentifierKey`].
+    pub(super) literal_keys: Vec<IdentifierKey>,
 
     /// Symbol used for ellipsis (usually "...")
     /// None means ellipsis is disabled (inside escape)
@@ -77,12 +76,12 @@ pub struct Compiler {
     pub(super) definition_scopes: ScopeSet,
 
     // Per-rule compilation context
-    /// Map from pattern variable *identity* to PVREF.
+    /// Map from pattern variable [`IdentifierKey`] to PVREF.
     ///
-    /// Keyed by (name, scopes) rather than name alone so that an identifier
+    /// Keyed by identity rather than name alone so that an identifier
     /// substituted from an outer expansion and an identifier introduced by that
     /// expansion's template never collide when they are spelled alike.
-    pub(super) pvars: HashMap<(Rc<str>, ScopeSet), PVRef>,
+    pub(super) pvars: HashMap<IdentifierKey, PVRef>,
 
     /// Counter for assigning PVREF indices
     pub(super) pvar_count: usize,
@@ -102,15 +101,20 @@ impl Compiler {
     /// but will be at runtime). If bound, capture the scopes of that binding.
     /// This enables correct `bound-identifier=?` semantics during pattern matching.
     fn resolve_literal_bindings(
-        literal_specs: &[LiteralSpec],
+        literal_keys: &[IdentifierKey],
         env: Option<&Rc<Environment>>,
         definition_scopes: &ScopeSet,
         shadowed_names: &std::collections::HashSet<Rc<str>>,
     ) -> Vec<LiteralBinding> {
-        literal_specs
+        // Deliberately name-scoped: this resolves where a literal was *bound*
+        // in the definition environment, which is a different question from the
+        // identity test in `is_literal_form`. Two literals spelled alike always
+        // resolve to the same binding, which is why the matcher's shadow lookup
+        // (`is_literal_shadowed_tagged`) can find one by name.
+        literal_keys
             .iter()
-            .map(|spec| {
-                let name = &spec.name;
+            .map(|key| {
+                let name = &key.name;
                 // Check if this literal is "bound" - either in the environment
                 // OR in shadowed_names (e.g., lambda parameters not yet evaluated)
                 let binding_scopes = if shadowed_names.contains(name) {
@@ -151,13 +155,13 @@ impl Compiler {
     /// # Arguments
     /// - `literals`: List of literal identifier names
     /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
-    pub fn new(literals: Vec<LiteralSpec>, ellipsis: Option<Rc<str>>, heap: SharedHeap) -> Self {
+    pub fn new(literals: Vec<IdentifierKey>, ellipsis: Option<Rc<str>>, heap: SharedHeap) -> Self {
         let empty_shadowed = std::collections::HashSet::new();
         let literal_bindings =
             Self::resolve_literal_bindings(&literals, None, &ScopeSet::new(), &empty_shadowed);
         Self {
             literals: literal_bindings,
-            literal_specs: literals,
+            literal_keys: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: None,
             definition_scopes: ScopeSet::new(),
@@ -175,7 +179,7 @@ impl Compiler {
     /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
     /// - `env`: Lexical environment where the macro is being defined
     pub fn with_env(
-        literals: Vec<LiteralSpec>,
+        literals: Vec<IdentifierKey>,
         ellipsis: Option<Rc<str>>,
         env: Rc<Environment>,
         heap: SharedHeap,
@@ -190,7 +194,7 @@ impl Compiler {
         );
         Self {
             literals: literal_bindings,
-            literal_specs: literals,
+            literal_keys: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes,
@@ -212,7 +216,7 @@ impl Compiler {
     /// Free variables in templates will carry the scope set so they resolve to
     /// definition-time bindings, not use-site bindings.
     pub fn with_env_and_scopes(
-        literals: Vec<LiteralSpec>,
+        literals: Vec<IdentifierKey>,
         ellipsis: Option<Rc<str>>,
         env: Rc<Environment>,
         scopes: ScopeSet,
@@ -223,7 +227,7 @@ impl Compiler {
             Self::resolve_literal_bindings(&literals, Some(&env), &scopes, &empty_shadowed);
         Self {
             literals: literal_bindings,
-            literal_specs: literals,
+            literal_keys: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes: scopes,
@@ -250,7 +254,7 @@ impl Compiler {
     /// even though they're not yet in the environment. This is essential for correct
     /// literal matching when a literal refers to an enclosing lambda parameter.
     pub fn with_env_scopes_and_shadowed(
-        literals: Vec<LiteralSpec>,
+        literals: Vec<IdentifierKey>,
         ellipsis: Option<Rc<str>>,
         env: Rc<Environment>,
         scopes: ScopeSet,
@@ -261,7 +265,7 @@ impl Compiler {
             Self::resolve_literal_bindings(&literals, Some(&env), &scopes, shadowed_names);
         Self {
             literals: literal_bindings,
-            literal_specs: literals,
+            literal_keys: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes: scopes,
@@ -314,7 +318,7 @@ impl Compiler {
             let pvar_names: HashMap<PVRef, Rc<str>> = self
                 .pvars
                 .iter()
-                .map(|((name, _scopes), pvref)| (*pvref, name.clone()))
+                .map(|(key, pvref)| (*pvref, key.name.clone()))
                 .collect();
 
             // Validate the rule before adding it

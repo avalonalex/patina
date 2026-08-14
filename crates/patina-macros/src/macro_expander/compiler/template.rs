@@ -19,16 +19,19 @@ impl Compiler {
         form: TaggedValue,
         level: usize,
     ) -> Result<Template, MacroError> {
-        // Handle all identifier types (Symbol, Identifier)
-        if let Some(s) = self.extract_symbol_name(form) {
+        // Handle all identifier types (Symbol, Identifier). Every leaf of every
+        // template reaches here, so the identity is read once and reused.
+        if let Some(key) = self.identifier_key(form) {
+            let s = key.name.clone();
+
             // Check if it's a pattern variable.
             //
             // This runs BEFORE the substituted-identifier case below. An
             // identifier substituted by an outer expansion can legitimately be
-            // this rule's own pattern variable -- the pattern compiler now
+            // this rule's own pattern variable -- the pattern compiler
             // classifies it by the literals list alone -- and a rule's own
             // pattern variable always wins over its spelling.
-            if let Some(pvref) = self.pvars.get(&(s.clone(), self.identifier_scopes(form))) {
+            if let Some(&pvref) = self.pvars.get(&key) {
                 // Verify level is valid
                 if pvref.level() > level {
                     return Err(MacroError::InvalidSyntax(format!(
@@ -38,7 +41,7 @@ impl Compiler {
                         level
                     )));
                 }
-                return Ok(Template::Var(*pvref));
+                return Ok(Template::Var(pvref));
             }
 
             // An identifier substituted by an outer expansion, and not this
