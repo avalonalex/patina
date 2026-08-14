@@ -22,30 +22,46 @@ license = "MIT"
 repository = "https://github.com/avalonalex/patina"
 
 # Shared dependencies across workspace
+#
+# Versions are stated at the granularity of a *breaking* change, and nothing
+# finer. Cargo requirements are already caret ranges — "2.0.18" and "2" have
+# the identical upper bound of <3.0.0, and the extra digits only assert a
+# minimum nobody here depends on — so spelling out patch levels does not
+# constrain anything; it just invites pointless edits. For 0.x crates the
+# minor field is the breaking unit, so "0.4" means <0.5.0.
+#
+# The effect: `cargo update` handles every compatible upgrade on its own and
+# records it in Cargo.lock, and a manifest edit is required exactly when a
+# dependency makes a breaking release. Cargo.lock is committed, so the exact
+# versions in use are always pinned regardless of how loose these ranges are.
 [workspace.dependencies]
-# Numeric tower support for R7RS compliance
+# Numeric tower support for R7RS compliance.
+#
+# num-bigint is held at 0.4 by num-rational, which has no 0.5 release: our
+# BigRational is Ratio<BigInt>, so taking num-bigint 0.5 alone puts two
+# incompatible BigInt types in the graph (verified — 36 type errors of the
+# form "expected BigInt, found num_bigint::bigint::BigInt"). Move all four
+# together once num-rational 0.5 exists; upstream tracks that as
+# rust-num/num-rational#157.
 num-bigint = "0.4"
 num-rational = "0.4"
 num-traits = "0.2"
 num-complex = "0.4"
 
 # Error handling
-thiserror = "2.0.18"
-
-# Thread-safe lazy statics
-once_cell = "1.19"
+thiserror = "2"
 
 # Small vector optimization
-smallvec = "1.13"
+smallvec = "1"
 
 # Fast non-cryptographic hashing for hot-path string-keyed maps
 rustc-hash = "2"
 
 # Logging/tracing
-tracing = "0.1.44"
+tracing = "0.1"
 
 # Benchmarking
-criterion = { version = "0.8.2", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # Tests interpret real Scheme (every integration test boots a full interpreter
 # and loads (scheme base)), which is unusably slow at opt-level 0. Measured

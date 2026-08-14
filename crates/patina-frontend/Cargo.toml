@@ -19,9 +19,6 @@ num-traits = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
-# For gensym (thread-safe counter)
-once_cell = { workspace = true }
-
 [lib]
 name = "patina_frontend"
 path = "src/lib.rs"

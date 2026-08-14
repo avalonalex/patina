@@ -1765,18 +1765,18 @@ impl Heap {
         // Check if both are fixnums (already handled by raw comparison above)
         // If one is fixnum and other isn't, check for BigInt equivalence
         if a.is_fixnum() {
-            if b.is_object() {
-                if let Some(b_big) = self.get_bigint(b) {
-                    return BigInt::from(a.as_fixnum_unchecked()) == *b_big;
-                }
+            if b.is_object()
+                && let Some(b_big) = self.get_bigint(b)
+            {
+                return BigInt::from(a.as_fixnum_unchecked()) == *b_big;
             }
             return false;
         }
         if b.is_fixnum() {
-            if a.is_object() {
-                if let Some(a_big) = self.get_bigint(a) {
-                    return *a_big == BigInt::from(b.as_fixnum_unchecked());
-                }
+            if a.is_object()
+                && let Some(a_big) = self.get_bigint(a)
+            {
+                return *a_big == BigInt::from(b.as_fixnum_unchecked());
             }
             return false;
         }
@@ -1854,18 +1854,18 @@ impl Heap {
 
         // Handle fixnum vs BigInt
         if a.is_fixnum() {
-            if b.is_object() {
-                if let Some(b_big) = self.get_bigint(b) {
-                    return BigInt::from(a.as_fixnum_unchecked()) == *b_big;
-                }
+            if b.is_object()
+                && let Some(b_big) = self.get_bigint(b)
+            {
+                return BigInt::from(a.as_fixnum_unchecked()) == *b_big;
             }
             return false;
         }
         if b.is_fixnum() {
-            if a.is_object() {
-                if let Some(a_big) = self.get_bigint(a) {
-                    return *a_big == BigInt::from(b.as_fixnum_unchecked());
-                }
+            if a.is_object()
+                && let Some(a_big) = self.get_bigint(a)
+            {
+                return *a_big == BigInt::from(b.as_fixnum_unchecked());
             }
             return false;
         }

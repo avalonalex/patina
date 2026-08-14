@@ -12,9 +12,6 @@ patina-core = { path = "../patina-core" }
 # Error handling
 thiserror = { workspace = true }
 
-# For gensym (thread-safe counter)
-once_cell = { workspace = true }
-
 [dev-dependencies]
 # For testing only - allows parsing syntax-rules definitions in tests
 patina-frontend = { path = "../patina-frontend" }

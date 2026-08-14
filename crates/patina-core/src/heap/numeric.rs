@@ -301,10 +301,10 @@ impl Heap {
     /// Convert BigInt to tagged, using fixnum if it fits
     #[inline]
     fn bigint_to_tagged(&mut self, n: BigInt) -> TaggedValue {
-        if let Some(i) = n.to_i64() {
-            if TaggedValue::fits_fixnum(i) {
-                return TaggedValue::fixnum(i);
-            }
+        if let Some(i) = n.to_i64()
+            && TaggedValue::fits_fixnum(i)
+        {
+            return TaggedValue::fixnum(i);
         }
         self.alloc_bigint(n)
     }
@@ -336,13 +336,13 @@ impl Heap {
         if self.is_exact_zero(imag) {
             return real;
         }
-        if let Some(f) = self.get_real(imag) {
-            if f == 0.0 {
-                if self.is_inexact_number(real) {
-                    return real;
-                }
-                return self.to_inexact_tagged(real);
+        if let Some(f) = self.get_real(imag)
+            && f == 0.0
+        {
+            if self.is_inexact_number(real) {
+                return real;
             }
+            return self.to_inexact_tagged(real);
         }
         self.alloc_complex(real, imag)
     }
@@ -670,10 +670,10 @@ impl Heap {
         if a.is_fixnum() && b.is_fixnum() {
             let x = a.as_fixnum_unchecked();
             let y = b.as_fixnum_unchecked();
-            if let Some(sum) = x.checked_add(y) {
-                if TaggedValue::fits_fixnum(sum) {
-                    return Ok(TaggedValue::fixnum(sum));
-                }
+            if let Some(sum) = x.checked_add(y)
+                && TaggedValue::fits_fixnum(sum)
+            {
+                return Ok(TaggedValue::fixnum(sum));
             }
             let big = BigInt::from(x) + BigInt::from(y);
             return Ok(self.alloc_bigint(big));
@@ -762,10 +762,10 @@ impl Heap {
         if a.is_fixnum() && b.is_fixnum() {
             let x = a.as_fixnum_unchecked();
             let y = b.as_fixnum_unchecked();
-            if let Some(diff) = x.checked_sub(y) {
-                if TaggedValue::fits_fixnum(diff) {
-                    return Ok(TaggedValue::fixnum(diff));
-                }
+            if let Some(diff) = x.checked_sub(y)
+                && TaggedValue::fits_fixnum(diff)
+            {
+                return Ok(TaggedValue::fixnum(diff));
             }
             let big = BigInt::from(x) - BigInt::from(y);
             return Ok(self.alloc_bigint(big));
@@ -864,10 +864,10 @@ impl Heap {
         if a.is_fixnum() && b.is_fixnum() {
             let x = a.as_fixnum_unchecked();
             let y = b.as_fixnum_unchecked();
-            if let Some(prod) = x.checked_mul(y) {
-                if TaggedValue::fits_fixnum(prod) {
-                    return Ok(TaggedValue::fixnum(prod));
-                }
+            if let Some(prod) = x.checked_mul(y)
+                && TaggedValue::fits_fixnum(prod)
+            {
+                return Ok(TaggedValue::fixnum(prod));
             }
             let big = BigInt::from(x) * BigInt::from(y);
             return Ok(self.alloc_bigint(big));
@@ -1089,10 +1089,10 @@ impl Heap {
         // Fast path: fixnum
         if a.is_fixnum() {
             let n = a.as_fixnum_unchecked();
-            if let Some(neg) = n.checked_neg() {
-                if TaggedValue::fits_fixnum(neg) {
-                    return Ok(TaggedValue::fixnum(neg));
-                }
+            if let Some(neg) = n.checked_neg()
+                && TaggedValue::fits_fixnum(neg)
+            {
+                return Ok(TaggedValue::fixnum(neg));
             }
             return Ok(self.alloc_bigint(-BigInt::from(n)));
         }
@@ -1104,10 +1104,10 @@ impl Heap {
     fn neg_impl(&mut self, a: TaggedValue) -> Result<TaggedValue, NumericError> {
         if a.is_fixnum() {
             let n = a.as_fixnum_unchecked();
-            if let Some(neg) = n.checked_neg() {
-                if TaggedValue::fits_fixnum(neg) {
-                    return Ok(TaggedValue::fixnum(neg));
-                }
+            if let Some(neg) = n.checked_neg()
+                && TaggedValue::fits_fixnum(neg)
+            {
+                return Ok(TaggedValue::fixnum(neg));
             }
             return Ok(self.alloc_bigint(-BigInt::from(n)));
         }
@@ -1424,10 +1424,10 @@ impl Heap {
         }
 
         // If imaginary is inexact zero, return real as inexact
-        if let Some(f) = self.get_real(imag) {
-            if f == 0.0 {
-                return Ok(self.to_inexact_tagged(real));
-            }
+        if let Some(f) = self.get_real(imag)
+            && f == 0.0
+        {
+            return Ok(self.to_inexact_tagged(real));
         }
 
         Ok(self.alloc_complex(real, imag))
@@ -1847,10 +1847,10 @@ impl Heap {
     pub fn numeric_square(&mut self, a: TaggedValue) -> Result<TaggedValue, NumericError> {
         if a.is_fixnum() {
             let n = a.as_fixnum_unchecked();
-            if let Some(sq) = n.checked_mul(n) {
-                if TaggedValue::fits_fixnum(sq) {
-                    return Ok(TaggedValue::fixnum(sq));
-                }
+            if let Some(sq) = n.checked_mul(n)
+                && TaggedValue::fits_fixnum(sq)
+            {
+                return Ok(TaggedValue::fixnum(sq));
             }
             let big = BigInt::from(n) * BigInt::from(n);
             return Ok(self.alloc_bigint(big));
@@ -1879,15 +1879,16 @@ impl Heap {
         }
 
         // Exact base with exact non-negative integer exponent → exact result
-        if self.is_exact_number(base) && self.is_exact_number(power) {
-            if let Some(exp_int) = self.exponent_as_integer_tv(power) {
-                if exp_int >= 0 {
-                    return self.exact_integer_power(base, exp_int as u64);
-                } else {
-                    // Negative integer exponent: 1/base^|exp|
-                    let pos_result = self.exact_integer_power(base, (-exp_int) as u64)?;
-                    return self.numeric_div(TaggedValue::fixnum(1), pos_result);
-                }
+        if self.is_exact_number(base)
+            && self.is_exact_number(power)
+            && let Some(exp_int) = self.exponent_as_integer_tv(power)
+        {
+            if exp_int >= 0 {
+                return self.exact_integer_power(base, exp_int as u64);
+            } else {
+                // Negative integer exponent: 1/base^|exp|
+                let pos_result = self.exact_integer_power(base, (-exp_int) as u64)?;
+                return self.numeric_div(TaggedValue::fixnum(1), pos_result);
             }
         }
 
