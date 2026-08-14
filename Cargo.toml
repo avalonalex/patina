@@ -41,7 +41,8 @@ repository = "https://github.com/avalonalex/patina"
 # BigRational is Ratio<BigInt>, so taking num-bigint 0.5 alone puts two
 # incompatible BigInt types in the graph (verified — 36 type errors of the
 # form "expected BigInt, found num_bigint::bigint::BigInt"). Move all four
-# together once num-rational 0.5 exists.
+# together once num-rational 0.5 exists; upstream tracks that as
+# rust-num/num-rational#157.
 num-bigint = "0.4"
 num-rational = "0.4"
 num-traits = "0.2"
