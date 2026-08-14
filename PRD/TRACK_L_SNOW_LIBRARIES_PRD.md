@@ -71,7 +71,19 @@ The recurring porting frictions (all *resolved* for the existing 9 SRFIs) are ca
 5. **Skip a leading `#!` line** in script files, so installed Snow programs execute.
 - **Acceptance:** new cases in `crates/patina-tests/tests/sld_file_loading.rs` — an inline `define-library`, an `.sld` with an unknown clause (loads with a warning), a library resolved from `./.patina/lib/`, and one resolved beside the running script; plus a shebang-prefixed script that runs.
 
-### L0.5 — Library-path CLI surface  *(small; prerequisite for the harness)*
+### L0.5 — Library-path CLI surface  *(done — 2026-08-13)*
+
+✅ **Done, all four items.** Deviations from the spec worth recording:
+- `-p` is repeatable (expressions evaluate in order, each non-unspecified result printed in write
+  form, then exit 0) and refuses to combine with a script file rather than picking an order.
+- `-I`/`-A` apply to script *and* REPL modes on both backends; the search order is
+  `-I` flags → `PATINA_LIBRARY_PATH` entries → `./lib` → `./.patina/lib` → `$PATINA_HOME/lib` →
+  workspace/exe paths → `-A` flags → the script's own directory.
+- Acceptance tests are binary-spawn end-to-end tests in `crates/patina-repl/tests/cli_options.rs`
+  (following L0's precedent — this is CLI-layer behaviour), not `crates/patina-tests/`; the
+  registry-level prepend/env-path logic has unit tests in `library_registry.rs`.
+
+#### Original spec
 External library directories are currently unusable. This is table stakes for any Scheme, independent of distribution mechanism, and every later item depends on it.
 
 - `-A <dir>` (append to search path) and `-I <dir>` (prepend) — the conventional spelling across Scheme implementations, and what the harness uses to point Patina at a fetched package.

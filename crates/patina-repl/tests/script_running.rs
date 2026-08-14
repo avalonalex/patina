@@ -8,46 +8,11 @@
 //! state test-wide. The shebang test is a one-spawn acceptance smoke: the
 //! mechanism is in the shared lexer and unit-tested there.
 
+mod common;
+
+use common::{run_both_backends, run_patina};
 use std::fs;
-use std::path::Path;
-use std::process::Command;
 use tempfile::TempDir;
-
-/// Run the patina binary on `script`, with `cwd` as the working directory.
-/// Returns (stdout, stderr, success).
-fn run_patina(cwd: &Path, args: &[&str]) -> (String, String, bool) {
-    let output = Command::new(env!("CARGO_BIN_EXE_patina"))
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("failed to spawn patina binary");
-    (
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-        output.status.success(),
-    )
-}
-
-/// Both backends: the default VM and --tree-walker.
-fn run_both_backends(cwd: &Path, script: &str, expect_stdout: &str) {
-    for extra in [&[][..], &["--tree-walker"][..]] {
-        let mut args = extra.to_vec();
-        args.push(script);
-        let (stdout, stderr, ok) = run_patina(cwd, &args);
-        assert!(
-            ok,
-            "patina {:?} failed\nstdout: {}\nstderr: {}",
-            args, stdout, stderr
-        );
-        assert_eq!(
-            stdout.trim(),
-            expect_stdout,
-            "unexpected output for patina {:?}\nstderr: {}",
-            args,
-            stderr
-        );
-    }
-}
 
 #[test]
 fn shebang_script_runs() {
@@ -91,7 +56,7 @@ fn library_beside_script_resolves() {
     // Run from a *different* cwd so resolution must come from the script's
     // own directory, not from ./.
     let other_cwd = TempDir::new().unwrap();
-    run_both_backends(other_cwd.path(), script.to_str().unwrap(), "42");
+    run_both_backends(other_cwd.path(), &[script.to_str().unwrap()], "42");
 }
 
 #[test]
@@ -122,5 +87,5 @@ fn project_local_patina_lib_resolves() {
 
     // cwd is the project directory; the script's own directory is excluded as
     // the resolution route by placing the dependency only under .patina/lib.
-    run_both_backends(temp.path(), "main.scm", "42");
+    run_both_backends(temp.path(), &["main.scm"], "42");
 }

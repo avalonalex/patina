@@ -145,6 +145,11 @@ impl TreeWalker {
     pub fn add_library_search_path(&self, path: std::path::PathBuf) {
         self.evaluator.add_library_search_path(path);
     }
+
+    /// Add a library search path ahead of every existing one (the CLI's `-I`).
+    pub fn prepend_library_search_path(&self, path: std::path::PathBuf) {
+        self.evaluator.prepend_library_search_path(path);
+    }
 }
 
 impl Default for TreeWalker {
