@@ -47,7 +47,7 @@
 | `Each syntax-rules rule must have exactly 2 elements (pattern template)` | 5 |
 | `syntax-rules literals must be symbols` | 3 |
 | `#<unknown>` | 1 |
-| `Name mismatch in interface implementation (expected, gotten) proc0 proc0` | 1 |
+| `Body must contain at least one expression (not just define-syntax)` | 1 |
 | `ch` | 1 |
 
 ## Load errors

@@ -1077,3 +1077,29 @@ fn test_repeated_substituted_identifier_in_pattern_is_an_error() {
         "#,
     );
 }
+
+/// A literal matches an input identifier when both are unbound and share a
+/// name, even though one is introduced and the other substituted.
+///
+/// R7RS 4.3.2 gives literal *matching* `free-identifier=?` semantics — same
+/// binding, **or both unbound with the same name**. That is a different
+/// question from literal *membership* (is this pattern identifier a literal at
+/// all?), which compares identity; see
+/// `test_substituted_identifier_in_literals_stays_a_literal`. Conflating the
+/// two is what made the introduced literal `k` below unable to match the
+/// substituted `k`.
+///
+/// Verified against Chez Scheme and Gauche, which both return `(lit notlit)`.
+#[test]
+fn test_literal_matches_when_both_unbound() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax m
+          (syntax-rules ()
+            ((_ e) (let-syntax ((n (syntax-rules (k) ((n k) 'lit) ((n x) 'notlit))))
+                     (n e)))))
+        (list (m k) (m other))
+        "#,
+        "(lit notlit)",
+    );
+}

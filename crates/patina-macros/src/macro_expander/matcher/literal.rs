@@ -101,25 +101,30 @@ pub fn tagged_matches_literal(input: TaggedValue, pattern_lit: TaggedValue, heap
     }
 
     // Check if pattern is an identifier (native or boxed, unified)
-    if let Some((pat_name, pat_scopes)) = heap.get_identifier_data_any(pattern_lit) {
-        // An identifier with empty scopes was substituted from an outer
-        // expansion. It stands for the identifier the outer macro put here, so
-        // it matches that identifier and no other -- which is what the general
-        // comparison below already computes, since an empty scope set is a
-        // subset of every scope set. Matching *any* identifier instead would
-        // make a literals list unable to tell one name from another.
-
-        // Check input identifier (native or boxed, unified)
-        if let Some((inp_name, inp_scopes)) = heap.get_identifier_data_any(input) {
-            return pat_name.as_ref() == inp_name.as_ref() && pat_scopes.is_subset_of(&inp_scopes);
-        }
-
-        // Input is a bare symbol - compare by name
-        if let Some(input_name) = heap.get_symbol_or_identifier_name(input) {
-            return pat_name.as_ref() == input_name;
-        }
-
-        return false;
+    if let Some((pat_name, _)) = heap.get_identifier_data_any(pattern_lit) {
+        // Names alone, matching the three other arms of this function.
+        //
+        // R7RS 4.3.2: a literal matches an input identifier when both denote
+        // the same binding, *or both are unbound and have the same name*. This
+        // function cannot see bindings — that is what the caller's
+        // `is_literal_shadowed_tagged` veto is for, and it runs first. So the
+        // only question left here is whether the spellings agree.
+        //
+        // Requiring the literal's scopes to be a subset of the input's answered
+        // a different question. It made an *introduced* literal (which carries
+        // the enclosing expansion's scopes) unable to match a *substituted*
+        // input (which carries none), even with both unbound:
+        //
+        //   (define-syntax m
+        //     (syntax-rules ()
+        //       ((_ e) (let-syntax ((n (syntax-rules (k) ((n k) 'lit)
+        //                                                ((n x) 'notlit))))
+        //                (n e)))))
+        //   (m k)  ;; => lit, per Chez and Gauche; was 'notlit
+        return match heap.get_symbol_or_identifier_name(input) {
+            Some(input_name) => pat_name.as_ref() == input_name,
+            None => false,
+        };
     }
 
     // For non-identifier types (booleans, numbers, etc.), use heap equality
