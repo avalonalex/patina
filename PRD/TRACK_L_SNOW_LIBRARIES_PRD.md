@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**137 of 184** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
+(**138 of 184** vendored packages pass, 2026-08-15); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -346,6 +346,13 @@ suite unrunnable — to `wrong-result`, with **74 of its 75 upstream tests passi
 remaining failure is `match-letrec` (§6). Worth noting for reading the number: the corpus counts
 packages, not tests, so it under-reports exactly this kind of progress.
 
+**Ports became parameter objects, 2026-08-15 (137 → 138 of 184).** lassik-dockerfile was the corpus's
+only `runtime-error` and now passes: it redirects output with
+`(parameterize ((current-output-port …)) …)`, which until now was rejected outright. A conformance
+fix reaching a package nobody had connected to it is the argument for fixing the standard rather
+than the symptom — the queue had this filed as an unexamined runtime error, not as a missing
+parameter object.
+
 **Recorded debt — `report.md` is written by shell redirect.** `run` and `report` print the rendered
 matrix to stdout and only `results.scm` is written to disk, so the committed
 `compat/reports/report.md` goes stale unless the caller redirects into it. Either write both
@@ -581,33 +588,34 @@ Adjacent and lower-stakes: `lib/scheme/base.sld` exports the eight three-deep `c
 (`caaar`…`cdddr`) as a documented extension, where R7RS-small puts them only in `(scheme cxr)`.
 Worth settling in the same PR while the cost of tightening is still low.
 
-**The standard port procedures are not parameter objects** — ❌ **open**, own PR. R7RS §6.13.1:
-`current-input-port`, `current-output-port` and `current-error-port` "are parameter objects, which
-can be overridden with `parameterize`". Patina implements all three as plain 0-argument procedures,
-so `parameterize` rejects them:
-
-```scheme
-(parameterize ((current-input-port (open-input-string "a b c"))) (read))
-;; => Invalid syntax: current-input-port expects exactly 0 arguments, got 1
-```
-
-`make-parameter` and `parameterize` work correctly for user-defined parameters, so the machinery
-exists; only the three built-ins are outside it. They are backed by Rust-side global state
-(`get_current_output_port` / `set_current_output_port` in `primitives/io/ports.rs`) that other
-primitives read directly, so the fix has to make that global read through the parameter's dynamic
-binding rather than merely accepting a second arity — which is why this is its own PR and not an
-inline fix.
-
-This is the one non-zero entry in the reference-suite expectations table: SRFI 158's suite defines
-`with-input-from-string` as `(parameterize ((current-input-port (open-input-string str))) (thunk))`,
-which is pure R7RS. It was previously recorded as the suite depending on a chibi extension. It is
-not — the extension is three lines of standard Scheme, and it is our `parameterize` that refuses it.
-Lower the SRFI 158 expectation to 0 when this lands.
-
-Redirecting the current ports is also a capability the L3 harness will want directly, for capturing
-a package's output without touching the real stdout.
-
 ### Fixed
+
+**The standard port procedures were not parameter objects** — ✅ **fixed** (2026-08-15). Both
+backends. R7RS §6.13.1 requires `current-input-port`, `current-output-port` and `current-error-port`
+to be parameter objects overridable with `parameterize`; all three were plain 0-argument procedures,
+so `parameterize` rejected them outright.
+
+The fix is smaller than this entry previously predicted, and the reason is worth keeping. It warned
+that accepting a second arity would not be enough, because the ports are backed by Rust-side globals
+that other primitives read directly. But `parameterize` (`lib/scheme/base/parameters.scm`) drives a
+parameter *through the object itself* — `(p)` to read, `(p v)` to install, `(p old)` from
+`dynamic-wind`'s after-thunk to restore. So writing the thread-local from the setter arity is not a
+shortcut around the dynamic binding: the thread-local **is** the binding, and it is exactly what
+`display` with no port argument consults. The version that would have been broken is the opposite
+one — a Scheme-level rebinding that left the thread-local alone would redirect nothing.
+
+`(chibi test)`'s SRFI 158 suite defines `with-input-from-string` in precisely these terms, so its
+expectation drops 1 → 0 and **every upstream suite now runs at zero failures**; the expectations
+table in `scheme_tests/upstream/README.md` has no non-zero row left. Redirecting the current output
+port is also the capability L3 wanted for capturing a package's output without touching real stdout.
+
+**Adjacent, and left open: `(current-output-port)` allocates a fresh wrapper per call**, so
+`(eq? (current-output-port) (current-output-port))` is `#f`. Pre-existing — verified against the
+build before this change — and untouched by it, since `parameterize` compares nothing and the
+restore path passes the same underlying port back. It is still odd for a parameter to return a
+different object each read, and `(eq? p (current-output-port))` is a reasonable thing for a package
+to write. The tests in `crates/patina-tests/tests/standard_ports.rs` assert restoration by where
+output *lands* rather than by identity, which is the better test regardless.
 
 **Relinking stopped at a `quote` *argument*** — ✅ **fixed** (2026-08-14). Both backends. Found the
 moment the `@` fix let `(chibi match)` load, and the only §6 entry that was blocking a corpus

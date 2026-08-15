@@ -20,7 +20,7 @@ All from chibi-scheme's `lib/`, BSD (Alex Shinn), copied unmodified except
 | `srfi/133/test.sld` | 93 | 0 |
 | `srfi/113/test.sld` | 253 | 0 |
 | `srfi/130/test.sld` | 219 | 0 |
-| `srfi/158/test.sld` | 76 | 1 — Patina's `current-input-port` is not a parameter object (see below) |
+| `srfi/158/test.sld` | 76 | 0 |
 
 **`srfi/130/test.sld` is the one adapted suite.** Upstream imports
 `(chibi char-set)` and `(chibi char-set full)`; the latter imports `(chibi)`,
@@ -51,8 +51,8 @@ expectations table, not a skip list. Every suite runs on both backends.
 
 ## What running them found
 
-Six defects, none of which the hand-written tests beside these libraries had
-caught. Five are fixed; the sixth is recorded below.
+Seven defects, none of which the hand-written tests beside these libraries had
+caught. All are now fixed; the last is recorded below.
 
 - **SRFI 113 `set-unfold` / `bag-unfold` took their arguments in the wrong
   order** — fixed. The SRFI orders them `(comparator stop? mapper successor
@@ -99,22 +99,22 @@ caught. Five are fixed; the sixth is recorded below.
   Both were checked against the suite. Reintroducing defect 1 into the old port
   turned the suite red with 2 failures, so the 0 in the table is not vacuous.
 
-- **The standard port procedures are not parameter objects** — open, tracked in
-  `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. R7RS §6.13.1 requires
+- **The standard port procedures were not parameter objects** — fixed 2026-08-15, and the reason
+  this table has no non-zero row left. R7RS §6.13.1 requires
   `current-input-port`, `current-output-port` and `current-error-port` to be
-  parameter objects overridable with `parameterize`; Patina implements all three
-  as plain 0-argument procedures, so `parameterize` fails on them:
+  parameter objects overridable with `parameterize`; Patina implemented all three
+  as plain 0-argument procedures, so `parameterize` failed on them:
 
   ```scheme
   (parameterize ((current-input-port (open-input-string "a b c"))) (read))
-  ;; => Invalid syntax: current-input-port expects exactly 0 arguments, got 1
+  ;; was => Invalid syntax: current-input-port expects exactly 0 arguments, got 1
   ```
 
-  `make-parameter` and `parameterize` are fine for user-defined parameters; only
-  the three built-in ports are affected. This is the SRFI 158 suite's one
+  `make-parameter` and `parameterize` were fine for user-defined parameters; only
+  the three built-in ports sat outside the machinery. This was the SRFI 158 suite's one
   failure — it defines its own `with-input-from-string` in exactly these terms,
-  so the entry above is a recorded Patina defect and not, as it previously said
-  here, a chibi extension we decline to provide.
+  so it was a recorded Patina defect and not, as this file once said, a chibi
+  extension we declined to provide.
 
 ## Suites not included, and why
 

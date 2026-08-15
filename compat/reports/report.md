@@ -1,16 +1,16 @@
 # Patina third-party compatibility (vm backend)
 
-**137 of 184 packages pass** — 137 of 182 achievable (excluding 2 out-of-scope pending FFI).
+**138 of 184 packages pass** — 138 of 182 achievable (excluding 2 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 137 |
+| pass | 138 |
 | missing-library | 24 |
 | parse-error | 14 |
 | load-error | 3 |
 | unbound-identifier | 1 |
 | wrong-result | 2 |
-| runtime-error | 1 |
+| runtime-error | 0 |
 | timeout | 0 |
 | out-of-scope | 2 |
 
@@ -122,7 +122,7 @@
 | in-progress-hash-tables | test | missing-library |
 | independentresearch-xattr | probe | missing-library |
 | jkode-sassy | test | missing-library |
-| lassik-dockerfile | test | runtime-error |
+| lassik-dockerfile | test | pass |
 | lassik-shell-quote | test | pass |
 | lassik-string-inflection | test | missing-library |
 | lassik-trivial-tar-writer | probe | pass |

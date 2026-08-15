@@ -55,7 +55,7 @@
   ((slug "in-progress-hash-tables") (mode test) (status missing-library) (missing "srfi 114 comparators"))
   ((slug "independentresearch-xattr") (mode probe) (status missing-library) (missing "chibi"))
   ((slug "jkode-sassy") (mode test) (status missing-library) (missing "srfi 142"))
-  ((slug "lassik-dockerfile") (mode test) (status runtime-error))
+  ((slug "lassik-dockerfile") (mode test) (status pass))
   ((slug "lassik-shell-quote") (mode test) (status pass))
   ((slug "lassik-string-inflection") (mode test) (status missing-library) (missing "srfi 64"))
   ((slug "lassik-trivial-tar-writer") (mode probe) (status pass))

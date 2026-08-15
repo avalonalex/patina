@@ -69,6 +69,11 @@ pub fn set_current_output_port(port: Rc<Port>) {
     CURRENT_OUTPUT_PORT.with(|p| *p.borrow_mut() = port);
 }
 
+/// Set the current error port (for dynamic rebinding)
+pub fn set_current_error_port(port: Rc<Port>) {
+    CURRENT_ERROR_PORT.with(|p| *p.borrow_mut() = port);
+}
+
 // =============================================================================
 // Helper functions for getting ports from arguments
 // =============================================================================
@@ -401,46 +406,95 @@ pub(super) fn get_output_bytevector(
 // Current Ports
 // =============================================================================
 
-/// (current-input-port) - Returns the current input port
+/// The three standard ports, as R7RS §6.13.1 requires: **parameter objects**,
+/// not plain procedures.
+///
+/// `parameterize` (`lib/scheme/base/parameters.scm`) drives a parameter through
+/// the object itself — `(p)` to read the current value, `(p v)` to install one,
+/// and `(p old)` from `dynamic-wind`'s after-thunk to restore it. So accepting
+/// the setter arity here is not a shortcut around the dynamic binding: the
+/// thread-local *is* the binding, and writing it is what every other primitive
+/// that calls `get_current_output_port()` observes. A Scheme-level rebinding
+/// that left the thread-local alone would be the broken version, because
+/// `display` with no port argument reads the thread-local and would ignore it.
+fn current_port(
+    heap: &SharedHeap,
+    args: &[TaggedValue],
+    who: &str,
+    get: fn() -> Rc<Port>,
+    set: fn(Rc<Port>),
+    want_input: bool,
+) -> Result<TaggedValue, EvalError> {
+    match args {
+        [] => Ok(heap.borrow_mut().alloc_port(get())),
+        [value] => {
+            let port = {
+                let heap_ref = heap.borrow();
+                get_port_tv(*value, &heap_ref)
+                    .ok_or_else(|| EvalError::TypeError(format!("{who} expects a port")))?
+                    .clone()
+            };
+            if want_input && !port.is_input() {
+                return Err(EvalError::TypeError(format!("{who} expects an input port")));
+            }
+            if !want_input && !port.is_output() {
+                return Err(EvalError::TypeError(format!(
+                    "{who} expects an output port"
+                )));
+            }
+            set(port);
+            Ok(TaggedValue::UNSPECIFIED)
+        }
+        _ => Err(EvalError::WrongArity {
+            expected: format!("{who} expects 0 or 1 arguments"),
+            actual: args.len(),
+        }),
+    }
+}
+
+/// (current-input-port) / (current-input-port port)
 pub(super) fn current_input_port(
     heap: &SharedHeap,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    if !args.is_empty() {
-        return Err(EvalError::WrongArity {
-            expected: "current-input-port expects 0 arguments".to_string(),
-            actual: args.len(),
-        });
-    }
-    Ok(heap.borrow_mut().alloc_port(get_current_input_port()))
+    current_port(
+        heap,
+        args,
+        "current-input-port",
+        get_current_input_port,
+        set_current_input_port,
+        true,
+    )
 }
 
-/// (current-output-port) - Returns the current output port
+/// (current-output-port) / (current-output-port port)
 pub(super) fn current_output_port(
     heap: &SharedHeap,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    if !args.is_empty() {
-        return Err(EvalError::WrongArity {
-            expected: "current-output-port expects 0 arguments".to_string(),
-            actual: args.len(),
-        });
-    }
-    Ok(heap.borrow_mut().alloc_port(get_current_output_port()))
+    current_port(
+        heap,
+        args,
+        "current-output-port",
+        get_current_output_port,
+        set_current_output_port,
+        false,
+    )
 }
 
-/// (current-error-port) - Returns the current error port
+/// (current-error-port) / (current-error-port port)
 pub(super) fn current_error_port(
     heap: &SharedHeap,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    if !args.is_empty() {
-        return Err(EvalError::WrongArity {
-            expected: "current-error-port expects 0 arguments".to_string(),
-            actual: args.len(),
-        });
-    }
-    Ok(heap.borrow_mut().alloc_port(get_current_error_port()))
+    current_port(
+        heap,
+        args,
+        "current-error-port",
+        get_current_error_port,
+        set_current_error_port,
+        false,
+    )
 }
 
 // =============================================================================

@@ -24,9 +24,11 @@ pub fn build_internal_io(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("input-port-open?", Arity::Exact(1)),
         ("output-port-open?", Arity::Exact(1)),
         // === Current ports ===
-        ("current-input-port", Arity::Exact(0)),
-        ("current-output-port", Arity::Exact(0)),
-        ("current-error-port", Arity::Exact(0)),
+        // R7RS 6.13.1: parameter objects, so they take an optional value to
+        // install as well as no argument to read.
+        ("current-input-port", Arity::Range(0, 1)),
+        ("current-output-port", Arity::Range(0, 1)),
+        ("current-error-port", Arity::Range(0, 1)),
         // === Port operations ===
         ("close-port", Arity::Exact(1)),
         ("close-input-port", Arity::Exact(1)),
