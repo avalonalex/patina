@@ -1,16 +1,16 @@
 # Patina third-party compatibility (vm backend)
 
-**129 of 187 packages pass** — 129 of 186 achievable (excluding 1 out-of-scope pending FFI).
+**133 of 187 packages pass** — 133 of 186 achievable (excluding 1 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 129 |
-| missing-library | 29 |
-| parse-error | 20 |
+| pass | 133 |
+| missing-library | 31 |
+| parse-error | 12 |
 | load-error | 6 |
 | unbound-identifier | 1 |
-| wrong-result | 1 |
-| runtime-error | 0 |
+| wrong-result | 2 |
+| runtime-error | 1 |
 | timeout | 0 |
 | out-of-scope | 1 |
 
@@ -18,7 +18,7 @@
 
 | Library | Packages |
 |---|---|
-| (srfi 130) | 4 |
+| (srfi 130) | 6 |
 | (chibi) | 3 |
 | (foreign c) | 2 |
 | (srfi 114 comparators) | 2 |
@@ -43,12 +43,12 @@
 
 | Error | Packages |
 |---|---|
-| `LexError(UnexpectedChar('@'))` | 9 |
 | `Each syntax-rules rule must have exactly 2 elements (pattern template)` | 5 |
 | `syntax-rules literals must be symbols` | 3 |
 | `#<unknown>` | 1 |
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
 | `ch` | 1 |
+| `set! expects 2 arguments, got 1` | 1 |
 
 ## Load errors
 
@@ -72,7 +72,7 @@
 |---|---|---|
 | arvyy-interface | test | parse-error |
 | arvyy-mustache | test | pass |
-| chibi-app | test | parse-error |
+| chibi-app | test | missing-library |
 | chibi-assert | test | missing-library |
 | chibi-base64 | test | pass |
 | chibi-binary-record | probe | missing-library |
@@ -85,7 +85,7 @@
 | chibi-crypto-sha2 | test | parse-error |
 | chibi-edit-distance | test | missing-library |
 | chibi-filesystem | test | load-error |
-| chibi-html-parser | probe | parse-error |
+| chibi-html-parser | probe | pass |
 | chibi-irregex | probe | missing-library |
 | chibi-iset | test | pass |
 | chibi-locale | test | wrong-result |
@@ -94,7 +94,7 @@
 | chibi-math-prime | test | pass |
 | chibi-math-stats | test | missing-library |
 | chibi-mecab | test | missing-library |
-| chibi-mime | test | parse-error |
+| chibi-mime | test | wrong-result |
 | chibi-monad-environment | probe | parse-error |
 | chibi-net-dns | test | missing-library |
 | chibi-net-smtp | test | out-of-scope |
@@ -107,7 +107,7 @@
 | chibi-snow-commands | probe | parse-error |
 | chibi-ssl | test | missing-library |
 | chibi-string | test | pass |
-| chibi-sxml | probe | parse-error |
+| chibi-sxml | probe | pass |
 | chibi-tar | test | missing-library |
 | chibi-temp-file | probe | load-error |
 | chibi-term-edit-line | probe | pass |
@@ -124,14 +124,14 @@
 | in-progress-hash-tables | test | missing-library |
 | independentresearch-xattr | probe | missing-library |
 | jkode-sassy | test | missing-library |
-| lassik-dockerfile | test | parse-error |
-| lassik-shell-quote | test | parse-error |
+| lassik-dockerfile | test | runtime-error |
+| lassik-shell-quote | test | pass |
 | lassik-string-inflection | test | missing-library |
 | lassik-trivial-tar-writer | probe | pass |
 | lassik-unpack-assoc | probe | pass |
 | lightweight-testing | probe | pass |
 | macduffie-json | probe | missing-library |
-| okmij-ssax | test | parse-error |
+| okmij-ssax | test | missing-library |
 | pfds-alist | probe | pass |
 | pfds-bitwise | probe | pass |
 | pfds-bounded-balance-tree | probe | pass |
@@ -224,7 +224,7 @@
 | slib-tree | probe | pass |
 | slib-tzfile | probe | pass |
 | slib-uri | probe | load-error |
-| slib-xml-parse | probe | parse-error |
+| slib-xml-parse | probe | pass |
 | srfi-106 | probe | missing-library |
 | srfi-11 | probe | pass |
 | srfi-14 | probe | pass |

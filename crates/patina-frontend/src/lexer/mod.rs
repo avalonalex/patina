@@ -782,6 +782,16 @@ impl Lexer {
                     | '+'
                     | '-'
                     | '.'
+                    // Deliberate extension beyond R7RS 7.1.1, where `@` is a
+                    // <special subsequent> and not an <initial>: a leading `@`
+                    // starts an identifier. No conforming program can contain a
+                    // bare `@` token, so this only widens what we accept — and
+                    // the ecosystem relies on it (SXML's `@` attribute marker
+                    // and `@raw` tag, `(chibi match)`'s `@` record pattern).
+                    // Chez, Gauche and chibi all read it; note that Chez and
+                    // Gauche still *write* it escaped, as we do. See
+                    // PRD/TRACK_L_SNOW_LIBRARIES_PRD.md section 6.
+                    | '@'
             )
     }
 
@@ -829,6 +839,36 @@ mod tests {
             Token::Number("2".to_string())
         );
         assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_leading_at_sign_starts_an_identifier() {
+        // Extension beyond R7RS 7.1.1 — see `is_identifier_start`.
+        let mut lexer = Lexer::new("(@ @raw x@y)");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "@"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "@raw"));
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "x@y"));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_unquote_splicing_still_wins_over_at_identifier() {
+        // `,@` is one token, so an `@` identifier can never be read out of it.
+        let mut lexer = Lexer::new(",@x ,@ , @");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::UnquoteSplicing);
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "x"));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::UnquoteSplicing);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Unquote);
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Identifier(s) if s == "@"));
+    }
+
+    #[test]
+    fn test_polar_complex_is_still_a_number() {
+        // `@` is only an identifier *start*; a leading digit still reads as
+        // the R7RS <real> @ <real> polar notation.
+        let mut lexer = Lexer::new("1@2");
+        assert!(matches!(lexer.next_token_kind().unwrap(), Token::Number(s) if s == "1@2"));
     }
 
     #[test]
