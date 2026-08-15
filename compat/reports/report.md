@@ -6,10 +6,10 @@
 |---|---|
 | pass | 137 |
 | missing-library | 24 |
-| parse-error | 15 |
+| parse-error | 14 |
 | load-error | 3 |
 | unbound-identifier | 1 |
-| wrong-result | 1 |
+| wrong-result | 2 |
 | runtime-error | 1 |
 | timeout | 0 |
 | out-of-scope | 2 |
@@ -49,7 +49,6 @@
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
 | `No matching pattern for macro ssax:make-parser/positional-args` | 1 |
 | `ch` | 1 |
-| `set! expects 2 arguments, got 1` | 1 |
 
 ## Load errors
 
@@ -89,7 +88,7 @@
 | chibi-irregex | probe | missing-library |
 | chibi-iset | test | pass |
 | chibi-locale | test | pass |
-| chibi-match | test | parse-error |
+| chibi-match | test | wrong-result |
 | chibi-math-linalg | test | missing-library |
 | chibi-math-prime | test | pass |
 | chibi-math-stats | test | missing-library |

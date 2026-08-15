@@ -356,6 +356,73 @@ impl Desugarer {
     /// themselves, not bindings, so rewriting them there would corrupt the
     /// datum. Depth rises through `quasiquote` and falls through `unquote` /
     /// `unquote-splicing`; `quote` is opaque outright.
+    /// Rewrite one *form* — a list read the way the evaluator reads it, with a
+    /// head that may be a quoting operator.
+    ///
+    /// The spine is walked here rather than by recursing on each cdr, and that
+    /// is the whole point. A cdr is a *tail*, not a form: in `(f quote x)` the
+    /// tail is `(quote x)`, so re-reading it as a form saw a quote and treated
+    /// everything after the argument `quote` as inert data. Any template that
+    /// passed `quote` along — `(match-two v (p q . r) …)` in `(chibi match)`,
+    /// reached by any pattern with a quoted tail — silently lost relinking for
+    /// every later argument. Head position is decided once, here.
+    fn rewrite_form(
+        &self,
+        tv: TaggedValue,
+        renames: &HashMap<Rc<str>, TaggedValue>,
+        quote_depth: u32,
+        shared_heap: &SharedHeap,
+    ) -> TaggedValue {
+        let head = {
+            let heap = shared_heap.borrow();
+            let (car, _) = heap.get_pair(tv);
+            heap.get_symbol_or_identifier_name(car).map(String::from)
+        };
+        let rest_depth = match head.as_deref() {
+            Some("quote") => return tv,
+            Some("quasiquote") => quote_depth + 1,
+            Some("unquote") | Some("unquote-splicing") => quote_depth.saturating_sub(1),
+            _ => quote_depth,
+        };
+
+        // Flatten the spine so the head can be told from the arguments. The
+        // final tail is whatever ends the list — `()` for a proper one, an
+        // atom for a dotted one.
+        let (elems, tail) = {
+            let heap = shared_heap.borrow();
+            let mut elems = Vec::new();
+            let mut cur = tv;
+            while cur.is_pair() {
+                let (car, cdr) = heap.get_pair(cur);
+                elems.push(car);
+                cur = cdr;
+            }
+            (elems, cur)
+        };
+
+        let mut out = Vec::with_capacity(elems.len());
+        let mut changed = false;
+        for (i, e) in elems.iter().enumerate() {
+            // The head is read at the enclosing depth; a quoting head governs
+            // its arguments, not itself.
+            let depth = if i == 0 { quote_depth } else { rest_depth };
+            let new_e = self.rewrite_refs(*e, renames, depth, shared_heap);
+            changed |= new_e != *e;
+            out.push(new_e);
+        }
+        let new_tail = self.rewrite_refs(tail, renames, rest_depth, shared_heap);
+        changed |= new_tail != tail;
+
+        if !changed {
+            return tv;
+        }
+        let mut result = new_tail;
+        for e in out.into_iter().rev() {
+            result = shared_heap.borrow_mut().alloc_pair(e, result);
+        }
+        result
+    }
+
     fn rewrite_refs(
         &self,
         tv: TaggedValue,
@@ -364,24 +431,7 @@ impl Desugarer {
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
         if tv.is_pair() {
-            let (car, cdr) = shared_heap.borrow().get_pair(tv);
-            // A quoting head changes how the rest of the form is read.
-            let head = {
-                let heap = shared_heap.borrow();
-                heap.get_symbol_or_identifier_name(car).map(String::from)
-            };
-            let inner_depth = match head.as_deref() {
-                Some("quote") => return tv,
-                Some("quasiquote") => quote_depth + 1,
-                Some("unquote") | Some("unquote-splicing") => quote_depth.saturating_sub(1),
-                _ => quote_depth,
-            };
-            let new_car = self.rewrite_refs(car, renames, quote_depth, shared_heap);
-            let new_cdr = self.rewrite_refs(cdr, renames, inner_depth, shared_heap);
-            if new_car == car && new_cdr == cdr {
-                return tv;
-            }
-            return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
+            return self.rewrite_form(tv, renames, quote_depth, shared_heap);
         }
 
         if tv.is_vector() {
