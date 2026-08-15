@@ -295,6 +295,35 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ## 6. Known defects surfaced by this track
 
+**Literal matching had no "both unbound" case** — ✅ **fixed** (2026-08-14). Both backends.
+R7RS 4.3.2 gives literal *matching* `free-identifier=?` semantics: an input matches a literal when
+both denote the same binding, **or both are unbound and have the same name**. That second clause was
+missing. `tagged_matches_literal` instead required the literal's scopes to be a subset of the
+input's, so an *introduced* literal (carrying the enclosing expansion's scopes) could never match a
+*substituted* input (carrying none), even with both unbound:
+
+```scheme
+(define-syntax m
+  (syntax-rules ()
+    ((_ e) (let-syntax ((n (syntax-rules (k) ((n k) 'lit) ((n x) 'notlit))))
+             (n e)))))
+(list (m k) (m other))
+;; before => (notlit notlit)
+;; after / Chez / Gauche => (lit notlit)
+```
+
+Bindings are not visible in that function; the caller's `is_literal_shadowed_tagged` veto runs first
+and is the binding-aware half. So the fix is to compare names, matching what the function's three
+other arms already did — the identifier-vs-identifier arm was the lone exception.
+
+Note this is a *different question* from the one below, and conflating them is the trap: **membership**
+("is this pattern identifier a literal at all?") compares identity, while **matching** ("does this
+input match that literal?") is `free-identifier=?`. Predates the identity work below — verified on
+`ac6f6d2`.
+
+Moved `arvyy-interface` off `Name mismatch in interface implementation … proc0 proc0` — two
+identifiers spelled alike that compared unequal — onto an unrelated failure.
+
 **Identifier identity was decided by name inside a macro that writes a macro** — ✅ **fixed**
 (2026-08-14). Both backends. Three places compared identifiers by name alone, so an identifier
 *substituted* from the outer use site and one *introduced* by the outer template were confused

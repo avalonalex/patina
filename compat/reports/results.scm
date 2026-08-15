@@ -3,7 +3,7 @@
  (version 1)
  (backend "vm")
  (results
-  ((slug "arvyy-interface") (mode test) (status parse-error) (errors "Name mismatch in interface implementation (expected, gotten) proc0 proc0"))
+  ((slug "arvyy-interface") (mode test) (status parse-error) (errors "Body must contain at least one expression (not just define-syntax)"))
   ((slug "arvyy-mustache") (mode test) (status pass))
   ((slug "chibi-app") (mode test) (status parse-error) (errors "LexError(UnexpectedChar('@'))"))
   ((slug "chibi-assert") (mode test) (status missing-library) (missing "chibi"))
