@@ -26,10 +26,10 @@ Three traps worth knowing, all previously hit and now guarded against:
     "free of  charge" and the match silently fails.
   * Re-vendoring must not delete the hand-written docs that live in
     compat/vendor/ (README.md, LICENSES.md). See KEEP below.
-  * A licence must not be resolved again for a tarball already vendored. Ten
-    packages are licensed only by their canonical SRFI document, so --offline
-    once found no licence for them, dropped them out of PERMISSIVE, and
-    deleted them from the corpus without an error. See recorded_licences().
+  * Anything fetched must be cached, and any licence already established must
+    be readable back. Ten packages are licensed only by their canonical SRFI
+    document, which was once fetched every run and never kept, so a run without
+    network silently deleted them from the corpus. See recorded_licences().
 """
 from __future__ import annotations
 
@@ -103,6 +103,30 @@ def collect_depends(node, out):
 # ──────────────────────────────── networking ─────────────────────────────────
 
 
+def slug(name) -> str:
+    """The directory/key name for a library name.
+
+    Accepts the tuple form (`["chibi", "string"]`) or the space-joined form
+    recorded in the generated files (`"chibi string"`). One conversion, because
+    the two must agree: a component containing a space would otherwise be split
+    by one spelling and not the other.
+    """
+    parts = name.split() if isinstance(name, str) else name
+    return "-".join(parts)
+
+
+def cache_path(url: str) -> Path:
+    """Where a fetched URL lives in the cache. One scheme for everything.
+
+    The whitelist keeps this safe for absolute URLs (colons, query strings) as
+    well as the index's relative paths, and it produces exactly the names the
+    tarballs already use — `/s/a/b.tgz` has no character it rewrites but the
+    slashes — so adopting it does not orphan an existing cache.
+    """
+    CACHE.mkdir(parents=True, exist_ok=True)
+    return CACHE / re.sub(r"[^A-Za-z0-9._-]", "_", url.strip("/"))
+
+
 def curl(url: str, dest: Path | None = None, offline: bool = False) -> str | None:
     if offline:
         return None
@@ -118,23 +142,21 @@ def curl(url: str, dest: Path | None = None, offline: bool = False) -> str | Non
 def page_text(url: str, offline: bool) -> str:
     """Fetch a page as plain text, through the cache.
 
-    The index and the tarballs are cached; these pages were the one thing the
-    tool fetched every run and kept nothing of. That asymmetry is what made
-    `--offline` lossy rather than merely slower: a package licensed only by its
-    canonical SRFI document had no answer available offline, so it silently
-    became licence-unknown. Cached like everything else, a warm cache answers
-    it.
+    Cached like the index and the tarballs. These pages used to be the one
+    thing fetched every run and kept nothing of, which is what made a
+    cache-only rebuild lossy rather than merely slower.
 
     Normalising whitespace after stripping tags is load-bearing -- see the
     module docstring.
     """
-    cached = CACHE / ("page_" + re.sub(r"[^A-Za-z0-9._-]", "_", url))
-    if cached.exists():
-        raw = cached.read_text(encoding="utf-8", errors="ignore")
+    cached = cache_path(url)
+    if offline:
+        raw = cached.read_text(encoding="utf-8", errors="ignore") if cached.exists() else ""
     else:
-        raw = curl(url, offline=offline) or ""
+        # A refresh re-reads the page: a licence grant can be corrected upstream
+        # without the package changing, and asking is the whole point of asking.
+        raw = curl(url) or ""
         if raw:
-            CACHE.mkdir(parents=True, exist_ok=True)
             cached.write_text(raw, encoding="utf-8")
     if not raw:
         return ""
@@ -231,48 +253,50 @@ def resolve_licence(pkg: dict, blob: str, offline: bool) -> tuple[str | None, st
 
 
 def recorded_licences() -> dict[str, tuple[str, str, str]]:
-    """slug -> (tarball_sha256, licence, evidence) from the committed manifest.
+    """slug -> (tarball_sha256, licence, evidence) from the generated files.
 
-    A licence already established for a given tarball does not need to be
-    established again. Keying on the checksum is what makes that exact rather
-    than a guess: identical bytes cannot yield a different answer.
+    What a cache-only rebuild answers from instead of the network, and the
+    reason it can reproduce the corpus at all: some packages are licensed only
+    by their canonical SRFI document, so without a recorded answer they read as
+    licence-unknown and vanish from the corpus. See the module docstring.
 
-    This is not only an optimisation. `resolve_licence` falls back to fetching
-    the package's canonical SRFI document, so ten packages -- srfi-2, 25, 29,
-    31, 42, 64, 106, 170, 227, 235 -- have no licence evidence that survives
-    `--offline`. Without this, an offline rebuild found no licence for them,
-    dropped them out of the PERMISSIVE bucket, and deleted them from the corpus
-    with no error. `--offline --check` reported drift on twelve packages when
-    two had changed. Reading the recorded answer back makes an offline rebuild
-    reproduce the corpus it started from.
+    Consulted **only when not refreshing**. Two of `resolve_licence`'s three
+    sources — the index's own `license` field, and that SRFI document — are not
+    determined by the tarball, so a checksum match does not actually prove they
+    are unchanged; it only proves the *package* is. Reusing them is right when
+    the alternative is no answer, and wrong when the user has asked to go and
+    look. `--refresh` re-derives every licence from scratch.
     """
-    out: dict[str, tuple[str, str, str]] = {}
-    for path, key, entries in (
-        (VENDOR / "MANIFEST.json", "slug", lambda d: d["packages"]),
-        # Excluded packages carry their licence too, so a rebuild does not have
-        # to establish it a second time to decide to exclude them again.
-        (VENDOR / "REVIEW-QUEUE.json", "library", lambda d: d),
-    ):
+    def harvest(path: Path, records, into: dict) -> None:
         if not path.exists():
-            continue
+            return
         try:
-            records = entries(json.loads(path.read_text()))
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-        for p in records:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return
+        for p in records(data):
             if p.get("tarball_sha256") and p.get("license") and p.get("license_evidence"):
-                slug = p[key] if key == "slug" else "-".join(p[key].split())
-                out.setdefault(slug, (p["tarball_sha256"], p["license"], p["license_evidence"]))
+                into.setdefault(slug(p["library"]),
+                                (p["tarball_sha256"], p["license"], p["license_evidence"]))
+
+    out: dict[str, tuple[str, str, str]] = {}
+    harvest(VENDOR / "MANIFEST.json", lambda d: d.get("packages", []), out)
+    # Excluded packages carry their licence too, so a rebuild does not have to
+    # establish it a second time to decide to exclude them again.
+    harvest(VENDOR / "REVIEW-QUEUE.json", lambda d: d, out)
     return out
 
 
 def load_index(offline: bool) -> list[dict]:
     CACHE.mkdir(parents=True, exist_ok=True)
-    idx = CACHE / "repo.scm"
-    if not idx.exists():
-        if offline:
-            sys.exit("error: no cached index and --offline given")
+    idx = CACHE / "repo.scm"          # its own name, predating cache_path()
+    if not offline:
+        # Always re-fetch under --refresh. The index is how a new version
+        # becomes visible at all, so reusing a cached copy would make the one
+        # flag that exists to ask upstream what is new answer from memory.
         curl(HOST + INDEX, idx)
+    if not idx.exists():
+        sys.exit("error: no cached index; run with --refresh to fetch one")
     repo = parse_sexp(idx.read_text())[0]
     out = []
     for p in (x for x in repo[1:] if isinstance(x, list) and x and x[0] == "package"):
@@ -320,13 +344,6 @@ def version_key(v: str | None):
 
 def build(target: Path, offline: bool) -> dict:
     if offline:
-        # The cache reproduces the vendored corpus exactly: every vendored
-        # package's licence is recorded in MANIFEST.json against its tarball
-        # checksum. A package that is *not* vendored has no recorded answer and
-        # falls back to the cache — which now holds the canonical SRFI pages
-        # too, so a cache warmed by any previous --refresh covers it. Until
-        # then those packages read as licence-unknown, which affects only the
-        # two reports about what was left out, never the corpus itself.
         print("note: rebuilding from the pinned cache. A package that is neither vendored nor "
               "cached reads as licence-unknown, so REVIEW-QUEUE.json and the excluded counts "
               "in INVENTORY.md may be incomplete. Pass --refresh to re-fetch.")
@@ -343,19 +360,22 @@ def build(target: Path, offline: bool) -> dict:
         for d in p["deps"]:
             indeg[d] += 1
 
-    prior = recorded_licences()
+    prior = recorded_licences() if offline else {}
     reused = 0
 
-    # A package whose library Patina bundles leaves the corpus whatever its
-    # licence says, so it is not awaiting licence review and does not belong in
-    # the reports about licence-based exclusions. Marking it here also keeps
-    # those reports identical with and without a refresh: such a package has no
-    # recorded licence to reuse — it is in neither generated file — so without
-    # this it read as licence-unknown from the cache and as permissive after a
-    # refresh, and the difference was pure noise.
+    # Partition the bundled packages out before anything prices a licence. They
+    # leave the corpus whatever their licence says, so resolving one is wasted
+    # work, and — since a bundled package is in neither generated file and so
+    # has no recorded answer — it also made the reports disagree with
+    # themselves: licence-unknown from the cache, permissive after a refresh,
+    # for a package excluded on neither ground. Splitting the list here means
+    # no report downstream has to remember to filter them out.
     bundled = bundled_libraries()
-    for p in pkgs:
-        p["bundled"] = bool(bundled & {" ".join(l) for l in p["libs"]})
+    dropped = sorted({" ".join(p["name"]) for p in pkgs
+                      if bundled & {" ".join(l) for l in p["libs"]}})
+    pkgs = [p for p in pkgs if not (bundled & {" ".join(l) for l in p["libs"]})]
+    if dropped:
+        print(f"excluded {len(dropped)} package(s) Patina bundles: {', '.join(dropped)}")
 
     work = CACHE / "extracted"
     work.mkdir(parents=True, exist_ok=True)
@@ -364,7 +384,7 @@ def build(target: Path, offline: bool) -> dict:
         if not p["url"]:
             p["licence"], p["evidence"], p["bucket"] = None, "none", "UNKNOWN"
             continue
-        tar = CACHE / p["url"].strip("/").replace("/", "_")
+        tar = cache_path(p["url"])
         if not tar.exists() and not offline:
             curl(HOST + p["url"], tar)
         if not tar.exists():
@@ -384,7 +404,7 @@ def build(target: Path, offline: bool) -> dict:
         # correctness, not speed: it also skips read_blob, but that is worth
         # about 0.2s of a 0.7s rebuild (measured over 184 packages), because
         # the packages are small. The point is that the answer cannot drift.
-        seen = prior.get("-".join(p["name"]))
+        seen = prior.get(slug(p["name"]))
         if seen and seen[0] == p["tar_sha256"]:
             p["licence"], p["evidence"] = seen[1], seen[2]
             reused += 1
@@ -402,15 +422,8 @@ def build(target: Path, offline: bool) -> dict:
             if p["name"][0] == "slib" and p["bucket"] == "UNKNOWN":
                 p["licence"], p["evidence"], p["bucket"] = "SLIB-Jaffer", "slib-family-inference", "NONSTANDARD"
 
-    # Packages whose library Patina bundles are excluded: the bundled copy is
-    # canonical, so a vendored duplicate is dead weight that only raises the
-    # question of which one a test resolved against. Flagged above.
-    sel = sorted(
-        (p for p in pkgs if p["bucket"] in ("PERMISSIVE", "NONSTANDARD") and not p["bundled"]),
-        key=lambda p: (-p["pop"], " ".join(p["name"])))
-    dropped = sorted({" ".join(p["name"]) for p in pkgs if p["bundled"]})
-    if dropped:
-        print(f"excluded {len(dropped)} package(s) Patina bundles: {', '.join(dropped)}")
+    sel = sorted((p for p in pkgs if p["bucket"] in ("PERMISSIVE", "NONSTANDARD")),
+                 key=lambda p: (-p["pop"], " ".join(p["name"])))
 
     target.mkdir(parents=True, exist_ok=True)
     for entry in target.iterdir():                    # never delete the hand-written docs
@@ -420,15 +433,15 @@ def build(target: Path, offline: bool) -> dict:
 
     manifest = []
     for p in sel:
-        slug = "-".join(p["name"])
+        pkg_slug = slug(p["name"])
         src = p["root"]
         inner = [d for d in src.iterdir() if d.is_dir()]
         if len(inner) == 1 and not any(f.suffix in (".sld", ".scm") for f in src.iterdir() if f.is_file()):
             src = inner[0]
-        shutil.copytree(src, target / slug)
-        files = sorted(str(f.relative_to(target / slug)) for f in (target / slug).rglob("*") if f.is_file())
+        shutil.copytree(src, target / pkg_slug)
+        files = sorted(str(f.relative_to(target / pkg_slug)) for f in (target / pkg_slug).rglob("*") if f.is_file())
         manifest.append({
-            "library": " ".join(p["name"]), "slug": slug, "version": p["version"],
+            "library": " ".join(p["name"]), "slug": pkg_slug, "version": p["version"],
             "license": p["licence"], "license_class": p["bucket"], "license_evidence": p["evidence"],
             "upstream_url": HOST + p["url"], "tarball_sha256": p.get("tar_sha256"),
             "popularity_indegree": p["pop"], "provides": [" ".join(l) for l in p["libs"]],
@@ -453,15 +466,13 @@ def build(target: Path, offline: bool) -> dict:
     # A licence is worth recording even for a package we decline to vendor: it
     # is the same answer, it cost the same to establish, and recording it with
     # the checksum it belongs to is what lets a later rebuild reuse it instead
-    # of going back to the network. Bundled packages are left out — they are
-    # excluded for a reason that has nothing to do with their licence.
+    # of going back to the network.
     excluded = [{"library": " ".join(p["name"]), "version": p["version"], "pop": p["pop"],
                  "license": p["licence"], "license_evidence": p["evidence"],
                  "tarball_sha256": p.get("tar_sha256"),
                  "bucket": p["bucket"], "size_kb": p["size"] // 1024,
                  "url": HOST + (p["url"] or "")}
-                for p in pkgs
-                if p["bucket"] not in ("PERMISSIVE", "NONSTANDARD") and not p["bundled"]]
+                for p in pkgs if p["bucket"] not in ("PERMISSIVE", "NONSTANDARD")]
     excluded.sort(key=lambda x: -x["pop"])
     (target / "REVIEW-QUEUE.json").write_text(json.dumps(excluded, indent=2) + "\n")
     write_inventory(target, manifest, pkgs)
@@ -497,12 +508,8 @@ def write_inventory(target: Path, manifest: list[dict], pkgs: list[dict]) -> Non
                   "out-of-scope rather than failing.", "",
               "## Excluded", "",
               "| Reason | Packages |", "|---|---|"]
-    # Licence-based exclusions only; the bundled ones are reported separately
-    # and counting them here would make this table depend on whether the run
-    # could reach the network to price a licence that does not matter.
     for bucket, n in Counter(p["bucket"] for p in pkgs
-                             if p["bucket"] not in ("PERMISSIVE", "NONSTANDARD")
-                             and not p.get("bundled")).most_common():
+                             if p["bucket"] not in ("PERMISSIVE", "NONSTANDARD")).most_common():
         lines.append(f"| {bucket} | {n} |")
     lines += ["", "Full detail in `REVIEW-QUEUE.json`.", ""]
     (target / "INVENTORY.md").write_text("\n".join(lines))
@@ -516,14 +523,13 @@ def main() -> None:
     # freshly fetched index, so a bare run could otherwise fold an unrelated
     # version bump into a change that meant only to drop a bundled package.
     # `--offline` is kept as the name for the default it used to request.
-    ap.add_argument("--refresh", action="store_true",
-                    help="re-fetch the index and any new tarballs; may pick up new upstream versions")
-    ap.add_argument("--offline", action="store_true",
-                    help="alias for the default (rebuild from the pinned cache)")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--refresh", action="store_true",
+                      help="re-fetch the index and re-derive every licence; may pick up new versions")
+    mode.add_argument("--offline", action="store_true",
+                      help="alias for the default (rebuild from the pinned cache)")
     ap.add_argument("--check", action="store_true", help="rebuild into a temp dir and diff against compat/vendor")
     args = ap.parse_args()
-    if args.refresh and args.offline:
-        sys.exit("error: --refresh and --offline ask for opposite things")
     offline = not args.refresh
 
     if args.check:

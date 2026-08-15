@@ -111,12 +111,18 @@ Either way it regenerates the three generated files above and **leaves `README.m
 `LICENSES.md` alone** — an earlier version deleted them, so that exclusion is now explicit in the
 code.
 
-`--check` exits non-zero on any drift, which makes it usable as a CI guard once the corpus is
-expected to be stable.
+`--check` exits non-zero on any drift. It is **not usable as a CI guard yet**, for a reason that has
+nothing to do with the corpus: `MANIFEST.json` records `"generated": <today>`, so a rebuild differs
+from the committed file every day even when every package field is byte-identical. Dropping that
+field — git already records when a file was written, and `tarball_sha256` is what provenance
+actually rests on — or excluding it from the comparison would fix it. Until then read `--check`'s
+output rather than its exit status.
 
-A licence is never resolved twice for the same tarball: `MANIFEST.json` records it against
-`tarball_sha256`, and identical bytes cannot yield a different answer. That is what lets a cache-only
-rebuild reproduce the corpus exactly. It did not always — SRFI packages whose snowball carries no
+A cache-only rebuild answers licences from `MANIFEST.json` and `REVIEW-QUEUE.json`, keyed on
+`tarball_sha256`, which is what lets it reproduce the corpus exactly. `--refresh` re-derives every
+licence instead: a checksum match proves the *package* is unchanged, but two of the three sources a
+licence can come from — the index's own `license` field and the canonical SRFI document — are not
+determined by the tarball, so only a refresh can pick up a correction to those. It did not always — SRFI packages whose snowball carries no
 licence text are resolved against their canonical SRFI document, and those pages were once the one
 thing the tool fetched every run without caching, so a cache-only rebuild quietly dropped ten
 packages. The pages are cached now.

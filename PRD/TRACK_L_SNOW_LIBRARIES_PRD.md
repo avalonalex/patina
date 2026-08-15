@@ -280,10 +280,15 @@ again:
 
 - **A licence is not resolved twice for the same tarball.** `recorded_licences()` reads
   `license`/`license_evidence` back from the committed `MANIFEST.json`, keyed on `tarball_sha256`.
-  Keying on the checksum is what makes this exact rather than a guess — identical bytes cannot yield
-  a different licence — and a changed tarball still falls through to full resolution. This is for
-  correctness, not speed: it also skips `read_blob`, but that is worth about 0.2s of a 0.7s rebuild
-  over 184 packages, since the packages are small.
+  This is for correctness, not speed: it also skips `read_blob`, but that is worth about 0.2s of a
+  0.7s rebuild over 184 packages, since the packages are small. The reuse is **scoped to the
+  cache-only path**, and that scoping is load-bearing: a checksum match proves the *package* is
+  unchanged, but two of `resolve_licence`'s three sources — the index's `license` field and the
+  canonical SRFI document — are not determined by the tarball at all. Reusing them is right when the
+  alternative is no answer and wrong when the user has asked to go and look, so `--refresh` re-derives
+  every licence and re-fetches both the index and those pages. `--refresh` did not previously re-fetch
+  the index at all — it was fetched once, ever — which the flag flip turned from a latent oddity into
+  a flag that lied.
 - **The canonical SRFI pages are cached**, as the index and the tarballs already were. That
   asymmetry was the root of it: those pages were the one thing the tool fetched every run and kept
   nothing of, which made `--offline` lossy rather than merely slower.
