@@ -14,6 +14,14 @@
 //! messages are not a stable interface, and two sites here share one message
 //! verbatim.
 //!
+//! A second rule, learned the same way: "the other backend does X" is not a
+//! reason to believe X — the convergence test below was checked against chibi,
+//! Gauche and Chez before the tree-walker was changed to agree with the VM.
+//!
+//! A third: a defect class cannot be enumerated by grep. The first sweep of
+//! `cps_eval/application.rs` matched `return Err(…)` and missed three
+//! catchable errors that reach Rust through `?`.
+//!
 //! `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 carries the history.
 
 mod common;
@@ -49,6 +57,13 @@ fn test_dynamic_wind_does_not_validate_its_arguments() {
 /// rejects a non-procedure instead of discovering the problem when it calls.
 /// This is the check that a parameter object failed before `procedure?` was
 /// fixed, on both backends.
+///
+/// **This is stricter than chibi and Gauche**, deliberately. Both accept a
+/// non-procedure handler and just run the thunk, returning `ok` — they only
+/// care when an exception is actually raised and the handler is called. Chez
+/// rejects it as Patina does. R7RS leaves the case unspecified, so this is a
+/// choice, not conformance; it is recorded here so nobody "fixes" Patina to
+/// match chibi without knowing Chez sits on the other side.
 #[test]
 fn test_with_exception_handler_validates_its_arguments() {
     assert_program_eval_error("(with-exception-handler 5 (lambda () 'ok))");
@@ -68,15 +83,16 @@ fn test_with_exception_handler_validates_its_arguments() {
 /// it as a converter — because callability is spelled two ways.
 /// `Heap::is_procedure` covers closures, primitives, VM continuation refs and
 /// (since the parameter fix) parameter objects, while tree-walker continuations
-/// live in `Heap::is_continuation`; five callers ask for the disjunction and
-/// four ask only the first. Folding `Continuation` into `is_procedure` would
-/// close it, at the cost of widening the four — a behaviour change wanting its
+/// live in `Heap::is_continuation`. `Heap::is_callable` is the union, and the
+/// sites that mean "any callable" now use it; the four that deliberately ask
+/// the narrower question still reject a continuation. Folding `Continuation`
+/// into `is_procedure` would widen those four — a behaviour change wanting its
 /// own tests.
 ///
-/// **This test is meant to fail when that happens.** When it does, the fix is
-/// not to adjust the expectation: it is to make `make-parameter` accept the
-/// continuation, then update this test, the `is_procedure` doc comment, and the
-/// PRD entry that all currently describe the enumeration as incomplete.
+/// **This test is meant to fail when that happens.** When it does, do not
+/// adjust the expectation: decide whether `make-parameter` should accept a
+/// continuation, then update this test, the `is_procedure` doc comment and the
+/// PRD entry together.
 #[test]
 fn test_procedure_p_is_wider_than_the_sites_that_require_a_procedure() {
     assert_program_eval_to("(call/cc (lambda (k) (procedure? k)))", "#t");
@@ -93,28 +109,72 @@ fn test_procedure_p_is_wider_than_the_sites_that_require_a_procedure() {
     );
 }
 
-/// Found while pinning the test above: `with-exception-handler`'s own type
-/// error is catchable on the VM but escapes `guard` on the tree-walker. It is
-/// why the test above asserts rejection with `assert_program_eval_error`
-/// rather than catching it.
+/// Converged 2026-08-15: an error raised *by a control primitive itself* is a
+/// catchable condition, in every position, on both backends.
 ///
-/// Same class as the unbound-variable defect fixed in #71 — a catchable error
-/// returned as a Rust `Err` instead of routed through the Scheme handlers —
-/// but in `cps_eval/application.rs`, which #71's `try_catchable!` sweep of
-/// `step.rs` never reached.
+/// Same class as #71 — a catchable error returned as a Rust `Err` instead of
+/// routed through the Scheme handlers — in the file that fix did not reach.
 ///
-/// **This row is one representative of six.** `dynamic-wind`,
-/// `call-with-values`, `raise`, `error` and a parameter's own arity error all
-/// escape the same way; the PRD entry carries the measured table. They are not
-/// quarantined individually because one sweep of the file should close them
-/// together — and quarantining six rows that a single change retires would be
-/// noise. Do not read this single row as the size of the defect.
+/// Checked against chibi, Gauche and Chez first. They differ on whether some
+/// of these should raise *at all*, never on catchability once something is
+/// raised — so a future change here is about the former, not the latter. The
+/// PRD carries the measured table.
+///
+/// Each body is asserted twice: caught when guarded, and *still an error* when
+/// not. Routing changes where a catchable error is delivered, never whether it
+/// is raised, and asserting only the first half would not notice a fix that
+/// swallowed errors instead of routing them.
+///
+/// Two of these rows exist because the first sweep missed them. It was defined
+/// syntactically — "every bare `return Err(…)`" — while three catchable errors
+/// in the same file reach Rust through `?` instead. `(error 5)` is one:
+/// fifteen lines below an arity check the sweep did route, in the same
+/// function. Grep patterns are not a way to enumerate a defect class.
 #[test]
-fn test_with_exception_handler_type_error_catchability_diverges() {
+fn test_a_control_primitive_error_is_catchable_in_every_position() {
+    for body in [
+        "(with-exception-handler 5 (lambda () 'ok))", // handler is not a procedure
+        "(dynamic-wind (lambda () 1))",               // arity
+        "(call-with-values (lambda () 1))",           // arity
+        "(raise)",                                    // arity
+        "(error)",                                    // arity
+        "((make-parameter 1) 1 2 3)",                 // a parameter's own arity
+        "(error 5)",                                  // message is not a string
+        "(error 'sym)",                               // ditto, the chibi-lenient shape
+    ] {
+        assert_program_eval_to(&format!("(guard (e (#t 'caught)) {body})"), "caught");
+        assert_program_eval_error(body);
+    }
+}
+
+/// The class is narrowed, not closed. An error raised by user code inside a
+/// `dynamic-wind` thunk still escapes `guard` on the tree-walker, because
+/// `run_wind_handlers(…)?` propagates it as a Rust error.
+///
+/// The depth is one level below that `?`: `apply_from_direct_tagged`
+/// (`cps_eval/wind.rs`) runs wind thunks on a *nested trampoline* that starts
+/// with an empty handler stack, so the error has to come back through Rust to
+/// reach the handlers installed outside. Routing at the `?` is what the
+/// parameter-converter case in this PR does and it works, but the general fix
+/// is to thread the handler stack into the nested trampoline. Tracked in the
+/// PRD; see `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+///
+/// The pinned value is what the VM returns, *not* an established correct
+/// answer: chibi loops forever on this program, so no reference was available
+/// to arbitrate. What this row asserts is only that the two backends disagree
+/// — the tree-walker dies where the VM does not. Establish the right answer
+/// before converging them.
+#[test]
+fn test_an_error_inside_a_wind_thunk_still_escapes_on_the_tree_walker() {
     assert_divergence(
-        "(guard (e (#t 'caught)) (with-exception-handler 5 (lambda () 'ok)))",
+        r#"(guard (e (#t 'caught))
+             (with-exception-handler (lambda (c) 'handled)
+               (lambda ()
+                 (dynamic-wind (lambda () 1)
+                               (lambda () (raise 'x))
+                               (lambda () (car 7))))))"#,
         On::Vm,
-        "caught",
+        "handled",
         ErrorClass::AtRuntime,
         "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6",
     );

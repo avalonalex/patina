@@ -134,8 +134,7 @@ pub(super) fn procedure_p(
     // Check heap for procedures and continuations
     let heap_ref = heap.borrow();
     // R7RS: Continuations captured by call/cc satisfy procedure?
-    let is_proc = heap_ref.is_procedure(args[0]) || heap_ref.is_continuation(args[0]);
-    Ok(TaggedValue::boolean(is_proc))
+    Ok(TaggedValue::boolean(heap_ref.is_callable(args[0])))
 }
 
 // ===== TaggedValue predicates with fast paths =====

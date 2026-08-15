@@ -1241,12 +1241,12 @@ impl Heap {
     /// through `get_parameter`, since reading and setting one is its own
     /// calling convention.
     ///
-    /// Not yet the single source of truth: tree-walker continuations
-    /// (`HeapObjectData::Continuation`) are callable but live in
-    /// [`Self::is_continuation`], so five callers still spell the question
-    /// `is_procedure(x) || is_continuation(x)`. Folding that variant in here
-    /// would let them drop the disjunct, but it also widens the four callers
-    /// that omit it today — a behaviour change wanting its own tests.
+    /// Not the whole of "callable": tree-walker continuations
+    /// (`HeapObjectData::Continuation`) are callable too but live in
+    /// [`Self::is_continuation`]. Callers who mean *any* callable want
+    /// [`Self::is_callable`]; this one is the narrower question, and four
+    /// callers deliberately ask it — folding `Continuation` in here would
+    /// widen them, a behaviour change wanting its own tests.
     #[inline]
     pub fn is_procedure(&self, tv: TaggedValue) -> bool {
         tv.is_closure()
@@ -1323,6 +1323,19 @@ impl Heap {
     pub fn is_named(&self, tv: TaggedValue, name: &str) -> bool {
         self.get_symbol_or_identifier_name(tv)
             .is_some_and(|n| n == name)
+    }
+
+    /// Can this value be applied at all — [`Self::is_procedure`] plus
+    /// tree-walker continuations?
+    ///
+    /// This is the question `procedure?` answers and the one every "must be a
+    /// procedure" check means. It exists as its own method rather than by
+    /// widening `is_procedure` because several callers deliberately ask the
+    /// narrower question, and widening them would be a behaviour change; a
+    /// separate predicate widens nothing.
+    #[inline]
+    pub fn is_callable(&self, tv: TaggedValue) -> bool {
+        self.is_procedure(tv) || self.is_continuation(tv)
     }
 
     /// Check if value is a continuation

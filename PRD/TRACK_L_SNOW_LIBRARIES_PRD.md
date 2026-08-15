@@ -449,43 +449,6 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
-**Tree-walker: the control primitives' own errors escape `guard`** — ❌ **open**. Found 2026-08-15
-while writing tests to pin the claims in the parameter fix below, and deliberately not folded into
-it. Same class as the unbound-variable defect fixed below — a catchable error returned as a Rust
-`Err` instead of being routed through the Scheme handlers — but in `cps_eval/application.rs`, which
-that fix's `try_catchable!` sweep of `step.rs` never reached.
-
-**Measured, not assumed.** The first draft of this entry recorded it as one site
-(`with-exception-handler`'s type error). Probing each control primitive separately — the tree-walker
-aborts on the first uncaught error, so they cannot be probed in one program — gives six observable
-positions, all `caught` on the VM and all escaping on the tree-walker:
-
-| probe | tree-walker | VM |
-|---|---|---|
-| `(with-exception-handler 5 (lambda () 'ok))` | escapes | caught |
-| `(dynamic-wind (lambda () 1))` | escapes | caught |
-| `(call-with-values (lambda () 1))` | escapes | caught |
-| `(raise)` | escapes | caught |
-| `(error)` | escapes | caught |
-| `((make-parameter 1) 1 2 3)` | escapes | caught |
-| `(apply)` | caught | caught |
-| `(force)` | caught | caught |
-
-The file has 13 bare `return Err(EvalError::…)` (10 `WrongArity`, 3 `TypeError` — all catchable
-classes) against only 4 routed calls, so the shape matches the count. `apply` and `force` already
-agree, which is worth understanding before the fix rather than after: they are the two whose arity
-is checked somewhere other than these bare returns.
-
-**The fix is the one `step.rs` already got**: route through `maybe_route_error_through_cps` instead
-of returning `Err`. Each site here has a real continuation in scope, not just `Halt`, so it should
-deliver to `cont` the way the `Continue` arm does. Doing it as a sweep — every bare return in the
-file, not the six that happen to be probed — is what stops this recurring a third time; #71's lesson
-was that patching the reported instances leaves the class alive.
-
-One representative row is pinned as a divergence in `crates/patina-tests/tests/callability.rs`, so
-it retires itself. The other five are recorded here rather than quarantined individually, since one
-sweep should close them together.
-
 **`with-output-to-file` does not restore through `dynamic-wind`** — ❌ **open**. Both backends.
 `with_output_to_file` / `with_input_from_file` (`patina-primitives/src/primitives/io/file.rs`) save
 the current port, call the thunk, and restore afterwards in straight-line Rust. That covers a normal
@@ -606,6 +569,84 @@ If the vector work does not restore the invariant, the deeper fix is to decide a
 time instead, where `Template::Symbol` and `Template::Var` distinguish the two without any proxy.
 
 ### Fixed
+
+**Tree-walker: the control primitives' own errors escaped `guard`** — ✅ **mostly fixed**
+(2026-08-15); one case remains open, see the end of this entry.
+The last of the class fixed in #71: a catchable error returned as a Rust `Err` instead of routed
+through the Scheme exception handlers. That fix swept `step.rs`; these lived in
+`cps_eval/application.rs`, which it never reached — so on the tree-walker `guard` could not catch a
+control primitive's *own* arity or type error, while the VM caught all of them.
+
+**The references decided which backend was right.** "Match the other backend" is not a reason to
+believe the other backend, so all six positions were run against chibi, Gauche and Chez first:
+
+| probe | chibi | Gauche | Chez | Patina VM | Patina tw (before) |
+|---|---|---|---|---|---|
+| `(with-exception-handler 5 (lambda () 'ok))` | `ok` — no check | `ok` — no check | caught | caught | escaped |
+| `(dynamic-wind (lambda () 1))` | caught | caught | caught | caught | escaped |
+| `(call-with-values (lambda () 1))` | caught | caught | caught | caught | escaped |
+| `(raise)` | caught | caught | caught | caught | escaped |
+| `(error)` | caught | caught | caught | caught | escaped |
+| `((make-parameter 1) 1 2 3)` | `#<undef>` | caught | caught | caught | escaped |
+
+Where the references disagree it is about whether to raise **at all** — chibi and Gauche accept a
+non-procedure handler and just run the thunk, and chibi returns `#<undef>` for a parameter called
+with three arguments, which R7RS §4.2.6 makes explicitly implementation-dependent. None of them
+disagrees about catchability *once something is raised*. The old tree-walker behaviour matched no
+implementation in any of the six, which is the cleanest mandate this track has had.
+
+**Done as a sweep, not as six patches** — #71's lesson was that fixing reported instances leaves the
+class alive. But the first attempt at that sweep defined the class *syntactically* — "every bare
+`return Err(EvalError::…)` in the file" — and review caught that this is not the same set as "every
+catchable error that can reach Scheme". `application.rs` has five `?`-propagation sites and the grep
+audited none of them. Three were live escapes, two of them inside functions the sweep had already
+edited:
+
+- `(error 5)` — the message type check, fifteen lines below the arity check that *was* routed, in
+  the same function. Fixed here; chibi, Gauche and the VM all catch it.
+- a parameter converter that raises — `apply_from_direct_tagged(conv, …)?` in `apply_parameter`,
+  thirteen lines above the arity arm that was routed. Fixed here; chibi and Gauche catch it.
+- an error raised inside a `dynamic-wind` thunk — `run_wind_handlers(…)?`. **Not fixed**, see below.
+
+Two sites are deliberately left propagating, both checked rather than assumed: `apply_other_primitive`'s
+"called with non-primitive procedure" is statically unreachable (its only caller has already matched
+`Procedure::Primitive`), and `eval_primop`'s arity checks have no continuation in scope but are
+already routed by their caller — the `try_catchable!` arm #71 added to `step.rs`. Review also found
+the first of those was `TypeError`, which `is_catchable()` treats as a *user* condition; it is now
+`InternalError`, so the code and the rationale agree.
+
+One site needed more than a mechanical rewrite. `apply_with_exception_handler` decided its type
+error inside a live `heap.borrow()`, and the router allocates the exception object
+(`heap().borrow_mut().alloc_exception`), so routing in place would have panicked on the RefCell.
+The check now yields the message and the borrow ends before the routing call — the
+extract-to-a-`let`-first discipline in `CLAUDE.md`. The same shape recurred in `apply_error`.
+
+**Narrowed, not closed — and the remaining depth is one level down.** An error raised by user code
+inside a wind thunk still escapes `guard` on the tree-walker. The `?` is only where it surfaces:
+`apply_from_direct_tagged` (`cps_eval/wind.rs`) runs wind thunks and parameter converters on a
+*nested trampoline that starts with an empty handler stack*, so anything they raise has to come back
+through Rust to reach the handlers installed outside. Routing at the `?` works for the converter
+case because the outer frame still has its handlers, but the general fix is to thread the handler
+stack into the nested trampoline — the same shape as the already-quarantined
+`reentered_continuation_keeps_exception_handler`, where `CpsContinuation` does not carry them
+either. Pinned as a self-retiring divergence.
+
+**Also recorded, VM side, pre-existing:** `(guard (e (#t 'caught)) (p 9))` where `p`'s converter
+raises produces *no output at all* on the VM (exit 0, nothing written), rather than an error or a
+catch. Unrelated to this change — the VM's parameter path is untouched here — but found by the same
+probe and worth a look before anyone trusts converter errors on either backend.
+
+Guarded by `crates/patina-tests/tests/callability.rs`, where every body is asserted twice — caught
+when guarded, still an error when not — so a future change that *swallowed* errors instead of
+routing them would fail. The divergence row pinned when this was found retired itself on the fix,
+printing "NO LONGER DIVERGES"; a new row now pins the wind-thunk case that remains.
+
+**A caveat on that new row.** Its pinned value is what the VM returns, not an established correct
+answer: chibi loops forever on the repro, so no reference could arbitrate. It asserts only that the
+two backends disagree. The same caveat applies to the continuation-arity site routed here —
+`(call/cc (lambda (k) (k 1 2)))` now yields a catchable error on the tree-walker where Gauche and
+the VM return `1`, which is the known multi-value-continuation gap, not something this change
+settled.
 
 **`make-parameter` objects were not procedures** — ✅ **fixed** (2026-08-15). Both backends. Found
 while checking whether the three standard ports had become *real* parameter objects or only ones
