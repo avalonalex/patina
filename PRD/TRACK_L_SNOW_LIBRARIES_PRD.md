@@ -449,6 +449,45 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
+**Tree-walker: an error inside a wind thunk escapes `guard`** — ❌ **open**. Found 2026-08-15 while
+sweeping the class below, and left open deliberately because the fix is one level down from where it
+surfaces.
+
+```scheme
+(guard (e (#t 'caught))
+  (with-exception-handler (lambda (c) 'handled)
+    (lambda () (dynamic-wind (lambda () 1) (lambda () (raise 'x)) (lambda () (car 7))))))
+;; tree-walker => Error: Type error: car expects a pair   (escapes)
+;; VM          => handled
+```
+
+The visible cause is `run_wind_handlers(…)?` propagating as a Rust error. The actual cause is
+`apply_from_direct_tagged` (`cps_eval/wind.rs`): it runs wind thunks and parameter converters on a
+*nested trampoline that starts with an empty handler stack*, so anything they raise must come back
+through Rust to reach the handlers installed outside. Routing at the `?` is what the
+parameter-converter fix below does and it works — the outer frame still has its handlers — but the
+general fix is to thread the handler stack into the nested trampoline.
+
+Same shape as the quarantined `reentered_continuation_keeps_exception_handler`, where
+`CpsContinuation` does not carry the handler stack either; the two probably want one fix. The
+enabling refactor both reviews converged on independently is a `MachineState` bundling
+`cont`/`cont_env`/`prompt_stack`/`dynamic_winds`/`exception_handlers` — the five values threaded
+through every `cps_eval` signature, every `StepResult` variant, and the reason for six
+`#[allow(clippy::too_many_arguments)]` in the crate. With it, routing becomes one call at the
+trampoline instead of ~18 hand-written sites, and the nested trampoline can inherit the stack
+instead of fabricating an empty one.
+
+**Caveat before converging it:** the pinned divergence row records what the VM returns, not an
+established correct answer — chibi loops forever on that repro, so no reference could arbitrate.
+Establish the right answer first. Pinned in `crates/patina-tests/tests/callability.rs`.
+
+**VM: a raising parameter converter produces no output at all** — ❌ **open**. Both found 2026-08-15.
+`(guard (e (#t 'caught)) (p 9))` where `p`'s converter raises exits 0 having written nothing —
+neither an error nor a catch. The tree-walker catches it (fixed below). Pre-existing and independent
+of that fix, which did not touch the VM's parameter path. Not pinned as a divergence, because
+`assert_divergence` needs the broken backend to *fail* and this one silently succeeds; worth fixing
+before anyone trusts converter errors.
+
 **`with-output-to-file` does not restore through `dynamic-wind`** — ❌ **open**. Both backends.
 `with_output_to_file` / `with_input_from_file` (`patina-primitives/src/primitives/io/file.rs`) save
 the current port, call the thunk, and restore afterwards in straight-line Rust. That covers a normal
@@ -621,20 +660,9 @@ error inside a live `heap.borrow()`, and the router allocates the exception obje
 The check now yields the message and the borrow ends before the routing call — the
 extract-to-a-`let`-first discipline in `CLAUDE.md`. The same shape recurred in `apply_error`.
 
-**Narrowed, not closed — and the remaining depth is one level down.** An error raised by user code
-inside a wind thunk still escapes `guard` on the tree-walker. The `?` is only where it surfaces:
-`apply_from_direct_tagged` (`cps_eval/wind.rs`) runs wind thunks and parameter converters on a
-*nested trampoline that starts with an empty handler stack*, so anything they raise has to come back
-through Rust to reach the handlers installed outside. Routing at the `?` works for the converter
-case because the outer frame still has its handlers, but the general fix is to thread the handler
-stack into the nested trampoline — the same shape as the already-quarantined
-`reentered_continuation_keeps_exception_handler`, where `CpsContinuation` does not carry them
-either. Pinned as a self-retiring divergence.
-
-**Also recorded, VM side, pre-existing:** `(guard (e (#t 'caught)) (p 9))` where `p`'s converter
-raises produces *no output at all* on the VM (exit 0, nothing written), rather than an error or a
-catch. Unrelated to this change — the VM's parameter path is untouched here — but found by the same
-probe and worth a look before anyone trusts converter errors on either backend.
+**Narrowed, not closed.** An error raised by user code inside a wind thunk still escapes `guard` on
+the tree-walker. Recorded as its own entry under **Open** above, rather than only here — an open
+defect filed inside a "Fixed" entry is not in the inventory anyone reads.
 
 Guarded by `crates/patina-tests/tests/callability.rs`, where every body is asserted twice — caught
 when guarded, still an error when not — so a future change that *swallowed* errors instead of
