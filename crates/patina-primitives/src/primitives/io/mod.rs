@@ -12,6 +12,7 @@
 
 mod binary;
 pub mod datum_writer;
+mod directory;
 mod file;
 mod ports;
 mod read;
@@ -458,6 +459,67 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         "Deletes the specified file.",
         file::delete_file,
     ));
+
+    // Directories. Named and shaped after `(chibi filesystem)`, which is what
+    // the ecosystem imports; `lib/chibi/filesystem.sld`'s `patina` branch is
+    // the only consumer today.
+    for (name, arity, doc, f) in [
+        (
+            "directory-files",
+            Arity::Exact(1),
+            "Returns the entry names in a directory, including \".\" and \"..\".",
+            directory::directory_files
+                as fn(
+                    &dyn crate::apply_context::ApplyContext,
+                    Vec<patina_core::TaggedValue>,
+                )
+                    -> Result<patina_core::TaggedValue, patina_runtime::EvalError>,
+        ),
+        (
+            "create-directory",
+            Arity::Range(1, 2),
+            "Creates a directory. The optional mode is accepted and ignored.",
+            directory::create_directory,
+        ),
+        (
+            "delete-directory",
+            Arity::Exact(1),
+            "Removes an empty directory.",
+            directory::delete_directory,
+        ),
+        (
+            "current-directory",
+            Arity::Exact(0),
+            "Returns the current working directory.",
+            directory::current_directory,
+        ),
+        (
+            "change-directory",
+            Arity::Exact(1),
+            "Sets the current working directory.",
+            directory::change_directory,
+        ),
+        (
+            "file-directory?",
+            Arity::Exact(1),
+            "Returns #t if the path is a directory.",
+            directory::file_directory_p,
+        ),
+        (
+            "file-regular?",
+            Arity::Exact(1),
+            "Returns #t if the path is a regular file.",
+            directory::file_regular_p,
+        ),
+    ] {
+        registry.register(PrimitiveFn::new_higher_order(
+            "scheme.file",
+            name,
+            arity,
+            doc,
+            f,
+        ));
+    }
 
     // Higher-order file operations (scheme file library)
     registry.register(PrimitiveFn::new_higher_order(

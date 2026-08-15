@@ -63,48 +63,6 @@
       "needs_ffi": false
     },
     {
-      "library": "chibi filesystem",
-      "slug": "chibi-filesystem",
-      "version": "0.9.0",
-      "license": "BSD",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "index-field",
-      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/filesystem/0.9.0/chibi-filesystem-0.9.0.tgz",
-      "tarball_sha256": "dad608a7fbc00fe8e9929ff6124edad13bedfdc58cc14042be29b33f64c13483",
-      "popularity_indegree": 8,
-      "provides": [
-        "chibi filesystem",
-        "chibi filesystem-test"
-      ],
-      "depends": [
-        "chibi",
-        "chibi string",
-        "chibi test",
-        "chicken",
-        "posix",
-        "sagittarius",
-        "scheme base",
-        "scheme file",
-        "scheme write",
-        "srfi 1",
-        "srfi 151",
-        "srfi 33",
-        "srfi 60"
-      ],
-      "description": "Interface to the filesystem and file descriptor objects.",
-      "files": [
-        "chibi/filesystem-test.sld",
-        "chibi/filesystem.html",
-        "chibi/filesystem.scm",
-        "chibi/filesystem.sld",
-        "chibi/filesystem.stub",
-        "package.scm",
-        "run-tests.scm"
-      ],
-      "modified": false,
-      "needs_ffi": true
-    },
-    {
       "library": "pfds list-helpers",
       "slug": "pfds-list-helpers",
       "version": "1.0.0",

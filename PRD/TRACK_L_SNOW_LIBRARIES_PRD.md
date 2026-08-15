@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**134 of 185** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
+(**137 of 184** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -165,7 +165,30 @@ Third-party packages frequently `(import (chibi …))`; today only `(chibi test)
   fallback their `cond-expand` reaches when `(chibi string)` is absent.
 - `(chibi io)`, `(chibi pathname)` — mostly pure Scheme over R7RS + SRFIs present after L1.
 - `(chibi show)` / SRFI 166 — the formatting library much of the ecosystem writes output with.
-- `(chibi filesystem)`, `(chibi process)` — need new primitives (filesystem/process); route file ops through the VFS `FileSystem` trait (`PRD/phase2/VFS_DESIGN.md`) so they stay testable.
+- ⚠️ `(chibi filesystem)` — **portable half done 2026-08-14; this entry's premise was wrong.**
+  The blocker was never a missing primitive. Upstream's `cond-expand` has branches for `chibi`,
+  `chicken` and `sagittarius` and **no `else`**, so on Patina the library loaded defining *nothing*
+  and every importer failed on its first export — which is why five packages sat in the load-error
+  bucket looking like five separate defects. Adding filesystem primitives alone would have moved
+  none of them; there was no branch for them to land in. Worth generalising: a `cond-expand` with no
+  `else` makes a library silently inert rather than absent, and the failure surfaces at the
+  *importer*, naming an export instead of the cause.
+
+  What landed: directory primitives routed through the VFS `FileSystem` trait as this entry
+  intended (`directory-files`, `create-directory`, `delete-directory`, `current-directory`,
+  `change-directory`, `file-directory?`, `file-regular?`), and a `(patina …)` branch in the bundled
+  `lib/chibi/filesystem.sld` implementing the directory API over them. The POSIX layer — file
+  descriptors, `stat` fields, symlinks, pipes, permissions — is stubbed with upstream's own
+  `define-unimplemented` idiom, borrowed from its sagittarius branch, which stubs the same fd
+  procedures for the same reason. That half is FFI work (`PRD/FFI_DESIGN.md`), and deliberately
+  *not* VFS work: raw fds are what that abstraction exists to avoid, so implementing them through it
+  would defeat the testability this entry asked for.
+
+  Result: slib-directory, slib-uri and chibi-temp-file pass; chibi-tar advanced to an unrelated
+  macro defect. Provenance and the boundary are recorded in `lib/chibi/PROVENANCE.md`; the branch is
+  the largest local edit in the bundled tree and is pinned post-edit.
+- `(chibi process)` — needs process primitives; the same VFS routing applies to whatever part of it
+  is portable, and the same warning applies about checking for an `else` branch first.
 - `(chibi uri)` — pure Scheme.
 - **Out of scope permanently:** `(chibi ast)` and the other C-backed libraries (`.c`/`.dylib` in the reference tree) — they need FFI and bound the achievable pass rate. See §6.
 - **Acceptance:** import + smoke-test each library.
@@ -254,6 +277,20 @@ removed its two vendored packages surgically, regenerating `INVENTORY.md`'s coun
 generator's own formatting logic rather than re-running it. The durable fix is for `--offline` to
 reuse the recorded `license`/`license_evidence` from the existing `MANIFEST.json` instead of
 re-deriving it, so an offline rebuild is faithful for everything already vendored.
+
+**`(chibi filesystem)`'s portable half, 2026-08-14 (134/185 → 137/184).** chibi-filesystem left the
+corpus on being bundled and was failing, so the baseline is 134/184 and this is **+3**:
+slib-directory, slib-uri and chibi-temp-file pass, chibi-tar advanced to an unrelated macro defect.
+The load-error bucket went 8 → 3 and `Exported identifier 'duplicate-file-descriptor' not defined`,
+its largest entry, is gone. See L2 for why the cause was a missing `cond-expand` branch rather than
+a missing primitive.
+
+**The harness learned a third way to be out-of-scope.** It already knew a package whose only missing
+imports are FFI-bound libraries. It now also recognises one that *reached* an FFI stub at runtime:
+the bundled `(chibi filesystem)` raises a marker string from its `define-unimplemented` procedures,
+and `classify` reports those as out-of-scope rather than as our runtime errors. The rule is unit
+tested but currently unexercised by the corpus — no package gets that far today — so it is a
+correctness guard against future misfiling, not a source of the numbers above.
 
 **Recorded debt — `report.md` is written by shell redirect.** `run` and `report` print the rendered
 matrix to stdout and only `results.scm` is written to disk, so the committed

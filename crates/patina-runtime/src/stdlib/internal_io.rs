@@ -51,6 +51,16 @@ pub fn build_internal_io(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("with-output-to-file", Arity::Exact(2)),
         ("file-exists?", Arity::Exact(1)),
         ("delete-file", Arity::Exact(1)),
+        // === Directories ===
+        // Not R7RS — these back `(chibi filesystem)`'s portable half, and are
+        // reachable only by importing that library, not `(scheme file)`.
+        ("directory-files", Arity::Exact(1)),
+        ("create-directory", Arity::Range(1, 2)),
+        ("delete-directory", Arity::Exact(1)),
+        ("current-directory", Arity::Exact(0)),
+        ("change-directory", Arity::Exact(1)),
+        ("file-directory?", Arity::Exact(1)),
+        ("file-regular?", Arity::Exact(1)),
         // === EOF handling ===
         ("eof-object?", Arity::Exact(1)),
         ("eof-object", Arity::Exact(0)),

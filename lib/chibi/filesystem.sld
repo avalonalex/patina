@@ -35,6 +35,127 @@
           file-is-readable? file-is-writable? file-is-executable?
           chmod chown is-a-tty?)
   (cond-expand
+   ;; PATINA LOCAL EDIT: this branch is ours; everything else in the file is
+   ;; upstream. Upstream has branches for chibi, chicken and sagittarius and no
+   ;; `else`, so on any other implementation the library loads defining nothing
+   ;; and every importer fails on the first export. See lib/chibi/PROVENANCE.md.
+   ;;
+   ;; The split below is not a matter of effort. `(chibi filesystem)` is two
+   ;; libraries wearing one name: a portable directory API, and a POSIX layer of
+   ;; file descriptors, stat fields, symlinks, pipes and permissions. The first
+   ;; is implemented here on primitives that route through Patina's VFS
+   ;; `FileSystem` trait, so it works the same against an in-memory filesystem.
+   ;; The second cannot be given a meaningful VFS implementation at all — raw
+   ;; fds are precisely what that abstraction exists to avoid — so it is stubbed
+   ;; with upstream's own `define-unimplemented` idiom, borrowed from the
+   ;; sagittarius branch below, which stubs the same fd procedures for the same
+   ;; reason. Those await the FFI layer (PRD/FFI_DESIGN.md), not more Scheme.
+   (patina
+    (import (scheme base) (scheme file)
+            (only (patina internal io)
+                  directory-files create-directory delete-directory
+                  current-directory change-directory
+                  file-directory? file-regular?))
+    (begin
+      (define-syntax define-unimplemented
+        (syntax-rules ()
+          ((define-unimplemented def ...)
+           (begin
+             (define (def . args)
+               (error "requires FFI, unavailable in Patina:" 'def))
+             ...))))
+
+      ;; The POSIX layer. Grouped by what each would need, so the list reads as
+      ;; a specification for the FFI work rather than an undifferentiated wall.
+      (define-unimplemented                    ; file descriptors
+        duplicate-file-descriptor duplicate-file-descriptor-to
+        close-file-descriptor renumber-file-descriptor
+        open-input-file-descriptor open-output-file-descriptor
+        get-file-descriptor-flags set-file-descriptor-flags!
+        get-file-descriptor-status set-file-descriptor-status!
+        open open-pipe make-fifo is-a-tty?)
+      (define-unimplemented                    ; stat(2)
+        file-status file-link-status
+        file-device file-inode file-mode file-num-links
+        file-owner file-group file-represented-device file-size
+        file-block-size file-num-blocks
+        file-access-time file-change-time
+        file-modification-time file-modification-time/safe
+        file-character? file-block? file-fifo? file-socket? file-link?)
+      (define-unimplemented                    ; links, locks, permissions
+        link-file symbolic-link-file read-link rename-file
+        file-lock file-truncate
+        file-is-readable? file-is-writable? file-is-executable?
+        chmod chown)
+
+      ;; Flags for `open`, which is unimplemented — so these are placeholders,
+      ;; not the platform's O_* values, which differ between macOS and Linux and
+      ;; would be wrong to bake into a portable library. Anything combining them
+      ;; still reaches `open` and fails there, which is the honest report.
+      ;; Implementing `open` means giving these real values first.
+      (define open/read 0)
+      (define open/write 0)
+      (define open/read-write 0)
+      (define open/create 0)
+      (define open/exclusive 0)
+      (define open/truncate 0)
+      (define open/append 0)
+      (define open/non-block 0)
+
+      ;; The portable half. `directory-files` includes "." and ".." as chibi's
+      ;; does, which is why the traversals below filter them by name.
+      (define (create-directory* dir . o)
+        (or (file-directory? dir)
+            (let ((parent (directory-parent dir)))
+              (and (or (equal? "" parent)
+                       (equal? dir parent)
+                       (create-directory* parent))
+                   (create-directory dir)))))
+
+      (define (directory-parent dir)
+        (let lp ((i (- (string-length dir) 1)))
+          (cond ((< i 0) "")
+                ((char=? #\/ (string-ref dir i))
+                 (if (= i 0) "/" (substring dir 0 i)))
+                (else (lp (- i 1))))))
+
+      (define (directory-fold dir kons knil)
+        (let lp ((ls (directory-files dir)) (acc knil))
+          (cond ((null? ls) acc)
+                ((member (car ls) '("." "..")) (lp (cdr ls) acc))
+                (else (lp (cdr ls) (kons (car ls) acc))))))
+
+      (define (path-join dir file)
+        (if (or (equal? "" dir) (char=? #\/ (string-ref dir (- (string-length dir) 1))))
+            (string-append dir file)
+            (string-append dir "/" file)))
+
+      (define (directory-fold-tree file down up here . o)
+        (let ((knil (and (pair? o) (car o)))
+              (down (or down (lambda (f acc) acc)))
+              (up (or up (lambda (f acc) acc)))
+              (here (or here (lambda (f acc) acc))))
+          (let fold ((file file) (acc knil))
+            (if (file-directory? file)
+                (up file
+                    (let lp ((ls (directory-files file)) (acc (down file acc)))
+                      (cond ((null? ls) acc)
+                            ((member (car ls) '("." "..")) (lp (cdr ls) acc))
+                            (else
+                             (lp (cdr ls) (fold (path-join file (car ls)) acc))))))
+                (here file acc)))))
+
+      (define (delete-file-hierarchy dir . o)
+        (directory-fold-tree
+         dir #f (lambda (d acc) (delete-directory d)) (lambda (f acc) (delete-file f)))
+        #t)
+
+      (define (with-directory dir thunk)
+        (let ((pwd (current-directory)))
+          (dynamic-wind
+            (lambda () (change-directory dir))
+            thunk
+            (lambda () (change-directory pwd)))))))
    (chibi
     (export lock/shared lock/exclusive lock/non-blocking lock/unlock)
     (import (chibi) (chibi string))
