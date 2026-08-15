@@ -267,16 +267,39 @@ incidentally cleared `(srfi 13)` from the queue — chibi-binary-record now pass
 advanced. `(chibi net-dns)` reclassified to out-of-scope: with its imports resolving it could
 finally report that it needs `(chibi net)`, which needs FFI.
 
-**Trap — `build_corpus.py --offline` silently shrinks the corpus.** Do not commit its output. Ten
-packages (srfi-2, 25, 29, 31, 42, 64, 106, 170, 227, 235) carry `license_evidence:
-srfi-canonical-document`, meaning their licence was established by fetching srfi.schemers.org. With
-`--offline` that fetch returns empty, the licence resolves to unknown, and the packages drop out of
-the PERMISSIVE bucket — so `--offline --check` reports drift on twelve packages when only two
-changed, and a full offline rebuild would quietly delete ten. The SRFI 130 bundling therefore
-removed its two vendored packages surgically, regenerating `INVENTORY.md`'s counts and rows with the
-generator's own formatting logic rather than re-running it. The durable fix is for `--offline` to
-reuse the recorded `license`/`license_evidence` from the existing `MANIFEST.json` instead of
-re-deriving it, so an offline rebuild is faithful for everything already vendored.
+**`build_corpus.py --offline` no longer shrinks the corpus** — ✅ **fixed 2026-08-14.** It used to
+delete ten packages (srfi-2, 25, 29, 31, 42, 64, 106, 170, 227, 235) without an error: their
+`license_evidence` is `srfi-canonical-document`, so their licence was established by fetching
+srfi.schemers.org, and offline that fetch returned empty, the licence resolved to unknown, and they
+dropped out of the PERMISSIVE bucket. `--offline --check` reported drift on twelve packages when two
+had changed. Both bundling PRs in this track worked around it by removing their vendored packages by
+hand.
+
+Two changes, both of which make the tool *reuse an answer it already has* rather than derive it
+again:
+
+- **A licence is not resolved twice for the same tarball.** `recorded_licences()` reads
+  `license`/`license_evidence` back from the committed `MANIFEST.json`, keyed on `tarball_sha256`.
+  Keying on the checksum is what makes this exact rather than a guess — identical bytes cannot yield
+  a different licence — and a changed tarball still falls through to full resolution. This is for
+  correctness, not speed: it also skips `read_blob`, but that is worth about 0.2s of a 0.7s rebuild
+  over 184 packages, since the packages are small.
+- **The canonical SRFI pages are cached**, as the index and the tarballs already were. That
+  asymmetry was the root of it: those pages were the one thing the tool fetched every run and kept
+  nothing of, which made `--offline` lossy rather than merely slower.
+
+`--offline --check` now reports **184 packages and no package-level drift**, matching the committed
+corpus exactly. What remains is confined to the two reports about what was *left out*: a package
+that is neither vendored nor in the cache still reads as licence-unknown, so `REVIEW-QUEUE.json` and
+`INVENTORY.md`'s excluded counts can differ until a cache warmed by an online run covers it. The
+tool prints that caveat when `--offline` is given. The corpus itself is never affected.
+
+**Offline is now the safer mode for the recurring job**, which is worth stating because the reflex is
+the opposite. When Patina bundles a library, the corpus must drop the package providing it — and an
+*online* rebuild would also silently pick up whatever new upstream versions the index now offers,
+folding an unrelated refresh into a bundling change. Offline rebuilds from the pinned cache and
+changes only what the bundling changed. Use `--offline` for that job; use a full online run only
+when refreshing the corpus is the intent.
 
 **`(chibi filesystem)`'s portable half, 2026-08-14 (134/185 → 137/184).** chibi-filesystem left the
 corpus on being bundled and was failing, so the baseline is 134/184 and this is **+3**:

@@ -13,12 +13,16 @@ Requires only Python 3.9+ and curl. This is corpus construction; running and
 scoring the corpus is a separate concern (see PRD/TRACK_L_SNOW_LIBRARIES_PRD.md,
 work item L3).
 
-Two traps worth knowing, both previously hit and now guarded against:
+Three traps worth knowing, all previously hit and now guarded against:
   * HTML text extraction MUST normalise whitespace after stripping tags, or a
     tag sitting inside a licence grant turns "free of charge" into
     "free of  charge" and the match silently fails.
   * Re-vendoring must not delete the hand-written docs that live in
     compat/vendor/ (README.md, LICENSES.md). See KEEP below.
+  * A licence must not be resolved again for a tarball already vendored. Ten
+    packages are licensed only by their canonical SRFI document, so --offline
+    once found no licence for them, dropped them out of PERMISSIVE, and
+    deleted them from the corpus without an error. See recorded_licences().
 """
 from __future__ import annotations
 
@@ -105,8 +109,26 @@ def curl(url: str, dest: Path | None = None, offline: bool = False) -> str | Non
 
 
 def page_text(url: str, offline: bool) -> str:
-    """Fetch a page as plain text. Normalising whitespace here is load-bearing."""
-    raw = curl(url, offline=offline)
+    """Fetch a page as plain text, through the cache.
+
+    The index and the tarballs are cached; these pages were the one thing the
+    tool fetched every run and kept nothing of. That asymmetry is what made
+    `--offline` lossy rather than merely slower: a package licensed only by its
+    canonical SRFI document had no answer available offline, so it silently
+    became licence-unknown. Cached like everything else, a warm cache answers
+    it.
+
+    Normalising whitespace after stripping tags is load-bearing -- see the
+    module docstring.
+    """
+    cached = CACHE / ("page_" + re.sub(r"[^A-Za-z0-9._-]", "_", url))
+    if cached.exists():
+        raw = cached.read_text(encoding="utf-8", errors="ignore")
+    else:
+        raw = curl(url, offline=offline) or ""
+        if raw:
+            CACHE.mkdir(parents=True, exist_ok=True)
+            cached.write_text(raw, encoding="utf-8")
     if not raw:
         return ""
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", raw)))
@@ -201,6 +223,36 @@ def resolve_licence(pkg: dict, blob: str, offline: bool) -> tuple[str | None, st
 # ──────────────────────────────── pipeline ───────────────────────────────────
 
 
+def recorded_licences() -> dict[str, tuple[str, str, str]]:
+    """slug -> (tarball_sha256, licence, evidence) from the committed manifest.
+
+    A licence already established for a given tarball does not need to be
+    established again. Keying on the checksum is what makes that exact rather
+    than a guess: identical bytes cannot yield a different answer.
+
+    This is not only an optimisation. `resolve_licence` falls back to fetching
+    the package's canonical SRFI document, so ten packages -- srfi-2, 25, 29,
+    31, 42, 64, 106, 170, 227, 235 -- have no licence evidence that survives
+    `--offline`. Without this, an offline rebuild found no licence for them,
+    dropped them out of the PERMISSIVE bucket, and deleted them from the corpus
+    with no error. `--offline --check` reported drift on twelve packages when
+    two had changed. Reading the recorded answer back makes an offline rebuild
+    reproduce the corpus it started from.
+    """
+    path = VENDOR / "MANIFEST.json"
+    if not path.exists():
+        return {}
+    try:
+        packages = json.loads(path.read_text())["packages"]
+    except (OSError, ValueError, KeyError):
+        return {}
+    return {
+        p["slug"]: (p.get("tarball_sha256"), p["license"], p["license_evidence"])
+        for p in packages
+        if p.get("tarball_sha256") and p.get("license")
+    }
+
+
 def load_index(offline: bool) -> list[dict]:
     CACHE.mkdir(parents=True, exist_ok=True)
     idx = CACHE / "repo.scm"
@@ -254,6 +306,17 @@ def version_key(v: str | None):
 
 
 def build(target: Path, offline: bool) -> dict:
+    if offline:
+        # `--offline` reproduces the vendored corpus exactly: every vendored
+        # package's licence is recorded in MANIFEST.json against its tarball
+        # checksum. A package that is *not* vendored has no recorded answer and
+        # falls back to the cache — which now holds the canonical SRFI pages
+        # too, so a cache warmed by any previous online run covers it. Until
+        # then those packages read as licence-unknown, which affects only the
+        # two reports about what was left out, never the corpus itself.
+        print("note: --offline reuses recorded licences and cached pages; a package that is "
+              "neither vendored nor in the cache reads as licence-unknown, so "
+              "REVIEW-QUEUE.json and the excluded counts in INVENTORY.md may be incomplete")
     pkgs = load_index(offline)
     best: dict = {}
     for p in pkgs:                                   # keep the highest version per name
@@ -266,6 +329,9 @@ def build(target: Path, offline: bool) -> dict:
     for p in pkgs:
         for d in p["deps"]:
             indeg[d] += 1
+
+    prior = recorded_licences()
+    reused = 0
 
     work = CACHE / "extracted"
     work.mkdir(parents=True, exist_ok=True)
@@ -290,8 +356,20 @@ def build(target: Path, offline: bool) -> dict:
             except Exception:
                 pass
         p["root"] = dest
-        p["licence"], p["evidence"] = resolve_licence(p, read_blob(dest), offline)
+        # Same tarball as the one already vendored -> same licence. This is for
+        # correctness, not speed: it also skips read_blob, but that is worth
+        # about 0.2s of a 0.7s rebuild (measured over 184 packages), because
+        # the packages are small. The point is that the answer cannot drift.
+        seen = prior.get("-".join(p["name"]))
+        if seen and seen[0] == p["tar_sha256"]:
+            p["licence"], p["evidence"] = seen[1], seen[2]
+            reused += 1
+        else:
+            p["licence"], p["evidence"] = resolve_licence(p, read_blob(dest), offline)
         p["bucket"] = classify(p["licence"])
+
+    if reused:
+        print(f"reused {reused} recorded licence(s) whose tarball is unchanged")
 
     # SLIB is one distribution by one author; infer for the members carrying no notice.
     verified = sum(1 for p in pkgs if p["name"][0] == "slib" and p["licence"] == "SLIB-Jaffer")
