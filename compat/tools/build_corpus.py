@@ -5,9 +5,16 @@ Pipeline: fetch the snow-fort index -> rank packages by dependency in-degree ->
 resolve each licence -> vendor the acceptable ones -> emit MANIFEST.json,
 INVENTORY.md and REVIEW-QUEUE.json.
 
-    python3 compat/tools/build_corpus.py            # full run (uses the cache)
-    python3 compat/tools/build_corpus.py --offline  # cache only, no network
+    python3 compat/tools/build_corpus.py            # rebuild from the pinned cache
+    python3 compat/tools/build_corpus.py --refresh  # ask upstream what is new
     python3 compat/tools/build_corpus.py --check    # rebuild into a temp dir and diff
+
+The default does not touch the network. Use it for the recurring job: Patina
+bundles a library, so the corpus must drop the package that provides it. Use
+--refresh only when refreshing the corpus is the intent -- it takes the highest
+version per package from a freshly fetched index, so it can bump upstream
+versions, and folding that into an unrelated change is how the corpus drifts
+without anyone deciding to.
 
 Requires only Python 3.9+ and curl. This is corpus construction; running and
 scoring the corpus is a separate concern (see PRD/TRACK_L_SNOW_LIBRARIES_PRD.md,
@@ -307,16 +314,16 @@ def version_key(v: str | None):
 
 def build(target: Path, offline: bool) -> dict:
     if offline:
-        # `--offline` reproduces the vendored corpus exactly: every vendored
+        # The cache reproduces the vendored corpus exactly: every vendored
         # package's licence is recorded in MANIFEST.json against its tarball
         # checksum. A package that is *not* vendored has no recorded answer and
         # falls back to the cache — which now holds the canonical SRFI pages
-        # too, so a cache warmed by any previous online run covers it. Until
+        # too, so a cache warmed by any previous --refresh covers it. Until
         # then those packages read as licence-unknown, which affects only the
         # two reports about what was left out, never the corpus itself.
-        print("note: --offline reuses recorded licences and cached pages; a package that is "
-              "neither vendored nor in the cache reads as licence-unknown, so "
-              "REVIEW-QUEUE.json and the excluded counts in INVENTORY.md may be incomplete")
+        print("note: rebuilding from the pinned cache. A package that is neither vendored nor "
+              "cached reads as licence-unknown, so REVIEW-QUEUE.json and the excluded counts "
+              "in INVENTORY.md may be incomplete. Pass --refresh to re-fetch.")
     pkgs = load_index(offline)
     best: dict = {}
     for p in pkgs:                                   # keep the highest version per name
@@ -479,20 +486,32 @@ def write_inventory(target: Path, manifest: list[dict], pkgs: list[dict]) -> Non
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--offline", action="store_true", help="use only the local cache")
+    # The default rebuilds from the pinned cache, and --refresh is the opt-in to
+    # ask upstream what is new. That way round because the refresh is the
+    # consequential operation: it takes the highest version per package from a
+    # freshly fetched index, so a bare run could otherwise fold an unrelated
+    # version bump into a change that meant only to drop a bundled package.
+    # `--offline` is kept as the name for the default it used to request.
+    ap.add_argument("--refresh", action="store_true",
+                    help="re-fetch the index and any new tarballs; may pick up new upstream versions")
+    ap.add_argument("--offline", action="store_true",
+                    help="alias for the default (rebuild from the pinned cache)")
     ap.add_argument("--check", action="store_true", help="rebuild into a temp dir and diff against compat/vendor")
     args = ap.parse_args()
+    if args.refresh and args.offline:
+        sys.exit("error: --refresh and --offline ask for opposite things")
+    offline = not args.refresh
 
     if args.check:
         with tempfile.TemporaryDirectory() as tmp:
-            out = build(Path(tmp) / "vendor", args.offline)
+            out = build(Path(tmp) / "vendor", offline)
             d = filecmp.dircmp(str(VENDOR), str(Path(tmp) / "vendor"),
                                ignore=list(KEEP) + [".DS_Store"])
             drift = d.left_only + d.right_only + d.diff_files
             print(f"{len(out['selected'])} packages; drift: {drift or 'none'}")
             sys.exit(1 if drift else 0)
 
-    out = build(VENDOR, args.offline)
+    out = build(VENDOR, offline)
     print(f"vendored {len(out['selected'])} packages into {VENDOR.relative_to(ROOT)}")
     print("buckets:", dict(Counter(p["bucket"] for p in out["all"])))
 

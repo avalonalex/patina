@@ -95,17 +95,30 @@ compare against if you need to know whether a tree still matches what upstream p
 ## Regenerating
 
 ```sh
-python3 compat/tools/build_corpus.py            # full run; downloads are cached in compat/.cache/
-python3 compat/tools/build_corpus.py --offline  # cache only, no network
+python3 compat/tools/build_corpus.py            # rebuild from the pinned cache (compat/.cache/)
+python3 compat/tools/build_corpus.py --refresh  # ask upstream what is new
 python3 compat/tools/build_corpus.py --check    # rebuild into a temp dir and diff against this one
 ```
 
-The tool fetches `http://snow-fort.org/s/repo.scm`, deduplicates to the highest version per package,
-ranks by in-degree, resolves each licence, and vendors the acceptable ones. It regenerates the three
-generated files above and **leaves `README.md` and `LICENSES.md` alone** — an earlier version deleted
-them, so that exclusion is now explicit in the code.
+With `--refresh` the tool fetches `http://snow-fort.org/s/repo.scm`, deduplicates to the highest
+version per package, ranks by in-degree, resolves each licence, and vendors the acceptable ones.
+Without it, it rebuilds from what is already cached and recorded, which is what you want when the
+corpus must change for a reason that has nothing to do with upstream — most often because Patina now
+bundles a library, so the package providing it has to leave the corpus. A `--refresh` would also
+bump versions, and that belongs in its own change.
+
+Either way it regenerates the three generated files above and **leaves `README.md` and
+`LICENSES.md` alone** — an earlier version deleted them, so that exclusion is now explicit in the
+code.
 
 `--check` exits non-zero on any drift, which makes it usable as a CI guard once the corpus is
-expected to be stable. Note that `--offline` resolves fewer licences than a networked run, because
-SRFI packages whose snowball carries no licence text are resolved against their canonical SRFI
-document; without network those fall back to unknown and are dropped from the corpus.
+expected to be stable.
+
+A licence is never resolved twice for the same tarball: `MANIFEST.json` records it against
+`tarball_sha256`, and identical bytes cannot yield a different answer. That is what lets a cache-only
+rebuild reproduce the corpus exactly. It did not always — SRFI packages whose snowball carries no
+licence text are resolved against their canonical SRFI document, and those pages were once the one
+thing the tool fetched every run without caching, so a cache-only rebuild quietly dropped ten
+packages. The pages are cached now. What can still differ without a network is `REVIEW-QUEUE.json`
+and the excluded counts in `INVENTORY.md`, which describe packages that were *not* vendored and so
+have no recorded answer; the corpus itself is unaffected.

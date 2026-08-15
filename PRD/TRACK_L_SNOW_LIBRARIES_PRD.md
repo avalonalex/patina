@@ -294,12 +294,18 @@ that is neither vendored nor in the cache still reads as licence-unknown, so `RE
 `INVENTORY.md`'s excluded counts can differ until a cache warmed by an online run covers it. The
 tool prints that caveat when `--offline` is given. The corpus itself is never affected.
 
-**Offline is now the safer mode for the recurring job**, which is worth stating because the reflex is
-the opposite. When Patina bundles a library, the corpus must drop the package providing it — and an
-*online* rebuild would also silently pick up whatever new upstream versions the index now offers,
-folding an unrelated refresh into a bundling change. Offline rebuilds from the pinned cache and
-changes only what the bundling changed. Use `--offline` for that job; use a full online run only
-when refreshing the corpus is the intent.
+**The default now rebuilds from the pinned cache; `--refresh` asks upstream what is new.** The flags
+used to name the mechanism — network or no network — when the real question is whether to refresh,
+and the riskier answer was the default. A bare run re-fetched the index and took the highest version
+per package, so it could bump upstream versions and fold an unrelated corpus refresh into a change
+that meant only to drop a bundled package. That is how a corpus drifts without anyone deciding to.
+So: default = rebuild from what is pinned, `--refresh` = go ask, `--offline` kept as an alias for the
+default it used to request, and the two are rejected together.
+
+This also puts the recurring job on the safe path by default. When Patina bundles a library, the
+corpus must drop the package providing it, and that needs no network at all — a cached tarball was
+never re-downloaded even before this, so an unchanged package now costs one index request under
+`--refresh` and nothing at all without it.
 
 **`(chibi filesystem)`'s portable half, 2026-08-14 (134/185 → 137/184).** chibi-filesystem left the
 corpus on being bundled and was failing, so the baseline is 134/184 and this is **+3**:
