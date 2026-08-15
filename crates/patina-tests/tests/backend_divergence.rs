@@ -33,6 +33,7 @@ use common::*;
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
 const CALLCC_MULTI_VALUES: &str = "PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md";
 const HANDLER_REENTRY: &str = "PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md B3";
+const GUARD_UNWIND_ORDER: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
 
 // ─── call/cc in value position (Track Q §1.2) ────────────────────────────────
 
@@ -191,6 +192,44 @@ fn apply_callcc_fails_on_both() {
 #[test]
 fn apply_values_agrees() {
     assert_program_eval_to("(apply values (list 7))", "7");
+}
+
+/// Tree-walker: a `guard` handler runs *inside* the dynamic extent of the
+/// erroring expression, before `dynamic-wind`'s after-thunk.
+///
+/// ```text
+///   VM, chibi, Gauche => (before after handler)
+///   tree-walker       => (before handler after)
+/// ```
+///
+/// R7RS §4.2.7 puts the unwind first and both references agree with the VM.
+/// Not cosmetic: a handler writing to `current-output-port` writes into
+/// whatever the un-unwound extent installed, which is how it was found.
+///
+/// Not `assert_divergence` — that needs the broken backend to *fail*, and this
+/// one returns a plausible wrong answer.
+#[test]
+fn guard_handler_runs_before_the_unwind_on_the_tree_walker() {
+    const PROGRAM: &str = r#"
+        (define log '())
+        (guard (e (#t (set! log (cons 'handler log))))
+          (dynamic-wind (lambda () (set! log (cons 'before log)))
+                        (lambda () (error "x"))
+                        (lambda () (set! log (cons 'after log)))))
+        (reverse log)
+    "#;
+    assert_eq!(
+        eval_program_vm(PROGRAM),
+        "(before after handler)",
+        "the VM matches chibi and Gauche; if this changed, it regressed"
+    );
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "(before handler after)",
+        "\n[tree-walker] NO LONGER DIVERGES — it now unwinds before the handler.\n\
+         Replace both assertions with assert_program_eval_to(PROGRAM, \
+         \"(before after handler)\") and update {GUARD_UNWIND_ORDER}."
+    );
 }
 
 /// Bad syntax handed to the `eval` primitive is the *caller's* error, raised

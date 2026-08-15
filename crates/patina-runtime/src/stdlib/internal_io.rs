@@ -49,8 +49,6 @@ pub fn build_internal_io(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("open-binary-output-file", Arity::Exact(1)),
         ("call-with-input-file", Arity::Exact(2)),
         ("call-with-output-file", Arity::Exact(2)),
-        ("with-input-from-file", Arity::Exact(2)),
-        ("with-output-to-file", Arity::Exact(2)),
         ("file-exists?", Arity::Exact(1)),
         ("delete-file", Arity::Exact(1)),
         // === Directories ===

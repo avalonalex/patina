@@ -5,12 +5,7 @@
 //! - open-binary-input-file, open-binary-output-file
 //! - file-exists?, delete-file
 //! - call-with-input-file, call-with-output-file
-//! - with-input-from-file, with-output-to-file
 
-use super::ports::{
-    get_current_input_port, get_current_output_port, set_current_input_port,
-    set_current_output_port,
-};
 use crate::apply_context::ApplyContext;
 use patina_core::{Heap, TaggedValue};
 use patina_runtime::EvalError;
@@ -269,108 +264,5 @@ pub(super) fn call_with_output_file(
     port.close();
 
     // Return the result
-    result
-}
-
-/// (with-input-from-file filename thunk) - Opens file, sets current-input-port, calls thunk
-/// Dynamically rebinds current-input-port for the duration of the thunk call.
-pub(super) fn with_input_from_file(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    if args.len() != 2 {
-        return Err(EvalError::WrongArity {
-            expected: "with-input-from-file expects 2 arguments".to_string(),
-            actual: args.len(),
-        });
-    }
-
-    let heap = ctx.heap();
-
-    let filename = {
-        let heap_ref = heap.borrow();
-        match get_string_tv(args[0], &heap_ref) {
-            Some(s) => s,
-            None => {
-                return Err(EvalError::TypeError(
-                    "with-input-from-file expects a string filename".to_string(),
-                ));
-            }
-        }
-    };
-
-    let thunk = args[1]; // already TaggedValue
-
-    // Open the file
-    let port = Port::open_input_file(&filename, ctx.fs().as_ref())
-        .map_err(|e| EvalError::IOError(format!("Cannot open '{}': {}", filename, e)))?;
-
-    // Save the old current-input-port
-    let old_port = get_current_input_port();
-
-    // Set the new current-input-port
-    set_current_input_port(port.clone());
-
-    // Call the thunk with no arguments
-    let result = ctx.apply_proc(thunk, vec![]);
-
-    // Restore the old current-input-port (even on error)
-    set_current_input_port(old_port);
-
-    // Close the file port
-    port.close();
-
-    result
-}
-
-/// (with-output-to-file filename thunk) - Opens file, sets current-output-port, calls thunk
-/// Dynamically rebinds current-output-port for the duration of the thunk call.
-pub(super) fn with_output_to_file(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    if args.len() != 2 {
-        return Err(EvalError::WrongArity {
-            expected: "with-output-to-file expects 2 arguments".to_string(),
-            actual: args.len(),
-        });
-    }
-
-    let heap = ctx.heap();
-
-    let filename = {
-        let heap_ref = heap.borrow();
-        match get_string_tv(args[0], &heap_ref) {
-            Some(s) => s,
-            None => {
-                return Err(EvalError::TypeError(
-                    "with-output-to-file expects a string filename".to_string(),
-                ));
-            }
-        }
-    };
-
-    let thunk = args[1]; // already TaggedValue
-
-    // Open the file
-    let port = Port::open_output_file(&filename, ctx.fs().as_ref())
-        .map_err(|e| EvalError::IOError(format!("Cannot open '{}': {}", filename, e)))?;
-
-    // Save the old current-output-port
-    let old_port = get_current_output_port();
-
-    // Set the new current-output-port
-    set_current_output_port(port.clone());
-
-    // Call the thunk with no arguments
-    let result = ctx.apply_proc(thunk, vec![]);
-
-    // Restore the old current-output-port (even on error)
-    set_current_output_port(old_port);
-
-    // Flush and close the file port
-    port.flush().ok(); // Best effort flush
-    port.close();
-
     result
 }

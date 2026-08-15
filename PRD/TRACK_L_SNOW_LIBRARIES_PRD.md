@@ -449,6 +449,100 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
+**Tree-walker: a `guard` handler runs before the unwind** — ❌ **open**. Found 2026-08-15 while
+moving `with-output-to-file` into Scheme, by a test whose two backends disagreed.
+
+```scheme
+(guard (e (#t (log 'handler)))
+  (dynamic-wind (log 'before) (lambda () (error "x")) (log 'after)))
+;; VM, chibi, Gauche => (before after handler)
+;; tree-walker       => (before handler after)
+```
+
+R7RS §4.2.7 evaluates the clauses "in the dynamic environment of the `guard` expression", so the
+unwind comes first; the VM is right and both references agree with it. Not cosmetic: a handler that
+writes to `current-output-port` writes into whatever the not-yet-unwound extent installed, which is
+exactly how this surfaced — a handler's output vanished into a port that was about to be closed.
+
+Pinned in `crates/patina-tests/tests/backend_divergence.rs`. Not via `assert_divergence`, which
+needs the broken backend to *fail*; this one returns a plausible wrong answer, so both sides are
+asserted explicitly with a message saying what to do when it converges.
+
+**VM: a re-entrant primitive plus an escape corrupts the register base** — ❌ **open**, and live in
+**seven shipped procedures**, not merely a future hazard. A first draft of this entry said "nothing
+structural stops the *next* higher-order primitive from doing so"; review enumerated the class and
+ran each one. Every one panics identically — `index out of bounds` at `set_reg_at` — where the
+tree-walker returns the right answer:
+
+| Procedure | escape repro | VM | tree-walker |
+|---|---|---|---|
+| `member` with comparator | `(call/cc (lambda (k) (member 2 '(1 2 3) (lambda (a b) (k 'x)))))` | panic | `x` |
+| `assoc` with comparator | same shape | panic | `x` |
+| `force` | `(call/cc (lambda (k) (force (delay (k 'x)))))` | panic | `x` |
+| `make-parameter` converter | `(call/cc (lambda (k) (make-parameter 1 (lambda (v) (k 'x)))))` | panic | `x` |
+| `call-with-port` | `(call/cc (lambda (k) (call-with-port p (lambda (q) (k 'x)))))` | panic | `x` |
+| `call-with-input-file` | `(call/cc (lambda (k) (call-with-input-file f (lambda (p) (k 'x)))))` | panic | `x` |
+| `call-with-output-file` | `(call/cc (lambda (k) (call-with-output-file f (lambda (p) (k 'x)))))` | panic | `x` |
+
+The last two are the functions *immediately above* the pair moved to Scheme below, in the same file.
+Safe by construction: `call-with-values` (VM-intercepted, never reaches `exec_call_primitive`), and
+`map`/`for-each`/`vector-map`/`string-for-each` (already Scheme). The offset tracks frame depth, so
+it is not a fixed-offset accident: a nested repro reports `len is 8 but the index is 9`.
+
+`exec_call_primitive` hoists the frame's `register_base`, calls the primitive, and writes the result
+through that base under a comment asserting "primitives are frame-neutral on the `Ok` path (a
+re-entrant call runs its nested frames to completion)". A `call/cc` out of the re-entered callback
+breaks exactly that: the nested frames are *popped*, not completed.
+
+**The fix is about a dozen lines and most of its plumbing exists.** `exec_call_primitive` already
+returns `Result<Option<TaggedValue>, VmError>` where `Some(v)` means "a continuation escaped past
+this frame, propagate it" — the shadow-deopt path already uses it — and `run_apply_proc` already
+captures `depth_before`. Nothing joins them. Detect `frames.len() < depth_before` after
+`run_loop_until`, carry that out (the `ApplyContext::apply_proc` signature cannot express it, so it
+wants a field on `VmState`), and have `exec_call_primitive` return `Ok(Some(v))` instead of writing
+through the dead base. That covers all seven at once, plus the `inline_primitive!` slow path, which
+writes through the same hoisted base.
+
+Relocating a procedure to Scheme removes it from the class but does not scale: `eval` and `load`
+re-enter through `ctx.eval_expr` and cannot be written in Scheme at all.
+
+**Not pinned by any test.** `assert_divergence` cannot express these — it matches `Ok`/`Err` while
+these *panic*, aborting the test binary — and nothing in `patina-tests` uses `catch_unwind`. A
+`assert_panics_on(backend, code, tracking)` helper would pin all seven in a few lines and fail the
+day the VM fix lands.
+
+**Tree-walker: a `guard` handler runs before the unwind** — ❌ **open**. Found 2026-08-15 while
+moving `with-output-to-file` into Scheme, by a test whose two backends disagreed.
+
+```scheme
+(guard (e (#t (log 'handler)))
+  (dynamic-wind (log 'before) (lambda () (error "x")) (log 'after)))
+;; VM, chibi, Gauche => (before after handler)
+;; tree-walker       => (before handler after)
+```
+
+R7RS §4.2.7 evaluates the clauses "in the dynamic environment of the `guard` expression", so the
+unwind comes first; the VM is right and both references agree with it. Not cosmetic: a handler that
+writes to `current-output-port` writes into whatever the not-yet-unwound extent installed, which is
+exactly how this surfaced — a handler's output vanished into a port that was about to be closed.
+
+Pinned in `crates/patina-tests/tests/backend_divergence.rs`. Not via `assert_divergence`, which
+needs the broken backend to *fail*; this one returns a plausible wrong answer, so both sides are
+asserted explicitly with a message saying what to do when it converges.
+
+**VM: a re-entrant primitive plus an escape corrupts the register base** — ❌ **open**. The crash
+below, one level down, and still reachable by any other higher-order primitive that re-enters the VM.
+`exec_call_primitive` hoists the frame's `register_base`, calls the primitive, and writes the result
+through that base afterwards, under a comment asserting "primitives are frame-neutral on the `Ok`
+path (a re-entrant call runs its nested frames to completion)". A `call/cc` out of the re-entered
+thunk breaks exactly that assumption: the nested frames do not run to completion, they are *popped*,
+and the write lands outside the register file — `index out of bounds` in release, and the
+`debug_assert_eq!(base, self.frame_base())` guarding the rule fires in debug.
+
+`with-output-to-file` no longer reaches it (see below), but nothing structural stops the next
+higher-order primitive from doing so. The fix is for the re-entrant path to notice that the escape
+popped past its own frame and stop, rather than for each caller to re-read the base.
+
 **Tree-walker: an error inside a wind thunk escapes `guard`** — ❌ **open**. Found 2026-08-15 while
 sweeping the class below, and left open deliberately because the fix is one level down from where it
 surfaces.
@@ -487,15 +581,6 @@ neither an error nor a catch. The tree-walker catches it (fixed below). Pre-exis
 of that fix, which did not touch the VM's parameter path. Not pinned as a divergence, because
 `assert_divergence` needs the broken backend to *fail* and this one silently succeeds; worth fixing
 before anyone trusts converter errors.
-
-**`with-output-to-file` does not restore through `dynamic-wind`** — ❌ **open**. Both backends.
-`with_output_to_file` / `with_input_from_file` (`patina-primitives/src/primitives/io/file.rs`) save
-the current port, call the thunk, and restore afterwards in straight-line Rust. That covers a normal
-return and an error, but not a `call/cc` escape out of the thunk: the unwind skips the restore and
-the process is left writing into a closed file port. `parameterize` gets this right via
-`dynamic-wind`, and now that the ports are parameter objects these two could simply be expressed in
-terms of it — one mechanism instead of two, with the escape case handled by construction. Not folded
-into the parameter-object change because it is a behaviour change to a different file.
 
 **The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ❌ **open**.
 Found 2026-08-14 by auditing the *class* behind the `quote`-argument fix below, which is the practice
@@ -608,6 +693,41 @@ If the vector work does not restore the invariant, the deeper fix is to decide a
 time instead, where `Template::Symbol` and `Template::Var` distinguish the two without any proxy.
 
 ### Fixed
+
+**`with-output-to-file` crashed the VM on an escape** — ✅ **fixed** (2026-08-15). Recorded as
+"does not restore through `dynamic-wind`, both backends"; both halves were wrong, which is why the
+first step was running it.
+
+The tree-walker restored correctly all along — a `call/cc` escape comes back as a Rust `Err`, and the
+restore sat after the call, so it ran. The VM did not miss a restore either: it **panicked**,
+`index out of bounds` in `set_reg_at`. The primitive re-enters the VM to run the thunk, and the
+escape pops the frames whose register base the interrupted `CallPrimitive` was still holding. That
+root cause is now its own entry above, since it outlives this fix.
+
+`with-input-from-file` and `with-output-to-file` are Scheme now
+(`lib/scheme/file/redirect.scm`), which is what the original entry proposed — and it removes the
+re-entrant primitive call rather than repairing it. The Rust primitives are deleted, not merely
+unexported, so there is no second implementation to drift.
+
+**This fixes one instance, not the class.** Seven other procedures still crash the same way, listed
+under Open above; two of them are the functions directly above these in the file they were deleted
+from. The comment left at that deletion site says so, so it cannot be read as the class being
+handled.
+
+The shape is chibi's — one `dynamic-wind`, before-thunk installing the port so a re-entered
+continuation re-establishes it, after-thunk restoring the old one. Two details were found by testing
+rather than reasoning, and both are wrong in the obvious first draft:
+
+- **Restore before closing.** Closing first leaves the closed port current for the length of the
+  unwind, and anything that runs in that window writes into it and disappears.
+- **Close at all.** chibi does not need to; it flushes open ports at exit and Patina does not, so a
+  port left open on a non-local exit loses everything buffered. R7RS §6.13.1 permits leaving it
+  open, not dropping the output. The cost is that re-entering a continuation captured inside the
+  thunk finds the port closed.
+
+A first draft nested `parameterize` inside a closing `dynamic-wind` and lost a `guard` handler's
+output entirely; chasing that is what turned up the handler-ordering divergence recorded above.
+Guarded by `crates/patina-tests/tests/with_file_redirection.rs`, checked against chibi and Gauche.
 
 **Tree-walker: the control primitives' own errors escaped `guard`** — ✅ **mostly fixed**
 (2026-08-15); one case remains open, see the end of this entry.
