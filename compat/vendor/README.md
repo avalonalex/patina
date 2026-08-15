@@ -2,7 +2,7 @@
 
 **This directory is test data. It is not part of Patina.**
 
-187 third-party Scheme packages from [snow-fort.org](http://snow-fort.org), vendored so Patina can be
+184 third-party Scheme packages from [snow-fort.org](http://snow-fort.org), vendored so Patina can be
 measured against real-world R7RS code (Track L — `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`).
 
 ## Purpose, and what this is not
@@ -41,8 +41,8 @@ vendored; there is no popularity cutoff, since at 8 MB the tail costs nothing an
 
 **Libraries Patina bundles itself are excluded**, computed from `lib/` rather than listed here.
 Patina's copy is canonical, so a vendored duplicate has no role: nothing tests it, and anything
-importing it resolves to the bundled version. Nine are excluded on that basis, including
-`(chibi test)` and `(srfi 1)`.
+importing it resolves to the bundled version. Thirteen are excluded on that basis, including
+`(chibi test)`, `(chibi string)`, `(srfi 1)` and `(srfi 130)`'s dependencies.
 
 Copyleft is excluded to keep this MIT-licensed repository's licence story simple, not because of any
 judgement about the code. Packages with no discoverable licence are excluded because absence of a
@@ -95,17 +95,40 @@ compare against if you need to know whether a tree still matches what upstream p
 ## Regenerating
 
 ```sh
-python3 compat/tools/build_corpus.py            # full run; downloads are cached in compat/.cache/
-python3 compat/tools/build_corpus.py --offline  # cache only, no network
+python3 compat/tools/build_corpus.py            # rebuild from the pinned cache (compat/.cache/)
+python3 compat/tools/build_corpus.py --refresh  # ask upstream what is new
 python3 compat/tools/build_corpus.py --check    # rebuild into a temp dir and diff against this one
 ```
 
-The tool fetches `http://snow-fort.org/s/repo.scm`, deduplicates to the highest version per package,
-ranks by in-degree, resolves each licence, and vendors the acceptable ones. It regenerates the three
-generated files above and **leaves `README.md` and `LICENSES.md` alone** — an earlier version deleted
-them, so that exclusion is now explicit in the code.
+With `--refresh` the tool fetches `http://snow-fort.org/s/repo.scm`, deduplicates to the highest
+version per package, ranks by in-degree, resolves each licence, and vendors the acceptable ones.
+Without it, it rebuilds from what is already cached and recorded, which is what you want when the
+corpus must change for a reason that has nothing to do with upstream — most often because Patina now
+bundles a library, so the package providing it has to leave the corpus. A `--refresh` would also
+bump versions, and that belongs in its own change.
 
-`--check` exits non-zero on any drift, which makes it usable as a CI guard once the corpus is
-expected to be stable. Note that `--offline` resolves fewer licences than a networked run, because
-SRFI packages whose snowball carries no licence text are resolved against their canonical SRFI
-document; without network those fall back to unknown and are dropped from the corpus.
+Either way it regenerates the three generated files above and **leaves `README.md` and
+`LICENSES.md` alone** — an earlier version deleted them, so that exclusion is now explicit in the
+code.
+
+`--check` exits non-zero on any drift. It is **not usable as a CI guard yet**, for a reason that has
+nothing to do with the corpus: `MANIFEST.json` records `"generated": <today>`, so a rebuild differs
+from the committed file every day even when every package field is byte-identical. Dropping that
+field — git already records when a file was written, and `tarball_sha256` is what provenance
+actually rests on — or excluding it from the comparison would fix it. Until then read `--check`'s
+output rather than its exit status.
+
+A cache-only rebuild answers licences from `MANIFEST.json` and `REVIEW-QUEUE.json`, keyed on
+`tarball_sha256`, which is what lets it reproduce the corpus exactly. `--refresh` re-derives every
+licence instead: a checksum match proves the *package* is unchanged, but two of the three sources a
+licence can come from — the index's own `license` field and the canonical SRFI document — are not
+determined by the tarball, so only a refresh can pick up a correction to those. It did not always — SRFI packages whose snowball carries no
+licence text are resolved against their canonical SRFI document, and those pages were once the one
+thing the tool fetched every run without caching, so a cache-only rebuild quietly dropped ten
+packages. The pages are cached now.
+
+`REVIEW-QUEUE.json` records `tarball_sha256` and `license_evidence` beside the `license` it already
+carried, so a licence established for a package we decline to vendor is reusable too — the answer
+cost the same to establish either way. Packages Patina bundles are excluded from these reports
+entirely: they leave the corpus for a reason that has nothing to do with their licence, and pricing
+one only made the reports depend on whether the run could reach the network.

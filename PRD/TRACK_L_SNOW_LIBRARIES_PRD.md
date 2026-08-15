@@ -267,16 +267,63 @@ incidentally cleared `(srfi 13)` from the queue — chibi-binary-record now pass
 advanced. `(chibi net-dns)` reclassified to out-of-scope: with its imports resolving it could
 finally report that it needs `(chibi net)`, which needs FFI.
 
-**Trap — `build_corpus.py --offline` silently shrinks the corpus.** Do not commit its output. Ten
-packages (srfi-2, 25, 29, 31, 42, 64, 106, 170, 227, 235) carry `license_evidence:
-srfi-canonical-document`, meaning their licence was established by fetching srfi.schemers.org. With
-`--offline` that fetch returns empty, the licence resolves to unknown, and the packages drop out of
-the PERMISSIVE bucket — so `--offline --check` reports drift on twelve packages when only two
-changed, and a full offline rebuild would quietly delete ten. The SRFI 130 bundling therefore
-removed its two vendored packages surgically, regenerating `INVENTORY.md`'s counts and rows with the
-generator's own formatting logic rather than re-running it. The durable fix is for `--offline` to
-reuse the recorded `license`/`license_evidence` from the existing `MANIFEST.json` instead of
-re-deriving it, so an offline rebuild is faithful for everything already vendored.
+**`build_corpus.py --offline` no longer shrinks the corpus** — ✅ **fixed 2026-08-14.** It used to
+delete ten packages (srfi-2, 25, 29, 31, 42, 64, 106, 170, 227, 235) without an error: their
+`license_evidence` is `srfi-canonical-document`, so their licence was established by fetching
+srfi.schemers.org, and offline that fetch returned empty, the licence resolved to unknown, and they
+dropped out of the PERMISSIVE bucket. `--offline --check` reported drift on twelve packages when two
+had changed. Both bundling PRs in this track worked around it by removing their vendored packages by
+hand.
+
+Two changes, both of which make the tool *reuse an answer it already has* rather than derive it
+again:
+
+- **A licence is not resolved twice for the same tarball.** `recorded_licences()` reads
+  `license`/`license_evidence` back from the committed `MANIFEST.json`, keyed on `tarball_sha256`.
+  This is for correctness, not speed: it also skips `read_blob`, but that is worth about 0.2s of a
+  0.7s rebuild over 184 packages, since the packages are small. The reuse is **scoped to the
+  cache-only path**, and that scoping is load-bearing: a checksum match proves the *package* is
+  unchanged, but two of `resolve_licence`'s three sources — the index's `license` field and the
+  canonical SRFI document — are not determined by the tarball at all. Reusing them is right when the
+  alternative is no answer and wrong when the user has asked to go and look, so `--refresh` re-derives
+  every licence and re-fetches both the index and those pages. `--refresh` did not previously re-fetch
+  the index at all — it was fetched once, ever — which the flag flip turned from a latent oddity into
+  a flag that lied.
+- **The canonical SRFI pages are cached**, as the index and the tarballs already were. That
+  asymmetry was the root of it: those pages were the one thing the tool fetched every run and kept
+  nothing of, which made `--offline` lossy rather than merely slower.
+
+A cache-only `--check` now reports **184 packages and no package-level drift**, matching the
+committed corpus exactly.
+
+**A licence is recorded even for a package we decline to vendor.** It is the same answer and it cost
+the same to establish, so `REVIEW-QUEUE.json` now carries `tarball_sha256` and `license_evidence`
+beside the `license` it already had, and `recorded_licences()` reads both files. This is plumbing
+until the next `--refresh` populates those fields; today one package, `srfi 5`, is the only one that
+still re-derives — its licence is the SRFI document's, so a cache-only run reads it as unknown and
+`INVENTORY.md`'s excluded counts differ by that one row.
+
+**A bundled package is excluded on grounds that have nothing to do with its licence**, so it no
+longer appears in the licence-based reports at all. That was the other half of the discrepancy:
+`srfi 27` is bundled and therefore in neither generated file, so it had no recorded licence to
+reuse and read as unknown from the cache but permissive after a refresh — pure noise, now gone. It
+is reported where it belongs instead, in the "excluded N packages Patina bundles" line, which counts
+13 rather than 12 because it no longer depends on having priced a licence that does not matter.
+
+The corpus itself is never affected by any of this.
+
+**The default now rebuilds from the pinned cache; `--refresh` asks upstream what is new.** The flags
+used to name the mechanism — network or no network — when the real question is whether to refresh,
+and the riskier answer was the default. A bare run re-fetched the index and took the highest version
+per package, so it could bump upstream versions and fold an unrelated corpus refresh into a change
+that meant only to drop a bundled package. That is how a corpus drifts without anyone deciding to.
+So: default = rebuild from what is pinned, `--refresh` = go ask, `--offline` kept as an alias for the
+default it used to request, and the two are rejected together.
+
+This also puts the recurring job on the safe path by default. When Patina bundles a library, the
+corpus must drop the package providing it, and that needs no network at all — a cached tarball was
+never re-downloaded even before this, so an unchanged package now costs one index request under
+`--refresh` and nothing at all without it.
 
 **`(chibi filesystem)`'s portable half, 2026-08-14 (134/185 → 137/184).** chibi-filesystem left the
 corpus on being bundled and was failing, so the baseline is 134/184 and this is **+3**:

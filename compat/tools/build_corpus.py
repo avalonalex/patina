@@ -5,20 +5,31 @@ Pipeline: fetch the snow-fort index -> rank packages by dependency in-degree ->
 resolve each licence -> vendor the acceptable ones -> emit MANIFEST.json,
 INVENTORY.md and REVIEW-QUEUE.json.
 
-    python3 compat/tools/build_corpus.py            # full run (uses the cache)
-    python3 compat/tools/build_corpus.py --offline  # cache only, no network
+    python3 compat/tools/build_corpus.py            # rebuild from the pinned cache
+    python3 compat/tools/build_corpus.py --refresh  # ask upstream what is new
     python3 compat/tools/build_corpus.py --check    # rebuild into a temp dir and diff
+
+The default does not touch the network. Use it for the recurring job: Patina
+bundles a library, so the corpus must drop the package that provides it. Use
+--refresh only when refreshing the corpus is the intent -- it takes the highest
+version per package from a freshly fetched index, so it can bump upstream
+versions, and folding that into an unrelated change is how the corpus drifts
+without anyone deciding to.
 
 Requires only Python 3.9+ and curl. This is corpus construction; running and
 scoring the corpus is a separate concern (see PRD/TRACK_L_SNOW_LIBRARIES_PRD.md,
 work item L3).
 
-Two traps worth knowing, both previously hit and now guarded against:
+Three traps worth knowing, all previously hit and now guarded against:
   * HTML text extraction MUST normalise whitespace after stripping tags, or a
     tag sitting inside a licence grant turns "free of charge" into
     "free of  charge" and the match silently fails.
   * Re-vendoring must not delete the hand-written docs that live in
     compat/vendor/ (README.md, LICENSES.md). See KEEP below.
+  * Anything fetched must be cached, and any licence already established must
+    be readable back. Ten packages are licensed only by their canonical SRFI
+    document, which was once fetched every run and never kept, so a run without
+    network silently deleted them from the corpus. See recorded_licences().
 """
 from __future__ import annotations
 
@@ -92,6 +103,30 @@ def collect_depends(node, out):
 # ──────────────────────────────── networking ─────────────────────────────────
 
 
+def slug(name) -> str:
+    """The directory/key name for a library name.
+
+    Accepts the tuple form (`["chibi", "string"]`) or the space-joined form
+    recorded in the generated files (`"chibi string"`). One conversion, because
+    the two must agree: a component containing a space would otherwise be split
+    by one spelling and not the other.
+    """
+    parts = name.split() if isinstance(name, str) else name
+    return "-".join(parts)
+
+
+def cache_path(url: str) -> Path:
+    """Where a fetched URL lives in the cache. One scheme for everything.
+
+    The whitelist keeps this safe for absolute URLs (colons, query strings) as
+    well as the index's relative paths, and it produces exactly the names the
+    tarballs already use — `/s/a/b.tgz` has no character it rewrites but the
+    slashes — so adopting it does not orphan an existing cache.
+    """
+    CACHE.mkdir(parents=True, exist_ok=True)
+    return CACHE / re.sub(r"[^A-Za-z0-9._-]", "_", url.strip("/"))
+
+
 def curl(url: str, dest: Path | None = None, offline: bool = False) -> str | None:
     if offline:
         return None
@@ -105,8 +140,24 @@ def curl(url: str, dest: Path | None = None, offline: bool = False) -> str | Non
 
 
 def page_text(url: str, offline: bool) -> str:
-    """Fetch a page as plain text. Normalising whitespace here is load-bearing."""
-    raw = curl(url, offline=offline)
+    """Fetch a page as plain text, through the cache.
+
+    Cached like the index and the tarballs. These pages used to be the one
+    thing fetched every run and kept nothing of, which is what made a
+    cache-only rebuild lossy rather than merely slower.
+
+    Normalising whitespace after stripping tags is load-bearing -- see the
+    module docstring.
+    """
+    cached = cache_path(url)
+    if offline:
+        raw = cached.read_text(encoding="utf-8", errors="ignore") if cached.exists() else ""
+    else:
+        # A refresh re-reads the page: a licence grant can be corrected upstream
+        # without the package changing, and asking is the whole point of asking.
+        raw = curl(url) or ""
+        if raw:
+            cached.write_text(raw, encoding="utf-8")
     if not raw:
         return ""
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", raw)))
@@ -201,13 +252,51 @@ def resolve_licence(pkg: dict, blob: str, offline: bool) -> tuple[str | None, st
 # ──────────────────────────────── pipeline ───────────────────────────────────
 
 
+def recorded_licences() -> dict[str, tuple[str, str, str]]:
+    """slug -> (tarball_sha256, licence, evidence) from the generated files.
+
+    What a cache-only rebuild answers from instead of the network, and the
+    reason it can reproduce the corpus at all: some packages are licensed only
+    by their canonical SRFI document, so without a recorded answer they read as
+    licence-unknown and vanish from the corpus. See the module docstring.
+
+    Consulted **only when not refreshing**. Two of `resolve_licence`'s three
+    sources — the index's own `license` field, and that SRFI document — are not
+    determined by the tarball, so a checksum match does not actually prove they
+    are unchanged; it only proves the *package* is. Reusing them is right when
+    the alternative is no answer, and wrong when the user has asked to go and
+    look. `--refresh` re-derives every licence from scratch.
+    """
+    def harvest(path: Path, records, into: dict) -> None:
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return
+        for p in records(data):
+            if p.get("tarball_sha256") and p.get("license") and p.get("license_evidence"):
+                into.setdefault(slug(p["library"]),
+                                (p["tarball_sha256"], p["license"], p["license_evidence"]))
+
+    out: dict[str, tuple[str, str, str]] = {}
+    harvest(VENDOR / "MANIFEST.json", lambda d: d.get("packages", []), out)
+    # Excluded packages carry their licence too, so a rebuild does not have to
+    # establish it a second time to decide to exclude them again.
+    harvest(VENDOR / "REVIEW-QUEUE.json", lambda d: d, out)
+    return out
+
+
 def load_index(offline: bool) -> list[dict]:
     CACHE.mkdir(parents=True, exist_ok=True)
-    idx = CACHE / "repo.scm"
-    if not idx.exists():
-        if offline:
-            sys.exit("error: no cached index and --offline given")
+    idx = CACHE / "repo.scm"          # its own name, predating cache_path()
+    if not offline:
+        # Always re-fetch under --refresh. The index is how a new version
+        # becomes visible at all, so reusing a cached copy would make the one
+        # flag that exists to ask upstream what is new answer from memory.
         curl(HOST + INDEX, idx)
+    if not idx.exists():
+        sys.exit("error: no cached index; run with --refresh to fetch one")
     repo = parse_sexp(idx.read_text())[0]
     out = []
     for p in (x for x in repo[1:] if isinstance(x, list) and x and x[0] == "package"):
@@ -254,6 +343,10 @@ def version_key(v: str | None):
 
 
 def build(target: Path, offline: bool) -> dict:
+    if offline:
+        print("note: rebuilding from the pinned cache. A package that is neither vendored nor "
+              "cached reads as licence-unknown, so REVIEW-QUEUE.json and the excluded counts "
+              "in INVENTORY.md may be incomplete. Pass --refresh to re-fetch.")
     pkgs = load_index(offline)
     best: dict = {}
     for p in pkgs:                                   # keep the highest version per name
@@ -267,6 +360,23 @@ def build(target: Path, offline: bool) -> dict:
         for d in p["deps"]:
             indeg[d] += 1
 
+    prior = recorded_licences() if offline else {}
+    reused = 0
+
+    # Partition the bundled packages out before anything prices a licence. They
+    # leave the corpus whatever their licence says, so resolving one is wasted
+    # work, and — since a bundled package is in neither generated file and so
+    # has no recorded answer — it also made the reports disagree with
+    # themselves: licence-unknown from the cache, permissive after a refresh,
+    # for a package excluded on neither ground. Splitting the list here means
+    # no report downstream has to remember to filter them out.
+    bundled = bundled_libraries()
+    dropped = sorted({" ".join(p["name"]) for p in pkgs
+                      if bundled & {" ".join(l) for l in p["libs"]}})
+    pkgs = [p for p in pkgs if not (bundled & {" ".join(l) for l in p["libs"]})]
+    if dropped:
+        print(f"excluded {len(dropped)} package(s) Patina bundles: {', '.join(dropped)}")
+
     work = CACHE / "extracted"
     work.mkdir(parents=True, exist_ok=True)
     for p in pkgs:
@@ -274,7 +384,7 @@ def build(target: Path, offline: bool) -> dict:
         if not p["url"]:
             p["licence"], p["evidence"], p["bucket"] = None, "none", "UNKNOWN"
             continue
-        tar = CACHE / p["url"].strip("/").replace("/", "_")
+        tar = cache_path(p["url"])
         if not tar.exists() and not offline:
             curl(HOST + p["url"], tar)
         if not tar.exists():
@@ -290,8 +400,20 @@ def build(target: Path, offline: bool) -> dict:
             except Exception:
                 pass
         p["root"] = dest
-        p["licence"], p["evidence"] = resolve_licence(p, read_blob(dest), offline)
+        # Same tarball as the one already vendored -> same licence. This is for
+        # correctness, not speed: it also skips read_blob, but that is worth
+        # about 0.2s of a 0.7s rebuild (measured over 184 packages), because
+        # the packages are small. The point is that the answer cannot drift.
+        seen = prior.get(slug(p["name"]))
+        if seen and seen[0] == p["tar_sha256"]:
+            p["licence"], p["evidence"] = seen[1], seen[2]
+            reused += 1
+        else:
+            p["licence"], p["evidence"] = resolve_licence(p, read_blob(dest), offline)
         p["bucket"] = classify(p["licence"])
+
+    if reused:
+        print(f"reused {reused} recorded licence(s) whose tarball is unchanged")
 
     # SLIB is one distribution by one author; infer for the members carrying no notice.
     verified = sum(1 for p in pkgs if p["name"][0] == "slib" and p["licence"] == "SLIB-Jaffer")
@@ -300,20 +422,8 @@ def build(target: Path, offline: bool) -> dict:
             if p["name"][0] == "slib" and p["bucket"] == "UNKNOWN":
                 p["licence"], p["evidence"], p["bucket"] = "SLIB-Jaffer", "slib-family-inference", "NONSTANDARD"
 
-    # Packages whose library Patina bundles are excluded: the bundled copy is
-    # canonical, so a vendored duplicate is dead weight that only raises the
-    # question of which one a test resolved against.
-    bundled = bundled_libraries()
-    sel = sorted(
-        (p for p in pkgs
-         if p["bucket"] in ("PERMISSIVE", "NONSTANDARD")
-         and not (bundled & {" ".join(l) for l in p["libs"]})),
-        key=lambda p: (-p["pop"], " ".join(p["name"])))
-    dropped = sorted({" ".join(p["name"]) for p in pkgs
-                      if p["bucket"] in ("PERMISSIVE", "NONSTANDARD")
-                      and (bundled & {" ".join(l) for l in p["libs"]})})
-    if dropped:
-        print(f"excluded {len(dropped)} package(s) Patina bundles: {', '.join(dropped)}")
+    sel = sorted((p for p in pkgs if p["bucket"] in ("PERMISSIVE", "NONSTANDARD")),
+                 key=lambda p: (-p["pop"], " ".join(p["name"])))
 
     target.mkdir(parents=True, exist_ok=True)
     for entry in target.iterdir():                    # never delete the hand-written docs
@@ -323,15 +433,15 @@ def build(target: Path, offline: bool) -> dict:
 
     manifest = []
     for p in sel:
-        slug = "-".join(p["name"])
+        pkg_slug = slug(p["name"])
         src = p["root"]
         inner = [d for d in src.iterdir() if d.is_dir()]
         if len(inner) == 1 and not any(f.suffix in (".sld", ".scm") for f in src.iterdir() if f.is_file()):
             src = inner[0]
-        shutil.copytree(src, target / slug)
-        files = sorted(str(f.relative_to(target / slug)) for f in (target / slug).rglob("*") if f.is_file())
+        shutil.copytree(src, target / pkg_slug)
+        files = sorted(str(f.relative_to(target / pkg_slug)) for f in (target / pkg_slug).rglob("*") if f.is_file())
         manifest.append({
-            "library": " ".join(p["name"]), "slug": slug, "version": p["version"],
+            "library": " ".join(p["name"]), "slug": pkg_slug, "version": p["version"],
             "license": p["licence"], "license_class": p["bucket"], "license_evidence": p["evidence"],
             "upstream_url": HOST + p["url"], "tarball_sha256": p.get("tar_sha256"),
             "popularity_indegree": p["pop"], "provides": [" ".join(l) for l in p["libs"]],
@@ -353,8 +463,14 @@ def build(target: Path, offline: bool) -> dict:
         "packages": manifest,
     }, indent=2) + "\n")
 
+    # A licence is worth recording even for a package we decline to vendor: it
+    # is the same answer, it cost the same to establish, and recording it with
+    # the checksum it belongs to is what lets a later rebuild reuse it instead
+    # of going back to the network.
     excluded = [{"library": " ".join(p["name"]), "version": p["version"], "pop": p["pop"],
-                 "license": p["licence"], "bucket": p["bucket"], "size_kb": p["size"] // 1024,
+                 "license": p["licence"], "license_evidence": p["evidence"],
+                 "tarball_sha256": p.get("tar_sha256"),
+                 "bucket": p["bucket"], "size_kb": p["size"] // 1024,
                  "url": HOST + (p["url"] or "")}
                 for p in pkgs if p["bucket"] not in ("PERMISSIVE", "NONSTANDARD")]
     excluded.sort(key=lambda x: -x["pop"])
@@ -401,20 +517,31 @@ def write_inventory(target: Path, manifest: list[dict], pkgs: list[dict]) -> Non
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--offline", action="store_true", help="use only the local cache")
+    # The default rebuilds from the pinned cache, and --refresh is the opt-in to
+    # ask upstream what is new. That way round because the refresh is the
+    # consequential operation: it takes the highest version per package from a
+    # freshly fetched index, so a bare run could otherwise fold an unrelated
+    # version bump into a change that meant only to drop a bundled package.
+    # `--offline` is kept as the name for the default it used to request.
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--refresh", action="store_true",
+                      help="re-fetch the index and re-derive every licence; may pick up new versions")
+    mode.add_argument("--offline", action="store_true",
+                      help="alias for the default (rebuild from the pinned cache)")
     ap.add_argument("--check", action="store_true", help="rebuild into a temp dir and diff against compat/vendor")
     args = ap.parse_args()
+    offline = not args.refresh
 
     if args.check:
         with tempfile.TemporaryDirectory() as tmp:
-            out = build(Path(tmp) / "vendor", args.offline)
+            out = build(Path(tmp) / "vendor", offline)
             d = filecmp.dircmp(str(VENDOR), str(Path(tmp) / "vendor"),
                                ignore=list(KEEP) + [".DS_Store"])
             drift = d.left_only + d.right_only + d.diff_files
             print(f"{len(out['selected'])} packages; drift: {drift or 'none'}")
             sys.exit(1 if drift else 0)
 
-    out = build(VENDOR, args.offline)
+    out = build(VENDOR, offline)
     print(f"vendored {len(out['selected'])} packages into {VENDOR.relative_to(ROOT)}")
     print("buckets:", dict(Counter(p["bucket"] for p in out["all"])))
 
