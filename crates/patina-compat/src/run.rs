@@ -342,6 +342,16 @@ fn classify(out: &Captured, mode: &str) -> Status {
         return Status::UnboundIdentifier(unbound);
     }
 
+    // A bundled library can be honest about its own limits. `(chibi filesystem)`
+    // implements its portable half and stubs the POSIX half with this marker
+    // (lib/chibi/filesystem.sld), so a package that reaches one of those stubs
+    // is FFI-bound in exactly the sense FFI_BOUND means — it just proved it by
+    // running instead of by failing to import. Without this it would be filed
+    // as a runtime-error, i.e. as our defect.
+    if let Some(stubs) = extract_ffi_stubs(parts) {
+        return Status::OutOfScope(stubs);
+    }
+
     if mode == "test" && test_suite_failed(&out.stdout) {
         return Status::WrongResult;
     }
@@ -353,6 +363,26 @@ fn classify(out: &Captured, mode: &str) -> Status {
     }
 
     Status::Pass
+}
+
+/// Names of the FFI-stub procedures a run actually reached, if any.
+///
+/// The marker is raised by `define-unimplemented` in a bundled library, so it
+/// is our own string and not pattern-matching on a third party's prose.
+fn extract_ffi_stubs(parts: [&str; 2]) -> Option<Vec<String>> {
+    const MARKER: &str = "requires FFI, unavailable in Patina:";
+    let mut found: Vec<String> = parts
+        .iter()
+        .flat_map(|s| s.lines())
+        .filter_map(|line| {
+            let (_, rest) = line.split_once(MARKER)?;
+            Some(rest.trim().trim_matches(['"', '\'']).to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    found.sort();
+    found.dedup();
+    (!found.is_empty()).then_some(found)
 }
 
 /// Pull `(lib name)` out of every "Library (lib name) not found" message.
@@ -446,6 +476,37 @@ mod tests {
         assert_eq!(
             classify(&out, "probe"),
             Status::OutOfScope(vec!["chibi ast".to_string()])
+        );
+    }
+
+    /// Reaching a bundled library's FFI stub is out-of-scope, not a defect —
+    /// the package got far enough to run, which a missing-import check cannot
+    /// see.
+    #[test]
+    fn classifies_reached_ffi_stub_as_out_of_scope() {
+        let out = captured(
+            "",
+            "Error: requires FFI, unavailable in Patina: duplicate-file-descriptor",
+            false,
+        );
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::OutOfScope(vec!["duplicate-file-descriptor".to_string()])
+        );
+    }
+
+    /// The stub check must not outrank a real failure that happened first.
+    #[test]
+    fn unbound_identifier_beats_a_later_ffi_stub() {
+        let out = captured(
+            "",
+            "Error: Undefined variable: frobnicate\n\
+             Error: requires FFI, unavailable in Patina: open",
+            false,
+        );
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::UnboundIdentifier(vec!["frobnicate".to_string()])
         );
     }
 

@@ -1,13 +1,13 @@
 # Patina third-party compatibility (vm backend)
 
-**134 of 185 packages pass** — 134 of 183 achievable (excluding 2 out-of-scope pending FFI).
+**137 of 184 packages pass** — 137 of 182 achievable (excluding 2 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 134 |
+| pass | 137 |
 | missing-library | 24 |
-| parse-error | 14 |
-| load-error | 8 |
+| parse-error | 15 |
+| load-error | 3 |
 | unbound-identifier | 1 |
 | wrong-result | 1 |
 | runtime-error | 1 |
@@ -44,9 +44,9 @@
 |---|---|
 | `Each syntax-rules rule must have exactly 2 elements (pattern template)` | 5 |
 | `syntax-rules literals must be symbols` | 3 |
+| `No matching pattern for macro case` | 2 |
 | `#<unknown>` | 1 |
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
-| `No matching pattern for macro case` | 1 |
 | `No matching pattern for macro ssax:make-parser/positional-args` | 1 |
 | `ch` | 1 |
 | `set! expects 2 arguments, got 1` | 1 |
@@ -55,7 +55,6 @@
 
 | Error | Packages |
 |---|---|
-| `Exported identifier 'duplicate-file-descriptor' not defined` | 5 |
 | `Exported identifier 'begin' not defined` | 2 |
 | `Exported identifier 'mecab?' not defined` | 1 |
 
@@ -86,7 +85,6 @@
 | chibi-crypto-rsa | test | parse-error |
 | chibi-crypto-sha2 | test | parse-error |
 | chibi-edit-distance | test | pass |
-| chibi-filesystem | test | load-error |
 | chibi-html-parser | probe | pass |
 | chibi-irregex | probe | missing-library |
 | chibi-iset | test | pass |
@@ -109,8 +107,8 @@
 | chibi-snow-commands | probe | parse-error |
 | chibi-ssl | test | missing-library |
 | chibi-sxml | probe | pass |
-| chibi-tar | test | load-error |
-| chibi-temp-file | probe | load-error |
+| chibi-tar | test | parse-error |
+| chibi-temp-file | probe | pass |
 | chibi-term-edit-line | probe | pass |
 | chibi-uri | test | pass |
 | chibi-voting | test | missing-library |
@@ -190,7 +188,7 @@
 | slib-common-list-functions | probe | pass |
 | slib-daylight | probe | pass |
 | slib-determinant | probe | pass |
-| slib-directory | probe | load-error |
+| slib-directory | probe | pass |
 | slib-dynamic | probe | pass |
 | slib-factor | probe | pass |
 | slib-filename | probe | pass |
@@ -224,7 +222,7 @@
 | slib-topological-sort | probe | pass |
 | slib-tree | probe | pass |
 | slib-tzfile | probe | pass |
-| slib-uri | probe | load-error |
+| slib-uri | probe | pass |
 | slib-xml-parse | probe | pass |
 | srfi-106 | probe | missing-library |
 | srfi-11 | probe | pass |

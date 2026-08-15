@@ -7,7 +7,7 @@
 //! - `NativeFs`: Wraps `std::fs` for production use
 //! - `MemoryFs`: In-memory filesystem for testing
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -47,6 +47,38 @@ pub trait FileSystem: Send + Sync + 'static {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         Ok(path.to_path_buf())
     }
+
+    // --- Directories -------------------------------------------------------
+    //
+    // The portable half of `(chibi filesystem)` sits on these. Everything the
+    // POSIX half needs — file descriptors, stat fields, symlinks, pipes — is
+    // deliberately absent: it cannot be given a meaningful in-memory or WASM
+    // implementation, which is the same reason that half of the library is
+    // stubbed rather than written. Keep that boundary.
+
+    /// Whether the path exists and is a directory.
+    fn is_dir(&self, path: &Path) -> bool;
+
+    /// Entry names directly under `path`, excluding `.` and `..`.
+    ///
+    /// Names, not paths — callers that want a path join them onto `path`
+    /// themselves. Order is unspecified, as it is for `std::fs::read_dir`.
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<String>>;
+
+    /// Create a directory. Fails if the parent is missing or it already exists.
+    fn create_dir(&self, path: &Path) -> io::Result<()>;
+
+    /// Create a directory and any missing parents. Succeeds if it exists.
+    fn create_dir_all(&self, path: &Path) -> io::Result<()>;
+
+    /// Remove an empty directory.
+    fn remove_dir(&self, path: &Path) -> io::Result<()>;
+
+    /// The current working directory.
+    fn current_dir(&self) -> io::Result<PathBuf>;
+
+    /// Change the current working directory.
+    fn set_current_dir(&self, path: &Path) -> io::Result<()>;
 }
 
 /// Trait for readable port streams (file or in-memory).
@@ -106,6 +138,38 @@ impl FileSystem for NativeFs {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         std::fs::canonicalize(path)
     }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(path)? {
+            names.push(entry?.file_name().to_string_lossy().into_owned());
+        }
+        Ok(names)
+    }
+
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        std::fs::create_dir(path)
+    }
+
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(path)
+    }
+
+    fn remove_dir(&self, path: &Path) -> io::Result<()> {
+        std::fs::remove_dir(path)
+    }
+
+    fn current_dir(&self) -> io::Result<PathBuf> {
+        std::env::current_dir()
+    }
+
+    fn set_current_dir(&self, path: &Path) -> io::Result<()> {
+        std::env::set_current_dir(path)
+    }
 }
 
 // =============================================================================
@@ -119,6 +183,13 @@ impl FileSystem for NativeFs {
 #[derive(Clone, Debug)]
 pub struct MemoryFs {
     files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
+    /// Explicitly created directories. Directories are *not* implied by the
+    /// files under them: `create-directory` has to be able to fail on a
+    /// missing parent, and `read_dir` on a path nobody made, the way the
+    /// native one does. Deriving them from file keys would make both silently
+    /// succeed and hide exactly the errors a test wants to provoke.
+    dirs: Arc<Mutex<BTreeSet<PathBuf>>>,
+    cwd: Arc<Mutex<PathBuf>>,
 }
 
 impl Default for MemoryFs {
@@ -131,6 +202,8 @@ impl MemoryFs {
     pub fn new() -> Self {
         MemoryFs {
             files: Arc::new(Mutex::new(HashMap::new())),
+            dirs: Arc::new(Mutex::new(BTreeSet::from([PathBuf::from("/")]))),
+            cwd: Arc::new(Mutex::new(PathBuf::from("/"))),
         }
     }
 
@@ -233,6 +306,94 @@ impl FileSystem for MemoryFs {
             })
             .map(|_| ())
     }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        self.dirs.lock().unwrap().contains(path)
+    }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
+        if !self.is_dir(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("not a directory: {}", path.display()),
+            ));
+        }
+        let child_name = |p: &Path| -> Option<String> {
+            (p.parent() == Some(path))
+                .then(|| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .flatten()
+        };
+        let mut names: Vec<String> = self
+            .files
+            .lock()
+            .unwrap()
+            .keys()
+            .filter_map(|p| child_name(p))
+            .collect();
+        names.extend(
+            self.dirs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|p| child_name(p)),
+        );
+        Ok(names)
+    }
+
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        if self.is_dir(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("already exists: {}", path.display()),
+            ));
+        }
+        match path.parent() {
+            Some(parent) if !self.is_dir(parent) => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no such directory: {}", parent.display()),
+            )),
+            _ => {
+                self.dirs.lock().unwrap().insert(path.to_path_buf());
+                Ok(())
+            }
+        }
+    }
+
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        let mut dirs = self.dirs.lock().unwrap();
+        let mut ancestors: Vec<&Path> = path.ancestors().collect();
+        ancestors.reverse();
+        for dir in ancestors {
+            dirs.insert(dir.to_path_buf());
+        }
+        Ok(())
+    }
+
+    fn remove_dir(&self, path: &Path) -> io::Result<()> {
+        if !self.read_dir(path)?.is_empty() {
+            return Err(io::Error::other(format!(
+                "directory not empty: {}",
+                path.display()
+            )));
+        }
+        self.dirs.lock().unwrap().remove(path);
+        Ok(())
+    }
+
+    fn current_dir(&self) -> io::Result<PathBuf> {
+        Ok(self.cwd.lock().unwrap().clone())
+    }
+
+    fn set_current_dir(&self, path: &Path) -> io::Result<()> {
+        if !self.is_dir(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no such directory: {}", path.display()),
+            ));
+        }
+        *self.cwd.lock().unwrap() = path.to_path_buf();
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -306,6 +467,56 @@ impl FileSystem for OverlayFs {
             return self.overlay.canonicalize(path);
         }
         self.base.canonicalize(path)
+    }
+
+    // Directories follow the same rule as files: the overlay wins where it has
+    // an answer, the base fills in the rest. `read_dir` is the one that has to
+    // merge rather than pick — a directory can exist in both, and listing only
+    // the overlay's half would hide base entries that `open_read` can still
+    // reach.
+    fn is_dir(&self, path: &Path) -> bool {
+        self.overlay.is_dir(path) || self.base.is_dir(path)
+    }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
+        let overlay = self.overlay.read_dir(path).unwrap_or_default();
+        let base = if self.base.is_dir(path) {
+            self.base.read_dir(path)?
+        } else if overlay.is_empty() && !self.overlay.is_dir(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("not a directory: {}", path.display()),
+            ));
+        } else {
+            Vec::new()
+        };
+        let mut names = overlay;
+        for name in base {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        Ok(names)
+    }
+
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        self.overlay.create_dir(path)
+    }
+
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        self.overlay.create_dir_all(path)
+    }
+
+    fn remove_dir(&self, path: &Path) -> io::Result<()> {
+        self.overlay.remove_dir(path)
+    }
+
+    fn current_dir(&self) -> io::Result<PathBuf> {
+        self.overlay.current_dir()
+    }
+
+    fn set_current_dir(&self, path: &Path) -> io::Result<()> {
+        self.overlay.set_current_dir(path)
     }
 }
 
