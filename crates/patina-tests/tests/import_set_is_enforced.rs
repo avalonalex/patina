@@ -2,18 +2,11 @@
 //!
 //! The VM used to bind the entire primitive registry into globals by short
 //! name, so a program importing only `(scheme base)` could still call `cadddr`
-//! from `(scheme cxr)` or `bitwise-and` from `(srfi 151)`. Scheme-level exports
-//! were scoped correctly and *libraries* enforced their imports properly, so
-//! the hole was specific to registered primitives at the top level.
-//!
-//! That asymmetry is why it survived: the same expression succeeded at the top
-//! level and failed inside a `define-library`, and the top level is where one
-//! naturally checks. It had already cost a real bug — `(srfi 132)`'s
-//! `vector-merge` called `cadddr` without importing `(scheme cxr)`, which failed
-//! only inside the library.
-//!
-//! The tree-walker was right all along, which is why these run on both backends:
-//! the point is that they now agree.
+//! from `(scheme cxr)` or `bitwise-and` from `(srfi 151)`. The hole was
+//! specific to registered primitives at the top level: libraries enforced
+//! their imports all along (`sld_file_loading.rs` covers that half), and so
+//! did the tree-walker — which is why these run on both backends: the point
+//! is that they now agree. History in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 
 mod common;
 use common::{assert_program_eval_error, eval_program as eval};
@@ -61,14 +54,4 @@ fn test_the_default_baseline_still_works() {
     assert_eq!(eval("(+ 1 2)"), "3");
     assert_eq!(eval("(car (list 9 8))"), "9");
     assert_eq!(eval("(map (lambda (x) (* x x)) (list 1 2 3))"), "(1 4 9)");
-}
-
-/// The asymmetry that hid the defect: top level and library scope must agree
-/// about the same expression under the same imports.
-/// The asymmetry that hid the defect: an expression rejected inside a
-/// `define-library` must be rejected at the top level under the same imports.
-/// `sld_file_loading.rs` covers the library half; this is the top-level half.
-#[test]
-fn test_top_level_agrees_with_library_scope() {
-    assert_program_eval_error("(import (scheme base)) (cadddr (list 1 2 3 4))");
 }

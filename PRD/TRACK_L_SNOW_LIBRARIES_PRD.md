@@ -600,21 +600,24 @@ time instead, where `Template::Symbol` and `Template::Var` distinguish the two w
 
 ### Fixed
 
-**Tree-walker: an unbound variable in operator position escaped `guard`** — ✅ **fixed**
+**Tree-walker: an unbound variable escaped `guard` in most positions** — ✅ **fixed**
 (2026-08-15). A bare `undefined-var` was a catchable condition, but `(undefined-fn)` was not — on the
-tree-walker only. chibi, Gauche and Chez all catch both forms, and the VM already did.
+tree-walker only. chibi, Gauche and Chez catch both, and the VM already did.
 
-The CPS transform binds an application's operator and operands through `LetVal`, and that arm of
-`step.rs` propagated the lookup failure as a Rust error with `?` instead of routing it through
-`maybe_route_error_through_cps` the way the neighbouring `Var` arm did — whose comment even said
-"for a bare Var (not in an App)", naming the gap without closing it. `EvalError::UndefinedVariable`
-was already in the catchable set; it simply never reached the handlers. The `App` arm had the same
-shape and is fixed alongside, though `LetVal` is the one the transform actually goes through.
+The defect was a class, not an instance: `step.rs` hand-copied the route-through-handlers dance in
+some arms (`Var`) and `?`-propagated the same lookup failure in others, so catchability depended on
+where the variable sat. Auditing every arm after fixing the reported `LetVal`/`App` case found five
+more escaping positions — `if` tests, `set!` targets, `define` values, `call/cc` operands, and
+unquotes — each confirmed divergent (VM caught them, tree-walker did not). The fix is structural: a
+single `try_catchable!` macro in `step.rs` that every fallible user-level evaluation goes through,
+routing failures into `maybe_route_error_through_cps` (which already held the catchability policy —
+`InternalError` and continuation escapes still propagate). A new arm can no longer quietly
+reintroduce the escape, and continuation-environment lookups stay `?` because a missing continuation
+is a compiler invariant, not a user error.
 
 Found by a test written for the import-set fix below, which used `guard` to assert a name was
 unbound and got two different answers from the two backends. Pinned in
-`crates/patina-tests/tests/backend_divergence.rs` as a converged row, in every position: bare,
-operator, operand, and operand of a primitive.
+`crates/patina-tests/tests/backend_divergence.rs` as a converged row covering all nine positions.
 
 **Rust registry primitives ignored the import set at top level** — ✅ **fixed** (2026-08-15).
 VM only; the tree-walker was right all along, which turned out to be the whole story. A program

@@ -151,7 +151,13 @@ impl VmState {
             .is_some_and(|w| w & (1 << (index % 64)) != 0)
     }
 
-    /// Install all registered primitives into the global environment.
+    /// Install all registered primitives into the global environment,
+    /// ignoring import scoping — test scaffolding only, for VM unit tests
+    /// that build a bare `VmState` with no library machinery to bootstrap
+    /// from. Production setup (`VmBackend::with_fs`) deliberately skips this
+    /// and lets `load_bootstrap()` define exactly the bootstrap libraries'
+    /// exports; calling it there would reopen the hole where unimported names
+    /// resolve (`import_set_is_enforced.rs`).
     ///
     /// Each primitive is stored as a `Procedure::Primitive` heap object so that
     /// `LoadGlobal` + `Call` can dispatch them via `call_primitive_proc`.

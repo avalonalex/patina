@@ -108,19 +108,15 @@ impl VmBackend {
         let global_env = Rc::new(Environment::new());
         let mut state = VmState::new(Rc::clone(&global_env));
         state.fs = fs.clone();
-        // Deliberately *not* `install_primitives()`. That bound every
-        // registered primitive into globals by short name, so a program
-        // importing only `(scheme base)` could still call `cadddr` from
-        // `(scheme cxr)` or `bitwise-and` from `(srfi 151)`. `load_bootstrap()`
-        // below defines exactly the exports of the libraries a fresh top level
-        // is meant to start with, which is what the tree-walker already did --
-        // the two backends disagreed, and the tree-walker was right.
-        //
-        // Primitives reached through a library carry `registry_index: None`;
-        // `resolve_index_cached` fills that in on first call, so the VM's
-        // primitive fast path is unaffected. `install_primitives` stays for the
-        // VM unit tests, which build a bare `VmState` with no library
-        // machinery to bootstrap from.
+        // Deliberately *not* `install_primitives()` — that bound every
+        // registered primitive into globals regardless of the import set
+        // (`cadddr` was callable with only `(scheme base)` imported).
+        // `load_bootstrap()` below defines exactly the exports a fresh top
+        // level starts with, as the tree-walker already did. The primitive
+        // fast path is unaffected: library-bound primitives resolve their
+        // registry index on first call via `resolve_index_cached`. Guarded by
+        // `import_set_is_enforced.rs`; history in
+        // `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 
         // Set up library loading infrastructure (Rc-shared with VmState)
         let mut lib_registry = LibraryRegistry::with_default_paths();

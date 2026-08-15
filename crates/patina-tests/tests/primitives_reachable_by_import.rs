@@ -18,50 +18,26 @@
 //! the thing that would actually break.
 
 mod common;
-use common::repo_root;
+use common::{files_under, repo_root};
 use patina_interpreter::TreeWalkInterpreter;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// Library names for every `.sld` under `root`, e.g. `lib/srfi/130.sld` ->
 /// `["srfi", "130"]`.
-fn glob_slds(root: &Path) -> Vec<Vec<String>> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("sld")
-                && let Ok(rel) = path.strip_prefix(root)
-            {
-                out.push(
-                    rel.with_extension("")
-                        .components()
-                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                        .collect(),
-                );
-            }
-        }
-    }
-    out
-}
-
-/// `"scheme.base/+"` -> `(["scheme", "base"], "+")`.
-///
-/// Split on the *first* slash, not the last: the library part is dot-separated
-/// and never contains one, while several primitive names do — `/`, `floor/`
-/// and `truncate/` are all real R7RS procedures.
-fn split_qualified(qualified: &str) -> Option<(Vec<String>, String)> {
-    let (library, name) = qualified.split_once('/')?;
-    Some((
-        library.split('.').map(str::to_string).collect(),
-        name.to_string(),
-    ))
+fn shipped_libraries(root: &Path) -> Vec<Vec<String>> {
+    files_under(root)
+        .into_iter()
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("sld"))
+        .map(|path| {
+            path.strip_prefix(root)
+                .expect("under lib/")
+                .with_extension("")
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect()
+        })
+        .collect()
 }
 
 #[test]
@@ -69,22 +45,20 @@ fn every_registered_primitive_is_reachable_by_some_import() {
     let mut registry = patina_primitives::PrimitiveRegistry::new();
     patina_primitives::register_all(&mut registry);
 
-    let mut registered: BTreeMap<String, String> = BTreeMap::new(); // name -> declared library
+    let mut registered: BTreeMap<&str, &str> = BTreeMap::new(); // name -> declared library
     let mut candidates: BTreeSet<Vec<String>> = BTreeSet::new();
-    for (_, prim) in registry.primitives_indexed() {
-        if let Some((library, name)) = split_qualified(&prim.qualified_name()) {
-            registered.insert(name, library.join(" "));
-            candidates.insert(library);
-        }
+    for prim in registry.primitives() {
+        registered.insert(prim.name, prim.library);
+        candidates.insert(prim.library.split('.').map(str::to_string).collect());
     }
     assert!(
         registered.len() > 100,
-        "expected the whole registry, got {} — has qualified_name's shape changed?",
+        "expected the whole registry, got {} — did register_all change?",
         registered.len()
     );
 
     // Every library Patina ships is a candidate, not only the labelled ones.
-    for sld in glob_slds(&repo_root().join("lib")) {
+    for sld in shipped_libraries(&repo_root().join("lib")) {
         candidates.insert(sld);
     }
 
@@ -100,7 +74,7 @@ fn every_registered_primitive_is_reachable_by_some_import() {
 
     let orphans: Vec<String> = registered
         .iter()
-        .filter(|(name, _)| !exported_anywhere.contains(name.as_str()))
+        .filter(|(name, _)| !exported_anywhere.contains(**name))
         .map(|(name, library)| format!("{name} (registered under {library})"))
         .collect();
     assert!(
