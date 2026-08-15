@@ -3,9 +3,14 @@
 Every file in this tree is **byte-identical** to its pinned upstream snowball
 package (verified 2026-08-12 by diffing against the sha256-checked tarballs
 below), with one exception: `filesystem.sld` carries a Patina `cond-expand`
-branch, described at the end of this file. All are by Alex Shinn, BSD-licensed
-(<http://synthcode.com/license.txt>); `test.scm` and `term/ansi.scm` carry
-in-file notices, `diff` and `optional` rely on this record.
+branch, described at the end of this file. All are by Alex Shinn under the BSD
+3-Clause licence, reproduced in full under [Licence](#licence) below.
+
+Only `test.scm`, `string.scm` and `term/ansi.scm` carry an in-file copyright
+notice — upstream's own files for `diff`, `optional`, `filesystem` and every
+`.sld` have none, and we have not removed any. For those files **this record is
+the only notice**, which is why the licence text lives here rather than behind
+a link.
 
 | Package | Version | Files here | Tarball sha256 |
 |---|---|---|---|
@@ -22,6 +27,46 @@ Tarball URLs follow the pattern
 snow-fort snowball releases, older than chibi-scheme's git head — e.g.
 `test.scm`'s copyright runs 2010-2020 — and the simplified SRFI-1 `any` at the
 top of `test.scm` is upstream's own portability shim, not a local edit.
+
+## Licence
+
+All files in this tree are covered by the following, from chibi-scheme's
+`COPYING`. It is reproduced here, not linked, because BSD 3-Clause condition 1
+requires a source redistribution to retain the conditions and disclaimer — and
+because a clone taken offline, or a link that rots, must still carry them.
+
+```
+Copyright (c) 2009-2021 Alex Shinn
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+Patina's own MIT licence covers Patina; it does not relicense anything in this
+tree, and vendoring changes no terms. Condition 3 is why nothing in this
+repository presents Alex Shinn or chibi-scheme as endorsing Patina — the
+README's references describe what we test against, which is attribution, not
+endorsement.
 
 `(chibi string)` was bundled 2026-08-14 for `(srfi 130)`, which is written
 against it; it arrived via the compat corpus's vendored copy of the same
