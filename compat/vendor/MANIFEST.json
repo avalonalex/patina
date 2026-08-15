@@ -38,43 +38,6 @@
       "needs_ffi": false
     },
     {
-      "library": "chibi string",
-      "slug": "chibi-string",
-      "version": "0.9.0",
-      "license": "BSD",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "index-field",
-      "upstream_url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/string/0.9.0/chibi-string-0.9.0.tgz",
-      "tarball_sha256": "86a73c53b2e7a4e1201ff10115a5488890993c0020051b3abe0fc785a077ec11",
-      "popularity_indegree": 16,
-      "provides": [
-        "chibi string",
-        "chibi string-test"
-      ],
-      "depends": [
-        "chibi",
-        "chibi ast",
-        "chibi char-set base",
-        "chibi test",
-        "scheme base",
-        "scheme char",
-        "srfi 1",
-        "srfi 13",
-        "srfi 14"
-      ],
-      "description": "A cursor-oriented string library.",
-      "files": [
-        "chibi/string-test.sld",
-        "chibi/string.html",
-        "chibi/string.scm",
-        "chibi/string.sld",
-        "package.scm",
-        "run-tests.scm"
-      ],
-      "modified": false,
-      "needs_ffi": false
-    },
-    {
       "library": "srfi 63",
       "slug": "srfi-63",
       "version": "1.0.0",
@@ -408,36 +371,6 @@
         "r6rs/unicode-reference/unicode1.body.scm",
         "r6rs/unicode-reference/unicode1.sld",
         "r6rsDoc.html"
-      ],
-      "modified": false,
-      "needs_ffi": false
-    },
-    {
-      "library": "srfi 14",
-      "slug": "srfi-14",
-      "version": "0.1.0",
-      "license": "MIT-Scheme-old",
-      "license_class": "NONSTANDARD",
-      "license_evidence": "licence-text",
-      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/14/0.1.0/srfi-14-0.1.0.tgz",
-      "tarball_sha256": "de94f90d7b032ea554ed51b4cbce942b22df6fefe68497d661b9c26e3c7e690e",
-      "popularity_indegree": 4,
-      "provides": [
-        "srfi 14"
-      ],
-      "depends": [
-        "scheme base",
-        "scheme char",
-        "scheme write",
-        "srfi 60",
-        "srfi :14 char-sets"
-      ],
-      "description": "SRFI-14",
-      "files": [
-        "README.html",
-        "package.scm",
-        "srfi/14.scm",
-        "srfi/14.sld"
       ],
       "modified": false,
       "needs_ffi": false

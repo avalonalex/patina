@@ -1,28 +1,26 @@
 # Patina third-party compatibility (vm backend)
 
-**133 of 187 packages pass** — 133 of 186 achievable (excluding 1 out-of-scope pending FFI).
+**134 of 185 packages pass** — 134 of 183 achievable (excluding 2 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 133 |
-| missing-library | 31 |
-| parse-error | 12 |
-| load-error | 6 |
+| pass | 134 |
+| missing-library | 24 |
+| parse-error | 14 |
+| load-error | 8 |
 | unbound-identifier | 1 |
-| wrong-result | 2 |
+| wrong-result | 1 |
 | runtime-error | 1 |
 | timeout | 0 |
-| out-of-scope | 1 |
+| out-of-scope | 2 |
 
 ## Missing libraries — the bundling work queue
 
 | Library | Packages |
 |---|---|
-| (srfi 130) | 6 |
 | (chibi) | 3 |
 | (foreign c) | 2 |
 | (srfi 114 comparators) | 2 |
-| (srfi 13) | 2 |
 | (srfi 64) | 2 |
 | (chibi io) | 1 |
 | (chibi irregex) | 1 |
@@ -35,6 +33,7 @@
 | (srfi 142) | 1 |
 | (srfi 144) | 1 |
 | (srfi 160 base) | 1 |
+| (srfi 165) | 1 |
 | (srfi 2) | 1 |
 | (srfi 23) | 1 |
 | (srfi 231) | 1 |
@@ -47,6 +46,8 @@
 | `syntax-rules literals must be symbols` | 3 |
 | `#<unknown>` | 1 |
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
+| `No matching pattern for macro case` | 1 |
+| `No matching pattern for macro ssax:make-parser/positional-args` | 1 |
 | `ch` | 1 |
 | `set! expects 2 arguments, got 1` | 1 |
 
@@ -54,8 +55,9 @@
 
 | Error | Packages |
 |---|---|
-| `Exported identifier 'duplicate-file-descriptor' not defined` | 4 |
+| `Exported identifier 'duplicate-file-descriptor' not defined` | 5 |
 | `Exported identifier 'begin' not defined` | 2 |
+| `Exported identifier 'mecab?' not defined` | 1 |
 
 ## Unbound identifiers
 
@@ -72,10 +74,10 @@
 |---|---|---|
 | arvyy-interface | test | parse-error |
 | arvyy-mustache | test | pass |
-| chibi-app | test | missing-library |
+| chibi-app | test | parse-error |
 | chibi-assert | test | missing-library |
 | chibi-base64 | test | pass |
-| chibi-binary-record | probe | missing-library |
+| chibi-binary-record | probe | pass |
 | chibi-bytevector | test | parse-error |
 | chibi-char-set | probe | pass |
 | chibi-char-set-boundary | probe | pass |
@@ -83,20 +85,20 @@
 | chibi-crypto-md5 | test | parse-error |
 | chibi-crypto-rsa | test | parse-error |
 | chibi-crypto-sha2 | test | parse-error |
-| chibi-edit-distance | test | missing-library |
+| chibi-edit-distance | test | pass |
 | chibi-filesystem | test | load-error |
 | chibi-html-parser | probe | pass |
 | chibi-irregex | probe | missing-library |
 | chibi-iset | test | pass |
-| chibi-locale | test | wrong-result |
+| chibi-locale | test | pass |
 | chibi-match | test | parse-error |
 | chibi-math-linalg | test | missing-library |
 | chibi-math-prime | test | pass |
 | chibi-math-stats | test | missing-library |
-| chibi-mecab | test | missing-library |
+| chibi-mecab | test | load-error |
 | chibi-mime | test | wrong-result |
 | chibi-monad-environment | probe | parse-error |
-| chibi-net-dns | test | missing-library |
+| chibi-net-dns | test | out-of-scope |
 | chibi-net-smtp | test | out-of-scope |
 | chibi-parse | test | pass |
 | chibi-pathname | test | pass |
@@ -106,9 +108,8 @@
 | chibi-show | test | parse-error |
 | chibi-snow-commands | probe | parse-error |
 | chibi-ssl | test | missing-library |
-| chibi-string | test | pass |
 | chibi-sxml | probe | pass |
-| chibi-tar | test | missing-library |
+| chibi-tar | test | load-error |
 | chibi-temp-file | probe | load-error |
 | chibi-term-edit-line | probe | pass |
 | chibi-uri | test | pass |
@@ -131,7 +132,7 @@
 | lassik-unpack-assoc | probe | pass |
 | lightweight-testing | probe | pass |
 | macduffie-json | probe | missing-library |
-| okmij-ssax | test | missing-library |
+| okmij-ssax | test | parse-error |
 | pfds-alist | probe | pass |
 | pfds-bitwise | probe | pass |
 | pfds-bounded-balance-tree | probe | pass |
@@ -227,7 +228,6 @@
 | slib-xml-parse | probe | pass |
 | srfi-106 | probe | missing-library |
 | srfi-11 | probe | pass |
-| srfi-14 | probe | pass |
 | srfi-145 | probe | pass |
 | srfi-156 | test | pass |
 | srfi-16 | probe | pass |
