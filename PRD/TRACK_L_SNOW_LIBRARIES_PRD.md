@@ -449,6 +449,68 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
+**Tree-walker: a `guard` handler runs before the unwind** — ❌ **open**. Found 2026-08-15 while
+moving `with-output-to-file` into Scheme, by a test whose two backends disagreed.
+
+```scheme
+(guard (e (#t (log 'handler)))
+  (dynamic-wind (log 'before) (lambda () (error "x")) (log 'after)))
+;; VM, chibi, Gauche => (before after handler)
+;; tree-walker       => (before handler after)
+```
+
+R7RS §4.2.7 evaluates the clauses "in the dynamic environment of the `guard` expression", so the
+unwind comes first; the VM is right and both references agree with it. Not cosmetic: a handler that
+writes to `current-output-port` writes into whatever the not-yet-unwound extent installed, which is
+exactly how this surfaced — a handler's output vanished into a port that was about to be closed.
+
+Pinned in `crates/patina-tests/tests/backend_divergence.rs`. Not via `assert_divergence`, which
+needs the broken backend to *fail*; this one returns a plausible wrong answer, so both sides are
+asserted explicitly with a message saying what to do when it converges.
+
+**VM: a re-entrant primitive plus an escape corrupts the register base** — ❌ **open**, and live in
+**seven shipped procedures**, not merely a future hazard. A first draft of this entry said "nothing
+structural stops the *next* higher-order primitive from doing so"; review enumerated the class and
+ran each one. Every one panics identically — `index out of bounds` at `set_reg_at` — where the
+tree-walker returns the right answer:
+
+| Procedure | escape repro | VM | tree-walker |
+|---|---|---|---|
+| `member` with comparator | `(call/cc (lambda (k) (member 2 '(1 2 3) (lambda (a b) (k 'x)))))` | panic | `x` |
+| `assoc` with comparator | same shape | panic | `x` |
+| `force` | `(call/cc (lambda (k) (force (delay (k 'x)))))` | panic | `x` |
+| `make-parameter` converter | `(call/cc (lambda (k) (make-parameter 1 (lambda (v) (k 'x)))))` | panic | `x` |
+| `call-with-port` | `(call/cc (lambda (k) (call-with-port p (lambda (q) (k 'x)))))` | panic | `x` |
+| `call-with-input-file` | `(call/cc (lambda (k) (call-with-input-file f (lambda (p) (k 'x)))))` | panic | `x` |
+| `call-with-output-file` | `(call/cc (lambda (k) (call-with-output-file f (lambda (p) (k 'x)))))` | panic | `x` |
+
+The last two are the functions *immediately above* the pair moved to Scheme below, in the same file.
+Safe by construction: `call-with-values` (VM-intercepted, never reaches `exec_call_primitive`), and
+`map`/`for-each`/`vector-map`/`string-for-each` (already Scheme). The offset tracks frame depth, so
+it is not a fixed-offset accident: a nested repro reports `len is 8 but the index is 9`.
+
+`exec_call_primitive` hoists the frame's `register_base`, calls the primitive, and writes the result
+through that base under a comment asserting "primitives are frame-neutral on the `Ok` path (a
+re-entrant call runs its nested frames to completion)". A `call/cc` out of the re-entered callback
+breaks exactly that: the nested frames are *popped*, not completed.
+
+**The fix is about a dozen lines and most of its plumbing exists.** `exec_call_primitive` already
+returns `Result<Option<TaggedValue>, VmError>` where `Some(v)` means "a continuation escaped past
+this frame, propagate it" — the shadow-deopt path already uses it — and `run_apply_proc` already
+captures `depth_before`. Nothing joins them. Detect `frames.len() < depth_before` after
+`run_loop_until`, carry that out (the `ApplyContext::apply_proc` signature cannot express it, so it
+wants a field on `VmState`), and have `exec_call_primitive` return `Ok(Some(v))` instead of writing
+through the dead base. That covers all seven at once, plus the `inline_primitive!` slow path, which
+writes through the same hoisted base.
+
+Relocating a procedure to Scheme removes it from the class but does not scale: `eval` and `load`
+re-enter through `ctx.eval_expr` and cannot be written in Scheme at all.
+
+**Not pinned by any test.** `assert_divergence` cannot express these — it matches `Ok`/`Err` while
+these *panic*, aborting the test binary — and nothing in `patina-tests` uses `catch_unwind`. A
+`assert_panics_on(backend, code, tracking)` helper would pin all seven in a few lines and fail the
+day the VM fix lands.
+
 **Tree-walker: an error inside a wind thunk escapes `guard`** — ❌ **open**. Found 2026-08-15 while
 sweeping the class below, and left open deliberately because the fix is one level down from where it
 surfaces.
@@ -487,15 +549,6 @@ neither an error nor a catch. The tree-walker catches it (fixed below). Pre-exis
 of that fix, which did not touch the VM's parameter path. Not pinned as a divergence, because
 `assert_divergence` needs the broken backend to *fail* and this one silently succeeds; worth fixing
 before anyone trusts converter errors.
-
-**`with-output-to-file` does not restore through `dynamic-wind`** — ❌ **open**. Both backends.
-`with_output_to_file` / `with_input_from_file` (`patina-primitives/src/primitives/io/file.rs`) save
-the current port, call the thunk, and restore afterwards in straight-line Rust. That covers a normal
-return and an error, but not a `call/cc` escape out of the thunk: the unwind skips the restore and
-the process is left writing into a closed file port. `parameterize` gets this right via
-`dynamic-wind`, and now that the ports are parameter objects these two could simply be expressed in
-terms of it — one mechanism instead of two, with the escape case handled by construction. Not folded
-into the parameter-object change because it is a behaviour change to a different file.
 
 **The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ❌ **open**.
 Found 2026-08-14 by auditing the *class* behind the `quote`-argument fix below, which is the practice
@@ -609,414 +662,30 @@ time instead, where `Template::Symbol` and `Template::Var` distinguish the two w
 
 ### Fixed
 
-**Tree-walker: the control primitives' own errors escaped `guard`** — ✅ **mostly fixed**
-(2026-08-15); one case remains open, see the end of this entry.
-The last of the class fixed in #71: a catchable error returned as a Rust `Err` instead of routed
-through the Scheme exception handlers. That fix swept `step.rs`; these lived in
-`cps_eval/application.rs`, which it never reached — so on the tree-walker `guard` could not catch a
-control primitive's *own* arity or type error, while the VM caught all of them.
-
-**The references decided which backend was right.** "Match the other backend" is not a reason to
-believe the other backend, so all six positions were run against chibi, Gauche and Chez first:
-
-| probe | chibi | Gauche | Chez | Patina VM | Patina tw (before) |
-|---|---|---|---|---|---|
-| `(with-exception-handler 5 (lambda () 'ok))` | `ok` — no check | `ok` — no check | caught | caught | escaped |
-| `(dynamic-wind (lambda () 1))` | caught | caught | caught | caught | escaped |
-| `(call-with-values (lambda () 1))` | caught | caught | caught | caught | escaped |
-| `(raise)` | caught | caught | caught | caught | escaped |
-| `(error)` | caught | caught | caught | caught | escaped |
-| `((make-parameter 1) 1 2 3)` | `#<undef>` | caught | caught | caught | escaped |
-
-Where the references disagree it is about whether to raise **at all** — chibi and Gauche accept a
-non-procedure handler and just run the thunk, and chibi returns `#<undef>` for a parameter called
-with three arguments, which R7RS §4.2.6 makes explicitly implementation-dependent. None of them
-disagrees about catchability *once something is raised*. The old tree-walker behaviour matched no
-implementation in any of the six, which is the cleanest mandate this track has had.
-
-**Done as a sweep, not as six patches** — #71's lesson was that fixing reported instances leaves the
-class alive. But the first attempt at that sweep defined the class *syntactically* — "every bare
-`return Err(EvalError::…)` in the file" — and review caught that this is not the same set as "every
-catchable error that can reach Scheme". `application.rs` has five `?`-propagation sites and the grep
-audited none of them. Three were live escapes, two of them inside functions the sweep had already
-edited:
-
-- `(error 5)` — the message type check, fifteen lines below the arity check that *was* routed, in
-  the same function. Fixed here; chibi, Gauche and the VM all catch it.
-- a parameter converter that raises — `apply_from_direct_tagged(conv, …)?` in `apply_parameter`,
-  thirteen lines above the arity arm that was routed. Fixed here; chibi and Gauche catch it.
-- an error raised inside a `dynamic-wind` thunk — `run_wind_handlers(…)?`. **Not fixed**, see below.
-
-Two sites are deliberately left propagating, both checked rather than assumed: `apply_other_primitive`'s
-"called with non-primitive procedure" is statically unreachable (its only caller has already matched
-`Procedure::Primitive`), and `eval_primop`'s arity checks have no continuation in scope but are
-already routed by their caller — the `try_catchable!` arm #71 added to `step.rs`. Review also found
-the first of those was `TypeError`, which `is_catchable()` treats as a *user* condition; it is now
-`InternalError`, so the code and the rationale agree.
-
-One site needed more than a mechanical rewrite. `apply_with_exception_handler` decided its type
-error inside a live `heap.borrow()`, and the router allocates the exception object
-(`heap().borrow_mut().alloc_exception`), so routing in place would have panicked on the RefCell.
-The check now yields the message and the borrow ends before the routing call — the
-extract-to-a-`let`-first discipline in `CLAUDE.md`. The same shape recurred in `apply_error`.
-
-**Narrowed, not closed.** An error raised by user code inside a wind thunk still escapes `guard` on
-the tree-walker. Recorded as its own entry under **Open** above, rather than only here — an open
-defect filed inside a "Fixed" entry is not in the inventory anyone reads.
-
-Guarded by `crates/patina-tests/tests/callability.rs`, where every body is asserted twice — caught
-when guarded, still an error when not — so a future change that *swallowed* errors instead of
-routing them would fail. The divergence row pinned when this was found retired itself on the fix,
-printing "NO LONGER DIVERGES"; a new row now pins the wind-thunk case that remains.
-
-**A caveat on that new row.** Its pinned value is what the VM returns, not an established correct
-answer: chibi loops forever on the repro, so no reference could arbitrate. It asserts only that the
-two backends disagree. The same caveat applies to the continuation-arity site routed here —
-`(call/cc (lambda (k) (k 1 2)))` now yields a catchable error on the tree-walker where Gauche and
-the VM return `1`, which is the known multi-value-continuation gap, not something this change
-settled.
-
-**`make-parameter` objects were not procedures** — ✅ **fixed** (2026-08-15). Both backends. Found
-while checking whether the three standard ports had become *real* parameter objects or only ones
-that satisfy our particular `parameterize` macro. They had, and the check turned up the mirror gap:
-
-```scheme
-(procedure? current-output-port)   ;; => #t   (correct)
-(procedure? (make-parameter 1))    ;; => #f   (wrong)
-```
-
-R7RS §4.2.6 defines `make-parameter` as returning "a newly allocated parameter object, **which is a
-procedure** that accepts zero arguments and returns the value associated with the parameter object";
-Gauche agrees. (§7.3's sample implementation builds one out of a `lambda`, which is the same answer
-from the other direction. An earlier draft of this entry cited §7.3 as the *definition* and
-paraphrased it as "a newly allocated procedure" inside quotation marks — both wrong, and the sort of
-thing that survives because nobody re-opens the spec.)
-
-Only the *predicate* was wrong — `(p)`, `(apply p '())` and passing `p` through `map` all worked
-before the fix, which is the shape of the defect: `Heap::is_procedure` enumerated callable variants
-(closure tag, native `Procedure`, VM closure, VM continuation refs) and omitted `Parameter`.
-
-The fix is one variant added to that enumeration, not a special case in `procedure?`, because the
-other callers mean the same thing by the question. Observably that changed three decision points:
-`with-exception-handler`'s argument checks on *each* backend (both rejected a parameter before the
-fix — verified by running it), and `make-parameter`'s own converter check, which had worked around
-the gap with `is_procedure(c) || is_parameter(c)`; that `||` is now redundant and gone. Adjacent,
-and fixed alongside because the two are one thought: a parameter fell through the datum writer's
-chain to `#<unknown>`, harmless until `procedure?` began answering `#t` about it.
-
-**Two counting errors, caught by review and corrected rather than quietly dropped.** A draft of this
-entry claimed eight sites "became correct together", listing `dynamic-wind` and `force` among them.
-Checked one at a time: `dynamic-wind` type-checks nothing on either backend — neither
-`apply_dynamic_wind` nor `VmControlPrimitive::DynamicWind` inspects its arguments, they just call
-the thunks — so it accepted a parameter all along; the `patina-primitives` `with_exception_handler`
-is shadowed on the normal call path by each backend's own control primitive, and reachable only
-through `apply`, where its two checks do run but the body then returns `InternalError("not yet
-implemented")` regardless, so they can never turn a rejection into a success; and `force`'s thunk
-check is reachable only for a `Delayed` promise, which `make-promise` does not build. Counting call
-sites in a grep is not the same as counting decisions, and the test that was going to guard
-`dynamic-wind` would have passed against unfixed code.
-
-**The previous entry's own claim was also wrong.** It held that the bespoke per-backend dispatch
-exists *because* parameters fail `is_procedure`, so fixing the predicate would remove the need for
-it. Both backends route on `get_parameter` (`try_call_parameter` in the VM, the `param_opt` branch
-in the tree-walker's `application.rs`), never on `is_procedure`, and that dispatch exists because
-reading and setting a parameter is its own calling convention. So step (2) — re-expressing the three
-ports as `make-parameter`-backed objects — is unblocked but buys only the per-port collapse.
-
-**The claims above are now pinned by tests**, in `crates/patina-tests/tests/callability.rs` — added
-because three statements in this entry's own first draft were wrong in ways no test could have
-contradicted. `dynamic-wind` performing no validation is proven by *ordering* (its before- and
-body-thunks run before a bad after-thunk is reached), not by matching an error message; and the
-"still half-applied" limit below is pinned as behaviour — a continuation answers `procedure?` with
-`#t` yet is rejected as a `make-parameter` converter. That last test is written to fail when the gap
-is closed, verified by closing it locally: whoever folds `Continuation` in gets a failure telling
-them to update the test, the doc comment and this entry together.
-
-**Still half-applied, and left open deliberately.** `is_procedure` is not yet the single source of
-truth for callability: tree-walker continuations (`HeapObjectData::Continuation`) are callable but
-live in `is_continuation`, so five callers still spell the question `is_procedure(x) ||
-is_continuation(x)` while four omit the disjunct. Folding that variant in would let all five drop
-it, but it widens the four that omit it today — a behaviour change wanting its own tests, not a
-rider on this one. Recorded in the `is_procedure` doc comment so the next reader does not mistake
-the enumeration for complete.
-
-Guarded by `crates/patina-tests/tests/parameters.rs`, which was ported from a tree-walker-only local
-helper to the shared both-backend helpers in the same change (Track Q Q1) — a single-backend file
-could not have stated the property it was missing. It pins the widening as a *predicate*: things
-that are not callable still answer `#f`, and the standard ports still answer `#t`.
-
-**Tree-walker: an unbound variable escaped `guard` in most positions** — ✅ **fixed**
-(2026-08-15). A bare `undefined-var` was a catchable condition, but `(undefined-fn)` was not — on the
-tree-walker only. chibi, Gauche and Chez catch both, and the VM already did.
-
-The defect was a class, not an instance: `step.rs` hand-copied the route-through-handlers dance in
-some arms (`Var`) and `?`-propagated the same lookup failure in others, so catchability depended on
-where the variable sat. Auditing every arm after fixing the reported `LetVal`/`App` case found five
-more escaping positions — `if` tests, `set!` targets, `define` values, `call/cc` operands, and
-unquotes — each confirmed divergent (VM caught them, tree-walker did not). The fix is structural: a
-single `try_catchable!` macro in `step.rs` that every fallible user-level evaluation goes through,
-routing failures into `maybe_route_error_through_cps` (which already held the catchability policy —
-`InternalError` and continuation escapes still propagate). A new arm can no longer quietly
-reintroduce the escape, and continuation-environment lookups stay `?` because a missing continuation
-is a compiler invariant, not a user error.
-
-Found by a test written for the import-set fix below, which used `guard` to assert a name was
-unbound and got two different answers from the two backends. Pinned in
-`crates/patina-tests/tests/backend_divergence.rs` as a converged row covering all nine positions.
-
-**Rust registry primitives ignored the import set at top level** — ✅ **fixed** (2026-08-15).
-VM only; the tree-walker was right all along, which turned out to be the whole story. A program
-importing only `(scheme base)` could still call `cadddr` from `(scheme cxr)` or `bitwise-and` from
-`(srfi 151)`, because `VmBackend::with_fs` called `install_primitives()` — a loop binding *every*
-registered primitive into globals by short name. The registry knows each primitive's owning library
-(it is right there in `qualified_name`, and the loop even reads it) but nothing consulted it, so
-`import` never got a say.
-
-Scheme-level exports were scoped correctly and libraries enforced their imports properly, so the
-hole was specific to registered primitives at the top level — and that asymmetry is why it survived.
-The same expression succeeded at the top level and failed inside a `define-library`, and the top
-level is where one naturally checks. It had already cost a real bug: `(srfi 132)`'s `vector-merge`
-called `cadddr` without importing `(scheme cxr)` and failed only inside the library.
-
-**The fix was deleting a call.** `load_bootstrap()` already ran immediately afterwards, loading
-`(scheme base)` and `(patina debug)` and defining exactly their exports — the correct model, already
-written, already what the tree-walker did. `install_primitives()` was redundant with it and
-destructive to it. Primitives reached through a library carry `registry_index: None`, which
-`resolve_index_cached` fills in on first call, so the VM's primitive fast path is untouched; the
-function stays for the VM unit tests, which build a bare `VmState` with no library machinery.
-
-The predicted fallout did not arrive: **77 test binaries green, 1226/1226 on both backends, and the
-corpus unchanged at 138**. In hindsight that was foreseeable — the suite runs every case on both
-backends and asserts they agree, so anything relying on the leak was already failing. One corpus
-package swapped `srfi-128` for `load` in its unbound list, which is the leak closing in plain view.
-
-New guard: `crates/patina-tests/tests/primitives_reachable_by_import.rs` asserts every registered
-primitive is exported by *some* shipped library. Before this change an under-exporting library
-builder cost nothing, because the blanket install handed the primitive out regardless; now such a
-primitive is simply unreachable, and nothing else would notice. It deliberately checks reachability
-rather than the primitive's own `library` label — several are labelled with a library adjacent to
-the one R7RS exports them from (`char->integer` says `scheme.char`; R7RS puts it in `(scheme base)`),
-so asserting the label would be asserting a naming convention instead of the property that matters.
-
-**Still open, and deliberately not folded in:** `lib/scheme/base.sld` exports the eight three-deep
-`cxr` procedures (`caaar`…`cdddr`), where R7RS-small puts them only in `(scheme cxr)`. That is a
-documented extension rather than a leak, and tightening it is a separate decision.
-
-
-**The standard port procedures were not parameter objects** — ✅ **fixed** (2026-08-15). Both
-backends. R7RS §6.13.1 requires `current-input-port`, `current-output-port` and `current-error-port`
-to be parameter objects overridable with `parameterize`; all three were plain 0-argument procedures,
-so `parameterize` rejected them outright.
-
-The fix is smaller than this entry previously predicted, and the reason is worth keeping. It warned
-that accepting a second arity would not be enough, because the ports are backed by Rust-side globals
-that other primitives read directly. But `parameterize` (`lib/scheme/base/parameters.scm`) drives a
-parameter *through the object itself* — `(p)` to read, `(p v)` to install, `(p old)` from
-`dynamic-wind`'s after-thunk to restore. So writing the thread-local from the setter arity is not a
-shortcut around the dynamic binding: the thread-local **is** the binding, and it is exactly what
-`display` with no port argument consults. The version that would have been broken is the opposite
-one — a Scheme-level rebinding that left the thread-local alone would redirect nothing.
-
-`(chibi test)`'s SRFI 158 suite defines `with-input-from-string` in precisely these terms, so its
-expectation drops 1 → 0 and **every upstream suite now runs at zero failures**; the expectations
-table in `scheme_tests/upstream/README.md` has no non-zero row left. Redirecting the current output
-port is also the capability L3 wanted for capturing a package's output without touching real stdout.
-
-**Adjacent, and left open: `(current-output-port)` allocates a fresh wrapper per call**, so
-`(eq? (current-output-port) (current-output-port))` is `#f`. Pre-existing — verified against the
-build before this change — and untouched by it, since `parameterize` compares nothing and the
-restore path passes the same underlying port back. It is still odd for a parameter to return a
-different object each read, and `(eq? p (current-output-port))` is a reasonable thing for a package
-to write. The tests in `crates/patina-tests/tests/standard_ports.rs` assert restoration by where
-output *lands* rather than by identity, which is the better test regardless.
-
-**Relinking stopped at a `quote` *argument*** — ✅ **fixed** (2026-08-14). Both backends. Found the
-moment the `@` fix let `(chibi match)` load, and the only §6 entry that was blocking a corpus
-package. Recorded first as "a library-internal macro loses its definition environment through a
-nested `let-syntax`", which is where it was found rather than what it was — the narrowing is the
-useful part, so both the symptom and the cause are kept here.
-
-The cause is one line of tree-walking. `rewrite_refs` recursed on each **cdr** as though a cdr were
-a form, and its first act on a form is to read the head for a quoting operator. A tail is not a
-form: in `(pass quote (helper 1 2))` the tail is `(quote (helper 1 2))`, which read as a quote form,
-so the walk returned it untouched and everything after the argument `quote` was left unrelinked.
-`helper` stayed a bare name and was resolved, unsuccessfully, at the use site. Three lines are
-enough:
-
-```scheme
-;; library (t m) exports only `top`; `helper` and `pass` are internal
-(define-syntax helper (syntax-rules () ((_ a b) (list 'expanded a b))))
-(define-syntax pass   (syntax-rules () ((_ a b) b)))
-(define-syntax top    (syntax-rules () ((_) (pass quote (helper 1 2)))))
-;; (import (t m)) (top)
-;; Chez, Gauche, and now Patina => (expanded 1 2)
-;; before                       => Error: unbound variable: helper
-```
-
-Nothing about it needed `let-syntax`, nested macros, or libraries beyond one private helper; the
-three-macro chain it was found in only made `quote` land in argument position. Any template that
-passes `quote` along was affected. The fix walks a form's spine once — head read in head position,
-arguments read as arguments — instead of re-reading each tail as a new form, which is also how the
-evaluator reads `(f quote x)`. The old walk simply disagreed with it.
-
-**Do not read the original diagnosis as a near miss.** It blamed the relinking *basis* — a
-`HashSet` of template names that "cannot express which occurrence came from that template" — and
-proposed designing this together with the entry below. That would have been a rewrite of the
-machinery to fix a defect in how a list is traversed. The lesson is the ordinary one: the three-macro
-repro was reduced further before anything was designed, and reducing it changed the answer.
-
-`(chibi match)` reaches this for **any pattern with a quoted tail**, since `(x . 'bad)` reads as
-`(x quote bad)` and is threaded through `match-two` as three arguments. The symptom there was worth
-reading too, because it named neither the cause nor the right macro: with `match-two` unlinked it
-was no longer a macro, so the desugarer treated the form as an application and desugared its
-arguments — including the inert getter/setter pair `((cons 1 2) (set! (cons 1 2)))` that only the
-`(set! setter)` rule ever destructures — and reported `set! expects 2 arguments, got 1`.
-
-Result: chibi-match went from a dead suite to **74 of 75**, and the corpus from parse-error to
-wrong-result on that package. The one remaining failure is `match-letrec`, recorded below. The
-entry below — relinking rewriting *by name* — is untouched by this and stays open.
-
-The two entries after this one were found on 2026-08-14 by auditing for the defect class behind the
-fixed items in this section — an identifier comparison made on the wrong basis. Each is cross-checked
-against **two** reference implementations (Chez Scheme and Gauche), not one. Neither is reachable
-from the corpus queue today; both were found by construction, so nothing in §4 depends on them. The
-two after those predate this track's macro work and are unchanged.
-
-**Literal matching had no "both unbound" case** — ✅ **fixed** (2026-08-14). Both backends.
-R7RS 4.3.2 gives literal *matching* `free-identifier=?` semantics: an input matches a literal when
-both denote the same binding, **or both are unbound and have the same name**. That second clause was
-missing. `tagged_matches_literal` instead required the literal's scopes to be a subset of the
-input's, so an *introduced* literal (carrying the enclosing expansion's scopes) could never match a
-*substituted* input (carrying none), even with both unbound:
-
-```scheme
-(define-syntax m
-  (syntax-rules ()
-    ((_ e) (let-syntax ((n (syntax-rules (k) ((n k) 'lit) ((n x) 'notlit))))
-             (n e)))))
-(list (m k) (m other))
-;; before => (notlit notlit)
-;; after / Chez / Gauche => (lit notlit)
-```
-
-Bindings are not visible in that function; the caller's `is_literal_shadowed_tagged` veto runs first
-and is the binding-aware half. So the fix is to compare names, matching what the function's three
-other arms already did — the identifier-vs-identifier arm was the lone exception.
-
-Note this is a *different question* from the one below, and conflating them is the trap: **membership**
-("is this pattern identifier a literal at all?") compares identity, while **matching** ("does this
-input match that literal?") is `free-identifier=?`. Predates the identity work below — verified on
-`ac6f6d2`.
-
-Moved `arvyy-interface` off `Name mismatch in interface implementation … proc0 proc0` — two
-identifiers spelled alike that compared unequal — onto an unrelated failure.
-
-**Identifier identity was decided by name inside a macro that writes a macro** — ✅ **fixed**
-(2026-08-14). Both backends. Three places compared identifiers by name alone, so an identifier
-*substituted* from the outer use site and one *introduced* by the outer template were confused
-whenever they were spelled the same. Every case below was cross-checked against Chez Scheme.
-
-| Site | Was | Now |
-|---|---|---|
-| `matcher/literal.rs` | a pattern literal with empty scopes matched **any** identifier | matches the same identifier, via the general name-and-scopes comparison that was already below it |
-| `compiler/pattern.rs` | any substituted identifier became a *literal* pattern | classified by the literals list alone, per R7RS 4.3.2 — so a substituted identifier that is not a literal is an ordinary pattern variable |
-| `compiler/{helpers,template,escape}.rs` | pattern variables keyed by name | keyed by `(name, scopes)`, so a substituted identifier never collides with an introduced pattern variable spelled alike |
-
-The literals list now keeps the scopes each identifier was written with (`LiteralSpec` in
-`patina-core/src/compiled_macro.rs`); both literals parsers previously discarded them.
-
-This unblocks the `new-symbol?` guard in `(chibi parse)`'s `grammar-bind`. `syntax-rules` cannot
-compare two identifiers, so the guard builds an inner macro whose literals list holds the names bound
-so far and calls it with an identifier that matches nothing: a literal cannot match, so the fallback
-rule answers "already bound", while a non-literal is a pattern variable, matches, and answers "new".
-With a literal that matched anything, the answer was always "new" and the same grammar nonterminal
-got a variable more than once — surfacing as `Duplicate parameter 'space' in lambda`.
-
-Watch the interaction with the fix below: the two `space` parameters were *correct* duplicates, so
-rejecting them was right. The defect was upstream of that, in the guard that should have stopped the
-second one being created.
-
-**Recursive macros could not introduce a fresh binding per expansion** — ✅ **fixed** (2026-08-14).
-Both backends. `check_no_duplicates_scoped` in `patina-frontend/src/desugarer/utils.rs` keyed its
-`HashSet` on the parameter *name*, so two params introduced by different expansions of the same
-template were rejected as duplicates even though their scope sets differed:
-
-```scheme
-(define-syntax gen
-  (syntax-rules ()
-    ((_ () (args ...)) (lambda (args ...) (list args ...)))
-    ((_ (x . rest) (args ...)) (gen rest (args ... a)))))
-((gen (1 2) ()) 10 20)
-;; before => Error: Duplicate parameter 'a' in lambda
-;; after / Gauche / Chez => (10 20)
-```
-
-Nothing downstream needed changing: `ScopeId::fresh()` per expansion already gave each introduced
-`a` its own scope, and both the VM's `alpha_rename` pass and the tree-walker bind params by name
-*and* scopes. Only the eager desugarer check disagreed. The two rest-parameter checks beside it
-compared by name alone for the same reason and now share one `binds_identifier` rule. Genuine
-duplicates — `(lambda (q q) q)`, `(lambda (q . q) q)` — still error. Regression tests in
-`crates/patina-tests/tests/compliance/macros_advanced.rs` run on both backends and include SRFI
-156's `extract-placeholders` shape, which is what surfaced this.
-
-**Tree-walker: nested `guard` across a procedure boundary** — ✅ **fixed**. Was 15 errors in the
-R7RS suite, all `Undefined variable: k_N`. Pre-existing (reproduced on `main` before this track) and
-invisible until upstream `(chibi test)` was adopted, because its applier calls every test thunk from
-inside its own `guard`.
-
-Cause: `capture_cont_bindings` returned `None` for the six `ContValue` variants that decorate another
-continuation with an effect — popping an exception handler, caching a forced promise, running a wind
-thunk, delivering multiple values. Returning `None` dropped the whole entry from the captured
-continuation environment, so the captured body's reference to that binder was stranded. Those
-variants now capture through to the continuation they wrap, via one shared
-`ContValue::wrapped_cont()` rule rather than six arms. The wrapper's effect is still not serialized,
-which matches the escape path's existing behaviour of rebuilding handler and wind state.
-
-The VM was never affected: `call/cc` snapshots whole machine state instead of serializing
-continuations name by name, so there is no per-variant case to leave unimplemented.
-
-```scheme
-(define (run thunk)
-  (guard (e (#t (list 'outer e)))
-    (list 'ok (thunk))))
-
-(run (lambda () (guard (x (else 'inner)) (error "boom"))))
-;; tree-walker => Error: Undefined variable: k_7
-;; VM          => (ok inner)
-```
-
-`(chibi test)` hits it because `test-default-applier` calls the test thunk from inside its own
-`guard`, so every suite test whose body uses `guard` trips it — which is why the errors cluster in
-6.10 Control Features and 6.11 Exceptions. A single `guard`, a `guard` under `dynamic-wind`, a
-`guard` under `call/cc`, and two sequential `guard`s all work; only the nesting-across-a-call case
-fails.
-
-**Bare `@` rejected as an identifier** — ✅ **decided and fixed** (2026-08-14). Both backends. We now
-read a leading `@`, which was the largest parse-error bucket at 9 packages and moved the corpus
-129 → 133.
-
-Patina was *strictly correct*: R7RS 7.1.1 makes `@` a ⟨special subsequent⟩ and not an ⟨initial⟩, so
-a bare `@` is not a conforming identifier. The decision to relax it rests on two facts, not on
-counting packages:
-
-1. **Accepting it cannot change the meaning of any conforming program**, because no conforming
-   program contains a bare `@` token. This is a pure widening — unlike the `syntax-rules` shape
-   buckets above, where matching chibi would mean accepting genuinely malformed input.
-2. **The ecosystem treats `@` as a datum, not as sloppiness.** SXML specifies `@` as the attribute
-   marker (and `@raw` as a tag); `(chibi match)` uses `@` as a `syntax-rules` literal for its
-   named-record-field pattern. Chez, Gauche and chibi all read it.
-
-The reader/writer asymmetry that follows is deliberate and matches the references: we read `@` but
-still **write** it as `|@|`, exactly as Gauche does (Chez writes `\x40;`). The invariant worth
-holding is that our writer's output reads back as itself under our own reader, not that we mimic
-another implementation's spelling.
-
-Scope was one `matches!` arm in `is_identifier_start` (`patina-frontend/src/lexer/mod.rs`), which
-already admitted `.` and non-ASCII letters — both themselves deviations from a literal reading of
-7.1.1, so this is consistent with what the lexer already did rather than a new posture. `,@` is
-lexed before identifiers and so is unaffected, as is `⟨real⟩@⟨real⟩` polar notation (`@` is an
-identifier *start*; a leading digit still reads as a number). Both are covered by unit tests
-alongside `crates/patina-tests/tests/at_identifiers.rs`.
+Full write-ups moved to `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md` (2026-08-15) — this section had
+grown to two thirds of the document. Each entry there keeps its repro, its wrong first diagnosis
+where there was one, and the guard test that retires it.
+
+| Defect | Fixed |
+|---|---|
+| `with-output-to-file` crashed the VM on an escape | 2026-08-15 |
+| Tree-walker: the control primitives' own errors escaped `guard` | 2026-08-15 |
+| `make-parameter` objects were not procedures | 2026-08-15 |
+| Tree-walker: an unbound variable escaped `guard` in most positions | 2026-08-15 |
+| Rust registry primitives ignored the import set at top level | 2026-08-15 |
+| The standard port procedures were not parameter objects | 2026-08-15 |
+| Relinking stopped at a `quote` *argument* | 2026-08-14 |
+| Literal matching had no "both unbound" case | 2026-08-14 |
+| Identifier identity was decided by name inside a macro that writes a macro | 2026-08-14 |
+| Recursive macros could not introduce a fresh binding per expansion | 2026-08-14 |
+| Tree-walker: nested `guard` across a procedure boundary | earlier in track |
+| Bare `@` rejected as an identifier | 2026-08-14 |
+
+The lesson they share, and the reason the archive is worth keeping: **run the recorded repro before
+designing against it.** Three of these were filed with a cause that was not the cause — the ports
+"needs more than a second arity" (it did not), the parameter dispatch "exists because `procedure?`
+fails" (it does not), `with-output-to-file` "does not restore" (it restored; the VM crashed) — and
+one of them shipped a test that passed against unfixed code.
 
 ## 7. Risks & mitigations
 - **Per-new-SRFI friction** (non-R7RS constructs, R5RS naming, control-op edges) → apply the resolved patterns in `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`; import each reference implementation incrementally with its own test.

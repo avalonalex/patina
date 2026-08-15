@@ -538,21 +538,10 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         file::call_with_output_file,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
-        "scheme.file",
-        "with-input-from-file",
-        Arity::Exact(2),
-        "Opens file and sets current-input-port for the duration of thunk.",
-        file::with_input_from_file,
-    ));
-
-    registry.register(PrimitiveFn::new_higher_order(
-        "scheme.file",
-        "with-output-to-file",
-        Arity::Exact(2),
-        "Opens file and sets current-output-port for the duration of thunk.",
-        file::with_output_to_file,
-    ));
+    // `with-input-from-file` and `with-output-to-file` are deliberately not
+    // here: they are Scheme, in `lib/scheme/file/redirect.scm`. As primitives
+    // they re-entered the VM to run the thunk, and a `call/cc` out of that
+    // thunk crashed it.
 }
 
 // =============================================================================
