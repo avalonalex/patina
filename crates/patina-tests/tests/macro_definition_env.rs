@@ -340,3 +340,77 @@ fn test_expansion_inside_a_let_syntax_body_resolves() {
     ]);
     assert_eq!(exported_fixnum(&eval, "usep", "r"), 25);
 }
+
+/// A tail is not a form. `rewrite_refs` used to recurse on each cdr as though
+/// it were, so in `(pass quote (helper 1 2))` the tail `(quote (helper 1 2))`
+/// read as a quote form and everything after the argument `quote` was left
+/// unrelinked — `helper` stayed a bare name and was resolved, unsuccessfully,
+/// at the use site.
+///
+/// Nothing about `quote` as an *argument* is exotic: `(chibi match)` reaches it
+/// for any pattern with a quoted tail, since `(x . 'bad)` reads as
+/// `(x quote bad)` and is threaded through `match-two` as three arguments.
+#[test]
+fn test_quote_as_an_argument_does_not_stop_relinking() {
+    let (eval, _t) = eval_with_libs(&[
+        (
+            "q.sld",
+            r#"(define-library (t q)
+                 (import (scheme base))
+                 (export mq)
+                 (begin
+                   (define (helper x) (* 5 x))
+                   (define-syntax pass (syntax-rules () ((pass a b) b)))
+                   (define-syntax mq
+                     (syntax-rules () ((mq x) (pass quote (helper x)))))))"#,
+        ),
+        (
+            "useq.sld",
+            r#"(define-library (t useq)
+                 (import (scheme base) (t q))
+                 (export r)
+                 (begin (define r (mq 6))))"#,
+        ),
+    ]);
+    assert_eq!(exported_fixnum(&eval, "useq", "r"), 30);
+}
+
+/// The same defect one layer down, which is the shape `(chibi match)` actually
+/// hits: the identifier is substituted into the *pattern* of a macro that a
+/// template defines with `let-syntax`, and the relinked reference rides along
+/// as another argument. This is `match-check-ellipsis`'s trick in miniature.
+#[test]
+fn test_quote_substituted_into_a_nested_macro_pattern() {
+    let (eval, _t) = eval_with_libs(&[
+        (
+            "n.sld",
+            r#"(define-library (t n)
+                 (import (scheme base))
+                 (export mn)
+                 (begin
+                   (define (helper x) (* 5 x))
+                   (define-syntax check
+                     (syntax-rules ()
+                       ((check id sk fk)
+                        (let-syntax ((inner (syntax-rules ()
+                                              ((inner (foo id) s f) s)
+                                              ((inner other s f) f))))
+                          (inner (a b c) sk fk)))))
+                   (define-syntax mn
+                     (syntax-rules ()
+                       ((mn id x) (check id 0 (helper x)))))))"#,
+        ),
+        (
+            "usen.sld",
+            r#"(define-library (t usen)
+                 (import (scheme base) (t n))
+                 (export r s)
+                 (begin
+                   (define r (mn quote 7))
+                   (define s (mn zzz 7))))"#,
+        ),
+    ]);
+    // Both spellings must relink; only the `quote` one used to fail.
+    assert_eq!(exported_fixnum(&eval, "usen", "r"), 35);
+    assert_eq!(exported_fixnum(&eval, "usen", "s"), 35);
+}

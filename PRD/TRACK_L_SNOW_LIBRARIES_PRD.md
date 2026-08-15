@@ -292,6 +292,13 @@ and `classify` reports those as out-of-scope rather than as our runtime errors. 
 tested but currently unexercised by the corpus — no package gets that far today — so it is a
 correctness guard against future misfiling, not a source of the numbers above.
 
+**Relinking fixed at a `quote` argument, 2026-08-14 (137/184, unchanged).** The headline does not
+move and that is the honest report: chibi-match went from `parse-error` — the library dead, its
+suite unrunnable — to `wrong-result`, with **74 of its 75 upstream tests passing**. A package scores
+`pass` or it does not, so a suite that goes from zero to 74/75 registers as no change at all. The
+remaining failure is `match-letrec` (§6). Worth noting for reading the number: the corpus counts
+packages, not tests, so it under-reports exactly this kind of progress.
+
 **Recorded debt — `report.md` is written by shell redirect.** `run` and `report` print the rendered
 matrix to stdout and only `results.scm` is written to disk, so the committed
 `compat/reports/report.md` goes stale unless the caller redirects into it. Either write both
@@ -388,57 +395,59 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
-**A library-internal macro loses its definition environment through a nested `let-syntax`** —
-❌ **open**, own PR. Both backends. Found 2026-08-14 the moment the `@` fix let `(chibi match)`
-load, and **the only §6 entry currently blocking a corpus package** (chibi-match's suite; everything
-else here was found by construction). Cross-checked against Chez and Gauche, both of which print
-`(expanded 1 2)` twice:
+**The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ❌ **open**.
+Found 2026-08-14 by auditing the *class* behind the `quote`-argument fix below, which is the practice
+this section already follows. `mark_substituted_tagged`
+(`patina-macros/src/macro_expander/expander/hygiene.rs`) walks a pair tree by recursing on the cdr
+and re-reading its head, exactly as `rewrite_refs` did:
 
-```scheme
-;; library (t m) exports only `top`; `helper` and `check` are internal
-(define-syntax helper (syntax-rules () ((_ a b) (list 'expanded a b))))
-(define-syntax check
-  (syntax-rules ()
-    ((_ id sk fk)
-     (let-syntax ((inner (syntax-rules ()
-                           ((inner (foo id) s f) s)
-                           ((inner other s f) f))))
-       (inner (a b c) sk fk)))))
-(define-syntax top (syntax-rules () ((_ id) (check id (list 'yes) (helper 1 2)))))
-
-;; use site: (import (t m)) (top quote)
-;; Chez, Gauche => (expanded 1 2)
-;; Patina       => Error: unbound variable: helper
+```rust
+if self.is_macro_definition_tagged(car) || self.is_quote_form_tagged(car) {
+    return tv;                       // correct for a form, wrong for a tail
+}
+let new_car = self.mark_substituted_tagged(car);
+let new_cdr = self.mark_substituted_tagged(cdr);   // cdr re-read as a form
 ```
 
-`helper` is introduced by `top`'s template, so it must resolve in the library's definition
-environment. It survives one hop, but not this one: `check` substitutes it into `inner`'s *arguments*,
-`inner` returns it as pattern-variable material, and by then the link is gone — `helper` is neither
-a macro nor a variable at the use site. One layer less (`top` expanding straight into the
-`let-syntax`) works, which is why this needed the real three-macro chain to surface.
+So for a substituted value shaped like `(f quote y)`, the recursive call on the tail `(quote y)`
+sees a quote head and returns unchanged — and `y`, plus everything after it, never receives the
+macro scope. That function exists precisely so substituted identifiers can be told apart from a
+nested macro's own pattern variables, which is the mechanism behind two already-fixed entries in
+this section, so losing the mark is a hygiene defect rather than a cosmetic one.
 
-The `(chibi match)` symptom is worth reading, because it looks like an unrelated bug. `match-one`
-emits `(match-two v (p q . r) g+s sk fk i)` as the failure branch of `match-check-ellipsis`, whose
-`let-syntax` trick returns it verbatim. `match-two` arrives unlinked, so it is no longer a macro,
-so the desugarer treats the form as an application and desugars its arguments — including the
-getter/setter pair `((cons 1 2) (set! (cons 1 2)))`, which is inert syntax that only the `(set! setter)`
-rule ever destructures. The reported error is `set! expects 2 arguments, got 1`, naming a form that
-was never meant to be evaluated and a macro that is not the one at fault. Minimal repro:
-`(match (cons 1 2) ((zz . 'bad) zz) (else 'no))` — any dotted pattern whose tail is quoted, since
-that is what routes through `match-check-ellipsis`.
+**Honest limit on this entry:** the code shape is confirmed identical, but no observable repro has
+been constructed yet. Reaching it needs a single pattern variable bound to a list with `quote`,
+`syntax-rules`, `define-syntax`, `let-syntax` or `letrec-syntax` in non-initial position, whose
+later elements then matter to an inner macro's identity comparisons — plausible from
+`(chibi parse)`-style macro-writing-macro code but not yet exhibited. Do not close it as theoretical
+without trying; do not report it as user-visible without a repro.
 
-Same machinery as the "definition-env relinking rewrites by name" entry below (`link_definition_env_refs`
-/ `rewrite_refs` in `patina-frontend/src/desugarer/mod.rs`), opposite symptom: that one relinks an
-identifier it should have left alone, this one fails to relink one it should have kept. Both suggest
-the relinking basis — a `HashSet<Rc<str>>` of template *names*, resolved once against two
-environments — cannot express "this particular occurrence came from that template". Worth designing
-the two together.
+The durable fix is the one the sibling walkers already use: `compile_template` and
+`compile_template_escaped` flatten the spine once via `collect_list_items` and index element 0,
+which is what `rewrite_form` converged on independently. `mark_substituted_tagged` is the one that
+still hand-rolls car/cdr recursion. Checked and clean: `stamp_expansion_source`,
+`contains_identifier_tagged`, `flip_scope_on_tagged_impl`, `strip_identifiers_impl` and
+`evaluate_feature_requirement_tagged` — the first four recurse uniformly with no head dispatch at
+all, and the last flattens before dispatching.
 
-The two entries after this one were found on 2026-08-14 by auditing for the defect class behind the
-fixed items in this section — an identifier comparison made on the wrong basis. Each is cross-checked
-against **two** reference implementations (Chez Scheme and Gauche), not one. Neither is reachable
-from the corpus queue today; both were found by construction, so nothing in §4 depends on them. The
-two after those predate this track's macro work and are unchanged.
+**`match-letrec` does not match** — ❌ **open**. Both backends. The one remaining failure in
+`(chibi match)`'s suite (74 of 75) after the relinking fix below, and the reason chibi-match scores
+`wrong-result` rather than `pass`. Every `match-letrec` fails, including the simplest one, while the
+neighbouring `match-let` works:
+
+```scheme
+(match-letrec (((x y) (list 1 2))) (list x y))
+;; chibi => (1 2)
+;; Patina => Error: type error: error: first argument must be a string
+```
+
+**Read that error carefully — it is not the failure.** The match fails, and chibi's failure branch
+is `(error 'match "no matching pattern")` (`match.scm:327`), whose first argument is a *symbol*.
+R7RS 6.11 gives `error` a string message, so Patina rejects the call and reports a type error about
+`error` itself, burying the real problem. Chez and Gauche accept a symbol there, so this is chibi
+leniency of the kind §4 already declines to imitate — but it is the second time in this track that
+a lenient `error` has hidden the defect underneath it, which is worth weighing if the question is
+ever reopened. Diagnosing this one means neutralising that call first.
 
 **Hygiene is not applied inside a quasiquoted vector** — ❌ **open**. Both backends. Six lines, and
 it captures in *both* directions at once — the template's own binding and the caller's argument each
@@ -552,6 +561,58 @@ Redirecting the current ports is also a capability the L3 harness will want dire
 a package's output without touching the real stdout.
 
 ### Fixed
+
+**Relinking stopped at a `quote` *argument*** — ✅ **fixed** (2026-08-14). Both backends. Found the
+moment the `@` fix let `(chibi match)` load, and the only §6 entry that was blocking a corpus
+package. Recorded first as "a library-internal macro loses its definition environment through a
+nested `let-syntax`", which is where it was found rather than what it was — the narrowing is the
+useful part, so both the symptom and the cause are kept here.
+
+The cause is one line of tree-walking. `rewrite_refs` recursed on each **cdr** as though a cdr were
+a form, and its first act on a form is to read the head for a quoting operator. A tail is not a
+form: in `(pass quote (helper 1 2))` the tail is `(quote (helper 1 2))`, which read as a quote form,
+so the walk returned it untouched and everything after the argument `quote` was left unrelinked.
+`helper` stayed a bare name and was resolved, unsuccessfully, at the use site. Three lines are
+enough:
+
+```scheme
+;; library (t m) exports only `top`; `helper` and `pass` are internal
+(define-syntax helper (syntax-rules () ((_ a b) (list 'expanded a b))))
+(define-syntax pass   (syntax-rules () ((_ a b) b)))
+(define-syntax top    (syntax-rules () ((_) (pass quote (helper 1 2)))))
+;; (import (t m)) (top)
+;; Chez, Gauche, and now Patina => (expanded 1 2)
+;; before                       => Error: unbound variable: helper
+```
+
+Nothing about it needed `let-syntax`, nested macros, or libraries beyond one private helper; the
+three-macro chain it was found in only made `quote` land in argument position. Any template that
+passes `quote` along was affected. The fix walks a form's spine once — head read in head position,
+arguments read as arguments — instead of re-reading each tail as a new form, which is also how the
+evaluator reads `(f quote x)`. The old walk simply disagreed with it.
+
+**Do not read the original diagnosis as a near miss.** It blamed the relinking *basis* — a
+`HashSet` of template names that "cannot express which occurrence came from that template" — and
+proposed designing this together with the entry below. That would have been a rewrite of the
+machinery to fix a defect in how a list is traversed. The lesson is the ordinary one: the three-macro
+repro was reduced further before anything was designed, and reducing it changed the answer.
+
+`(chibi match)` reaches this for **any pattern with a quoted tail**, since `(x . 'bad)` reads as
+`(x quote bad)` and is threaded through `match-two` as three arguments. The symptom there was worth
+reading too, because it named neither the cause nor the right macro: with `match-two` unlinked it
+was no longer a macro, so the desugarer treated the form as an application and desugared its
+arguments — including the inert getter/setter pair `((cons 1 2) (set! (cons 1 2)))` that only the
+`(set! setter)` rule ever destructures — and reported `set! expects 2 arguments, got 1`.
+
+Result: chibi-match went from a dead suite to **74 of 75**, and the corpus from parse-error to
+wrong-result on that package. The one remaining failure is `match-letrec`, recorded below. The
+entry below — relinking rewriting *by name* — is untouched by this and stays open.
+
+The two entries after this one were found on 2026-08-14 by auditing for the defect class behind the
+fixed items in this section — an identifier comparison made on the wrong basis. Each is cross-checked
+against **two** reference implementations (Chez Scheme and Gauche), not one. Neither is reachable
+from the corpus queue today; both were found by construction, so nothing in §4 depends on them. The
+two after those predate this track's macro work and are unchanged.
 
 **Literal matching had no "both unbound" case** — ✅ **fixed** (2026-08-14). Both backends.
 R7RS 4.3.2 gives literal *matching* `free-identifier=?` semantics: an input matches a literal when

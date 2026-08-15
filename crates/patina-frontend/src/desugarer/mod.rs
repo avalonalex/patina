@@ -77,6 +77,7 @@ use patina_core::error::SourceLocation;
 use patina_core::{SharedHeap, TaggedValue};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
+use patina_macros::macro_expander::utils::list_to_vec_with_tail_tagged;
 use patina_runtime::{Environment, ScopeId, ScopeSet};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -350,6 +351,59 @@ impl Desugarer {
         self.rewrite_refs(expanded, &renames, 0, shared_heap)
     }
 
+    /// Rewrite one *form* — a list read the way the evaluator reads it, with a
+    /// head that may be a quoting operator.
+    ///
+    /// The spine is walked here rather than by recursing on each cdr, and that
+    /// is the whole point. A cdr is a *tail*, not a form: in `(f quote x)` the
+    /// tail is `(quote x)`, so re-reading it as a form saw a quote and treated
+    /// everything after the argument `quote` as inert data. Head position is
+    /// decided once, here.
+    fn rewrite_form(
+        &self,
+        tv: TaggedValue,
+        renames: &HashMap<Rc<str>, TaggedValue>,
+        quote_depth: u32,
+        shared_heap: &SharedHeap,
+    ) -> TaggedValue {
+        // Compute the depth inside the borrow: the answer is a `u32`, so
+        // nothing needs to outlive it and the head name is never copied out.
+        let rest_depth = {
+            let heap = shared_heap.borrow();
+            let (car, _) = heap.get_pair(tv);
+            match heap.get_symbol_or_identifier_name(car) {
+                Some("quote") => return tv,
+                Some("quasiquote") => quote_depth + 1,
+                Some("unquote") | Some("unquote-splicing") => quote_depth.saturating_sub(1),
+                _ => quote_depth,
+            }
+        };
+
+        // Flatten the spine so the head can be told from the arguments. The
+        // tail is whatever ends the list — `()` for a proper one, an atom for
+        // a dotted one.
+        let (mut elems, tail) = list_to_vec_with_tail_tagged(tv, &shared_heap.borrow());
+
+        let mut changed = false;
+        for (i, e) in elems.iter_mut().enumerate() {
+            // The head is read at the enclosing depth; a quoting head governs
+            // its arguments, not itself.
+            let depth = if i == 0 { quote_depth } else { rest_depth };
+            let new_e = self.rewrite_refs(*e, renames, depth, shared_heap);
+            changed |= new_e != *e;
+            *e = new_e;
+        }
+        let new_tail = self.rewrite_refs(tail, renames, rest_depth, shared_heap);
+        changed |= new_tail != tail;
+
+        if !changed {
+            return tv;
+        }
+        shared_heap
+            .borrow_mut()
+            .list_from_iter_with_tail(elems, new_tail)
+    }
+
     /// Substitute `renames` into evaluated positions of `tv`.
     ///
     /// `quote_depth` tracks quasiquotation: names inside quoted data denote
@@ -364,24 +418,7 @@ impl Desugarer {
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
         if tv.is_pair() {
-            let (car, cdr) = shared_heap.borrow().get_pair(tv);
-            // A quoting head changes how the rest of the form is read.
-            let head = {
-                let heap = shared_heap.borrow();
-                heap.get_symbol_or_identifier_name(car).map(String::from)
-            };
-            let inner_depth = match head.as_deref() {
-                Some("quote") => return tv,
-                Some("quasiquote") => quote_depth + 1,
-                Some("unquote") | Some("unquote-splicing") => quote_depth.saturating_sub(1),
-                _ => quote_depth,
-            };
-            let new_car = self.rewrite_refs(car, renames, quote_depth, shared_heap);
-            let new_cdr = self.rewrite_refs(cdr, renames, inner_depth, shared_heap);
-            if new_car == car && new_cdr == cdr {
-                return tv;
-            }
-            return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
+            return self.rewrite_form(tv, renames, quote_depth, shared_heap);
         }
 
         if tv.is_vector() {

@@ -21,7 +21,7 @@
   ((slug "chibi-irregex") (mode probe) (status missing-library) (missing "chibi irregex"))
   ((slug "chibi-iset") (mode test) (status pass))
   ((slug "chibi-locale") (mode test) (status pass))
-  ((slug "chibi-match") (mode test) (status parse-error) (errors "set! expects 2 arguments, got 1"))
+  ((slug "chibi-match") (mode test) (status wrong-result))
   ((slug "chibi-math-linalg") (mode test) (status missing-library) (missing "srfi 231"))
   ((slug "chibi-math-prime") (mode test) (status pass))
   ((slug "chibi-math-stats") (mode test) (status missing-library) (missing "scheme flonum"))
