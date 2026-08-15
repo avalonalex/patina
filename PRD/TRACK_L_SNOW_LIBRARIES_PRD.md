@@ -449,6 +449,32 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
+**`make-parameter` objects are not procedures** — ❌ **open**. Both backends. Found 2026-08-15 while
+checking whether the three standard ports had become *real* parameter objects or only ones that
+satisfy our particular `parameterize` macro. They had, and the check turned up the mirror gap
+instead:
+
+```scheme
+(procedure? current-output-port)   ;; => #t   (correct)
+(procedure? (make-parameter 1))    ;; => #f   (wrong)
+```
+
+R7RS §7.3 defines `make-parameter` as returning "a newly allocated **procedure**", and §4.2.6 applies
+parameter objects as `(p)`. Patina's are a distinct heap object that the evaluator applies specially,
+so they work everywhere a parameter is used but answer `procedure?` wrongly. Low stakes on its own,
+but it means Patina now has two kinds of parameter object that disagree about what they are — and it
+is the reason the ports were **not** converted to the generic mechanism: doing so would have traded a
+fixed defect for this one. Fixing this first would make that conversion available.
+
+**`with-output-to-file` does not restore through `dynamic-wind`** — ❌ **open**. Both backends.
+`with_output_to_file` / `with_input_from_file` (`patina-primitives/src/primitives/io/file.rs`) save
+the current port, call the thunk, and restore afterwards in straight-line Rust. That covers a normal
+return and an error, but not a `call/cc` escape out of the thunk: the unwind skips the restore and
+the process is left writing into a closed file port. `parameterize` gets this right via
+`dynamic-wind`, and now that the ports are parameter objects these two could simply be expressed in
+terms of it — one mechanism instead of two, with the escape case handled by construction. Not folded
+into the parameter-object change because it is a behaviour change to a different file.
+
 **The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ❌ **open**.
 Found 2026-08-14 by auditing the *class* behind the `quote`-argument fix below, which is the practice
 this section already follows. `mark_substituted_tagged`

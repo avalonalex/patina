@@ -417,31 +417,27 @@ pub(super) fn get_output_bytevector(
 /// that calls `get_current_output_port()` observes. A Scheme-level rebinding
 /// that left the thread-local alone would be the broken version, because
 /// `display` with no port argument reads the thread-local and would ignore it.
+/// The shape of this file's port-argument validators, so the three standard
+/// ports can be handed the one matching their direction.
+type PortCheck =
+    fn(&[TaggedValue], usize, &std::cell::Ref<'_, Heap>) -> Result<Rc<Port>, EvalError>;
+
+/// `check` is the file's existing port-argument validator for the right
+/// direction — `get_input_port_tagged` or `get_output_port_tagged`. Its
+/// "absent argument defaults to the current port" branch is unreachable here,
+/// since this arm only runs with exactly one argument.
 fn current_port(
     heap: &SharedHeap,
     args: &[TaggedValue],
     who: &str,
     get: fn() -> Rc<Port>,
     set: fn(Rc<Port>),
-    want_input: bool,
+    check: PortCheck,
 ) -> Result<TaggedValue, EvalError> {
     match args {
         [] => Ok(heap.borrow_mut().alloc_port(get())),
-        [value] => {
-            let port = {
-                let heap_ref = heap.borrow();
-                get_port_tv(*value, &heap_ref)
-                    .ok_or_else(|| EvalError::TypeError(format!("{who} expects a port")))?
-                    .clone()
-            };
-            if want_input && !port.is_input() {
-                return Err(EvalError::TypeError(format!("{who} expects an input port")));
-            }
-            if !want_input && !port.is_output() {
-                return Err(EvalError::TypeError(format!(
-                    "{who} expects an output port"
-                )));
-            }
+        [_] => {
+            let port = check(args, 0, &heap.borrow())?;
             set(port);
             Ok(TaggedValue::UNSPECIFIED)
         }
@@ -463,7 +459,7 @@ pub(super) fn current_input_port(
         "current-input-port",
         get_current_input_port,
         set_current_input_port,
-        true,
+        get_input_port_tagged,
     )
 }
 
@@ -478,7 +474,7 @@ pub(super) fn current_output_port(
         "current-output-port",
         get_current_output_port,
         set_current_output_port,
-        false,
+        get_output_port_tagged,
     )
 }
 
@@ -493,7 +489,7 @@ pub(super) fn current_error_port(
         "current-error-port",
         get_current_error_port,
         set_current_error_port,
-        false,
+        get_output_port_tagged,
     )
 }
 
