@@ -160,9 +160,8 @@ Third-party packages frequently `(import (chibi …))`; today only `(chibi test)
 - `(chibi match)`, `(chibi optional)` — pure Scheme, pervasive in chibi-authored packages, and `(chibi optional)` also retires the ad-hoc `:optional` / `let-optionals` shims the existing SRFI ports carry. Highest leverage in this group.
 - ✅ `(chibi string)` — **done 2026-08-14**, bundled as `(srfi 130)`'s dependency rather than on its
   own schedule, though it earned a place either way at in-degree 16, the highest in the corpus after
-  `(slib common)`. Byte-identical to the 0.9.0 snowball; its `cond-expand` takes the non-chibi
-  branch, where string cursors are plain integers. Bundling it also retired `(srfi 13)` from the
-  missing-library queue — chibi-binary-record and chibi-tar were asking for SRFI 13 only as the
+  `(slib common)`. Byte-identical to the 0.9.0 snowball; `lib/chibi/PROVENANCE.md` carries the
+  record. Bundling it also retired `(srfi 13)` from the missing-library queue — chibi-binary-record and chibi-tar were asking for SRFI 13 only as the
   fallback their `cond-expand` reaches when `(chibi string)` is absent.
 - `(chibi io)`, `(chibi pathname)` — mostly pure Scheme over R7RS + SRFIs present after L1.
 - `(chibi show)` / SRFI 166 — the formatting library much of the ecosystem writes output with.

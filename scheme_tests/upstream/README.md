@@ -33,6 +33,16 @@ standard SRFI 14, which Patina now bundles. So the two imports are replaced by
 no test body is touched. Recorded here rather than done silently, because the
 value of these suites is that they are not ours to edit.
 
+Which exposes something worth fixing: **nothing mechanically guards this tree.**
+`lib/` has `crates/patina-tests/tests/bundled_provenance.rs` hashing every
+bundled file against a recorded pin, so an unrecorded edit fails the suite. The
+claim above is prose only, and always has been — true for the six suites here
+before this one. It mattered less while "copied unmodified" was exceptionless;
+now that there is one adaptation, a second could arrive without disclosure and
+nothing would notice. The fix is the mechanism `lib/` already has: pin these
+`test.sld` files by hash too, with `srfi/130/test.sld` pinned at its adapted
+hash, exactly as `lib/srfi/130.scm` is pinned post-edit.
+
 Both columns are enforced by `upstream_srfi_suites.rs`, not prose: the failure
 count is asserted exactly, in both directions — a regression fails, and so does
 a fix until the number is lowered — and the assertion count is a floor, so a

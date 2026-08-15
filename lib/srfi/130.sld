@@ -7,17 +7,17 @@
 ;; one, which is why it is recorded here rather than in PROVENANCE.md with
 ;; the tarball-pinned trees.
 ;;
-;; This .sld is byte-identical to upstream. `130.scm` carries exactly one
-;; deviation, marked `;; PATINA LOCAL EDIT:` at its site: upstream's
+;; The library form below is unchanged from upstream — this header is the only
+;; addition to the file. `130.scm` carries exactly one deviation, marked
+;; `;; PATINA LOCAL EDIT:` at its site: upstream's
 ;; `string-drop` calls `(substring str n)`, and R7RS 6.7 gives `substring`
 ;; exactly three arguments. The two-argument form is a chibi extension that
 ;; Gauche and Chez reject as we do, so this is upstream depending on its own
 ;; reader rather than a gap in Patina — see PRD/TRACK_L_SNOW_LIBRARIES_PRD.md
 ;; section 6 for the same verdict applied to other chibi-only constructs.
 ;;
-;; It is written against `(chibi string)` (bundled here, see
-;; lib/chibi/PROVENANCE.md), whose non-chibi `cond-expand` branch makes string
-;; cursors plain integers.
+;; It is written against `(chibi string)`, bundled here; lib/chibi/PROVENANCE.md
+;; is where that tree's record lives, including why its cursors are integers.
 
 (define-library (srfi 130)
   (export

@@ -40,6 +40,13 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/14.sld", 0xa30fdc16bb8de140),
     ("lib/srfi/27.scm", 0xf12c3dd28221b826),
     ("lib/srfi/27.sld", 0xa55b16b061696cdf),
+    // 130.scm is pinned at its *post-edit* hash, like 132.sld below: it is
+    // upstream apart from one `;; PATINA LOCAL EDIT:`, and pinning the result
+    // is what keeps the other 307 lines guarded. Leaving a file out because it
+    // is not byte-identical would make the deviation the reason its whole tree
+    // goes unwatched.
+    ("lib/srfi/130.scm", 0x2979bbeb162b21e1),
+    ("lib/srfi/130.sld", 0xe70313221d2c5e5b),
     // Unlike every other row, 132.sld is Patina-authored with no upstream to
     // match — the pin freezes the tree's provenance *record*, so editing the
     // header is a deliberate act like editing the files it describes.
