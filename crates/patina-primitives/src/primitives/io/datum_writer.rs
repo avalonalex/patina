@@ -191,6 +191,12 @@ fn symbol_needs_vertical_bars(name: &str) -> bool {
         }
 
         if i == 0 {
+            // Intentionally *stricter* than the lexer's `is_identifier_start`,
+            // which also admits `@` and non-ASCII letters. This asks "would
+            // every R7RS reader take this bare?", so it stays at 7.1.1 and
+            // bar-quotes the rest — `@` writes as `|@|`, as Gauche does. Do
+            // not sync the two lists; widening what we *read* must not narrow
+            // what we escape.
             let is_valid_initial = ch.is_ascii_alphabetic()
                 || matches!(
                     ch,

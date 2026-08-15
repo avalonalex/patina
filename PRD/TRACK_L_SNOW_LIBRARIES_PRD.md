@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**129 of 187** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
+(**133 of 187** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -195,11 +195,25 @@ unblocking **srfi-42**. The rest of the queue, with verdicts:
 
 | Bucket | Pkgs | Verdict |
 |---|---|---|
-| bare `@` identifier | 9 | Patina is right per R7RS 7.1.1 (`@` is a ⟨special subsequent⟩, not an ⟨initial⟩); chibi and Gauche accept it. Needs the explicit decision recorded in §6, not a silent relaxation. |
+| bare `@` identifier | 9 | **Decided and ✅ landed** — we now read it (§6). Patina was right per R7RS 7.1.1, but strictness bought nothing: no conforming program contains a bare `@` token, so accepting it only widens the accepted language. |
 | syntax-rules rule with >2 elements | 5 | **Chez rejects these too.** They are typos in chibi's own sources (e.g. `((_) bv off i)` in `ieee-754.scm`) that only chibi's lenient reader tolerates. Matching chibi here means accepting nonsense. |
 | `syntax-rules` with no literals list | 3 | Upstream-malformed: `(syntax-rules ((_ x) 'x))` sits in `(chibi monad environment)`'s `cond-expand` **else** branch, which chibi itself never takes. Blocks chibi-show and chibi-snow-commands transitively. |
 | `Duplicate parameter 'space' / 'symbol-first'` | 2 | **Ours — ✅ fixed** (§6, identifier identity). chibi-parse now passes. edn advanced to `duplicate pattern variable ch`, which **Chez raises verbatim on the same input**, so what is left there is chibi leniency, not our defect. |
 | `Expected proper list in feature requirement` | 1 | **Ours — ✅ fixed.** srfi-42 ships `(cond-expand (stklos …) (else #f))`; the inert `#f` is not a list, so it hard-errored instead of taking L0's warn-and-skip path — and reported a message belonging to a shared list helper, misattributing the problem to the feature requirement. A declaration that is not a proper list, or whose head is not a symbol, now takes the same lenient path as an unknown keyword, still strict under `PATINA_STRICT_LIBRARY_SYNTAX=1`. This closes a gap in L0's own policy: leniency covered unrecognized *keywords* but not shapes that are not declarations at all, which is exactly what a cond-expand branch written for another implementation leaves behind. |
+
+**Bare `@` accepted, 2026-08-14 (129 → 133).** The largest parse-error bucket is gone; the nine
+packages it blocked landed as **4 passes** (chibi-html-parser, chibi-sxml, lassik-shell-quote,
+slib-xml-parse) and 5 advances to a further failure. That split is the point: a lexer fix cannot
+make a package pass on its own, and the advances are what re-ordered the queue —
+
+- **`(srfi 130)` is now the top bundling target at in-degree 6**, up from 4: chibi-app and okmij-ssax
+  both reached their imports and asked for it. It leads `(chibi)` ×3 and the ×2 tail by a clear
+  margin, so L1 should take it next.
+- **chibi-match now loads and runs**, and only its *test suite* still fails — on a genuine defect
+  this unblocking exposed (§6, definition-env link lost through a nested `let-syntax`). Worth
+  separating: the library third parties actually import is working.
+- chibi-mime → `wrong-result` and lassik-dockerfile → `runtime-error` are new, unexamined, and are
+  the first entries this track has in either bucket.
 
 **Recorded debt — `report.md` is written by shell redirect.** `run` and `report` print the rendered
 matrix to stdout and only `results.scm` is written to disk, so the committed
@@ -297,11 +311,57 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
-The first two entries were found on 2026-08-14 by auditing for the defect class behind the fixed
-items in this section — an identifier comparison made on the wrong basis. Each is cross-checked
+**A library-internal macro loses its definition environment through a nested `let-syntax`** —
+❌ **open**, own PR. Both backends. Found 2026-08-14 the moment the `@` fix let `(chibi match)`
+load, and **the only §6 entry currently blocking a corpus package** (chibi-match's suite; everything
+else here was found by construction). Cross-checked against Chez and Gauche, both of which print
+`(expanded 1 2)` twice:
+
+```scheme
+;; library (t m) exports only `top`; `helper` and `check` are internal
+(define-syntax helper (syntax-rules () ((_ a b) (list 'expanded a b))))
+(define-syntax check
+  (syntax-rules ()
+    ((_ id sk fk)
+     (let-syntax ((inner (syntax-rules ()
+                           ((inner (foo id) s f) s)
+                           ((inner other s f) f))))
+       (inner (a b c) sk fk)))))
+(define-syntax top (syntax-rules () ((_ id) (check id (list 'yes) (helper 1 2)))))
+
+;; use site: (import (t m)) (top quote)
+;; Chez, Gauche => (expanded 1 2)
+;; Patina       => Error: unbound variable: helper
+```
+
+`helper` is introduced by `top`'s template, so it must resolve in the library's definition
+environment. It survives one hop, but not this one: `check` substitutes it into `inner`'s *arguments*,
+`inner` returns it as pattern-variable material, and by then the link is gone — `helper` is neither
+a macro nor a variable at the use site. One layer less (`top` expanding straight into the
+`let-syntax`) works, which is why this needed the real three-macro chain to surface.
+
+The `(chibi match)` symptom is worth reading, because it looks like an unrelated bug. `match-one`
+emits `(match-two v (p q . r) g+s sk fk i)` as the failure branch of `match-check-ellipsis`, whose
+`let-syntax` trick returns it verbatim. `match-two` arrives unlinked, so it is no longer a macro,
+so the desugarer treats the form as an application and desugars its arguments — including the
+getter/setter pair `((cons 1 2) (set! (cons 1 2)))`, which is inert syntax that only the `(set! setter)`
+rule ever destructures. The reported error is `set! expects 2 arguments, got 1`, naming a form that
+was never meant to be evaluated and a macro that is not the one at fault. Minimal repro:
+`(match (cons 1 2) ((zz . 'bad) zz) (else 'no))` — any dotted pattern whose tail is quoted, since
+that is what routes through `match-check-ellipsis`.
+
+Same machinery as the "definition-env relinking rewrites by name" entry below (`link_definition_env_refs`
+/ `rewrite_refs` in `patina-frontend/src/desugarer/mod.rs`), opposite symptom: that one relinks an
+identifier it should have left alone, this one fails to relink one it should have kept. Both suggest
+the relinking basis — a `HashSet<Rc<str>>` of template *names*, resolved once against two
+environments — cannot express "this particular occurrence came from that template". Worth designing
+the two together.
+
+The two entries after this one were found on 2026-08-14 by auditing for the defect class behind the
+fixed items in this section — an identifier comparison made on the wrong basis. Each is cross-checked
 against **two** reference implementations (Chez Scheme and Gauche), not one. Neither is reachable
 from the corpus queue today; both were found by construction, so nothing in §4 depends on them. The
-two after that predate this track's macro work and are unchanged.
+two after those predate this track's macro work and are unchanged.
 
 **Hygiene is not applied inside a quasiquoted vector** — ❌ **open**. Both backends. Six lines, and
 it captures in *both* directions at once — the template's own binding and the caller's argument each
@@ -525,9 +585,32 @@ continuations name by name, so there is no per-variant case to leave unimplement
 `guard` under `call/cc`, and two sequential `guard`s all work; only the nesting-across-a-call case
 fails.
 
-**Bare `@` rejected as an identifier** — 9 corpus packages, including `(chibi match)`. Patina is
-strictly correct per R7RS 7.1.1 (`@` is a ⟨special subsequent⟩, not an ⟨initial⟩); chibi and Gauche
-accept it. A deliberate strictness decision rather than a bug, but it needs making explicitly.
+**Bare `@` rejected as an identifier** — ✅ **decided and fixed** (2026-08-14). Both backends. We now
+read a leading `@`, which was the largest parse-error bucket at 9 packages and moved the corpus
+129 → 133.
+
+Patina was *strictly correct*: R7RS 7.1.1 makes `@` a ⟨special subsequent⟩ and not an ⟨initial⟩, so
+a bare `@` is not a conforming identifier. The decision to relax it rests on two facts, not on
+counting packages:
+
+1. **Accepting it cannot change the meaning of any conforming program**, because no conforming
+   program contains a bare `@` token. This is a pure widening — unlike the `syntax-rules` shape
+   buckets above, where matching chibi would mean accepting genuinely malformed input.
+2. **The ecosystem treats `@` as a datum, not as sloppiness.** SXML specifies `@` as the attribute
+   marker (and `@raw` as a tag); `(chibi match)` uses `@` as a `syntax-rules` literal for its
+   named-record-field pattern. Chez, Gauche and chibi all read it.
+
+The reader/writer asymmetry that follows is deliberate and matches the references: we read `@` but
+still **write** it as `|@|`, exactly as Gauche does (Chez writes `\x40;`). The invariant worth
+holding is that our writer's output reads back as itself under our own reader, not that we mimic
+another implementation's spelling.
+
+Scope was one `matches!` arm in `is_identifier_start` (`patina-frontend/src/lexer/mod.rs`), which
+already admitted `.` and non-ASCII letters — both themselves deviations from a literal reading of
+7.1.1, so this is consistent with what the lexer already did rather than a new posture. `,@` is
+lexed before identifiers and so is unaffected, as is `⟨real⟩@⟨real⟩` polar notation (`@` is an
+identifier *start*; a leading digit still reads as a number). Both are covered by unit tests
+alongside `crates/patina-tests/tests/at_identifiers.rs`.
 
 ## 7. Risks & mitigations
 - **Per-new-SRFI friction** (non-R7RS constructs, R5RS naming, control-op edges) → apply the resolved patterns in `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`; import each reference implementation incrementally with its own test.
