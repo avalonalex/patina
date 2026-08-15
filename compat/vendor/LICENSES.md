@@ -124,9 +124,12 @@ older MIT Scheme distribution licence:
 
 Three obligations, all currently satisfied:
 
-1. **Reproduce the copyright notice in full.** Satisfied because every file is vendored unmodified,
-   notices intact. This is the concrete reason the no-modification rule in `README.md` matters: strip
-   a header and the licence is breached.
+1. **Reproduce the copyright notice in full.** Nothing here has been stripped — every file is
+   vendored unmodified, so every notice upstream shipped is still present. That is the concrete
+   reason the no-modification rule in `README.md` matters: strip a header and the licence is
+   breached. It is *not* the same as saying a notice exists for every package; 43 of the 184 ship
+   none in any source file, and for those this record is the notice. See **Packages that ship no
+   notice** below.
 2. **Do not use the authors' names to promote anything.** Neither Aubrey Jaffer nor MIT may appear in
    Patina's advertising or promotional material. Listing them here, as an accurate record of what the
    test corpus contains, is not promotional use — but "tested against Aubrey Jaffer's SLIB" as a
@@ -137,6 +140,156 @@ The MIT Scheme licence's clause 2 asks users to make "best efforts" to return im
 Scheme project and to inform MIT of noteworthy uses. It is phrased as an agreement rather than a
 condition of the grant, and is generally treated as a request. It is moot here regardless: the code is
 vendored unmodified and only executed as a test input, so there are no improvements to return.
+
+## Standard licence texts
+
+The two non-standard licences above are quoted because they are unusual. These three are quoted
+because 43 packages ship no notice of their own (below), so for those the terms exist nowhere else
+in this repository. Each package's own copyright line is its publisher's, listed in that table;
+the bodies are the standard ones.
+
+### BSD 3-Clause — 63 packages
+
+Reproduced from chibi-scheme's `COPYING`, the origin of most BSD packages here. `lib/chibi/PROVENANCE.md`
+carries the same text for the libraries Patina actually bundles.
+
+```
+Copyright (c) <year> <author>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+### MIT / Expat — 54 packages
+
+Also the licence of most SRFI reference implementations (the "MIT regime" above).
+
+```
+Copyright (c) <year> <author>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### ISC — 5 packages
+
+```
+Copyright (c) <year> <author>
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+```
+
+**CC0-1.0 (2 packages)** waives rights rather than granting them conditionally, so it imposes no
+notice obligation. **Apache-2.0 (1 package, `(lassik http-client)`)** is not reproduced here: its
+§4(a) asks that recipients be given a copy of the licence, so if that package ever moves from test
+corpus into anything shipped, add the full text at <https://www.apache.org/licenses/LICENSE-2.0>.
+
+## Packages that ship no notice
+
+Measured, not assumed: of the 184 packages, **43 carry no copyright line, permission grant, public
+domain dedication or SPDX tag in any `.scm` or `.sld` they ship**. Upstream shipped them that way;
+nothing was removed here. For these the licence is known only from snow-fort's `repo.scm` index and
+this record, so this table *is* the notice — which is why the standard texts above are reproduced
+rather than linked.
+
+The publisher column is derived from the snow-fort path in `upstream_url`
+(`snow-fort.org/s/<publisher>/<package>/…`), which is the author namespace snow-fort publishes
+under, not a copyright line the author wrote. Treat it as the best available identification, not as
+an attribution the author asserted.
+
+| Package | Publisher (from snow-fort path) | Recorded licence |
+|---|---|---|
+| `(arvyy interface)` | `gmail.com/nma.arvydas.silanskas` | MIT |
+| `(arvyy mustache)` | `gmail.com/nma.arvydas.silanskas` | MIT |
+| `(chibi assert)` | `gmail.com/alexshinn` | BSD |
+| `(chibi binary-record)` | `gmail.com/alexshinn` | BSD |
+| `(chibi char-set)` | `gmail.com/alexshinn` | BSD |
+| `(chibi edit-distance)` | `gmail.com/alexshinn` | BSD |
+| `(chibi locale)` | `gmail.com/alexshinn` | BSD |
+| `(chibi math linalg)` | `gmail.com/alexshinn` | BSD |
+| `(chibi mecab)` | `gmail.com/alexshinn` | BSD |
+| `(chibi ssl)` | `gmail.com/alexshinn` | BSD |
+| `(chibi sxml)` | `gmail.com/alexshinn` | BSD |
+| `(chibi tar)` | `gmail.com/alexshinn` | BSD |
+| `(chibi temp-file)` | `gmail.com/alexshinn` | BSD |
+| `(chibi voting)` | `gmail.com/alexshinn` | BSD |
+| `(chibi xgboost)` | `gmail.com/alexshinn` | BSD |
+| `(chibi xlib)` | `gmail.com/alexshinn` | BSD |
+| `(chrisoei cint)` | `gmail.com/chris.oei` | MIT |
+| `(chrisoei test)` | `gmail.com/chris.oei` | MIT |
+| `(generators)` | `gmail.com/kwortman` | MIT |
+| `(independentresearch xattr)` | `gmail.com/lockywolf` | CC0-1.0 |
+| `(pfds list-helpers)` | `peterlane.info/peter` | BSD |
+| `(r6rs control)` | `ccs.neu.edu/will` | MIT |
+| `(r6rs eval)` | `ccs.neu.edu/will` | MIT |
+| `(r6rs exceptions)` | `ccs.neu.edu/will` | MIT |
+| `(r6rs files)` | `ccs.neu.edu/will` | MIT |
+| `(r6rs io simple)` | `ccs.neu.edu/will` | MIT |
+| `(r6rs mutable-pairs)` | `ccs.neu.edu/will` | MIT |
+| `(r6rs mutable-strings)` | `ccs.neu.edu/will` | MIT |
+| `(r6rs programs)` | `ccs.neu.edu/will` | MIT |
+| `(r6rs r5rs)` | `ccs.neu.edu/will` | MIT |
+| `(slib common)` | `peterlane.info/peter` | SLIB-Jaffer |
+| `(slib pretty-print)` | `peterlane.info/peter` | SLIB-Jaffer |
+| `(slib rationalize)` | `peterlane.info/peter` | SLIB-Jaffer |
+| `(srfi 106)` | `iki.fi/retropikzel` | MIT |
+| `(srfi 170)` | `iki.fi/retropikzel` | MIT |
+| `(srfi 197)` | `upr.edu/jantony.velazquez` | MIT |
+| `(srfi 2)` | `iki.fi/retropikzel` | MIT |
+| `(srfi 227)` | `iki.fi/retropikzel` | MIT |
+| `(srfi 235)` | `upr.edu/jantony.velazquez` | MIT |
+| `(srfi 25)` | `iki.fi/retropikzel` | MIT |
+| `(srfi 29)` | `iki.fi/retropikzel` | MIT |
+| `(srfi 31)` | `iki.fi/retropikzel` | MIT |
+| `(srfi 42)` | `iki.fi/retropikzel` | MIT |
+
+Regenerate with a grep for a notice across each package's sources; a package appearing here is a
+prompt to check upstream for a `LICENSE` file the snowball omitted, not evidence of a problem.
 
 ## Complete non-standard package list
 

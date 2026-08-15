@@ -268,12 +268,23 @@ patina/
 
 ## Third-Party Code
 
-- `scheme_tests/chibi/r7rs-tests.scm` is from
-  [chibi-scheme](https://github.com/ashinn/chibi-scheme) (BSD 3-Clause);
-  see `scheme_tests/README.md` for attribution and the full license text.
-- `crates/patina-tests/bench_programs/{nboyer,sboyer}.scm` are the classic
-  Boyer benchmarks (Public Domain, original headers retained), vendored via
-  [ecraven/r7rs-benchmarks](https://github.com/ecraven/r7rs-benchmarks).
+Patina is MIT-licensed, but it ships and vendors code under other licences.
+Nothing is relicensed: each tree keeps its own terms, and each has one record
+that carries the attribution and the full licence text.
+
+| What | Licence | Attribution and full text |
+|---|---|---|
+| `lib/chibi/` — bundled chibi libraries (`test`, `string`, `diff`, `optional`, `filesystem`, `term ansi`) | BSD 3-Clause, © Alex Shinn | `lib/chibi/PROVENANCE.md` |
+| `lib/srfi/` — SRFI reference implementations and ports | MIT, MIT Scheme 1988–1995, Shivers' sort notice | `lib/srfi/PROVENANCE.md` and the per-library `.sld` headers |
+| `compat/vendor/` — 184 snow-fort packages, test corpus only | BSD, MIT, SLIB, ISC, public domain, … | `compat/vendor/LICENSES.md` (terms, evidence, obligations) |
+| `scheme_tests/chibi/r7rs-tests.scm` — the conformance suite | BSD 3-Clause, © Alex Shinn | `scheme_tests/README.md` |
+| `crates/patina-tests/bench_programs/{nboyer,sboyer}.scm` — Boyer benchmarks | Public domain, original headers retained | vendored via [ecraven/r7rs-benchmarks](https://github.com/ecraven/r7rs-benchmarks) |
+
+Bundled files are byte-identical to upstream unless a deviation is marked
+`;; PATINA LOCAL EDIT:` and recorded in that tree's provenance file; the claim
+is enforced by `crates/patina-tests/tests/bundled_provenance.rs`. None of these
+authors endorse Patina — the references above describe what it is tested
+against.
 
 ## License
 

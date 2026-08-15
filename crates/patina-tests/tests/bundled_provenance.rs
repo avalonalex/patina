@@ -50,7 +50,10 @@ const PINNED: &[(&str, u64)] = &[
     // is not byte-identical would make the deviation the reason its whole tree
     // goes unwatched.
     ("lib/srfi/130.scm", 0x2979bbeb162b21e1),
-    ("lib/srfi/130.sld", 0xe70313221d2c5e5b),
+    // Re-pinned 2026-08-15: its Patina-authored header now cites the in-repo
+    // BSD text instead of a bare URL. Header only; the library form below it
+    // is untouched upstream.
+    ("lib/srfi/130.sld", 0x1fe6cb5ef2698643),
     // Unlike every other row, 132.sld is Patina-authored with no upstream to
     // match — the pin freezes the tree's provenance *record*, so editing the
     // header is a deliberate act like editing the files it describes.

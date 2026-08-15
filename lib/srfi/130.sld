@@ -2,8 +2,9 @@
 ;;
 ;; Alex Shinn's implementation, from chibi-scheme's own tree
 ;; (lib/srfi/130.sld and lib/srfi/130.scm) pinned at commit
-;; f26603620cc479b4e404db5790a35f06946368bf. BSD, per
-;; <http://synthcode.com/license.txt>. There is no snowball release of this
+;; f26603620cc479b4e404db5790a35f06946368bf. BSD 3-Clause; the full text is in
+;; lib/chibi/PROVENANCE.md § Licence (same author, same licence), rather than
+;; only behind a link. There is no snowball release of this
 ;; one, which is why it is recorded here rather than in PROVENANCE.md with
 ;; the tarball-pinned trees.
 ;;

@@ -19,6 +19,49 @@ corpus drops packages Patina provides). Each `.scm` sits beside its `.sld`
 rather than in a numbered subdirectory so the `(include "…")` resolves
 unchanged.
 
+## Licences
+
+`(srfi 14)` needs nothing added here: `14.scm` carries its own attribution
+chain (MIT Scheme → Brian D. Carlstrom → Olin Shivers → Retropikzel) *and* the
+full MIT Scheme 1988–1995 licence text at the end of the file, exactly as
+upstream ships it.
+
+`(srfi 27)` does not. `27.scm` carries a single author line —
+`Sebastian.Egner@philips.com, Mar-2002` — and no terms at all, upstream's own
+state, not something removed here. Its licence requires that "the above
+copyright notice and this permission notice shall be included in all copies",
+so the text is reproduced below rather than linked. Taken verbatim from the
+SRFI 27 document at <https://srfi.schemers.org/srfi-27/srfi-27.html>.
+
+```
+Copyright (C) Sebastian Egner (2002). All Rights Reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+The adapted ports named under **The boundary** below carry their upstream
+notices in-file where upstream has one; `lib/srfi/132.sld` is the model for
+recording a tree whose licence lives in a per-file notice, including its note
+that `select.scm` has none upstream either. `lib/srfi/130.sld` records the one
+BSD-licensed port, whose text is in `lib/chibi/PROVENANCE.md` § Licence — same
+author, same licence.
+
 `(srfi 14)` was bundled 2026-08-14 as a dependency of `(chibi string)`, which
 `(srfi 130)` is written against — it is imported for exactly two names,
 `char-set?` and `char-set-contains?`. That is a thin use of a large library,
