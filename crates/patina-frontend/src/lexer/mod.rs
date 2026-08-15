@@ -762,6 +762,21 @@ impl Lexer {
         Ok(Token::Number(num_str))
     }
 
+    /// Whether `ch` can begin an identifier.
+    ///
+    /// Wider than R7RS 7.1.1's <initial> in three deliberate places: any
+    /// Unicode letter (7.1.1 admits only a-zA-Z), `.`, and `@`. All three are
+    /// pure widenings — no conforming program contains a token they admit — so
+    /// none can change an existing program's meaning. `@` is the one the
+    /// third-party ecosystem depends on; the rationale is in
+    /// `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` section 6, the cases in
+    /// `crates/patina-tests/tests/at_identifiers.rs`.
+    ///
+    /// The writer deliberately does *not* track this set: `symbol_needs_
+    /// vertical_bars` (patina-primitives) stays strict, so `@` writes back as
+    /// `|@|`. It answers the other question — "would every R7RS reader accept
+    /// this bare?", not "will we read it?" — and erring toward bars is always
+    /// safe. Widening here must not widen it.
     fn is_identifier_start(&self, ch: char) -> bool {
         ch.is_alphabetic()
             || matches!(
@@ -782,15 +797,6 @@ impl Lexer {
                     | '+'
                     | '-'
                     | '.'
-                    // Deliberate extension beyond R7RS 7.1.1, where `@` is a
-                    // <special subsequent> and not an <initial>: a leading `@`
-                    // starts an identifier. No conforming program can contain a
-                    // bare `@` token, so this only widens what we accept — and
-                    // the ecosystem relies on it (SXML's `@` attribute marker
-                    // and `@raw` tag, `(chibi match)`'s `@` record pattern).
-                    // Chez, Gauche and chibi all read it; note that Chez and
-                    // Gauche still *write* it escaped, as we do. See
-                    // PRD/TRACK_L_SNOW_LIBRARIES_PRD.md section 6.
                     | '@'
             )
     }

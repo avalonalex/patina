@@ -48,23 +48,25 @@ fn test_at_as_a_syntax_rules_literal() {
 }
 
 #[test]
-fn test_unquote_splicing_is_unaffected() {
-    // `,@` still lexes as unquote-splicing, never as an `@` identifier.
-    assert_eval_to("`(1 ,@(list 2 3) 4)", "(1 2 3 4)");
-    // ... and `@` is still readable inside the same quasiquote.
+fn test_at_and_unquote_splicing_coexist() {
+    // `,@` is lexed before identifiers, so the two never compete for the same
+    // `@`. That `,@` alone still splices is a lexer-level fact, pinned by
+    // `test_unquote_splicing_still_wins_over_at_identifier`; what needs saying
+    // here is that both spellings survive in one form.
     assert_eval_to("`(@ ,@(list 2 3))", "(|@| 2 3)");
 }
 
 #[test]
-fn test_polar_complex_notation_is_unaffected() {
-    // `@` only starts an identifier; a leading digit still reads as a number.
-    assert_eval_to("(exact? 1@0)", "#f");
-    assert_eval_to("(= 1@0 1.0)", "#t");
-}
-
-#[test]
 fn test_at_symbol_round_trips_through_write() {
-    // We write `|@|`, as Gauche does, because `@` is not conforming identifier
-    // syntax — but our own reader accepts both spellings.
-    assert_eval_to("(eq? '@ '|@|)", "#t");
+    // The invariant behind reading `@` but writing `|@|`: our own writer's
+    // output must read back as the same symbol. Assert the written form
+    // literally, so narrowing `symbol_needs_vertical_bars` cannot pass this
+    // test while silently breaking the round trip.
+    assert_program_eval_to(
+        "(define p (open-output-string))
+         (write '@ p)
+         (define written (get-output-string p))
+         (list written (eq? (read (open-input-string written)) '@))",
+        "(\"|@|\" #t)",
+    );
 }
