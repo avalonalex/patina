@@ -295,6 +295,127 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ## 6. Known defects surfaced by this track
 
+### Open
+
+The first two entries were found on 2026-08-14 by auditing for the defect class behind the fixed
+items in this section — an identifier comparison made on the wrong basis. Each is cross-checked
+against **two** reference implementations (Chez Scheme and Gauche), not one. Neither is reachable
+from the corpus queue today; both were found by construction, so nothing in §4 depends on them. The
+two after that predate this track's macro work and are unchanged.
+
+**Hygiene is not applied inside a quasiquoted vector** — ❌ **open**. Both backends. Six lines, and
+it captures in *both* directions at once — the template's own binding and the caller's argument each
+resolve to the other:
+
+```scheme
+(define tmp 'use-site)
+(define-syntax g1 (syntax-rules () ((_)   (let ((tmp 'introduced)) `#(,tmp)))))
+(define-syntax g2 (syntax-rules () ((_ e) (let ((tmp 'introduced)) `#(,e)))))
+(list (g1) (g2 tmp))
+;; Chez, Gauche => (#(introduced) #(use-site))
+;; Patina       => (#(use-site)   #(introduced))
+```
+
+The list equivalents (`` `(,tmp) ``) are correct, so this is specific to vectors. The obvious
+suspect is `flip_scope_on_tagged_impl` in `patina-macros/src/macro_expander/mod.rs`, which ends
+"All other values (vectors, etc.) pass through unchanged" while its own doc comment two screens
+earlier claims it "traverses the heap structure (pairs, **vectors**, identifiers)". The doc and the
+code disagree, and `contains_identifier_tagged` has the same gap — so its early exit can skip the
+flip for a tree whose only identifiers sit inside a vector. `rewrite_refs` in the desugarer already
+fixed exactly this oversight for itself ("A pair-only walk silently left the reference unlinked").
+
+**Do not treat that as the diagnosis.** Teaching both functions to descend into vectors did *not*
+change the behaviour, and instrumentation showed the flip never runs on that expansion at all —
+neither the vector arm nor the pass-through tail was reached. So something upstream is also not
+producing the identifiers one would expect. Start by confirming what the expanded output actually
+contains before changing the flip.
+
+**Definition-env relinking rewrites by name** — ❌ **open**, and blocked on the entry above.
+`link_definition_env_refs` / `rewrite_refs` (`patina-frontend/src/desugarer/mod.rs`) collect
+`template_symbols: HashSet<Rc<str>>` and then rewrite every occurrence of those *names* in the
+expanded output. By expansion time that tree also holds use-site material substituted from pattern
+variables, which can be spelled like a template symbol without being one:
+
+```scheme
+;; library (t m): helper = 'from-definition, and (mac x) => (list helper x)
+(define helper 'from-use-site)
+(mac helper)
+;; Chez, Gauche => (from-definition from-use-site)
+;; Patina       => (from-definition from-definition)   ; the caller's argument was captured
+```
+
+The template's `helper` should resolve to the definition environment; the one the *caller* passed
+must not. Template-local bindings are already handled correctly (a template that says
+`(let ((helper …)) …)` works), so this is specifically pattern-variable material colliding with a
+template symbol name.
+
+The fix needs a way to tell template-emitted identifiers from substituted ones. The natural
+discriminator is the flip-scope invariant — introduced identifiers carry the expansion's macro
+scope, substituted ones had it flipped back off. That was implemented and **backed out**: it fixes
+this capture but breaks `test_quasiquoted_vector_elements_are_rewritten`, because template material
+inside a quasiquoted vector also comes out with empty scopes. That is the same vector gap as the
+entry above, which is why this is blocked on it rather than independently fixable.
+
+If the vector work does not restore the invariant, the deeper fix is to decide at template-expansion
+time instead, where `Template::Symbol` and `Template::Var` distinguish the two without any proxy.
+
+**Rust registry primitives ignore the import set at top level** — ❌ **open**, own PR. (Adjacent
+cleanup landed 2026-08-12, PR #52: the four continuation-broken Rust higher-order primitives were
+*deleted*, removing those instances of the pattern — but deletion was available only because Scheme
+replacements already existed for continuation-safety reasons. The general registry/import-set
+scoping fix below is still required.) A program that
+imports only `(scheme base)` can still call primitives no imported library exports:
+
+```scheme
+(import (scheme base))
+(cadddr '(1 2 3 4))      ;; => 4      -- (scheme cxr)
+(bit-count 12)           ;; => 2      -- (srfi 151)
+(arithmetic-shift 1 10)  ;; => 1024   -- (srfi 151)
+(bitwise-and 12 10)      ;; => 8      -- (srfi 151)
+```
+
+Scheme-level exports *are* scoped correctly — `list-sort` and `bitwise-nand` are unbound under the
+same import — so this is specific to the primitive registry: registered primitives land in the
+top-level environment regardless of what was imported. Inside a `define-library` imports are
+enforced properly, which is the whole reason this went unnoticed.
+
+That asymmetry is also a testing hazard, and it already cost us one bug. `(srfi 132)`'s
+`vector-merge` called `cadddr` without importing `(scheme cxr)`; it failed only inside the library,
+while any script-level check of the same expression passed. Library code cannot be validated by
+top-level scripts until this is fixed.
+
+Adjacent and lower-stakes: `lib/scheme/base.sld` exports the eight three-deep `cxr` procedures
+(`caaar`…`cdddr`) as a documented extension, where R7RS-small puts them only in `(scheme cxr)`.
+Worth settling in the same PR while the cost of tightening is still low.
+
+**The standard port procedures are not parameter objects** — ❌ **open**, own PR. R7RS §6.13.1:
+`current-input-port`, `current-output-port` and `current-error-port` "are parameter objects, which
+can be overridden with `parameterize`". Patina implements all three as plain 0-argument procedures,
+so `parameterize` rejects them:
+
+```scheme
+(parameterize ((current-input-port (open-input-string "a b c"))) (read))
+;; => Invalid syntax: current-input-port expects exactly 0 arguments, got 1
+```
+
+`make-parameter` and `parameterize` work correctly for user-defined parameters, so the machinery
+exists; only the three built-ins are outside it. They are backed by Rust-side global state
+(`get_current_output_port` / `set_current_output_port` in `primitives/io/ports.rs`) that other
+primitives read directly, so the fix has to make that global read through the parameter's dynamic
+binding rather than merely accepting a second arity — which is why this is its own PR and not an
+inline fix.
+
+This is the one non-zero entry in the reference-suite expectations table: SRFI 158's suite defines
+`with-input-from-string` as `(parameterize ((current-input-port (open-input-string str))) (thunk))`,
+which is pure R7RS. It was previously recorded as the suite depending on a chibi extension. It is
+not — the extension is three lines of standard Scheme, and it is our `parameterize` that refuses it.
+Lower the SRFI 158 expectation to 0 when this lands.
+
+Redirecting the current ports is also a capability the L3 harness will want directly, for capturing
+a package's output without touching the real stdout.
+
+### Fixed
+
 **Literal matching had no "both unbound" case** — ✅ **fixed** (2026-08-14). Both backends.
 R7RS 4.3.2 gives literal *matching* `free-identifier=?` semantics: an input matches a literal when
 both denote the same binding, **or both are unbound and have the same name**. That second clause was
@@ -407,61 +528,6 @@ fails.
 **Bare `@` rejected as an identifier** — 9 corpus packages, including `(chibi match)`. Patina is
 strictly correct per R7RS 7.1.1 (`@` is a ⟨special subsequent⟩, not an ⟨initial⟩); chibi and Gauche
 accept it. A deliberate strictness decision rather than a bug, but it needs making explicitly.
-
-**Rust registry primitives ignore the import set at top level** — ❌ **open**, own PR. (Adjacent
-cleanup landed 2026-08-12, PR #52: the four continuation-broken Rust higher-order primitives were
-*deleted*, removing those instances of the pattern — but deletion was available only because Scheme
-replacements already existed for continuation-safety reasons. The general registry/import-set
-scoping fix below is still required.) A program that
-imports only `(scheme base)` can still call primitives no imported library exports:
-
-```scheme
-(import (scheme base))
-(cadddr '(1 2 3 4))      ;; => 4      -- (scheme cxr)
-(bit-count 12)           ;; => 2      -- (srfi 151)
-(arithmetic-shift 1 10)  ;; => 1024   -- (srfi 151)
-(bitwise-and 12 10)      ;; => 8      -- (srfi 151)
-```
-
-Scheme-level exports *are* scoped correctly — `list-sort` and `bitwise-nand` are unbound under the
-same import — so this is specific to the primitive registry: registered primitives land in the
-top-level environment regardless of what was imported. Inside a `define-library` imports are
-enforced properly, which is the whole reason this went unnoticed.
-
-That asymmetry is also a testing hazard, and it already cost us one bug. `(srfi 132)`'s
-`vector-merge` called `cadddr` without importing `(scheme cxr)`; it failed only inside the library,
-while any script-level check of the same expression passed. Library code cannot be validated by
-top-level scripts until this is fixed.
-
-Adjacent and lower-stakes: `lib/scheme/base.sld` exports the eight three-deep `cxr` procedures
-(`caaar`…`cdddr`) as a documented extension, where R7RS-small puts them only in `(scheme cxr)`.
-Worth settling in the same PR while the cost of tightening is still low.
-
-**The standard port procedures are not parameter objects** — ❌ **open**, own PR. R7RS §6.13.1:
-`current-input-port`, `current-output-port` and `current-error-port` "are parameter objects, which
-can be overridden with `parameterize`". Patina implements all three as plain 0-argument procedures,
-so `parameterize` rejects them:
-
-```scheme
-(parameterize ((current-input-port (open-input-string "a b c"))) (read))
-;; => Invalid syntax: current-input-port expects exactly 0 arguments, got 1
-```
-
-`make-parameter` and `parameterize` work correctly for user-defined parameters, so the machinery
-exists; only the three built-ins are outside it. They are backed by Rust-side global state
-(`get_current_output_port` / `set_current_output_port` in `primitives/io/ports.rs`) that other
-primitives read directly, so the fix has to make that global read through the parameter's dynamic
-binding rather than merely accepting a second arity — which is why this is its own PR and not an
-inline fix.
-
-This is the one non-zero entry in the reference-suite expectations table: SRFI 158's suite defines
-`with-input-from-string` as `(parameterize ((current-input-port (open-input-string str))) (thunk))`,
-which is pure R7RS. It was previously recorded as the suite depending on a chibi extension. It is
-not — the extension is three lines of standard Scheme, and it is our `parameterize` that refuses it.
-Lower the SRFI 158 expectation to 0 when this lands.
-
-Redirecting the current ports is also a capability the L3 harness will want directly, for capturing
-a package's output without touching the real stdout.
 
 ## 7. Risks & mitigations
 - **Per-new-SRFI friction** (non-R7RS constructs, R5RS naming, control-op edges) → apply the resolved patterns in `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`; import each reference implementation incrementally with its own test.
