@@ -47,7 +47,7 @@ pub(super) fn make_parameter(
     let converter: Option<TaggedValue> = if args.len() == 2 {
         let conv_tagged = args[1];
         // Verify converter is a procedure using heap
-        if heap.borrow().is_procedure(conv_tagged) || heap.borrow().is_parameter(conv_tagged) {
+        if heap.borrow().is_procedure(conv_tagged) {
             Some(conv_tagged)
         } else {
             return Err(EvalError::TypeError(format!(
