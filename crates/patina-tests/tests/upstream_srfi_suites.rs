@@ -158,6 +158,10 @@ suite_test!(srfi_143_fixnum, "(srfi 143 test)", 0, 141);
 suite_test!(srfi_132_sort, "(srfi 132 test)", 0, 221);
 suite_test!(srfi_133_vector, "(srfi 133 test)", 0, 93);
 suite_test!(srfi_113_set, "(srfi 113 test)", 0, 253);
+// The only suite here not copied verbatim: its two chibi char-set imports were
+// replaced by `(srfi 14)`, test bodies untouched. Why, in
+// scheme_tests/upstream/README.md.
+suite_test!(srfi_130_string, "(srfi 130 test)", 0, 219);
 // The one remaining failure is a Patina defect, not a defect in (srfi 158):
 // `current-input-port` is a plain 0-arg procedure rather than an R7RS
 // parameter object, so the suite's `(parameterize ((current-input-port ...)))`

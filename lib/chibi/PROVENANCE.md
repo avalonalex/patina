@@ -11,6 +11,7 @@ in-file notices, `diff` and `optional` rely on this record.
 | `(chibi test)` | 0.9.0 | `test.scm`, `test.sld` | `86997714be7fb6ade1b094d91727f9c9becd9051a41d1703986643d1ed09865d` |
 | `(chibi diff)` | 0.9.1.3 | `diff.scm`, `diff.sld` | `07b62a03d280924f0bd42ca6375c752884a480779984dd7e9889e150f892fbac` |
 | `(chibi optional)` | 0.9.1.3 | `optional.scm`, `optional.sld` | `30b58c0bbecbe37560fc24086417d2ab908536b74d8775670da55f1eb6971e9c` |
+| `(chibi string)` | 0.9.0 | `string.scm`, `string.sld` | `86a73c53b2e7a4e1201ff10115a5488890993c0020051b3abe0fc785a077ec11` |
 | `(chibi term ansi)` | 0.9.0 | `term/ansi.scm`, `term/ansi.sld` | `805e33d6b87c6d54337bf0c89002f13c323e6d836291d2e88a252140d1552599` |
 
 Tarball URLs follow the pattern
@@ -19,6 +20,13 @@ Tarball URLs follow the pattern
 snow-fort snowball releases, older than chibi-scheme's git head — e.g.
 `test.scm`'s copyright runs 2010-2020 — and the simplified SRFI-1 `any` at the
 top of `test.scm` is upstream's own portability shim, not a local edit.
+
+`(chibi string)` was bundled 2026-08-14 for `(srfi 130)`, which is written
+against it; it arrived via the compat corpus's vendored copy of the same
+snowball (`compat/vendor/` recorded it unmodified, and it is byte-identical to
+chibi-scheme's own tree at `f266036`), so the corpus no longer carries it. Its
+`cond-expand` takes the non-chibi branch here, where string cursors are plain
+integers — the fast-random-access path the library was written to support.
 
 Two known upstream defects are inherited, not local: `test.scm`'s
 `string-search` misses last-position matches (affects `TEST_FILTER`-family

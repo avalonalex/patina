@@ -9,7 +9,8 @@ here is the same person who wrote the implementation. `srfi/151/test.sld` alone
 is 145 assertions against the 13 in
 `crates/patina-tests/tests/srfi_151_bitwise.rs`.
 
-All copied unmodified from chibi-scheme's `lib/`, BSD (Alex Shinn).
+All from chibi-scheme's `lib/`, BSD (Alex Shinn), copied unmodified except
+`srfi/130/test.sld`'s import list — see the note under the table.
 
 | Suite | Assertions | Failing |
 |---|---|---|
@@ -18,7 +19,29 @@ All copied unmodified from chibi-scheme's `lib/`, BSD (Alex Shinn).
 | `srfi/132/test.sld` | 221 | 0 |
 | `srfi/133/test.sld` | 93 | 0 |
 | `srfi/113/test.sld` | 253 | 0 |
+| `srfi/130/test.sld` | 219 | 0 |
 | `srfi/158/test.sld` | 76 | 1 — Patina's `current-input-port` is not a parameter object (see below) |
+
+**`srfi/130/test.sld` is the one adapted suite.** Upstream imports
+`(chibi char-set)` and `(chibi char-set full)`; the latter imports `(chibi)`,
+chibi's implementation core, which Patina does not provide — the same wall that
+keeps the SRFI 1 and SRFI 69 suites out below. But the suite uses only six
+char-set names (`char-set`, `char-set-complement`, `char-set-contains?`,
+`char-set:lower-case`, `char-set:letter`, `char-set:digit`), all of them
+standard SRFI 14, which Patina now bundles. So the two imports are replaced by
+`(srfi 14)` and nothing else changes: the diff against upstream is one line, and
+no test body is touched. Recorded here rather than done silently, because the
+value of these suites is that they are not ours to edit.
+
+Which exposes something worth fixing: **nothing mechanically guards this tree.**
+`lib/` has `crates/patina-tests/tests/bundled_provenance.rs` hashing every
+bundled file against a recorded pin, so an unrecorded edit fails the suite. The
+claim above is prose only, and always has been — true for the six suites here
+before this one. It mattered less while "copied unmodified" was exceptionless;
+now that there is one adaptation, a second could arrive without disclosure and
+nothing would notice. The fix is the mechanism `lib/` already has: pin these
+`test.sld` files by hash too, with `srfi/130/test.sld` pinned at its adapted
+hash, exactly as `lib/srfi/130.scm` is pinned post-edit.
 
 Both columns are enforced by `upstream_srfi_suites.rs`, not prose: the failure
 count is asserted exactly, in both directions — a regression fails, and so does

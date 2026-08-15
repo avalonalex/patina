@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**133 of 187** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
+(**134 of 185** vendored packages pass, 2026-08-14); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -114,6 +114,19 @@ and `-A` already cover, and none is standard-track.
 The policy in one line: bundle what R7RS-large names, plus what cannot exist without the runtime,
 plus the legacy aliases the ecosystem actually imports. Everything else stays out.
 
+**SRFI 130 + SRFI 14 landed 2026-08-14, and the queue they came off is now flat.** SRFI 130 (Red
+edition, cursor-based strings) reached in-degree 6 after the `@` fix and led the table; SRFI 14 came
+with it, since `(chibi string)` — which SRFI 130 is written against — imports it for exactly two
+names. Both are byte-identical snowball imports; the chain and its one deviation are recorded in
+`lib/srfi/PROVENANCE.md`, `lib/chibi/PROVENANCE.md` and `lib/srfi/130.sld`'s header.
+
+The result reorders what is left. **No missing library is now worth more than two packages**, and the
+one at three is `(chibi)`, chibi's implementation core, which is permanently out of reach. Bundling
+was the cheap lever for most of this track; it is close to spent. The remaining corpus failures are
+concentrated in the parse-error and load-error buckets — defects, not absent libraries — so the
+queue below should be read as a completeness exercise against the policy rather than as the ordered
+route to a higher score.
+
 Priority order, highest value first:
 1. **Bitwise: SRFI 151, plus `(srfi 60)` / `(srfi 33)` shims.** Standard-track *and* the largest
    ecosystem gap — 31 packages import `(srfi 60)`, 19 import `(srfi 33)`, and R7RS-large names 151.
@@ -125,8 +138,11 @@ Priority order, highest value first:
    Needs a `HeapObjectData::HashMap` variant.
 4. **SRFI 27** random — impossible without an RNG primitive; in-degree 9.
 5. **SRFI 143** fixnums — must match the VM's actual fixnum width.
-6. **SRFI 14** char-sets (in-degree 4), then the remaining standard-track set with little measured
-   demand: Red 41, 101, 116, 117, 124, 127, 134, 135 and Tangerine 146, 159, 160.
+6. ~~**SRFI 14** char-sets (in-degree 4)~~ — ✅ **done 2026-08-14**, pulled forward by SRFI 130.
+   Then the remaining standard-track set with little measured demand: Red 41, 101, 116, 117, 124,
+   127, 134, 135 and Tangerine 146, 159, 160.
+8. ✅ **SRFI 130** cursor-based strings — **done 2026-08-14**, out of numeric order because the
+   measured queue put it first. Red edition, and the top missing library at in-degree 6.
 7. **SRFI 115** regex last — large, and only if the corpus justifies it.
 
 Near-free re-export shims to do alongside, since R7RS base already provides the functionality but
@@ -142,7 +158,12 @@ library builder; aligns with `PRD/PARALLEL_TRACKS.md` Track B3.
 ### L2 — Bundle the common `(chibi …)` libraries
 Third-party packages frequently `(import (chibi …))`; today only `(chibi test)` exists. Port from the pinned chibi checkout the harness already fetches (locally mirrored at `~/Project/reference/chibi-scheme`), in the order L0.75/L3 dictate. Each ported library also brings its upstream `*-test.sld` suite, which drops straight into the L3 corpus:
 - `(chibi match)`, `(chibi optional)` — pure Scheme, pervasive in chibi-authored packages, and `(chibi optional)` also retires the ad-hoc `:optional` / `let-optionals` shims the existing SRFI ports carry. Highest leverage in this group.
-- `(chibi string)`, `(chibi io)`, `(chibi pathname)` — mostly pure Scheme over R7RS + SRFIs present after L1.
+- ✅ `(chibi string)` — **done 2026-08-14**, bundled as `(srfi 130)`'s dependency rather than on its
+  own schedule, though it earned a place either way at in-degree 16, the highest in the corpus after
+  `(slib common)`. Byte-identical to the 0.9.0 snowball; `lib/chibi/PROVENANCE.md` carries the
+  record. Bundling it also retired `(srfi 13)` from the missing-library queue — chibi-binary-record and chibi-tar were asking for SRFI 13 only as the
+  fallback their `cond-expand` reaches when `(chibi string)` is absent.
+- `(chibi io)`, `(chibi pathname)` — mostly pure Scheme over R7RS + SRFIs present after L1.
 - `(chibi show)` / SRFI 166 — the formatting library much of the ecosystem writes output with.
 - `(chibi filesystem)`, `(chibi process)` — need new primitives (filesystem/process); route file ops through the VFS `FileSystem` trait (`PRD/phase2/VFS_DESIGN.md`) so they stay testable.
 - `(chibi uri)` — pure Scheme.
@@ -214,6 +235,25 @@ make a package pass on its own, and the advances are what re-ordered the queue �
   separating: the library third parties actually import is working.
 - chibi-mime → `wrong-result` and lassik-dockerfile → `runtime-error` are new, unexamined, and are
   the first entries this track has in either bucket.
+
+**SRFI 130 bundled, 2026-08-14 (133/187 → 134/185).** The denominator moves because L4's policy
+drops what Patina bundles: srfi-14 and chibi-string left the corpus, both passing, so the like-for-
+like baseline was 131/185 and this is **+3**. Two of the six SRFI 130 packages now pass outright
+(chibi-edit-distance, chibi-locale), the other four advanced, and bundling `(chibi string)`
+incidentally cleared `(srfi 13)` from the queue — chibi-binary-record now passes and chibi-tar
+advanced. `(chibi net-dns)` reclassified to out-of-scope: with its imports resolving it could
+finally report that it needs `(chibi net)`, which needs FFI.
+
+**Trap — `build_corpus.py --offline` silently shrinks the corpus.** Do not commit its output. Ten
+packages (srfi-2, 25, 29, 31, 42, 64, 106, 170, 227, 235) carry `license_evidence:
+srfi-canonical-document`, meaning their licence was established by fetching srfi.schemers.org. With
+`--offline` that fetch returns empty, the licence resolves to unknown, and the packages drop out of
+the PERMISSIVE bucket — so `--offline --check` reports drift on twelve packages when only two
+changed, and a full offline rebuild would quietly delete ten. The SRFI 130 bundling therefore
+removed its two vendored packages surgically, regenerating `INVENTORY.md`'s counts and rows with the
+generator's own formatting logic rather than re-running it. The durable fix is for `--offline` to
+reuse the recorded `license`/`license_evidence` from the existing `MANIFEST.json` instead of
+re-deriving it, so an offline rebuild is faithful for everything already vendored.
 
 **Recorded debt — `report.md` is written by shell redirect.** `run` and `report` print the rendered
 matrix to stdout and only `results.scm` is written to disk, so the committed

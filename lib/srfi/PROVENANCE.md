@@ -8,13 +8,22 @@ own record. One home per tree.
 
 | Package | Version | Files | Upstream | Tarball sha256 |
 |---|---|---|---|---|
+| `(srfi 14)` | 0.1.0 | `14.sld`, `14.scm` | snow-fort, Retropikzel's R7RS port of Olin Shivers' char-set reference implementation (MIT-Scheme-old) | `de94f90d7b032ea554ed51b4cbce942b22df6fefe68497d661b9c26e3c7e690e` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
-Tarball URL: `http://snow-fort.org/s/iki.fi/retropikzel/srfi/27/2025.12.14/srfi-27-2025.12.14.tgz`
-(the compat corpus vendored the same tarball until Patina bundled it; the
-corpus drops packages Patina provides). `27.scm` sits beside `27.sld` rather
-than in a `27/` subdirectory so the `.sld`'s `(include "27.scm")` resolves
+Tarball URLs:
+`http://snow-fort.org/s/iki.fi/retropikzel/srfi/14/0.1.0/srfi-14-0.1.0.tgz` and
+`http://snow-fort.org/s/iki.fi/retropikzel/srfi/27/2025.12.14/srfi-27-2025.12.14.tgz`
+(the compat corpus vendored the same tarballs until Patina bundled them; the
+corpus drops packages Patina provides). Each `.scm` sits beside its `.sld`
+rather than in a numbered subdirectory so the `(include "…")` resolves
 unchanged.
+
+`(srfi 14)` was bundled 2026-08-14 as a dependency of `(chibi string)`, which
+`(srfi 130)` is written against — it is imported for exactly two names,
+`char-set?` and `char-set-contains?`. That is a thin use of a large library,
+but the alternative was a hand-maintained subset, and SRFI 14 was already an
+L1 bundling target on its own in-degree.
 
 The package ships no test suite; conformance is covered by
 `crates/patina-tests/tests/srfi_27.rs` (both backends must agree on exact

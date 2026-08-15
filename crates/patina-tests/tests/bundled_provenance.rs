@@ -30,12 +30,23 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/chibi/diff.sld", 0xf23c1551ba46f31b),
     ("lib/chibi/optional.scm", 0xc690d10b2fa58f49),
     ("lib/chibi/optional.sld", 0x90f9ebb211b8bc6e),
+    ("lib/chibi/string.scm", 0x40519db9f7f6ea77),
+    ("lib/chibi/string.sld", 0x547187363ef72f66),
     ("lib/chibi/term/ansi.scm", 0xb611532f45ff4b36),
     ("lib/chibi/term/ansi.sld", 0xcb7a30ac04c2fb00),
     ("lib/chibi/test.scm", 0x41e9de8d4b7cc1ec),
     ("lib/chibi/test.sld", 0xf810b0f46bc155d7),
+    ("lib/srfi/14.scm", 0xd1a60e0a57f95349),
+    ("lib/srfi/14.sld", 0xa30fdc16bb8de140),
     ("lib/srfi/27.scm", 0xf12c3dd28221b826),
     ("lib/srfi/27.sld", 0xa55b16b061696cdf),
+    // 130.scm is pinned at its *post-edit* hash, like 132.sld below: it is
+    // upstream apart from one `;; PATINA LOCAL EDIT:`, and pinning the result
+    // is what keeps the other 307 lines guarded. Leaving a file out because it
+    // is not byte-identical would make the deviation the reason its whole tree
+    // goes unwatched.
+    ("lib/srfi/130.scm", 0x2979bbeb162b21e1),
+    ("lib/srfi/130.sld", 0xe70313221d2c5e5b),
     // Unlike every other row, 132.sld is Patina-authored with no upstream to
     // match — the pin freezes the tree's provenance *record*, so editing the
     // header is a deliberate act like editing the files it describes.
