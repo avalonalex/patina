@@ -262,12 +262,12 @@ pub(super) fn with_exception_handler(
     let heap_ref = heap.borrow();
 
     // Verify both are procedures using heap methods
-    if !heap_ref.is_procedure(args[0]) && !heap_ref.is_continuation(args[0]) {
+    if !heap_ref.is_callable(args[0]) {
         return Err(EvalError::TypeError(
             "with-exception-handler: first argument must be a procedure".to_string(),
         ));
     }
-    if !heap_ref.is_procedure(args[1]) && !heap_ref.is_continuation(args[1]) {
+    if !heap_ref.is_callable(args[1]) {
         return Err(EvalError::TypeError(
             "with-exception-handler: second argument must be a procedure".to_string(),
         ));

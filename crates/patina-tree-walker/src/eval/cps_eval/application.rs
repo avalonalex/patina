@@ -31,23 +31,6 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Result<StepResult, EvalError> {
         let heap = self.evaluator.global_env.heap();
 
-        // Helper closure to route catchable errors through exception handlers
-        let route_error = |err: EvalError,
-                           cont: ContValue,
-                           cont_env: ContEnv,
-                           prompt_stack: Vec<PromptFrame>,
-                           dynamic_winds: Vec<DynamicWindRecord>,
-                           exception_handlers: Vec<ExceptionHandler>| {
-            self.maybe_route_error_through_cps(
-                err,
-                cont,
-                cont_env,
-                prompt_stack,
-                dynamic_winds,
-                exception_handlers,
-            )
-        };
-
         // Extract all type checks upfront to ensure borrows are released before nested heap access
         // This avoids RefCell borrow conflicts when primitives need to borrow the heap
         let proc_opt = heap.borrow().get_procedure(proc_tagged);
@@ -72,7 +55,7 @@ impl<'a> CpsEvaluator<'a> {
                     // Check arity - route through exception handlers
                     let min_args = params.len();
                     if variadic.is_none() && args.len() != min_args {
-                        return route_error(
+                        return self.maybe_route_error_through_cps(
                             EvalError::WrongArity {
                                 expected: min_args.to_string(),
                                 actual: args.len(),
@@ -85,7 +68,7 @@ impl<'a> CpsEvaluator<'a> {
                         );
                     }
                     if args.len() < min_args {
-                        return route_error(
+                        return self.maybe_route_error_through_cps(
                             EvalError::WrongArity {
                                 expected: format!("at least {}", min_args),
                                 actual: args.len(),
@@ -260,10 +243,17 @@ impl<'a> CpsEvaluator<'a> {
         } else if let Some(k) = cont_opt {
             // Invoking a captured continuation - non-local control transfer
             if args.len() != 1 {
-                return Err(EvalError::WrongArity {
-                    expected: "1".to_string(),
-                    actual: args.len(),
-                });
+                return self.maybe_route_error_through_cps(
+                    EvalError::WrongArity {
+                        expected: "1".to_string(),
+                        actual: args.len(),
+                    },
+                    cont,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                );
             }
 
             // Get the single argument as TaggedValue directly
@@ -291,7 +281,7 @@ impl<'a> CpsEvaluator<'a> {
         } else {
             // Not a procedure - generate error with type name from heap
             let type_name = heap.borrow().type_name(proc_tagged);
-            route_error(
+            self.maybe_route_error_through_cps(
                 EvalError::NotAProcedure(format!("#<{}>", type_name)),
                 cont,
                 cont_env,
@@ -316,10 +306,17 @@ impl<'a> CpsEvaluator<'a> {
         // (call-with-values producer consumer)
         // In CPS: call producer with a continuation that will call consumer
         if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
+            return self.maybe_route_error_through_cps(
+                EvalError::WrongArity {
+                    expected: "2".to_string(),
+                    actual: args.len(),
+                },
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
         }
         // Both producer and consumer stay as TaggedValue
         let producer = args[0];
@@ -359,10 +356,17 @@ impl<'a> CpsEvaluator<'a> {
         // (force promise)
         // In CPS: if promise is forced, return value; else call thunk in CPS mode
         if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
+            return self.maybe_route_error_through_cps(
+                EvalError::WrongArity {
+                    expected: "1".to_string(),
+                    actual: args.len(),
+                },
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
         }
         // Pass TaggedValue directly - force_promise_cps handles extraction
         self.force_promise_cps(
@@ -387,10 +391,17 @@ impl<'a> CpsEvaluator<'a> {
         // (dynamic-wind before body after)
         // Sets up handlers to be called when entering/leaving this dynamic extent
         if args.len() != 3 {
-            return Err(EvalError::WrongArity {
-                expected: "3".to_string(),
-                actual: args.len(),
-            });
+            return self.maybe_route_error_through_cps(
+                EvalError::WrongArity {
+                    expected: "3".to_string(),
+                    actual: args.len(),
+                },
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
         }
         // Keep all thunks as TaggedValue for ApplyProc
         let before = args[0]; // Keep as TaggedValue
@@ -443,29 +454,45 @@ impl<'a> CpsEvaluator<'a> {
         // (with-exception-handler handler thunk)
         // Installs handler for duration of thunk's dynamic extent
         if args.len() != 2 {
-            return Err(EvalError::WrongArity {
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
+            return self.maybe_route_error_through_cps(
+                EvalError::WrongArity {
+                    expected: "2".to_string(),
+                    actual: args.len(),
+                },
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
         }
         // Both handler and thunk stay as TaggedValue
         let heap = self.evaluator.global_env.heap();
         let handler = args[0]; // Keep as TaggedValue
         let thunk = args[1]; // Keep as TaggedValue
 
-        // Verify both are procedures (use heap type-checking methods directly)
-        {
+        // Verify both are procedures. Decide inside the borrow, route outside
+        // it: `maybe_route_error_through_cps` allocates the exception object,
+        // so it takes `borrow_mut()` and would panic against a live `borrow()`.
+        let bad_argument = {
             let heap_ref = heap.borrow();
-            if !heap_ref.is_procedure(handler) && !heap_ref.is_continuation(handler) {
-                return Err(EvalError::TypeError(
-                    "with-exception-handler: first argument must be a procedure".to_string(),
-                ));
+            if !heap_ref.is_callable(handler) {
+                Some("with-exception-handler: first argument must be a procedure")
+            } else if !heap_ref.is_callable(thunk) {
+                Some("with-exception-handler: second argument must be a procedure")
+            } else {
+                None
             }
-            if !heap_ref.is_procedure(thunk) && !heap_ref.is_continuation(thunk) {
-                return Err(EvalError::TypeError(
-                    "with-exception-handler: second argument must be a procedure".to_string(),
-                ));
-            }
+        };
+        if let Some(message) = bad_argument {
+            return self.maybe_route_error_through_cps(
+                EvalError::TypeError(message.to_string()),
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
         }
 
         // Create cleanup continuation that pops the handler when thunk completes
@@ -508,10 +535,17 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Result<StepResult, EvalError> {
         // (raise obj) or (raise-continuable obj)
         if args.len() != 1 {
-            return Err(EvalError::WrongArity {
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
+            return self.maybe_route_error_through_cps(
+                EvalError::WrongArity {
+                    expected: "1".to_string(),
+                    actual: args.len(),
+                },
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
         }
         // Exception already comes as TaggedValue - no conversion needed!
         let exception_tagged = args[0];
@@ -584,17 +618,34 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Result<StepResult, EvalError> {
         // (error message obj ...) - Create error object and raise it
         if args.is_empty() {
-            return Err(EvalError::WrongArity {
-                expected: "at least 1".to_string(),
-                actual: args.len(),
-            });
+            return self.maybe_route_error_through_cps(
+                EvalError::WrongArity {
+                    expected: "at least 1".to_string(),
+                    actual: args.len(),
+                },
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
         }
 
-        // First argument must be a string (the message)
+        // First argument must be a string (the message). Extract before
+        // routing: the borrow must end before `maybe_route_error_through_cps`
+        // takes `borrow_mut()` to allocate the exception.
         let heap = self.evaluator.global_env.heap();
-        let message = heap.borrow().get_string_contents(args[0]).ok_or_else(|| {
-            EvalError::TypeError("error: first argument must be a string".to_string())
-        })?;
+        let message_opt = heap.borrow().get_string_contents(args[0]);
+        let Some(message) = message_opt else {
+            return self.maybe_route_error_through_cps(
+                EvalError::TypeError("error: first argument must be a string".to_string()),
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
+        };
 
         // Remaining arguments are irritants - already TaggedValue!
         let irritants_tagged: Vec<TaggedValue> = args[1..].to_vec();
@@ -749,7 +800,12 @@ impl<'a> CpsEvaluator<'a> {
                 ..
             } => (qualified_name.as_ref(), registry_index),
             _ => {
-                return Err(EvalError::TypeError(
+                // Unreachable: the only caller matches `Procedure::Primitive`
+                // first. `InternalError`, not `TypeError`, because
+                // `is_catchable()` treats the latter as a user condition — a
+                // future routing sweep would otherwise let Scheme code catch
+                // an interpreter bug.
+                return Err(EvalError::InternalError(
                     "apply_other_primitive called with non-primitive procedure".to_string(),
                 ));
             }
@@ -818,8 +874,24 @@ impl<'a> CpsEvaluator<'a> {
             1 => {
                 // Set value (replace top of stack after applying converter)
                 let new_val = if let Some(conv) = converter {
-                    // Apply converter to new value using CPS machinery
-                    self.apply_from_direct_tagged(conv, vec![args[0]])?
+                    // Apply converter to new value using CPS machinery. The
+                    // converter is user code, so anything it raises must reach
+                    // the handlers installed *here* — `apply_from_direct_tagged`
+                    // runs it on a nested trampoline that starts with an empty
+                    // handler stack, so it comes back as a Rust error.
+                    match self.apply_from_direct_tagged(conv, vec![args[0]]) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            return self.maybe_route_error_through_cps(
+                                err,
+                                cont,
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                                exception_handlers,
+                            );
+                        }
+                    }
                 } else {
                     args[0]
                 };
@@ -832,10 +904,17 @@ impl<'a> CpsEvaluator<'a> {
                 TaggedValue::UNSPECIFIED
             }
             _ => {
-                return Err(EvalError::WrongArity {
-                    expected: "0 or 1".to_string(),
-                    actual: args.len(),
-                });
+                return self.maybe_route_error_through_cps(
+                    EvalError::WrongArity {
+                        expected: "0 or 1".to_string(),
+                        actual: args.len(),
+                    },
+                    cont,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                );
             }
         };
 
