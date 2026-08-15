@@ -449,35 +449,42 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
-**`make-parameter` objects are not procedures** — ❌ **open**. Both backends. Found 2026-08-15 while
-checking whether the three standard ports had become *real* parameter objects or only ones that
-satisfy our particular `parameterize` macro. They had, and the check turned up the mirror gap
-instead:
+**Tree-walker: the control primitives' own errors escape `guard`** — ❌ **open**. Found 2026-08-15
+while writing tests to pin the claims in the parameter fix below, and deliberately not folded into
+it. Same class as the unbound-variable defect fixed below — a catchable error returned as a Rust
+`Err` instead of being routed through the Scheme handlers — but in `cps_eval/application.rs`, which
+that fix's `try_catchable!` sweep of `step.rs` never reached.
 
-```scheme
-(procedure? current-output-port)   ;; => #t   (correct)
-(procedure? (make-parameter 1))    ;; => #f   (wrong)
-```
+**Measured, not assumed.** The first draft of this entry recorded it as one site
+(`with-exception-handler`'s type error). Probing each control primitive separately — the tree-walker
+aborts on the first uncaught error, so they cannot be probed in one program — gives six observable
+positions, all `caught` on the VM and all escaping on the tree-walker:
 
-R7RS §7.3 defines `make-parameter` as returning "a newly allocated **procedure**", and §4.2.6 applies
-parameter objects as `(p)`. Patina's are a distinct heap object that answers `procedure?` wrongly
-because `procedure_p` (`patina-primitives/src/primitives/predicates.rs`) checks
-`is_closure() || is_procedure() || is_continuation()` and never `is_parameter()`.
+| probe | tree-walker | VM |
+|---|---|---|
+| `(with-exception-handler 5 (lambda () 'ok))` | escapes | caught |
+| `(dynamic-wind (lambda () 1))` | escapes | caught |
+| `(call-with-values (lambda () 1))` | escapes | caught |
+| `(raise)` | escapes | caught |
+| `(error)` | escapes | caught |
+| `((make-parameter 1) 1 2 3)` | escapes | caught |
+| `(apply)` | caught | caught |
+| `(force)` | caught | caught |
 
-That is also why the three standard ports were **not** re-expressed on top of the generic mechanism,
-and the reason is stronger than "it would trade one defect for another". Because `Parameter` objects
-fail `is_procedure`, calling one at all needs bespoke dispatch in *both* backends — the tree-walker
-routes on `param_opt` in `application.rs` and has a whole `apply_parameter`, and the VM has its own
-case in `vm_state.rs`. The ports, being ordinary registered primitives, need **none** of that: they
-go through the same call path as every other primitive. So the shipped version is the *less*
-special-cased of the two.
+The file has 13 bare `return Err(EvalError::…)` (10 `WrongArity`, 3 `TypeError` — all catchable
+classes) against only 4 routed calls, so the shape matches the count. `apply` and `force` already
+agree, which is worth understanding before the fix rather than after: they are the two whose arity
+is checked somewhere other than these bare returns.
 
-**Sequence to converge**, if it is ever worth doing: (1) teach `procedure?` — and whatever else keys
-off "is this callable" — to recognise `Parameter` objects, which fixes this entry and removes the
-need for the backend dispatch; (2) only then re-express the three ports as `make-parameter`-backed
-objects whose converter validates direction and writes the thread-local, which collapses the
-per-port Rust into one converter each. Doing (2) first regresses `procedure?` on
-`current-output-port`, which this change just got right.
+**The fix is the one `step.rs` already got**: route through `maybe_route_error_through_cps` instead
+of returning `Err`. Each site here has a real continuation in scope, not just `Halt`, so it should
+deliver to `cont` the way the `Continue` arm does. Doing it as a sweep — every bare return in the
+file, not the six that happen to be probed — is what stops this recurring a third time; #71's lesson
+was that patching the reported instances leaves the class alive.
+
+One representative row is pinned as a divergence in `crates/patina-tests/tests/callability.rs`, so
+it retires itself. The other five are recorded here rather than quarantined individually, since one
+sweep should close them together.
 
 **`with-output-to-file` does not restore through `dynamic-wind`** — ❌ **open**. Both backends.
 `with_output_to_file` / `with_input_from_file` (`patina-primitives/src/primitives/io/file.rs`) save
@@ -599,6 +606,75 @@ If the vector work does not restore the invariant, the deeper fix is to decide a
 time instead, where `Template::Symbol` and `Template::Var` distinguish the two without any proxy.
 
 ### Fixed
+
+**`make-parameter` objects were not procedures** — ✅ **fixed** (2026-08-15). Both backends. Found
+while checking whether the three standard ports had become *real* parameter objects or only ones
+that satisfy our particular `parameterize` macro. They had, and the check turned up the mirror gap:
+
+```scheme
+(procedure? current-output-port)   ;; => #t   (correct)
+(procedure? (make-parameter 1))    ;; => #f   (wrong)
+```
+
+R7RS §4.2.6 defines `make-parameter` as returning "a newly allocated parameter object, **which is a
+procedure** that accepts zero arguments and returns the value associated with the parameter object";
+Gauche agrees. (§7.3's sample implementation builds one out of a `lambda`, which is the same answer
+from the other direction. An earlier draft of this entry cited §7.3 as the *definition* and
+paraphrased it as "a newly allocated procedure" inside quotation marks — both wrong, and the sort of
+thing that survives because nobody re-opens the spec.)
+
+Only the *predicate* was wrong — `(p)`, `(apply p '())` and passing `p` through `map` all worked
+before the fix, which is the shape of the defect: `Heap::is_procedure` enumerated callable variants
+(closure tag, native `Procedure`, VM closure, VM continuation refs) and omitted `Parameter`.
+
+The fix is one variant added to that enumeration, not a special case in `procedure?`, because the
+other callers mean the same thing by the question. Observably that changed three decision points:
+`with-exception-handler`'s argument checks on *each* backend (both rejected a parameter before the
+fix — verified by running it), and `make-parameter`'s own converter check, which had worked around
+the gap with `is_procedure(c) || is_parameter(c)`; that `||` is now redundant and gone. Adjacent,
+and fixed alongside because the two are one thought: a parameter fell through the datum writer's
+chain to `#<unknown>`, harmless until `procedure?` began answering `#t` about it.
+
+**Two counting errors, caught by review and corrected rather than quietly dropped.** A draft of this
+entry claimed eight sites "became correct together", listing `dynamic-wind` and `force` among them.
+Checked one at a time: `dynamic-wind` type-checks nothing on either backend — neither
+`apply_dynamic_wind` nor `VmControlPrimitive::DynamicWind` inspects its arguments, they just call
+the thunks — so it accepted a parameter all along; the `patina-primitives` `with_exception_handler`
+is shadowed on the normal call path by each backend's own control primitive, and reachable only
+through `apply`, where its two checks do run but the body then returns `InternalError("not yet
+implemented")` regardless, so they can never turn a rejection into a success; and `force`'s thunk
+check is reachable only for a `Delayed` promise, which `make-promise` does not build. Counting call
+sites in a grep is not the same as counting decisions, and the test that was going to guard
+`dynamic-wind` would have passed against unfixed code.
+
+**The previous entry's own claim was also wrong.** It held that the bespoke per-backend dispatch
+exists *because* parameters fail `is_procedure`, so fixing the predicate would remove the need for
+it. Both backends route on `get_parameter` (`try_call_parameter` in the VM, the `param_opt` branch
+in the tree-walker's `application.rs`), never on `is_procedure`, and that dispatch exists because
+reading and setting a parameter is its own calling convention. So step (2) — re-expressing the three
+ports as `make-parameter`-backed objects — is unblocked but buys only the per-port collapse.
+
+**The claims above are now pinned by tests**, in `crates/patina-tests/tests/callability.rs` — added
+because three statements in this entry's own first draft were wrong in ways no test could have
+contradicted. `dynamic-wind` performing no validation is proven by *ordering* (its before- and
+body-thunks run before a bad after-thunk is reached), not by matching an error message; and the
+"still half-applied" limit below is pinned as behaviour — a continuation answers `procedure?` with
+`#t` yet is rejected as a `make-parameter` converter. That last test is written to fail when the gap
+is closed, verified by closing it locally: whoever folds `Continuation` in gets a failure telling
+them to update the test, the doc comment and this entry together.
+
+**Still half-applied, and left open deliberately.** `is_procedure` is not yet the single source of
+truth for callability: tree-walker continuations (`HeapObjectData::Continuation`) are callable but
+live in `is_continuation`, so five callers still spell the question `is_procedure(x) ||
+is_continuation(x)` while four omit the disjunct. Folding that variant in would let all five drop
+it, but it widens the four that omit it today — a behaviour change wanting its own tests, not a
+rider on this one. Recorded in the `is_procedure` doc comment so the next reader does not mistake
+the enumeration for complete.
+
+Guarded by `crates/patina-tests/tests/parameters.rs`, which was ported from a tree-walker-only local
+helper to the shared both-backend helpers in the same change (Track Q Q1) — a single-backend file
+could not have stated the property it was missing. It pins the widening as a *predicate*: things
+that are not callable still answer `#f`, and the standard ports still answer `#t`.
 
 **Tree-walker: an unbound variable escaped `guard` in most positions** — ✅ **fixed**
 (2026-08-15). A bare `undefined-var` was a catchable condition, but `(undefined-fn)` was not — on the

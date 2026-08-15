@@ -100,6 +100,10 @@ fn test_procedure_predicate() {
     assert_eval_to("(procedure? (lambda (x) x))", "#t");
     assert_eval_to("(procedure? (lambda () 3))", "#t");
 
+    // Parameter objects: R7RS §4.2.6 makes `make-parameter` return a procedure.
+    // Behaviour that follows from it lives in `tests/parameters.rs`.
+    assert_eval_to("(procedure? (make-parameter 1))", "#t");
+
     // Non-procedures
     assert_eval_to("(procedure? 42)", "#f");
     assert_eval_to("(procedure? #t)", "#f");
@@ -108,6 +112,7 @@ fn test_procedure_predicate() {
     assert_eval_to("(procedure? '())", "#f");
     assert_eval_to("(procedure? '(1 2 3))", "#f");
     assert_eval_to("(procedure? (cons 1 2))", "#f");
+    assert_eval_to("(procedure? (vector 1))", "#f");
 
     // Evaluated results
     assert_eval_to("(procedure? ((lambda () 3)))", "#f");

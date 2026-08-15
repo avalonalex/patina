@@ -1234,7 +1234,19 @@ impl Heap {
         tv.is_object() && matches!(self.get_object(tv), HeapObjectData::Promise(_))
     }
 
-    /// Check if value is a procedure (native variant, closure, VM closure, or continuation)
+    /// Is this value callable? Covers the closure tag, the native `Procedure`
+    /// variant, VM closures, VM continuation refs, and parameter objects —
+    /// R7RS §4.2.6 makes `make-parameter` return a procedure. Being callable is
+    /// what this asks, not which variant holds it; parameters still *dispatch*
+    /// through `get_parameter`, since reading and setting one is its own
+    /// calling convention.
+    ///
+    /// Not yet the single source of truth: tree-walker continuations
+    /// (`HeapObjectData::Continuation`) are callable but live in
+    /// [`Self::is_continuation`], so five callers still spell the question
+    /// `is_procedure(x) || is_continuation(x)`. Folding that variant in here
+    /// would let them drop the disjunct, but it also widens the four callers
+    /// that omit it today — a behaviour change wanting its own tests.
     #[inline]
     pub fn is_procedure(&self, tv: TaggedValue) -> bool {
         tv.is_closure()
@@ -1245,6 +1257,7 @@ impl Heap {
                         | HeapObjectData::VmClosure { .. }
                         | HeapObjectData::VmContinuationRef(_)
                         | HeapObjectData::VmDelimitedContinuationRef(_)
+                        | HeapObjectData::Parameter { .. }
                 ))
     }
 

@@ -368,6 +368,12 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         out.push_str("#<values>");
         return;
     }
+    // Parameter object — a procedure per R7RS §4.2.6, named for what it is.
+    // Last in the chain: every probe above it is paid by every leaf formatted.
+    if heap.is_parameter(tv) {
+        out.push_str("#<parameter>");
+        return;
+    }
     // Unknown
     out.push_str("#<unknown>");
 }
