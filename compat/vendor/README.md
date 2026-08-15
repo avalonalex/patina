@@ -2,7 +2,7 @@
 
 **This directory is test data. It is not part of Patina.**
 
-187 third-party Scheme packages from [snow-fort.org](http://snow-fort.org), vendored so Patina can be
+184 third-party Scheme packages from [snow-fort.org](http://snow-fort.org), vendored so Patina can be
 measured against real-world R7RS code (Track L — `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`).
 
 ## Purpose, and what this is not
@@ -41,8 +41,8 @@ vendored; there is no popularity cutoff, since at 8 MB the tail costs nothing an
 
 **Libraries Patina bundles itself are excluded**, computed from `lib/` rather than listed here.
 Patina's copy is canonical, so a vendored duplicate has no role: nothing tests it, and anything
-importing it resolves to the bundled version. Nine are excluded on that basis, including
-`(chibi test)` and `(srfi 1)`.
+importing it resolves to the bundled version. Thirteen are excluded on that basis, including
+`(chibi test)`, `(chibi string)`, `(srfi 1)` and `(srfi 130)`'s dependencies.
 
 Copyleft is excluded to keep this MIT-licensed repository's licence story simple, not because of any
 judgement about the code. Packages with no discoverable licence are excluded because absence of a
@@ -119,6 +119,10 @@ A licence is never resolved twice for the same tarball: `MANIFEST.json` records 
 rebuild reproduce the corpus exactly. It did not always — SRFI packages whose snowball carries no
 licence text are resolved against their canonical SRFI document, and those pages were once the one
 thing the tool fetched every run without caching, so a cache-only rebuild quietly dropped ten
-packages. The pages are cached now. What can still differ without a network is `REVIEW-QUEUE.json`
-and the excluded counts in `INVENTORY.md`, which describe packages that were *not* vendored and so
-have no recorded answer; the corpus itself is unaffected.
+packages. The pages are cached now.
+
+`REVIEW-QUEUE.json` records `tarball_sha256` and `license_evidence` beside the `license` it already
+carried, so a licence established for a package we decline to vendor is reusable too — the answer
+cost the same to establish either way. Packages Patina bundles are excluded from these reports
+entirely: they leave the corpus for a reason that has nothing to do with their licence, and pricing
+one only made the reports depend on whether the run could reach the network.

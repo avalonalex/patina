@@ -246,18 +246,24 @@ def recorded_licences() -> dict[str, tuple[str, str, str]]:
     two had changed. Reading the recorded answer back makes an offline rebuild
     reproduce the corpus it started from.
     """
-    path = VENDOR / "MANIFEST.json"
-    if not path.exists():
-        return {}
-    try:
-        packages = json.loads(path.read_text())["packages"]
-    except (OSError, ValueError, KeyError):
-        return {}
-    return {
-        p["slug"]: (p.get("tarball_sha256"), p["license"], p["license_evidence"])
-        for p in packages
-        if p.get("tarball_sha256") and p.get("license")
-    }
+    out: dict[str, tuple[str, str, str]] = {}
+    for path, key, entries in (
+        (VENDOR / "MANIFEST.json", "slug", lambda d: d["packages"]),
+        # Excluded packages carry their licence too, so a rebuild does not have
+        # to establish it a second time to decide to exclude them again.
+        (VENDOR / "REVIEW-QUEUE.json", "library", lambda d: d),
+    ):
+        if not path.exists():
+            continue
+        try:
+            records = entries(json.loads(path.read_text()))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        for p in records:
+            if p.get("tarball_sha256") and p.get("license") and p.get("license_evidence"):
+                slug = p[key] if key == "slug" else "-".join(p[key].split())
+                out.setdefault(slug, (p["tarball_sha256"], p["license"], p["license_evidence"]))
+    return out
 
 
 def load_index(offline: bool) -> list[dict]:
@@ -340,6 +346,17 @@ def build(target: Path, offline: bool) -> dict:
     prior = recorded_licences()
     reused = 0
 
+    # A package whose library Patina bundles leaves the corpus whatever its
+    # licence says, so it is not awaiting licence review and does not belong in
+    # the reports about licence-based exclusions. Marking it here also keeps
+    # those reports identical with and without a refresh: such a package has no
+    # recorded licence to reuse — it is in neither generated file — so without
+    # this it read as licence-unknown from the cache and as permissive after a
+    # refresh, and the difference was pure noise.
+    bundled = bundled_libraries()
+    for p in pkgs:
+        p["bundled"] = bool(bundled & {" ".join(l) for l in p["libs"]})
+
     work = CACHE / "extracted"
     work.mkdir(parents=True, exist_ok=True)
     for p in pkgs:
@@ -387,16 +404,11 @@ def build(target: Path, offline: bool) -> dict:
 
     # Packages whose library Patina bundles are excluded: the bundled copy is
     # canonical, so a vendored duplicate is dead weight that only raises the
-    # question of which one a test resolved against.
-    bundled = bundled_libraries()
+    # question of which one a test resolved against. Flagged above.
     sel = sorted(
-        (p for p in pkgs
-         if p["bucket"] in ("PERMISSIVE", "NONSTANDARD")
-         and not (bundled & {" ".join(l) for l in p["libs"]})),
+        (p for p in pkgs if p["bucket"] in ("PERMISSIVE", "NONSTANDARD") and not p["bundled"]),
         key=lambda p: (-p["pop"], " ".join(p["name"])))
-    dropped = sorted({" ".join(p["name"]) for p in pkgs
-                      if p["bucket"] in ("PERMISSIVE", "NONSTANDARD")
-                      and (bundled & {" ".join(l) for l in p["libs"]})})
+    dropped = sorted({" ".join(p["name"]) for p in pkgs if p["bundled"]})
     if dropped:
         print(f"excluded {len(dropped)} package(s) Patina bundles: {', '.join(dropped)}")
 
@@ -438,10 +450,18 @@ def build(target: Path, offline: bool) -> dict:
         "packages": manifest,
     }, indent=2) + "\n")
 
+    # A licence is worth recording even for a package we decline to vendor: it
+    # is the same answer, it cost the same to establish, and recording it with
+    # the checksum it belongs to is what lets a later rebuild reuse it instead
+    # of going back to the network. Bundled packages are left out — they are
+    # excluded for a reason that has nothing to do with their licence.
     excluded = [{"library": " ".join(p["name"]), "version": p["version"], "pop": p["pop"],
-                 "license": p["licence"], "bucket": p["bucket"], "size_kb": p["size"] // 1024,
+                 "license": p["licence"], "license_evidence": p["evidence"],
+                 "tarball_sha256": p.get("tar_sha256"),
+                 "bucket": p["bucket"], "size_kb": p["size"] // 1024,
                  "url": HOST + (p["url"] or "")}
-                for p in pkgs if p["bucket"] not in ("PERMISSIVE", "NONSTANDARD")]
+                for p in pkgs
+                if p["bucket"] not in ("PERMISSIVE", "NONSTANDARD") and not p["bundled"]]
     excluded.sort(key=lambda x: -x["pop"])
     (target / "REVIEW-QUEUE.json").write_text(json.dumps(excluded, indent=2) + "\n")
     write_inventory(target, manifest, pkgs)
@@ -477,8 +497,12 @@ def write_inventory(target: Path, manifest: list[dict], pkgs: list[dict]) -> Non
                   "out-of-scope rather than failing.", "",
               "## Excluded", "",
               "| Reason | Packages |", "|---|---|"]
+    # Licence-based exclusions only; the bundled ones are reported separately
+    # and counting them here would make this table depend on whether the run
+    # could reach the network to price a licence that does not matter.
     for bucket, n in Counter(p["bucket"] for p in pkgs
-                             if p["bucket"] not in ("PERMISSIVE", "NONSTANDARD")).most_common():
+                             if p["bucket"] not in ("PERMISSIVE", "NONSTANDARD")
+                             and not p.get("bundled")).most_common():
         lines.append(f"| {bucket} | {n} |")
     lines += ["", "Full detail in `REVIEW-QUEUE.json`.", ""]
     (target / "INVENTORY.md").write_text("\n".join(lines))

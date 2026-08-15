@@ -288,11 +288,24 @@ again:
   asymmetry was the root of it: those pages were the one thing the tool fetched every run and kept
   nothing of, which made `--offline` lossy rather than merely slower.
 
-`--offline --check` now reports **184 packages and no package-level drift**, matching the committed
-corpus exactly. What remains is confined to the two reports about what was *left out*: a package
-that is neither vendored nor in the cache still reads as licence-unknown, so `REVIEW-QUEUE.json` and
-`INVENTORY.md`'s excluded counts can differ until a cache warmed by an online run covers it. The
-tool prints that caveat when `--offline` is given. The corpus itself is never affected.
+A cache-only `--check` now reports **184 packages and no package-level drift**, matching the
+committed corpus exactly.
+
+**A licence is recorded even for a package we decline to vendor.** It is the same answer and it cost
+the same to establish, so `REVIEW-QUEUE.json` now carries `tarball_sha256` and `license_evidence`
+beside the `license` it already had, and `recorded_licences()` reads both files. This is plumbing
+until the next `--refresh` populates those fields; today one package, `srfi 5`, is the only one that
+still re-derives — its licence is the SRFI document's, so a cache-only run reads it as unknown and
+`INVENTORY.md`'s excluded counts differ by that one row.
+
+**A bundled package is excluded on grounds that have nothing to do with its licence**, so it no
+longer appears in the licence-based reports at all. That was the other half of the discrepancy:
+`srfi 27` is bundled and therefore in neither generated file, so it had no recorded licence to
+reuse and read as unknown from the cache but permissive after a refresh — pure noise, now gone. It
+is reported where it belongs instead, in the "excluded N packages Patina bundles" line, which counts
+13 rather than 12 because it no longer depends on having priced a licence that does not matter.
+
+The corpus itself is never affected by any of this.
 
 **The default now rebuilds from the pinned cache; `--refresh` asks upstream what is new.** The flags
 used to name the mechanism — network or no network — when the real question is whether to refresh,
