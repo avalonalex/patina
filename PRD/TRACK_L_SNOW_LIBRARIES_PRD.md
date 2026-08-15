@@ -460,11 +460,24 @@ instead:
 ```
 
 R7RS §7.3 defines `make-parameter` as returning "a newly allocated **procedure**", and §4.2.6 applies
-parameter objects as `(p)`. Patina's are a distinct heap object that the evaluator applies specially,
-so they work everywhere a parameter is used but answer `procedure?` wrongly. Low stakes on its own,
-but it means Patina now has two kinds of parameter object that disagree about what they are — and it
-is the reason the ports were **not** converted to the generic mechanism: doing so would have traded a
-fixed defect for this one. Fixing this first would make that conversion available.
+parameter objects as `(p)`. Patina's are a distinct heap object that answers `procedure?` wrongly
+because `procedure_p` (`patina-primitives/src/primitives/predicates.rs`) checks
+`is_closure() || is_procedure() || is_continuation()` and never `is_parameter()`.
+
+That is also why the three standard ports were **not** re-expressed on top of the generic mechanism,
+and the reason is stronger than "it would trade one defect for another". Because `Parameter` objects
+fail `is_procedure`, calling one at all needs bespoke dispatch in *both* backends — the tree-walker
+routes on `param_opt` in `application.rs` and has a whole `apply_parameter`, and the VM has its own
+case in `vm_state.rs`. The ports, being ordinary registered primitives, need **none** of that: they
+go through the same call path as every other primitive. So the shipped version is the *less*
+special-cased of the two.
+
+**Sequence to converge**, if it is ever worth doing: (1) teach `procedure?` — and whatever else keys
+off "is this callable" — to recognise `Parameter` objects, which fixes this entry and removes the
+need for the backend dispatch; (2) only then re-express the three ports as `make-parameter`-backed
+objects whose converter validates direction and writes the thread-local, which collapses the
+per-port Rust into one converter each. Doing (2) first regresses `procedure?` on
+`current-output-port`, which this change just got right.
 
 **`with-output-to-file` does not restore through `dynamic-wind`** — ❌ **open**. Both backends.
 `with_output_to_file` / `with_input_from_file` (`patina-primitives/src/primitives/io/file.rs`) save

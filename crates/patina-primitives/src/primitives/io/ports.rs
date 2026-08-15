@@ -406,61 +406,42 @@ pub(super) fn get_output_bytevector(
 // Current Ports
 // =============================================================================
 
-/// The three standard ports, as R7RS §6.13.1 requires: **parameter objects**,
-/// not plain procedures.
-///
-/// `parameterize` (`lib/scheme/base/parameters.scm`) drives a parameter through
-/// the object itself — `(p)` to read the current value, `(p v)` to install one,
-/// and `(p old)` from `dynamic-wind`'s after-thunk to restore it. So accepting
-/// the setter arity here is not a shortcut around the dynamic binding: the
-/// thread-local *is* the binding, and writing it is what every other primitive
-/// that calls `get_current_output_port()` observes. A Scheme-level rebinding
-/// that left the thread-local alone would be the broken version, because
-/// `display` with no port argument reads the thread-local and would ignore it.
-/// The shape of this file's port-argument validators, so the three standard
-/// ports can be handed the one matching their direction.
-type PortCheck =
-    fn(&[TaggedValue], usize, &std::cell::Ref<'_, Heap>) -> Result<Rc<Port>, EvalError>;
-
-/// `check` is the file's existing port-argument validator for the right
-/// direction — `get_input_port_tagged` or `get_output_port_tagged`. Its
-/// "absent argument defaults to the current port" branch is unreachable here,
-/// since this arm only runs with exactly one argument.
-fn current_port(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-    who: &str,
-    get: fn() -> Rc<Port>,
-    set: fn(Rc<Port>),
-    check: PortCheck,
-) -> Result<TaggedValue, EvalError> {
-    match args {
-        [] => Ok(heap.borrow_mut().alloc_port(get())),
-        [_] => {
-            let port = check(args, 0, &heap.borrow())?;
-            set(port);
-            Ok(TaggedValue::UNSPECIFIED)
-        }
-        _ => Err(EvalError::WrongArity {
-            expected: format!("{who} expects 0 or 1 arguments"),
-            actual: args.len(),
-        }),
-    }
-}
+// These three are **parameter objects**, as R7RS §6.13.1 requires, not plain
+// procedures: each reads with no argument and installs with one.
+//
+// `parameterize` (`lib/scheme/base/parameters.scm`) drives a parameter through
+// the object itself — `(p)` to read the current value, `(p v)` to install one,
+// `(p old)` from `dynamic-wind`'s after-thunk to restore it. So accepting the
+// setter arity is not a shortcut around the dynamic binding: the thread-local
+// *is* the binding, and writing it is what every other primitive that calls
+// `get_current_output_port()` observes. A Scheme-level rebinding that left the
+// thread-local alone would be the broken version, because `display` with no
+// port argument reads the thread-local and would ignore it.
+//
+// Written out three times rather than shared: each has to exist anyway as its
+// own `fn` (the registry takes bare fn pointers, not closures), so factoring
+// the body out moved it behind three function-pointer parameters without
+// removing a function. The setter arm defers to this file's existing port
+// validator for the right direction, whose "argument absent, use the current
+// port" branch cannot be reached from here.
 
 /// (current-input-port) / (current-input-port port)
 pub(super) fn current_input_port(
     heap: &SharedHeap,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    current_port(
-        heap,
-        args,
-        "current-input-port",
-        get_current_input_port,
-        set_current_input_port,
-        get_input_port_tagged,
-    )
+    match args {
+        [] => Ok(heap.borrow_mut().alloc_port(get_current_input_port())),
+        [_] => {
+            let port = get_input_port_tagged(args, 0, &heap.borrow())?;
+            set_current_input_port(port);
+            Ok(TaggedValue::UNSPECIFIED)
+        }
+        _ => Err(EvalError::WrongArity {
+            expected: "current-input-port expects 0 or 1 arguments".to_string(),
+            actual: args.len(),
+        }),
+    }
 }
 
 /// (current-output-port) / (current-output-port port)
@@ -468,14 +449,18 @@ pub(super) fn current_output_port(
     heap: &SharedHeap,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    current_port(
-        heap,
-        args,
-        "current-output-port",
-        get_current_output_port,
-        set_current_output_port,
-        get_output_port_tagged,
-    )
+    match args {
+        [] => Ok(heap.borrow_mut().alloc_port(get_current_output_port())),
+        [_] => {
+            let port = get_output_port_tagged(args, 0, &heap.borrow())?;
+            set_current_output_port(port);
+            Ok(TaggedValue::UNSPECIFIED)
+        }
+        _ => Err(EvalError::WrongArity {
+            expected: "current-output-port expects 0 or 1 arguments".to_string(),
+            actual: args.len(),
+        }),
+    }
 }
 
 /// (current-error-port) / (current-error-port port)
@@ -483,14 +468,18 @@ pub(super) fn current_error_port(
     heap: &SharedHeap,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, EvalError> {
-    current_port(
-        heap,
-        args,
-        "current-error-port",
-        get_current_error_port,
-        set_current_error_port,
-        get_output_port_tagged,
-    )
+    match args {
+        [] => Ok(heap.borrow_mut().alloc_port(get_current_error_port())),
+        [_] => {
+            let port = get_output_port_tagged(args, 0, &heap.borrow())?;
+            set_current_error_port(port);
+            Ok(TaggedValue::UNSPECIFIED)
+        }
+        _ => Err(EvalError::WrongArity {
+            expected: "current-error-port expects 0 or 1 arguments".to_string(),
+            actual: args.len(),
+        }),
+    }
 }
 
 // =============================================================================

@@ -3,8 +3,8 @@
 //! They used to be plain 0-argument procedures, so `parameterize` rejected them
 //! outright — the one failure in SRFI 158's upstream suite, which defines its
 //! own `with-input-from-string` in exactly those terms. Why writing the backing
-//! thread-local *is* rebinding rather than a way around it: see `current_port`
-//! in `patina-primitives/src/primitives/io/ports.rs`.
+//! thread-local *is* rebinding rather than a way around it is explained above
+//! the three procedures in `patina-primitives/src/primitives/io/ports.rs`.
 //!
 //! Restoration is asserted by where output *lands*, never by port identity:
 //! `(current-output-port)` allocates a fresh wrapper per call, so `eq?` on two
