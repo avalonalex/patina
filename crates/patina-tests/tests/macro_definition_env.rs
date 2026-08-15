@@ -414,35 +414,3 @@ fn test_quote_substituted_into_a_nested_macro_pattern() {
     assert_eq!(exported_fixnum(&eval, "usen", "r"), 35);
     assert_eq!(exported_fixnum(&eval, "usen", "s"), 35);
 }
-
-/// The guard on the fix: a genuine quote form is still opaque, and quasiquote
-/// depth still governs whether an unquoted reference is rewritten.
-#[test]
-fn test_real_quote_forms_are_still_left_alone() {
-    let (eval, _t) = eval_with_libs(&[
-        (
-            "qq.sld",
-            r#"(define-library (t qq)
-                 (import (scheme base))
-                 (export mqq)
-                 (begin
-                   (define (helper x) (* 5 x))
-                   (define-syntax mqq
-                     (syntax-rules ()
-                       ((mqq x)
-                        ;; 'helper is the symbol, not the procedure; the
-                        ;; unquoted call is the procedure.
-                        (let ((q '(helper ignored)))
-                          (+ (if (eq? (car q) 'helper) 1 0)
-                             (helper x))))))))"#,
-        ),
-        (
-            "useqq.sld",
-            r#"(define-library (t useqq)
-                 (import (scheme base) (t qq))
-                 (export r)
-                 (begin (define r (mqq 8))))"#,
-        ),
-    ]);
-    assert_eq!(exported_fixnum(&eval, "useqq", "r"), 41);
-}

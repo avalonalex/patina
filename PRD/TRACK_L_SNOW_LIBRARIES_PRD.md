@@ -395,6 +395,41 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
+**The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ❌ **open**.
+Found 2026-08-14 by auditing the *class* behind the `quote`-argument fix below, which is the practice
+this section already follows. `mark_substituted_tagged`
+(`patina-macros/src/macro_expander/expander/hygiene.rs`) walks a pair tree by recursing on the cdr
+and re-reading its head, exactly as `rewrite_refs` did:
+
+```rust
+if self.is_macro_definition_tagged(car) || self.is_quote_form_tagged(car) {
+    return tv;                       // correct for a form, wrong for a tail
+}
+let new_car = self.mark_substituted_tagged(car);
+let new_cdr = self.mark_substituted_tagged(cdr);   // cdr re-read as a form
+```
+
+So for a substituted value shaped like `(f quote y)`, the recursive call on the tail `(quote y)`
+sees a quote head and returns unchanged — and `y`, plus everything after it, never receives the
+macro scope. That function exists precisely so substituted identifiers can be told apart from a
+nested macro's own pattern variables, which is the mechanism behind two already-fixed entries in
+this section, so losing the mark is a hygiene defect rather than a cosmetic one.
+
+**Honest limit on this entry:** the code shape is confirmed identical, but no observable repro has
+been constructed yet. Reaching it needs a single pattern variable bound to a list with `quote`,
+`syntax-rules`, `define-syntax`, `let-syntax` or `letrec-syntax` in non-initial position, whose
+later elements then matter to an inner macro's identity comparisons — plausible from
+`(chibi parse)`-style macro-writing-macro code but not yet exhibited. Do not close it as theoretical
+without trying; do not report it as user-visible without a repro.
+
+The durable fix is the one the sibling walkers already use: `compile_template` and
+`compile_template_escaped` flatten the spine once via `collect_list_items` and index element 0,
+which is what `rewrite_form` converged on independently. `mark_substituted_tagged` is the one that
+still hand-rolls car/cdr recursion. Checked and clean: `stamp_expansion_source`,
+`contains_identifier_tagged`, `flip_scope_on_tagged_impl`, `strip_identifiers_impl` and
+`evaluate_feature_requirement_tagged` — the first four recurse uniformly with no head dispatch at
+all, and the last flattens before dispatching.
+
 **`match-letrec` does not match** — ❌ **open**. Both backends. The one remaining failure in
 `(chibi match)`'s suite (74 of 75) after the relinking fix below, and the reason chibi-match scores
 `wrong-result` rather than `pass`. Every `match-letrec` fails, including the simplest one, while the
