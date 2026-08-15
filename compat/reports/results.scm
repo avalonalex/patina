@@ -48,7 +48,7 @@
   ((slug "chibi-xlib") (mode probe) (status missing-library) (missing "chibi"))
   ((slug "chrisoei-cint") (mode test) (status missing-library) (missing "scheme small"))
   ((slug "chrisoei-test") (mode probe) (status pass))
-  ((slug "comparators") (mode test) (status unbound-identifier) (unbound "`srfi-128`" "`test-exit`" "`test-group`" "`use`"))
+  ((slug "comparators") (mode test) (status unbound-identifier) (unbound "`load`" "`test-exit`" "`test-group`" "`use`"))
   ((slug "edn") (mode test) (status parse-error) (errors "ch"))
   ((slug "generators") (mode probe) (status pass))
   ((slug "in-progress-hash-bimaps") (mode test) (status missing-library) (missing "srfi 114 comparators"))

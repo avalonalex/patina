@@ -102,9 +102,24 @@ impl<'a> CpsEvaluator<'a> {
                 // ==================== Expressions that update state and continue ====================
                 // These are handled in the inner loop
                 CpsExprKind::LetVal { name, value, body } => {
-                    let val = self
-                        .eval_trivial_tagged(value, &current_env, &cont_env)
-                        .map_err(|e| e.at_opt(current_expr.source.clone()))?;
+                    // Same routing as the `Var` and `App` arms: the CPS transform
+                    // binds an application's operator and operands through
+                    // `LetVal`, so this is where `(undefined-fn)`'s lookup
+                    // actually fails, and propagating here is what let it escape
+                    // `guard`.
+                    let val = match self.eval_trivial_tagged(value, &current_env, &cont_env) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return self.maybe_route_error_through_cps(
+                                e.at_opt(current_expr.source.clone()),
+                                ContValue::Halt,
+                                cont_env,
+                                prompt_stack,
+                                current_winds,
+                                exception_handlers,
+                            );
+                        }
+                    };
                     let new_env = Rc::new(Environment::with_parent(current_env.clone()));
                     new_env.define(name.to_string(), val);
                     current_expr = body.as_ref().clone();
@@ -186,14 +201,42 @@ impl<'a> CpsEvaluator<'a> {
                     // Evaluate func to TaggedValue directly for ApplyProc.proc
                     // Attach call-site source to any lookup errors (e.g. undefined function)
                     let call_source = current_expr.source.clone();
-                    let proc = self
-                        .eval_trivial_tagged(func, &current_env, &cont_env)
-                        .map_err(|e| e.at_opt(call_source.clone()))?;
+                    // Route through the handlers rather than propagating as a Rust
+                    // error, exactly as the `Var` arm above does. Without this the
+                    // operator position was the one place an unbound variable
+                    // escaped `guard`: `undefined-var` was catchable but
+                    // `(undefined-fn)` was not, on the tree-walker only. chibi,
+                    // Gauche and Chez all catch both, and so does the VM.
+                    let proc = match self.eval_trivial_tagged(func, &current_env, &cont_env) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return self.maybe_route_error_through_cps(
+                                e.at_opt(call_source.clone()),
+                                ContValue::Halt,
+                                cont_env,
+                                prompt_stack,
+                                current_winds,
+                                exception_handlers,
+                            );
+                        }
+                    };
                     let arg_values: Result<Vec<TaggedValue>, _> = args
                         .iter()
                         .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
                         .collect();
-                    let arg_values = arg_values.map_err(|e| e.at_opt(call_source.clone()))?;
+                    let arg_values = match arg_values {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return self.maybe_route_error_through_cps(
+                                e.at_opt(call_source.clone()),
+                                ContValue::Halt,
+                                cont_env,
+                                prompt_stack,
+                                current_winds,
+                                exception_handlers,
+                            );
+                        }
+                    };
 
                     let k = cont_env
                         .get(cont)

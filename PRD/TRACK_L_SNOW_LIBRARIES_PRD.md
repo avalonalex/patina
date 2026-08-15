@@ -598,36 +598,62 @@ entry above, which is why this is blocked on it rather than independently fixabl
 If the vector work does not restore the invariant, the deeper fix is to decide at template-expansion
 time instead, where `Template::Symbol` and `Template::Var` distinguish the two without any proxy.
 
-**Rust registry primitives ignore the import set at top level** — ❌ **open**, own PR. (Adjacent
-cleanup landed 2026-08-12, PR #52: the four continuation-broken Rust higher-order primitives were
-*deleted*, removing those instances of the pattern — but deletion was available only because Scheme
-replacements already existed for continuation-safety reasons. The general registry/import-set
-scoping fix below is still required.) A program that
-imports only `(scheme base)` can still call primitives no imported library exports:
-
-```scheme
-(import (scheme base))
-(cadddr '(1 2 3 4))      ;; => 4      -- (scheme cxr)
-(bit-count 12)           ;; => 2      -- (srfi 151)
-(arithmetic-shift 1 10)  ;; => 1024   -- (srfi 151)
-(bitwise-and 12 10)      ;; => 8      -- (srfi 151)
-```
-
-Scheme-level exports *are* scoped correctly — `list-sort` and `bitwise-nand` are unbound under the
-same import — so this is specific to the primitive registry: registered primitives land in the
-top-level environment regardless of what was imported. Inside a `define-library` imports are
-enforced properly, which is the whole reason this went unnoticed.
-
-That asymmetry is also a testing hazard, and it already cost us one bug. `(srfi 132)`'s
-`vector-merge` called `cadddr` without importing `(scheme cxr)`; it failed only inside the library,
-while any script-level check of the same expression passed. Library code cannot be validated by
-top-level scripts until this is fixed.
-
-Adjacent and lower-stakes: `lib/scheme/base.sld` exports the eight three-deep `cxr` procedures
-(`caaar`…`cdddr`) as a documented extension, where R7RS-small puts them only in `(scheme cxr)`.
-Worth settling in the same PR while the cost of tightening is still low.
-
 ### Fixed
+
+**Tree-walker: an unbound variable in operator position escaped `guard`** — ✅ **fixed**
+(2026-08-15). A bare `undefined-var` was a catchable condition, but `(undefined-fn)` was not — on the
+tree-walker only. chibi, Gauche and Chez all catch both forms, and the VM already did.
+
+The CPS transform binds an application's operator and operands through `LetVal`, and that arm of
+`step.rs` propagated the lookup failure as a Rust error with `?` instead of routing it through
+`maybe_route_error_through_cps` the way the neighbouring `Var` arm did — whose comment even said
+"for a bare Var (not in an App)", naming the gap without closing it. `EvalError::UndefinedVariable`
+was already in the catchable set; it simply never reached the handlers. The `App` arm had the same
+shape and is fixed alongside, though `LetVal` is the one the transform actually goes through.
+
+Found by a test written for the import-set fix below, which used `guard` to assert a name was
+unbound and got two different answers from the two backends. Pinned in
+`crates/patina-tests/tests/backend_divergence.rs` as a converged row, in every position: bare,
+operator, operand, and operand of a primitive.
+
+**Rust registry primitives ignored the import set at top level** — ✅ **fixed** (2026-08-15).
+VM only; the tree-walker was right all along, which turned out to be the whole story. A program
+importing only `(scheme base)` could still call `cadddr` from `(scheme cxr)` or `bitwise-and` from
+`(srfi 151)`, because `VmBackend::with_fs` called `install_primitives()` — a loop binding *every*
+registered primitive into globals by short name. The registry knows each primitive's owning library
+(it is right there in `qualified_name`, and the loop even reads it) but nothing consulted it, so
+`import` never got a say.
+
+Scheme-level exports were scoped correctly and libraries enforced their imports properly, so the
+hole was specific to registered primitives at the top level — and that asymmetry is why it survived.
+The same expression succeeded at the top level and failed inside a `define-library`, and the top
+level is where one naturally checks. It had already cost a real bug: `(srfi 132)`'s `vector-merge`
+called `cadddr` without importing `(scheme cxr)` and failed only inside the library.
+
+**The fix was deleting a call.** `load_bootstrap()` already ran immediately afterwards, loading
+`(scheme base)` and `(patina debug)` and defining exactly their exports — the correct model, already
+written, already what the tree-walker did. `install_primitives()` was redundant with it and
+destructive to it. Primitives reached through a library carry `registry_index: None`, which
+`resolve_index_cached` fills in on first call, so the VM's primitive fast path is untouched; the
+function stays for the VM unit tests, which build a bare `VmState` with no library machinery.
+
+The predicted fallout did not arrive: **77 test binaries green, 1226/1226 on both backends, and the
+corpus unchanged at 138**. In hindsight that was foreseeable — the suite runs every case on both
+backends and asserts they agree, so anything relying on the leak was already failing. One corpus
+package swapped `srfi-128` for `load` in its unbound list, which is the leak closing in plain view.
+
+New guard: `crates/patina-tests/tests/primitives_reachable_by_import.rs` asserts every registered
+primitive is exported by *some* shipped library. Before this change an under-exporting library
+builder cost nothing, because the blanket install handed the primitive out regardless; now such a
+primitive is simply unreachable, and nothing else would notice. It deliberately checks reachability
+rather than the primitive's own `library` label — several are labelled with a library adjacent to
+the one R7RS exports them from (`char->integer` says `scheme.char`; R7RS puts it in `(scheme base)`),
+so asserting the label would be asserting a naming convention instead of the property that matters.
+
+**Still open, and deliberately not folded in:** `lib/scheme/base.sld` exports the eight three-deep
+`cxr` procedures (`caaar`…`cdddr`), where R7RS-small puts them only in `(scheme cxr)`. That is a
+documented extension rather than a leak, and tightening it is a separate decision.
+
 
 **The standard port procedures were not parameter objects** — ✅ **fixed** (2026-08-15). Both
 backends. R7RS §6.13.1 requires `current-input-port`, `current-output-port` and `current-error-port`

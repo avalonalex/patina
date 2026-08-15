@@ -207,3 +207,30 @@ fn evaled_bad_syntax_is_catchable_on_both() {
         "caught",
     );
 }
+
+/// Converged 2026-08-15: an unbound variable in *operator* position is a
+/// catchable condition on both backends.
+///
+/// Not a divergence any more, but it lived here in spirit: a bare
+/// `undefined-var` was catchable on the tree-walker while `(undefined-fn)` was
+/// not, because the CPS transform binds an application's operator through
+/// `LetVal`, and that arm propagated the lookup failure as a Rust error instead
+/// of routing it through the exception handlers the way the `Var` arm did.
+/// chibi, Gauche and Chez all catch both forms, and the VM already did.
+///
+/// Found by a test written for an unrelated change that used `guard` to assert
+/// a name was unbound, and got two different answers.
+#[test]
+fn unbound_variable_is_catchable_in_every_position() {
+    for body in [
+        "undefined-name",          // bare reference
+        "(undefined-name)",        // operator position
+        "(list (undefined-name))", // operand position
+        "(+ 1 (undefined-name))",  // operand of a primitive
+    ] {
+        assert_program_eval_to(
+            &format!("(import (scheme base)) (guard (e (#t 'caught)) {body})"),
+            "caught",
+        );
+    }
+}
