@@ -162,12 +162,7 @@ suite_test!(srfi_113_set, "(srfi 113 test)", 0, 253);
 // replaced by `(srfi 14)`, test bodies untouched. Why, in
 // scheme_tests/upstream/README.md.
 suite_test!(srfi_130_string, "(srfi 130 test)", 0, 219);
-// The one remaining failure is a Patina defect, not a defect in (srfi 158):
-// `current-input-port` is a plain 0-arg procedure rather than an R7RS
-// parameter object, so the suite's `(parameterize ((current-input-port ...)))`
-// fails with "expects exactly 0 arguments, got 1". Same for the output and
-// error ports. Tracked in the Track L PRD; lower this to 0 when it is fixed.
-suite_test!(srfi_158_generator, "(srfi 158 test)", 1, 76);
+suite_test!(srfi_158_generator, "(srfi 158 test)", 0, 76);
 
 /// Proves the harness can actually report a failure — and actually counts.
 ///

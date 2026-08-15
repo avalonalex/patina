@@ -139,24 +139,24 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "current-input-port",
-        Arity::Exact(0),
-        "Returns the current input port.",
+        Arity::Range(0, 1),
+        "Returns the current input port; with an argument, installs one (R7RS parameter).",
         ports::current_input_port,
     ));
 
     registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "current-output-port",
-        Arity::Exact(0),
-        "Returns the current output port.",
+        Arity::Range(0, 1),
+        "Returns the current output port; with an argument, installs one (R7RS parameter).",
         ports::current_output_port,
     ));
 
     registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "current-error-port",
-        Arity::Exact(0),
-        "Returns the current error port.",
+        Arity::Range(0, 1),
+        "Returns the current error port; with an argument, installs one (R7RS parameter).",
         ports::current_error_port,
     ));
 
