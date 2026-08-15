@@ -61,7 +61,7 @@
 
 | Identifier | Packages |
 |---|---|
-| `srfi-128` | 1 |
+| `load` | 1 |
 | `test-exit` | 1 |
 | `test-group` | 1 |
 | `use` | 1 |

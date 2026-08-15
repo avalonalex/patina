@@ -90,6 +90,27 @@ pub fn repo_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
+/// Every file under `root`, recursively, in unspecified order. Callers filter
+/// by extension. Panics on an unreadable directory — in a test, an IO failure
+/// should be loud, not an empty listing that lets an assertion pass vacuously.
+pub fn files_under(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("readable dir entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
 /// Format a TaggedValue for display (backend-agnostic).
 fn display_tagged(tv: TaggedValue, heap: &RefCell<patina_core::heap::Heap>) -> String {
     // Unpack multiple values (R7RS: each value displayed on its own line)

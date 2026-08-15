@@ -40,6 +40,36 @@ impl<'a> CpsEvaluator<'a> {
         // - For lambda bodies, this is the lambda's body environment
         let def_env = env;
 
+        // Unwrap a `Result` whose failure is a *user-level* error: deliver it
+        // to the Scheme exception handlers (`guard`, `with-exception-handler`)
+        // instead of propagating a Rust error. `maybe_route_error_through_cps`
+        // is the policy point — non-catchable errors (internal bugs,
+        // continuation escapes) still propagate. Every arm must use this
+        // rather than `?`: routing used to be hand-copied per arm, and each
+        // arm without a copy was a position where an unbound variable escaped
+        // `guard` (operator position, `if` tests, `set!`/`define` values,
+        // `call/cc` operands, unquotes) — tree-walker only, while chibi,
+        // Gauche, Chez and the VM all catch them. Continuation-environment
+        // lookups stay `?`: a missing continuation is a compiler invariant,
+        // not a user error.
+        macro_rules! try_catchable {
+            ($result:expr) => {
+                match $result {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return self.maybe_route_error_through_cps(
+                            e.at_opt(current_expr.source.clone()),
+                            ContValue::Halt,
+                            cont_env,
+                            prompt_stack,
+                            current_winds,
+                            exception_handlers,
+                        );
+                    }
+                }
+            };
+        }
+
         loop {
             match &current_expr.kind {
                 // ==================== Trivial Expressions ====================
@@ -49,28 +79,8 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExprKind::Var { name, scopes } => {
-                    match self.lookup_var_tagged(name, scopes, &current_env) {
-                        Ok(tagged) => {
-                            return Ok(StepResult::Done(tagged));
-                        }
-                        Err(err) => {
-                            // Attach source location from the Var expression, if available
-                            let err = err.at_opt(current_expr.source.clone());
-                            // Route undefined variable errors through exception handlers
-                            // We need a continuation to deliver the error to.
-                            // For a bare Var (not in an App), we use a Halt continuation
-                            // so the error can be caught by guard/with-exception-handler.
-                            let halt_cont = ContValue::Halt;
-                            return self.maybe_route_error_through_cps(
-                                err,
-                                halt_cont,
-                                cont_env,
-                                prompt_stack,
-                                current_winds,
-                                exception_handlers,
-                            );
-                        }
-                    }
+                    let tagged = try_catchable!(self.lookup_var_tagged(name, scopes, &current_env));
+                    return Ok(StepResult::Done(tagged));
                 }
 
                 CpsExprKind::ContRef(k) => {
@@ -102,9 +112,10 @@ impl<'a> CpsEvaluator<'a> {
                 // ==================== Expressions that update state and continue ====================
                 // These are handled in the inner loop
                 CpsExprKind::LetVal { name, value, body } => {
-                    let val = self
-                        .eval_trivial_tagged(value, &current_env, &cont_env)
-                        .map_err(|e| e.at_opt(current_expr.source.clone()))?;
+                    // The CPS transform binds an application's operator through
+                    // `LetVal`, so this is where `(undefined-fn)`'s lookup fails.
+                    let val =
+                        try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
                     let new_env = Rc::new(Environment::with_parent(current_env.clone()));
                     new_env.define(name.to_string(), val);
                     current_expr = body.as_ref().clone();
@@ -132,7 +143,8 @@ impl<'a> CpsEvaluator<'a> {
                     consequent,
                     alternate,
                 } => {
-                    let test_val = self.eval_trivial_tagged(test, &current_env, &cont_env)?;
+                    let test_val =
+                        try_catchable!(self.eval_trivial_tagged(test, &current_env, &cont_env));
                     current_expr = if test_val.is_truthy() {
                         consequent.as_ref().clone()
                     } else {
@@ -146,13 +158,15 @@ impl<'a> CpsEvaluator<'a> {
                     value,
                     cont,
                 } => {
-                    let val = self.eval_trivial_tagged(value, &current_env, &cont_env)?;
-                    self.set_var_tagged(var, scopes, val, &current_env)?;
+                    let val =
+                        try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
+                    try_catchable!(self.set_var_tagged(var, scopes, val, &current_env));
                     current_expr = cont.as_ref().clone();
                 }
 
                 CpsExprKind::Define { name, value, cont } => {
-                    let val = self.eval_trivial_tagged(value, &current_env, &cont_env)?;
+                    let val =
+                        try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
                     // Define in the "definition environment", not current_env
                     // - For top-level: def_env is global_env
                     // - For lambda body: def_env is the lambda's body environment
@@ -183,17 +197,13 @@ impl<'a> CpsEvaluator<'a> {
                 // ==================== Expressions that return StepResult ====================
                 // These require trampolining to avoid stack growth
                 CpsExprKind::App { func, args, cont } => {
-                    // Evaluate func to TaggedValue directly for ApplyProc.proc
-                    // Attach call-site source to any lookup errors (e.g. undefined function)
-                    let call_source = current_expr.source.clone();
-                    let proc = self
-                        .eval_trivial_tagged(func, &current_env, &cont_env)
-                        .map_err(|e| e.at_opt(call_source.clone()))?;
-                    let arg_values: Result<Vec<TaggedValue>, _> = args
-                        .iter()
-                        .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
-                        .collect();
-                    let arg_values = arg_values.map_err(|e| e.at_opt(call_source.clone()))?;
+                    let proc =
+                        try_catchable!(self.eval_trivial_tagged(func, &current_env, &cont_env));
+                    let arg_values: Vec<TaggedValue> = try_catchable!(
+                        args.iter()
+                            .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
+                            .collect::<Result<_, _>>()
+                    );
 
                     let k = cont_env
                         .get(cont)
@@ -213,16 +223,16 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExprKind::Apply { func, args, cont } => {
-                    // Evaluate func to TaggedValue directly for ApplyProc.proc
-                    let proc = self.eval_trivial_tagged(func, &current_env, &cont_env)?;
+                    let proc =
+                        try_catchable!(self.eval_trivial_tagged(func, &current_env, &cont_env));
                     let heap = self.evaluator.global_env.heap();
 
                     // Evaluate args to TaggedValue and flatten the last list
-                    let arg_tagged: Result<Vec<TaggedValue>, _> = args
-                        .iter()
-                        .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
-                        .collect();
-                    let mut arg_tagged = arg_tagged?;
+                    let mut arg_tagged: Vec<TaggedValue> = try_catchable!(
+                        args.iter()
+                            .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
+                            .collect::<Result<_, _>>()
+                    );
 
                     let k = cont_env
                         .get(cont)
@@ -310,8 +320,8 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExprKind::CallCC { proc, cont } => {
-                    // Evaluate proc to TaggedValue directly for ApplyProc.proc
-                    let procedure = self.eval_trivial_tagged(proc, &current_env, &cont_env)?;
+                    let procedure =
+                        try_catchable!(self.eval_trivial_tagged(proc, &current_env, &cont_env));
 
                     let k = cont_env
                         .get(cont)
@@ -334,8 +344,8 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExprKind::Control { tag, proc } => {
-                    // Evaluate proc to TaggedValue directly for ApplyProc.proc
-                    let procedure = self.eval_trivial_tagged(proc, &current_env, &cont_env)?;
+                    let procedure =
+                        try_catchable!(self.eval_trivial_tagged(proc, &current_env, &cont_env));
 
                     let prompt_idx = prompt_stack
                         .iter()
@@ -369,7 +379,8 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExprKind::Abort { tag, value } => {
-                    let val_tagged = self.eval_trivial_tagged(value, &current_env, &cont_env)?;
+                    let val_tagged =
+                        try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
 
                     let prompt_idx = prompt_stack
                         .iter()
@@ -396,11 +407,11 @@ impl<'a> CpsEvaluator<'a> {
 
                 CpsExprKind::Quasiquote { template, cont } => {
                     // Evaluate quasiquote template - now works with TaggedValue directly
-                    let result = super::quasiquote::eval_quasiquote_in_env(
+                    let result = try_catchable!(super::quasiquote::eval_quasiquote_in_env(
                         self.evaluator,
                         *template,
                         &current_env,
-                    )?;
+                    ));
 
                     let k = cont_env
                         .get(cont)
@@ -420,14 +431,14 @@ impl<'a> CpsEvaluator<'a> {
 
                 CpsExprKind::PrimOp { op, args, cont } => {
                     // Evaluate args directly to TaggedValue
-                    let arg_values: Result<Vec<TaggedValue>, _> = args
-                        .iter()
-                        .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
-                        .collect();
-                    let arg_values = arg_values?;
+                    let arg_values: Vec<TaggedValue> = try_catchable!(
+                        args.iter()
+                            .map(|arg| self.eval_trivial_tagged(arg, &current_env, &cont_env))
+                            .collect::<Result<_, _>>()
+                    );
 
                     // eval_primop now takes and returns TaggedValue
-                    let result_tagged = self.eval_primop(op, arg_values)?;
+                    let result_tagged = try_catchable!(self.eval_primop(op, arg_values));
 
                     let k = cont_env
                         .get(cont)
@@ -446,7 +457,8 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 CpsExprKind::Halt(value) => {
-                    let tagged = self.eval_trivial_tagged(value, &current_env, &cont_env)?;
+                    let tagged =
+                        try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
                     return Ok(StepResult::Done(tagged));
                 }
             }

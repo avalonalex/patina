@@ -207,3 +207,32 @@ fn evaled_bad_syntax_is_catchable_on_both() {
         "caught",
     );
 }
+
+/// Converged 2026-08-15: an unbound variable is a catchable condition in
+/// every position, on both backends.
+///
+/// The tree-walker's CPS step function routed lookup failures through the
+/// Scheme exception handlers in some arms and `?`-propagated them in others,
+/// so whether `guard` caught the error depended on where the variable sat.
+/// chibi, Gauche and Chez catch every position here; the VM already did.
+/// Enforced structurally by the `try_catchable!` macro in `step.rs`; history
+/// in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+#[test]
+fn unbound_variable_is_catchable_in_every_position() {
+    for body in [
+        "undefined-name",              // bare reference
+        "(undefined-name)",            // operator position
+        "(list (undefined-name))",     // operand position
+        "(+ 1 (undefined-name))",      // operand of a primitive
+        "(if undefined-name 1 2)",     // `if` test
+        "(set! undefined-name 1)",     // `set!` target
+        "(define x undefined-name) x", // `define` value
+        "(call/cc undefined-name)",    // `call/cc` operand
+        "`(,undefined-name)",          // unquote
+    ] {
+        assert_program_eval_to(
+            &format!("(import (scheme base)) (guard (e (#t 'caught)) {body})"),
+            "caught",
+        );
+    }
+}

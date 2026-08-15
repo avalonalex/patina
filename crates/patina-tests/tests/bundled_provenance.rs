@@ -11,7 +11,7 @@
 //! specification (unlike `DefaultHasher`), with no new dependency.
 
 mod common;
-use common::repo_root;
+use common::{files_under, repo_root};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -74,11 +74,8 @@ const PINNED: &[(&str, u64)] = &[
 const PINNED_TREES: &[&str] = &["lib/chibi", "lib/srfi/132"];
 
 fn scheme_files_under(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
-    for entry in std::fs::read_dir(dir).expect("pinned tree should be readable") {
-        let path = entry.expect("readable dir entry").path();
-        if path.is_dir() {
-            scheme_files_under(root, &path, out);
-        } else if matches!(
+    for path in files_under(dir) {
+        if matches!(
             path.extension().and_then(|e| e.to_str()),
             Some("scm") | Some("sld")
         ) {
