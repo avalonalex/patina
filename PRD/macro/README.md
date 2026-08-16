@@ -16,6 +16,9 @@ Patina has a complete R7RS-small `syntax-rules` implementation with Racket-style
 - **[CONSECUTIVE_ELLIPSES.md](CONSECUTIVE_ELLIPSES.md)** — Cartesian product semantics for `... ...` in templates, ported from Racket. Independent, small scope (~150-250 lines).
 - **[SRFI_149_ADVANCED_MACROS.md](SRFI_149_ADVANCED_MACROS.md)** — Original catalog of non-R7RS patterns removed from test suite. Historical reference.
 
+### Keyword Bindings
+- **[SYNTAX_KEYWORD_BINDINGS_DESIGN.md](SYNTAX_KEYWORD_BINDINGS_DESIGN.md)** — Give core syntactic keywords real bindings instead of recognizing them by spelling, so import sets and export resolution reach them through the ordinary path. Retires three workarounds; fixes six conformance defects including a recorded backend divergence. Two staged PRs.
+
 ### syntax-case System
 - **[SYNTAX_CASE_DESIGN.md](SYNTAX_CASE_DESIGN.md)** — Core `syntax-case` implementation design: syntax objects, pattern matching with fenders, `datum->syntax`, `quasisyntax`, etc.
 

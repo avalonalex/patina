@@ -805,6 +805,14 @@ design described in the fixed-defects archive — so this is best fixed by that 
 locally. Not pinned as a divergence yet for the reason §6 records elsewhere: establish the correct
 answer first, and here the correct answer is a design decision, not an observation.
 
+**That decision is now taken:** `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` (2026-08-16) works
+the design out and stages it into two PRs. It also records five sibling symptoms of the same root
+cause, found while costing it and each verified against chibi and Gauche — a top-level `define`
+cannot shadow core syntax while a `define-syntax` can, `except` does not except, `prefix` binds the
+prefixed name nowhere while leaving the bare one working, `(null-environment 5)` still has
+`cond-expand`, and `(list else)` returns a symbol because of the `base.sld` workaround. They are
+kept there rather than repeated here: they are one defect, and it now has one document.
+
 **`match-letrec` does not match** — ❌ **open**. Both backends. The one remaining failure in
 `(chibi match)`'s suite (74 of 75) after the relinking fix below, and the reason chibi-match scores
 `wrong-result` rather than `pass`. Every `match-letrec` fails, including the simplest one, while the
