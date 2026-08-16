@@ -31,7 +31,10 @@ pub enum Token {
 
 #[derive(Error, Debug)]
 pub enum LexError {
-    #[error("Unexpected character: {0}")]
+    /// Formatted through [`describe_char`]: the one character that still
+    /// reaches here from above ASCII is a non-breaking or other exotic space,
+    /// and printing it prints nothing at all.
+    #[error("Unexpected character: {}", describe_char(*.0))]
     UnexpectedChar(char),
 
     #[error("Unterminated string")]
@@ -60,6 +63,20 @@ pub enum LexError {
     #[allow(dead_code)]
     #[error("Invalid number format: {0}")]
     InvalidNumber(String),
+}
+
+/// Render a character for an error message, naming it by code point when the
+/// glyph would show the reader nothing — whitespace and controls.
+///
+/// Without this, a stray U+00A0 between two identifiers reports
+/// `Unexpected character: ` and the reader is left hunting for an invisible
+/// difference; with it, the message says `U+00A0`.
+fn describe_char(ch: char) -> String {
+    if ch.is_whitespace() || ch.is_control() {
+        format!("U+{:04X}", ch as u32)
+    } else {
+        ch.to_string()
+    }
 }
 
 /// A token with its source position
@@ -186,7 +203,11 @@ impl Lexer {
             '"' => self.read_string(),
             '|' => self.read_vertical_bar_identifier(),
             '#' => self.read_hash_syntax(),
-            _ if ch.is_numeric()
+            // `is_ascii_digit`, not `is_numeric`: R7RS number literals are
+            // ASCII, while `char::is_numeric` also covers Nd/Nl/No above
+            // ASCII, so `₁` was routed here and rejected as a bad number
+            // instead of read as the identifier it is.
+            _ if ch.is_ascii_digit()
                 || (ch == '-' || ch == '+')
                     && (self.peek_is_numeric()
                         || self.peek_is_decimal_start()
@@ -294,11 +315,13 @@ impl Lexer {
         next.is_whitespace() || matches!(next, '(' | ')' | '"' | ';')
     }
 
+    /// ASCII-only, for the same reason as the number dispatch: a non-ASCII
+    /// numeric after `.`/`+`/`-` belongs to an identifier, not a literal.
     fn peek_is_numeric(&self) -> bool {
         if self.position + 1 >= self.input.len() {
             return false;
         }
-        self.input[self.position + 1].is_numeric()
+        self.input[self.position + 1].is_ascii_digit()
     }
 
     fn peek_is_imaginary(&self) -> bool {
@@ -317,7 +340,7 @@ impl Lexer {
         }
         let next = self.input[self.position + 1];
         let after = self.input[self.position + 2];
-        next == '.' && after.is_numeric()
+        next == '.' && after.is_ascii_digit()
     }
 
     fn is_special_float_literal(&self) -> bool {
@@ -765,12 +788,31 @@ impl Lexer {
     /// Whether `ch` can begin an identifier.
     ///
     /// Wider than R7RS 7.1.1's <initial> in three deliberate places: any
-    /// Unicode letter (7.1.1 admits only a-zA-Z), `.`, and `@`. All three are
-    /// pure widenings — no conforming program contains a token they admit — so
-    /// none can change an existing program's meaning. `@` is the one the
-    /// third-party ecosystem depends on; the rationale is in
-    /// `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` section 6, the cases in
-    /// `crates/patina-tests/tests/at_identifiers.rs`.
+    /// non-ASCII character that is not whitespace (7.1.1 admits only a-zA-Z),
+    /// `.`, and `@`. All three are pure widenings — no conforming program
+    /// contains a token they admit — so none can change an existing program's
+    /// meaning. `@` is the one the third-party ecosystem depends on; the
+    /// rationale is in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` section 6, the cases
+    /// in `crates/patina-tests/tests/at_identifiers.rs`.
+    ///
+    /// R7RS 7.1 permits the extension and does not say how far: R6RS 4.2.4
+    /// spells one out by Unicode general category (Lu, Ll, …, Po, Sm, So …),
+    /// but chibi, Gauche and Chez all go further and take *any* character
+    /// above ASCII, including ones no category list admits — all three read
+    /// `“` as an identifier. Matching them costs nothing and needs no category
+    /// tables, so the rule here is the simple one they behave like rather than
+    /// the precise one none of them implements.
+    ///
+    /// Whitespace is the one exclusion, and it is where the references part
+    /// company: chibi reads U+00A0 as an identifier character, Gauche treats it
+    /// as a separator. Patina does neither — `char::is_whitespace` (Unicode
+    /// White_Space) keeps it out of identifiers, and `skip_whitespace_and_
+    /// comments` only skips the five ASCII spaces, so it stays a lex error.
+    /// That is stricter than both references on purpose: a stray non-breaking
+    /// space is a typo in every case anyone has reported, and silently welding
+    /// two identifiers into one (chibi) or silently splitting a token (Gauche)
+    /// are both invisible in the source. The error names it `U+00A0` —
+    /// see `describe_char`, since printing the character prints nothing.
     ///
     /// The writer deliberately does *not* track this set: `symbol_needs_
     /// vertical_bars` (patina-primitives) stays strict, so `@` writes back as
@@ -778,7 +820,7 @@ impl Lexer {
     /// this bare?", not "will we read it?" — and erring toward bars is always
     /// safe. Widening here must not widen it.
     fn is_identifier_start(&self, ch: char) -> bool {
-        ch.is_alphabetic()
+        Self::is_extended_identifier_char(ch)
             || matches!(
                 ch,
                 '!' | '$'
@@ -799,6 +841,22 @@ impl Lexer {
                     | '.'
                     | '@'
             )
+    }
+
+    /// An ASCII letter, or any non-ASCII character that is not whitespace.
+    ///
+    /// The non-ASCII half is the extension R7RS 7.1 permits; see
+    /// [`Self::is_identifier_start`] for why it is drawn this widely. Kept as
+    /// its own predicate because the number dispatch needs the same boundary
+    /// from the other side: `char::is_numeric` is Unicode-aware and would
+    /// claim `₁` (U+2081, category No) for `read_number`, so a subscript could
+    /// never reach the identifier path at all.
+    fn is_extended_identifier_char(ch: char) -> bool {
+        if ch.is_ascii() {
+            ch.is_ascii_alphabetic()
+        } else {
+            !ch.is_whitespace()
+        }
     }
 
     fn read_identifier(&mut self) -> Result<Token, LexError> {

@@ -6,11 +6,11 @@
 |---|---|
 | pass | 143 |
 | missing-library | 20 |
-| parse-error | 15 |
+| parse-error | 14 |
 | load-error | 1 |
 | unbound-identifier | 1 |
 | wrong-result | 2 |
-| runtime-error | 0 |
+| runtime-error | 1 |
 | timeout | 0 |
 | out-of-scope | 2 |
 
@@ -44,7 +44,6 @@
 | `No matching pattern for macro case` | 2 |
 | `#<unknown>` | 1 |
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
-| `Lexer error: Unexpected character: …` | 1 |
 | `No matching pattern for macro ssax:make-parser/positional-args` | 1 |
 | `ch` | 1 |
 
@@ -231,7 +230,7 @@
 | srfi-179 | test | missing-library |
 | srfi-180 | probe | pass |
 | srfi-19 | probe | pass |
-| srfi-197 | test | parse-error |
+| srfi-197 | test | runtime-error |
 | srfi-2 | probe | pass |
 | srfi-227 | probe | pass |
 | srfi-235 | test | missing-library |
