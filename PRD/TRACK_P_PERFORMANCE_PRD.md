@@ -864,6 +864,39 @@ reference implementation and will validate its replacement.
 
 ---
 
+### The lexer is quadratic in file size — `is_special_float_literal`  *(open, found 2026-08-16)*
+
+Found by a review sweep over an unrelated lexer change (Track L, Unicode identifiers), not by a
+profile — which is why it is recorded here rather than fixed there.
+
+`is_special_float_literal` (`crates/patina-frontend/src/lexer/mod.rs`) copies **the entire
+remaining input** into a `String` and `to_lowercase()`s it — a second allocation, with full Unicode
+case mapping — to test a 6-character prefix. The number dispatch calls it for every token starting
+`+` or `-` that is not followed by a digit, so every `(- a b)`, every `(+ x 1)` and every
+`-`-leading identifier pays it. Lexing is therefore O(n²) in file size.
+
+Measured (median of 9 interleaved rounds, against an allocation-free prefix comparison that
+produced identical token streams across the whole corpus):
+
+| input | calls | chars copied + lowercased | current | fixed | speedup |
+|---|---|---|---|---|---|
+| all 87 `lib/**/*.{scm,sld}` | — | — | 12.80 ms | 3.32 ms | 3.9× |
+| `chibi/tests/r7rs-tests.scm` (73 KB) | 108 | 5.67 M (78× the file) | 16.46 ms | 0.48 ms | 34× |
+| 537 KB concatenation | 526 | 136.2 M (253× the input) | 440 ms | 2.40 ms | 184× |
+
+Each doubling of input costs ~5.6×, confirming the quadratic. The worst shipped files are
+`lib/srfi/133/vectors-impl.scm` (2.58 ms) and `lib/chibi/test.scm` (2.18 ms); a script importing
+just those two runs ~35 ms wall, so this one function is roughly **15% of a small script's total
+time**. The fix is a direct char comparison against the four 6-character patterns — no allocation,
+no `to_lowercase`, no behaviour change.
+
+Two adjuncts found with it, both cheaper to fix once this is: `Lexer::new` collects the whole input
+into a `Vec<char>` (4 bytes per char), and `read` builds a fresh `Parser` over the *remaining*
+buffer for each datum (`patina-primitives/src/primitives/io/read.rs`), so both that `Vec<char>`
+build and the quadratic above are re-paid per datum in a `(read)` loop.
+
+---
+
 ## 5. Sequencing within the track
 Original plan: **P0** → **P1** → **P2 → P3** → **P4 → P5**, with **P6** in parallel — all landed through P3/P6 as of 2026-08-03. Sequencing for what remains is now data-driven, per §1.2: **P7 phase 2 → P4 → (cross-track: weak continuation tables) → P5**, each preceded by a fresh profile and followed by the §1.2 scoreboard run. See `PRD/SNOW_AND_PERF_ROADMAP.md` for the M1–M4 interleave with Track L.
 

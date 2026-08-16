@@ -167,7 +167,7 @@
   ((slug "srfi-179") (mode test) (status missing-library) (missing "srfi 144"))
   ((slug "srfi-180") (mode probe) (status pass))
   ((slug "srfi-19") (mode probe) (status pass))
-  ((slug "srfi-197") (mode test) (status parse-error) (errors "Lexer error: Unexpected character: …"))
+  ((slug "srfi-197") (mode test) (status runtime-error))
   ((slug "srfi-2") (mode probe) (status pass))
   ((slug "srfi-227") (mode probe) (status pass))
   ((slug "srfi-235") (mode test) (status missing-library) (missing "srfi 64"))

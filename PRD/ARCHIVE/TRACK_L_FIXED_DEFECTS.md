@@ -10,6 +10,41 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**The lexer rejected a non-ASCII identifier** — ✅ **fixed** (2026-08-16). Both backends. Found once
+srfi-197's misfiled `missing-library` row was corrected and the package could report its real
+failure.
+
+```scheme
+(define …₁ 1)   ;; before => Lexer error: Unexpected character: …
+                ;; chibi, Gauche, Chez => fine
+```
+
+R7RS 7.1.1 spells `<identifier>` with ASCII letters, but §7.1 lets an implementation extend the
+grammar and does not say how far. R6RS 4.2.4 draws a line by Unicode general category; **all three
+references go past it** and read *any* character above ASCII — chibi, Gauche and Chez each accept
+`“` (a curly quote) as an identifier, which no category list admits. Matching them needs no
+category tables and can only widen the accepted language, so the rule is now: above ASCII,
+everything except whitespace.
+
+**Two independent causes, and the second was invisible from the first.** `is_identifier_start`
+already called `is_alphabetic`, so `λ` and `café` worked all along; only non-letters like `…` (Po)
+were rejected there. But `₁` (U+2081, category No) never reached that predicate at all — the token
+dispatch tests `char::is_numeric`, which is Unicode-aware, so a subscript was routed to
+`read_number` and reported as `Invalid number: ₁`. Fixing the identifier predicate alone would have
+left SRFI 197 failing with a different message. The dispatch and both numeric peeks now test
+`is_ascii_digit`, which is what R7RS number literals actually are.
+
+Whitespace is the one exclusion, and it is where the references part company: chibi reads U+00A0 as
+an identifier character, Gauche treats it as a separator. Patina does neither — it stays a lex
+error, now reported as `U+00A0` rather than as an invisible glyph. Stricter than both on purpose: a
+stray non-breaking space is a typo, and both welding two identifiers into one and silently
+splitting a token are invisible in the source.
+
+**The score did not move, and the entry said so in advance.** srfi-197 was the only package needing
+this and it advanced from `parse-error` to `runtime-error`: its test program also
+`(include "./test.scm")`s a file the package does not ship, so it cannot pass whatever we do. Done
+because rejecting Unicode identifiers is wrong, not for the number.
+
 **A library could not re-export a core syntactic keyword** — ✅ **fixed** (2026-08-16). Both
 backends. `(r6rs base)` opens by re-exporting the whole of R7RS's syntax, which R7RS §5.6.1 permits
 and every implementation accepts; Patina rejected the library outright.

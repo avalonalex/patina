@@ -31,7 +31,11 @@ pub enum Token {
 
 #[derive(Error, Debug)]
 pub enum LexError {
-    #[error("Unexpected character: {0}")]
+    /// Formatted through [`describe_char`], because the characters that reach
+    /// here are largely ones with no visible glyph: `'\0'` is also the
+    /// end-of-input sentinel `current_char` returns past the end, and above
+    /// ASCII only whitespace is left, everything else now being an identifier.
+    #[error("Unexpected character: {}", describe_char(*.0))]
     UnexpectedChar(char),
 
     #[error("Unterminated string")]
@@ -60,6 +64,20 @@ pub enum LexError {
     #[allow(dead_code)]
     #[error("Invalid number format: {0}")]
     InvalidNumber(String),
+}
+
+/// Render a character for an error message, naming it by code point when the
+/// glyph would show the reader nothing — whitespace and controls.
+///
+/// Without this, a stray U+00A0 between two identifiers reports
+/// `Unexpected character: ` and the reader is left hunting for an invisible
+/// difference; with it, the message says `U+00A0`.
+fn describe_char(ch: char) -> String {
+    if ch.is_whitespace() || ch.is_control() {
+        format!("U+{:04X}", ch as u32)
+    } else {
+        ch.to_string()
+    }
 }
 
 /// A token with its source position
@@ -186,7 +204,12 @@ impl Lexer {
             '"' => self.read_string(),
             '|' => self.read_vertical_bar_identifier(),
             '#' => self.read_hash_syntax(),
-            _ if ch.is_numeric()
+            // `is_ascii_digit`, not `is_numeric`: R7RS number literals are
+            // ASCII, while `char::is_numeric` also covers Nd/Nl/No above it,
+            // so `₁` (U+2081) was claimed here and rejected as a bad number
+            // rather than reaching `is_identifier_start` at all. The two
+            // `peek_is_*` helpers hold the same boundary.
+            _ if ch.is_ascii_digit()
                 || (ch == '-' || ch == '+')
                     && (self.peek_is_numeric()
                         || self.peek_is_decimal_start()
@@ -195,7 +218,7 @@ impl Lexer {
             {
                 self.read_number()
             }
-            _ if self.is_identifier_start(ch) => self.read_identifier(),
+            _ if Self::is_identifier_start(ch) => self.read_identifier(),
             _ => Err(LexError::UnexpectedChar(ch)),
         }
     }
@@ -233,6 +256,10 @@ impl Lexer {
     fn skip_whitespace_and_comments(&mut self) -> Result<(), LexError> {
         while !self.is_at_end() {
             match self.current_char() {
+                // Exactly R7RS 7.1.1's <whitespace>, deliberately *not*
+                // `char::is_whitespace`: widening it here would silently turn
+                // a stray U+00A0 into a space, where `is_identifier_start`
+                // keeps it a visible error. See that function.
                 ' ' | '\t' | '\n' | '\r' | '\x0C' => self.advance(),
                 ';' => {
                     // Line comment: skip until end of line
@@ -286,19 +313,37 @@ impl Lexer {
         Ok(())
     }
 
+    /// Where a token ends.
+    ///
+    /// Narrower than R7RS 7.1.1's <delimiter>, which also lists `|`, and
+    /// narrower than what Gauche and chibi stop at (`'`, `` ` ``, `,`, and for
+    /// Gauche `[`/`]`). So `a'b` and `a,b` read as one symbol here and as two
+    /// tokens there, and `a[b]` swallows brackets a *leading* `[` would reject
+    /// as reserved. That is a real divergence and deliberately not changed
+    /// here — widening it can only *split* tokens that used to be whole, which
+    /// is the one kind of lexer change that can alter an existing program's
+    /// meaning, so it wants its own decision and its own cross-check.
+    ///
+    /// What this function is for is making that decision live in one place:
+    /// the set was written out seven times before, which is why the question
+    /// had no home.
+    fn is_delimiter(ch: char) -> bool {
+        ch.is_whitespace() || matches!(ch, '(' | ')' | '"' | ';')
+    }
+
     fn is_delimiter_next(&self) -> bool {
         if self.position + 1 >= self.input.len() {
             return true;
         }
-        let next = self.input[self.position + 1];
-        next.is_whitespace() || matches!(next, '(' | ')' | '"' | ';')
+        Self::is_delimiter(self.input[self.position + 1])
     }
 
+    /// ASCII-only; see the number dispatch in `lex_token` for why.
     fn peek_is_numeric(&self) -> bool {
         if self.position + 1 >= self.input.len() {
             return false;
         }
-        self.input[self.position + 1].is_numeric()
+        self.input[self.position + 1].is_ascii_digit()
     }
 
     fn peek_is_imaginary(&self) -> bool {
@@ -317,7 +362,7 @@ impl Lexer {
         }
         let next = self.input[self.position + 1];
         let after = self.input[self.position + 2];
-        next == '.' && after.is_numeric()
+        next == '.' && after.is_ascii_digit()
     }
 
     fn is_special_float_literal(&self) -> bool {
@@ -642,10 +687,7 @@ impl Lexer {
 
         // Read the directive name (until whitespace or delimiter)
         let start = self.position;
-        while !self.is_at_end()
-            && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')' | '"' | ';')
-        {
+        while !self.is_at_end() && !Self::is_delimiter(self.current_char()) {
             self.advance();
         }
 
@@ -689,11 +731,8 @@ impl Lexer {
         let start = self.position;
         let first = self.current_char();
         self.advance();
-        if !first.is_whitespace() && !matches!(first, '(' | ')' | '"' | ';') {
-            while !self.is_at_end()
-                && !self.current_char().is_whitespace()
-                && !matches!(self.current_char(), '(' | ')' | '"' | ';')
-            {
+        if !Self::is_delimiter(first) {
+            while !self.is_at_end() && !Self::is_delimiter(self.current_char()) {
                 self.advance();
             }
         }
@@ -733,10 +772,7 @@ impl Lexer {
     fn read_number(&mut self) -> Result<Token, LexError> {
         let start = self.position;
 
-        while !self.is_at_end()
-            && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')' | '"' | ';')
-        {
+        while !self.is_at_end() && !Self::is_delimiter(self.current_char()) {
             self.advance();
         }
 
@@ -751,10 +787,7 @@ impl Lexer {
 
         // Read through all prefixes and the number
         // R7RS allows combinations like #e#x10, #i#b1010, etc.
-        while !self.is_at_end()
-            && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')' | '"' | ';')
-        {
+        while !self.is_at_end() && !Self::is_delimiter(self.current_char()) {
             self.advance();
         }
 
@@ -765,20 +798,32 @@ impl Lexer {
     /// Whether `ch` can begin an identifier.
     ///
     /// Wider than R7RS 7.1.1's <initial> in three deliberate places: any
-    /// Unicode letter (7.1.1 admits only a-zA-Z), `.`, and `@`. All three are
-    /// pure widenings — no conforming program contains a token they admit — so
-    /// none can change an existing program's meaning. `@` is the one the
-    /// third-party ecosystem depends on; the rationale is in
-    /// `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` section 6, the cases in
-    /// `crates/patina-tests/tests/at_identifiers.rs`.
+    /// non-ASCII character that is not whitespace (7.1.1 admits only a-zA-Z),
+    /// `.`, and `@`. All three are pure widenings — no conforming program
+    /// contains a token they admit — so none can change an existing program's
+    /// meaning. The reasoning for the non-ASCII rule, and what the three
+    /// reference implementations do, is in `PRD/ARCHIVE/TRACK_L_FIXED_
+    /// DEFECTS.md`; `@` is in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, with
+    /// cases in `crates/patina-tests/tests/at_identifiers.rs`.
     ///
-    /// The writer deliberately does *not* track this set: `symbol_needs_
-    /// vertical_bars` (patina-primitives) stays strict, so `@` writes back as
-    /// `|@|`. It answers the other question — "would every R7RS reader accept
-    /// this bare?", not "will we read it?" — and erring toward bars is always
-    /// safe. Widening here must not widen it.
-    fn is_identifier_start(&self, ch: char) -> bool {
-        ch.is_alphabetic()
+    /// Whitespace is the one exclusion, and the one place Patina is *stricter*
+    /// than every reference: chibi welds `a<U+00A0>b` into one symbol, Gauche
+    /// and Chez both split it, and we reject it. `char::is_whitespace` (Unicode
+    /// White_Space) keeps it out of identifiers while
+    /// [`Self::skip_whitespace_and_comments`] skips only R7RS's five ASCII
+    /// spaces, so it can be neither, and a stray non-breaking space is a typo
+    /// worth seeing rather than silently welding or splitting a token.
+    ///
+    /// The writer deliberately does *not* track this set:
+    /// `symbol_needs_vertical_bars` (patina-primitives) stays strict, so `@`
+    /// writes back as `|@|`. It answers the other question — "would every R7RS
+    /// reader accept this bare?", not "will we read it?" — and erring toward
+    /// bars is always safe. Widening here must not widen it.
+    fn is_identifier_start(ch: char) -> bool {
+        if !ch.is_ascii() {
+            return !ch.is_whitespace();
+        }
+        ch.is_ascii_alphabetic()
             || matches!(
                 ch,
                 '!' | '$'
@@ -804,10 +849,7 @@ impl Lexer {
     fn read_identifier(&mut self) -> Result<Token, LexError> {
         let start = self.position;
 
-        while !self.is_at_end()
-            && !self.current_char().is_whitespace()
-            && !matches!(self.current_char(), '(' | ')' | '"' | ';')
-        {
+        while !self.is_at_end() && !Self::is_delimiter(self.current_char()) {
             self.advance();
         }
 

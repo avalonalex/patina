@@ -436,6 +436,18 @@ backend. The export side is where the corpus pointed, and the corpus only measur
 packages happen to do; the import side had no package exercising it and so said nothing. Fixed
 with it, and `(only …)` now agrees.
 
+**Unicode identifiers accepted, 2026-08-16 (143 of 184, unchanged).** The headline does not move
+and the defect entry predicted that before the work started, which is the point of having said it:
+srfi-197 was the only package needing it, and it advanced from `parse-error` to `runtime-error`
+because its test program `(include "./test.scm")`s a file the package does not ship. That last
+detail is upstream, not ours — worth knowing before anyone reopens the row, since `runtime-error`
+now holds one package that is not a defect of Patina's.
+
+Two independent causes, and finding only the first would have left SRFI 197 failing with a
+different message: `…` was rejected by the identifier predicate, while `₁` never reached that
+predicate at all — the token dispatch tests `char::is_numeric`, which is Unicode-aware, so a
+subscript was claimed by the *number* reader. Full write-up in the fixed-defects archive.
+
 **`report.md` is written to disk again**, closing the recorded debt that `run` printed the rendered
 matrix to stdout and wrote only `results.scm` — so the committed copy went stale unless the caller
 redirected into it. `run` now writes both artifacts under the same subset-run guard (`--report` sets
@@ -694,6 +706,27 @@ still hand-rolls car/cdr recursion. Checked and clean: `stamp_expansion_source`,
 `evaluate_feature_requirement_tagged` — the first four recurse uniformly with no head dispatch at
 all, and the last flattens before dispatching.
 
+**An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
+Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many
+more tokens through `read_identifier` and so makes the stop set matter more.
+
+```scheme
+(length '(a'b))   ;; Patina => 1   chibi, Gauche => 2
+(length '(a,b))   ;; Patina => 1   chibi, Gauche => 2
+```
+
+Patina ends a token only at whitespace, `(`, `)`, `"` or `;`. R7RS 7.1.1's `<delimiter>` also lists
+`|`, and both references additionally stop at `'`, `` ` `` and `,`. The sharpest case is `[`: a
+*leading* `[` is a deliberate `ReservedCharacter` error, but `a[b]` swallows it silently, because
+the reserved-bracket rule only applies at token start.
+
+**Left open deliberately, and the reason is worth keeping.** Widening a delimiter set can only
+*split* tokens that used to be whole, which is the one kind of lexer change that can alter the
+meaning of a program that already works — unlike every widening this track has taken so far, which
+only accepted previously-rejected text. So it needs its own decision and its own cross-check rather
+than riding along. The set now lives in one function (`Lexer::is_delimiter`) instead of seven
+inline copies, which is what makes that a one-line decision when someone takes it.
+
 **The backends disagree on renaming core syntax at import** — ❌ **open**. Found 2026-08-16 by
 review of the export-side fix, and pre-existing: that fix touched the export path and `(only …)`,
 not this.
@@ -712,23 +745,6 @@ work needs the new name to be recognized as syntax at the use site, which is the
 design described in the fixed-defects archive — so this is best fixed by that work rather than
 locally. Not pinned as a divergence yet for the reason §6 records elsewhere: establish the correct
 answer first, and here the correct answer is a design decision, not an observation.
-
-**The lexer rejects a non-ASCII identifier** — ❌ **open**. Both backends; found 2026-08-16 once
-srfi-197's misfiled `missing-library` row was corrected and it could report its real failure.
-
-```scheme
-(define …₁ 1)   ;; Patina => Lexer error: Unexpected character: …
-                ;; chibi, Gauche, Chez => fine
-```
-
-R7RS 7.1.1 spells `<identifier>` with ASCII letters but §7.1 says an implementation may extend the
-syntax, and every major one accepts Unicode identifiers. SRFI 197's reference implementation relies
-on it, using `…₁` as its custom ellipsis so its templates can emit a literal `...`.
-
-**Fixing it alone will not move the corpus number**, and that is worth stating up front so nobody
-measures the change by the wrong yardstick: srfi-197 is the only package that needs it, and its test
-program also `(include "./test.scm")`s a file the package does not ship. Do this one because
-rejecting Unicode identifiers is wrong, not for the score.
 
 **`match-letrec` does not match** — ❌ **open**. Both backends. The one remaining failure in
 `(chibi match)`'s suite (74 of 75) after the relinking fix below, and the reason chibi-match scores
@@ -813,6 +829,7 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| The lexer rejected a non-ASCII identifier | 2026-08-16 |
 | A library could not re-export a core syntactic keyword | 2026-08-16 |
 | VM: an escape out of a re-entrant primitive crashed the process (call position) | 2026-08-15 |
 | VM: an escaped-from primitive kept running, and `apply`/value-position escapes were wrong | 2026-08-16 |
