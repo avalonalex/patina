@@ -70,6 +70,106 @@ pub enum ExportSpec {
     Rename { internal: String, external: String },
 }
 
+/// The syntactic keywords the desugarer recognizes by name wherever they
+/// appear, rather than by looking them up as bindings.
+///
+/// These have no entry in any environment — not even in `(scheme base)`,
+/// which is why its `.sld` omits them from its own export list — so a library
+/// that re-exports one has nothing to resolve. R7RS §5.6.1 lets a library
+/// export any identifier it imports, and every implementation accepts
+/// `(export begin if lambda …)`; `(r6rs base)` opens with exactly that.
+///
+/// Kept in step with the `match` in `patina-frontend`'s
+/// `desugarer::desugar_list_tagged`, plus the `syntax-rules` auxiliaries that
+/// macro compilation handles rather than the desugarer. `apply` is
+/// deliberately absent: the desugarer special-cases it, but it is also a real
+/// procedure binding, so it resolves the ordinary way.
+/// `else` and `=>` are likewise absent — `lib/scheme/base/*.sld` binds them as
+/// variables so they already resolve.
+pub const CORE_SYNTAX: &[&str] = &[
+    "quote",
+    "quasiquote",
+    "unquote",
+    "unquote-splicing",
+    "lambda",
+    "if",
+    "set!",
+    "define",
+    "define-syntax",
+    "let-syntax",
+    "letrec-syntax",
+    "syntax-rules",
+    "begin",
+    "import",
+    "cond-expand",
+    "include",
+    "include-ci",
+    "syntax-error",
+    "expand",
+    "_",
+    "...",
+];
+
+/// Is `name` one of the syntactic keywords that exist without a binding?
+pub fn is_core_syntax(name: &str) -> bool {
+    CORE_SYNTAX.contains(&name)
+}
+
+/// Resolve a library's `export` declarations against the environment its body
+/// produced, filling in the library's export table.
+///
+/// Shared by both backends, which build libraries independently but must
+/// agree on what a valid export is.
+pub fn collect_exports(
+    library: &mut Library,
+    exports: &[ExportSpec],
+    lib_env: &Rc<Environment>,
+) -> Result<(), LibraryError> {
+    let undefined = |library: &Library, name: &str, detail: &str| LibraryError::ParseError {
+        file: library
+            .source
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        message: format!("Exported identifier '{}' {}", name, detail),
+    };
+
+    for spec in exports {
+        match spec {
+            ExportSpec::Identifier(name) => {
+                if let Some(value) = lib_env.get(name) {
+                    library.export_tagged(name.clone(), value);
+                } else if !is_core_syntax(name) {
+                    return Err(undefined(library, name, "not defined"));
+                }
+                // A core syntactic keyword needs no export entry: it is
+                // recognized by name in every scope already, so importing the
+                // library gives the importer working syntax either way. The
+                // same reason makes `(only …)`/`(except …)` unable to hide
+                // one, which is a property of that design, not of this.
+            }
+            ExportSpec::Rename { internal, external } => {
+                if let Some(value) = lib_env.get(internal) {
+                    library.export_tagged(external.clone(), value);
+                } else if is_core_syntax(internal) {
+                    // Renaming would need the new name to be recognized as
+                    // syntax at the use site, and syntax is matched by name.
+                    // Say so, rather than reporting it as undefined or
+                    // exporting a name that would not work.
+                    return Err(undefined(
+                        library,
+                        internal,
+                        "is core syntax and cannot be renamed on export",
+                    ));
+                } else {
+                    return Err(undefined(library, internal, "not defined"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Import set (R7RS 5.6.1)
 ///
 /// Describes how to import identifiers from other libraries,

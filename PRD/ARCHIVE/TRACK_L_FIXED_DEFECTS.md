@@ -10,6 +10,37 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**A library could not re-export a core syntactic keyword** — ✅ **fixed** (2026-08-16). Both
+backends. `(r6rs base)` opens by re-exporting the whole of R7RS's syntax, which R7RS §5.6.1 permits
+and every implementation accepts; Patina rejected the library outright.
+
+```scheme
+(define-library (re exp) (export begin) (import (scheme base)))
+;; before => Exported identifier 'begin' not defined
+```
+
+Exactly the keywords the desugarer recognizes *by name* failed —
+`quote quasiquote unquote unquote-splicing lambda if set! define define-syntax let-syntax
+letrec-syntax syntax-rules begin import cond-expand include include-ci syntax-error expand _ ...` —
+while every Scheme-level macro (`let`, `cond`, `case`, `do`, `when`, `and`, `or`) exported fine.
+That split is the whole diagnosis: these keywords have no binding in any environment, so export
+resolution had nothing to look up. `lib/scheme/base.sld` shows the same hole from the other side —
+it omits them from its own export list, and works around it for the auxiliary syntax by binding
+`else` and `=>` as *variables* (`(define else 'else)`).
+
+The fix accepts them with no export entry, because in Patina a core keyword is recognized in every
+scope already: an importer gets working syntax whether or not the export table mentions it. The
+same property means `(only …)` and `(except …)` cannot hide one — a consequence of matching syntax
+by name, not of this change.
+
+Renaming is refused explicitly (`'begin' is core syntax and cannot be renamed on export`) rather
+than silently exporting a name that would not work: the new name would have to be recognized as
+syntax at the use site, and that recognition is by name.
+
+Landed with the three copies of the export loop — one in the tree-walker, two in the VM, all
+byte-identical — replaced by a single `collect_exports` in `patina-runtime`, so the two backends
+cannot drift on what a valid export is.
+
 **VM: escapes out of `eval`, `load` and a `parameterize` converter were unhandled** — ✅ **fixed**
 (2026-08-16). The completion of the entry below, which installed the boundary check in *one* of four
 re-entry points and claimed the class closed but for one shape. Review enumerated the trait and ran

@@ -1,13 +1,13 @@
 # Patina third-party compatibility (vm backend)
 
-**141 of 184 packages pass** — 141 of 182 achievable (excluding 2 out-of-scope pending FFI).
+**143 of 184 packages pass** — 143 of 182 achievable (excluding 2 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 141 |
+| pass | 143 |
 | missing-library | 20 |
 | parse-error | 15 |
-| load-error | 3 |
+| load-error | 1 |
 | unbound-identifier | 1 |
 | wrong-result | 2 |
 | runtime-error | 0 |
@@ -52,7 +52,6 @@
 
 | Error | Packages |
 |---|---|
-| `Exported identifier 'begin' not defined` | 2 |
 | `Exported identifier 'mecab?' not defined` | 1 |
 
 ## Unbound identifiers
@@ -145,8 +144,8 @@
 | pfds-set | probe | pass |
 | pfds-vector | probe | pass |
 | postgresql | probe | parse-error |
-| r6rs-arithmetic-fixnums | probe | load-error |
-| r6rs-base | probe | load-error |
+| r6rs-arithmetic-fixnums | probe | pass |
+| r6rs-base | probe | pass |
 | r6rs-bytevectors | probe | pass |
 | r6rs-control | probe | pass |
 | r6rs-enums | probe | pass |

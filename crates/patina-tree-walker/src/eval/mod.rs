@@ -702,8 +702,6 @@ impl Evaluator {
         &self,
         parsed: patina_runtime::library_loader::ParsedLibrary,
     ) -> Result<patina_runtime::Library, patina_runtime::LibraryError> {
-        use patina_runtime::library_loader::ExportSpec;
-
         // Create a fresh environment for this library, sharing global heap for TaggedValue compatibility
         let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
 
@@ -753,41 +751,7 @@ impl Evaluator {
             library.set_source(source);
         }
 
-        for spec in &parsed.exports {
-            match spec {
-                ExportSpec::Identifier(name) => {
-                    // Export with same name
-                    if let Some(value) = lib_env.get(name) {
-                        library.export_tagged(name.clone(), value);
-                    } else {
-                        return Err(patina_runtime::LibraryError::ParseError {
-                            file: library
-                                .source
-                                .as_ref()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default(),
-                            message: format!("Exported identifier '{}' not defined", name),
-                        });
-                    }
-                }
-
-                ExportSpec::Rename { internal, external } => {
-                    // Export with different name
-                    if let Some(value) = lib_env.get(internal) {
-                        library.export_tagged(external.clone(), value);
-                    } else {
-                        return Err(patina_runtime::LibraryError::ParseError {
-                            file: library
-                                .source
-                                .as_ref()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default(),
-                            message: format!("Exported identifier '{}' not defined", internal),
-                        });
-                    }
-                }
-            }
-        }
+        patina_runtime::library_loader::collect_exports(&mut library, &parsed.exports, &lib_env)?;
 
         Ok(library)
     }

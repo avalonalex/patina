@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**141 of 184** vendored packages pass, 2026-08-16); L1/L2 continue against the measured queue
+(**143 of 184** vendored packages pass, 2026-08-16); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -415,6 +415,20 @@ clauses") while chibi takes the `else` and Chez takes the trailing clause; on th
 errors ("invalid case clause") while chibi and Gauche both fall through to `else`. Declining both
 keeps the stance the `syntax-rules` buckets already set, and each package has exactly one occurrence.
 
+**Core syntactic keywords became exportable, 2026-08-16 (141 → 143 of 184).** r6rs-base and
+r6rs-arithmetic-fixnums were the whole of the load-error bucket bar one, both on
+`Exported identifier 'begin' not defined`, and both now pass. `(r6rs base)` opens by re-exporting
+the whole of R7RS's syntax — which R7RS §5.6.1 permits and every implementation accepts — and
+Patina rejected the library outright. Full write-up in `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md`; the
+short version is that these keywords are recognized *by name* rather than bound, so export
+resolution had nothing to look up, and `lib/scheme/base.sld` shows the same hole from the other
+side by omitting them from its own export list.
+
+Worth recording as a queue-reading lesson rather than only as a fix: this sat in `load-error`, a
+bucket of two packages, and looked like a two-package problem. It was a conformance gap in the
+library machinery that any package re-exporting standard syntax would have hit — the bucket size
+measured how much of *this corpus* trips it, not how big the defect was.
+
 **`report.md` is written to disk again**, closing the recorded debt that `run` printed the rendered
 matrix to stdout and wrote only `results.scm` — so the committed copy went stale unless the caller
 redirected into it. `run` now writes both artifacts under the same subset-run guard (`--report` sets
@@ -773,6 +787,7 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| A library could not re-export a core syntactic keyword | 2026-08-16 |
 | VM: an escape out of a re-entrant primitive crashed the process (call position) | 2026-08-15 |
 | VM: an escaped-from primitive kept running, and `apply`/value-position escapes were wrong | 2026-08-16 |
 | VM: escapes out of `eval`, `load` and a `parameterize` converter were unhandled | 2026-08-16 |

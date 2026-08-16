@@ -323,7 +323,7 @@ use crate::types::instruction::PrimitiveFnId;
 use patina_core::core_expr::Symbol;
 use patina_frontend::Desugarer;
 use patina_runtime::Library;
-use patina_runtime::library_loader::{ExportSpec, ImportSet};
+use patina_runtime::library_loader::ImportSet;
 use patina_runtime::library_registry::LibraryError;
 
 /// Load a Scheme library by name using the shared registries on `VmState`.
@@ -497,38 +497,7 @@ fn vm_evaluate_parsed_library(
         library.set_source(source);
     }
 
-    for spec in &parsed.exports {
-        match spec {
-            ExportSpec::Identifier(name) => {
-                if let Some(value) = lib_env.get(name) {
-                    library.export_tagged(name.clone(), value);
-                } else {
-                    return Err(LibraryError::ParseError {
-                        file: library
-                            .source
-                            .as_ref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default(),
-                        message: format!("Exported identifier '{}' not defined", name),
-                    });
-                }
-            }
-            ExportSpec::Rename { internal, external } => {
-                if let Some(value) = lib_env.get(internal) {
-                    library.export_tagged(external.clone(), value);
-                } else {
-                    return Err(LibraryError::ParseError {
-                        file: library
-                            .source
-                            .as_ref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default(),
-                        message: format!("Exported identifier '{}' not defined", internal),
-                    });
-                }
-            }
-        }
-    }
+    patina_runtime::library_loader::collect_exports(&mut library, &parsed.exports, &lib_env)?;
 
     Ok(library)
 }

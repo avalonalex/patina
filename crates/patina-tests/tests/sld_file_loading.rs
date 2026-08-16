@@ -400,6 +400,83 @@ fn test_inline_define_library_redefinition_wins() {
 }
 
 // ============================================================================
+// A library may re-export the core syntactic keywords (R7RS 5.6.1)
+// ============================================================================
+
+/// `(r6rs base)` opens by re-exporting the whole of R7RS's syntax, and every
+/// implementation accepts that. Patina rejected it because these keywords are
+/// recognized by name rather than bound, so there was nothing to resolve.
+#[test]
+fn test_library_can_export_core_syntax() {
+    common::assert_program_eval_to(
+        r#"
+        (define-library (syn demo)
+          (import (scheme base))
+          (export begin if lambda quote quasiquote unquote unquote-splicing
+                  set! define define-syntax let-syntax letrec-syntax
+                  syntax-rules cond-expand include include-ci import
+                  _ ... twice)
+          (begin (define (twice x) (* 2 x))))
+        (import (syn demo))
+        (let ((a 1)) (if #t (begin (twice 21)) 0))
+        "#,
+        "42",
+    );
+}
+
+/// Every name the runtime calls core syntax must actually be exportable —
+/// the list and the desugarer's dispatch have to stay in step.
+#[test]
+fn test_every_core_syntax_name_is_exportable() {
+    for name in patina_runtime::library_loader::CORE_SYNTAX {
+        common::assert_program_eval_to(
+            &format!(
+                r#"
+                (define-library (syn one)
+                  (import (scheme base))
+                  (export {name}))
+                (import (syn one))
+                'done
+                "#
+            ),
+            "done",
+        );
+    }
+}
+
+/// Leniency stops at syntax: an identifier that is neither bound nor core
+/// syntax is still a mistake worth reporting.
+#[test]
+fn test_exporting_an_undefined_identifier_still_fails() {
+    common::assert_program_eval_error(
+        r#"
+        (define-library (syn bad)
+          (import (scheme base))
+          (export no-such-thing))
+        (import (syn bad))
+        "#,
+    );
+}
+
+/// Renaming needs the *new* name to be recognized as syntax at the use site,
+/// and syntax is matched by name — so this is refused rather than exported as
+/// a name that would not work. What is pinned here is the refusal; the message
+/// explaining *why* is deliberately not asserted, per this suite's rule that
+/// error text is not compared (see `ErrorClass` in `common`). Renaming an
+/// ordinary binding is unaffected — `test_library_with_renamed_export`.
+#[test]
+fn test_core_syntax_cannot_be_renamed_on_export() {
+    common::assert_program_eval_error(
+        r#"
+        (define-library (syn renamed)
+          (import (scheme base))
+          (export (rename begin blk)))
+        (import (syn renamed))
+        "#,
+    );
+}
+
+// ============================================================================
 // L0: unknown declarations in .sld files load leniently
 // ============================================================================
 
