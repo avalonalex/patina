@@ -34,6 +34,14 @@ pub struct VmState {
     pub frames: Vec<CallFrame>,
     /// Side channel for multiple return values (`values` / `call-with-values`).
     pub value_buffer: Vec<TaggedValue>,
+    /// Value carried by a continuation that escaped past a re-entry boundary,
+    /// parked between [`across_reentry`] and the dispatch loop that resumes
+    /// with it. A field rather than a return value because the
+    /// `ApplyContext` methods return `Result<T, EvalError>` and cannot say
+    /// "escaped". Mirrors the tree-walker's `set_pending_escape` /
+    /// `take_pending_escape` pair (`cps_eval/types.rs`) — same split, same
+    /// reason, and rooted for the same reason (`gc_roots.rs`).
+    pub(crate) pending_escape: Option<TaggedValue>,
     /// Stack of active continuation prompts (SRFI-226).
     pub prompt_stack: Vec<PromptFrame>,
     /// Stack of active `dynamic-wind` records.
@@ -113,6 +121,7 @@ impl VmState {
             registers: Vec::new(),
             frames: Vec::new(),
             value_buffer: Vec::new(),
+            pending_escape: None,
             prompt_stack: Vec::new(),
             dynamic_winds: Vec::new(),
             exception_handlers: Vec::new(),
@@ -825,6 +834,19 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
             Ok(Some(val)) => return Ok(val),
             Ok(None) => continue,
             Err(e) => {
+                // Checked before the catchability test on purpose: the
+                // sentinel crosses the registry boundary as an ordinary
+                // `VmError` and would otherwise look catchable and be handed
+                // to a `guard`. See `VmState::pending_escape`.
+                if let Some(value) = state.pending_escape.take() {
+                    if state.frames.len() <= exit_depth {
+                        return Ok(value);
+                    }
+                    // Control resumed in a frame this loop still owns.
+                    cur_code = state.current_code()?;
+                    continue;
+                }
+
                 // Attach source location from the current frame's code object if available.
                 let e = attach_source_location(state, e);
 
@@ -2087,7 +2109,20 @@ fn call_any_sync(
     }
     call_closure(state, func_val, args, return_reg)?;
     // run_loop_until returns the value directly from Return instruction dispatch.
-    run_loop_until(state, depth_before)
+    // Routed through the re-entry boundary: this is how a parameter converter
+    // runs during `parameterize`, and a continuation can escape out of it.
+    match across_reentry(
+        state,
+        depth_before,
+        |s| run_loop_until(s, depth_before),
+        |v| *v,
+    ) {
+        Ok(v) => Ok(v),
+        Err(Reentry::Escaped) => Err(VmError::Runtime {
+            message: "continuation escaped".into(),
+        }),
+        Err(Reentry::Failed(e)) => Err(e),
+    }
 }
 
 fn closure_heap_index(val: TaggedValue) -> Option<patina_core::tagged_value::HeapIndex> {
@@ -2758,6 +2793,61 @@ struct VmApplyContext {
     state: *mut VmState,
 }
 
+/// How a re-entry into the VM ended, when it did not end normally.
+enum Reentry {
+    /// A continuation captured outside the boundary was invoked inside it.
+    /// The value it carries is on [`VmState::pending_escape`].
+    Escaped,
+    /// The body failed on its own terms.
+    Failed(VmError),
+}
+
+/// Run `body` across a re-entry into the VM, detecting a continuation that
+/// escaped past the boundary.
+///
+/// Every `ApplyContext` method, and every synchronous nested run, is such a
+/// boundary: the Rust code below it holds a stack it loses if a continuation
+/// is invoked inside. On a shrink the carried value is stashed on
+/// [`VmState::pending_escape`] and the caller is told to unwind rather than
+/// carry on with frames it no longer owns.
+///
+/// `depth_before` is the caller's own frame depth *before* it pushed anything
+/// for this call — passed in rather than sampled here, because a caller that
+/// has already pushed a frame (`call_any_sync`) would otherwise compare
+/// against the pushed depth and read every normal return as an escape.
+///
+/// Route new boundaries through here. The first attempt at this fix covered
+/// one boundary of four, and `load` and `parameterize` stayed broken because
+/// nothing made the omission visible.
+fn across_reentry<T>(
+    state: &mut VmState,
+    depth_before: usize,
+    body: impl FnOnce(&mut VmState) -> Result<T, VmError>,
+    value_of: impl FnOnce(&T) -> TaggedValue,
+) -> Result<T, Reentry> {
+    let result = body(state);
+    if state.frames.len() < depth_before {
+        // Any error here belongs to a call that is being abandoned; what
+        // resumes is the continuation's value, not this one's outcome.
+        let carried = result.as_ref().ok().map(value_of);
+        state.pending_escape = Some(carried.unwrap_or(TaggedValue::UNSPECIFIED));
+        return Err(Reentry::Escaped);
+    }
+    result.map_err(Reentry::Failed)
+}
+
+impl Reentry {
+    /// The escape sentinel is deliberately `ContinuationEscape`: it is already
+    /// non-catchable, so no `guard` between the primitive and the dispatch
+    /// loop can swallow it.
+    fn into_eval_error(self) -> patina_primitives::EvalError {
+        match self {
+            Reentry::Escaped => patina_primitives::EvalError::ContinuationEscape,
+            Reentry::Failed(e) => patina_primitives::EvalError::InternalError(e.to_string()),
+        }
+    }
+}
+
 impl patina_primitives::ApplyContext for VmApplyContext {
     fn heap(&self) -> &SharedHeap {
         // SAFETY: pointer is valid for the lifetime of the primitive call.
@@ -2776,8 +2866,14 @@ impl patina_primitives::ApplyContext for VmApplyContext {
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
         // SAFETY: we have exclusive access (see struct doc comment).
         let state = unsafe { &mut *self.state };
-        run_apply_proc(state, proc, &args)
-            .map_err(|e| patina_primitives::EvalError::InternalError(e.to_string()))
+        let depth_before = state.frames.len();
+        across_reentry(
+            state,
+            depth_before,
+            |s| run_apply_proc(s, proc, &args),
+            |v| *v,
+        )
+        .map_err(Reentry::into_eval_error)
     }
 
     fn eval_expr(
@@ -2786,8 +2882,9 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         env: &Rc<patina_core::environment::Environment>,
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
         let state = unsafe { &mut *self.state };
-        vm_eval_expr(state, expr, env)
-            .map_err(|e| patina_primitives::EvalError::InternalError(e.to_string()))
+        let depth_before = state.frames.len();
+        across_reentry(state, depth_before, |s| vm_eval_expr(s, expr, env), |v| *v)
+            .map_err(Reentry::into_eval_error)
     }
 
     fn load_scheme_library(
@@ -2795,9 +2892,21 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         name: &[String],
     ) -> Result<Rc<patina_core::library::Library>, patina_primitives::EvalError> {
         let state = unsafe { &mut *self.state };
-        vm_load_library(state, name)
-            .map(Rc::new)
-            .map_err(|e| patina_primitives::EvalError::InternalError(e.to_string()))
+        // A library is not a `TaggedValue`; an escape out of a load resumes
+        // with whatever the continuation carried, not with the library.
+        let depth_before = state.frames.len();
+        across_reentry(
+            state,
+            depth_before,
+            |s| {
+                vm_load_library(s, name).map_err(|e| VmError::Runtime {
+                    message: e.to_string(),
+                })
+            },
+            |_| TaggedValue::UNSPECIFIED,
+        )
+        .map(Rc::new)
+        .map_err(Reentry::into_eval_error)
     }
 
     fn interaction_environment(&self) -> Rc<patina_core::environment::Environment> {
@@ -3281,7 +3390,6 @@ fn exec_call_primitive(
         }
         return call_value(state, func_val, arg_vals, dst, exit_depth);
     }
-    let depth_before = state.frames.len();
     let registry = Rc::clone(&state.primitive_registry);
     let ctx = VmApplyContext {
         state: state as *mut VmState,
@@ -3291,26 +3399,11 @@ fn exec_call_primitive(
         .map_err(|e| VmError::Runtime {
             message: e.to_string(),
         })?;
-    // A higher-order primitive re-enters the VM to run its callback, and a
-    // continuation captured outside can be invoked inside it — the nested
-    // frames are then *popped* rather than run to completion, so `base`
-    // addresses a register window that no longer exists. Same safety net as
-    // `call_value_with_probe`, for the primitive-in-call-position path.
-    //
-    // Only that path: `apply`, value-position dispatch and `call-with-values`
-    // reach primitives through `call_primitive_proc`, which has no equivalent
-    // check and still mishandles an escape. Neither this nor those *abandons*
-    // the primitive — it runs to completion on a stack it no longer owns —
-    // which is why the real fix belongs at the re-entry boundary. See
-    // `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
-    if state.frames.len() < depth_before {
-        if state.frames.len() <= exit_depth {
-            return Ok(Some(result));
-        }
-        // Control resumed between the two depths; the continuation invocation
-        // has already delivered its value there.
-        return Ok(None);
-    }
+    // No frame check here: a continuation escaping out of a re-entrant
+    // primitive is signalled at the boundary (`across_reentry`) and unwinds
+    // through the `?` above, so by this point the frames are the ones this
+    // call started with. An earlier fix guarded it here instead, which caught
+    // only primitives in call position.
     state.set_reg_at(base, dst, result);
     Ok(None)
 }

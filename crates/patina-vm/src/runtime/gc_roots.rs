@@ -46,6 +46,17 @@ impl GcRoots for VmState {
         visitor.visit_slice(&self.value_buffer);
         visitor.visit_slice(&self.scratch_args);
 
+        // A hidden root while it is set: between the stash in `across_reentry`
+        // and the `take()` in `run_loop_until`, the escaping continuation's
+        // value is reachable from nowhere else. No safe point runs inside that
+        // window today, so this is future-proofing on the same reasoning as
+        // `scratch_args` above — and it mirrors the tree-walker's
+        // `trace_pending_escape`, which roots the same value for the same
+        // reason.
+        if let Some(v) = self.pending_escape {
+            visitor.visit(v);
+        }
+
         trace_frames(&self.frames, visitor);
 
         // Code objects are never evicted, so their constants are effectively

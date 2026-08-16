@@ -8,16 +8,18 @@
 //! in `set_reg_at`. The tree-walker returned the right answer throughout, so
 //! it is the expectation here.
 //!
-//! **These cover the primitive in call position only.** Reaching the same
-//! primitives through `apply`, through a value (`((car ops) …)`) or through
-//! `call-with-values` goes via `call_primitive_proc`, which has no equivalent
-//! check and is still wrong — and none of these paths *abandons* the
-//! primitive, which keeps running on a stack it no longer owns. Both are
-//! recorded as open in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, with repros.
-//! Do not read this file as the class being closed.
+//! The primitive is also *abandoned* now rather than left running on a stack
+//! it no longer owns: `ApplyContext::apply_proc` returns a non-catchable
+//! `ContinuationEscape` so the primitive unwinds through its own `?`, and the
+//! dispatch loop takes the value from there.
+//!
+//! **One shape is still wrong** — a primitive used as a `call-with-values`
+//! *consumer*, whose callback escapes; the frame-depth check structurally
+//! cannot see it. Diagnosis in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. Do not
+//! read this file as the class being closed.
 
 mod common;
-use common::{assert_program_eval_to, scratch_path};
+use common::{assert_program_eval_to, eval_program_vm, scratch_path};
 use tempfile::TempDir;
 
 /// Every re-entrant primitive reachable without a file, escaped out of. `'x`
@@ -75,5 +77,98 @@ fn test_a_closure_callback_that_does_not_escape_still_works() {
            (list (member 2 '(1 2 3) (lambda (a b) (= a b)))
                  (assoc 2 '((1 . a) (2 . b)) (lambda (a b) (= a b))))"#,
         "((2 3) (2 . b))",
+    );
+}
+
+/// Reaching the same primitives other than by call position. `apply` and
+/// value-position dispatch go through `call_primitive_proc`, which has no
+/// depth check of its own — they work because the escape is now signalled
+/// from the re-entry boundary instead, and every route unwinds the same way.
+#[test]
+fn test_escaping_through_apply_and_value_position() {
+    for form in [
+        "(apply member (list 2 '(1 2 3) (lambda (a b) (k 'x))))",
+        "(let ((ops (list member))) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x))))",
+    ] {
+        assert_program_eval_to(
+            &format!("(import (scheme base) (scheme lazy)) (call/cc (lambda (k) {form}))"),
+            "x",
+        );
+    }
+}
+
+/// The primitive stops when the continuation is invoked, instead of running
+/// on to completion. `member` would otherwise keep calling the comparator for
+/// the remaining elements — each call re-invoking the continuation.
+#[test]
+fn test_the_escaped_from_primitive_is_abandoned() {
+    assert_program_eval_to(
+        r#"(import (scheme base))
+           (define seen '())
+           (define r (call/cc (lambda (k)
+                       (member 9 '(1 2 3)
+                         (lambda (a b) (set! seen (cons b seen)) (k #f))))))
+           (list r (reverse seen))"#,
+        "(#f (1))",
+    );
+}
+
+/// A continuation captured *and* invoked inside the callback, returning
+/// normally, is not an escape — the primitive must run to completion. This is
+/// the case a naive "any continuation invocation unwinds the primitive" rule
+/// would break, and the reason the check is a frame-depth comparison rather
+/// than a "was a continuation invoked" flag.
+///
+/// VM-only, deliberately: the tree-walker writes nothing for this program.
+/// `assert_divergence` does not fit — it needs the broken backend to *fail*,
+/// and this one succeeds with a wrong value — so the divergence is pinned in
+/// `backend_divergence.rs` instead, where it will retire itself. chibi and
+/// Gauche both agree with the VM's `(2 3)`.
+#[test]
+fn test_a_continuation_used_inside_the_callback_is_not_an_escape() {
+    assert_eq!(
+        eval_program_vm(
+            r#"(import (scheme base))
+               (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))"#
+        ),
+        "(2 3)",
+    );
+}
+
+/// `eval` and `load` re-enter the VM the same way a higher-order primitive
+/// does, and the first attempt missed them: it detected the escape in
+/// `apply_proc` alone, so `load` kept executing the remaining forms of the
+/// file after the continuation had been invoked, where chibi stops at the
+/// escaping form.
+///
+/// VM-only: the tree-walker escapes *and then continues*, running the
+/// fall-through as well. Pinned as a divergence in `backend_divergence.rs`.
+#[test]
+fn test_escaping_out_of_eval() {
+    assert_eq!(
+        eval_program_vm(
+            r#"(import (scheme base) (scheme eval) (scheme repl))
+               (define kk #f)
+               (call/cc (lambda (k)
+                 (set! kk k)
+                 (eval '(kk 'from-eval) (interaction-environment))
+                 'fell-through))"#
+        ),
+        "from-eval",
+    );
+}
+
+/// The parameter *set* path, which runs a converter through a different
+/// boundary than `make-parameter` construction does. Before this it lost the
+/// enclosing top-level `define` outright on the VM.
+#[test]
+fn test_escaping_out_of_a_parameter_converter_during_parameterize() {
+    assert_program_eval_to(
+        r#"(import (scheme base))
+           (define kk #f)
+           (define p (make-parameter 0 (lambda (v) (if kk (kk 'from-converter) v))))
+           (define r (call/cc (lambda (k) (set! kk k) (parameterize ((p 1)) 'done))))
+           r"#,
+        "from-converter",
     );
 }

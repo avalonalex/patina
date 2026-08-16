@@ -10,6 +10,82 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**VM: escapes out of `eval`, `load` and a `parameterize` converter were unhandled** — ✅ **fixed**
+(2026-08-16). The completion of the entry below, which installed the boundary check in *one* of four
+re-entry points and claimed the class closed but for one shape. Review enumerated the trait and ran
+each method; two shipped R7RS procedures were wrong:
+
+```scheme
+;; load kept executing the file after the continuation was invoked
+(call/cc (lambda (k) (set! kk k) (load "f.scm") 'fell-through))
+;; before => (escaped (form1 form2 form3))     chibi => (escaped (form1))
+
+;; the parameter *set* path lost the enclosing top-level define outright
+(define r (call/cc (lambda (k) (set! kk k) (parameterize ((p 1)) 'done))))
+;; before => Error: unbound variable: `r`      chibi, Gauche, tree-walker => from-converter
+```
+
+`make-parameter`'s converter was covered because construction goes through `apply_proc`; the set
+path goes `try_call_parameter` → `call_any_sync`, a different boundary.
+
+All four now route through one `across_reentry` helper — `apply_proc`, `eval_expr`,
+`load_scheme_library` and `call_any_sync` — which takes the caller's pre-call frame depth, stashes
+the escaping value on `VmState::pending_escape`, and returns a `Reentry::Escaped` the callers turn
+into the non-catchable `ContinuationEscape` sentinel. Passing the depth in rather than sampling it
+inside is load-bearing: `call_any_sync` has already pushed a frame by then, and sampling locally
+made every ordinary return look like an escape — caught by the chibi suite as one failing
+`parameterize` test, which is what that suite is for.
+
+With every boundary signalling, the leaf-level frame check the previous entry added to
+`exec_call_primitive` became unreachable — verified by instrumenting it and finding zero hits across
+the chibi suite, the full test suite and each repro — and is deleted. One mechanism, at the
+boundary, where the previous attempt had two at different altitudes with a comment that had already
+gone stale describing them.
+
+`pending_escape` is traced as a GC root, mirroring the tree-walker's `trace_pending_escape`: while
+set, the value is reachable from nowhere else. No safe point runs in that window today, so it is
+future-proofing on the same reasoning `scratch_args` is rooted under.
+
+Guarded by `crates/patina-tests/tests/escape_from_primitive.rs`. The tree-walker's own versions of
+these defects are pinned in `backend_divergence.rs` and recorded under Open.
+
+**VM: an escaped-from primitive kept running, and `apply`/value-position escapes were wrong** —
+✅ **fixed** (2026-08-16). The follow-up to the crash fix below, which closed only the call-position
+path and left the class open. Two defects, one cause and one fix.
+
+A Rust primitive re-enters the VM through `ApplyContext::apply_proc`, whose signature —
+`Result<TaggedValue, EvalError>` — cannot say "a continuation escaped". So the escape arrived at the
+primitive looking like an ordinary return value, and the primitive carried on:
+
+```scheme
+(member 9 '(1 2 3) (lambda (a b) (log b) (k #f)))
+;; before => the callback runs for all three elements, each re-invoking the continuation
+;; after  => runs once, like the tree-walker, chibi and Gauche
+```
+
+Because each of those extra invocations re-entered the continuation, the `dynamic-wind` thunks ran
+once per element with it — four `in`/`out` pairs where one was expected.
+
+The fix signals from the *boundary* rather than the leaf. `VmApplyContext::apply_proc` compares
+frame depth across `run_apply_proc`; on a shrink it stashes the value on `VmState::pending_escape`
+and returns `EvalError::ContinuationEscape` — which already existed and is already non-catchable, so
+no `guard` in between can swallow it, and the primitive unwinds through its own `?`. The primitives
+that do cleanup rather than propagate (`call-with-port`, `call-with-input-file`,
+`call-with-output-file`) close their port first and then return the sentinel, which is the wanted
+order. One check in `run_loop_until`'s error arm converts it back into the existing
+`Ok(Some)/Ok(None)` protocol — placed *before* the catchability test, because the sentinel crosses
+the registry boundary as an ordinary `VmError` and would otherwise look catchable.
+
+Being at the boundary, it also fixed the `apply` and value-position shapes for free: those reach
+primitives through `call_primitive_proc`, which has no depth check of its own and now needs none.
+
+Not fixed, and recorded under Open: the `call-with-values` consumer shape, where a frame-count
+comparison cannot see the escape at all. The diagnosis is in that entry.
+
+Guarded by `crates/patina-tests/tests/escape_from_primitive.rs`, including the case a cruder rule
+would break — a callback that captures and invokes its *own* continuation and returns normally, where
+the primitive must still run to completion.
+
 **VM: an escape out of a re-entrant primitive corrupted the register base** — ✅ **fixed**
 (2026-08-15). Seven shipped procedures crashed the *process*, not merely a future hazard. A first
 draft of the entry said "nothing structural stops the *next* higher-order primitive from doing so";
