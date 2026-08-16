@@ -9,9 +9,9 @@
 //!   the package provides. Probes run in strict mode, so the exit status is
 //!   meaningful.
 
-use crate::corpus::Package;
+use crate::corpus::{self, Package};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -164,8 +164,6 @@ fn run_package(
     providers: &BTreeMap<String, usize>,
     config: &RunConfig,
 ) -> PackageResult {
-    let search_roots = dependency_roots(package, universe, providers);
-
     // Run from a scratch directory, not the package root: test suites write
     // log files into their cwd (srfi-64 always does), and the vendored trees
     // must stay byte-identical to upstream. Library includes are unaffected —
@@ -185,6 +183,7 @@ fn run_package(
         Some(path) => (path.clone(), "test"),
         None => (write_probe(&scratch, package), "probe"),
     };
+    let search_roots = search_roots(package, universe, providers, &scratch, mode == "test");
 
     let mut cmd = Command::new(&config.patina);
     for root in &search_roots {
@@ -216,17 +215,33 @@ fn run_package(
     }
 }
 
-/// The package's own root plus the roots of every vendored package in its
-/// transitive dependency closure. Libraries nobody vendors (bundled ones,
-/// genuinely missing ones) are simply absent — patina reports the latter.
-fn dependency_roots(
+/// Every `-A` root the run needs: the package itself plus every vendored
+/// package in its transitive dependency closure, each contributing a staged
+/// root ahead of its source tree when it has libraries the source tree cannot
+/// resolve by name. Libraries nobody vendors (bundled ones, genuinely missing
+/// ones) are simply absent — patina reports the latter.
+///
+/// Staging follows the closure rather than being applied to the subject alone:
+/// an off-path library is just as unreachable when it is a *dependency*, and
+/// that would misfile the importer as `missing-library` naming a library the
+/// corpus provides — the failure this whole mechanism exists to prevent.
+fn search_roots(
     package: &Package,
     all: &[Package],
     providers: &BTreeMap<String, usize>,
+    scratch: &Path,
+    is_test_run: bool,
 ) -> Vec<PathBuf> {
-    let mut roots = vec![package.root.clone()];
+    let mut closure = vec![package];
     let mut seen = vec![false; all.len()];
     let mut queue: Vec<&str> = package.depends.iter().map(String::as_str).collect();
+    // `(test-depends ...)` belongs to the package's own test program, so it
+    // seeds the closure only when that program is what we are about to run,
+    // and is never followed out of a *dependency* — nobody importing this
+    // package needs its test framework.
+    if is_test_run {
+        queue.extend(package.test_depends.iter().map(String::as_str));
+    }
     while let Some(lib) = queue.pop() {
         let Some(&idx) = providers.get(lib) else {
             continue;
@@ -235,11 +250,64 @@ fn dependency_roots(
             continue;
         }
         if all[idx].root != package.root {
-            roots.push(all[idx].root.clone());
+            closure.push(&all[idx]);
         }
         queue.extend(all[idx].depends.iter().map(String::as_str));
     }
+
+    let mut roots = Vec::with_capacity(closure.len());
+    for pkg in closure {
+        roots.extend(stage_off_path_libraries(scratch, pkg));
+        roots.push(pkg.root.clone());
+    }
     roots
+}
+
+/// Give the package's off-path libraries the layout their names imply, in a
+/// throwaway directory, and return the search root that exposes it (`None`
+/// when the package needs no staging, which is the norm).
+///
+/// The `.sld`'s whole directory is mirrored, not just the file, so its
+/// relative `include`s still resolve from the staged copy. Snow's installer
+/// instead keeps includes at their package-relative paths, which leaves them
+/// unreachable from the `.sld`'s new home; mirroring is the same rename with
+/// that defect fixed.
+fn stage_off_path_libraries(scratch: &Path, package: &Package) -> Option<PathBuf> {
+    // Per package, since the closure can stage several and two of them could
+    // otherwise want the same directory.
+    let stage = scratch.join("stage").join(&package.slug);
+    let mut staged_any = false;
+    for lib in &package.off_path_libraries {
+        let dest = stage.join(corpus::name_relative_path(&lib.name));
+        let (Some(dest_dir), Some(source_dir)) = (dest.parent(), lib.source.parent()) else {
+            continue;
+        };
+        match copy_tree(source_dir, dest_dir).and_then(|()| std::fs::copy(&lib.source, &dest)) {
+            Ok(_) => staged_any = true,
+            Err(e) => eprintln!(
+                "warning: {}: could not stage ({}): {}",
+                package.slug, lib.name, e
+            ),
+        }
+    }
+    staged_any.then_some(stage)
+}
+
+/// Copy `source` into `dest` recursively, creating `dest`. Corpus packages
+/// are a few hundred KB at most, and copying keeps the runner free of
+/// platform-specific symlink handling.
+fn copy_tree(source: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let to = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// Write a synthesized import probe into the scratch directory. The fixed
@@ -401,17 +469,30 @@ fn extract_missing_libraries(parts: [&str; 2]) -> Vec<String> {
     found
 }
 
-/// Pull the error description out of "Parse error in <path>: <detail>" lines
-/// — the detail alone, so the histogram groups by error kind, not by file.
+/// Pull the error description out of a parse failure — the detail alone, so
+/// the histogram groups by error kind, not by file.
+///
+/// Two wordings, because failing to parse an *included* file is reported by
+/// `include`/`load` rather than by the library loader: "Parse error in
+/// <path>: <detail>" and "include: parse error in '<path>': <detail>". The
+/// second is just as much a parse error, and without it a package whose
+/// included source cannot be lexed lands in `runtime-error`, i.e. filed as a
+/// failure of something that never ran.
 fn extract_parse_errors(parts: [&str; 2]) -> Vec<String> {
+    fn from_loader(line: &str) -> Option<String> {
+        let (_, rest) = line.split_once("Parse error in ")?;
+        let (_, detail) = rest.rsplit_once(": ")?;
+        Some(detail.trim().to_string())
+    }
+    fn from_include(line: &str) -> Option<String> {
+        let (_, rest) = line.split_once("parse error in '")?;
+        let (_, detail) = rest.split_once("': ")?;
+        Some(detail.trim().to_string())
+    }
     let mut found: Vec<String> = parts
         .iter()
         .flat_map(|s| s.lines())
-        .filter_map(|line| {
-            let (_, rest) = line.split_once("Parse error in ")?;
-            let (_, detail) = rest.rsplit_once(": ")?;
-            Some(detail.trim().to_string())
-        })
+        .filter_map(|line| from_loader(line).or_else(|| from_include(line)))
         .collect();
     found.sort();
     found.dedup();
@@ -451,6 +532,129 @@ fn test_suite_failed(stdout: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::corpus::OffPathLibrary;
+
+    fn package(slug: &str, root: &Path) -> Package {
+        Package {
+            slug: slug.to_string(),
+            root: root.to_path_buf(),
+            provides: Vec::new(),
+            depends: Vec::new(),
+            test_depends: Vec::new(),
+            test_script: None,
+            off_path_libraries: Vec::new(),
+        }
+    }
+
+    /// A package rooted under `temp` that provides one library.
+    fn provider(slug: &str, temp: &Path, library: &str) -> Package {
+        let mut pkg = package(slug, &temp.join(slug));
+        pkg.provides.push(library.to_string());
+        pkg
+    }
+
+    /// A package whose one library sits at `<root>/<file>` rather than where
+    /// its name says, with `file` written out so staging has something to copy.
+    fn off_path_provider(slug: &str, temp: &Path, library: &str, file: &str) -> Package {
+        let mut pkg = provider(slug, temp, library);
+        std::fs::create_dir_all(&pkg.root).unwrap();
+        std::fs::write(
+            pkg.root.join(file),
+            format!("(define-library ({}))", library),
+        )
+        .unwrap();
+        pkg.off_path_libraries.push(OffPathLibrary {
+            name: library.to_string(),
+            source: pkg.root.join(file),
+        });
+        pkg
+    }
+
+    /// Staging must carry the `.sld`'s neighbours along, or its relative
+    /// `include`s break the moment it is read from its new home.
+    #[test]
+    fn staging_takes_the_includes_with_it() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let pkg = off_path_provider("chibi-irregex", temp.path(), "chibi irregex", "irregex.sld");
+        std::fs::write(pkg.root.join("irregex.scm"), "(define x 1)").unwrap();
+
+        let scratch = temp.path().join("scratch");
+        let stage = stage_off_path_libraries(&scratch, &pkg).expect("staged");
+        assert!(stage.join("chibi/irregex.sld").is_file());
+        assert!(stage.join("chibi/irregex.scm").is_file());
+    }
+
+    #[test]
+    fn a_conventional_package_stages_nothing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let pkg = package("srfi-1", temp.path());
+        assert!(stage_off_path_libraries(&temp.path().join("scratch"), &pkg).is_none());
+    }
+
+    /// A test-only dependency has to reach the search path, or the package is
+    /// filed as `missing-library` naming something the corpus provides.
+    #[test]
+    fn test_depends_reach_the_search_path_when_the_test_runs() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let scratch = temp.path().join("scratch");
+        let mut subject = package("lassik-string-inflection", &temp.path().join("subject"));
+        subject.test_depends.push("srfi 64".to_string());
+        let framework = provider("srfi-64", temp.path(), "srfi 64");
+        let framework_root = framework.root.clone();
+
+        let universe = vec![framework];
+        let providers = corpus::providers(&universe);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, true);
+        assert!(roots.contains(&framework_root));
+
+        // With no test program to run, they are irrelevant and stay off.
+        let roots = search_roots(&subject, &universe, &providers, &scratch, false);
+        assert!(!roots.contains(&framework_root));
+    }
+
+    /// An off-path library is just as unreachable when it is a dependency, so
+    /// staging has to follow the closure rather than stop at the subject.
+    #[test]
+    fn a_dependency_with_an_off_path_library_is_staged_too() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let scratch = temp.path().join("scratch");
+        let mut subject = package("chibi-regexp", &temp.path().join("chibi-regexp"));
+        subject.depends.push("chibi irregex".to_string());
+        let dependency =
+            off_path_provider("chibi-irregex", temp.path(), "chibi irregex", "irregex.sld");
+
+        let universe = vec![dependency];
+        let providers = corpus::providers(&universe);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, false);
+
+        assert!(
+            roots.iter().any(|r| r.join("chibi/irregex.sld").is_file()),
+            "no search root resolves the dependency's library by name: {:?}",
+            roots
+        );
+    }
+
+    /// A dependency's own test framework is not part of what importing it
+    /// requires, so the closure must not pull it in transitively.
+    #[test]
+    fn test_depends_are_not_followed_out_of_a_dependency() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let scratch = temp.path().join("scratch");
+        let mut subject = package("app", &temp.path().join("app"));
+        subject.depends.push("some lib".to_string());
+
+        let mut library = provider("some-lib", temp.path(), "some lib");
+        library.test_depends.push("srfi 64".to_string());
+        let library_root = library.root.clone();
+        let framework = provider("srfi-64", temp.path(), "srfi 64");
+        let framework_root = framework.root.clone();
+
+        let universe = vec![library, framework];
+        let providers = corpus::providers(&universe);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, true);
+        assert!(roots.contains(&library_root));
+        assert!(!roots.contains(&framework_root));
+    }
 
     fn captured(stdout: &str, stderr: &str, exit_ok: bool) -> Captured {
         Captured {
@@ -561,6 +765,25 @@ mod tests {
             false,
         );
         assert!(matches!(classify(&out, "probe"), Status::ParseError(_)));
+    }
+
+    /// `include` words a parse failure its own way and quotes the path. It is
+    /// still a parse error, and belongs in the queue that drives parser work
+    /// rather than in `runtime-error`.
+    #[test]
+    fn an_included_file_that_will_not_lex_is_a_parse_error() {
+        let out = captured(
+            "",
+            "Error: desugar error: Invalid syntax: include: parse error in \
+             '/x/srfi-197.scm': Lexer error: Unexpected character: \u{2026}",
+            false,
+        );
+        assert_eq!(
+            classify(&out, "test"),
+            Status::ParseError(vec![
+                "Lexer error: Unexpected character: \u{2026}".to_string()
+            ])
+        );
     }
 
     #[test]
