@@ -208,6 +208,11 @@ variants take the dispatch prologue's hoisted base; only instruction arms
 that cannot push or pop a frame before the access may use them (a plain
 `set_reg` at a dispatch site signals "the frame changed here").
 
+The primitive-call arms are the exception: they pass the hoisted base to a
+callee that *can* pop frames, since a higher-order primitive re-enters the VM
+and a continuation can escape out of its callback. They hold only because
+`exec_call_primitive` re-reads the frame depth before writing.
+
 ---
 
 ## 4. Call and Return

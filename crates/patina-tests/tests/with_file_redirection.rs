@@ -6,13 +6,8 @@
 //! to crash the VM outright. History in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 
 mod common;
-use common::assert_program_eval_to;
+use common::{assert_program_eval_to, scratch_path as scratch};
 use tempfile::TempDir;
-
-/// A path in a directory that deletes itself when the returned guard drops.
-fn scratch(dir: &TempDir, name: &str) -> String {
-    dir.path().join(name).to_string_lossy().into_owned()
-}
 
 /// The redirection ends when the thunk does: `display` afterwards must not
 /// still be going to the file.

@@ -10,6 +10,53 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**VM: an escape out of a re-entrant primitive corrupted the register base** — ✅ **fixed**
+(2026-08-15). Seven shipped procedures crashed the *process*, not merely a future hazard. A first
+draft of the entry said "nothing structural stops the *next* higher-order primitive from doing so";
+review enumerated the class and ran each one, and every one panicked identically —
+`index out of bounds` at `set_reg_at` — where the tree-walker returned the right answer:
+
+| Procedure | escape repro | VM | tree-walker |
+|---|---|---|---|
+| `member` with comparator | `(call/cc (lambda (k) (member 2 '(1 2 3) (lambda (a b) (k 'x)))))` | panic | `x` |
+| `assoc` with comparator | same shape | panic | `x` |
+| `force` | `(call/cc (lambda (k) (force (delay (k 'x)))))` | panic | `x` |
+| `make-parameter` converter | `(call/cc (lambda (k) (make-parameter 1 (lambda (v) (k 'x)))))` | panic | `x` |
+| `call-with-port` | `(call/cc (lambda (k) (call-with-port p (lambda (q) (k 'x)))))` | panic | `x` |
+| `call-with-input-file` | `(call/cc (lambda (k) (call-with-input-file f (lambda (p) (k 'x)))))` | panic | `x` |
+| `call-with-output-file` | `(call/cc (lambda (k) (call-with-output-file f (lambda (p) (k 'x)))))` | panic | `x` |
+
+The last two are the functions *immediately above* the pair that had been moved to Scheme, in the
+same file. That is what made a VM-level fix the only real one: relocating a procedure removes it
+from the class but does not scale, since `eval` and `load` re-enter through `ctx.eval_expr` and
+cannot be written in Scheme at all.
+
+A higher-order primitive re-enters the VM to run its callback. `exec_call_primitive` hoisted the
+frame's `register_base`, called the primitive, then wrote the result through that base — under a
+comment asserting "primitives are frame-neutral on the `Ok` path (a re-entrant call runs its nested
+frames to completion)". A `call/cc` out of the callback breaks exactly that: the nested frames are
+*popped*, not completed, so the base addresses a register window that no longer exists. In release
+the write landed out of bounds; in debug the `debug_assert_eq!(base, self.frame_base())` that guards
+the rule fired. The bad offset tracked frame depth, so it was not a fixed-offset accident.
+
+The fix: `exec_call_primitive` notices the frame stack shrank under it and delivers the value the
+way an invoked continuation does — `Ok(Some(v))` when the unwind reached this loop's `exit_depth`,
+which is the protocol `call_value` already documented, and `Ok(None)` when control resumed in a
+frame between the two, where the continuation invocation has already delivered the value. Both
+halves of the plumbing existed and nothing joined them: `exec_call_primitive` already had the
+`Some` return path, `run_apply_proc` already captured `depth_before`.
+
+**Scope, corrected by review before merge.** A draft of this entry said "one check covers all
+seven". It covers the *call-position* path — the `CallPrimitive` arm, and the `inline_primitive!`
+slow path that routes into it. The same primitives reached through `apply`, through a value, or
+through `call-with-values` go via `call_primitive_proc`, which has no equivalent check; those were
+already wrong before this change and remain so, recorded under Open. Nor does any path *abandon*
+the primitive — it runs to completion on a stack it no longer owns, re-invoking the continuation
+and re-running wind thunks with it. What this entry fixed is the crash, not the class.
+
+Guarded by `crates/patina-tests/tests/escape_from_primitive.rs`, including a repeat-and-nest case —
+an off-by-one that only worked at one frame depth would otherwise pass.
+
 **`with-output-to-file` crashed the VM on an escape** — ✅ **fixed** (2026-08-15). Recorded as
 "does not restore through `dynamic-wind`, both backends"; both halves were wrong, which is why the
 first step was running it.

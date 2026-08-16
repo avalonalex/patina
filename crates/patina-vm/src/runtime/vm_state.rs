@@ -231,6 +231,11 @@ impl VmState {
     // — after a frame change the hoisted base addresses the wrong window
     // (a `set_reg` at a dispatch site means "the frame changed here"). The
     // debug assert makes that rule machine-checked across the test suite.
+    //
+    // The primitive-call arms are the exception that proves it: they hand the
+    // hoisted base to a callee that *can* pop frames, because a higher-order
+    // primitive re-enters the VM. They are safe only because
+    // `exec_call_primitive` re-reads the depth before writing.
 
     #[inline(always)]
     fn reg_at(&self, base: usize, reg: u16) -> TaggedValue {
@@ -3276,6 +3281,7 @@ fn exec_call_primitive(
         }
         return call_value(state, func_val, arg_vals, dst, exit_depth);
     }
+    let depth_before = state.frames.len();
     let registry = Rc::clone(&state.primitive_registry);
     let ctx = VmApplyContext {
         state: state as *mut VmState,
@@ -3285,9 +3291,26 @@ fn exec_call_primitive(
         .map_err(|e| VmError::Runtime {
             message: e.to_string(),
         })?;
-    // Primitives are frame-neutral on the `Ok` path (a re-entrant call runs
-    // its nested frames to completion), so the hoisted base is still the
-    // top frame's — the write the plain `set_reg` here already assumed.
+    // A higher-order primitive re-enters the VM to run its callback, and a
+    // continuation captured outside can be invoked inside it — the nested
+    // frames are then *popped* rather than run to completion, so `base`
+    // addresses a register window that no longer exists. Same safety net as
+    // `call_value_with_probe`, for the primitive-in-call-position path.
+    //
+    // Only that path: `apply`, value-position dispatch and `call-with-values`
+    // reach primitives through `call_primitive_proc`, which has no equivalent
+    // check and still mishandles an escape. Neither this nor those *abandons*
+    // the primitive — it runs to completion on a stack it no longer owns —
+    // which is why the real fix belongs at the re-entry boundary. See
+    // `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+    if state.frames.len() < depth_before {
+        if state.frames.len() <= exit_depth {
+            return Ok(Some(result));
+        }
+        // Control resumed between the two depths; the continuation invocation
+        // has already delivered its value there.
+        return Ok(None);
+    }
     state.set_reg_at(base, dst, result);
     Ok(None)
 }
