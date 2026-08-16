@@ -18,7 +18,7 @@ use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use patina_frontend::{Desugarer, SchemeLibraryLoader};
-use patina_runtime::library_loader::ImportSet;
+use patina_runtime::library_loader::{ImportSet, build_library};
 use patina_runtime::library_registry::LibraryError;
 use patina_runtime::{
     Backend, Library, LibraryLoaderRegistry, LibraryRegistry, RustLibraryLoader, stdlib,
@@ -589,15 +589,8 @@ impl VmBackend {
             body_result?;
         }
 
-        // Step 3: Collect exports from lib_env
-        let mut library = Library::with_env(parsed.name.clone(), lib_env.clone());
-        if let Some(source) = parsed.source {
-            library.set_source(source);
-        }
-
-        patina_runtime::library_loader::collect_exports(&mut library, &parsed.exports, &lib_env)?;
-
-        Ok(library)
+        // Step 3: Assemble the library and resolve its exports
+        build_library(parsed, lib_env)
     }
 
     /// Resolve an import set into the given environment.
@@ -627,13 +620,17 @@ impl VmBackend {
                 self.process_import_set(import_set, &temp_env)?;
                 let mut state = self.state.borrow_mut();
                 for id in identifiers {
-                    if let Some(value) = temp_env.get(id) {
-                        import_define(&mut state, lib_env, id.clone(), value);
-                    } else {
-                        return Err(LibraryError::ParseError {
-                            file: String::new(),
-                            message: format!("Identifier '{}' not found in import set", id),
-                        });
+                    match temp_env.get(id) {
+                        Some(value) => import_define(&mut state, lib_env, id.clone(), value),
+                        // See the tree-walker's copy: a core syntactic keyword
+                        // has no binding to select, and needs none.
+                        None if patina_runtime::library_loader::is_core_syntax(id) => {}
+                        None => {
+                            return Err(LibraryError::parse(
+                                None,
+                                format!("Identifier '{}' not found in import set", id),
+                            ));
+                        }
                     }
                 }
                 Ok(())

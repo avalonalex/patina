@@ -429,6 +429,13 @@ bucket of two packages, and looked like a two-package problem. It was a conforma
 library machinery that any package re-exporting standard syntax would have hit — the bucket size
 measured how much of *this corpus* trips it, not how big the defect was.
 
+The same reading error nearly shipped inside the fix. It landed with a comment claiming `(only …)`
+could not *hide* a core keyword, when in fact `only` **rejected the program** — so narrowing a
+blanket re-export, the first thing a consumer does with one, would have failed on the default
+backend. The export side is where the corpus pointed, and the corpus only measures what its
+packages happen to do; the import side had no package exercising it and so said nothing. Fixed
+with it, and `(only …)` now agrees.
+
 **`report.md` is written to disk again**, closing the recorded debt that `run` printed the rendered
 matrix to stdout and wrote only `results.scm` — so the committed copy went stale unless the caller
 redirected into it. `run` now writes both artifacts under the same subset-run guard (`--report` sets
@@ -686,6 +693,25 @@ still hand-rolls car/cdr recursion. Checked and clean: `stamp_expansion_source`,
 `contains_identifier_tagged`, `flip_scope_on_tagged_impl`, `strip_identifiers_impl` and
 `evaluate_feature_requirement_tagged` — the first four recurse uniformly with no head dispatch at
 all, and the last flattens before dispatching.
+
+**The backends disagree on renaming core syntax at import** — ❌ **open**. Found 2026-08-16 by
+review of the export-side fix, and pre-existing: that fix touched the export path and `(only …)`,
+not this.
+
+```scheme
+;; inside a library: (import (rename (scheme base) (begin blk)))
+;; VM          => loads; `blk` is then unusable
+;; tree-walker => Parse error: Identifier 'begin' not found for rename
+;; chibi, Gauche => `(blk 1 2)` evaluates to 2
+```
+
+At *top* level both backends agree and neither binds `blk`, so only the library-internal path
+diverges. Note where the references land: chibi and Gauche make the rename **work**, so neither
+of our answers is right, and "make the two agree by rejecting" would pick the wrong one. Making it
+work needs the new name to be recognized as syntax at the use site, which is the binding-based
+design described in the fixed-defects archive — so this is best fixed by that work rather than
+locally. Not pinned as a divergence yet for the reason §6 records elsewhere: establish the correct
+answer first, and here the correct answer is a design decision, not an observation.
 
 **The lexer rejects a non-ASCII identifier** — ❌ **open**. Both backends; found 2026-08-16 once
 srfi-197's misfiled `missing-library` row was corrected and it could report its real failure.

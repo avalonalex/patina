@@ -323,7 +323,7 @@ use crate::types::instruction::PrimitiveFnId;
 use patina_core::core_expr::Symbol;
 use patina_frontend::Desugarer;
 use patina_runtime::Library;
-use patina_runtime::library_loader::ImportSet;
+use patina_runtime::library_loader::{ImportSet, build_library};
 use patina_runtime::library_registry::LibraryError;
 
 /// Load a Scheme library by name using the shared registries on `VmState`.
@@ -491,15 +491,8 @@ fn vm_evaluate_parsed_library(
     state.globals = saved_globals;
     body_result?;
 
-    // Step 3: Collect exports
-    let mut library = Library::with_env(parsed.name.clone(), lib_env.clone());
-    if let Some(source) = parsed.source {
-        library.set_source(source);
-    }
-
-    patina_runtime::library_loader::collect_exports(&mut library, &parsed.exports, &lib_env)?;
-
-    Ok(library)
+    // Step 3: Assemble the library and resolve its exports
+    build_library(parsed, lib_env)
 }
 
 /// Resolve an import set into the given environment.
@@ -523,13 +516,17 @@ fn vm_process_import_set(
             let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
             vm_process_import_set(state, import_set, &temp_env)?;
             for id in identifiers {
-                if let Some(value) = temp_env.get(id) {
-                    import_define(state, lib_env, id.clone(), value);
-                } else {
-                    return Err(LibraryError::ParseError {
-                        file: String::new(),
-                        message: format!("Identifier '{}' not found in import set", id),
-                    });
+                match temp_env.get(id) {
+                    Some(value) => import_define(state, lib_env, id.clone(), value),
+                    // See the tree-walker's copy: a core syntactic keyword has
+                    // no binding to select, and needs none.
+                    None if patina_runtime::library_loader::is_core_syntax(id) => {}
+                    None => {
+                        return Err(LibraryError::parse(
+                            None,
+                            format!("Identifier '{}' not found in import set", id),
+                        ));
+                    }
                 }
             }
             Ok(())

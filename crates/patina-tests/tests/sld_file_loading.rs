@@ -406,29 +406,36 @@ fn test_inline_define_library_redefinition_wins() {
 /// `(r6rs base)` opens by re-exporting the whole of R7RS's syntax, and every
 /// implementation accepts that. Patina rejected it because these keywords are
 /// recognized by name rather than bound, so there was nothing to resolve.
+///
+/// A few representative names, not the whole list: that the *list* is accepted
+/// is `test_every_core_syntax_name_is_exportable` below, and that it matches
+/// the desugarer is `patina-frontend`'s `tests/core_syntax_list.rs`. What only
+/// this test shows is a core name exported beside a real binding, with the
+/// imported syntax still working at the use site.
 #[test]
 fn test_library_can_export_core_syntax() {
     common::assert_program_eval_to(
         r#"
         (define-library (syn demo)
           (import (scheme base))
-          (export begin if lambda quote quasiquote unquote unquote-splicing
-                  set! define define-syntax let-syntax letrec-syntax
-                  syntax-rules cond-expand include include-ci import
-                  _ ... twice)
+          (export begin if lambda twice)
           (begin (define (twice x) (* 2 x))))
         (import (syn demo))
-        (let ((a 1)) (if #t (begin (twice 21)) 0))
+        (if #t (begin (twice 21)) 0)
         "#,
         "42",
     );
 }
 
-/// Every name the runtime calls core syntax must actually be exportable —
-/// the list and the desugarer's dispatch have to stay in step.
+/// Every name the runtime calls core syntax must survive the export path.
+///
+/// This pins the list against `build_library` only — it cannot tell whether a
+/// listed name is *really* syntax, because acceptance is what the list itself
+/// decides. `patina-frontend`'s `tests/core_syntax_list.rs` is the test that
+/// checks the list against the desugarer, which is the drift that matters.
 #[test]
 fn test_every_core_syntax_name_is_exportable() {
-    for name in patina_runtime::library_loader::CORE_SYNTAX {
+    for name in patina_runtime::library_loader::core_syntax_names() {
         common::assert_program_eval_to(
             &format!(
                 r#"
@@ -442,6 +449,25 @@ fn test_every_core_syntax_name_is_exportable() {
             "done",
         );
     }
+}
+
+/// The import side has to agree with the export side, or the first thing a
+/// consumer of a blanket re-export does — narrowing it with `only` — fails.
+/// Selecting a core keyword is a no-op for the same reason exporting one is:
+/// there is no binding to carry, and the importer has the syntax regardless.
+#[test]
+fn test_only_can_select_core_syntax() {
+    common::assert_program_eval_to(
+        r#"
+        (define-library (syn narrow)
+          (import (scheme base))
+          (export begin twice)
+          (begin (define (twice x) (* 2 x))))
+        (import (only (syn narrow) begin twice))
+        (begin (twice 21))
+        "#,
+        "42",
+    );
 }
 
 /// Leniency stops at syntax: an identifier that is neither bound nor core
