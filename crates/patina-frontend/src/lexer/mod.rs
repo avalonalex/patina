@@ -365,14 +365,36 @@ impl Lexer {
         next == '.' && after.is_ascii_digit()
     }
 
+    /// Are we at `+inf.0`, `-inf.0`, `+nan.0` or `-nan.0` (case-insensitive)?
+    ///
+    /// Compares the six characters where they sit. The obvious spelling —
+    /// collect the rest of the input into a `String` and `to_lowercase()` it —
+    /// made lexing **O(n²)**: the number dispatch reaches here for every `+`
+    /// or `-` token that is not followed by a digit, `.` or `i`, so every
+    /// `(- a b)` and every `->name` copied and case-mapped the remainder of
+    /// the file. Measured at 184× on a 537 KB input; see
+    /// `PRD/TRACK_P_PERFORMANCE_PRD.md`.
+    ///
+    /// `to_ascii_lowercase` rather than `char::to_lowercase` is not a
+    /// narrowing: no non-ASCII character lowercases to a bare `i`, `n`, `f` or
+    /// `a`, and the one that comes close, `İ` (U+0130), maps to *two* chars,
+    /// which the old prefix test rejected as well.
     fn is_special_float_literal(&self) -> bool {
-        // Check if we're at the start of +inf.0, -inf.0, +nan.0, or -nan.0 (case-insensitive)
-        let remaining: String = self.input[self.position..].iter().collect();
-        let lower = remaining.to_lowercase();
-        lower.starts_with("+inf.0")
-            || lower.starts_with("-inf.0")
-            || lower.starts_with("+nan.0")
-            || lower.starts_with("-nan.0")
+        let Some(&[sign, a, b, c, point, zero]) = self.input.get(self.position..self.position + 6)
+        else {
+            return false;
+        };
+        matches!(sign, '+' | '-')
+            && point == '.'
+            && zero == '0'
+            && matches!(
+                [
+                    a.to_ascii_lowercase(),
+                    b.to_ascii_lowercase(),
+                    c.to_ascii_lowercase()
+                ],
+                ['i', 'n', 'f'] | ['n', 'a', 'n']
+            )
     }
 
     fn read_string(&mut self) -> Result<Token, LexError> {
@@ -869,6 +891,51 @@ impl Lexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `is_special_float_literal` decides whether `+`/`-` starts a number or
+    /// an identifier. It had no test of its own, which is how it kept a
+    /// quadratic implementation — the behaviour was covered only indirectly,
+    /// through programs that happened to contain `+inf.0`.
+    #[test]
+    fn test_special_float_literals_lex_as_numbers() {
+        for src in [
+            "+inf.0", "-inf.0", "+nan.0", "-nan.0", "+INF.0", "-Inf.0", "+NaN.0", "-nAn.0",
+        ] {
+            assert_eq!(
+                Lexer::new(src).next_token_kind().unwrap(),
+                Token::Number(src.to_string()),
+                "{src} should lex as a number"
+            );
+        }
+    }
+
+    /// The near-misses have to stay identifiers: each differs from a special
+    /// float in exactly one position, which is what the six-character
+    /// comparison has to get right. `-nan.1` and `-nan` are the two shapes
+    /// that reach this predicate and fail it — on the last character, and on
+    /// running out of input.
+    ///
+    /// `+i`/`-inf` are deliberately absent: `peek_is_imaginary` claims any
+    /// `+`/`-` followed by `i` for the number reader before this predicate is
+    /// consulted, so they lex as (malformed) numbers and always did.
+    #[test]
+    fn test_near_miss_special_floats_lex_as_identifiers() {
+        for src in ["-nan", "+na", "-nan.1", "-", "+", "->foo", "-x"] {
+            assert_eq!(
+                Lexer::new(src).next_token_kind().unwrap(),
+                Token::Identifier(src.to_string()),
+                "{src} should lex as an identifier"
+            );
+        }
+    }
+
+    /// A truncated literal at end of input must not index past the buffer.
+    #[test]
+    fn test_special_float_prefix_at_end_of_input() {
+        for src in ["+inf.", "+inf", "+i", "+"] {
+            assert!(Lexer::new(src).next_token_kind().is_ok(), "{src} panicked");
+        }
+    }
 
     #[test]
     fn test_basic_tokens() {

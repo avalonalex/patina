@@ -864,36 +864,57 @@ reference implementation and will validate its replacement.
 
 ---
 
-### The lexer is quadratic in file size — `is_special_float_literal`  *(open, found 2026-08-16)*
+### The lexer was quadratic in file size — `is_special_float_literal`  *(done — 2026-08-16)*
 
 Found by a review sweep over an unrelated lexer change (Track L, Unicode identifiers), not by a
-profile — which is why it is recorded here rather than fixed there.
+profile.
 
-`is_special_float_literal` (`crates/patina-frontend/src/lexer/mod.rs`) copies **the entire
-remaining input** into a `String` and `to_lowercase()`s it — a second allocation, with full Unicode
-case mapping — to test a 6-character prefix. The number dispatch calls it for every token starting
-`+` or `-` that is not followed by a digit, so every `(- a b)`, every `(+ x 1)` and every
-`-`-leading identifier pays it. Lexing is therefore O(n²) in file size.
+`is_special_float_literal` collected **the entire remaining input** into a `String` and
+`to_lowercase()`d it — a second allocation, with full Unicode case mapping — to test a
+6-character prefix. The number dispatch reaches it for every `+`/`-` token not followed by a digit,
+`.` or `i`, so every `(- a b)` and every `->name` re-copied the rest of the file. It now compares
+the six characters where they sit.
 
-Measured (median of 9 interleaved rounds, against an allocation-free prefix comparison that
-produced identical token streams across the whole corpus):
+**Measured on this machine, alternating wall-clock runs of the two release binaries, three
+interleaved rounds** (§1's measurement discipline), importing a generated library of
+`(define (fN a b) (- a b))` forms:
 
-| input | calls | chars copied + lowercased | current | fixed | speedup |
-|---|---|---|---|---|---|
-| all 87 `lib/**/*.{scm,sld}` | — | — | 12.80 ms | 3.32 ms | 3.9× |
-| `chibi/tests/r7rs-tests.scm` (73 KB) | 108 | 5.67 M (78× the file) | 16.46 ms | 0.48 ms | 34× |
-| 537 KB concatenation | 526 | 136.2 M (253× the input) | 440 ms | 2.40 ms | 184× |
+| forms | source | main | branch |
+|---|---|---|---|
+| 500 | 13 KB | 24 ms | 21 ms |
+| 1000 | 27 KB | 36 ms | 26 ms |
+| 2000 | 55 KB | 75 ms | 32 ms |
+| 4000 | 112 KB | 211 ms | 40 ms |
 
-Each doubling of input costs ~5.6×, confirming the quadratic. The worst shipped files are
-`lib/srfi/133/vectors-impl.scm` (2.58 ms) and `lib/chibi/test.scm` (2.18 ms); a script importing
-just those two runs ~35 ms wall, so this one function is roughly **15% of a small script's total
-time**. The fix is a direct char comparison against the four 6-character patterns — no allocation,
-no `to_lowercase`, no behaviour change.
+Each doubling cost main ~2.8× and the branch ~1.25× — the quadratic, and its removal, are visible
+directly in the scaling rather than inferred from one data point.
 
-Two adjuncts found with it, both cheaper to fix once this is: `Lexer::new` collects the whole input
+**On real workloads the win is about 10%, not the 184× a microbenchmark suggested**, and the gap is
+worth recording because it is the kind of number that gets quoted without its denominator. Lexing
+is a minority of load time, and no shipped Scheme file is anywhere near the size where the
+quadratic dominates:
+
+- `(import (srfi 133) (chibi test))`, the two heaviest bundled `.scm` files: 45.4 ms → 40.8 ms
+  (mean of three interleaved rounds of 10 runs).
+- REPL bootstrap (`patina -p 1`): 9.2 ms → 9.1 ms, i.e. inside noise.
+- A `(read)` loop over a 73 KB file: no reliable change — `read` re-slices per datum, so the
+  remaining buffer never grows large enough for the quadratic to build.
+
+That last line is also the answer to why this went unnoticed: the cost only concentrates when one
+large buffer is lexed in a single pass, which is what library loading does and what interactive use
+never does.
+
+**Equivalence:** every one of the 727 `.scm`/`.sld` files in `lib/`, `compat/vendor/` and
+`scheme_tests/` was read and written back through both binaries with byte-identical output; both
+chibi suites stayed 1226/1226 and the corpus 143 of 184 with byte-identical artifacts.
+`is_special_float_literal` had no unit test of its own before this — which is how it kept a
+quadratic implementation — and now has three.
+
+**Still open, found alongside and deliberately not bundled:** `Lexer::new` collects the whole input
 into a `Vec<char>` (4 bytes per char), and `read` builds a fresh `Parser` over the *remaining*
 buffer for each datum (`patina-primitives/src/primitives/io/read.rs`), so both that `Vec<char>`
-build and the quadratic above are re-paid per datum in a `(read)` loop.
+build and any per-lex setup are re-paid per datum in a `(read)` loop. Both are structural changes
+to the reader's interface rather than a local fix, and neither is on a measured hot path yet.
 
 ---
 
