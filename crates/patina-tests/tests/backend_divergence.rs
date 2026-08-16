@@ -300,6 +300,44 @@ fn callback_using_its_own_continuation_yields_nothing_on_the_tree_walker() {
     );
 }
 
+/// VM: invoking a continuation captured inside its own `dynamic-wind` extent
+/// re-runs the wind thunks, as though the extent had been exited and
+/// re-entered.
+///
+/// ```text
+///   (dynamic-wind in (lambda () (call/cc (lambda (k) (k #f)))) out)
+///   tree-walker, chibi, Gauche => (in out)
+///   VM                         => (in out in out)
+/// ```
+///
+/// R7RS §6.10 runs the thunks when the extent is actually left and re-entered;
+/// invoking `k` here never leaves it. Pinned because this defect was tracked
+/// in the PRD, lost in an edit, and recovered only by review — a test cannot
+/// be edited away by accident.
+#[test]
+fn continuation_within_its_own_wind_reruns_the_thunks_on_the_vm() {
+    const PROGRAM: &str = r#"
+        (import (scheme base))
+        (define log '())
+        (dynamic-wind (lambda () (set! log (cons 'in log)))
+                      (lambda () (call/cc (lambda (k) (k #f))))
+                      (lambda () (set! log (cons 'out log))))
+        (reverse log)
+    "#;
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "(in out)",
+        "the tree-walker matches chibi and Gauche; if this changed, it regressed"
+    );
+    assert_eq!(
+        eval_program_vm(PROGRAM),
+        "(in out in out)",
+        "\n[vm] NO LONGER DIVERGES — it now runs the wind thunks once.\n\
+         Replace both assertions with assert_program_eval_to(PROGRAM, \"(in out)\") \
+         and update {GUARD_UNWIND_ORDER}."
+    );
+}
+
 /// Bad syntax handed to the `eval` primitive is the *caller's* error, raised
 /// while the program runs — catchable, on both backends. The tree-walker used
 /// to wrap it in a non-catchable `InternalError` (so this program died) while
