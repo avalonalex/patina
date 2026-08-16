@@ -449,53 +449,50 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
-**VM: an escape out of a re-entrant primitive is still wrong in three call shapes** — ❌ **open**.
-The crash was fixed for the *call-position* path (see Fixed); these three reach the same primitives
-through `call_primitive_proc`, which has no equivalent depth check. All pre-date that fix and are
-unchanged by it — verified by re-running them against `main`.
+**VM: a primitive used as a `call-with-values` consumer still mishandles an escaping callback** —
+❌ **open**. The last shape of the re-entry class; the rest closed 2026-08-16.
 
 ```scheme
-(call/cc (lambda (k) (apply member (list 2 '(1 2 3) (lambda (a b) (k 'x))))))
-;; VM => no output, exit 0        tree-walker => x
-(let ((ops (list member))) (call/cc (lambda (k) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x))))))
-;; VM => no output, exit 0        tree-walker => x
 (call/cc (lambda (k) (call-with-values (lambda () (values 2 '(1 2 3) (lambda (a b) (k 'x)))) member)))
-;; VM => (1 2 3)                  tree-walker => x
+;; VM => (1 2 3)     tree-walker, chibi, Gauche => x
 ```
 
-Six sites share the shape: the `Apply` and `TailApply` primitive and parameter branches,
-`call_value_with_probe`, `tail_call_value_with_probe`, `call_any` and `call_any_sync`. The two tail
-sites additionally `frames.pop()` a stack the escape already replaced. `exec_call_primitive`'s own
-shadow-deopt early return also exits above its depth check, landing in this unprotected code.
+`call-with-values` is a control primitive that pushes no frame, so the consumer runs at the call/cc
+lambda's own depth and the continuation restores to exactly that depth. Instrumented: the direct
+call reports `before=2 after=1`; this shape reports `before=1 after=1`.
 
-**VM: an escaped-from primitive is never abandoned** — ❌ **open**, and the sharper half. Even on
-the fixed path the Rust primitive keeps running after the continuation has been invoked, because
-the escape is delivered as an ordinary return value through
-`ApplyContext::apply_proc -> Result<TaggedValue, EvalError>`, which cannot say "escaped".
+**A previous draft of this entry recorded the wrong remedy.** It said "what is wanted is frame
+identity — a per-frame id, or a generation stamped on the frame". Review instrumented every frame
+field (`code.id`, `pc`, `register_base`, `num_regs`) across the boundary and found the open case and
+the must-not-fire case (`test_a_continuation_used_inside_the_callback_is_not_an_escape`) are
+**byte-identical at every field**: the continuation restores a *clone of the very activation* the
+primitive is standing on, suspended at the same `pc`. A stamp applied at frame push is cloned along
+with the frame and compares equal on both sides, so it cannot separate them. Anyone following that
+note would have spent the attempt discovering this.
+
+What does separate them is identity on the **continuation** rather than the frame: a monotone
+barrier id pushed at each re-entry boundary, recorded into `VmContinuation` at capture, compared at
+invoke — an invocation is an escape iff it was captured under an older barrier. `k2` in the
+must-not-fire case is captured *under* the primitive's own barrier and so compares equal.
+
+**Tree-walker: two continuation defects around primitive callbacks** — ❌ **open**. Both found
+2026-08-16 while fixing the VM half, and both pinned in
+`crates/patina-tests/tests/backend_divergence.rs` so they retire themselves.
 
 ```scheme
-(let ((seen '()))
-  (let ((r (call/cc (lambda (k) (member 9 '(1 2 3) (lambda (a b) (set! seen (cons b seen)) (k #f)))))))
-    (list r (reverse seen))))
-;; tree-walker => (#f (1))        VM => (#f (1 2 3))    — the callback runs three more times
+(member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))
+;; tree-walker => #f — the callback's value, not the primitive's
+;; VM, chibi, Gauche => (2 3)
+
+(call/cc (lambda (k) (set! kk k) (eval '(kk 'from-eval) (interaction-environment)) 'fell-through))
+;; tree-walker => escapes *and then* runs the fall-through as well
+;; VM, chibi => from-eval
 ```
 
-Each of those extra invocations re-invokes the continuation, so the wind thunks re-run with it:
-
-```scheme
-(dynamic-wind (lambda () (log 'in)) (lambda () (call/cc (lambda (k) (member 9 '(1 2 3) (lambda (a b) (k #f)))))) (lambda () (log 'out)))
-;; tree-walker => (in in out)      VM => (in out in out in out in out)
-```
-
-**Both want the same fix, at the re-entry boundary rather than at the leaf.** Each boundary
-(`run_apply_proc`, `call_any_sync`, `run_thunk`, `vm_eval_expr`, `vm_load_library`) already has the
-`depth_before` / `run_loop_until(depth_before)` pair. On `frames.len() < depth_before`, record the
-escape on `VmState` and return a sentinel error from `apply_proc` so the primitive unwinds through
-its own `?` instead of continuing; then one check in `call_primitive_proc` — widened to
-`Result<Option<TaggedValue>, VmError>` — converts it into the existing `Ok(Some)/Ok(None)` protocol
-for all six sites, with the tail sites skipping their `frames.pop()`. That also settles a value
-question the leaf check cannot: `Ok(Some(result))` currently hands on the *primitive's* return
-value where the continuation's argument is what belongs there.
+`map` with the first shape works on both, so it is specific to a Rust primitive running the
+callback. The second is the tree-walker's half of the boundary problem the VM just fixed: it has no
+equivalent of `across_reentry`, so an escape out of `eval` or `load` does not abandon the caller —
+`(load …)` runs every remaining form in the file.
 
 **Tree-walker: a `guard` handler runs before the unwind** — ❌ **open**. Found 2026-08-15 while
 moving `with-output-to-file` into Scheme, by a test whose two backends disagreed.
@@ -679,6 +676,8 @@ where there was one, and the guard test that retires it.
 | Defect | Fixed |
 |---|---|
 | VM: an escape out of a re-entrant primitive crashed the process (call position) | 2026-08-15 |
+| VM: an escaped-from primitive kept running, and `apply`/value-position escapes were wrong | 2026-08-16 |
+| VM: escapes out of `eval`, `load` and a `parameterize` converter were unhandled | 2026-08-16 |
 | `with-output-to-file` crashed the VM on an escape | 2026-08-15 |
 | Tree-walker: the control primitives' own errors escaped `guard` | 2026-08-15 |
 | `make-parameter` objects were not procedures | 2026-08-15 |

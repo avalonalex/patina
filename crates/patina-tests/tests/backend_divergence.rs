@@ -232,6 +232,74 @@ fn guard_handler_runs_before_the_unwind_on_the_tree_walker() {
     );
 }
 
+/// Tree-walker: a continuation that escapes out of `eval` does not abandon
+/// the rest of the expression — it escapes *and then continues*.
+///
+/// ```text
+///   (call/cc (lambda (k) (set! kk k) (eval '(kk 'from-eval) …) 'fell-through))
+///   VM, chibi  => from-eval
+///   tree-walker => from-eval, and then 'fell-through runs too
+/// ```
+///
+/// The VM half was fixed by routing every `ApplyContext` re-entry through one
+/// boundary check; the tree-walker has no equivalent. Not `assert_divergence`
+/// — that needs the broken backend to *fail*, and this one succeeds twice.
+#[test]
+fn escape_out_of_eval_does_not_abandon_on_the_tree_walker() {
+    const PROGRAM: &str = r#"
+        (import (scheme base) (scheme eval) (scheme repl))
+        (define kk #f)
+        (define trace '())
+        (call/cc (lambda (k)
+          (set! kk k)
+          (eval '(kk 'from-eval) (interaction-environment))
+          (set! trace (cons 'ran-on trace))
+          'fell-through))
+        (reverse trace)
+    "#;
+    assert_eq!(
+        eval_program_vm(PROGRAM),
+        "()",
+        "the VM abandons at the escape; if this changed, it regressed"
+    );
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "(ran-on)",
+        "\n[tree-walker] NO LONGER DIVERGES — it now abandons at the escape.\n\
+         Replace both assertions with assert_program_eval_to(PROGRAM, \"()\") \
+         and update {GUARD_UNWIND_ORDER}."
+    );
+}
+
+/// Tree-walker: a primitive callback that captures and invokes its *own*
+/// continuation makes the whole program produce nothing.
+///
+/// ```text
+///   (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))
+///   VM, chibi, Gauche => (2 3)
+///   tree-walker       => #f — the callback's value, not the primitive's
+/// ```
+///
+/// Not an escape — the continuation is used and returned from normally — so
+/// it is the case a cruder "any continuation invocation unwinds" rule would
+/// break, which is why it is pinned rather than left to prose.
+#[test]
+fn callback_using_its_own_continuation_yields_nothing_on_the_tree_walker() {
+    const PROGRAM: &str = r#"
+        (import (scheme base))
+        (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))
+    "#;
+    assert_eq!(eval_program_vm(PROGRAM), "(2 3)");
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "#f",
+        "\n[tree-walker] NO LONGER DIVERGES — it now returns the primitive's \
+         value.\nReplace both assertions with \
+         assert_program_eval_to(PROGRAM, \"(2 3)\") and update \
+         {GUARD_UNWIND_ORDER}."
+    );
+}
+
 /// Bad syntax handed to the `eval` primitive is the *caller's* error, raised
 /// while the program runs — catchable, on both backends. The tree-walker used
 /// to wrap it in a non-catchable `InternalError` (so this program died) while
