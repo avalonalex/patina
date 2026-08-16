@@ -449,6 +449,25 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
+**VM: invoking a continuation inside its own `dynamic-wind` re-runs the thunks** — ❌ **open**.
+No primitive involved; the minimal repro is a bare `call/cc`.
+
+```scheme
+(dynamic-wind (lambda () (log 'in)) (lambda () (call/cc (lambda (k) (k #f)))) (lambda () (log 'out)))
+;; VM => (in out in out)
+;; tree-walker, chibi, Gauche => (in out)
+```
+
+The VM treats invoking a continuation captured *within* the extent as leaving and re-entering it,
+so the after- and before-thunks run again; R7RS §6.10 only requires them when the dynamic extent is
+actually exited and re-entered, which it is not here.
+
+**Recorded late, and that is the point.** This was visible as the "four `in`/`out` pairs" symptom in
+the primitive-escape work, and when those entries were rewritten the standalone repro went with
+them — a defect that had been tracked became untracked, and only a review sweep caught it. It is now
+pinned in `crates/patina-tests/tests/backend_divergence.rs`, which is the mechanism that would have
+prevented that: prose in a PRD can be edited away, a failing test cannot.
+
 **VM: a primitive used as a `call-with-values` consumer still mishandles an escaping callback** —
 ❌ **open**. The last shape of the re-entry class; the rest closed 2026-08-16.
 
