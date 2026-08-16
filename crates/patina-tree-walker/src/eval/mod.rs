@@ -702,8 +702,6 @@ impl Evaluator {
         &self,
         parsed: patina_runtime::library_loader::ParsedLibrary,
     ) -> Result<patina_runtime::Library, patina_runtime::LibraryError> {
-        use patina_runtime::library_loader::ExportSpec;
-
         // Create a fresh environment for this library, sharing global heap for TaggedValue compatibility
         let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
 
@@ -747,49 +745,8 @@ impl Evaluator {
             })?;
         }
 
-        // Step 3: Collect exports and create library
-        let mut library = patina_runtime::Library::with_env(parsed.name.clone(), lib_env.clone());
-        if let Some(source) = parsed.source {
-            library.set_source(source);
-        }
-
-        for spec in &parsed.exports {
-            match spec {
-                ExportSpec::Identifier(name) => {
-                    // Export with same name
-                    if let Some(value) = lib_env.get(name) {
-                        library.export_tagged(name.clone(), value);
-                    } else {
-                        return Err(patina_runtime::LibraryError::ParseError {
-                            file: library
-                                .source
-                                .as_ref()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default(),
-                            message: format!("Exported identifier '{}' not defined", name),
-                        });
-                    }
-                }
-
-                ExportSpec::Rename { internal, external } => {
-                    // Export with different name
-                    if let Some(value) = lib_env.get(internal) {
-                        library.export_tagged(external.clone(), value);
-                    } else {
-                        return Err(patina_runtime::LibraryError::ParseError {
-                            file: library
-                                .source
-                                .as_ref()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default(),
-                            message: format!("Exported identifier '{}' not defined", internal),
-                        });
-                    }
-                }
-            }
-        }
-
-        Ok(library)
+        // Step 3: Assemble the library and resolve its exports
+        patina_runtime::library_loader::build_library(parsed, lib_env)
     }
 
     /// Process a single import set
@@ -825,13 +782,20 @@ impl Evaluator {
 
                 // Then import only the specified identifiers
                 for id in identifiers {
-                    if let Some(value) = temp_env.get(id) {
-                        lib_env.define(id.clone(), value);
-                    } else {
-                        return Err(patina_runtime::LibraryError::ParseError {
-                            file: String::new(),
-                            message: format!("Identifier '{}' not found in import set", id),
-                        });
+                    match temp_env.get(id) {
+                        Some(value) => lib_env.define(id.clone(), value),
+                        // Nothing to select, and nothing wrong: a core
+                        // syntactic keyword has no binding to carry across,
+                        // and works in the importer regardless. Rejecting
+                        // here would make `(only ...)` unusable on exactly
+                        // the libraries that re-export syntax.
+                        None if patina_runtime::library_loader::is_core_syntax(id) => {}
+                        None => {
+                            return Err(patina_runtime::LibraryError::parse(
+                                None,
+                                format!("Identifier '{}' not found in import set", id),
+                            ));
+                        }
                     }
                 }
                 Ok(())

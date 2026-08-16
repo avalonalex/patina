@@ -70,6 +70,114 @@ pub enum ExportSpec {
     Rename { internal: String, external: String },
 }
 
+/// Syntactic keywords the desugarer recognizes by name wherever they appear,
+/// rather than by looking them up as bindings.
+///
+/// Mirrors the `match` in `patina-frontend`'s `desugarer::desugar_list_tagged`.
+/// `apply` is the one arm deliberately left out: the desugarer special-cases
+/// it, but it is also a real procedure binding, so it resolves the ordinary
+/// way. `patina-frontend`'s `tests/core_syntax_list.rs` pins this half against
+/// the desugarer, which is what keeps the two from drifting.
+pub const DESUGARED_FORMS: &[&str] = &[
+    "quote",
+    "quasiquote",
+    "lambda",
+    "if",
+    "set!",
+    "define",
+    "define-syntax",
+    "let-syntax",
+    "letrec-syntax",
+    "begin",
+    "import",
+    "cond-expand",
+    "include",
+    "include-ci",
+    "syntax-error",
+    "expand",
+];
+
+/// Keywords with meaning only *inside* a macro transformer, handled by
+/// `patina-macros` rather than by the desugarer.
+///
+/// Kept apart from [`DESUGARED_FORMS`] because they behave differently in
+/// every way but this one: in head position they are ordinary unbound
+/// variables, so no desugarer guard can cover them.
+pub const SYNTAX_RULES_KEYWORDS: &[&str] =
+    &["unquote", "unquote-splicing", "syntax-rules", "_", "..."];
+
+/// Is `name` a syntactic keyword that exists without a binding?
+///
+/// These have no entry in any environment — not even in `(scheme base)`,
+/// which is why its `.sld` omits them from its own export list — so a library
+/// re-exporting one has nothing to resolve, and selecting one through
+/// `(only …)` has nothing to select. R7RS §5.6.1 lets a library export any
+/// identifier it imports, and every implementation accepts
+/// `(export begin if lambda …)`; `(r6rs base)` opens with exactly that.
+///
+/// `else` and `=>` are absent from both lists: `lib/scheme/base.sld` binds
+/// them as variables, so they already resolve. That workaround is the
+/// binding-based fix applied to two names; applying it to all of them would
+/// retire these lists entirely — see the Track L PRD.
+pub fn is_core_syntax(name: &str) -> bool {
+    DESUGARED_FORMS.contains(&name) || SYNTAX_RULES_KEYWORDS.contains(&name)
+}
+
+/// Every name [`is_core_syntax`] accepts.
+pub fn core_syntax_names() -> impl Iterator<Item = &'static str> {
+    DESUGARED_FORMS.iter().chain(SYNTAX_RULES_KEYWORDS).copied()
+}
+
+/// Assemble the library a parsed `define-library` describes, resolving its
+/// `export` declarations against the environment its body produced.
+///
+/// Shared by both backends, which evaluate library bodies independently but
+/// must agree on what a valid export is.
+pub fn build_library(
+    parsed: ParsedLibrary,
+    lib_env: Rc<Environment>,
+) -> Result<Library, LibraryError> {
+    let mut library = Library::with_env(parsed.name, lib_env);
+    if let Some(source) = parsed.source {
+        library.set_source(source);
+    }
+    let file = library.source.clone();
+    let reject = |name: &str, detail: &str| {
+        LibraryError::parse(
+            file.as_deref(),
+            format!("Exported identifier '{}' {}", name, detail),
+        )
+    };
+
+    for spec in &parsed.exports {
+        match spec {
+            ExportSpec::Identifier(name) => match library.env.get(name) {
+                Some(value) => library.export_tagged(name.clone(), value),
+                // A core syntactic keyword needs no export entry: it is
+                // recognized by name in every scope already, so the importer
+                // gets working syntax whether or not the table mentions it.
+                None if is_core_syntax(name) => {}
+                None => return Err(reject(name, "not defined")),
+            },
+            ExportSpec::Rename { internal, external } => match library.env.get(internal) {
+                Some(value) => library.export_tagged(external.clone(), value),
+                // Renaming would need the *new* name to be recognized as
+                // syntax at the use site, and that recognition is by name.
+                // Say so, rather than reporting it as undefined or exporting a
+                // name that would not work.
+                None if is_core_syntax(internal) => {
+                    return Err(LibraryError::parse(
+                        file.as_deref(),
+                        format!("Cannot rename core syntax '{}' on export", internal),
+                    ));
+                }
+                None => return Err(reject(internal, "not defined")),
+            },
+        }
+    }
+    Ok(library)
+}
+
 /// Import set (R7RS 5.6.1)
 ///
 /// Describes how to import identifiers from other libraries,

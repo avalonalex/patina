@@ -747,12 +747,14 @@ mod tests {
         // work queue.
         let out = captured(
             "",
-            "Error: Parse error in /x/lib.sld: Exported identifier 'begin' not defined",
+            "Error: Parse error in /x/lib.sld: Exported identifier 'my-helper' not defined",
             false,
         );
         assert_eq!(
             classify(&out, "probe"),
-            Status::LoadError(vec!["Exported identifier 'begin' not defined".to_string()])
+            Status::LoadError(vec![
+                "Exported identifier 'my-helper' not defined".to_string()
+            ])
         );
     }
 

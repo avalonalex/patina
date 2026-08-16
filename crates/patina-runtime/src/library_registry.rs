@@ -34,6 +34,18 @@ pub enum LibraryError {
     ParseError { file: String, message: String },
 }
 
+impl LibraryError {
+    /// A failure while reading or installing a library, attributed to the file
+    /// it came from. `None` covers an inline `define-library`, which has no
+    /// file — the empty string the callers used to write by hand.
+    pub fn parse(source: Option<&std::path::Path>, message: impl Into<String>) -> Self {
+        LibraryError::ParseError {
+            file: source.map(|p| p.display().to_string()).unwrap_or_default(),
+            message: message.into(),
+        }
+    }
+}
+
 impl std::fmt::Display for LibraryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

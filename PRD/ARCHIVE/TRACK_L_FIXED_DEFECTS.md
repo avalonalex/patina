@@ -10,6 +10,58 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**A library could not re-export a core syntactic keyword** — ✅ **fixed** (2026-08-16). Both
+backends. `(r6rs base)` opens by re-exporting the whole of R7RS's syntax, which R7RS §5.6.1 permits
+and every implementation accepts; Patina rejected the library outright.
+
+```scheme
+(define-library (re exp) (export begin) (import (scheme base)))
+;; before => Exported identifier 'begin' not defined
+```
+
+Exactly the keywords the desugarer recognizes *by name* failed —
+`quote quasiquote unquote unquote-splicing lambda if set! define define-syntax let-syntax
+letrec-syntax syntax-rules begin import cond-expand include include-ci syntax-error expand _ ...` —
+while every Scheme-level macro (`let`, `cond`, `case`, `do`, `when`, `and`, `or`) exported fine.
+That split is the whole diagnosis: these keywords have no binding in any environment, so export
+resolution had nothing to look up. `lib/scheme/base.sld` shows the same hole from the other side —
+it omits them from its own export list, and works around it for the auxiliary syntax by binding
+`else` and `=>` as *variables* (`(define else 'else)`).
+
+The fix accepts them with no export entry, because in Patina a core keyword is recognized in every
+scope already: an importer gets working syntax whether or not the export table mentions it.
+
+**The import side had to move with it, and a first draft of this entry said the opposite.** It
+claimed `(only …)` and `(except …)` "cannot hide" a core keyword. `except` behaves that way;
+`only` did not — it *rejected the program* (`Identifier 'begin' not found in import set`), because
+selecting a name it cannot find is an error there. That is exactly what the first consumer of a
+blanket re-export does: narrow it. `only` now treats a core keyword the same way the export path
+does — nothing to select, and nothing wrong — so `(import (only (r6rs base) begin …))` works.
+
+Renaming on export is refused explicitly (`Cannot rename core syntax 'begin' on export`) rather
+than silently exporting a name that would not work: the new name would have to be recognized as
+syntax at the use site, and that recognition is by name. The message deliberately does not start
+with `Exported identifier`, which is the prefix `patina-compat`'s classifier keys on — a deliberate
+"unsupported" is not a package's missing export.
+
+Landed with the three copies of the export loop — one in the tree-walker, two in the VM, all
+byte-identical — replaced by a single `build_library` in `patina-runtime`, so the two backends
+cannot drift on what a valid export is.
+
+**This should be the last such list.** It is the third workaround in the tree for one hole — the
+other two are `null-environment`'s `R5RS_SYNTAX` skip-list (`patina-primitives/src/primitives/
+eval.rs`) and `lib/scheme/base.sld` binding `else` and `=>` as *variables* so `(only (scheme base)
+else)` works. That last one is the deeper fix applied to two names: give syntactic keywords real
+bindings — a marker value in the environment — and export resolution, `only`, `except`, `prefix`
+and `rename` all work through the normal path with no list and no special case. Review costed it:
+the desugarer already looks the head symbol up for macros *before* its name `match`, `Desugarer::
+new()` (no env) is test-only, and `HeapObjectData::Macro` shows the shape a `CoreSyntax` sibling
+would take; the real work is that library bodies desugar in a *parentless* env at three sites,
+which would have to chain to a root env seeded with the markers. It would also give `_` and `...`
+a real identity, which base.sld notes it could not do with variables without breaking SRFI-46
+custom ellipsis. The next surface that needs to name syntax should do that instead of adding a
+fourth list.
+
 **VM: escapes out of `eval`, `load` and a `parameterize` converter were unhandled** — ✅ **fixed**
 (2026-08-16). The completion of the entry below, which installed the boundary check in *one* of four
 re-entry points and claimed the class closed but for one shape. Review enumerated the trait and ran
