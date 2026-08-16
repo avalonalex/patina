@@ -43,9 +43,46 @@ full MIT Scheme 1988–1995 licence text at the end of the file, exactly as
 upstream ships it.
 
 `(srfi 125)`'s `hash.scm` carries no in-file notice, as chibi's own files
-mostly do not; it is Alex Shinn's under the BSD 3-Clause licence reproduced in
-full in `lib/chibi/PROVENANCE.md`, which is the same licence and the same
-author as every file in that tree.
+mostly do not — upstream's own state, not something removed here. Two things
+establish whose it is, since the file itself says nothing: chibi's `AUTHORS`
+opens "Alex Shinn wrote the initial version of chibi-scheme and all distributed
+modules", and the list of SRFIs it *does* attribute to their reference
+implementations (101, 134, 135, 139, 146, 154, 165) does not include 125 —
+consistent with the file being a thin layer over SRFI 69 rather than SRFI 125's
+sample implementation, which is a hash table in its own right. So it is Shinn's
+under chibi's `COPYING`, BSD 3-Clause, whose first condition requires that
+redistributions "retain the above copyright notice, this list of conditions and
+the following disclaimer". The file cannot, so the text is reproduced here
+rather than linked, verbatim from `COPYING` at chibi 0.12.0. The same text
+appears in `lib/chibi/PROVENANCE.md` for that tree; one copy per tree, as
+elsewhere in this file.
+
+```
+Copyright (c) 2009-2021 Alex Shinn
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
 
 `(srfi 27)` does not. `27.scm` carries a single author line —
 `Sebastian.Egner@philips.com, Mar-2002` — and no terms at all, upstream's own
