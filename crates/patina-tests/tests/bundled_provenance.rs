@@ -57,6 +57,9 @@ const PINNED: &[(&str, u64)] = &[
     // Unlike every other row, 132.sld is Patina-authored with no upstream to
     // match — the pin freezes the tree's provenance *record*, so editing the
     // header is a deliberate act like editing the files it describes.
+    // Byte-identical to chibi 0.12.0's, per lib/srfi/PROVENANCE.md. Its `.sld`
+    // is Patina's own and so is not pinned.
+    ("lib/srfi/125/hash.scm", 0xf1aeae0530c9f659),
     ("lib/srfi/132.sld", 0xe954f0fc6682a300),
     ("lib/srfi/132/delndups.scm", 0xabcb04a8827d44f4),
     ("lib/srfi/132/lmsort.scm", 0xf84cd67deda00bb8),

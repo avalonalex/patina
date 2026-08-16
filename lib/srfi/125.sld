@@ -1,47 +1,85 @@
 ;; SRFI 125: Intermediate Hash Tables
 ;;
-;; `125/hash.scm` is byte-identical to chibi-scheme 0.12.0's
-;; `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause); provenance and the
-;; licence text are in `lib/srfi/PROVENANCE.md`. It is a thin layer over
-;; SRFI 69 and SRFI 128 rather than a hash table of its own, which is why
-;; bundling it needs no new runtime support — `equal-hash` is already a
-;; primitive and `(srfi 69)` is already a real bucket-vector table.
+;; A thin layer over SRFI 69 and SRFI 128 rather than a hash table of its own.
+;; `125/hash.scm` is byte-identical to upstream; provenance and licence are in
+;; `lib/srfi/PROVENANCE.md`.
 ;;
-;; Two clauses below stand in for things upstream takes from chibi. Both are
-;; local to this file; `125/hash.scm` itself is untouched.
+;; Four deviations, all in the `(begin ...)` below — `125/hash.scm` itself is
+;; untouched. Each exists because upstream runs against chibi's *C-backed*
+;; SRFI 69, which already has behaviour the portable reference implementation
+;; we bundle does not, so upstream inherits what we have to supply.
 ;;
 ;; 1. **Hash-function arity.** SRFI 69 hash functions take `(obj [bound])` and
 ;;    return a value below `bound`; SRFI 128 comparator hash functions take
-;;    `(obj)` and return any non-negative integer. `hash.scm` hands the latter
-;;    straight to SRFI 69's constructors, which works on chibi because its
-;;    SRFI 69 is C-backed and reduces the value itself. Ours is the portable
-;;    reference implementation, which calls `(hash key size)` — so a
-;;    comparator's hash function would be called with one argument too many.
-;;    `%make-hash-table` and `%alist->hash-table` adapt it here.
+;;    `(obj)` and return anything. Our SRFI 69 always passes the bound, so a
+;;    comparator's would be called with one argument too many. Every hash
+;;    function reaching SRFI 69's constructors is therefore adapted, and called
+;;    with one argument.
 ;;
-;; 2. **Immutability.** `hash.scm` uses `(chibi ast)`'s `immutable?` and
-;;    `make-immutable!` to implement `hash-table-mutable?` and the immutable
-;;    result of a one-argument `hash-table-copy`. Patina has no object-level
-;;    immutability, so the flag lives in a table keyed by identity. The cost is
-;;    that a table marked immutable is remembered for the life of the program;
-;;    only `hash-table-copy` with a false or absent second argument creates
-;;    one, so the set stays small.
+;;    That placement is a trade, not an oversight, and neither side is free:
+;;    adapting *only* the comparator path would leave a caller who extracts
+;;    `(comparator-hash-function c)` by hand and passes it along — which the
+;;    upstream conformance suite does — handing SRFI 69 a one-argument
+;;    procedure. Adapting everything instead costs the reverse: a hash function
+;;    that *requires* two arguments works under plain `(srfi 69)`, which always
+;;    supplies the bound, and fails here. Adapting everything is the better
+;;    trade because every hash function SRFI 69 itself defines takes the bound
+;;    optionally, so a conforming one is always callable with one argument;
+;;    only a two-argument-only procedure, which SRFI 125 never produces, is
+;;    lost. Distinguishing them needs arity introspection Scheme does not have.
+;;
+;;    `lib/srfi/113/sets-impl.scm`'s `modulizer` is the same shim for the same
+;;    mismatch, inside a vendored include.
+;;
+;; 2. **Immutability.** Upstream uses `(chibi ast)`'s `immutable?` and
+;;    `make-immutable!` for `hash-table-mutable?` and the immutable result of a
+;;    one-argument `hash-table-copy`. Patina has no object-level immutability,
+;;    so the flag lives in a table keyed by identity. Two consequences worth
+;;    stating rather than leaving to be discovered:
+;;      - the flag is **advisory**. SRFI 69's `hash-table-set!` cannot consult
+;;        it, so mutating a table that reports `(hash-table-mutable? ht)` =>
+;;        `#f` still succeeds. chibi's object-level mark is enforced; this is
+;;        not.
+;;      - entries are **never released**, so an immutable copy is pinned for
+;;        the life of the process — and the leaky spelling is the default one,
+;;        `(hash-table-copy ht)`. Bounding it needs weak references keyed by
+;;        object identity; the runtime has that machinery for the VM's
+;;        continuation tables (`GcRoots::trace_weak_ids` / `sweep_weak`, see
+;;        `docs/GC_DESIGN.md`) but does not expose it to Scheme.
+;;
+;; 3. **`hash-table-ref` and `hash-table-update!`** take SRFI 125's `success`
+;;    argument, which SRFI 69's do not; inherited, `success` was accepted and
+;;    silently ignored.
+;;
+;; 4. **`hash-table-union!`** (spelled `merge!` upstream, which `hash.scm`
+;;    aliases) must leave associations already in the first table alone.
+;;    SRFI 69's overwrites them, which silently gave the *second* table
+;;    priority — the opposite of what SRFI 125 specifies, and invisible
+;;    because both tables still end up the right size.
+;;
+;; Widening `(srfi 69)` itself was considered and rejected for 3 and 4: it is a
+;; separate published SRFI with its own narrower spec and 16 importers in the
+;; compat corpus, so changing it would alter results for code that never asked
+;; for SRFI 125.
 (define-library (srfi 125)
   (import (scheme base)
-          ;; SRFI 128 also binds `string-hash` and `string-ci-hash`, but to the
-          ;; one-argument comparator convention. SRFI 125 re-exports SRFI 69's,
-          ;; which take an optional bound, so 128's are excluded rather than
-          ;; left to collide.
+          ;; SRFI 128 also binds `string-hash` and `string-ci-hash`, to the
+          ;; one-argument convention; SRFI 125 re-exports SRFI 69's, which take
+          ;; an optional bound, so 128's are excluded rather than left to
+          ;; collide.
           (except (srfi 128) string-hash string-ci-hash)
-          (rename (srfi 69)
+          ;; The three names deviations 3 and 4 replace are excluded; the two
+          ;; constructors are renamed so deviation 1 can wrap what they are
+          ;; handed. The rest is upstream's own rename list.
+          (rename (except (srfi 69)
+                          hash-table-ref hash-table-update! hash-table-merge!)
                   (make-hash-table srfi-69:make-hash-table)
                   (alist->hash-table srfi-69:alist->hash-table)
                   (hash-table-copy %hash-table-copy)
                   (hash-table-set! %hash-table-set!)
                   (hash-table-delete! %hash-table-delete!)
-                  (hash-table-fold %hash-table-fold)
-                  (hash-table-ref srfi-69:hash-table-ref)
-                  (hash-table-merge! srfi-69:hash-table-merge!)))
+                  (hash-table-fold %hash-table-fold))
+          (only (patina internal predicates) equal-hash))
   (export
    ;; Constructors:
    make-hash-table hash-table hash-table-unfold alist->hash-table
@@ -70,7 +108,7 @@
    hash-table-equivalence-function hash-table-hash-function)
 
   (begin
-    ;; Deviation 1: give a SRFI 128 hash function SRFI 69's calling convention.
+    ;; Deviation 1.
     (define (as-srfi-69-hash-function hash)
       (lambda (obj . bound)
         (let ((h (hash obj)))
@@ -82,8 +120,12 @@
     (define (%alist->hash-table alist equal hash)
       (srfi-69:alist->hash-table alist equal (as-srfi-69-hash-function hash)))
 
-    ;; Deviation 2: immutability, tracked beside the tables rather than in them.
-    (define immutable-tables (srfi-69:make-hash-table eq?))
+    ;; Deviation 2. Keyed by identity, and hashed by it too: SRFI 69's
+    ;; `hash-by-identity` has no branch for a record, so every table would land
+    ;; in one bucket and each lookup would scan every immutable table ever
+    ;; made. `equal-hash` separates them and is stable under mutation.
+    (define immutable-tables
+      (%make-hash-table eq? equal-hash))
 
     (define (immutable? ht)
       (hash-table-ref/default immutable-tables ht #f))
@@ -92,13 +134,7 @@
       (%hash-table-set! immutable-tables ht #t)
       ht)
 
-    ;; Deviation 3: two procedures SRFI 125 redefines rather than inherits.
-    ;; `hash.scm` re-exports SRFI 69's, which is right on chibi because its
-    ;; SRFI 69 is C-backed and already has the wider behaviour; the portable
-    ;; reference implementation we bundle has the SRFI 69 behaviour only.
-    ;;
-    ;; `hash-table-ref` gains SRFI 125's third argument: SRFI 69 takes only a
-    ;; failure thunk, where SRFI 125 also applies `success` to the value found.
+    ;; Deviation 3.
     (define missing (list 'missing))
 
     (define (hash-table-ref ht key . failure+success)
@@ -112,10 +148,14 @@
           ((cadr failure+success) value))
          (else value))))
 
-    ;; `hash-table-union!` (spelled `merge!` upstream, which `hash.scm`
-    ;; aliases) must leave associations already in `ht1` alone. SRFI 69's
-    ;; overwrites them, which silently gave `ht2` priority — the opposite of
-    ;; what SRFI 125 specifies.
+    ;; SRFI 125 defines this as `(hash-table-set! ht key (updater
+    ;; (hash-table-ref ht key failure success)))`, so it is written that way.
+    (define (hash-table-update! ht key updater . failure+success)
+      (%hash-table-set!
+       ht key
+       (updater (apply hash-table-ref ht key failure+success))))
+
+    ;; Deviation 4.
     (define (hash-table-merge! ht1 ht2)
       (hash-table-walk
        ht2

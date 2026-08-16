@@ -474,13 +474,25 @@ That file also had to define five comparator constants belonging to **SRFI 162**
 into its `(srfi 128)`. Bundling SRFI 162 is the obvious next Red-edition step and would retire that
 half of the adaptation.
 
-**Three deviations from upstream's file were needed, each because chibi's SRFI 69 is C-backed and
+**Four deviations from upstream's file were needed, each because chibi's SRFI 69 is C-backed and
 ours is the portable reference implementation** — recorded in `lib/srfi/125.sld`'s header, with
-`125/hash.scm` itself byte-identical: a SRFI 128 comparator's one-argument hash function has to be
-adapted to SRFI 69's `(obj bound)` convention; immutability, which upstream takes from
-`(chibi ast)`, is tracked beside the tables; and `hash-table-ref`'s `success` argument and
-`hash-table-union!`'s do-not-overwrite rule have to be supplied, because SRFI 69's versions of both
-are narrower and upstream inherits the wider ones from chibi's own SRFI 69.
+`125/hash.scm` itself byte-identical: a SRFI 128 comparator's one-argument hash function adapted to
+SRFI 69's `(obj bound)` convention; immutability, which upstream takes from `(chibi ast)`, tracked
+beside the tables; `hash-table-ref`'s and `hash-table-update!`'s `success` argument; and
+`hash-table-union!`'s do-not-overwrite rule.
+
+**Review found three defects the 74-test suite had passed over, which is the part worth keeping.**
+All three were in the deviations — the code that is *ours* — and none was reachable from the
+suite: `hash-table-update!` accepted `success` and silently ignored it (SRFI 69's rest argument
+swallowed it, giving 8 where SRFI 125 specifies 71); the SRFI 69 hash fix covered one of the *two*
+branches that can return an inexact value, so `2.0` still crashed the table while `2.718` no longer
+did, and the test written for it exercised only the branch that was fixed; and the hash-function
+adapter's placement is a genuine trade whose two sides fail in opposite directions — adapting only
+the comparator path breaks a caller who extracts `(comparator-hash-function c)` by hand, which the
+upstream suite does at one fixture, while adapting everything breaks a hash function that *requires*
+two arguments, which plain `(srfi 69)` accepts. The second is the better trade and is now the
+documented behaviour. The lesson is the recurring one: an upstream suite gates the *ported* code,
+not the glue written to port it.
 
 **A live defect in `(srfi 69)` fell out of it, and matters more than the new library does.** SRFI 69
 has in-degree 16 in the corpus, and *any float key crashed it*:

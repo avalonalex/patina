@@ -158,13 +158,13 @@ suite_test!(srfi_143_fixnum, "(srfi 143 test)", 0, 141);
 suite_test!(srfi_132_sort, "(srfi 132 test)", 0, 221);
 suite_test!(srfi_133_vector, "(srfi 133 test)", 0, 93);
 suite_test!(srfi_113_set, "(srfi 113 test)", 0, 253);
-// The only suite here not copied verbatim: its two chibi char-set imports were
-// replaced by `(srfi 14)`, test bodies untouched. Why, in
+// Adapted, not verbatim: its two chibi char-set imports were replaced by
+// `(srfi 14)`, test bodies untouched. Why, in
 // scheme_tests/upstream/README.md.
 suite_test!(srfi_130_string, "(srfi 130 test)", 0, 219);
 suite_test!(srfi_158_generator, "(srfi 158 test)", 0, 76);
-// Adapted like 130's, and for a related reason: two imports disambiguated,
-// test bodies untouched. Why, in scheme_tests/upstream/README.md.
+// The other adapted suite: imports adapted, test bodies untouched. Why, in
+// scheme_tests/upstream/README.md.
 suite_test!(srfi_125_hash_table, "(srfi 125 test)", 0, 74);
 
 /// Proves the harness can actually report a failure — and actually counts.

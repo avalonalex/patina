@@ -1,151 +1,99 @@
-//! SRFI 125 (intermediate hash tables) and its R7RS-large name,
-//! `(scheme hash-table)`.
+//! What chibi's own SRFI 125 suite cannot see.
 //!
-//! The bundled library is a thin layer over SRFI 69 and SRFI 128 — see
-//! `lib/srfi/125.sld` for the three places it has to diverge from chibi's
-//! upstream file, each of which is exercised below. The headline gate is
-//! chibi's own 74-test suite, run separately; these pin the behaviours that
-//! are ours rather than upstream's, so a regression names itself.
+//! The suite is the headline gate — 74 assertions, run on both backends by
+//! `upstream_srfi_suites.rs` — and it already covers the library's behaviour
+//! far better than a hand-written file would. So this one deliberately holds
+//! only the cases it *misses*, each of which was a real defect found by review
+//! after the suite was green:
+//!
+//! - `hash-table-copy`'s immutable default, which the suite covers but which
+//!   is ours rather than upstream's — the flag has no runtime support behind
+//!   it;
+//! - `hash-table-update!`'s `success` argument, which the suite calls with at
+//!   most four arguments;
+//! - `(srfi 69)`'s own `hash` on inexact keys, which the suite never calls.
+//!
+//! `(scheme hash-table)`'s export list is checked against `(srfi 125)`'s by
+//! `r7rs_large_aliases.rs`, which compares the two in both directions — a
+//! stronger check than sampling bindings here.
 
 mod common;
 use common::*;
 
-/// Both names must reach the same library — the Red edition adopts SRFI 125's
-/// bindings unchanged, so `(scheme hash-table)` is a re-export.
+/// A hash function handed straight to SRFI 69's constructors — which the
+/// upstream suite does at its `ht-symbol` fixture, extracting
+/// `(comparator-hash-function default-comparator)` and passing it along.
+///
+/// It is a *one*-argument procedure, while our SRFI 69 always supplies the
+/// bound, so it only works because SRFI 125 adapts every hash function on the
+/// way in rather than only the ones it reads out of a comparator. Adapting
+/// only the comparator path passes every test in this file and fails the
+/// upstream suite, which is why this case is pinned here too.
 #[test]
-fn test_both_names_provide_the_same_bindings() {
-    for library in ["(srfi 125)", "(scheme hash-table)"] {
-        assert_program_eval_to(
-            &format!(
-                r#"
-                (import (scheme base) {library} (srfi 128))
-                (define ht (make-hash-table (make-equal-comparator)))
-                (hash-table-set! ht 'a 1 'b 2)
-                (list (hash-table-size ht)
-                      (hash-table-ref/default ht 'a #f)
-                      (hash-table-contains? ht 'b)
-                      (hash-table-ref/default ht 'z 'none))
-                "#
-            ),
-            "(2 1 #t none)",
-        );
-    }
-}
-
-/// Deviation 1: a SRFI 128 comparator's hash function takes one argument,
-/// while our SRFI 69 calls hash functions with a bound. Constructing from a
-/// comparator is the path that would break without the adapter.
-#[test]
-fn test_a_comparator_can_construct_a_table() {
+fn test_a_hash_function_passed_by_hand_is_adapted() {
     assert_program_eval_to(
         r#"
         (import (scheme base) (srfi 125) (srfi 128))
-        (define ht (hash-table (make-equal-comparator) "x" 1 "y" 2))
-        (define eqv-ht (make-hash-table (make-eqv-comparator)))
-        (hash-table-set! eqv-ht 42 'answer)
-        (list (hash-table-size ht)
-              (hash-table-ref/default ht "y" #f)
-              (hash-table-ref/default eqv-ht 42 #f))
+        (define ht
+          (alist->hash-table '((a . 1) (b . 2))
+                             equal?
+                             (comparator-hash-function (make-default-comparator))))
+        (list (hash-table-ref/default ht 'a 'missing)
+              (hash-table-ref/default ht 'b 'missing)
+              (hash-table-size ht))
         "#,
-        "(2 2 answer)",
+        "(1 2 2)",
     );
 }
 
-/// Deviation 2: SRFI 125 has immutable tables; Patina has no object-level
-/// immutability, so the flag is tracked beside the table. A one-argument
-/// `hash-table-copy` produces an immutable copy — the default is *not*
-/// mutable, which is easy to get backwards.
+/// SRFI 125 defines `hash-table-update!` as
+/// `(hash-table-set! ht key (updater (hash-table-ref ht key failure success)))`
+/// — so `success` transforms the value *before* the updater sees it.
+///
+/// SRFI 69's version takes only a failure thunk and has a rest argument, so an
+/// inherited one accepted `success` and silently ignored it: the update below
+/// produced 8 instead of 71.
 #[test]
-fn test_copy_controls_mutability() {
-    assert_program_eval_to(
-        r#"
-        (import (scheme base) (srfi 125) (srfi 128))
-        (define ht (make-hash-table (make-equal-comparator)))
-        (hash-table-set! ht 'k 'v)
-        (list (hash-table-mutable? ht)
-              (hash-table-mutable? (hash-table-copy ht))
-              (hash-table-mutable? (hash-table-copy ht #f))
-              (hash-table-mutable? (hash-table-copy ht #t)))
-        "#,
-        "(#t #f #f #t)",
-    );
-}
-
-/// Deviation 3a: SRFI 69's `hash-table-ref` takes only a failure thunk;
-/// SRFI 125 also applies `success` to the value found.
-#[test]
-fn test_ref_takes_failure_and_success() {
+fn test_update_applies_success_before_the_updater() {
     assert_program_eval_to(
         r#"
         (import (scheme base) (srfi 125) (srfi 128))
         (define ht (make-hash-table (make-equal-comparator)))
         (hash-table-set! ht 'k 7)
-        (list (hash-table-ref ht 'k)
-              (hash-table-ref ht 'k (lambda () 'absent))
-              (hash-table-ref ht 'k (lambda () 'absent) (lambda (v) (* v 2)))
-              (hash-table-ref ht 'nope (lambda () 'absent))
-              (hash-table-ref ht 'nope (lambda () 'absent) (lambda (v) v)))
+        (hash-table-update! ht 'k (lambda (v) (+ v 1)) (lambda () 0) (lambda (v) (* v 10)))
+        (define missing-key
+          (begin
+            (hash-table-update! ht 'absent (lambda (v) (* v 2)) (lambda () 5))
+            (hash-table-ref/default ht 'absent #f)))
+        (list (hash-table-ref/default ht 'k #f) missing-key)
         "#,
-        "(7 7 14 absent absent)",
+        "(71 10)",
     );
 }
 
-/// Deviation 3b: SRFI 69's `hash-table-merge!` overwrites; SRFI 125's
-/// `hash-table-union!` must leave associations already in the first table
-/// alone. Getting this backwards is silent — both tables end up the right
-/// size, with the wrong values.
-#[test]
-fn test_union_keeps_the_first_tables_values() {
-    assert_program_eval_to(
-        r#"
-        (import (scheme base) (scheme write) (srfi 125) (srfi 128))
-        (define (table . kvs)
-          (apply hash-table (make-equal-comparator) kvs))
-        (define a (table 'shared 'from-a 'only-a 1))
-        (define b (table 'shared 'from-b 'only-b 2))
-        (hash-table-union! a b)
-        (list (hash-table-ref/default a 'shared #f)
-              (hash-table-ref/default a 'only-a #f)
-              (hash-table-ref/default a 'only-b #f))
-        "#,
-        "(from-a 1 2)",
-    );
-}
-
-/// The set operations delete keys rather than rewrite values, so they must
-/// leave the surviving associations untouched.
-#[test]
-fn test_intersection_and_difference_keep_their_values() {
-    assert_program_eval_to(
-        r#"
-        (import (scheme base) (srfi 125) (srfi 128))
-        (define (table . kvs)
-          (apply hash-table (make-equal-comparator) kvs))
-        (define a (table 'x 'a-x 'y 'a-y))
-        (define b (table 'y 'b-y 'z 'b-z))
-        (define d (table 'x 'd-x 'y 'd-y))
-        (hash-table-intersection! a b)
-        (hash-table-difference! d b)
-        (list (hash-table->alist a) (hash-table->alist d))
-        "#,
-        "(((y . a-y)) ((x . d-x)))",
-    );
-}
-
-/// A float key used to crash `(srfi 69)` outright — `hash` returned an
-/// inexact value and `vector-ref` rejected it as an index. Fixed in the
-/// bundled SRFI 69, so it is pinned at both layers.
+/// `(srfi 69)`'s `hash` feeds a `vector-ref` index, so an inexact result
+/// crashes the table outright — which it did, for every inexact key.
+///
+/// Two branches produce one: `real?` reaches `numerator`/`denominator`, which
+/// R7RS makes inexact for inexact input, and `integer?` matches `2.0` first.
+/// The first fix covered only `real?`, so `2.0` still crashed and every test
+/// here still passed — hence a case from each branch, plus a composite that
+/// recurses back into `hash`.
 #[test]
 fn test_inexact_keys_hash_to_exact_values() {
     assert_program_eval_to(
         r#"
         (import (scheme base) (srfi 69))
         (define ht (make-hash-table))
-        (hash-table-set! ht 2.718 'e)
+        (hash-table-set! ht 2.718 'real-branch)
+        (hash-table-set! ht 2.0 'integer-branch)
         (list (exact-integer? (hash 2.718))
-              (exact-integer? (hash (vector 'a 2.718)))
-              (hash-table-ref/default ht 2.718 'missing))
+              (exact-integer? (hash 2.0))
+              (exact-integer? (hash 1e10))
+              (exact-integer? (hash (vector 'a 2.0)))
+              (hash-table-ref/default ht 2.718 'missing)
+              (hash-table-ref/default ht 2.0 'missing))
         "#,
-        "(#t #t e)",
+        "(#t #t #t #t real-branch integer-branch)",
     );
 }

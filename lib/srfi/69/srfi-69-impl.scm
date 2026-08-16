@@ -46,31 +46,38 @@
     (%string-hash (symbol->string s) (lambda (x) x) bound)))
 
 (define (hash obj . maybe-bound)
+  ;; PATINA DEVIATION: the whole `cond` is wrapped in `exact`.
+  ;;
+  ;; The result is used as a vector index, by `%hash-table-hash` and again by
+  ;; `%hash-table-maybe-resize!`, so an inexact one fails with "vector-ref
+  ;; expects an integer index" — any inexact key crashed the table. *Two*
+  ;; branches can produce one: `integer?` is true of `2.0`, and `real?` reaches
+  ;; `numerator`/`denominator`, which R7RS says return inexact results for
+  ;; inexact arguments. Coercing once around the `cond` covers the class,
+  ;; including the `vector?`/`pair?`/`number?` branches that recurse back in;
+  ;; fixing either branch alone leaves the other, which is how the first
+  ;; attempt at this missed `2.0`.
+  ;;
+  ;; Upstream does not hit it: chibi's SRFI 69 is C-backed and returns exact
+  ;; hashes.
   (let ((bound (if (null? maybe-bound) *default-bound* (car maybe-bound))))
-    (cond ((integer? obj) (modulo (abs obj) bound))
-          ((string? obj) (string-hash obj bound))
-          ((symbol? obj) (symbol-hash obj bound))
-          ;; PATINA DEVIATION: `exact` added. R7RS makes `numerator` and
-          ;; `denominator` return inexact results for inexact arguments, so
-          ;; upstream's expression yields an inexact hash for a key like
-          ;; 2.718 — which `%hash-table-hash` then hands to `vector-ref`,
-          ;; failing with "expects an integer index". Any float key crashed
-          ;; the table. Upstream does not hit this because the reference
-          ;; implementations it was written against, and chibi's C-backed
-          ;; SRFI 69, return exact hashes.
-          ((real? obj)
-           (exact (modulo (abs (+ (numerator obj) (denominator obj))) bound)))
-          ((number? obj)
-           (modulo (+ (hash (real-part obj)) (* 3 (hash (imag-part obj))))
-                   bound))
-          ((char? obj) (modulo (char->integer obj) bound))
-          ((vector? obj) (vector-hash obj bound))
-          ((pair? obj) (modulo (+ (hash (car obj)) (* 3 (hash (cdr obj))))
-                               bound))
-          ((null? obj) 0)
-          ((not obj) 0)
-          ((procedure? obj) (error "hash: procedures cannot be hashed" obj))
-          (else 1))))
+    (exact
+     (cond ((integer? obj) (modulo (abs obj) bound))
+           ((string? obj) (string-hash obj bound))
+           ((symbol? obj) (symbol-hash obj bound))
+           ((real? obj) (modulo (abs (+ (numerator obj) (denominator obj)))
+                                bound))
+           ((number? obj)
+            (modulo (+ (hash (real-part obj)) (* 3 (hash (imag-part obj))))
+                    bound))
+           ((char? obj) (modulo (char->integer obj) bound))
+           ((vector? obj) (vector-hash obj bound))
+           ((pair? obj) (modulo (+ (hash (car obj)) (* 3 (hash (cdr obj))))
+                                bound))
+           ((null? obj) 0)
+           ((not obj) 0)
+           ((procedure? obj) (error "hash: procedures cannot be hashed" obj))
+           (else 1)))))
 
 (define hash-by-identity hash)
 
