@@ -163,6 +163,9 @@ suite_test!(srfi_113_set, "(srfi 113 test)", 0, 253);
 // scheme_tests/upstream/README.md.
 suite_test!(srfi_130_string, "(srfi 130 test)", 0, 219);
 suite_test!(srfi_158_generator, "(srfi 158 test)", 0, 76);
+// Adapted like 130's, and for a related reason: two imports disambiguated,
+// test bodies untouched. Why, in scheme_tests/upstream/README.md.
+suite_test!(srfi_125_hash_table, "(srfi 125 test)", 0, 74);
 
 /// Proves the harness can actually report a failure — and actually counts.
 ///

@@ -21,8 +21,21 @@ All from chibi-scheme's `lib/`, BSD (Alex Shinn), copied unmodified except
 | `srfi/113/test.sld` | 253 | 0 |
 | `srfi/130/test.sld` | 219 | 0 |
 | `srfi/158/test.sld` | 76 | 0 |
+| `srfi/125/test.sld` | 74 | 0 |
 
-**`srfi/130/test.sld` is the one adapted suite.** Upstream imports
+**`srfi/125/test.sld` is adapted too**, in two places, test bodies untouched.
+Its imports exclude `string-hash` and `string-ci-hash` from `(srfi 128)` so
+they resolve to SRFI 125's — the tests call them with a bound, which is SRFI
+69's convention and what SRFI 125 re-exports, while SRFI 128's take one
+argument. Upstream needs no exclusion because chibi binds a single native
+procedure under both names, so the ambiguity never arises there; without the
+exclusion two assertions error. It also defines five comparator constants
+(`default-comparator`, `eq-comparator`, `eqv-comparator`, `string-comparator`,
+`string-ci-comparator`) that belong to SRFI 162, which chibi folds into its
+`(srfi 128)` and Patina does not bundle — an obvious follow-up, and the reason
+these five sit in the test file rather than in a library.
+
+**`srfi/130/test.sld` is the other adapted suite.** Upstream imports
 `(chibi char-set)` and `(chibi char-set full)`; the latter imports `(chibi)`,
 chibi's implementation core, which Patina does not provide — the same wall that
 keeps the SRFI 1 and SRFI 69 suites out below. But the suite uses only six

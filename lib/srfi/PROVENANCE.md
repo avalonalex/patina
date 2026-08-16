@@ -9,6 +9,7 @@ own record. One home per tree.
 | Package | Version | Files | Upstream | Tarball sha256 |
 |---|---|---|---|---|
 | `(srfi 14)` | 0.1.0 | `14.sld`, `14.scm` | snow-fort, Retropikzel's R7RS port of Olin Shivers' char-set reference implementation (MIT-Scheme-old) | `de94f90d7b032ea554ed51b4cbce942b22df6fefe68497d661b9c26e3c7e690e` |
+| `(srfi 125)` | chibi 0.12.0 | `125/hash.scm` | chibi-scheme's `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause) | file sha256 `d469201d00fa0b955ba23a01e02707034dad5ba2ef1a29cd7b12b880e76f1053` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
 Tarball URLs:
@@ -19,12 +20,32 @@ corpus drops packages Patina provides). Each `.scm` sits beside its `.sld`
 rather than in a numbered subdirectory so the `(include "…")` resolves
 unchanged.
 
+`(srfi 125)` is the one entry not from a snow-fort tarball: snow-fort has no
+SRFI 125 package, so `125/hash.scm` is taken from the pinned chibi checkout and
+recorded by file digest instead. Only that file is upstream's — `125.sld` is
+Patina's own, because upstream's imports `(chibi ast)` and relies on chibi's
+C-backed SRFI 69; the three resulting deviations are documented in its header,
+which is where this tree records deviation.
+
+`(srfi 69)` is **not** byte-identical and is deliberately absent from the table
+above: `69/srfi-69-impl.scm` carries one marked local fix, `PATINA DEVIATION` at
+the `real?` branch of `hash`. R7RS makes `numerator`/`denominator` return
+inexact results for inexact arguments, so upstream's expression produced an
+inexact hash, which `vector-ref` then rejected as an index — any float key
+crashed the table. Upstream does not hit it because the implementations it
+targets return exact hashes.
+
 ## Licences
 
 `(srfi 14)` needs nothing added here: `14.scm` carries its own attribution
 chain (MIT Scheme → Brian D. Carlstrom → Olin Shivers → Retropikzel) *and* the
 full MIT Scheme 1988–1995 licence text at the end of the file, exactly as
 upstream ships it.
+
+`(srfi 125)`'s `hash.scm` carries no in-file notice, as chibi's own files
+mostly do not; it is Alex Shinn's under the BSD 3-Clause licence reproduced in
+full in `lib/chibi/PROVENANCE.md`, which is the same licence and the same
+author as every file in that tree.
 
 `(srfi 27)` does not. `27.scm` carries a single author line —
 `Sebastian.Egner@philips.com, Mar-2002` — and no terms at all, upstream's own

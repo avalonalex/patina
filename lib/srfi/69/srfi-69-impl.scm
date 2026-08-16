@@ -50,7 +50,16 @@
     (cond ((integer? obj) (modulo (abs obj) bound))
           ((string? obj) (string-hash obj bound))
           ((symbol? obj) (symbol-hash obj bound))
-          ((real? obj) (modulo (abs (+ (numerator obj) (denominator obj))) bound))
+          ;; PATINA DEVIATION: `exact` added. R7RS makes `numerator` and
+          ;; `denominator` return inexact results for inexact arguments, so
+          ;; upstream's expression yields an inexact hash for a key like
+          ;; 2.718 — which `%hash-table-hash` then hands to `vector-ref`,
+          ;; failing with "expects an integer index". Any float key crashed
+          ;; the table. Upstream does not hit this because the reference
+          ;; implementations it was written against, and chibi's C-backed
+          ;; SRFI 69, return exact hashes.
+          ((real? obj)
+           (exact (modulo (abs (+ (numerator obj) (denominator obj))) bound)))
           ((number? obj)
            (modulo (+ (hash (real-part obj)) (* 3 (hash (imag-part obj))))
                    bound))

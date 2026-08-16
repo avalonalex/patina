@@ -134,8 +134,15 @@ Priority order, highest value first:
    unusably slow.
 2. **`(scheme …)` alias libraries** for the six Red-edition SRFIs already shipped (1, 111, 113, 128,
    132, 133) and for 158. A `.sld` re-export each — the cheapest R7RS-large progress available.
-3. **SRFI 125** hash tables, superseding the shipped SRFI 69 (in-degree 16); keep 69 as an alias.
-   Needs a `HeapObjectData::HashMap` variant.
+3. ~~**SRFI 125** hash tables … Needs a `HeapObjectData::HashMap` variant.~~ — ✅ **done
+   2026-08-16, and that premise was wrong.** No new runtime support was needed, and checking why is
+   the useful part: the piece that genuinely cannot be written in Scheme, `equal-hash`, has been a
+   Rust primitive all along, and the shipped `(srfi 69)` is already a real bucket-vector table
+   rather than an alist. SRFI 125 itself is a **layer**, not a table — chibi's is 178 lines over
+   SRFI 69 and SRFI 128, both of which Patina ships — so bundling it is Scheme-level work.
+   `(srfi 69)` is unchanged as the substrate rather than becoming an alias; a Rust-backed table
+   stays available as a *performance* decision for Track P, to be taken on a profile rather than
+   assumed here.
 4. **SRFI 27** random — impossible without an RNG primitive; in-degree 9.
 5. **SRFI 143** fixnums — must match the VM's actual fixnum width.
 6. ~~**SRFI 14** char-sets (in-degree 4)~~ — ✅ **done 2026-08-14**, pulled forward by SRFI 130.
@@ -447,6 +454,46 @@ Two independent causes, and finding only the first would have left SRFI 197 fail
 different message: `…` was rejected by the identifier predicate, while `₁` never reached that
 predicate at all — the token dispatch tests `char::is_numeric`, which is Unicode-aware, so a
 subscript was claimed by the *number* reader. Full write-up in the fixed-defects archive.
+
+**SRFI 125 and `(scheme hash-table)` bundled, 2026-08-16 (143 of 184, unchanged).** The corpus
+number does not move: chibi-voting was the only package asking for `(scheme hash-table)`, and it
+advances from `missing-library` to `wrong-result` at **5 of 7** — both failures are ties broken in a
+different order (`((C . D) . 3) ((B . D) . 3) …` against our `((C . D) . 3) ((A . B) . 3) …`), i.e.
+the suite depends on hash-table iteration order, which neither SRFI specifies. Not ours to fix.
+
+The port's value is R7RS-large conformance, and it is measured by chibi's own SRFI 125 suite,
+now the eighth in `scheme_tests/upstream/`: **74 of 74**. Two of those needed the suite's import
+list disambiguated — it imports `(srfi 125)` *and* `(srfi 128)`, which bind `string-hash` to
+different procedures (SRFI 69's takes an optional bound, SRFI 128's does not), an ambiguity chibi
+never has because its `string-hash` is one native procedure under both names. The exclusion picks
+SRFI 125's, which is what the assertions calling it with a bound expect and what SRFI 125
+specifies; test bodies are untouched, and the adaptation is described in
+`scheme_tests/upstream/README.md` beside SRFI 130's.
+
+That file also had to define five comparator constants belonging to **SRFI 162**, which chibi folds
+into its `(srfi 128)`. Bundling SRFI 162 is the obvious next Red-edition step and would retire that
+half of the adaptation.
+
+**Three deviations from upstream's file were needed, each because chibi's SRFI 69 is C-backed and
+ours is the portable reference implementation** — recorded in `lib/srfi/125.sld`'s header, with
+`125/hash.scm` itself byte-identical: a SRFI 128 comparator's one-argument hash function has to be
+adapted to SRFI 69's `(obj bound)` convention; immutability, which upstream takes from
+`(chibi ast)`, is tracked beside the tables; and `hash-table-ref`'s `success` argument and
+`hash-table-union!`'s do-not-overwrite rule have to be supplied, because SRFI 69's versions of both
+are narrower and upstream inherits the wider ones from chibi's own SRFI 69.
+
+**A live defect in `(srfi 69)` fell out of it, and matters more than the new library does.** SRFI 69
+has in-degree 16 in the corpus, and *any float key crashed it*:
+
+```scheme
+(hash-table-set! (make-hash-table) 2.718 'e)
+;; before => Error: Type error: vector-ref expects an integer index
+```
+
+R7RS makes `numerator`/`denominator` return inexact results for inexact arguments, so the reference
+implementation's `hash` returned an inexact value, which it then used as a vector index. chibi never
+hits it because its SRFI 69 is native. Fixed in the bundled copy and marked `PATINA DEVIATION`
+in place.
 
 **`report.md` is written to disk again**, closing the recorded debt that `run` printed the rendered
 matrix to stdout and wrote only `results.scm` — so the committed copy went stale unless the caller
