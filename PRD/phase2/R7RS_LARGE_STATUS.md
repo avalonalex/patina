@@ -36,7 +36,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 117 | `(scheme list-queue)` | List queues | ❌ | ❌ |
 | SRFI 121 | `(scheme generator)` | Generators | — superseded by SRFI 158 | — |
 | SRFI 124 | `(scheme ephemeron)` | Ephemerons | ❌ | ❌ |
-| SRFI 125 | `(scheme hash-table)` | Hash tables | ❌ (SRFI 69 shipped instead) | ❌ |
+| SRFI 125 | `(scheme hash-table)` | Hash tables | ✅ | ✅ |
 | SRFI 127 | `(scheme lseq)` | Lazy sequences | ❌ | ❌ |
 | SRFI 128 | `(scheme comparator)` | Comparators | ✅ shipped | ✅ shipped |
 | SRFI 132 | `(scheme sort)` | Sort libraries | ✅ shipped | ✅ shipped |
@@ -167,7 +167,11 @@ Highest-value first:
    `(patina internal bitwise)`; the ~30 derived procedures are Scheme. `(srfi 60)` (in-degree 31)
    and `(srfi 33)` (19) are renames over the same bindings, not separate ports.
 2. ~~`(scheme …)` alias libraries for the shipped SRFIs~~ — **done**; see the tables above.
-3. **SRFI 125 hash tables**, superseding the shipped SRFI 69 (in-degree 16); keep 69 as an alias.
+3. ~~**SRFI 125 hash tables**, superseding the shipped SRFI 69 (in-degree 16); keep 69 as an
+   alias.~~ ✅ **done 2026-08-16, and not that way.** SRFI 125 is a layer *over* SRFI 69 and
+   SRFI 128, not a replacement: SRFI 69 stays as the substrate and keeps its own narrower
+   semantics, because it is a separate published SRFI with 16 corpus importers. Four deviations
+   were needed and are recorded in `lib/srfi/125.sld`'s header.
 4. **SRFI 27 random** — runtime-forced, in-degree 9.
 5. ~~SRFI 143 fixnums~~ — **done**. Mostly renames over SRFI 151 and `(scheme base)`; the part that
    had to be right is `fx-width` / `fx-greatest` / `fx-least`, derived by probing `fixnum?` rather

@@ -5,11 +5,11 @@
 | Status | Packages |
 |---|---|
 | pass | 143 |
-| missing-library | 20 |
+| missing-library | 19 |
 | parse-error | 14 |
 | load-error | 1 |
 | unbound-identifier | 1 |
-| wrong-result | 2 |
+| wrong-result | 3 |
 | runtime-error | 1 |
 | timeout | 0 |
 | out-of-scope | 2 |
@@ -25,7 +25,6 @@
 | (rebottled pregexp) | 1 |
 | (retropikzel named-pipes) | 1 |
 | (scheme flonum) | 1 |
-| (scheme hash-table) | 1 |
 | (scheme small) | 1 |
 | (srfi 142) | 1 |
 | (srfi 144) | 1 |
@@ -106,7 +105,7 @@
 | chibi-temp-file | probe | pass |
 | chibi-term-edit-line | probe | pass |
 | chibi-uri | test | pass |
-| chibi-voting | test | missing-library |
+| chibi-voting | test | wrong-result |
 | chibi-xgboost | test | missing-library |
 | chibi-xlib | probe | missing-library |
 | chrisoei-cint | test | missing-library |

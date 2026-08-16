@@ -43,7 +43,7 @@
   ((slug "chibi-temp-file") (mode probe) (status pass))
   ((slug "chibi-term-edit-line") (mode probe) (status pass))
   ((slug "chibi-uri") (mode test) (status pass))
-  ((slug "chibi-voting") (mode test) (status missing-library) (missing "scheme hash-table"))
+  ((slug "chibi-voting") (mode test) (status wrong-result))
   ((slug "chibi-xgboost") (mode test) (status missing-library) (missing "srfi 160 base"))
   ((slug "chibi-xlib") (mode probe) (status missing-library) (missing "chibi"))
   ((slug "chrisoei-cint") (mode test) (status missing-library) (missing "scheme small"))

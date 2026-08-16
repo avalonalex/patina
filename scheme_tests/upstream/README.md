@@ -9,7 +9,7 @@ here is the same person who wrote the implementation. `srfi/151/test.sld` alone
 is 145 assertions against the 13 in
 `crates/patina-tests/tests/srfi_151_bitwise.rs`.
 
-All from chibi-scheme's `lib/`, BSD (Alex Shinn), copied unmodified except
+All from chibi-scheme's `lib/`, copied unmodified except
 `srfi/130/test.sld`'s import list — see the note under the table.
 
 | Suite | Assertions | Failing |
@@ -21,8 +21,21 @@ All from chibi-scheme's `lib/`, BSD (Alex Shinn), copied unmodified except
 | `srfi/113/test.sld` | 253 | 0 |
 | `srfi/130/test.sld` | 219 | 0 |
 | `srfi/158/test.sld` | 76 | 0 |
+| `srfi/125/test.sld` | 74 | 0 |
 
-**`srfi/130/test.sld` is the one adapted suite.** Upstream imports
+**`srfi/125/test.sld` is adapted too**, in two places, test bodies untouched.
+Its imports exclude `string-hash` and `string-ci-hash` from `(srfi 128)` so
+they resolve to SRFI 125's — the tests call them with a bound, which is SRFI
+69's convention and what SRFI 125 re-exports, while SRFI 128's take one
+argument. Upstream needs no exclusion because chibi binds a single native
+procedure under both names, so the ambiguity never arises there; without the
+exclusion two assertions error. It also defines five comparator constants
+(`default-comparator`, `eq-comparator`, `eqv-comparator`, `string-comparator`,
+`string-ci-comparator`) that belong to SRFI 162, which chibi folds into its
+`(srfi 128)` and Patina does not bundle — an obvious follow-up, and the reason
+these five sit in the test file rather than in a library.
+
+**`srfi/130/test.sld` is the other adapted suite.** Upstream imports
 `(chibi char-set)` and `(chibi char-set full)`; the latter imports `(chibi)`,
 chibi's implementation core, which Patina does not provide — the same wall that
 keeps the SRFI 1 and SRFI 69 suites out below. But the suite uses only six
@@ -138,3 +151,39 @@ test code. The directory is a library search root: `(srfi 151 test)` resolves to
 `srfi/151/test.sld` beneath it.
 
 Add a suite when Patina bundles the library it tests.
+
+## Licence
+
+Every suite here is from chibi-scheme's `lib/`, by Alex Shinn under the BSD
+3-Clause licence in chibi's `COPYING`. None of the files carries an in-file
+notice — upstream's own state — and the licence's first condition requires that
+redistributions "retain the above copyright notice, this list of conditions and
+the following disclaimer". Reproduced here rather than named, verbatim from
+`COPYING` at chibi 0.12.0, because naming a licence is not retaining its notice.
+
+```
+Copyright (c) 2009-2021 Alex Shinn
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```

@@ -9,6 +9,7 @@ own record. One home per tree.
 | Package | Version | Files | Upstream | Tarball sha256 |
 |---|---|---|---|---|
 | `(srfi 14)` | 0.1.0 | `14.sld`, `14.scm` | snow-fort, Retropikzel's R7RS port of Olin Shivers' char-set reference implementation (MIT-Scheme-old) | `de94f90d7b032ea554ed51b4cbce942b22df6fefe68497d661b9c26e3c7e690e` |
+| `(srfi 125)` | chibi 0.12.0 | `125/hash.scm` | chibi-scheme's `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause) | file sha256 `d469201d00fa0b955ba23a01e02707034dad5ba2ef1a29cd7b12b880e76f1053` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
 Tarball URLs:
@@ -19,12 +20,67 @@ corpus drops packages Patina provides). Each `.scm` sits beside its `.sld`
 rather than in a numbered subdirectory so the `(include "…")` resolves
 unchanged.
 
+`(srfi 125)` is the one entry not from a snow-fort tarball: snow-fort has no
+SRFI 125 package, so `125/hash.scm` is taken from the pinned chibi checkout and
+recorded by file digest instead. Only that file is upstream's — `125.sld` is
+Patina's own, because upstream's imports `(chibi ast)` and relies on chibi's
+C-backed SRFI 69; the resulting deviations are documented in its header,
+which is where this tree records deviation.
+
+`(srfi 69)` is **not** byte-identical and is deliberately absent from the table
+above: `69/srfi-69-impl.scm` carries one marked local fix, `PATINA DEVIATION` on
+`hash`, coercing its result to an exact integer so that an inexact key cannot
+crash the table. The reasoning stays in the file, where anyone diffing against
+upstream will be standing.
+
 ## Licences
 
 `(srfi 14)` needs nothing added here: `14.scm` carries its own attribution
 chain (MIT Scheme → Brian D. Carlstrom → Olin Shivers → Retropikzel) *and* the
 full MIT Scheme 1988–1995 licence text at the end of the file, exactly as
 upstream ships it.
+
+`(srfi 125)`'s `hash.scm` carries no in-file notice, as chibi's own files
+mostly do not — upstream's own state, not something removed here. Two things
+establish whose it is, since the file itself says nothing: chibi's `AUTHORS`
+opens "Alex Shinn wrote the initial version of chibi-scheme and all distributed
+modules", and the list of SRFIs it *does* attribute to their reference
+implementations (101, 134, 135, 139, 146, 154, 165) does not include 125 —
+consistent with the file being a thin layer over SRFI 69 rather than SRFI 125's
+sample implementation, which is a hash table in its own right. So it is Shinn's
+under chibi's `COPYING`, BSD 3-Clause, whose first condition requires that
+redistributions "retain the above copyright notice, this list of conditions and
+the following disclaimer". The file cannot, so the text is reproduced here
+rather than linked, verbatim from `COPYING` at chibi 0.12.0. The same text
+appears in `lib/chibi/PROVENANCE.md` for that tree; one copy per tree, as
+elsewhere in this file.
+
+```
+Copyright (c) 2009-2021 Alex Shinn
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
 
 `(srfi 27)` does not. `27.scm` carries a single author line —
 `Sebastian.Egner@philips.com, Mar-2002` — and no terms at all, upstream's own
