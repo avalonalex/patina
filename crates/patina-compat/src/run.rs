@@ -164,8 +164,6 @@ fn run_package(
     providers: &BTreeMap<String, usize>,
     config: &RunConfig,
 ) -> PackageResult {
-    let mut search_roots = dependency_roots(package, universe, providers);
-
     // Run from a scratch directory, not the package root: test suites write
     // log files into their cwd (srfi-64 always does), and the vendored trees
     // must stay byte-identical to upstream. Library includes are unaffected —
@@ -181,16 +179,11 @@ fn run_package(
     ));
     let _ = std::fs::create_dir_all(&scratch);
 
-    // A package whose `.sld` does not sit where its name says needs the
-    // layout an installer would have given it before anything can import it.
-    if let Some(stage) = stage_off_path_libraries(&scratch, package) {
-        search_roots.insert(0, stage);
-    }
-
     let (script, mode) = match &package.test_script {
         Some(path) => (path.clone(), "test"),
         None => (write_probe(&scratch, package), "probe"),
     };
+    let search_roots = search_roots(package, universe, providers, &scratch, mode == "test");
 
     let mut cmd = Command::new(&config.patina);
     for root in &search_roots {
@@ -222,22 +215,31 @@ fn run_package(
     }
 }
 
-/// The package's own root plus the roots of every vendored package in its
-/// transitive dependency closure. Libraries nobody vendors (bundled ones,
-/// genuinely missing ones) are simply absent — patina reports the latter.
-fn dependency_roots(
+/// Every `-A` root the run needs: the package itself plus every vendored
+/// package in its transitive dependency closure, each contributing a staged
+/// root ahead of its source tree when it has libraries the source tree cannot
+/// resolve by name. Libraries nobody vendors (bundled ones, genuinely missing
+/// ones) are simply absent — patina reports the latter.
+///
+/// Staging follows the closure rather than being applied to the subject alone:
+/// an off-path library is just as unreachable when it is a *dependency*, and
+/// that would misfile the importer as `missing-library` naming a library the
+/// corpus provides — the failure this whole mechanism exists to prevent.
+fn search_roots(
     package: &Package,
     all: &[Package],
     providers: &BTreeMap<String, usize>,
+    scratch: &Path,
+    is_test_run: bool,
 ) -> Vec<PathBuf> {
-    let mut roots = vec![package.root.clone()];
+    let mut closure = vec![package];
     let mut seen = vec![false; all.len()];
     let mut queue: Vec<&str> = package.depends.iter().map(String::as_str).collect();
     // `(test-depends ...)` belongs to the package's own test program, so it
     // seeds the closure only when that program is what we are about to run,
     // and is never followed out of a *dependency* — nobody importing this
     // package needs its test framework.
-    if package.test_script.is_some() {
+    if is_test_run {
         queue.extend(package.test_depends.iter().map(String::as_str));
     }
     while let Some(lib) = queue.pop() {
@@ -248,9 +250,15 @@ fn dependency_roots(
             continue;
         }
         if all[idx].root != package.root {
-            roots.push(all[idx].root.clone());
+            closure.push(&all[idx]);
         }
         queue.extend(all[idx].depends.iter().map(String::as_str));
+    }
+
+    let mut roots = Vec::with_capacity(closure.len());
+    for pkg in closure {
+        roots.extend(stage_off_path_libraries(scratch, pkg));
+        roots.push(pkg.root.clone());
     }
     roots
 }
@@ -265,7 +273,9 @@ fn dependency_roots(
 /// unreachable from the `.sld`'s new home; mirroring is the same rename with
 /// that defect fixed.
 fn stage_off_path_libraries(scratch: &Path, package: &Package) -> Option<PathBuf> {
-    let stage = scratch.join("stage");
+    // Per package, since the closure can stage several and two of them could
+    // otherwise want the same directory.
+    let stage = scratch.join("stage").join(&package.slug);
     let mut staged_any = false;
     for lib in &package.off_path_libraries {
         let dest = stage.join(corpus::name_relative_path(&lib.name));
@@ -536,27 +546,39 @@ mod tests {
         }
     }
 
+    /// A package rooted under `temp` that provides one library.
+    fn provider(slug: &str, temp: &Path, library: &str) -> Package {
+        let mut pkg = package(slug, &temp.join(slug));
+        pkg.provides.push(library.to_string());
+        pkg
+    }
+
+    /// A package whose one library sits at `<root>/<file>` rather than where
+    /// its name says, with `file` written out so staging has something to copy.
+    fn off_path_provider(slug: &str, temp: &Path, library: &str, file: &str) -> Package {
+        let mut pkg = provider(slug, temp, library);
+        std::fs::create_dir_all(&pkg.root).unwrap();
+        std::fs::write(
+            pkg.root.join(file),
+            format!("(define-library ({}))", library),
+        )
+        .unwrap();
+        pkg.off_path_libraries.push(OffPathLibrary {
+            name: library.to_string(),
+            source: pkg.root.join(file),
+        });
+        pkg
+    }
+
     /// Staging must carry the `.sld`'s neighbours along, or its relative
     /// `include`s break the moment it is read from its new home.
     #[test]
     fn staging_takes_the_includes_with_it() {
         let temp = tempfile::TempDir::new().unwrap();
-        let source = temp.path().join("pkg");
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(
-            source.join("irregex.sld"),
-            "(define-library (chibi irregex))",
-        )
-        .unwrap();
-        std::fs::write(source.join("irregex.scm"), "(define x 1)").unwrap();
+        let pkg = off_path_provider("chibi-irregex", temp.path(), "chibi irregex", "irregex.sld");
+        std::fs::write(pkg.root.join("irregex.scm"), "(define x 1)").unwrap();
 
         let scratch = temp.path().join("scratch");
-        let mut pkg = package("chibi-irregex", &source);
-        pkg.off_path_libraries.push(OffPathLibrary {
-            name: "chibi irregex".to_string(),
-            source: source.join("irregex.sld"),
-        });
-
         let stage = stage_off_path_libraries(&scratch, &pkg).expect("staged");
         assert!(stage.join("chibi/irregex.sld").is_file());
         assert!(stage.join("chibi/irregex.scm").is_file());
@@ -574,22 +596,42 @@ mod tests {
     #[test]
     fn test_depends_reach_the_search_path_when_the_test_runs() {
         let temp = tempfile::TempDir::new().unwrap();
+        let scratch = temp.path().join("scratch");
         let mut subject = package("lassik-string-inflection", &temp.path().join("subject"));
         subject.test_depends.push("srfi 64".to_string());
-        subject.test_script = Some(temp.path().join("subject/t.scm"));
-        let framework_root = temp.path().join("srfi-64");
-        let mut framework = package("srfi-64", &framework_root);
-        framework.provides.push("srfi 64".to_string());
+        let framework = provider("srfi-64", temp.path(), "srfi 64");
+        let framework_root = framework.root.clone();
 
         let universe = vec![framework];
         let providers = corpus::providers(&universe);
-        let roots = dependency_roots(&subject, &universe, &providers);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, true);
         assert!(roots.contains(&framework_root));
 
         // With no test program to run, they are irrelevant and stay off.
-        subject.test_script = None;
-        let roots = dependency_roots(&subject, &universe, &providers);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, false);
         assert!(!roots.contains(&framework_root));
+    }
+
+    /// An off-path library is just as unreachable when it is a dependency, so
+    /// staging has to follow the closure rather than stop at the subject.
+    #[test]
+    fn a_dependency_with_an_off_path_library_is_staged_too() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let scratch = temp.path().join("scratch");
+        let mut subject = package("chibi-regexp", &temp.path().join("chibi-regexp"));
+        subject.depends.push("chibi irregex".to_string());
+        let dependency =
+            off_path_provider("chibi-irregex", temp.path(), "chibi irregex", "irregex.sld");
+
+        let universe = vec![dependency];
+        let providers = corpus::providers(&universe);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, false);
+
+        assert!(
+            roots.iter().any(|r| r.join("chibi/irregex.sld").is_file()),
+            "no search root resolves the dependency's library by name: {:?}",
+            roots
+        );
     }
 
     /// A dependency's own test framework is not part of what importing it
@@ -597,21 +639,20 @@ mod tests {
     #[test]
     fn test_depends_are_not_followed_out_of_a_dependency() {
         let temp = tempfile::TempDir::new().unwrap();
+        let scratch = temp.path().join("scratch");
         let mut subject = package("app", &temp.path().join("app"));
         subject.depends.push("some lib".to_string());
-        subject.test_script = Some(temp.path().join("app/t.scm"));
 
-        let mut library = package("some-lib", &temp.path().join("some-lib"));
-        library.provides.push("some lib".to_string());
+        let mut library = provider("some-lib", temp.path(), "some lib");
         library.test_depends.push("srfi 64".to_string());
-        let framework_root = temp.path().join("srfi-64");
-        let mut framework = package("srfi-64", &framework_root);
-        framework.provides.push("srfi 64".to_string());
+        let library_root = library.root.clone();
+        let framework = provider("srfi-64", temp.path(), "srfi 64");
+        let framework_root = framework.root.clone();
 
         let universe = vec![library, framework];
         let providers = corpus::providers(&universe);
-        let roots = dependency_roots(&subject, &universe, &providers);
-        assert!(roots.contains(&temp.path().join("some-lib")));
+        let roots = search_roots(&subject, &universe, &providers, &scratch, true);
+        assert!(roots.contains(&library_root));
         assert!(!roots.contains(&framework_root));
     }
 

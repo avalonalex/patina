@@ -47,11 +47,14 @@ pub struct OffPathLibrary {
 }
 
 /// Where a search root must hold library `(a b c)`: `a/b/c.sld`.
+///
+/// Must agree with the resolver under test — `LibraryRegistry::find_library_file`
+/// in `patina-runtime` — or staging writes to a path nothing reads. The rule
+/// is not shared as code because the harness deliberately depends on the
+/// patina *binary* rather than on runtime internals.
 pub fn name_relative_path(name: &str) -> PathBuf {
-    let mut parts: Vec<&str> = name.split(' ').collect();
-    let last = parts.pop().unwrap_or_default();
-    let mut path: PathBuf = parts.iter().collect();
-    path.push(format!("{}.sld", last));
+    let mut path: PathBuf = name.split(' ').collect();
+    path.as_mut_os_string().push(".sld");
     path
 }
 
@@ -115,7 +118,9 @@ fn parse_package(
                 collect_component(&body, &mut provides, &mut depends, heap);
                 // Only libraries: a program is run by path, never imported by
                 // name, so where its file sits cannot mislead a lookup.
-                off_path_libraries.extend(off_path_library(&body, root, heap));
+                if let Some(lib) = off_path_library(&body, root, heap) {
+                    off_path_libraries.push(lib);
+                }
             } else if let Some(body) = sexp::tagged_form(decl, "program", heap) {
                 collect_component(&body, &mut provides, &mut depends, heap);
             } else if let Some(rest) = sexp::tagged_form(decl, "test-depends", heap) {
@@ -124,8 +129,8 @@ fn parse_package(
                         test_depends.push(name);
                     }
                 }
-            } else if let Some(rest) = sexp::tagged_form(decl, "test", heap)
-                && let Some(name) = rest.first().and_then(|tv| sexp::string_value(*tv, heap))
+            } else if let Some(name) = sexp::clause_argument(decl, "test", heap)
+                && let Some(name) = sexp::string_value(name, heap)
             {
                 let path = root.join(&name);
                 if path.is_file() {
@@ -157,16 +162,14 @@ fn off_path_library(
     root: &Path,
     heap: &SharedHeap,
 ) -> Option<OffPathLibrary> {
-    let mut name = None;
-    let mut declared = None;
-    for decl in body {
-        if let Some(rest) = sexp::tagged_form(*decl, "name", heap) {
-            name = rest.first().and_then(|tv| sexp::library_name(*tv, heap));
-        } else if let Some(rest) = sexp::tagged_form(*decl, "path", heap) {
-            declared = rest.first().and_then(|tv| sexp::string_value(*tv, heap));
-        }
-    }
-    let (name, declared) = (name?, declared?);
+    let name = body
+        .iter()
+        .find_map(|decl| sexp::clause_argument(*decl, "name", heap))
+        .and_then(|tv| sexp::library_name(tv, heap))?;
+    let declared = body
+        .iter()
+        .find_map(|decl| sexp::clause_argument(*decl, "path", heap))
+        .and_then(|tv| sexp::string_value(tv, heap))?;
     if Path::new(&declared) == name_relative_path(&name) {
         return None;
     }
@@ -183,8 +186,8 @@ fn collect_component(
     heap: &SharedHeap,
 ) {
     for decl in body {
-        if let Some(rest) = sexp::tagged_form(*decl, "name", heap) {
-            if let Some(name) = rest.first().and_then(|tv| sexp::library_name(*tv, heap)) {
+        if let Some(name) = sexp::clause_argument(*decl, "name", heap) {
+            if let Some(name) = sexp::library_name(name, heap) {
                 provides.push(name);
             }
         } else if let Some(rest) = sexp::tagged_form(*decl, "depends", heap) {
@@ -213,11 +216,23 @@ fn collect_component(
 mod tests {
     use super::*;
 
+    /// Write `package.scm` into `temp` and parse it. Auxiliary files a case
+    /// needs (a test script, an `.sld` to find) are written by the case.
+    fn parsed(slug: &str, temp: &Path, package_scm: &str) -> Package {
+        let path = temp.join("package.scm");
+        std::fs::write(&path, package_scm).unwrap();
+        let heap = patina_core::new_shared_heap();
+        parse_package(slug, temp, &path, &heap).unwrap()
+    }
+
     #[test]
     fn parses_a_snow_package_scm() {
         let temp = tempfile::TempDir::new().unwrap();
-        std::fs::write(
-            temp.path().join("package.scm"),
+        std::fs::write(temp.path().join("run-tests.scm"), "(display 1)").unwrap();
+
+        let pkg = parsed(
+            "chibi-match",
+            temp.path(),
             r#"
             (package
               (version "0.9.1")
@@ -236,18 +251,7 @@ mod tests {
                 (use-for test))
               (test "run-tests.scm"))
         "#,
-        )
-        .unwrap();
-        std::fs::write(temp.path().join("run-tests.scm"), "(display 1)").unwrap();
-
-        let heap = patina_core::new_shared_heap();
-        let pkg = parse_package(
-            "chibi-match",
-            temp.path(),
-            &temp.path().join("package.scm"),
-            &heap,
-        )
-        .unwrap();
+        );
 
         assert_eq!(pkg.provides, vec!["chibi match", "chibi match-test"]);
         assert!(pkg.depends.contains(&"scheme base".to_string()));
@@ -265,8 +269,11 @@ mod tests {
     #[test]
     fn collects_package_level_test_depends() {
         let temp = tempfile::TempDir::new().unwrap();
-        std::fs::write(
-            temp.path().join("package.scm"),
+        std::fs::write(temp.path().join("t.scm"), "(display 1)").unwrap();
+
+        let pkg = parsed(
+            "lassik-string-inflection",
+            temp.path(),
             r#"
             (package
               (library (name (lassik string-inflection))
@@ -275,18 +282,7 @@ mod tests {
               (test "t.scm")
               (test-depends (scheme base) (srfi 64)))
         "#,
-        )
-        .unwrap();
-        std::fs::write(temp.path().join("t.scm"), "(display 1)").unwrap();
-
-        let heap = patina_core::new_shared_heap();
-        let pkg = parse_package(
-            "lassik-string-inflection",
-            temp.path(),
-            &temp.path().join("package.scm"),
-            &heap,
-        )
-        .unwrap();
+        );
 
         assert_eq!(pkg.test_depends, vec!["scheme base", "srfi 64"]);
         // and they stay out of what an importer of this package would need
@@ -297,30 +293,22 @@ mod tests {
     fn records_a_library_whose_path_defies_its_name() {
         let temp = tempfile::TempDir::new().unwrap();
         std::fs::write(
-            temp.path().join("package.scm"),
-            r#"
-            (package
-              (library (name (chibi irregex)) (path "irregex.sld")
-                       (depends (scheme base)))
-              (program (name (bin foo)) (path "foo.scm")))
-        "#,
-        )
-        .unwrap();
-        std::fs::write(
             temp.path().join("irregex.sld"),
             "(define-library (chibi irregex))",
         )
         .unwrap();
         std::fs::write(temp.path().join("foo.scm"), "(display 1)").unwrap();
 
-        let heap = patina_core::new_shared_heap();
-        let pkg = parse_package(
+        let pkg = parsed(
             "chibi-irregex",
             temp.path(),
-            &temp.path().join("package.scm"),
-            &heap,
-        )
-        .unwrap();
+            r#"
+            (package
+              (library (name (chibi irregex)) (path "irregex.sld")
+                       (depends (scheme base)))
+              (program (name (bin foo)) (path "foo.scm")))
+        "#,
+        );
 
         assert_eq!(pkg.off_path_libraries.len(), 1);
         assert_eq!(pkg.off_path_libraries[0].name, "chibi irregex");
@@ -346,20 +334,11 @@ mod tests {
     #[test]
     fn integer_library_names_normalize() {
         let temp = tempfile::TempDir::new().unwrap();
-        std::fs::write(
-            temp.path().join("package.scm"),
-            r#"(package (library (name (srfi 1)) (depends (srfi 8))))"#,
-        )
-        .unwrap();
-
-        let heap = patina_core::new_shared_heap();
-        let pkg = parse_package(
+        let pkg = parsed(
             "srfi-1",
             temp.path(),
-            &temp.path().join("package.scm"),
-            &heap,
-        )
-        .unwrap();
+            r#"(package (library (name (srfi 1)) (depends (srfi 8))))"#,
+        );
         assert_eq!(pkg.provides, vec!["srfi 1"]);
         assert_eq!(pkg.depends, vec!["srfi 8"]);
         assert!(pkg.test_script.is_none());

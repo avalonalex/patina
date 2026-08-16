@@ -40,6 +40,13 @@ pub fn tagged_form(tv: TaggedValue, head: &str, heap: &SharedHeap) -> Option<Vec
     }
 }
 
+/// The single argument of a one-argument clause: `(path "x")` → `"x"`'s
+/// datum. Most `package.scm` clauses have this shape, and pairing
+/// `tagged_form` with `.first()` at each of them reads worse than naming it.
+pub fn clause_argument(tv: TaggedValue, head: &str, heap: &SharedHeap) -> Option<TaggedValue> {
+    tagged_form(tv, head, heap)?.first().copied()
+}
+
 /// Render a library name list like `(chibi match)` or `(srfi 1)` as the
 /// canonical space-joined form `"chibi match"` / `"srfi 1"`.
 pub fn library_name(tv: TaggedValue, heap: &SharedHeap) -> Option<String> {

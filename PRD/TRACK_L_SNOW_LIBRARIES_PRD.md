@@ -218,6 +218,18 @@ release binary. Deviations from the spec below, all consequences of L4 vendoring
   second the parser queue is inflated. **Recorded debt:** the durable fix is a distinct
   `LibraryError` variant for load failures with its own Display — the harness currently splits on
   message prefixes.
+
+  **The debt is wider than that one overload, and is worth reading as a single item rather than
+  as a growing list of prefixes.** `classify` is an *unenforced prose contract*: it turns on the
+  exact wording of five markers produced by four crates — `Library (…) not found`,
+  `Parse error in …`, `include:`/`load: parse error in '…'`, `Undefined variable:` /
+  `unbound variable:`, and the FFI stub marker — and only the last is a string Patina emits
+  deliberately for the harness to read. **No producing site says it is parsed.** Rewording
+  `include: parse error in '{}'` to `include: could not parse '{}'` is a plainly harmless-looking
+  improvement that would silently move a package from `parse-error` to `runtime-error`, a bucket
+  read as "our runtime broke", with every test still green. The durable fix is a machine-readable
+  error mode in the CLI — the same shape as the `--strict-errors` flag recorded below, and the
+  same reason it is deferred rather than done here.
 - **Recorded debt — the CLI's test-file heuristic.** `main.rs` runs any file whose name contains
   "test" resiliently (exit 0 always), which is why test-mode classification reads output rather
   than exit status, and why the harness keeps "test" out of its probe and scratch paths (two
