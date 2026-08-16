@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**138 of 184** vendored packages pass, 2026-08-15); L1/L2 continue against the measured queue
+(**141 of 184** vendored packages pass, 2026-08-16); L1/L2 continue against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -353,10 +353,60 @@ fix reaching a package nobody had connected to it is the argument for fixing the
 than the symptom — the queue had this filed as an unexamined runtime error, not as a missing
 parameter object.
 
-**Recorded debt — `report.md` is written by shell redirect.** `run` and `report` print the rendered
-matrix to stdout and only `results.scm` is written to disk, so the committed
-`compat/reports/report.md` goes stale unless the caller redirects into it. Either write both
-artifacts, or stop committing the rendered copy.
+**The queue was pointing at libraries the corpus already had, 2026-08-16 (138 → 141 of 184).**
+Four rows of the missing-library histogram — the table this track treats *as* its work queue — were
+harness artifacts, and two of them named a library sitting in `compat/vendor/` and passing. Two
+clauses of `package.scm` the runner never read:
+
+- **`(test-depends ...)`.** `corpus.rs` collected `depends` only from `library`/`program`
+  components, so a dependency only the test program needs was invisible. lassik-string-inflection
+  declares `(srfi 64)` there and was filed as missing it; with the dep on `-A` its suite passes
+  18/18. Now kept in a field of its own rather than folded into `depends`: it seeds the closure only
+  when that test program is what we are about to run, and is never followed out of a *dependency*,
+  because nobody importing a package needs its test framework.
+- **`(path ...)`.** Patina resolves `(chibi irregex)` at `chibi/irregex.sld` under a search root;
+  four vendored packages ship the file elsewhere and say so in `package.scm`. Two of them —
+  chibi-irregex and macduffie-json — could not find *their own* library and reported it as missing.
+  The runner now stages the name-shaped layout into the scratch directory before running, which is
+  what snow's installer does: `default-installer` (chibi's `lib/chibi/snow/commands.scm`) *reads*
+  the declared path and *writes* the name-derived one. One deliberate difference — snow keeps
+  includes at their package-relative paths, which leaves them unreachable from the `.sld`'s new
+  home, so we mirror the `.sld`'s whole directory instead of moving the file alone.
+
+**Staging is not what moved srfi-197, and the fourth row is worth reading carefully.** It was filed
+as missing `(srfi 2)`, which the corpus provides; with that resolved it reports the real defect,
+`Lexer error: Unexpected character: …` — the reference implementation uses `…₁` as its custom
+ellipsis, so **Patina rejects Unicode identifiers**, which R7RS permits and every major
+implementation accepts. Its `(path ...)` is off-convention too, but that never mattered: its test
+program `(include "./srfi-197.scm")`s the source directly and never imports the library. It will not
+pass even with Unicode identifiers — it also includes a `./test.scm` the package does not ship.
+
+**Also fixed: an unlexable *included* file was filed as a runtime error.** `include` and `load` word
+a parse failure their own way and quote the path (`include: parse error in '<file>': <detail>`),
+which the classifier's "Parse error in ..." matcher missed, so it fell through to `runtime-error` —
+a bucket meaning "our runtime broke" for something that never ran. That is how srfi-197 first
+landed after the two fixes above, and it is the same misfiling in a third place.
+
+**Two buckets triaged while reading the queue, 2026-08-16 — neither is ours.** chibi-mime's
+`wrong-result` (5 of 9, all four failures in `mime-message->sxml`) was recorded as unexamined; it is
+`read-line expects 0-1 arguments, got 2`. `chibi/mime.scm` passes chibi's line-length limit while
+importing only `(scheme base)`, i.e. it uses a chibi extension without importing `(chibi io)`.
+
+The `No matching pattern for macro case` pair is two *different* invalid shapes that report
+identically, which is worth knowing before anyone treats the bucket as one defect: chibi-app has an
+`else` that is not last (`(case (length commands) ((0) …) (else …) ((1) …))`, `app.scm:467`, so the
+trailing clause is dead code), and chibi-tar has a clause with no body at all (`((#\g #\x))`,
+`tar.scm:162`). R7RS's grammar rejects both — `else` is the final clause and a clause needs one or
+more expressions — but neither is unanimously rejected in practice, so this is a leniency call
+rather than a settled one: on `else`-not-last, Gauche errors ("'else' clause followed by more
+clauses") while chibi takes the `else` and Chez takes the trailing clause; on the empty body, Chez
+errors ("invalid case clause") while chibi and Gauche both fall through to `else`. Declining both
+keeps the stance the `syntax-rules` buckets already set, and each package has exactly one occurrence.
+
+**`report.md` is written to disk again**, closing the recorded debt that `run` printed the rendered
+matrix to stdout and wrote only `results.scm` — so the committed copy went stale unless the caller
+redirected into it. `run` now writes both artifacts under the same subset-run guard (`--report` sets
+the path); `report` still only prints, which is its job.
 
 #### Original spec
 A new workspace crate, `crates/patina-compat/`, that owns the whole loop. Everything it needs is in this repo; it shells out to nothing but the Patina binary under test.
@@ -610,6 +660,23 @@ still hand-rolls car/cdr recursion. Checked and clean: `stamp_expansion_source`,
 `contains_identifier_tagged`, `flip_scope_on_tagged_impl`, `strip_identifiers_impl` and
 `evaluate_feature_requirement_tagged` — the first four recurse uniformly with no head dispatch at
 all, and the last flattens before dispatching.
+
+**The lexer rejects a non-ASCII identifier** — ❌ **open**. Both backends; found 2026-08-16 once
+srfi-197's misfiled `missing-library` row was corrected and it could report its real failure.
+
+```scheme
+(define …₁ 1)   ;; Patina => Lexer error: Unexpected character: …
+                ;; chibi, Gauche, Chez => fine
+```
+
+R7RS 7.1.1 spells `<identifier>` with ASCII letters but §7.1 says an implementation may extend the
+syntax, and every major one accepts Unicode identifiers. SRFI 197's reference implementation relies
+on it, using `…₁` as its custom ellipsis so its templates can emit a literal `...`.
+
+**Fixing it alone will not move the corpus number**, and that is worth stating up front so nobody
+measures the change by the wrong yardstick: srfi-197 is the only package that needs it, and its test
+program also `(include "./test.scm")`s a file the package does not ship. Do this one because
+rejecting Unicode identifiers is wrong, not for the score.
 
 **`match-letrec` does not match** — ❌ **open**. Both backends. The one remaining failure in
 `(chibi match)`'s suite (74 of 75) after the relinking fix below, and the reason chibi-match scores

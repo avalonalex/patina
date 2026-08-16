@@ -1,12 +1,12 @@
 # Patina third-party compatibility (vm backend)
 
-**138 of 184 packages pass** — 138 of 182 achievable (excluding 2 out-of-scope pending FFI).
+**141 of 184 packages pass** — 141 of 182 achievable (excluding 2 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 138 |
-| missing-library | 24 |
-| parse-error | 14 |
+| pass | 141 |
+| missing-library | 20 |
+| parse-error | 15 |
 | load-error | 3 |
 | unbound-identifier | 1 |
 | wrong-result | 2 |
@@ -21,10 +21,7 @@
 | (chibi) | 3 |
 | (foreign c) | 2 |
 | (srfi 114 comparators) | 2 |
-| (srfi 64) | 2 |
 | (chibi io) | 1 |
-| (chibi irregex) | 1 |
-| (macduffie json) | 1 |
 | (rebottled pregexp) | 1 |
 | (retropikzel named-pipes) | 1 |
 | (scheme flonum) | 1 |
@@ -34,9 +31,9 @@
 | (srfi 144) | 1 |
 | (srfi 160 base) | 1 |
 | (srfi 165) | 1 |
-| (srfi 2) | 1 |
 | (srfi 23) | 1 |
 | (srfi 231) | 1 |
+| (srfi 64) | 1 |
 
 ## Parse errors
 
@@ -47,6 +44,7 @@
 | `No matching pattern for macro case` | 2 |
 | `#<unknown>` | 1 |
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
+| `Lexer error: Unexpected character: …` | 1 |
 | `No matching pattern for macro ssax:make-parser/positional-args` | 1 |
 | `ch` | 1 |
 
@@ -85,7 +83,7 @@
 | chibi-crypto-sha2 | test | parse-error |
 | chibi-edit-distance | test | pass |
 | chibi-html-parser | probe | pass |
-| chibi-irregex | probe | missing-library |
+| chibi-irregex | probe | pass |
 | chibi-iset | test | pass |
 | chibi-locale | test | pass |
 | chibi-match | test | wrong-result |
@@ -124,11 +122,11 @@
 | jkode-sassy | test | missing-library |
 | lassik-dockerfile | test | pass |
 | lassik-shell-quote | test | pass |
-| lassik-string-inflection | test | missing-library |
+| lassik-string-inflection | test | pass |
 | lassik-trivial-tar-writer | probe | pass |
 | lassik-unpack-assoc | probe | pass |
 | lightweight-testing | probe | pass |
-| macduffie-json | probe | missing-library |
+| macduffie-json | probe | pass |
 | okmij-ssax | test | parse-error |
 | pfds-alist | probe | pass |
 | pfds-bitwise | probe | pass |
@@ -234,7 +232,7 @@
 | srfi-179 | test | missing-library |
 | srfi-180 | probe | pass |
 | srfi-19 | probe | pass |
-| srfi-197 | test | missing-library |
+| srfi-197 | test | parse-error |
 | srfi-2 | probe | pass |
 | srfi-227 | probe | pass |
 | srfi-235 | test | missing-library |
@@ -254,4 +252,3 @@
 | srfi-64 | test | pass |
 | srfi-78 | probe | missing-library |
 | srfi-95 | probe | pass |
-

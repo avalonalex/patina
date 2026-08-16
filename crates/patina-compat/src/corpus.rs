@@ -17,8 +17,42 @@ pub struct Package {
     /// Library names its libraries/programs import (all cond-expand branches
     /// pooled — an over-approximation is harmless, it only widens `-A`).
     pub depends: Vec<String>,
+    /// Library names only the package's *test* program imports, from the
+    /// package-level `(test-depends ...)` clause. Held apart from `depends`
+    /// because they are not part of what an importer of this package needs:
+    /// they widen `-A` for this package's own test run and are never followed
+    /// transitively.
+    pub test_depends: Vec<String>,
     /// The package's own test program, when it ships one.
     pub test_script: Option<PathBuf>,
+    /// Libraries whose `.sld` does not sit where its name says it should.
+    pub off_path_libraries: Vec<OffPathLibrary>,
+}
+
+/// A library whose declared `(path ...)` is not the one its `(name ...)`
+/// implies — chibi-irregex ships `(chibi irregex)` as a bare `irregex.sld`.
+///
+/// Patina resolves libraries by name, so such a package cannot find its own
+/// library from its own root and is misfiled as `missing-library` naming the
+/// library it is itself providing. Snow's installer has the same split — it
+/// *reads* the declared path and *writes* the name-derived one
+/// (`default-installer`, chibi's `lib/chibi/snow/commands.scm`) — so the
+/// runner stages the same layout before running the package.
+#[derive(Debug)]
+pub struct OffPathLibrary {
+    /// Library name, e.g. `"chibi irregex"`.
+    pub name: String,
+    /// The `.sld` where the package actually keeps it.
+    pub source: PathBuf,
+}
+
+/// Where a search root must hold library `(a b c)`: `a/b/c.sld`.
+pub fn name_relative_path(name: &str) -> PathBuf {
+    let mut parts: Vec<&str> = name.split(' ').collect();
+    let last = parts.pop().unwrap_or_default();
+    let mut path: PathBuf = parts.iter().collect();
+    path.push(format!("{}.sld", last));
+    path
 }
 
 /// Every package under `vendor`, sorted by slug.
@@ -68,17 +102,28 @@ fn parse_package(
 
     let mut provides = Vec::new();
     let mut depends = Vec::new();
+    let mut test_depends = Vec::new();
     let mut test_script = None;
+    let mut off_path_libraries = Vec::new();
 
     for form in forms {
         let Some(decls) = sexp::tagged_form(form, "package", heap) else {
             continue;
         };
         for decl in decls {
-            if let Some(body) = sexp::tagged_form(decl, "library", heap)
-                .or_else(|| sexp::tagged_form(decl, "program", heap))
-            {
+            if let Some(body) = sexp::tagged_form(decl, "library", heap) {
                 collect_component(&body, &mut provides, &mut depends, heap);
+                // Only libraries: a program is run by path, never imported by
+                // name, so where its file sits cannot mislead a lookup.
+                off_path_libraries.extend(off_path_library(&body, root, heap));
+            } else if let Some(body) = sexp::tagged_form(decl, "program", heap) {
+                collect_component(&body, &mut provides, &mut depends, heap);
+            } else if let Some(rest) = sexp::tagged_form(decl, "test-depends", heap) {
+                for dep in rest {
+                    if let Some(name) = sexp::library_name(dep, heap) {
+                        test_depends.push(name);
+                    }
+                }
             } else if let Some(rest) = sexp::tagged_form(decl, "test", heap)
                 && let Some(name) = rest.first().and_then(|tv| sexp::string_value(*tv, heap))
             {
@@ -92,13 +137,41 @@ fn parse_package(
 
     depends.sort();
     depends.dedup();
+    test_depends.sort();
+    test_depends.dedup();
     Ok(Package {
         slug: slug.to_string(),
         root: root.to_path_buf(),
         provides,
         depends,
+        test_depends,
         test_script,
+        off_path_libraries,
     })
+}
+
+/// The `.sld` of a `library` component whose declared path differs from the
+/// one its name implies — `None` when they agree, which is the norm.
+fn off_path_library(
+    body: &[patina_core::TaggedValue],
+    root: &Path,
+    heap: &SharedHeap,
+) -> Option<OffPathLibrary> {
+    let mut name = None;
+    let mut declared = None;
+    for decl in body {
+        if let Some(rest) = sexp::tagged_form(*decl, "name", heap) {
+            name = rest.first().and_then(|tv| sexp::library_name(*tv, heap));
+        } else if let Some(rest) = sexp::tagged_form(*decl, "path", heap) {
+            declared = rest.first().and_then(|tv| sexp::string_value(*tv, heap));
+        }
+    }
+    let (name, declared) = (name?, declared?);
+    if Path::new(&declared) == name_relative_path(&name) {
+        return None;
+    }
+    let source = root.join(&declared);
+    source.is_file().then_some(OffPathLibrary { name, source })
 }
 
 /// Pull `(name ...)` and every `(depends ...)` — including those inside
@@ -181,6 +254,93 @@ mod tests {
         assert!(pkg.depends.contains(&"chibi test".to_string()));
         assert!(pkg.depends.contains(&"chibi".to_string()));
         assert!(pkg.test_script.is_some());
+        // Paths match the names, so nothing needs staging.
+        assert!(pkg.off_path_libraries.is_empty());
+    }
+
+    /// A dependency the *test* program alone needs is declared in a clause of
+    /// its own. Ignoring it filed packages as `missing-library` naming a
+    /// library sitting in the corpus, which put bogus entries at the head of
+    /// the bundling work queue.
+    #[test]
+    fn collects_package_level_test_depends() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("package.scm"),
+            r#"
+            (package
+              (library (name (lassik string-inflection))
+                       (path "lassik/string-inflection.sld")
+                       (depends (scheme base) (scheme char)))
+              (test "t.scm")
+              (test-depends (scheme base) (srfi 64)))
+        "#,
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("t.scm"), "(display 1)").unwrap();
+
+        let heap = patina_core::new_shared_heap();
+        let pkg = parse_package(
+            "lassik-string-inflection",
+            temp.path(),
+            &temp.path().join("package.scm"),
+            &heap,
+        )
+        .unwrap();
+
+        assert_eq!(pkg.test_depends, vec!["scheme base", "srfi 64"]);
+        // and they stay out of what an importer of this package would need
+        assert!(!pkg.depends.contains(&"srfi 64".to_string()));
+    }
+
+    #[test]
+    fn records_a_library_whose_path_defies_its_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("package.scm"),
+            r#"
+            (package
+              (library (name (chibi irregex)) (path "irregex.sld")
+                       (depends (scheme base)))
+              (program (name (bin foo)) (path "foo.scm")))
+        "#,
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("irregex.sld"),
+            "(define-library (chibi irregex))",
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("foo.scm"), "(display 1)").unwrap();
+
+        let heap = patina_core::new_shared_heap();
+        let pkg = parse_package(
+            "chibi-irregex",
+            temp.path(),
+            &temp.path().join("package.scm"),
+            &heap,
+        )
+        .unwrap();
+
+        assert_eq!(pkg.off_path_libraries.len(), 1);
+        assert_eq!(pkg.off_path_libraries[0].name, "chibi irregex");
+        assert_eq!(
+            pkg.off_path_libraries[0].source,
+            temp.path().join("irregex.sld")
+        );
+    }
+
+    #[test]
+    fn name_relative_path_is_the_sld_convention() {
+        assert_eq!(
+            name_relative_path("chibi irregex"),
+            PathBuf::from("chibi/irregex.sld")
+        );
+        assert_eq!(
+            name_relative_path("srfi 197"),
+            PathBuf::from("srfi/197.sld")
+        );
+        assert_eq!(name_relative_path("foo"), PathBuf::from("foo.sld"));
     }
 
     #[test]
@@ -203,5 +363,6 @@ mod tests {
         assert_eq!(pkg.provides, vec!["srfi 1"]);
         assert_eq!(pkg.depends, vec!["srfi 8"]);
         assert!(pkg.test_script.is_none());
+        assert!(pkg.test_depends.is_empty());
     }
 }

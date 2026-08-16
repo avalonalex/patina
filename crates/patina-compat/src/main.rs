@@ -31,13 +31,14 @@ fn print_help() {
     eprintln!("Usage: patina-compat <run|report> [OPTIONS]");
     eprintln!();
     eprintln!("Commands:");
-    eprintln!("  run      Execute the corpus, write the results snapshot, print the report");
+    eprintln!("  run      Execute the corpus, write both artifacts, print the report");
     eprintln!("  report   Re-render the report from an existing results snapshot");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --patina <path>   Binary under test (default: target/release/patina)");
     eprintln!("  --vendor <dir>    Corpus directory (default: compat/vendor)");
     eprintln!("  --results <file>  Snapshot path (default: compat/reports/results.scm)");
+    eprintln!("  --report <file>   Rendered matrix path (default: compat/reports/report.md)");
     eprintln!("  --filter <substr> Only packages whose slug contains <substr>");
     eprintln!("  --tree-walker     Test the tree-walking backend instead of the VM");
     eprintln!("  --timeout <secs>  Per-package budget (default: 30)");
@@ -54,6 +55,7 @@ struct Options {
     patina: PathBuf,
     vendor: PathBuf,
     results_path: PathBuf,
+    report_path: PathBuf,
     /// Whether `--results` was given, which authorizes writing a snapshot
     /// even for a filtered (subset) run.
     results_explicit: bool,
@@ -78,6 +80,7 @@ fn parse_args() -> Options {
         patina: root.join("target/release/patina"),
         vendor: root.join("compat/vendor"),
         results_path: root.join("compat/reports/results.scm"),
+        report_path: root.join("compat/reports/report.md"),
         results_explicit: false,
         filter: None,
         tree_walker: false,
@@ -99,6 +102,7 @@ fn parse_args() -> Options {
                 opts.results_path = PathBuf::from(require_value(&mut iter, "--results"));
                 opts.results_explicit = true;
             }
+            "--report" => opts.report_path = PathBuf::from(require_value(&mut iter, "--report")),
             "--filter" => opts.filter = Some(require_value(&mut iter, "--filter")),
             "--tree-walker" => opts.tree_walker = true,
             "--timeout" => {
@@ -190,33 +194,38 @@ fn run_command(opts: &Options) {
     };
     let results = run::run_corpus(&selected, &universe, &providers, &config);
 
+    let rendered = report::render(&results, backend);
+
     // A filtered run measures a subset, so it must not overwrite the
-    // canonical snapshot — that would silently shrink the committed
+    // canonical artifacts — that would silently shrink the committed
     // baseline to whatever was filtered. Pass --results explicitly to
     // capture a subset run.
     let write_snapshot = opts.filter.is_none() || opts.results_explicit;
     if write_snapshot {
-        let snapshot = report::to_sexp(&results, backend);
-        if let Some(parent) = opts.results_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Err(e) = std::fs::write(&opts.results_path, &snapshot) {
-            eprintln!(
-                "warning: could not write {}: {}",
-                opts.results_path.display(),
-                e
-            );
-        } else {
-            eprintln!("results written to {}", opts.results_path.display());
-        }
+        // Both artifacts, not just the snapshot: the rendered matrix is
+        // committed too, and printing it to stdout alone left it stale
+        // unless the caller happened to redirect.
+        write_artifact(&opts.results_path, &report::to_sexp(&results, backend));
+        write_artifact(&opts.report_path, &rendered);
     } else {
         eprintln!(
-            "filtered run: {} left unchanged (pass --results <file> to save a subset)",
-            opts.results_path.display()
+            "filtered run: {} and {} left unchanged (pass --results <file> to save a subset)",
+            opts.results_path.display(),
+            opts.report_path.display()
         );
     }
 
-    println!("{}", report::render(&results, backend));
+    println!("{}", rendered);
+}
+
+fn write_artifact(path: &std::path::Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(path, contents) {
+        Ok(()) => eprintln!("written: {}", path.display()),
+        Err(e) => eprintln!("warning: could not write {}: {}", path.display(), e),
+    }
 }
 
 fn report_command(opts: &Options) {
