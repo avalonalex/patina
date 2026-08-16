@@ -90,6 +90,14 @@ pub fn repo_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
+/// A path inside a caller-owned [`tempfile::TempDir`], which deletes the
+/// whole directory when it drops. Tests that hand a path to a Scheme program
+/// need it as a `String`; the guard stays with the caller so the directory
+/// outlives the program.
+pub fn scratch_path(dir: &tempfile::TempDir, name: &str) -> String {
+    dir.path().join(name).to_string_lossy().into_owned()
+}
+
 /// Every file under `root`, recursively, in unspecified order. Callers filter
 /// by extension. Panics on an unreadable directory — in a test, an IO failure
 /// should be loud, not an empty listing that lets an assertion pass vacuously.

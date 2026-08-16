@@ -449,6 +449,54 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ### Open
 
+**VM: an escape out of a re-entrant primitive is still wrong in three call shapes** — ❌ **open**.
+The crash was fixed for the *call-position* path (see Fixed); these three reach the same primitives
+through `call_primitive_proc`, which has no equivalent depth check. All pre-date that fix and are
+unchanged by it — verified by re-running them against `main`.
+
+```scheme
+(call/cc (lambda (k) (apply member (list 2 '(1 2 3) (lambda (a b) (k 'x))))))
+;; VM => no output, exit 0        tree-walker => x
+(let ((ops (list member))) (call/cc (lambda (k) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x))))))
+;; VM => no output, exit 0        tree-walker => x
+(call/cc (lambda (k) (call-with-values (lambda () (values 2 '(1 2 3) (lambda (a b) (k 'x)))) member)))
+;; VM => (1 2 3)                  tree-walker => x
+```
+
+Six sites share the shape: the `Apply` and `TailApply` primitive and parameter branches,
+`call_value_with_probe`, `tail_call_value_with_probe`, `call_any` and `call_any_sync`. The two tail
+sites additionally `frames.pop()` a stack the escape already replaced. `exec_call_primitive`'s own
+shadow-deopt early return also exits above its depth check, landing in this unprotected code.
+
+**VM: an escaped-from primitive is never abandoned** — ❌ **open**, and the sharper half. Even on
+the fixed path the Rust primitive keeps running after the continuation has been invoked, because
+the escape is delivered as an ordinary return value through
+`ApplyContext::apply_proc -> Result<TaggedValue, EvalError>`, which cannot say "escaped".
+
+```scheme
+(let ((seen '()))
+  (let ((r (call/cc (lambda (k) (member 9 '(1 2 3) (lambda (a b) (set! seen (cons b seen)) (k #f)))))))
+    (list r (reverse seen))))
+;; tree-walker => (#f (1))        VM => (#f (1 2 3))    — the callback runs three more times
+```
+
+Each of those extra invocations re-invokes the continuation, so the wind thunks re-run with it:
+
+```scheme
+(dynamic-wind (lambda () (log 'in)) (lambda () (call/cc (lambda (k) (member 9 '(1 2 3) (lambda (a b) (k #f)))))) (lambda () (log 'out)))
+;; tree-walker => (in in out)      VM => (in out in out in out in out)
+```
+
+**Both want the same fix, at the re-entry boundary rather than at the leaf.** Each boundary
+(`run_apply_proc`, `call_any_sync`, `run_thunk`, `vm_eval_expr`, `vm_load_library`) already has the
+`depth_before` / `run_loop_until(depth_before)` pair. On `frames.len() < depth_before`, record the
+escape on `VmState` and return a sentinel error from `apply_proc` so the primitive unwinds through
+its own `?` instead of continuing; then one check in `call_primitive_proc` — widened to
+`Result<Option<TaggedValue>, VmError>` — converts it into the existing `Ok(Some)/Ok(None)` protocol
+for all six sites, with the tail sites skipping their `frames.pop()`. That also settles a value
+question the leaf check cannot: `Ok(Some(result))` currently hands on the *primitive's* return
+value where the continuation's argument is what belongs there.
+
 **Tree-walker: a `guard` handler runs before the unwind** — ❌ **open**. Found 2026-08-15 while
 moving `with-output-to-file` into Scheme, by a test whose two backends disagreed.
 
@@ -467,49 +515,6 @@ exactly how this surfaced — a handler's output vanished into a port that was a
 Pinned in `crates/patina-tests/tests/backend_divergence.rs`. Not via `assert_divergence`, which
 needs the broken backend to *fail*; this one returns a plausible wrong answer, so both sides are
 asserted explicitly with a message saying what to do when it converges.
-
-**VM: a re-entrant primitive plus an escape corrupts the register base** — ❌ **open**, and live in
-**seven shipped procedures**, not merely a future hazard. A first draft of this entry said "nothing
-structural stops the *next* higher-order primitive from doing so"; review enumerated the class and
-ran each one. Every one panics identically — `index out of bounds` at `set_reg_at` — where the
-tree-walker returns the right answer:
-
-| Procedure | escape repro | VM | tree-walker |
-|---|---|---|---|
-| `member` with comparator | `(call/cc (lambda (k) (member 2 '(1 2 3) (lambda (a b) (k 'x)))))` | panic | `x` |
-| `assoc` with comparator | same shape | panic | `x` |
-| `force` | `(call/cc (lambda (k) (force (delay (k 'x)))))` | panic | `x` |
-| `make-parameter` converter | `(call/cc (lambda (k) (make-parameter 1 (lambda (v) (k 'x)))))` | panic | `x` |
-| `call-with-port` | `(call/cc (lambda (k) (call-with-port p (lambda (q) (k 'x)))))` | panic | `x` |
-| `call-with-input-file` | `(call/cc (lambda (k) (call-with-input-file f (lambda (p) (k 'x)))))` | panic | `x` |
-| `call-with-output-file` | `(call/cc (lambda (k) (call-with-output-file f (lambda (p) (k 'x)))))` | panic | `x` |
-
-The last two are the functions *immediately above* the pair moved to Scheme below, in the same file.
-Safe by construction: `call-with-values` (VM-intercepted, never reaches `exec_call_primitive`), and
-`map`/`for-each`/`vector-map`/`string-for-each` (already Scheme). The offset tracks frame depth, so
-it is not a fixed-offset accident: a nested repro reports `len is 8 but the index is 9`.
-
-`exec_call_primitive` hoists the frame's `register_base`, calls the primitive, and writes the result
-through that base under a comment asserting "primitives are frame-neutral on the `Ok` path (a
-re-entrant call runs its nested frames to completion)". A `call/cc` out of the re-entered callback
-breaks exactly that: the nested frames are *popped*, not completed.
-
-**The fix is about a dozen lines and most of its plumbing exists.** `exec_call_primitive` already
-returns `Result<Option<TaggedValue>, VmError>` where `Some(v)` means "a continuation escaped past
-this frame, propagate it" — the shadow-deopt path already uses it — and `run_apply_proc` already
-captures `depth_before`. Nothing joins them. Detect `frames.len() < depth_before` after
-`run_loop_until`, carry that out (the `ApplyContext::apply_proc` signature cannot express it, so it
-wants a field on `VmState`), and have `exec_call_primitive` return `Ok(Some(v))` instead of writing
-through the dead base. That covers all seven at once, plus the `inline_primitive!` slow path, which
-writes through the same hoisted base.
-
-Relocating a procedure to Scheme removes it from the class but does not scale: `eval` and `load`
-re-enter through `ctx.eval_expr` and cannot be written in Scheme at all.
-
-**Not pinned by any test.** `assert_divergence` cannot express these — it matches `Ok`/`Err` while
-these *panic*, aborting the test binary — and nothing in `patina-tests` uses `catch_unwind`. A
-`assert_panics_on(backend, code, tracking)` helper would pin all seven in a few lines and fail the
-day the VM fix lands.
 
 **Tree-walker: an error inside a wind thunk escapes `guard`** — ❌ **open**. Found 2026-08-15 while
 sweeping the class below, and left open deliberately because the fix is one level down from where it
@@ -543,12 +548,17 @@ instead of fabricating an empty one.
 established correct answer — chibi loops forever on that repro, so no reference could arbitrate.
 Establish the right answer first. Pinned in `crates/patina-tests/tests/callability.rs`.
 
-**VM: a raising parameter converter produces no output at all** — ❌ **open**. Both found 2026-08-15.
+**VM: a raising parameter converter produces no output at all** — ❌ **open**. Found 2026-08-15.
 `(guard (e (#t 'caught)) (p 9))` where `p`'s converter raises exits 0 having written nothing —
-neither an error nor a catch. The tree-walker catches it (fixed below). Pre-existing and independent
-of that fix, which did not touch the VM's parameter path. Not pinned as a divergence, because
-`assert_divergence` needs the broken backend to *fail* and this one silently succeeds; worth fixing
-before anyone trusts converter errors.
+neither an error nor a catch, where the tree-walker catches it.
+
+Narrowed 2026-08-15: a converter that *escapes* rather than raises was the same register-base bug
+and is fixed (`(call/cc (lambda (k) (let ((p (make-parameter 1 (lambda (x) (k 'escaped))))) (p 9))))`
+now returns `escaped` on both). What remains is the raise path specifically, which is a different
+mechanism — the error is neither routed to the handlers nor propagated.
+
+Not pinned as a divergence: `assert_divergence` needs the broken backend to *fail*, and this one
+silently succeeds. Worth fixing before anyone trusts converter errors.
 
 **The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ❌ **open**.
 Found 2026-08-14 by auditing the *class* behind the `quote`-argument fix below, which is the practice
@@ -668,6 +678,7 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| VM: an escape out of a re-entrant primitive crashed the process (call position) | 2026-08-15 |
 | `with-output-to-file` crashed the VM on an escape | 2026-08-15 |
 | Tree-walker: the control primitives' own errors escaped `guard` | 2026-08-15 |
 | `make-parameter` objects were not procedures | 2026-08-15 |
