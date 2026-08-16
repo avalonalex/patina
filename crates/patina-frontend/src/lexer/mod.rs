@@ -365,36 +365,28 @@ impl Lexer {
         next == '.' && after.is_ascii_digit()
     }
 
-    /// Are we at `+inf.0`, `-inf.0`, `+nan.0` or `-nan.0` (case-insensitive)?
+    /// Are we at `+nan.0` or `-nan.0` — or, in principle, `+inf.0`/`-inf.0`?
     ///
-    /// Compares the six characters where they sit. The obvious spelling —
-    /// collect the rest of the input into a `String` and `to_lowercase()` it —
-    /// made lexing **O(n²)**: the number dispatch reaches here for every `+`
-    /// or `-` token that is not followed by a digit, `.` or `i`, so every
-    /// `(- a b)` and every `->name` copied and case-mapped the remainder of
-    /// the file. Measured at 184× on a 537 KB input; see
-    /// `PRD/TRACK_P_PERFORMANCE_PRD.md`.
+    /// The `inf` spellings never actually arrive: `peek_is_imaginary` runs
+    /// first in the dispatch and claims any `+`/`-` followed by `i`, so they
+    /// reach `read_number` by that route. They are still named here because
+    /// this predicate is where a reader looks for the set of special floats,
+    /// and because the two orderings should not have to be read together to
+    /// know the answer is right.
     ///
-    /// `to_ascii_lowercase` rather than `char::to_lowercase` is not a
-    /// narrowing: no non-ASCII character lowercases to a bare `i`, `n`, `f` or
-    /// `a`, and the one that comes close, `İ` (U+0130), maps to *two* chars,
-    /// which the old prefix test rejected as well.
+    /// Kept allocation-free deliberately. Collecting the rest of the input
+    /// into a `String` to test a prefix — the obvious spelling, and the one
+    /// this replaced — made lexing quadratic in file size, because the
+    /// dispatch reaches here for every `+`/`-` token that is not a number:
+    /// every `(- a b)`, every `->name`. See `PRD/TRACK_P_PERFORMANCE_PRD.md`.
+    ///
+    /// The ASCII-only case folding is not a narrowing: no non-ASCII character
+    /// lowercases to a bare `i`, `n`, `f` or `a` (checked over every code
+    /// point), and `İ` (U+0130), the near miss, folds to *two* chars — which
+    /// the old prefix test rejected too.
     fn is_special_float_literal(&self) -> bool {
-        let Some(&[sign, a, b, c, point, zero]) = self.input.get(self.position..self.position + 6)
-        else {
-            return false;
-        };
-        matches!(sign, '+' | '-')
-            && point == '.'
-            && zero == '0'
-            && matches!(
-                [
-                    a.to_ascii_lowercase(),
-                    b.to_ascii_lowercase(),
-                    c.to_ascii_lowercase()
-                ],
-                ['i', 'n', 'f'] | ['n', 'a', 'n']
-            )
+        matches!(self.current_char(), '+' | '-')
+            && (self.matches_ascii_at(1, "nan.0") || self.matches_ascii_at(1, "inf.0"))
     }
 
     fn read_string(&mut self) -> Result<Token, LexError> {
@@ -637,20 +629,25 @@ impl Lexer {
         }
     }
 
+    /// Do the characters at `offset` from here spell `text`, ASCII
+    /// case-insensitively? Never allocates and never reads past the end.
+    fn matches_ascii_at(&self, offset: usize, text: &str) -> bool {
+        let start = self.position + offset;
+        let Some(window) = self.input.get(start..start + text.len()) else {
+            return false;
+        };
+        window
+            .iter()
+            .zip(text.chars())
+            .all(|(c, t)| c.eq_ignore_ascii_case(&t))
+    }
+
     /// If the upcoming characters spell `suffix` (ASCII case-insensitive),
     /// consume them. Used for the long boolean forms #true and #false, whose
     /// suffixes must be consumed with the token rather than left in the
     /// input as a stray identifier.
     fn consume_ascii_suffix(&mut self, suffix: &str) {
-        let end = self.position + suffix.len();
-        if end > self.input.len() {
-            return;
-        }
-        let matches = self.input[self.position..end]
-            .iter()
-            .zip(suffix.chars())
-            .all(|(c, s)| c.eq_ignore_ascii_case(&s));
-        if matches {
+        if self.matches_ascii_at(0, suffix) {
             for _ in 0..suffix.len() {
                 self.advance();
             }
@@ -896,11 +893,15 @@ mod tests {
     /// an identifier. It had no test of its own, which is how it kept a
     /// quadratic implementation — the behaviour was covered only indirectly,
     /// through programs that happened to contain `+inf.0`.
+    ///
+    /// The `inf` spellings are here for completeness but do not exercise this
+    /// predicate: `peek_is_imaginary` claims any `+`/`-` followed by `i`
+    /// first. `parser::tests::test_parse_special_floats_case_insensitive`
+    /// covers a superset of these end to end; this test localizes a failure
+    /// to the lexer.
     #[test]
     fn test_special_float_literals_lex_as_numbers() {
-        for src in [
-            "+inf.0", "-inf.0", "+nan.0", "-nan.0", "+INF.0", "-Inf.0", "+NaN.0", "-nAn.0",
-        ] {
+        for src in ["+nan.0", "-nan.0", "+NaN.0", "-nAn.0", "+inf.0", "-Inf.0"] {
             assert_eq!(
                 Lexer::new(src).next_token_kind().unwrap(),
                 Token::Number(src.to_string()),
@@ -909,15 +910,11 @@ mod tests {
         }
     }
 
-    /// The near-misses have to stay identifiers: each differs from a special
-    /// float in exactly one position, which is what the six-character
-    /// comparison has to get right. `-nan.1` and `-nan` are the two shapes
-    /// that reach this predicate and fail it — on the last character, and on
-    /// running out of input.
-    ///
-    /// `+i`/`-inf` are deliberately absent: `peek_is_imaginary` claims any
-    /// `+`/`-` followed by `i` for the number reader before this predicate is
-    /// consulted, so they lex as (malformed) numbers and always did.
+    /// The near-misses have to stay identifiers. These are the cases that
+    /// actually reach the predicate and fail it: on the last character
+    /// (`-nan.1`), on the letters (`+na`, `->foo`), and on running out of
+    /// input mid-pattern (`-nan`, `-`, `+`) — which is also the bounds check,
+    /// since a short buffer must return false rather than read past the end.
     #[test]
     fn test_near_miss_special_floats_lex_as_identifiers() {
         for src in ["-nan", "+na", "-nan.1", "-", "+", "->foo", "-x"] {
@@ -929,12 +926,33 @@ mod tests {
         }
     }
 
-    /// A truncated literal at end of input must not index past the buffer.
+    /// Lexing must stay linear in input size.
+    ///
+    /// Nothing else here pins the *complexity*, and this file has already
+    /// carried one accidental quadratic: `is_special_float_literal` copied the
+    /// rest of the input on every `+`/`-` token that was not a number, and
+    /// every behavioural test passed throughout. Measured on this input:
+    /// ~10 ms linear against 5.9 s with that version restored, so the 2 s
+    /// bound sits ~200× above a healthy run and ~3× below a regressed one.
+    /// An absolute bound rather than a ratio, following `gc_tree_walker.rs`'s
+    /// idiom — it fires only on a complexity change, never on a slow machine.
     #[test]
-    fn test_special_float_prefix_at_end_of_input() {
-        for src in ["+inf.", "+inf", "+i", "+"] {
-            assert!(Lexer::new(src).next_token_kind().is_ok(), "{src} panicked");
+    fn test_lexing_is_linear_in_input_size() {
+        let source = "(define (f a b) (- a b))\n".repeat(16_000);
+        let start = std::time::Instant::now();
+        let mut lexer = Lexer::new(&source);
+        let mut tokens = 0usize;
+        while !matches!(lexer.next_token_kind().unwrap(), Token::Eof) {
+            tokens += 1;
         }
+        let elapsed = start.elapsed();
+        // 13 tokens per form: ( define ( f a b ) ( - a b ) )
+        assert_eq!(tokens, 16_000 * 13);
+        assert!(
+            elapsed.as_millis() < 2_000,
+            "lexing {} forms took {elapsed:?} — the lexer is likely quadratic again",
+            16_000
+        );
     }
 
     #[test]

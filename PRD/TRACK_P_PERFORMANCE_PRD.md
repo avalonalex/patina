@@ -897,12 +897,15 @@ quadratic dominates:
 - `(import (srfi 133) (chibi test))`, the two heaviest bundled `.scm` files: 45.4 ms → 40.8 ms
   (mean of three interleaved rounds of 10 runs).
 - REPL bootstrap (`patina -p 1`): 9.2 ms → 9.1 ms, i.e. inside noise.
-- A `(read)` loop over a 73 KB file: no reliable change — `read` re-slices per datum, so the
-  remaining buffer never grows large enough for the quadratic to build.
+- A `(read)` loop over a 73 KB **file**: no reliable change.
 
 That last line is also the answer to why this went unnoticed: the cost only concentrates when one
-large buffer is lexed in a single pass, which is what library loading does and what interactive use
-never does.
+large buffer is lexed in a single pass, which is what library loading does and interactive use
+never does. **The first draft of this entry gave the wrong reason for it** — it said `read`
+re-slices per datum so the buffer never grows. Review checked: file and stdin ports go through
+`read_buffered`, which accumulates line by line, so the buffer only ever holds *one datum*; that,
+not the re-slicing, is why they are linear. For **string** ports the re-slicing is real and is
+itself quadratic — see below.
 
 **Equivalence:** every one of the 727 `.scm`/`.sld` files in `lib/`, `compat/vendor/` and
 `scheme_tests/` was read and written back through both binaries with byte-identical output; both
@@ -910,11 +913,47 @@ chibi suites stayed 1226/1226 and the corpus 143 of 184 with byte-identical arti
 `is_special_float_literal` had no unit test of its own before this — which is how it kept a
 quadratic implementation — and now has three.
 
-**Still open, found alongside and deliberately not bundled:** `Lexer::new` collects the whole input
-into a `Vec<char>` (4 bytes per char), and `read` builds a fresh `Parser` over the *remaining*
-buffer for each datum (`patina-primitives/src/primitives/io/read.rs`), so both that `Vec<char>`
-build and any per-lex setup are re-paid per datum in a `(read)` loop. Both are structural changes
-to the reader's interface rather than a local fix, and neither is on a measured hot path yet.
+### The same class, still open  *(found 2026-08-16 by the review sweep over the fix above)*
+
+**`read` on a string port is quadratic — the largest remaining instance.** Each `read` does
+`content[position..].to_string()` and then `Parser::new_with_heap` over that copy, which runs
+`Lexer::new` over it: **two full copies of the remaining buffer per datum**
+(`patina-primitives/src/primitives/io/read.rs`). Measured with the release binary on
+`open-input-string` + a `read` loop:
+
+| data | buffer | total |
+|---|---|---|
+| 256 | 6.4 KB | 1.19 ms |
+| 512 | 12.8 KB | 3.56 ms |
+| 1024 | 25.6 KB | 11.1 ms |
+| 2048 | 51.2 KB | 41.2 ms |
+
+≈3.2–3.7× per doubling. A linear reader would be ~5 ms at 2048 data, so ~36 ms of that is
+quadratic overhead at only 51 KB. **The two adjuncts are one defect, not two:** ~34 ms of the 36 is
+`Lexer::new`'s `Vec<char>` collect (0.64 ns/char, measured), ~3 ms the `to_string`. That makes
+`Lexer::new` the place to start, and makes the pair worth fixing together — the `Vec<char>` is 0.2%
+of a file import but ~85% of this loop's overhead.
+
+**Three smaller survivors of the same shape**, none on a measured hot path, listed so the class is
+counted rather than rediscovered:
+- `SourceMap`'s byte-offset→line lookup rescans the whole source per call
+  (`patina-frontend/src/source_map.rs`). Called once per *error*, which would be fine — except
+  `eval_program_resilient_with_source_name` (`patina-interpreter/src/lib.rs`) prints and continues,
+  so cost is O(errors × source length). A lazily built line-start index fixes it.
+- `read_buffered` re-parses the accumulated buffer from scratch after every appended line, so a
+  datum spanning L lines is lexed L times. Bounded by one datum, not the file.
+- `pass5_codegen`'s `add_constant` interns by linear scan, O(K²) in distinct literals per code
+  object. `TaggedValue` compares as one `u64` and the pool index caps K at 65535, so this is
+  microseconds outside a pathologically literal-dense body.
+
+**The gap worth closing is the detector, not any one of these.** This class has now been found and
+fixed at least three times in this codebase — `string-ref`/`string-length` (§1), a per-call string
+copy in `(scheme base)`'s loops (a comment in `patina-primitives/src/primitives/strings.rs` records
+it), and now the lexer — every time by reading, never by measurement, because nothing measures cost
+*against input size*. A frontend throughput benchmark that lexes and parses inputs at 1×/2×/4×/8×
+and reports the scaling would have caught all three, and is perhaps thirty lines. The unit test
+added with the lexer fix (`test_lexing_is_linear_in_input_size`) pins one function against one
+input size; it is not a substitute.
 
 ---
 
