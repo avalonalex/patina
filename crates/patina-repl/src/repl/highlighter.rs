@@ -198,10 +198,13 @@ impl SchemeHighlighter {
             result.push_str(&self.keyword_style.paint(token).to_string());
         } else if Self::is_builtin(token) {
             result.push_str(&self.builtin_style.paint(token).to_string());
-        } else if token.chars().next().is_some_and(|c| c.is_numeric())
+        // `is_ascii_digit`, matching the lexer's own number dispatch: a
+        // non-ASCII numeric like `₁` starts an identifier, not a literal, and
+        // painting it as a number would tell the reader the opposite.
+        } else if token.chars().next().is_some_and(|c| c.is_ascii_digit())
             || (token.starts_with('-') || token.starts_with('+'))
                 && token.len() > 1
-                && token.chars().nth(1).is_some_and(|c| c.is_numeric())
+                && token.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
         {
             result.push_str(&self.number_style.paint(token).to_string());
         } else {

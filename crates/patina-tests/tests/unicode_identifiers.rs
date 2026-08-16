@@ -15,20 +15,28 @@ mod common;
 use common::*;
 
 #[test]
-fn test_letters_beyond_ascii_are_identifiers() {
-    // These already worked — `is_alphabetic` is Unicode-aware — and are here
-    // so a future narrowing of the rule cannot take them with it.
+fn test_characters_beyond_ascii_are_identifiers() {
+    // `λ` and `café` already worked — `is_alphabetic` is Unicode-aware — and
+    // stay here so a future narrowing cannot quietly take letters with it.
     assert_program_eval_to("(define λ 1) λ", "1");
     assert_program_eval_to("(define café 2) café", "2");
-    assert_program_eval_to("(define Δx 3) Δx", "3");
+    // These are what the change added: category Po, Sm and So.
+    assert_program_eval_to("(define … 3) …", "3");
+    assert_program_eval_to("(define → 4) →", "4");
+    assert_program_eval_to("(define ± 5) ±", "5");
 }
 
+/// The case that separates the rule we chose from the one we did not.
+///
+/// R6RS 4.2.4 defines identifier constituents by Unicode general category,
+/// and every other character in this file is inside that set — so a narrowing
+/// to the R6RS rule would leave the rest of these tests passing. `“` is
+/// category Pi, which R6RS excludes and chibi, Gauche and Chez all accept.
+/// It is the reason the rule is "anything above ASCII" rather than a category
+/// list, so it is the one that has to be asserted.
 #[test]
-fn test_symbols_and_punctuation_beyond_ascii_are_identifiers() {
-    assert_program_eval_to("(define … 1) …", "1");
-    assert_program_eval_to("(define → 2) →", "2");
-    assert_program_eval_to("(define ∀ 3) ∀", "3");
-    assert_program_eval_to("(define ± 4) ±", "4");
+fn test_a_character_outside_the_r6rs_categories_is_still_an_identifier() {
+    assert_program_eval_to("(define “ 1) “", "1");
 }
 
 /// The shape SRFI 197 needs: a subscript digit, which is Unicode category No.
@@ -58,20 +66,17 @@ fn test_a_unicode_identifier_works_as_a_custom_ellipsis() {
     );
 }
 
-/// ASCII number literals must keep lexing as numbers — the dispatch narrowed
-/// from `is_numeric` to `is_ascii_digit` to let the subscript through, and
-/// that is the boundary it moved.
+/// The three ASCII forms that go through the predicates this change narrowed:
+/// the dispatch itself, `peek_is_numeric` and `peek_is_decimal_start`.
+///
+/// Deliberately not a tour of number syntax — rationals, complexes, radix
+/// prefixes and exponents reach `read_number` through paths the change never
+/// touched, and are covered in `compliance/`.
 #[test]
-fn test_ascii_number_literals_are_unaffected() {
+fn test_ascii_number_literals_still_lex_as_numbers() {
     assert_eval_to("42", "42");
-    assert_eval_to("-1.5", "-1.5");
     assert_eval_to(".3", "0.3");
     assert_eval_to("-.25", "-0.25");
-    assert_eval_to("1/2", "1/2");
-    assert_eval_to("+inf.0", "+inf.0");
-    assert_eval_to("#xff", "255");
-    assert_eval_to("1e10", "10000000000.0");
-    assert_eval_to("3+4i", "3+4i");
 }
 
 /// The writer answers a different question — "would every R7RS reader take
@@ -80,14 +85,17 @@ fn test_ascii_number_literals_are_unaffected() {
 #[test]
 fn test_the_writer_stays_strict_and_round_trips() {
     assert_eval_to("'…₁", "|…₁|");
+    assert_eval_to("'→", "|→|");
+    // `display` is unaffected — only `write` has to be re-readable.
+    assert_program_eval_to("(import (scheme write)) (display '→) 'done", "done");
     assert_eval_to("(eq? '…₁ (string->symbol \"…₁\"))", "#t");
-    assert_eval_to("(equal? (symbol->string '→) \"→\")", "#t");
 }
 
 /// Whitespace is the one thing above ASCII that is *not* an identifier
 /// character, so a stray non-breaking space cannot silently weld two
-/// identifiers into one. Patina rejects it rather than skipping it, which is
-/// stricter than chibi (welds) and Gauche (splits).
+/// identifiers into one. Patina rejects it outright, which is stricter than
+/// every reference: chibi welds `a<U+00A0>b` into the symbol `|a b|`, while
+/// Gauche and Chez both split it and evaluate `3`.
 #[test]
 fn test_a_non_breaking_space_is_not_an_identifier_character() {
     assert_program_eval_error("(define a 1) (define b 2) (+ a\u{00A0}b)");

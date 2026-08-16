@@ -706,6 +706,27 @@ still hand-rolls car/cdr recursion. Checked and clean: `stamp_expansion_source`,
 `evaluate_feature_requirement_tagged` — the first four recurse uniformly with no head dispatch at
 all, and the last flattens before dispatching.
 
+**An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
+Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many
+more tokens through `read_identifier` and so makes the stop set matter more.
+
+```scheme
+(length '(a'b))   ;; Patina => 1   chibi, Gauche => 2
+(length '(a,b))   ;; Patina => 1   chibi, Gauche => 2
+```
+
+Patina ends a token only at whitespace, `(`, `)`, `"` or `;`. R7RS 7.1.1's `<delimiter>` also lists
+`|`, and both references additionally stop at `'`, `` ` `` and `,`. The sharpest case is `[`: a
+*leading* `[` is a deliberate `ReservedCharacter` error, but `a[b]` swallows it silently, because
+the reserved-bracket rule only applies at token start.
+
+**Left open deliberately, and the reason is worth keeping.** Widening a delimiter set can only
+*split* tokens that used to be whole, which is the one kind of lexer change that can alter the
+meaning of a program that already works — unlike every widening this track has taken so far, which
+only accepted previously-rejected text. So it needs its own decision and its own cross-check rather
+than riding along. The set now lives in one function (`Lexer::is_delimiter`) instead of seven
+inline copies, which is what makes that a one-line decision when someone takes it.
+
 **The backends disagree on renaming core syntax at import** — ❌ **open**. Found 2026-08-16 by
 review of the export-side fix, and pre-existing: that fix touched the export path and `(only …)`,
 not this.
