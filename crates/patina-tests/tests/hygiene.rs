@@ -602,26 +602,11 @@ fn test_shadowed_literal_cond_arrow() {
     assert_eq!(interp.display_tagged(result.unwrap()), "ok");
 }
 
-/// Test shadowed literal with else in cond
-///
-/// Similar to above, but testing the `else` literal.
-#[test]
-fn test_shadowed_literal_cond_else() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ((else #f))
-          (cond (else 'matched-else)
-                (#t 'fallback)))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // With `else` shadowed, the first clause should be (test result...) form
-    // where test=#f, so it should fall through to the second clause
-    assert_eq!(interp.display_tagged(result.unwrap()), "fallback");
-}
+// The `else` counterpart of the test above lives in
+// `core_syntax_bindings.rs::test_a_rebound_else_does_not_match`. It ran here as
+// the same program against a directly-constructed `TreeWalkInterpreter`, so it
+// covered one backend; the helper there runs both, which is what `else`
+// becoming a syntactic binding warranted.
 
 /// Test that non-shadowed literal still works normally
 #[test]
@@ -1143,4 +1128,53 @@ fn test_literal_binding_before_vs_after() {
     );
     assert!(result_after.is_ok(), "Case B failed: {:?}", result_after);
     assert_eq!(interp.display_tagged(result_after.unwrap()), "no-match");
+}
+
+/// Test: a literal bound *globally* matches from inside a nested scope.
+///
+/// The third case beside the two above, and the one that was wrong. A literal
+/// resolving in the plain, unscoped bindings — a global, a library export — has
+/// an identity that owes nothing to where the macro happened to be defined, but
+/// `resolve_literal_bindings` recorded the *definition site's* scopes for it.
+/// The matcher then compared a non-empty scope set against an unscoped use-site
+/// identifier and called them different bindings, so any macro defined inside
+/// any scope failed to match any global literal.
+///
+/// `car` here is an ordinary procedure: nothing about this is syntactic. It
+/// surfaced only when syntactic keywords became bindings, because
+/// `(syntax-rules ::: (...))` then had a literal that resolved for the first
+/// time — see `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` §4.
+///
+/// Both forms are asserted together because the top-level one always passed:
+/// the pair is what shows the answer no longer depends on the nesting.
+///
+/// Verified against chibi-scheme and Gauche, which return 'matched for both.
+#[test]
+fn test_global_literal_matches_from_a_nested_scope() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+
+    let nested = interp.eval_program(
+        r#"
+        (let ()
+          (define-syntax m
+            (syntax-rules (car)
+              ((_ car) 'matched)
+              ((_ x) 'not-matched)))
+          (m car))
+        "#,
+    );
+    assert!(nested.is_ok(), "Failed: {:?}", nested);
+    assert_eq!(interp.display_tagged(nested.unwrap()), "matched");
+
+    let top_level = interp.eval_program(
+        r#"
+        (define-syntax m2
+          (syntax-rules (car)
+            ((_ car) 'matched)
+            ((_ x) 'not-matched)))
+        (m2 car)
+        "#,
+    );
+    assert!(top_level.is_ok(), "Failed: {:?}", top_level);
+    assert_eq!(interp.display_tagged(top_level.unwrap()), "matched");
 }

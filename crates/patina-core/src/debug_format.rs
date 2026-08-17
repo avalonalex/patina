@@ -133,6 +133,10 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         }
         HeapObjectData::Port(p) => write!(buf, "{}", p).unwrap(),
         HeapObjectData::Macro(m) => write!(buf, "#<macro:{}>", m.name).unwrap(),
+        // Its canonical spelling, not the name it was reached by: after
+        // `(rename (begin blk))` this still prints `#<syntax:begin>`, which is
+        // what tells you the two are one form.
+        HeapObjectData::CoreSyntax(form) => write!(buf, "#<syntax:{}>", form).unwrap(),
         HeapObjectData::RecordType(rtd) => write!(buf, "#<record-type {}>", rtd.name).unwrap(),
         HeapObjectData::Record { record_type, .. } => {
             write!(buf, "#<record {}>", record_type.name).unwrap()

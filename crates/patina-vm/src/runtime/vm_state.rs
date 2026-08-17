@@ -518,8 +518,9 @@ fn vm_process_import_set(
             for id in identifiers {
                 match temp_env.get(id) {
                     Some(value) => import_define(state, lib_env, id.clone(), value),
-                    // See the tree-walker's copy: a core syntactic keyword has
-                    // no binding to select, and needs none.
+                    // See the tree-walker's copy: a keyword this library never
+                    // imported has no marker to select, and the importer gets
+                    // it from the spelling fallback anyway.
                     None if patina_runtime::library_loader::is_core_syntax(id) => {}
                     None => {
                         return Err(LibraryError::parse(

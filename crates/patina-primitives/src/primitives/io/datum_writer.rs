@@ -363,6 +363,13 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         out.push_str("#<macro>");
         return;
     }
+    // Syntactic keyword. Names the form, not the binding it was reached
+    // through: a `begin` imported as `blk` still writes `#<syntax:begin>`.
+    if let Some(form) = heap.get_core_syntax(tv) {
+        use std::fmt::Write;
+        write!(out, "#<syntax:{}>", form).unwrap();
+        return;
+    }
     // Values
     if heap.get_values(tv).is_some() {
         out.push_str("#<values>");

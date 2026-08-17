@@ -113,6 +113,8 @@ pub enum HeapObjectType {
     VmDelimitedContinuationRef = 24,
     /// Tombstone left by the GC sweep; the slot is on the free list awaiting reuse
     Free = 25,
+    /// A syntactic keyword as a binding (`begin`, `if`, `else`, …)
+    CoreSyntax = 26,
 }
 
 /// State of a promise for lazy evaluation
@@ -197,6 +199,10 @@ pub enum HeapObjectData {
     /// Opaque handle to a delimited VM continuation.
     /// The actual `VmDelimitedContinuation` data lives in `VmState::delimited_continuation_store`.
     VmDelimitedContinuationRef(u64),
+    /// A syntactic keyword bound as a value, so that import sets and export
+    /// resolution can reach it through the ordinary path. Interned once per
+    /// heap — see `Heap::core_syntax`.
+    CoreSyntax(crate::core_syntax::CoreForm),
     /// Tombstone written by the GC sweep. Overwriting the dead slot (rather
     /// than leaving stale data until reuse) drops `Rc` payloads eagerly,
     /// which is what breaks closure ↔ environment cycles. Accessing a Free
@@ -235,6 +241,7 @@ impl HeapObjectData {
             HeapObjectData::VmDelimitedContinuationRef(_) => {
                 HeapObjectType::VmDelimitedContinuationRef
             }
+            HeapObjectData::CoreSyntax(_) => HeapObjectType::CoreSyntax,
             HeapObjectData::Free => HeapObjectType::Free,
         }
     }
@@ -279,6 +286,19 @@ pub struct Heap {
 
     /// Symbol intern table (name -> object index)
     symbol_table: std::collections::HashMap<String, HeapIndex>,
+
+    /// Syntactic-keyword intern table, the exact shape of `symbol_table`:
+    /// keyed by the thing being interned. Allocated lazily on first use and
+    /// then permanent, because a marker *is* the identity of a form — two
+    /// lookups of `begin` must return the same object however many
+    /// environments it has been copied between.
+    ///
+    /// Rooted in `GcVisitor::new` beside `symbol_table`, and for the same
+    /// reason — a dangling index here would break any collector, so it is a
+    /// heap invariant rather than collector policy.
+    ///
+    /// [`CoreForm`]: crate::core_syntax::CoreForm
+    core_syntax_table: std::collections::HashMap<crate::core_syntax::CoreForm, HeapIndex>,
 
     /// Free list for pairs (indices of freed pairs)
     free_pairs: Vec<HeapIndex>,
@@ -371,6 +391,7 @@ impl Heap {
             strings: Vec::with_capacity(strings),
             objects: Vec::new(),
             symbol_table: std::collections::HashMap::new(),
+            core_syntax_table: std::collections::HashMap::new(),
             free_pairs: Vec::new(),
             free_vectors: Vec::new(),
             free_strings: Vec::new(),
@@ -800,6 +821,33 @@ impl Heap {
             self.symbol_table
                 .insert(name.to_string(), tagged.heap_index());
             tagged
+        }
+    }
+
+    /// The marker bound to a syntactic keyword, interning it on first use.
+    ///
+    /// One object per form per heap, so `eqv?` answers yes for two references
+    /// to the same keyword however they were imported — which is what lets a
+    /// renamed `blk` and the original `begin` still be one form.
+    pub fn core_syntax(&mut self, form: crate::core_syntax::CoreForm) -> TaggedValue {
+        if let Some(&index) = self.core_syntax_table.get(&form) {
+            TaggedValue::object(index)
+        } else {
+            let tagged = self.alloc_object(HeapObjectData::CoreSyntax(form));
+            self.core_syntax_table.insert(form, tagged.heap_index());
+            tagged
+        }
+    }
+
+    /// The form this value denotes, if it is a syntactic-keyword marker.
+    #[inline]
+    pub fn get_core_syntax(&self, tv: TaggedValue) -> Option<crate::core_syntax::CoreForm> {
+        if !tv.is_object() {
+            return None;
+        }
+        match self.get_object(tv) {
+            HeapObjectData::CoreSyntax(form) => Some(*form),
+            _ => None,
         }
     }
 
@@ -1580,6 +1628,7 @@ impl Heap {
                 HeapObjectData::Procedure(_) => "procedure",
                 HeapObjectData::Port(_) => "port",
                 HeapObjectData::Macro(_) => "macro",
+                HeapObjectData::CoreSyntax(_) => "syntax",
                 HeapObjectData::RecordType(_) => "record-type",
                 HeapObjectData::Record { .. } => "record",
                 HeapObjectData::Identifier { .. } => "identifier",

@@ -505,6 +505,29 @@ impl Environment {
         best.map(|(_, tv)| tv).or_else(|| self.get(name))
     }
 
+    /// Does `name` have a *scoped* binding visible from `scopes`?
+    ///
+    /// The question [`get_with_scopes`] cannot answer, because it falls back to
+    /// the plain bindings and returns a value either way. A caller that needs
+    /// to know which of the two it got — `resolve_literal_bindings` in
+    /// `patina-macros` does, since only a scoped binding's identity depends on
+    /// the scopes it was reached with — asks here first.
+    ///
+    /// [`get_with_scopes`]: Self::get_with_scopes
+    pub fn has_scoped_binding(&self, name: &str, scopes: &ScopeSet) -> bool {
+        if scopes.is_empty() {
+            return false;
+        }
+        self.scoped_bindings
+            .borrow()
+            .get(name)
+            .is_some_and(|bindings| bindings.iter().any(|b| b.scopes.is_subset_of(scopes)))
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|p| p.has_scoped_binding(name, scopes))
+    }
+
     /// Check if a binding exists
     #[allow(dead_code)]
     pub fn has(&self, name: &str) -> bool {

@@ -305,6 +305,10 @@ impl VmBackend {
             stdlib::build_internal_lazy,
         );
         rust_loader.register(
+            vec!["patina".into(), "internal".into(), "syntax".into()],
+            stdlib::build_internal_syntax,
+        );
+        rust_loader.register(
             vec!["patina".into(), "internal".into(), "eval".into()],
             stdlib::build_internal_eval,
         );
@@ -349,6 +353,10 @@ impl VmBackend {
                 self.global_env.define(name.clone(), value);
             }
         }
+
+        // `import` and `expand` work at the top level but are not
+        // `(scheme base)` exports, so nothing above binds them.
+        stdlib::seed_top_level_syntax(&self.global_env);
     }
 
     /// Get an already-loaded library by name.
@@ -622,8 +630,9 @@ impl VmBackend {
                 for id in identifiers {
                     match temp_env.get(id) {
                         Some(value) => import_define(&mut state, lib_env, id.clone(), value),
-                        // See the tree-walker's copy: a core syntactic keyword
-                        // has no binding to select, and needs none.
+                        // See the tree-walker's copy: a keyword this library
+                        // never imported has no marker to select, and the
+                        // importer gets it from the spelling fallback anyway.
                         None if patina_runtime::library_loader::is_core_syntax(id) => {}
                         None => {
                             return Err(LibraryError::parse(

@@ -484,20 +484,60 @@ fn test_exporting_an_undefined_identifier_still_fails() {
     );
 }
 
-/// Renaming needs the *new* name to be recognized as syntax at the use site,
-/// and syntax is matched by name — so this is refused rather than exported as
-/// a name that would not work. What is pinned here is the refusal; the message
-/// explaining *why* is deliberately not asserted, per this suite's rule that
-/// error text is not compared (see `ErrorClass` in `common`). Renaming an
-/// ordinary binding is unaffected — `test_library_with_renamed_export`.
+/// Renaming a keyword on export works like renaming anything else: the marker
+/// travels under the new name and the use site dispatches on the form. This
+/// was refused outright while keywords were recognized by spelling, because a
+/// renamed one could not have been recognized at all.
 #[test]
-fn test_core_syntax_cannot_be_renamed_on_export() {
-    common::assert_program_eval_error(
+fn test_core_syntax_can_be_renamed_on_export() {
+    common::assert_program_eval_to(
         r#"
         (define-library (syn renamed)
           (import (scheme base))
           (export (rename begin blk)))
-        (import (syn renamed))
+        (import (syn renamed) (scheme base))
+        (blk 1 2)
+        "#,
+        "2",
+    );
+}
+
+/// The other half: renaming on *import*, which is where the two backends used
+/// to disagree — the VM loaded the library and left the new name unusable,
+/// the tree-walker rejected the library outright, and chibi and Gauche made it
+/// work. Recorded as an open divergence in Track L §6 and never pinned,
+/// deliberately, because neither of our answers was the right one.
+#[test]
+fn test_core_syntax_can_be_renamed_on_import() {
+    common::assert_program_eval_to(
+        r#"
+        (define-library (syn user)
+          (import (rename (scheme base) (begin blk)))
+          (export go)
+          ;; The outer `begin` is a library declaration, which the .sld parser
+          ;; reads structurally and an import set never touches. `blk` inside
+          ;; the body is the renamed keyword, and is what this pins.
+          (begin (define (go) (blk 1 2))))
+        (import (syn user))
+        (go)
+        "#,
+        "2",
+    );
+}
+
+/// A keyword the library never imported cannot be renamed on export: there is
+/// no marker to send, and the use site's spelling fallback only knows the
+/// original name. Refused rather than exported as a name that would not work.
+/// The message is deliberately not asserted, per this suite's rule that error
+/// text is not compared (see `ErrorClass` in `common`).
+#[test]
+fn test_renaming_an_unimported_keyword_on_export_still_fails() {
+    common::assert_program_eval_error(
+        r#"
+        (define-library (syn norename)
+          (import (patina internal lists))
+          (export (rename begin blk)))
+        (import (syn norename))
         "#,
     );
 }
