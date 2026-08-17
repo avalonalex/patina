@@ -88,17 +88,19 @@ fn test_auxiliary_syntax_in_head_position_is_an_error() {
     assert_program_eval_error("(import (scheme base)) (=> 1 2)");
 }
 
-/// Their real job is unaffected: `cond` and `case` match `else` and `=>` as
-/// `syntax-rules` literals, by name and scopes, without consulting a binding.
-#[test]
-fn test_auxiliary_syntax_still_works_where_it_belongs() {
-    assert_eval_to("(cond (#f 1) (else 'fell-through))", "fell-through");
-    assert_eval_to("(cond ((assv 1 '((1 . one))) => cdr) (else 'no))", "one");
-    assert_eval_to("(case 9 ((1) 'one) (else 'other))", "other");
-}
+// That `else` and `=>` still do their real job — matching as `syntax-rules`
+// literals inside `cond` and `case` — is already covered on both backends by
+// `compliance/derived.rs` (`test_cond_with_else`, `test_cond_with_arrow`,
+// `test_case_with_else`). Not restated here: those are the regression guards
+// for `cond`/`case`, and a second copy only splits the failure across two
+// files.
 
 /// A use site that rebinds `else` must stop it matching, which is the reason
 /// R7RS matches literals by binding rather than by spelling.
+///
+/// Moved here from `hygiene.rs`, which ran the same program against a
+/// directly-constructed `TreeWalkInterpreter` and so covered one backend; this
+/// helper runs both, which is what the change to `else` warranted.
 #[test]
 fn test_a_rebound_else_does_not_match() {
     assert_eval_to("(let ((else #f)) (cond (else 1) (#t 2)))", "2");

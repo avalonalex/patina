@@ -518,12 +518,10 @@ impl Environment {
         if scopes.is_empty() {
             return false;
         }
-        let found = self
-            .scoped_bindings
+        self.scoped_bindings
             .borrow()
             .get(name)
-            .is_some_and(|bindings| bindings.iter().any(|b| b.scopes.is_subset_of(scopes)));
-        found
+            .is_some_and(|bindings| bindings.iter().any(|b| b.scopes.is_subset_of(scopes)))
             || self
                 .parent
                 .as_ref()

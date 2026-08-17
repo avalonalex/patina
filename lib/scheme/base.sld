@@ -207,8 +207,10 @@
     ;;
     ;; `import` and `expand` are deliberately absent: R7RS does not put
     ;; `import` in (scheme base) -- it is a top-level and library declaration
-    ;; keyword -- and `expand` is a Patina extension. Both are seeded straight
-    ;; into the top level by the backends' bootstrap.
+    ;; keyword -- and `expand` is a Patina extension. Both are bound at the top
+    ;; level instead, by `seed_top_level_syntax` in
+    ;; crates/patina-runtime/src/stdlib/internal_syntax.rs, which each backend's
+    ;; bootstrap calls.
 
     ;; === Primitive expression and definition forms (§4.1, §5) ===
     quote lambda if set! define define-syntax

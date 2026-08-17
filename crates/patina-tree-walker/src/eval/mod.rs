@@ -332,6 +332,10 @@ impl Evaluator {
             }
         }
 
+        // `import` and `expand` work at the top level but are not
+        // `(scheme base)` exports, so nothing above binds them.
+        patina_runtime::stdlib::seed_top_level_syntax(&self.global_env);
+
         // Import (patina debug) into global environment for REPL convenience
         if let Some(lib) = self
             .library_registry
@@ -792,11 +796,13 @@ impl Evaluator {
                 for id in identifiers {
                     match temp_env.get(id) {
                         Some(value) => lib_env.define(id.clone(), value),
-                        // Nothing to select, and nothing wrong: a core
-                        // syntactic keyword has no binding to carry across,
-                        // and works in the importer regardless. Rejecting
-                        // here would make `(only ...)` unusable on exactly
-                        // the libraries that re-export syntax.
+                        // A keyword this library never imported, so there
+                        // is no marker to carry across. The importer still
+                        // gets working syntax from the desugarer's spelling
+                        // fallback, so selecting it is a no-op rather than an
+                        // error. Keywords the library *did* import resolve
+                        // above, like any other binding. Stage 2 removes both
+                        // the fallback and this arm.
                         None if patina_runtime::library_loader::is_core_syntax(id) => {}
                         None => {
                             return Err(patina_runtime::LibraryError::parse(

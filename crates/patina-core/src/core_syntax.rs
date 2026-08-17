@@ -57,10 +57,12 @@ pub enum CoreForm {
 
 /// Every `CoreForm`, in declaration order.
 ///
-/// The one place that enumerates them: the intern table is built from this, so
-/// a new variant cannot be added without also being allocated. It is the half
-/// the compiler cannot check — a variant missing from [`CoreForm::name`] fails
-/// to compile, a variant missing from here does not.
+/// Order carries no meaning — the intern table is keyed by the form itself —
+/// but completeness does: this is what `(patina internal syntax)` iterates to
+/// create the bindings, so a variant missing from here is a keyword that is
+/// never bound anywhere. It is the half the compiler cannot check; a variant
+/// missing from [`CoreForm::name`] fails to compile, one missing from here does
+/// not, which is what `all_core_forms_is_complete` exists to catch.
 pub const ALL_CORE_FORMS: &[CoreForm] = &[
     CoreForm::Quote,
     CoreForm::Quasiquote,
@@ -154,6 +156,22 @@ impl std::fmt::Display for CoreForm {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// The tripwire for the one failure the compiler cannot catch: a variant
+    /// added to the enum but not to `ALL_CORE_FORMS`. Nothing structural
+    /// detects it — the form would simply never be interned, never be bound by
+    /// `(patina internal syntax)`, and never be exported, with no error
+    /// anywhere. Bump this deliberately when adding a keyword.
+    #[test]
+    fn all_core_forms_is_complete() {
+        assert_eq!(
+            ALL_CORE_FORMS.len(),
+            23,
+            "a CoreForm variant was added or removed; add it to ALL_CORE_FORMS \
+             (and to lib/scheme/base.sld's export list if R7RS puts it in (scheme base)) \
+             before updating this count"
+        );
+    }
 
     /// `ALL_CORE_FORMS` is hand-written beside an enum the compiler checks, so
     /// it is the half that can silently fall behind. A missing entry would

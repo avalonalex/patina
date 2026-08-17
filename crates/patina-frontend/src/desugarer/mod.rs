@@ -674,38 +674,42 @@ impl Desugarer {
             return self.desugar_core_form(form, cdr, shared_heap);
         }
 
-        // `apply` is not a keyword and has no marker. The desugarer
-        // special-cases it as an optimization, but it is also a real procedure
-        // binding, so it is checked whatever the environment holds.
+        // The two remaining head-symbol rules, both spelling-based and both
+        // sharing the shadowing guard.
         if let Some(sym) = &name
             && !is_shadowed
-            && sym.as_ref() == "apply"
         {
-            return self.desugar_apply_tagged(list, cdr, shared_heap);
-        }
+            // `apply` is not a keyword and has no marker. The desugarer
+            // special-cases it as an optimization, but it is also a real
+            // procedure binding, so it is checked whatever the environment
+            // holds — the one head symbol whose meaning still ignores the
+            // binding just resolved.
+            if sym.as_ref() == "apply" {
+                return self.desugar_apply_tagged(list, cdr, shared_heap);
+            }
 
-        // Stage 1 fallback: a keyword with no binding in scope is still
-        // recognized by spelling.
-        //
-        // `head_is_bound` is the whole of the new rule — a binding, any
-        // binding, now decides, and only an unbound name falls through to its
-        // spelling. That is why `(define (if a b c) …)` takes effect: `if`
-        // resolves to a procedure, so this never runs.
-        //
-        // Auxiliary keywords are excluded deliberately. Bound, they are an
-        // error in head position; unbound, they stay an ordinary application
-        // of an unbound name, which is what they were before this change.
-        //
-        // Stage 2 deletes this block, and with it the last place a keyword is
-        // recognized by spelling — see
-        // `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`.
-        if let Some(sym) = &name
-            && !is_shadowed
-            && !head_is_bound
-            && let Some(form) = CoreForm::from_name(sym)
-            && form.is_dispatching()
-        {
-            return self.desugar_core_form(form, cdr, shared_heap);
+            // Stage 1 fallback: a keyword with no binding in scope is still
+            // recognized by spelling.
+            //
+            // `head_is_bound` is the whole of the new rule — a binding, any
+            // binding, now decides, and only an unbound name falls through to
+            // its spelling. That is why `(define (if a b c) …)` takes effect:
+            // `if` resolves to a procedure, so this never runs.
+            //
+            // Auxiliary keywords are excluded deliberately. Bound, they are an
+            // error in head position; unbound, they stay an ordinary
+            // application of an unbound name, which is what they were before
+            // this change.
+            //
+            // Stage 2 deletes this block, and with it the last place a keyword
+            // is recognized by spelling — see
+            // `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`.
+            if !head_is_bound
+                && let Some(form) = CoreForm::from_name(sym)
+                && form.is_dispatching()
+            {
+                return self.desugar_core_form(form, cdr, shared_heap);
+            }
         }
 
         // Regular application
@@ -747,16 +751,23 @@ impl Desugarer {
             // saying which beats reporting that a symbol is not a procedure —
             // which is what `(else 1)` used to report, because `base.sld` bound
             // `else` to the symbol `'else` to get it through an import set.
-            CoreForm::Unquote
-            | CoreForm::UnquoteSplicing
-            | CoreForm::SyntaxRules
-            | CoreForm::Underscore
-            | CoreForm::Ellipsis
-            | CoreForm::Else
-            | CoreForm::Arrow => Err(DesugarError::InvalidSyntax(format!(
-                "invalid use of auxiliary syntax: {}",
-                form
-            ))),
+            //
+            // A catch-all rather than the seven variants spelled out again:
+            // `CoreForm::is_dispatching` is the one place that classification
+            // lives, and listing it twice is how the two come to disagree. The
+            // cost is that a *new* dispatching form with no arm above lands
+            // here instead of failing to compile — which the assertion turns
+            // into a loud failure across the test suite.
+            form => {
+                debug_assert!(
+                    !form.is_dispatching(),
+                    "`{form}` is classified as dispatching but has no arm in desugar_core_form"
+                );
+                Err(DesugarError::InvalidSyntax(format!(
+                    "invalid use of auxiliary syntax: {}",
+                    form
+                )))
+            }
         }
     }
 

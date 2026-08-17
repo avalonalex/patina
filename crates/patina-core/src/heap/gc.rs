@@ -433,8 +433,8 @@ impl<'h> GcVisitor<'h> {
         // Syntactic-keyword markers are roots on the same terms: a marker is
         // the identity of a form, so collecting one would let the next intern
         // mint a different object for the same keyword. Leaves too.
-        for idx in heap.core_syntax_table.iter().flatten() {
-            marks.objects.set(*idx as usize);
+        for &idx in heap.core_syntax_table.values() {
+            marks.objects.set(idx as usize);
         }
         Self {
             heap,

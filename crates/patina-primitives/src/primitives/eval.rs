@@ -180,6 +180,41 @@ const R5RS_SYNTAX: &[&str] = &[
     "syntax-rules",
 ];
 
+/// The [`R5RS_SYNTAX`] names `(scheme base)` does not export.
+///
+/// R5RS puts `delay` in the base language; Patina puts it in `(scheme lazy)`.
+/// Kept as data beside the list it qualifies, rather than as a name buried in
+/// one of the two loops that install these — the loops used to differ on
+/// whether the exception was checked at all.
+///
+/// Chasing it is not worth it: the macro expands to a `(scheme lazy)`
+/// primitive that a null environment would not have either.
+const R5RS_SYNTAX_NOT_IN_BASE: &[&str] = &["delay"];
+
+/// Install the `R5RS_SYNTAX` keywords `(scheme base)` exports into `env`.
+///
+/// Shared by `null-environment` and `scheme-report-environment`, which ran
+/// byte-identical copies of this loop. Every name resolves now that syntactic
+/// keywords are bindings: the Scheme-level macros (`cond`, `let`, `do`, …)
+/// always did, and the core keywords (`if`, `lambda`, `quote`, …) used to be
+/// skipped silently here, with a comment claiming they were "handled by the
+/// evaluator and don't need to be in the environment" — true only because they
+/// were recognized in every scope, which is what made `(null-environment 5)`
+/// not null.
+fn install_r5rs_syntax(env: &Rc<Environment>, base_lib: &patina_core::Library) {
+    for name in R5RS_SYNTAX {
+        if let Some(tv) = base_lib.get_export_tagged(name) {
+            env.define(name.to_string(), tv);
+        } else {
+            debug_assert!(
+                R5RS_SYNTAX_NOT_IN_BASE.contains(name),
+                "(scheme base) stopped exporting the R5RS keyword '{name}'; \
+                 add it to R5RS_SYNTAX_NOT_IN_BASE if that is intended"
+            );
+        }
+    }
+}
+
 /// R5RS procedures (subset of scheme base that existed in R5RS)
 /// Combined with R5RS_SYNTAX, these form (scheme-report-environment 5)
 const R5RS_PROCEDURES: &[&str] = &[
@@ -434,27 +469,7 @@ fn primitive_null_environment(
         .load_scheme_library(&["scheme".to_string(), "base".to_string()])
         .map_err(|e| EvalError::InternalError(format!("Cannot load scheme base: {}", e)))?;
 
-    // Install the syntactic keywords. This loop used to miss the core keywords
-    // (`if`, `lambda`, `quote`, `begin`, …) entirely, with a comment saying
-    // they were "handled by the evaluator and don't need to be in the
-    // environment" — true only because they were recognized in every scope,
-    // which is what made this environment not null. They are bindings now, so
-    // they arrive here like the Scheme-level macros always did.
-    //
-    // `delay` is the one name still expected to miss: R5RS lists it, but
-    // Patina puts it in `(scheme lazy)`. Pre-existing, and not worth chasing
-    // here — the macro expands to a `(scheme lazy)` primitive that a null
-    // environment would not have either.
-    for name in R5RS_SYNTAX {
-        if let Some(tv) = base_lib.get_export_tagged(name) {
-            env.define(name.to_string(), tv);
-        } else {
-            debug_assert_eq!(
-                *name, "delay",
-                "R5RS_SYNTAX names a keyword (scheme base) does not export"
-            );
-        }
-    }
+    install_r5rs_syntax(&env, &base_lib);
 
     let heap = ctx.heap();
     Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
@@ -501,11 +516,7 @@ fn primitive_scheme_report_environment(
         .map_err(|e| EvalError::InternalError(format!("Cannot load scheme base: {}", e)))?;
 
     // Install syntactic keywords
-    for name in R5RS_SYNTAX {
-        if let Some(tv) = base_lib.get_export_tagged(name) {
-            env.define(name.to_string(), tv);
-        }
-    }
+    install_r5rs_syntax(&env, &base_lib);
 
     // Install procedures
     for name in R5RS_PROCEDURES {

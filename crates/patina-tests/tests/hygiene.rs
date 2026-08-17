@@ -602,26 +602,11 @@ fn test_shadowed_literal_cond_arrow() {
     assert_eq!(interp.display_tagged(result.unwrap()), "ok");
 }
 
-/// Test shadowed literal with else in cond
-///
-/// Similar to above, but testing the `else` literal.
-#[test]
-fn test_shadowed_literal_cond_else() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ((else #f))
-          (cond (else 'matched-else)
-                (#t 'fallback)))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // With `else` shadowed, the first clause should be (test result...) form
-    // where test=#f, so it should fall through to the second clause
-    assert_eq!(interp.display_tagged(result.unwrap()), "fallback");
-}
+// The `else` counterpart of the test above lives in
+// `core_syntax_bindings.rs::test_a_rebound_else_does_not_match`. It ran here as
+// the same program against a directly-constructed `TreeWalkInterpreter`, so it
+// covered one backend; the helper there runs both, which is what `else`
+// becoming a syntactic binding warranted.
 
 /// Test that non-shadowed literal still works normally
 #[test]

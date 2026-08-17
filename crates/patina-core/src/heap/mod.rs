@@ -287,19 +287,18 @@ pub struct Heap {
     /// Symbol intern table (name -> object index)
     symbol_table: std::collections::HashMap<String, HeapIndex>,
 
-    /// Syntactic-keyword markers, one per [`CoreForm`], parallel to
-    /// [`ALL_CORE_FORMS`]. Allocated lazily on first use and then permanent:
-    /// a marker is the identity of a form, so two lookups of `begin` must
-    /// return the same object however many environments it has been copied
-    /// between.
+    /// Syntactic-keyword intern table, the exact shape of `symbol_table`:
+    /// keyed by the thing being interned. Allocated lazily on first use and
+    /// then permanent, because a marker *is* the identity of a form — two
+    /// lookups of `begin` must return the same object however many
+    /// environments it has been copied between.
     ///
     /// Rooted in `GcVisitor::new` beside `symbol_table`, and for the same
     /// reason — a dangling index here would break any collector, so it is a
     /// heap invariant rather than collector policy.
     ///
     /// [`CoreForm`]: crate::core_syntax::CoreForm
-    /// [`ALL_CORE_FORMS`]: crate::core_syntax::ALL_CORE_FORMS
-    core_syntax_table: Vec<Option<HeapIndex>>,
+    core_syntax_table: std::collections::HashMap<crate::core_syntax::CoreForm, HeapIndex>,
 
     /// Free list for pairs (indices of freed pairs)
     free_pairs: Vec<HeapIndex>,
@@ -392,7 +391,7 @@ impl Heap {
             strings: Vec::with_capacity(strings),
             objects: Vec::new(),
             symbol_table: std::collections::HashMap::new(),
-            core_syntax_table: vec![None; crate::core_syntax::ALL_CORE_FORMS.len()],
+            core_syntax_table: std::collections::HashMap::new(),
             free_pairs: Vec::new(),
             free_vectors: Vec::new(),
             free_strings: Vec::new(),
@@ -831,13 +830,13 @@ impl Heap {
     /// to the same keyword however they were imported — which is what lets a
     /// renamed `blk` and the original `begin` still be one form.
     pub fn core_syntax(&mut self, form: crate::core_syntax::CoreForm) -> TaggedValue {
-        let slot = Self::core_syntax_slot(form);
-        if let Some(index) = self.core_syntax_table[slot] {
-            return TaggedValue::object(index);
+        if let Some(&index) = self.core_syntax_table.get(&form) {
+            TaggedValue::object(index)
+        } else {
+            let tagged = self.alloc_object(HeapObjectData::CoreSyntax(form));
+            self.core_syntax_table.insert(form, tagged.heap_index());
+            tagged
         }
-        let tagged = self.alloc_object(HeapObjectData::CoreSyntax(form));
-        self.core_syntax_table[slot] = Some(tagged.heap_index());
-        tagged
     }
 
     /// The form this value denotes, if it is a syntactic-keyword marker.
@@ -850,23 +849,6 @@ impl Heap {
             HeapObjectData::CoreSyntax(form) => Some(*form),
             _ => None,
         }
-    }
-
-    /// Is this value a syntactic-keyword marker?
-    pub fn is_core_syntax(&self, tv: TaggedValue) -> bool {
-        self.get_core_syntax(tv).is_some()
-    }
-
-    /// Position of `form` in the intern table.
-    ///
-    /// By search rather than by `as usize`: the enum's declaration order and
-    /// `ALL_CORE_FORMS`'s order agree today, but nothing makes them, and a
-    /// silent mismatch would alias two keywords onto one marker.
-    fn core_syntax_slot(form: crate::core_syntax::CoreForm) -> usize {
-        crate::core_syntax::ALL_CORE_FORMS
-            .iter()
-            .position(|&f| f == form)
-            .expect("every CoreForm is listed in ALL_CORE_FORMS")
     }
 
     /// Allocate a native identifier with scope set
