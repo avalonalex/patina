@@ -11,10 +11,9 @@
 //! collapse the call into a plain `assert_program_eval_to`. A quarantine that
 //! does not retire itself becomes a permanent excuse.
 //!
-//! Two tests at the end are *not* divergences: one records a gap both backends
-//! share (so the differential harness cannot see it) and one guards a row that
-//! has already converged. They live here because this is where someone working
-//! the divergence list will look for them.
+//! Some tests here are *not* divergences: they guard rows that have already
+//! converged. They live here because this is where someone working the
+//! divergence list will look for them.
 //!
 //! Sources: `PRD/TRACK_Q_QUALITY_PRD.md` §1.2, re-measured at `2d4ce29`
 //! (2026-08-10), `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`, and
@@ -26,6 +25,23 @@
 //! binding behind the name is missing or a stub. Every one works when called
 //! directly, which is why the 1226/1226 chibi suite never catches it — that
 //! suite never takes one of them as a value. Track Q Q2 is the fix.
+//!
+//! **The VM half of the `apply` rows is fixed** (2026-08-16). It was not the
+//! registry after all: both apply instructions probed only
+//! primitive → parameter → closure, so a VM-intercepted control primitive was
+//! rejected before the registry was ever consulted — which is why the
+//! `with-exception-handler` row's note blamed a stub that never ran. Both now
+//! route through the same dispatcher `Call` uses. What remains on the
+//! tree-walker is its genuine registry hole, still Q2 part 1's to fix, and
+//! `apply` is simply a third way to reach it.
+//!
+//! **The VM keeps one narrow dispatcher**, `call_any`, with the same probe set
+//! the apply instructions shed — so a control primitive or continuation
+//! reached through `call-with-values`, a prompt handler or an exception
+//! handler still fails there:
+//! `(call-with-values (lambda () (values + '(1 2))) apply)`. Pinned in
+//! `callability.rs`, not here, because both backends do not disagree about it
+//! — only the VM is wrong, and the tree-walker is right.
 
 mod common;
 use common::*;
@@ -66,39 +82,21 @@ fn callcc_passed_to_higher_order_procedure() {
 
 // ─── apply on control ops (Track Q §1.2) ─────────────────────────────────────
 
-/// The opposite direction: the VM reports `Undefined variable:
-/// patina.internal.control/dynamic-wind`. The two backends' holes are
-/// complementary — the signature of never having run a differential test.
+/// Was "fails on both", recorded here so Q2 would not mistake backend
+/// *agreement* for correctness. Half of it is fixed: the VM now evaluates it to
+/// `1`, as R7RS requires and as chibi does, so what was a shared gap is now an
+/// ordinary divergence with the tree-walker on the wrong side.
+///
+/// The tree-walker's remaining hole is the one `callcc_bound_with_define` and
+/// `callcc_passed_to_higher_order_procedure` already describe — `call/cc` in
+/// value position resolves to a registry binding that is not there — and it is
+/// still Q2 part 1's to fix. `apply` is simply a third way to reach it.
 #[test]
-fn apply_dynamic_wind() {
+fn apply_callcc() {
     assert_divergence(
-        r#"
-        (define r '())
-        (apply dynamic-wind
-               (list (lambda () (set! r 1)) (lambda () 2) (lambda () (set! r 3))))
-        "#,
-        On::TreeWalker,
-        "2",
-        ErrorClass::AtRuntime,
-        CONTROL_OPS,
-    );
-}
-
-/// The VM hits the registered-but-stubbed primitive whose body is
-/// `InternalError("with-exception-handler: not yet implemented")`
-/// (`patina-primitives/src/primitives/exceptions.rs`). Q2 part 2 deletes or
-/// implements that stub: a registered primitive that unconditionally errors is
-/// worse than an unregistered one, because it turns a clean unbound-variable
-/// error into an internal error and advertises support in the export list.
-#[test]
-fn apply_with_exception_handler() {
-    assert_divergence(
-        r#"
-        (apply with-exception-handler
-               (list (lambda (e) 43) (lambda () (raise-continuable 'x))))
-        "#,
-        On::TreeWalker,
-        "43",
+        "(apply call/cc (list (lambda (k) 1)))",
+        On::Vm,
+        "1",
         ErrorClass::AtRuntime,
         CONTROL_OPS,
     );
@@ -177,14 +175,6 @@ fn reentered_continuation_keeps_exception_handler() {
 }
 
 // ─── Not divergences ─────────────────────────────────────────────────────────
-
-/// Both backends fail identically, so the differential harness cannot see this
-/// — but it is still an R7RS conformance gap: it must evaluate to `1`.
-/// Recorded so Q2 does not mistake backend *agreement* for correctness.
-#[test]
-fn apply_callcc_fails_on_both() {
-    assert_program_eval_error("(apply call/cc (list (lambda (k) 1)))");
-}
 
 /// §1.2 recorded this as a VM failure (`Wrong number of arguments: expected 1,
 /// got 2`) at `7a6a797`; both backends return `7` as of `2d4ce29`. Kept as the
