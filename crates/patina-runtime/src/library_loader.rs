@@ -15,7 +15,6 @@ use crate::heap::SharedHeap;
 use crate::library::Library;
 use crate::library_registry::LibraryError;
 use patina_core::TaggedValue;
-use patina_core::core_syntax::{ALL_CORE_FORMS, CoreForm};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -71,27 +70,6 @@ pub enum ExportSpec {
     Rename { internal: String, external: String },
 }
 
-/// Is `name` the spelling of a syntactic keyword?
-///
-/// Keywords are ordinary bindings now, so this asks about *spelling* only — a
-/// question with exactly one honest use: how lenient to be about a keyword that
-/// a library never imported, and therefore has no binding for. Both callers
-/// ([`build_library`] below, and each backend's `(only …)`) exist for that case,
-/// and stage 2 removes them along with the desugarer's spelling fallback.
-///
-/// Derived from [`CoreForm`] rather than listed. Two hand-kept `&[&str]`s used
-/// to restate the same table a crate away, and had already drifted: they omitted
-/// `else` and `=>`, so `(export begin)` was lenient where `(export else)` was
-/// not — two spellings of one rule answering differently.
-pub fn is_core_syntax(name: &str) -> bool {
-    CoreForm::from_name(name).is_some()
-}
-
-/// Every name [`is_core_syntax`] accepts.
-pub fn core_syntax_names() -> impl Iterator<Item = &'static str> {
-    ALL_CORE_FORMS.iter().map(|form| form.name())
-}
-
 /// Assemble the library a parsed `define-library` describes, resolving its
 /// `export` declarations against the environment its body produced.
 ///
@@ -115,43 +93,20 @@ pub fn build_library(
 
     for spec in &parsed.exports {
         match spec {
+            // Keywords need no exemption here. A library that imports one has
+            // a binding to export like any other; one that does not cannot
+            // export it, and saying so is right rather than lenient — the
+            // importer would have got nothing either way, and before stage 2
+            // only the desugarer's spelling fallback hid that.
             ExportSpec::Identifier(name) => match library.env.get(name) {
                 Some(value) => library.export_tagged(name.clone(), value),
-                // A syntactic keyword this library never imported. It has no
-                // marker to carry, but the desugarer still recognizes it by
-                // spelling where nothing is bound, so the importer gets working
-                // syntax and there is nothing to report. Stage 2 removes that
-                // fallback, and with it this arm.
-                None if is_core_syntax(name) => {}
                 None => return Err(reject(name, "not defined")),
             },
             ExportSpec::Rename { internal, external } => match library.env.get(internal) {
-                // Renaming a keyword works like renaming anything else now: the
-                // marker goes out under the new name and the importer's
-                // desugarer dispatches on the form, not the spelling.
+                // Renaming a keyword works like renaming anything else: the
+                // marker goes out under the new name, and the importer's
+                // desugarer dispatches on the form rather than the spelling.
                 Some(value) => library.export_tagged(external.clone(), value),
-                // Except when the library never imported it, where there is no
-                // marker to send and the use site's fallback only knows the
-                // original spelling. Refused rather than exported as a name
-                // that would not work.
-                //
-                // The message leads with the rule that actually applies — you
-                // cannot export what you did not import — because renaming a
-                // keyword on export *does* work, and a message reading "cannot
-                // rename core syntax" would send the reader after a limitation
-                // that no longer exists. It still avoids opening with
-                // "Exported identifier", the prefix `patina-compat`'s
-                // classifier keys on for a package's missing export.
-                None if is_core_syntax(internal) => {
-                    return Err(LibraryError::parse(
-                        file.as_deref(),
-                        format!(
-                            "Cannot export '{}' under a new name: it is a syntactic keyword this \
-                             library does not import",
-                            internal
-                        ),
-                    ));
-                }
                 None => return Err(reject(internal, "not defined")),
             },
         }

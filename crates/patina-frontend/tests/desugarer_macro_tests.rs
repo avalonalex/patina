@@ -202,7 +202,12 @@ use std::rc::Rc;
 /// (macro is compiled immediately and installed in environment)
 #[test]
 fn test_desugarer_returns_unspecified_for_define_syntax() {
+    // Seeded, not bare: since stage 2 the desugarer recognizes `define-syntax`
+    // only through a binding, so an empty environment would compile this to a
+    // call of an unbound variable. `core_syntax_list.rs` pins that on purpose;
+    // here it would just be noise.
     let env = Rc::new(Environment::new());
+    patina_runtime::stdlib::seed_core_syntax(&env);
     let heap = env.heap().clone();
     let mut parser = Parser::new_with_heap(
         "(define-syntax foo (syntax-rules () ((foo x) x)))",
@@ -227,7 +232,12 @@ fn test_desugarer_returns_unspecified_for_define_syntax() {
 /// Test that desugarer installs macro in environment
 #[test]
 fn test_desugarer_installs_macro_in_environment() {
+    // Seeded, not bare: since stage 2 the desugarer recognizes `define-syntax`
+    // only through a binding, so an empty environment would compile this to a
+    // call of an unbound variable. `core_syntax_list.rs` pins that on purpose;
+    // here it would just be noise.
     let env = Rc::new(Environment::new());
+    patina_runtime::stdlib::seed_core_syntax(&env);
     let heap = env.heap().clone();
     let mut parser = Parser::new_with_heap(
         "(define-syntax foo (syntax-rules () ((foo x) x)))",

@@ -1,24 +1,28 @@
-//! Pins `CoreForm`'s dispatching/auxiliary split against the desugarer.
+//! Pins `CoreForm`'s dispatching/auxiliary split against the desugarer, and
+//! pins that a keyword is recognized *only* through a binding.
 //!
-//! This file used to check a hand-written `&[&str]` in `patina-runtime` against
-//! the desugarer's `match` arms, because a list of another crate's arms drifts
-//! silently in both directions. Both lists are gone: the desugarer now matches
-//! exhaustively on `CoreForm`, so the compiler enforces what half of this file
-//! was invented to check.
+//! This file has been narrowed twice. It began as a check that a hand-written
+//! `&[&str]` in `patina-runtime` matched the desugarer's `match` arms, because
+//! a list of another crate's arms drifts silently in both directions. That list
+//! is gone: the desugarer matches exhaustively on `CoreForm`, so the compiler
+//! enforces it.
 //!
 //! What the compiler still cannot check is the *classification*.
 //! `CoreForm::is_dispatching` is hand-written, and being wrong about a form is
 //! silent in both directions — a dispatching form misfiled as auxiliary becomes
 //! an error at every use, and an auxiliary form misfiled as dispatching reaches
-//! a `desugar_*` method that has no idea what to do with it.
+//! a `desugar_*` method with no idea what to do with it.
 //!
-//! The observable property: a dispatching form is intercepted in head position
-//! instead of compiling to a call to a variable of that name, and an auxiliary
-//! form is not.
+//! Stage 2 added the second property. There is no spelling fallback any more,
+//! so "is this syntax?" has exactly one answer: what the environment says.
+//! `keywords_are_not_recognized_without_a_binding` is the regression guard for
+//! that, and it is the test that would have failed at any point before stage 2.
 
 use patina_core::{ALL_CORE_FORMS, SharedHeap, TaggedValue};
 use patina_frontend::{Desugarer, Parser};
 use patina_ir::CoreExprKind;
+use patina_runtime::Environment;
+use std::rc::Rc;
 
 fn parse_tv(code: &str) -> (TaggedValue, SharedHeap) {
     let mut parser = Parser::new(code).expect("parser creation failed");
@@ -26,31 +30,40 @@ fn parse_tv(code: &str) -> (TaggedValue, SharedHeap) {
     (tv, parser.heap().clone())
 }
 
-/// Does `(<name> …)` compile to an application of a variable called `name`?
-/// True for an ordinary identifier, false for anything the desugarer claims.
-///
-/// `Desugarer::new()` carries no environment, so this exercises the stage-1
-/// spelling fallback — which is exactly the path that must agree with
-/// `is_dispatching`, since that is what the fallback consults.
-fn compiles_to_a_call_of_itself(name: &str) -> bool {
-    // Two arguments keep every form that takes any past its arity check, so a
-    // failure here means "rejected as syntax", never "treated as a call".
-    let (tv, heap) = parse_tv(&format!("({} a b)", name));
-    let Ok(expr) = Desugarer::new().desugar_tagged(tv, &heap) else {
-        return false;
-    };
-    let CoreExprKind::App { func, .. } = &expr.kind else {
-        return false;
-    };
-    matches!(&func.kind, CoreExprKind::Var { name: n, .. } if n.as_ref() == name)
+/// How `(<name> a b)` desugars.
+enum Head {
+    /// An application of a variable called `name` — an ordinary identifier.
+    CallOfItself,
+    /// Claimed by the desugarer as a form.
+    Intercepted,
+    /// Rejected outright.
+    Rejected,
 }
 
+fn desugar_head(desugarer: &Desugarer, name: &str) -> Head {
+    // Two arguments keep every form that takes any past its arity check, so a
+    // rejection here means "refused as syntax", never "treated as a call".
+    let (tv, heap) = parse_tv(&format!("({} a b)", name));
+    let Ok(expr) = desugarer.desugar_tagged(tv, &heap) else {
+        return Head::Rejected;
+    };
+    match &expr.kind {
+        CoreExprKind::App { func, .. } if matches!(&func.kind, CoreExprKind::Var { name: n, .. } if n.as_ref() == name) => {
+            Head::CallOfItself
+        }
+        _ => Head::Intercepted,
+    }
+}
+
+/// `Desugarer::new()` binds the keywords and nothing else — the desugarer's
+/// `(null-environment)`.
 #[test]
-fn every_dispatching_form_is_intercepted_by_the_desugarer() {
+fn every_dispatching_form_is_intercepted_when_bound() {
+    let desugarer = Desugarer::new();
     for form in ALL_CORE_FORMS.iter().filter(|f| f.is_dispatching()) {
         let name = form.name();
         assert!(
-            !compiles_to_a_call_of_itself(name),
+            !matches!(desugar_head(&desugarer, name), Head::CallOfItself),
             "`{name}` is classified as dispatching, but the desugarer compiles `({name} a b)` as \
              an ordinary call — so exporting it from a library would be accepted and then fail at \
              the use site. Either add the form to the desugarer, or mark it auxiliary."
@@ -58,41 +71,79 @@ fn every_dispatching_form_is_intercepted_by_the_desugarer() {
     }
 }
 
-/// The other half of the classification, and the reason it is a separate test:
-/// an auxiliary keyword means something only inside an enclosing form, so with
-/// no binding in scope it is an ordinary unbound variable — the desugarer's
-/// fallback must *not* claim it. (Bound, it is an error in head position; that
-/// is `core_syntax_bindings.rs` in `patina-tests`, which needs a real
-/// environment.)
+/// The other half of the classification. An auxiliary keyword means something
+/// only inside an enclosing form, so in head position it is a mistake — and
+/// now that it is *bound*, the desugarer can say so instead of emitting a call
+/// to an unbound name.
 #[test]
-fn no_auxiliary_form_is_intercepted_by_the_fallback() {
+fn every_auxiliary_form_is_rejected_when_bound() {
+    let desugarer = Desugarer::new();
     for form in ALL_CORE_FORMS.iter().filter(|f| !f.is_dispatching()) {
         let name = form.name();
         assert!(
-            compiles_to_a_call_of_itself(name),
-            "`{name}` is classified as auxiliary, but the desugarer's spelling fallback claims \
-             `({name} a b)`. Auxiliary keywords have no meaning in head position and no binding \
-             to dispatch on, so the fallback must leave them alone."
+            matches!(desugar_head(&desugarer, name), Head::Rejected),
+            "`{name}` is classified as auxiliary, so `({name} a b)` should be refused as a \
+             misplaced keyword. Either it grew a meaning in head position — in which case mark \
+             it dispatching and give it an arm — or the classification is wrong."
         );
     }
 }
 
-/// The control: without it, the first assertion above passes for any string
+/// **The stage-2 property.** With nothing bound, a keyword is an ordinary
+/// identifier: `(begin a b)` compiles to a call of a variable named `begin`.
+///
+/// Before stage 2 the desugarer recognized keywords by spelling wherever they
+/// were unbound, so every one of these would have been intercepted. That
+/// fallback is what made `(except (scheme base) begin)` mean nothing inside a
+/// library, and deleting it is what this test guards.
+///
+/// It uses a bare `Environment::new()` rather than `Desugarer::new()`, which
+/// seeds the keywords on purpose.
+#[test]
+fn keywords_are_not_recognized_without_a_binding() {
+    let desugarer = Desugarer::with_env(Rc::new(Environment::new()));
+    for form in ALL_CORE_FORMS {
+        let name = form.name();
+        assert!(
+            matches!(desugar_head(&desugarer, name), Head::CallOfItself),
+            "`{name}` was claimed as syntax by a desugarer whose environment binds nothing. \
+             Keywords are recognized through bindings only — a spelling fallback has come back."
+        );
+    }
+}
+
+/// The control: without it, the interception assertions pass for any string
 /// that merely fails to desugar, which is most of them.
 #[test]
 fn an_ordinary_identifier_compiles_to_a_call_of_itself() {
-    assert!(compiles_to_a_call_of_itself("frobnicate"));
+    let desugarer = Desugarer::new();
+    assert!(matches!(
+        desugar_head(&desugarer, "frobnicate"),
+        Head::CallOfItself
+    ));
     // Near-misses of real entries, to catch a typo in the table rather than a
     // genuinely absent form.
-    assert!(compiles_to_a_call_of_itself("beign"));
-    assert!(compiles_to_a_call_of_itself("qoute"));
+    assert!(matches!(
+        desugar_head(&desugarer, "beign"),
+        Head::CallOfItself
+    ));
+    assert!(matches!(
+        desugar_head(&desugarer, "qoute"),
+        Head::CallOfItself
+    ));
 }
 
 /// `apply` is the one desugarer arm deliberately left out of `CoreForm`: it is
-/// special-cased *and* a real procedure binding, so it resolves the ordinary
-/// way and needs no marker.
+/// special-cased *and* a real procedure binding. It is also the last head
+/// symbol recognized by spelling — so unlike every keyword above, it is
+/// intercepted even with nothing bound.
 #[test]
 fn apply_is_excluded_on_purpose() {
-    assert!(!patina_runtime::library_loader::is_core_syntax("apply"));
     assert!(patina_core::CoreForm::from_name("apply").is_none());
+    let empty = Desugarer::with_env(Rc::new(Environment::new()));
+    assert!(
+        matches!(desugar_head(&empty, "apply"), Head::Intercepted),
+        "`apply` is still spelling-recognized; if that changed, update this test and the note in \
+         `desugar_list_tagged`"
+    );
 }
