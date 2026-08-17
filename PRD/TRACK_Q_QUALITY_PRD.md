@@ -83,6 +83,29 @@ the live inventory. Each pins both backends' current behaviour and is written to
 **fail when the bug is fixed**, forcing collapse into a plain both-backends
 assertion. Prefer that file over this section when starting Q2.
 
+**Update 2026-08-16 — the VM half of every `apply` row is fixed, and the
+diagnosis above was wrong about why.** It was never the registry. Both apply
+instructions (`Instruction::Apply` and `Instruction::TailApply`) probed only
+primitive → parameter → closure, so a VM-intercepted control primitive was
+rejected *before* the registry was consulted — which is why the
+`with-exception-handler` row blames "the §1.1 stub" for an error the stub never
+produced. `apply`'s idea of what is callable was simply narrower than `Call`'s;
+both now route through the same dispatcher, and `apply` itself became a
+`VmControlPrimitive` so it works as a value too.
+
+Three rows converge (`apply dynamic-wind`, `apply with-exception-handler`, and
+`(let ((f apply)) (f + '(1 2 3)))`, the report that started it). `(apply call/cc
+…)` stops being a shared gap and becomes an ordinary divergence with the VM
+correct — the tree-walker's registry hole is real and is still Q2 part 1's to
+fix; `apply` was just a third way to reach it. `crates/patina-tests/tests/
+callability.rs` carries the callee-set tests, `backend_divergence.rs` the one
+remaining pin.
+
+**The lesson is the one §1.2 already teaches, applied to itself:** every row in
+that table was measured, but the *cause* attached to two of them was inferred
+from the error text and never checked. A registry name in an error message is
+not evidence the registry was reached.
+
 **Shared root cause with an open Track L defect.** `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
 §6 records that Rust registry primitives ignore the import set at top level.
 That is the same disagreement seen from the other side: the compiler's

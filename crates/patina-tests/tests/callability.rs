@@ -179,3 +179,67 @@ fn test_an_error_inside_a_wind_thunk_still_escapes_on_the_tree_walker() {
         "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6",
     );
 }
+
+// ─── `apply`'s callee set is `Call`'s callee set ─────────────────────────────
+
+/// `apply` used as a value, which is what started this section.
+///
+/// The desugarer intercepts `apply` in head position and lowers it to a
+/// dedicated instruction, so `(apply f xs)` never consults the binding. Reached
+/// any other way — through a variable, an argument, a higher-order procedure —
+/// it resolved to the `apply` that `(patina internal control)` exports, and the
+/// VM then dispatched it through the primitive registry, where nothing
+/// implements it: spreading a list into a real call is work only the VM can do.
+/// So the VM reported `Undefined variable: patina.internal.control/apply` while
+/// the tree-walker, which intercepts `apply` by name at call time, answered 6.
+#[test]
+fn test_apply_is_callable_as_a_value() {
+    assert_program_eval_to("(let ((f apply)) (f + '(1 2 3)))", "6");
+    // Through a higher-order procedure, the shape real code hits.
+    assert_program_eval_to("(map (lambda (f) (f + '(1 2))) (list apply))", "(3)");
+    // In tail position, which takes a different dispatcher.
+    assert_program_eval_to("(define (call-it g) (g + '(7 8))) (call-it apply)", "15");
+    // Fixed arguments before the spread list.
+    assert_program_eval_to("(let ((f apply)) (f + 1 2 '(3 4)))", "10");
+}
+
+/// The deeper half of the same fix, and the reason it is here rather than in a
+/// test named after `apply`: both apply instructions probed only
+/// primitive → parameter → closure, so *`apply`'s* idea of what is callable was
+/// narrower than `Call`'s. Every callee below is accepted by a direct call and
+/// was rejected through `apply`.
+///
+/// Verified against chibi and Gauche, which accept all of them.
+#[test]
+fn test_apply_accepts_every_callee_a_direct_call_accepts() {
+    // A VM-intercepted control primitive.
+    assert_program_eval_to(
+        "(apply with-exception-handler
+                (list (lambda (e) 43) (lambda () (raise-continuable 'x))))",
+        "43",
+    );
+    assert_program_eval_to(
+        "(define r '())
+         (apply dynamic-wind
+                (list (lambda () (set! r 1)) (lambda () 2) (lambda () (set! r 3))))",
+        "2",
+    );
+    // `apply` itself is one of them, so this is also the self-application case.
+    assert_program_eval_to("(apply apply (list + '(1 2)))", "3");
+    // A parameter object.
+    assert_program_eval_to("(define p (make-parameter 5)) (apply p '())", "5");
+}
+
+/// A continuation reached through `apply`, on both backends.
+///
+/// Kept separate because it is easy to conflate with the one case still
+/// failing on the tree-walker, and I did conflate them: this was first written
+/// as a pinned divergence, and `assert_divergence` rejected it. What the
+/// tree-walker still fails is `(apply call/cc …)` — `call/cc` *as apply's
+/// callee*, resolved by name in value position — not a continuation object,
+/// which it invokes here fine. That one is pinned in
+/// `backend_divergence.rs::apply_callcc`.
+#[test]
+fn test_apply_invokes_a_continuation() {
+    assert_program_eval_to("(call/cc (lambda (k) (let ((f apply)) (f k '(42)))))", "42");
+}

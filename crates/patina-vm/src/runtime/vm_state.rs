@@ -1180,76 +1180,26 @@ fn dispatch_one_instruction(
             dst,
         } => {
             let func_val = state.reg_at(base, func);
-            let mut arg_vals: Vec<TaggedValue> = args[..args.len() - 1]
-                .iter()
-                .map(|&r| state.reg_at(base, r))
-                .collect();
-            let last = state.reg_at(base, *args.last().unwrap());
-            let spread = state
-                .heap
-                .borrow()
-                .list_to_vec(last)
-                .ok_or_else(|| VmError::Runtime {
-                    message: "apply: last argument is not a proper list".into(),
-                })?;
-            arg_vals.extend(spread);
-            if let Some(prim) = primitive_procedure(state, func_val) {
-                let result = call_primitive_proc(state, &prim, &arg_vals);
-                state.set_reg(dst, result?);
-            } else if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
-                state.set_reg(dst, result?);
-            } else {
-                call_closure(state, func_val, &arg_vals, dst)?;
+            let arg_vals = spread_apply_args(state, base, args)?;
+            // The same dispatcher `Call` uses. It used to probe only
+            // primitive → parameter → closure here, which left two callee
+            // kinds that `Call` accepts unreachable through `apply`:
+            // `(apply k '(42))` on a continuation, and `(apply apply …)` or
+            // any other VM-intercepted control primitive. chibi, Gauche and
+            // the tree-walker all accept both.
+            if let Some(escaped) = call_value(state, func_val, &arg_vals, dst, exit_depth)? {
+                return Ok(Some(escaped));
             }
         }
 
         Instruction::TailApply { func, ref args } => {
             let func_val = state.reg_at(base, func);
-            let mut arg_vals: Vec<TaggedValue> = args[..args.len() - 1]
-                .iter()
-                .map(|&r| state.reg_at(base, r))
-                .collect();
-            let last = state.reg_at(base, *args.last().unwrap());
-            let spread = state
-                .heap
-                .borrow()
-                .list_to_vec(last)
-                .ok_or_else(|| VmError::Runtime {
-                    message: "apply: last argument is not a proper list".into(),
-                })?;
-            arg_vals.extend(spread);
-
-            if let Some(prim) = primitive_procedure(state, func_val) {
-                let result = call_primitive_proc(state, &prim, &arg_vals)?;
-                let frame = state.frames.pop().expect("TailApply with empty stack");
-                if state.frames.len() == exit_depth {
-                    state.free_top_registers(frame.register_base);
-                    return Ok(Some(result));
-                }
-                let return_reg = frame.return_reg;
-                state.set_reg(return_reg, result);
-                state.free_top_registers(frame.register_base);
-                return Ok(None);
-            }
-
-            if let Some(result) = try_call_parameter(state, func_val, &arg_vals) {
-                let result = result?;
-                let frame = state
-                    .frames
-                    .pop()
-                    .expect("TailApply param with empty stack");
-                if state.frames.len() == exit_depth {
-                    state.free_top_registers(frame.register_base);
-                    return Ok(Some(result));
-                }
-                let return_reg = frame.return_reg;
-                state.set_reg(return_reg, result);
-                state.free_top_registers(frame.register_base);
-                return Ok(None);
-            }
-
-            let new_code_id = resolve_closure(state, func_val)?;
-            tail_call_closure_resolved(state, func_val, new_code_id, &arg_vals)?;
+            let arg_vals = spread_apply_args(state, base, args)?;
+            // Likewise the dispatcher `TailCall` uses, whose primitive and
+            // parameter branches were already byte-identical to the ones this
+            // arm spelled out; it adds the control-primitive and continuation
+            // cases on top.
+            return tail_call_value(state, func_val, &arg_vals, exit_depth);
         }
 
         Instruction::Return { val } => {
@@ -1994,6 +1944,37 @@ fn resolve_closure(state: &VmState, val: TaggedValue) -> Result<CodeObjectId, Vm
 /// Call any callable value (VmClosure or Primitive). For VmClosures, pushes a
 /// frame and returns `Ok(None)` — the caller must continue in the run loop.
 /// For primitives, calls immediately and returns `Ok(Some(result))`.
+/// Build `apply`'s argument list from a register window: every argument but
+/// the last verbatim, then the last spread out of a proper list.
+///
+/// Shared by `Instruction::Apply`, `Instruction::TailApply` and the
+/// `VmControlPrimitive::Apply` handler, which is what keeps the head-position
+/// form and the value form accepting the same shapes.
+fn spread_apply_args(
+    state: &mut VmState,
+    base: usize,
+    args: &[u16],
+) -> Result<Vec<TaggedValue>, VmError> {
+    let mut arg_vals: Vec<TaggedValue> = args[..args.len() - 1]
+        .iter()
+        .map(|&r| state.reg_at(base, r))
+        .collect();
+    let last = state.reg_at(base, *args.last().unwrap());
+    arg_vals.extend(spread_apply_tail(state, last)?);
+    Ok(arg_vals)
+}
+
+/// `apply`'s final argument, flattened. Errors if it is not a proper list.
+fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedValue>, VmError> {
+    state
+        .heap
+        .borrow()
+        .list_to_vec(last)
+        .ok_or_else(|| VmError::Runtime {
+            message: "apply: last argument is not a proper list".into(),
+        })
+}
+
 fn call_any(
     state: &mut VmState,
     func_val: TaggedValue,
@@ -2188,6 +2169,7 @@ fn handle_control_primitive(
     args: &[TaggedValue],
     dst: u16,
     _is_tail: bool,
+    exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
     match ctrl {
         VmControlPrimitive::DynamicWind => {
@@ -2393,6 +2375,35 @@ fn handle_control_primitive(
             if let Some(result) = call_any(state, consumer, &produced_vals, dst)? {
                 state.set_reg(dst, result);
             }
+        }
+
+        VmControlPrimitive::Apply => {
+            // (apply proc arg ... arg-list) — R7RS §6.10.
+            //
+            // Reached only when `apply` is used as a *value*: the desugarer
+            // intercepts it in head position and lowers `(apply f xs)` to
+            // `Instruction::Apply`, which never arrives here. Before this
+            // existed, the value form resolved to the `apply` binding that
+            // `(patina internal control)` exports, and dispatching it through
+            // the registry failed — nothing implements it there, because the
+            // work is spreading the list into a real call, which only the VM
+            // can do. So `(let ((f apply)) (f + '(1 2 3)))` reported
+            // `Undefined variable: patina.internal.control/apply` while the
+            // tree-walker, which intercepts `apply` by name at call time,
+            // answered 6.
+            if args.len() < 2 {
+                return Err(VmError::ArityMismatch {
+                    expected: "at least 2".into(),
+                    got: args.len(),
+                });
+            }
+            let callee = args[0];
+            // Fixed arguments, then the final list spread onto the end.
+            let mut call_args: Vec<TaggedValue> = args[1..args.len() - 1].to_vec();
+            call_args.extend(spread_apply_tail(state, *args.last().unwrap())?);
+            // The same dispatcher `Instruction::Apply` uses, so the value form
+            // and the head-position form accept the same callees.
+            return call_value(state, callee, &call_args, dst, exit_depth);
         }
 
         // ── Exception handling ────────────────────────────────────────────
@@ -2917,6 +2928,7 @@ pub(crate) enum VmControlPrimitive {
     CallWithCurrentContinuation,
     CallWithValues,
     Values,
+    Apply,
     WithExceptionHandler,
     Raise,
     RaiseContinuable,
@@ -2955,6 +2967,7 @@ pub(crate) const VM_INTERCEPTED_PRIMITIVES: &[(&str, VmControlPrimitive)] = &[
         VmControlPrimitive::CallWithValues,
     ),
     ("patina.internal.control/values", VmControlPrimitive::Values),
+    ("patina.internal.control/apply", VmControlPrimitive::Apply),
     (
         "patina.internal.errors/with-exception-handler",
         VmControlPrimitive::WithExceptionHandler,
@@ -3099,7 +3112,7 @@ fn call_value_with_probe(
     if closure_code_id.is_none() {
         // Intercept higher-order control primitives that need VM cooperation.
         if let Some(ctrl) = vm_control_primitive(state, func_val) {
-            return handle_control_primitive(state, ctrl, arg_vals, dst, false);
+            return handle_control_primitive(state, ctrl, arg_vals, dst, false, exit_depth);
         }
         if let Some(prim) = primitive_procedure(state, func_val) {
             let result = call_primitive_proc(state, &prim, arg_vals);
@@ -3177,7 +3190,7 @@ fn tail_call_value_with_probe(
             // 0, which could clobber live registers like MutableCell
             // pointers.)
             if let Some(escaped) =
-                handle_control_primitive(state, ctrl, arg_vals, return_reg, false)?
+                handle_control_primitive(state, ctrl, arg_vals, return_reg, false, exit_depth)?
             {
                 return Ok(Some(escaped));
             }
