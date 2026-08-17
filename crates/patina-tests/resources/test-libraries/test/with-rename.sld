@@ -1,5 +1,7 @@
 ;; Test library with renamed exports
 (define-library (test with-rename)
+  ;; `define` is a binding, imported like any other (stage 2).
+  (import (scheme base))
   (export square (rename internal-cube cube))
 
   (begin

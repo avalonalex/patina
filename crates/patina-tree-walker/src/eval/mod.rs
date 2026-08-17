@@ -796,14 +796,6 @@ impl Evaluator {
                 for id in identifiers {
                     match temp_env.get(id) {
                         Some(value) => lib_env.define(id.clone(), value),
-                        // A keyword this library never imported, so there
-                        // is no marker to carry across. The importer still
-                        // gets working syntax from the desugarer's spelling
-                        // fallback, so selecting it is a no-op rather than an
-                        // error. Keywords the library *did* import resolve
-                        // above, like any other binding. Stage 2 removes both
-                        // the fallback and this arm.
-                        None if patina_runtime::library_loader::is_core_syntax(id) => {}
                         None => {
                             return Err(patina_runtime::LibraryError::parse(
                                 None,

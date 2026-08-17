@@ -145,9 +145,13 @@ fn next_alias_id() -> u64 {
 /// This handles cases like `(let ((let odd?)) (let 8))` where the inner `let`
 /// should call the variable, not expand the macro.
 pub struct Desugarer {
-    /// Optional environment for macro lookup
-    /// If None, macros cannot be expanded (will cause desugar errors)
-    env: Option<Rc<Environment>>,
+    /// The environment head symbols resolve in.
+    ///
+    /// Not optional: since core syntactic keywords became bindings and the
+    /// spelling fallback was deleted, a desugarer without an environment could
+    /// not desugar `(quote x)` — it would compile a call to an unbound
+    /// `quote`. `Desugarer::new()` supplies one holding exactly the keywords.
+    env: Rc<Environment>,
 
     /// Current scope set for scope-based hygiene
     /// Accumulates scopes as we enter binding forms
@@ -166,17 +170,19 @@ pub struct Desugarer {
 }
 
 impl Desugarer {
-    /// Create a new desugarer without macro expansion support
+    /// Create a desugarer whose environment holds the syntactic keywords and
+    /// nothing else.
     ///
-    /// This is used when the input is already fully macro-expanded.
+    /// The desugarer's equivalent of `(null-environment)`: core forms desugar,
+    /// and every other name is an ordinary variable reference. Before stage 2
+    /// this constructor carried no environment at all and relied on keywords
+    /// being recognized by spelling; with the fallback gone it has to bind
+    /// them, which also means `define-syntax` now works here instead of
+    /// erroring.
     pub fn new() -> Self {
-        Self {
-            env: None,
-            current_scopes: ScopeSet::new(),
-            shadowed_names: std::collections::HashSet::new(),
-            source_map: None,
-            fs: std::sync::Arc::new(patina_core::NativeFs),
-        }
+        let env = Rc::new(Environment::new());
+        patina_runtime::stdlib::seed_core_syntax(&env);
+        Self::with_env(env)
     }
 
     /// Create a new desugarer with macro expansion support
@@ -188,7 +194,7 @@ impl Desugarer {
     /// and installs macros in the environment, returning `CoreExpr::Literal(Unspecified)`.
     pub fn with_env(env: Rc<Environment>) -> Self {
         Self {
-            env: Some(env),
+            env,
             current_scopes: ScopeSet::new(),
             shadowed_names: std::collections::HashSet::new(),
             source_map: None,
@@ -205,7 +211,7 @@ impl Desugarer {
         source_map: Rc<RefCell<SourceMap>>,
     ) -> Self {
         Self {
-            env: Some(env),
+            env,
             current_scopes: ScopeSet::new(),
             shadowed_names: std::collections::HashSet::new(),
             source_map: Some(source_map),
@@ -224,7 +230,7 @@ impl Desugarer {
     /// Used when creating child desugarers that inherit scope context.
     pub fn with_env_and_scopes(env: Rc<Environment>, scopes: ScopeSet) -> Self {
         Self {
-            env: Some(env),
+            env,
             current_scopes: scopes,
             shadowed_names: std::collections::HashSet::new(),
             source_map: None,
@@ -285,7 +291,7 @@ impl Desugarer {
     /// This inherits the current shadowed_names and uses the new environment and scopes.
     fn with_new_env(&self, env: Rc<Environment>, scopes: ScopeSet) -> Self {
         Self {
-            env: Some(env),
+            env,
             current_scopes: scopes,
             shadowed_names: self.shadowed_names.clone(),
             source_map: self.source_map.clone(),
@@ -314,10 +320,10 @@ impl Desugarer {
         template_symbols: &HashSet<Rc<str>>,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
-        let (Some(def_env), Some(use_env)) = (definition_env, self.env.as_ref()) else {
+        let Some(def_env) = definition_env else {
             return expanded;
         };
-        if def_env.env_id() == use_env.env_id() || template_symbols.is_empty() {
+        if def_env.env_id() == self.env.env_id() || template_symbols.is_empty() {
             return expanded;
         }
 
@@ -331,13 +337,13 @@ impl Desugarer {
         // resolved in. `self.env` may be a transient child created for a
         // `let-syntax` or internal-define body and dropped when desugaring
         // ends, so walk to the root of the chain.
-        let target_env = use_env.root();
+        let target_env = self.env.root();
         let mut renames: HashMap<Rc<str>, TaggedValue> = HashMap::new();
         for name in template_symbols {
             let Some(def_value) = def_env.get(name) else {
                 continue;
             };
-            if use_env.get(name) == Some(def_value) {
+            if self.env.get(name) == Some(def_value) {
                 continue;
             }
             let alias = format!("{}.{}", name, next_alias_id());
@@ -607,19 +613,18 @@ impl Desugarer {
         // `head_is_bound` carries the third answer — bound to something that
         // is neither — because that is what lets an ordinary definition shadow
         // a keyword.
-        let (macro_to_expand, core_form, head_is_bound) = match (&self.env, &name) {
-            (Some(env), Some(sym)) if !is_shadowed => match env.get(sym) {
+        let (macro_to_expand, core_form) = match &name {
+            Some(sym) if !is_shadowed => match self.env.get(sym) {
                 Some(tv) => {
-                    let heap_ref = env.heap().borrow();
+                    let heap_ref = self.env.heap().borrow();
                     (
                         heap_ref.get_macro(tv).cloned(),
                         heap_ref.get_core_syntax(tv),
-                        true,
                     )
                 }
-                None => (None, None, false),
+                None => (None, None),
             },
-            _ => (None, None, false),
+            _ => (None, None),
         };
 
         // Handle macro expansion
@@ -674,42 +679,20 @@ impl Desugarer {
             return self.desugar_core_form(form, cdr, shared_heap);
         }
 
-        // The two remaining head-symbol rules, both spelling-based and both
-        // sharing the shadowing guard.
+        // `apply` is the last head symbol recognized by spelling. It is not a
+        // keyword and has no marker: the desugarer special-cases it as an
+        // optimization, but it is also a real procedure binding, so it is
+        // checked whatever the environment holds. That makes it the one name
+        // whose meaning still ignores the binding just resolved — and the
+        // reason `(define (apply a b) …)` is silently ignored, which is the
+        // defect this design fixed for every other name. Tracked separately;
+        // the fix is to key the lowering on the binding, as `core_form` above
+        // does.
         if let Some(sym) = &name
             && !is_shadowed
+            && sym.as_ref() == "apply"
         {
-            // `apply` is not a keyword and has no marker. The desugarer
-            // special-cases it as an optimization, but it is also a real
-            // procedure binding, so it is checked whatever the environment
-            // holds — the one head symbol whose meaning still ignores the
-            // binding just resolved.
-            if sym.as_ref() == "apply" {
-                return self.desugar_apply_tagged(list, cdr, shared_heap);
-            }
-
-            // Stage 1 fallback: a keyword with no binding in scope is still
-            // recognized by spelling.
-            //
-            // `head_is_bound` is the whole of the new rule — a binding, any
-            // binding, now decides, and only an unbound name falls through to
-            // its spelling. That is why `(define (if a b c) …)` takes effect:
-            // `if` resolves to a procedure, so this never runs.
-            //
-            // Auxiliary keywords are excluded deliberately. Bound, they are an
-            // error in head position; unbound, they stay an ordinary
-            // application of an unbound name, which is what they were before
-            // this change.
-            //
-            // Stage 2 deletes this block, and with it the last place a keyword
-            // is recognized by spelling — see
-            // `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`.
-            if !head_is_bound
-                && let Some(form) = CoreForm::from_name(sym)
-                && form.is_dispatching()
-            {
-                return self.desugar_core_form(form, cdr, shared_heap);
-            }
+            return self.desugar_apply_tagged(list, cdr, shared_heap);
         }
 
         // Regular application
@@ -850,15 +833,7 @@ impl Desugarer {
         shared_heap: &SharedHeap,
         body_scopes: &ScopeSet,
     ) -> Result<Vec<CoreExpr>> {
-        let env = match &initial_desugarer.env {
-            Some(e) => e.clone(),
-            None => {
-                return body_tvs
-                    .iter()
-                    .map(|tv| initial_desugarer.desugar_tagged(*tv, shared_heap))
-                    .collect();
-            }
-        };
+        let env = initial_desugarer.env.clone();
 
         let mut body_exprs = Vec::new();
         let mut current_env = env.clone();
@@ -1250,11 +1225,7 @@ impl Desugarer {
         };
 
         // Compile macro immediately and install in environment
-        let env = self.env.as_ref().ok_or_else(|| {
-            DesugarError::InvalidSyntax(
-                "define-syntax requires environment (use Desugarer::with_env)".into(),
-            )
-        })?;
+        let env = &self.env;
 
         let compiled_macro = self.compile_syntax_rules_tagged(
             args_vec[1],
@@ -1335,12 +1306,7 @@ impl Desugarer {
         shared_heap: &SharedHeap,
         is_letrec: bool,
     ) -> Result<CoreExpr> {
-        let env = self.env.as_ref().ok_or_else(|| {
-            DesugarError::InvalidSyntax(
-                "let-syntax requires macro environment (desugarer must be created with with_env)"
-                    .to_string(),
-            )
-        })?;
+        let env = &self.env;
 
         let let_syntax_scope = ScopeId::fresh();
         let definition_scopes = self.current_scopes.with_scope(let_syntax_scope);

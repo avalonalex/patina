@@ -149,50 +149,96 @@ fn test_only_can_select_a_keyword() {
 }
 
 // ============================================================================
-// Stage 2 boundary — pinned as still lenient, on purpose
+// Stage 2 — an import set scopes keywords like any other binding
 // ============================================================================
 
-/// What is left for stage 2 is exactly one thing: the *bare* spelling still
-/// resolves after an import set has excluded or moved it. Deleting the
-/// desugarer's spelling fallback is what fixes it, and that can break a program
-/// which works today, so it wants its own PR and its own compat run.
-///
-/// Pinned rather than left untested so that deleting the fallback shows up here
-/// as a failing assertion instead of passing unnoticed. chibi and Gauche report
-/// `begin` unbound in both programs below.
+/// The keyword form of the rule stage 2 exists for: a library gets syntax only
+/// by importing it. `begin` is excluded here, so the body cannot use it — which
+/// is chibi's and Gauche's answer, and was impossible to reach while the
+/// desugarer recognized keywords by spelling wherever they were unbound.
 #[test]
-fn test_stage2_except_does_not_yet_hide_a_keyword() {
-    assert_program_eval_to("(import (except (scheme base) begin)) (begin 1 2)", "2");
-}
-
-#[test]
-fn test_stage2_prefix_does_not_yet_hide_the_bare_spelling() {
-    assert_program_eval_to("(import (prefix (scheme base) s:)) (begin 1 2)", "2");
-}
-
-/// The *other* half of `prefix` needs no stage 2 and is conformant now: a
-/// prefixed keyword resolves, because `prefix` copies the marker under the new
-/// name and the desugarer dispatches on the form. Composing several is the real
-/// check — `s:quote` carries the reader's `'` shorthand, so a prefixed base
-/// that got this wrong would fail on the first quoted datum.
-#[test]
-fn test_a_prefixed_keyword_resolves() {
-    assert_program_eval_to("(import (prefix (scheme base) s:)) (s:begin 1 2)", "2");
-    assert_program_eval_to(
-        "(import (prefix (scheme base) s:))
-         (s:let ((x 5)) (s:if x (s:quote yes) (s:quote no)))",
-        "yes",
+fn test_except_hides_a_keyword_from_a_library() {
+    assert_program_eval_error(
+        r#"
+        (define-library (syn ex)
+          (import (except (scheme base) begin))
+          (export go)
+          (begin (define (go) (begin 1 2))))
+        (import (syn ex))
+        (go)
+        "#,
     );
 }
 
-/// `(null-environment 5)` still admits R7RS-only forms, for the same reason:
-/// `cond-expand` is unbound there, so the spelling fallback claims it. chibi
-/// reports an undefined variable.
+/// And `prefix` moves it rather than duplicating it: the prefixed name works
+/// (that much was true from stage 1) and the bare one no longer does.
 #[test]
-fn test_stage2_null_environment_still_admits_r7rs_forms() {
+fn test_prefix_moves_a_keyword_out_of_the_bare_spelling() {
     assert_program_eval_to(
+        r#"
+        (define-library (syn pfx)
+          (import (prefix (scheme base) s:))
+          (export go)
+          ;; The outer `begin` is a library declaration, which the .sld parser
+          ;; reads structurally and no import set touches. Everything inside it
+          ;; is ordinary code and must use the prefixed names.
+          (begin (s:define (go) (s:begin 1 2))))
+        (import (syn pfx))
+        (go)
+        "#,
+        "2",
+    );
+    assert_program_eval_error(
+        r#"
+        (define-library (syn pfx2)
+          (import (prefix (scheme base) s:))
+          (export go)
+          (begin (s:define (go) (begin 1 2))))
+        (import (syn pfx2))
+        (go)
+        "#,
+    );
+}
+
+/// `(null-environment 5)` is null now. It used to admit any R7RS form the
+/// desugarer knew by spelling — `cond-expand`, `include`, `import`,
+/// `syntax-error` — because none of them was bound there to be left out.
+#[test]
+fn test_null_environment_admits_only_r5rs_syntax() {
+    assert_program_eval_error(
         "(import (scheme base) (scheme eval) (scheme r5rs))
          (eval '(cond-expand (else 42)) (null-environment 5))",
-        "42",
+    );
+    // The R5RS keywords it *should* have still work, so the environment is
+    // narrowed rather than empty.
+    assert_program_eval_to(
+        "(import (scheme base) (scheme eval) (scheme r5rs) (scheme write))
+         (eval '(begin 1 2) (null-environment 5))",
+        "2",
+    );
+}
+
+// ============================================================================
+// The top level is not covered by any of the above, and not because of keywords
+// ============================================================================
+
+/// At the top level an import set does not remove anything, because
+/// `load_bootstrap` seeds every `(scheme base)` export into the global
+/// environment before a program runs — that is what lets a script with no
+/// `import` at all work, which Patina supports and chibi does not.
+///
+/// **Not a keyword defect**, which is the point of asserting `car` beside
+/// `begin`: an ordinary procedure survives `except` exactly the same way. The
+/// design doc listed the top-level `(except … begin)` case under stage 2, and
+/// that was a misattribution — deleting the spelling fallback fixed the library
+/// case above and could not have fixed this one. Its fix is to stop pre-seeding
+/// the global environment, which is a deliberate REPL affordance and a separate
+/// decision.
+#[test]
+fn test_a_top_level_import_set_removes_nothing_keyword_or_not() {
+    assert_program_eval_to("(import (except (scheme base) begin)) (begin 1 2)", "2");
+    assert_program_eval_to(
+        "(import (except (scheme base) car) (scheme write)) (car (list 1 2))",
+        "1",
     );
 }

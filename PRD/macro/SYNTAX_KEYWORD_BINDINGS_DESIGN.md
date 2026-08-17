@@ -95,11 +95,13 @@ scope the reader's shorthand.
 
 Each is the same hole patched at a different surface.
 
-| # | Workaround | Location |
-|---|---|---|
-| 1 | `DESUGARED_FORMS` + `SYNTAX_RULES_KEYWORDS` + `is_core_syntax`, consulted at four sites across both backends | `patina-runtime/src/library_loader.rs` |
-| 2 | `R5RS_SYNTAX` and its silent skip (`if let Some(tv) = base_lib.get_export_tagged(name)`) | `patina-primitives/src/primitives/eval.rs` |
-| 3 | `(define else 'else)` / `(define => '=>)`, so `(import (only (scheme base) else))` resolves | `lib/scheme/base.sld` |
+All three are gone as of stage 2.
+
+| # | Workaround | Location | Retired |
+|---|---|---|---|
+| 1 | `DESUGARED_FORMS` + `SYNTAX_RULES_KEYWORDS` + `is_core_syntax`, consulted at four sites across both backends | `patina-runtime/src/library_loader.rs` | stage 2 |
+| 2 | `R5RS_SYNTAX` and its silent skip (`if let Some(tv) = base_lib.get_export_tagged(name)`) | `patina-primitives/src/primitives/eval.rs` | stage 1 (skip), stage 2 (leak) |
+| 3 | `(define else 'else)` / `(define => '=>)`, so `(import (only (scheme base) else))` resolves | `lib/scheme/base.sld` | stage 1 |
 
 Workaround 1 is the newest, added by PR #81 (2026-08-16) to make `(r6rs base)` load. Its own
 closing note said it should be the last such list.
@@ -296,32 +298,67 @@ labelled every global binding as scoped.
 Make a syntactic keyword *and a macro* an error where a value is expected, as Chez and chibi do.
 Separate because it changes behaviour at every macro reference, not only at keywords.
 
-### Stage 2 — delete the fallback
+### Stage 2 — delete the fallback  *(done)*
 
 Removes the 17-arm `match`, and with it `DESUGARED_FORMS`, `SYNTAX_RULES_KEYWORDS` and
-`is_core_syntax` (workaround 1) and the `R5RS_SYNTAX` leak (workaround 2).
+`is_core_syntax` (workaround 1) and the `R5RS_SYNTAX` leak (workaround 2). A keyword is now
+recognized through a binding and by nothing else, which is the whole point of the design.
 
-**Narrower than planned, because stage 1 took more than expected.** What is left is one thing: the
-*bare* spelling still resolves after an import set has excluded or moved it. `(except … begin)`
-still admits `begin`, `(prefix … s:)` still admits `begin`, and `(null-environment 5)` still admits
-`cond-expand` — all three because the name is unbound there and the fallback claims it.
+The desugarer's environment stopped being optional along the way. With no fallback, a desugarer
+with no environment cannot desugar `(quote x)` — it would compile a call to an unbound `quote` —
+so `Desugarer::new()` now seeds one holding exactly the keywords: the desugarer's
+`(null-environment)`. That removed the last `Option<Rc<Environment>>` branches, including the two
+"define-syntax requires environment" errors, which could no longer happen.
 
-The *other* half of `prefix` needed no stage 2 at all and is conformant as of stage 1: `s:begin`
-resolves, because `prefix` copies the marker under the new name and the desugarer dispatches on the
-form. `s:let`, `s:if` and `s:quote` compose correctly too, which is the real check — `s:quote`
-carries the reader's `'` shorthand, so a prefixed base that got this wrong would fail on the first
-quoted datum. Pinned in `crates/patina-tests/tests/core_syntax_bindings.rs`.
+**One entry above was misattributed, and the fix is what showed it.** The `except` and `prefix`
+symptoms in §1 were measured at the *top level*, and deleting the fallback did not change them:
 
-Requires:
+```scheme
+(import (except (scheme base) begin))  (begin 1 2)   ;; => 2, still
+(import (except (scheme base) car))    (car '(1 2))  ;; => 1, and this is the tell
+```
 
-- `lib/scheme/lazy.sld` to import a library exporting syntax. It imports only
-  `(patina internal lazy)`, but its included `lazy/promises.scm` uses `define-syntax`,
-  `syntax-rules` and `lambda`. It is the only one of 49 bundled `.sld` files affected — every other
-  either imports `(scheme base)` or has no body.
-- `import` and `expand` reachable from `global_env` (§2.4).
-- `patina-frontend/tests/core_syntax_list.rs` retired or repointed: it pins the list against the
-  desugarer, and after stage 2 there is no list. The property it protects — a name that claims to
-  be syntax must actually be intercepted — should survive as a test over `CoreForm`.
+An ordinary procedure survives `except` exactly as a keyword does, so this was never a keyword
+defect. Its cause is `load_bootstrap` seeding every `(scheme base)` export into the global
+environment before a program runs — the affordance that lets a script with no `import` work at all,
+which Patina supports and chibi does not. Removing it is a separate decision about what Patina's
+top level is, not part of this design.
+
+Where an import set actually governs a scope, stage 2 does what it promised. Inside a library:
+
+```scheme
+(define-library (syn ex)
+  (import (except (scheme base) begin))
+  (export go)
+  (begin (define (go) (begin 1 2))))
+;; => unbound variable: begin        chibi, Gauche => the same
+```
+
+and `(null-environment 5)` — which builds a fresh environment rather than inheriting the global one
+— is null: `(eval '(cond-expand (else 42)) (null-environment 5))` now errors, as chibi does.
+
+**The export exemptions went with the fallback**, in `build_library` and in the three copies of
+`(only …)`. A library that imports a keyword exports it like any other binding; one that does not
+cannot export it, and saying so is right rather than lenient — the importer would have got nothing
+either way, and only the spelling fallback hid that.
+
+What it took:
+
+- `lib/scheme/lazy.sld`, exactly as predicted — the one bundled `.sld` with a body and no
+  syntax-providing import.
+- 16 test fixtures with the same shape (14 inline in `sld_file_loading.rs`, 2 on disk under
+  `resources/test-libraries/`). All were `.sld` files whose bodies used `define` while importing
+  nothing; each now imports `(scheme base)`, which is what a real library must do.
+- Two tests whose premise the change removes: `test_eval_empty_environment_if` asserted that
+  "special forms should work even in empty environment", and two desugarer unit tests built a bare
+  `Environment::new()` and expected `define-syntax` to be intercepted. chibi and Gauche both report
+  `undefined variable: if` for the first; it is now asserted as an error.
+- `core_syntax_list.rs` repointed a second time. It now pins the classification *and*
+  `keywords_are_not_recognized_without_a_binding`, the direct regression guard: with an empty
+  environment every keyword must compile to a call of itself.
+
+`import` and `expand` needed no work here — the stage-1 cleanup pass had already made
+`seed_top_level_syntax` real after review caught the doc claiming a seeding that did not exist.
 
 ## 5. Migration cost, measured
 
@@ -363,6 +400,12 @@ cheapest it will ever be.
 - New guard tests for each symptom in §1, on both backends. The import-rename case moves out of
   Track L §6 Open and becomes a passing test rather than a pinned divergence — it was never pinned,
   deliberately, because the correct answer was a design decision and this document is that decision.
-- `cargo run -p patina-compat -- run` on stage 2 only. Baseline 143/184 pass. Stage 2 is expected
-  to hold; a drop names the packages that were relying on Patina's leniency, which is information
-  worth having either way.
+- `cargo run -p patina-compat -- run` on stage 2 only. Baseline 143/184 pass. **Held exactly** —
+  `compat/reports/results.scm` came back byte-identical, so not one package was relying on the
+  leniency. The §5 reasoning is why: the corpus was written for chibi, and chibi is strict, so
+  anything that loads there already imports its syntax.
+
+**Both stages are done.** What the design set out to fix is fixed; what remains is recorded
+elsewhere rather than here — stage 1.5 (§2.5, syntax in value position), `apply`'s desugarer
+special case (§2.2 and the note in `desugar_list_tagged`, which is now the only head symbol
+recognized by spelling), and the top-level import-set question stage 2 turned up (§4).

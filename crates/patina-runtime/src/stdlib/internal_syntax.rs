@@ -17,14 +17,24 @@ use std::rc::Rc;
 
 /// Build the (patina internal syntax) library.
 pub fn build_internal_syntax(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+    seed_core_syntax(&env);
     ALL_CORE_FORMS
         .iter()
-        .map(|&form| {
-            let name = form.name().to_string();
-            define_core_syntax(&env, form);
-            name
-        })
+        .map(|form| form.name().to_string())
         .collect()
+}
+
+/// Bind every syntactic keyword in `env`.
+///
+/// The library builder above is one caller; the other is `Desugarer::new()`,
+/// which needs an environment in which core syntax resolves and nothing else
+/// does. Since stage 2 there is no spelling fallback, so a desugarer with an
+/// empty environment cannot desugar `(quote x)` — it would compile a call to an
+/// unbound `quote`.
+pub fn seed_core_syntax(env: &Rc<Environment>) {
+    for &form in ALL_CORE_FORMS {
+        define_core_syntax(env, form);
+    }
 }
 
 /// Keywords a fresh top level has that `(scheme base)` does not export.

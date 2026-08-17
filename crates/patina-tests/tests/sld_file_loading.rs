@@ -205,7 +205,7 @@ fn test_circular_dependency_detection() {
         lib_dir.join("lib-a.sld"),
         r#"
         (define-library (test lib-a)
-          (import (test lib-b))
+          (import (scheme base) (test lib-b))
           (export a-value)
           (begin (define a-value 1)))
     "#,
@@ -216,7 +216,7 @@ fn test_circular_dependency_detection() {
         lib_dir.join("lib-b.sld"),
         r#"
         (define-library (test lib-b)
-          (import (test lib-a))
+          (import (scheme base) (test lib-a))
           (export b-value)
           (begin (define b-value 2)))
     "#,
@@ -252,6 +252,7 @@ fn test_import_modifiers() {
         lib_dir.join("source.sld"),
         r#"
         (define-library (test source)
+          (import (scheme base))
           (export foo bar baz qux)
           (begin
             (define foo 1)
@@ -427,28 +428,49 @@ fn test_library_can_export_core_syntax() {
     );
 }
 
-/// Every name the runtime calls core syntax must survive the export path.
+/// Every syntactic keyword survives the export path — all 23, including the
+/// two `(scheme base)` does not carry.
 ///
-/// This pins the list against `build_library` only — it cannot tell whether a
-/// listed name is *really* syntax, because acceptance is what the list itself
-/// decides. `patina-frontend`'s `tests/core_syntax_list.rs` is the test that
-/// checks the list against the desugarer, which is the drift that matters.
+/// The library imports `(patina internal syntax)` rather than `(scheme base)`
+/// because that is the one that exports the whole set: R7RS keeps `import` out
+/// of `(scheme base)`, and `expand` is a Patina extension.
+///
+/// There is no list to pin any more. `build_library` treats a keyword like any
+/// other name, so what this checks is that the marker really is a binding the
+/// export path can find — the property that made the exemption unnecessary.
 #[test]
 fn test_every_core_syntax_name_is_exportable() {
-    for name in patina_runtime::library_loader::core_syntax_names() {
+    for form in patina_core::ALL_CORE_FORMS {
         common::assert_program_eval_to(
             &format!(
                 r#"
                 (define-library (syn one)
-                  (import (scheme base))
+                  (import (patina internal syntax))
                   (export {name}))
                 (import (syn one))
                 'done
-                "#
+                "#,
+                name = form.name()
             ),
             "done",
         );
     }
+}
+
+/// The other side of removing the exemption: a library cannot export a keyword
+/// it never imported. It used to be accepted and silently export nothing,
+/// which only looked harmless because the importer's desugarer recognized the
+/// spelling anyway.
+#[test]
+fn test_exporting_an_unimported_keyword_fails() {
+    common::assert_program_eval_error(
+        r#"
+        (define-library (syn nokeyword)
+          (import (patina internal lists))
+          (export begin))
+        (import (syn nokeyword))
+        "#,
+    );
 }
 
 /// The import side has to agree with the export side, or the first thing a
@@ -696,6 +718,7 @@ fn test_include_file_not_found() {
         lib_dir.join("bad-include.sld"),
         r#"
         (define-library (test bad-include)
+          (import (scheme base))
           (export foo)
           (include "nonexistent.scm"))
     "#,
@@ -796,6 +819,7 @@ fn test_include_ci_vs_include() {
         lib_dir.join("case-sensitive.sld"),
         r#"
         (define-library (test case-sensitive)
+          (import (scheme base))
           (export MY-VALUE)
           (include "mixed.scm"))
     "#,
@@ -843,6 +867,7 @@ fn test_include_library_declarations_export() {
         lib_dir.join("decl-lib.sld"),
         r#"
         (define-library (test decl-lib)
+          (import (scheme base))
           (include-library-declarations "exports.scm")
           (begin
             (define foo 1)
@@ -892,6 +917,7 @@ fn test_include_library_declarations_import() {
         lib_dir.join("import-decl.sld"),
         r#"
         (define-library (test import-decl)
+          (import (scheme base))
           (include-library-declarations "imports.scm")
           (export double-value)
           (begin
@@ -939,6 +965,7 @@ fn test_include_library_declarations_begin() {
         lib_dir.join("begin-decl.sld"),
         r#"
         (define-library (test begin-decl)
+          (import (scheme base))
           (export x get-x)
           (include-library-declarations "body.scm"))
     "#,
@@ -994,6 +1021,7 @@ fn test_include_library_declarations_multiple_files() {
         lib_dir.join("multi-decl.sld"),
         r#"
         (define-library (test multi-decl)
+          (import (scheme base))
           (include-library-declarations "decl1.scm" "decl2.scm")
           (begin
             (define foo 42)))
@@ -1051,6 +1079,7 @@ fn test_include_library_declarations_nested() {
         lib_dir.join("nested-decl.sld"),
         r#"
         (define-library (test nested-decl)
+          (import (scheme base))
           (export deep-value)
           (include-library-declarations "inner.scm"))
     "#,
@@ -1095,6 +1124,7 @@ fn test_cond_expand_library_check_available() {
         lib_dir.join("lib-check.sld"),
         r#"
         (define-library (test lib-check)
+          (import (scheme base))
           (export result)
           (cond-expand
             ((library (scheme base))
@@ -1142,6 +1172,7 @@ fn test_cond_expand_library_check_unavailable() {
         lib_dir.join("lib-check-missing.sld"),
         r#"
         (define-library (test lib-check-missing)
+          (import (scheme base))
           (export result)
           (cond-expand
             ((library (nonexistent library that does not exist))
@@ -1189,6 +1220,7 @@ fn test_cond_expand_library_check_sld_library() {
         lib_dir.join("helper.sld"),
         r#"
         (define-library (test helper)
+          (import (scheme base))
           (export helper-value)
           (begin (define helper-value 42)))
     "#,
@@ -1200,6 +1232,7 @@ fn test_cond_expand_library_check_sld_library() {
         lib_dir.join("check-helper.sld"),
         r#"
         (define-library (test check-helper)
+          (import (scheme base))
           (export result)
           (cond-expand
             ((library (test helper))

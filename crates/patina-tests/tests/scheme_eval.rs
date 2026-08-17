@@ -242,16 +242,36 @@ fn test_eval_quote() {
     assert_eq!(result, "(a b c)");
 }
 
+/// `(environment)` with no import sets binds nothing, so `if` is unbound in it.
+///
+/// This asserted `42` — "special forms should work even in empty environment" —
+/// which was true only because the desugarer recognized keywords by spelling
+/// wherever nothing was bound. Keywords are ordinary bindings now, and an
+/// environment that imports nothing has none of them. chibi and Gauche both
+/// report `undefined variable: if` here.
 #[test]
-fn test_eval_empty_environment_if() {
-    // Special forms should work even in empty environment
+fn test_eval_empty_environment_has_no_syntax() {
     let result = eval_program(
         r#"
         (import (scheme eval))
         (eval '(if #t 42 0) (environment))
     "#,
     );
-    assert_eq!(result, "42");
+    assert!(
+        result.starts_with("ERROR:") && result.contains("if"),
+        "expected an unbound-variable error naming `if`, got {result}"
+    );
+    // The same expression works once something exporting `if` is imported, so
+    // the failure is about the environment, not about `eval`.
+    assert_eq!(
+        eval_program(
+            r#"
+        (import (scheme eval))
+        (eval '(if #t 42 0) (environment '(scheme base)))
+    "#
+        ),
+        "42"
+    );
 }
 
 #[test]
