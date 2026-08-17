@@ -133,9 +133,11 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         }
         HeapObjectData::Port(p) => write!(buf, "{}", p).unwrap(),
         HeapObjectData::Macro(m) => write!(buf, "#<macro:{}>", m.name).unwrap(),
-        // Its canonical spelling, not the name it was reached by: after
-        // `(rename (begin blk))` this still prints `#<syntax:begin>`, which is
-        // what tells you the two are one form.
+        // Reachable from macro-debug output and from the residual cases in
+        // `patina-tests/tests/syntax_as_a_value.rs` — a marker no longer
+        // survives an ordinary variable reference. Prints its canonical
+        // spelling, not the name it was reached by, so a `begin` imported as
+        // `blk` is still visibly `begin`.
         HeapObjectData::CoreSyntax(form) => write!(buf, "#<syntax:{}>", form).unwrap(),
         HeapObjectData::RecordType(rtd) => write!(buf, "#<record-type {}>", rtd.name).unwrap(),
         HeapObjectData::Record { record_type, .. } => {

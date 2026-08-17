@@ -225,6 +225,29 @@ errata list has nothing on it across all 33 entries, and neither does the workin
 tracker. `crates/patina-tests/tests/syntax_as_a_value.rs` carries the reasoning so that reversing
 it later is a decision rather than a discovery.
 
+**`set!` is refused too, and that asymmetry is the report's.** §5.3.1 is normative that a
+*definition* over a syntactic keyword binds a new location; nothing licenses `set!`, whose
+⟨variable⟩ must already be one. chibi draws the line in exactly that place, rejecting `(set! if 5)`
+with the message it gives for `(list if)`; Gauche accepts it and then breaks inside its own startup
+code. Without this, reading syntax was an error while overwriting it silently succeeded.
+
+**Two residuals, recorded rather than implied.** The check asks what a name resolves to *while the
+form is being desugared*, so it misses a name that is not syntax yet (a forward reference to a
+later `define-syntax`) and one whose spelling is shadowed by an unrelated binding — both still load
+`#<macro>`. Both fail safe, never producing a wrong rejection, and both are pinned at the bottom of
+`syntax_as_a_value.rs`. Closing them means checking at every variable *read* instead: `LoadGlobal`
+on the VM, whose per-site inline cache stores a slot, so a fill-time check would be unsound and a
+per-load tag test would sit on the interpreter's hottest instruction. That price is the reason, and
+it is written down so the `#<macro>` formatting in `datum_writer.rs` is not mistaken for dead code.
+
+**One lookup, three askers.** Head position, value position and the `set!` target had grown three
+resolutions of the same question with two different shadowing rules and two different environment
+queries — the head path dropped the reference's scopes, the value path used them. They are now one
+`Desugarer::resolve_syntax`. Flattening them surfaced the rule that had been implicit: a
+*macro-introduced* reference is exempt from the spelling-keyed shadow test, because hygiene means
+`(let ((if 'captured)) (my-cond #t 'ok))` must still see the template's `if` as the special form.
+The hygiene suite caught it immediately, which is the argument for having merged them.
+
 Nothing in `lib/` or the corpus reads `else` as a value; the only two hits are a `syntax-rules`
 literals list and a `cond-expand` clause, both structural.
 

@@ -19,6 +19,15 @@
 //! would rebuild the very split this work removed — before it, `(procedure? if)`
 //! errored and `(procedure? cond)` returned `#f`, which was an accident of `if`
 //! having had no binding to load.
+//!
+//! **It is a desugar-time rule, so it has two recorded residuals**, both pinned
+//! at the bottom of this file. The check asks what a name resolves to *while
+//! the form is being desugared*: a name that is not syntax yet, or whose
+//! spelling is shadowed by an unrelated binding, still loads `#<macro>` or
+//! `#<syntax:…>` as a value. Both directions are safe — a missed rejection,
+//! never a wrong one — and closing them means checking at every variable
+//! *read* instead, on the VM's hottest instruction. The residual is the price;
+//! it is written down rather than implied.
 
 mod common;
 use common::{assert_program_eval_error, assert_program_eval_to};
@@ -85,22 +94,20 @@ fn test_quoted_syntax_is_data() {
     assert_program_eval_to("(import (scheme base)) `(a ,(+ 1 1) else)", "(a 2 else)");
 }
 
-/// Auxiliary syntax still does its real job — matched as a `syntax-rules`
-/// literal inside the form that gives it meaning, which never desugars it as an
-/// expression.
-#[test]
-fn test_auxiliary_syntax_still_works_where_it_belongs() {
-    assert_program_eval_to("(import (scheme base)) (cond (#f 1) (else 'ok))", "ok");
-    assert_program_eval_to(
-        "(import (scheme base)) (cond ((assv 1 '((1 . one))) => cdr) (else 'no))",
-        "one",
-    );
-    assert_program_eval_to("(import (scheme base)) (case 9 ((1) 'one) (else 'x))", "x");
-}
+// That `else` and `=>` still work inside `cond` and `case` — matched as
+// `syntax-rules` literals, never desugared as expressions — is covered on both
+// backends by `compliance/derived.rs` (`test_cond_with_else`,
+// `test_cond_with_arrow`, `test_case_with_else`). `core_syntax_bindings.rs`
+// says in as many words that it does not restate them; neither does this file.
 
 /// The derived forms are all macros whose expansions the check now sees. Any
 /// one of them emitting a keyword in value position would fail here — which is
 /// the cheapest guard against this rule being subtly too strict.
+///
+/// A smoke test, deliberately: each form has its own suite in `compliance/`,
+/// and every one of the ~1400 integration tests goes through this desugarer, so
+/// a real breakage fails hundreds of tests before this one. It earns its place
+/// by naming *why* these five are watched, not by being the only guard.
 #[test]
 fn test_the_derived_forms_still_expand() {
     assert_program_eval_to(
@@ -132,44 +139,107 @@ fn test_the_derived_forms_still_expand() {
 /// spelling — the check reads the binding, so the two do not interfere.
 #[test]
 fn test_apply_is_still_a_value() {
+    // `apply` as a *callee* is `callability.rs`'s subject and is covered there;
+    // what belongs here is only that the check does not claim it.
     assert_program_eval_to("(import (scheme base)) (procedure? apply)", "#t");
-    assert_program_eval_to("(import (scheme base)) (let ((f apply)) (f + '(1 2)))", "3");
 }
 
 // ============================================================================
 // The rule reads bindings, not spellings
 // ============================================================================
 
-/// The whole design in one program: rebind the name and the check stops firing,
-/// because there is no longer any syntax there to misuse.
+/// `define` over a keyword is licensed and `set!` over one is not, and the
+/// asymmetry is the report's, not ours.
 ///
-/// R7RS §5.3.1 makes the `define` case normative — "if ⟨variable⟩ is not bound,
-/// *or is a syntactic keyword*, then the definition will bind ⟨variable⟩ to a
-/// new location". Gauche agrees on both; chibi rejects the `set!` itself.
+/// R7RS §5.3.1 is normative for the first — "if ⟨variable⟩ is not bound, *or is
+/// a syntactic keyword*, then the definition will bind ⟨variable⟩ to a new
+/// location" — and says nothing of the sort for `set!`, whose ⟨variable⟩ must
+/// already be one (§4.1.6, §3.1). chibi draws the line in exactly that place,
+/// rejecting `(set! if 5)` with the same message it gives for `(list if)`.
+/// Gauche accepts it and then breaks inside its own startup code, which is the
+/// argument against following it.
+///
+/// (`(define (if a b) …)` in *head* position is
+/// `core_syntax_bindings.rs::test_define_shadows_a_syntactic_keyword`; what is
+/// new here is the value half.)
 #[test]
-fn test_rebinding_a_keyword_makes_it_a_value() {
+fn test_define_may_rebind_a_keyword_but_set_may_not() {
     assert_program_eval_to("(import (scheme base)) (define if 5) (+ if 1)", "6");
-    assert_program_eval_to("(import (scheme base)) (set! if 5) (+ if 1)", "6");
-    // And the rebound name is an ordinary procedure position, too.
-    assert_program_eval_to(
-        "(import (scheme base)) (define (if a b) (list 'proc a b)) (if 1 2)",
-        "(proc 1 2)",
-    );
+    assert_program_eval_error("(import (scheme base)) (set! if 5)");
+    assert_program_eval_error("(import (scheme base)) (set! cond 5)");
+    // A `set!` on an ordinary variable is untouched — the refusal is about what
+    // the name denotes, not about `set!`.
+    assert_program_eval_to("(import (scheme base)) (let ((x 1)) (set! x 2) x)", "2");
 }
 
 /// A keyword that was never imported is an unbound variable, not a misuse of
-/// syntax — so the two failures stay distinguishable. Both are errors; what
-/// matters is that the check does not claim a name it knows nothing about.
+/// syntax — the check must not claim a name it knows nothing about.
+///
+/// The first version of this test imported `(patina internal lists)`, which
+/// exports no `define`, so the library failed on its own first line and never
+/// reached `cond` at all. `assert_program_eval_error` accepts any error, so it
+/// passed while testing nothing. Importing exactly `define` and `list` is what
+/// makes `cond` the only thing that can fail.
 #[test]
 fn test_an_unimported_keyword_is_merely_unbound() {
     assert_program_eval_error(
         r#"
         (define-library (val nokeyword)
-          (import (patina internal lists))
+          (import (only (scheme base) define list))
           (export go)
           (begin (define (go) (list cond))))
         (import (val nokeyword))
         (go)
         "#,
+    );
+}
+
+// ============================================================================
+// Residuals — the rule is a desugar-time snapshot
+// ============================================================================
+
+/// A name that is not syntax *yet* still loads as a value.
+///
+/// The check reads the environment as it stands while the enclosing form is
+/// desugared, and returns "not syntax" on a lookup miss — which is right, or an
+/// ordinary forward reference to a procedure would be an error. The cost is
+/// that `#<macro>`, the value this rule exists to abolish, is still reachable
+/// through a forward reference. chibi reports `undefined variable: foo` here,
+/// because it resolves at the *read*.
+///
+/// Pinned rather than fixed: closing it means checking on every variable read,
+/// which is `LoadGlobal` on the VM — and the per-site inline cache stores a
+/// slot, so a fill-time check would be unsound and a per-load tag test would
+/// sit on the hottest instruction in the interpreter. Recorded so the
+/// `#<macro>` formatting in `datum_writer.rs` is not mistaken for dead code.
+#[test]
+fn test_a_forward_reference_to_syntax_is_not_caught() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define (f) (list foo))
+         (define-syntax foo (syntax-rules () ((_) 1)))
+         (f)",
+        "(#<macro>)",
+    );
+}
+
+/// A binding that merely shares a spelling suppresses the check.
+///
+/// `shadowed_names` is keyed by spelling, because local bindings never reach
+/// the desugarer's environment — so it is a coarser test than the scope-aware
+/// resolution it guards. Here the template binds a *scoped* `cond` while the
+/// reference is the use site's unscoped one, which resolves to the global
+/// macro; the spelling match suppresses the answer anyway.
+///
+/// Safe in the direction it fails, and older than this rule: fixing it means
+/// making shadowing scope-aware, which is a hygiene change with its own blast
+/// radius. chibi mangles this case too.
+#[test]
+fn test_a_shadowed_spelling_suppresses_the_check() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define-syntax m (syntax-rules () ((_ body) (let ((cond 5)) body))))
+         (m cond)",
+        "#<macro>",
     );
 }

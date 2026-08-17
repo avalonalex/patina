@@ -69,12 +69,6 @@ fn test_local_bindings_still_shadow_keywords() {
 // Auxiliary syntax
 // ============================================================================
 
-// `else` and `=>` used to be bound as *variables* holding their own symbol,
-// purely so that `(import (only (scheme base) else))` had something to select,
-// and the workaround leaked: `(list else)` returned the symbol `else`. It
-// briefly returned `#<syntax:else>` once they became markers, and is now
-// refused outright — `syntax_as_a_value.rs` owns that rule and asserts it.
-
 /// In head position an auxiliary keyword is a mistake, and saying which beats
 /// reporting that a symbol is not a procedure — which is what `(else 1)` used
 /// to report, via the variable binding.
@@ -120,12 +114,9 @@ fn test_a_renamed_keyword_works_at_top_level() {
     assert_program_eval_to("(import (rename (scheme base) (begin blk))) (blk 1 2)", "2");
 }
 
-// Renaming does not smuggle in a second spelling: `blk` is `begin`, the same
-// interned marker rather than a copy that behaves alike. That used to be
-// assertable from Scheme as `(eqv? begin blk)`, which no longer evaluates now
-// that syntax is refused in value position. The property is unchanged and is
-// pinned where it can still be observed: `core_syntax_is_interned_per_heap` in
-// `patina-core`'s heap tests.
+// A renamed keyword is the *same* interned marker, not a copy: pinned by
+// `core_syntax_is_interned_per_heap` in `patina-core`, which is where it moved
+// when `(eqv? begin blk)` stopped evaluating.
 
 /// `only` selecting a keyword works because there is now something to select.
 /// It used to *reject the program* — "Identifier 'begin' not found in import

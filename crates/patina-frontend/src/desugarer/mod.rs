@@ -144,6 +144,26 @@ fn next_alias_id() -> u64 {
 /// macro calls, even if a macro with that name exists in the environment.
 /// This handles cases like `(let ((let odd?)) (let 8))` where the inner `let`
 /// should call the variable, not expand the macro.
+/// What a head symbol, variable reference or `set!` target names, when it
+/// names syntax rather than a value.
+///
+/// Returned by [`Desugarer::resolve_syntax`], which is the single place that
+/// decides. Head position acts on both variants, the other two refuse both.
+enum SyntaxRef {
+    CoreSyntax(CoreForm),
+    Macro(Rc<patina_core::CompiledMacro>),
+}
+
+impl SyntaxRef {
+    /// How to name this in a diagnostic.
+    fn describe(&self) -> &'static str {
+        match self {
+            SyntaxRef::CoreSyntax(_) => "a syntactic keyword",
+            SyntaxRef::Macro(_) => "a macro",
+        }
+    }
+}
+
 pub struct Desugarer {
     /// The environment head symbols resolve in.
     ///
@@ -286,43 +306,63 @@ impl Desugarer {
         self.shadowed_names.contains(name)
     }
 
+    /// What syntax, if any, this identifier names here.
+    ///
+    /// The one answer to "is this name syntax?", used by all three places that
+    /// have to ask: head position, where it selects a form or a macro
+    /// expansion; value position, where it is a mistake; and a `set!` target,
+    /// where it is also a mistake. Those were three separate lookups with two
+    /// different shadowing rules and two different environment queries, and
+    /// nothing kept them in step — a binding one of them called syntax and
+    /// another did not would silently reopen the `#<macro>`-as-a-value hole.
+    ///
+    /// Shadowing is checked first and by spelling, which is what
+    /// `shadowed_names` records: local bindings never reach the desugarer's
+    /// environment. It applies only to a reference written *without* scopes.
+    /// A macro-introduced one carries its own, and hygiene is the whole point
+    /// — `(let ((if 'captured)) (my-cond #t 'ok))` must still see the
+    /// template's `if` as the special form, which is
+    /// `test_special_form_not_captured` in `patina-tests`' hygiene suite.
+    ///
+    /// The spelling test is *coarser* than the resolution it guards, so an
+    /// enclosing binding that merely shares a spelling suppresses the answer —
+    /// see `test_a_shadowed_spelling_suppresses_the_check`. That direction is
+    /// safe (a missed rejection, never a wrong one) and predates this rule;
+    /// fixing it means making shadowing scope-aware, a hygiene change of its
+    /// own.
+    fn resolve_syntax(&self, name: &str, scopes: &ScopeSet) -> Option<SyntaxRef> {
+        if scopes.is_empty() && self.is_shadowed(name) {
+            return None;
+        }
+        let tv = self.env.get_with_scopes(name, scopes)?;
+        let heap = self.env.heap().borrow();
+        if let Some(form) = heap.get_core_syntax(tv) {
+            return Some(SyntaxRef::CoreSyntax(form));
+        }
+        heap.get_macro(tv).cloned().map(SyntaxRef::Macro)
+    }
+
     /// Reject a reference to syntax where a value is expected.
     ///
     /// R7RS puts syntactic keywords and variables in disjoint categories (§3.1)
     /// and its `⟨expression⟩` grammar (§7.1.3) admits only the latter, so
-    /// `(procedure? if)` is not a well-formed procedure call at all. The report
-    /// says "it is an error" rather than "an error is signaled", which §1.3.2
-    /// defines as *not* requiring detection — "though [implementations] are
-    /// encouraged to do so". This is Patina taking that encouragement; both
-    /// answers are conformant, and Gauche returns an opaque object here.
+    /// `(procedure? if)` is not a well-formed procedure call at all. Whether to
+    /// *report* that is a choice the report leaves open — the reasoning, the
+    /// references and the residual cases live in
+    /// `crates/patina-tests/tests/syntax_as_a_value.rs`, which is where to look
+    /// before changing this.
     ///
-    /// Macros are included deliberately. Patina used to return `#<macro>` for
-    /// `(list cond)` and error only for `if` — an accident of `if` having had
-    /// no binding to load rather than a rule. Applying this to keywords alone
-    /// would rebuild that split from the other side.
-    ///
-    /// Shadowed names are exempt: a local binding wins, so `(lambda (else) else)`
-    /// is an ordinary variable reference. Quoted data never reaches here — it
-    /// desugars to a literal — and neither do `syntax-rules` patterns and
-    /// templates, which the macro expander handles.
-    fn reject_syntax_as_value(&self, name: &Rc<str>, scopes: &ScopeSet) -> Result<()> {
-        if self.is_shadowed(name) {
-            return Ok(());
+    /// Quoted data never reaches here (it desugars to a literal), and neither
+    /// do `syntax-rules` patterns and templates, which the macro expander
+    /// handles.
+    fn reject_syntax_as_value(&self, name: &str, scopes: &ScopeSet) -> Result<()> {
+        match self.resolve_syntax(name, scopes) {
+            None => Ok(()),
+            Some(found) => Err(DesugarError::InvalidSyntax(format!(
+                "invalid use of syntax as a value: `{name}` is {}",
+                found.describe()
+            ))),
         }
-        let Some(tv) = self.env.get_with_scopes(name, scopes) else {
-            return Ok(());
-        };
-        let heap = self.env.heap().borrow();
-        let kind = if heap.get_core_syntax(tv).is_some() {
-            "a syntactic keyword"
-        } else if heap.get_macro(tv).is_some() {
-            "a macro"
-        } else {
-            return Ok(());
-        };
-        Err(DesugarError::InvalidSyntax(format!(
-            "invalid use of syntax as a value: `{name}` is {kind}"
-        )))
     }
 
     /// Create a child desugarer with a new environment (for let-syntax bodies)
@@ -621,20 +661,29 @@ impl Desugarer {
         };
         // Borrow released
 
-        // Step 2: Extract operator name (immutable access only)
-        let (name, is_macro_introduced) = {
+        // Step 2: Extract operator name and the scopes it was written with
+        // (immutable access only). The scopes used to be discarded here and the
+        // head looked up without them, while value position looked up *with*
+        // them — one of the two ways the two lookups had drifted apart before
+        // `resolve_syntax` merged them.
+        let (name, head_scopes, is_macro_introduced) = {
             let heap = shared_heap.borrow();
             if let Some(s) = heap.get_symbol_name(car) {
-                (Some(Rc::from(s)), false)
+                (Some(Rc::from(s)), ScopeSet::new(), false)
             } else if let Some((id_name, id_scopes)) = utils::get_identifier_info(car, &heap) {
-                (Some(id_name), !id_scopes.is_empty())
+                let introduced = !id_scopes.is_empty();
+                (Some(id_name), id_scopes, introduced)
             } else {
-                (None, false)
+                (None, ScopeSet::new(), false)
             }
         };
         // Immutable borrow released
 
-        // Determine if this name is shadowed by a local binding
+        // Determine if this name is shadowed by a local binding. A
+        // macro-introduced head is exempt: it carries its own scopes, and
+        // hygiene means the template's `if` is still the special form even
+        // where the use site bound `if`. `resolve_syntax` applies the same
+        // rule from the scopes, so this is only for the `apply` check below.
         let is_shadowed = name
             .as_ref()
             .map(|n| !is_macro_introduced && self.is_shadowed(n))
@@ -648,20 +697,16 @@ impl Desugarer {
         // must find whichever the environment holds. Asking only about macros
         // here is what let `(define-syntax if …)` take effect while
         // `(define (if a b c) …)` did not: the macro was looked up and the
-        // procedure was not, so the name `match` below still claimed the form.
+        // procedure was not, so the name match below still claimed the form.
         //
-        // `head_is_bound` carries the third answer — bound to something that
-        // is neither — because that is what lets an ordinary definition shadow
-        // a keyword.
+        // `resolve_syntax` is shared with value position and `set!`, so all
+        // three agree on what counts as syntax. A name bound to anything else
+        // answers `None` here and falls through to an ordinary application,
+        // which is what lets a definition shadow a keyword.
         let (macro_to_expand, core_form) = match &name {
-            Some(sym) if !is_shadowed => match self.env.get(sym) {
-                Some(tv) => {
-                    let heap_ref = self.env.heap().borrow();
-                    (
-                        heap_ref.get_macro(tv).cloned(),
-                        heap_ref.get_core_syntax(tv),
-                    )
-                }
+            Some(sym) => match self.resolve_syntax(sym, &head_scopes) {
+                Some(SyntaxRef::Macro(m)) => (Some(m), None),
+                Some(SyntaxRef::CoreSyntax(form)) => (None, Some(form)),
                 None => (None, None),
             },
             _ => (None, None),
@@ -1034,6 +1079,17 @@ impl Desugarer {
                 ));
             }
         };
+
+        // `set!` refuses syntax for the same reason a value reference does, and
+        // by the same call. R7RS §5.3.1 licenses a *definition* over a
+        // syntactic keyword — "if ⟨variable⟩ is not bound, or is a syntactic
+        // keyword, then the definition will bind ⟨variable⟩ to a new location"
+        // — and says nothing of the sort for `set!`, whose ⟨variable⟩ must
+        // already be one (§4.1.6, §3.1). chibi rejects `(set! if 5)` with the
+        // same message it gives for `(list if)`; Gauche accepts it and then
+        // breaks inside its own startup code. Without this, reading syntax was
+        // an error while overwriting it silently succeeded.
+        self.reject_syntax_as_value(&name, &scopes)?;
 
         let value = self.desugar_tagged(args_vec[1], shared_heap)?;
 

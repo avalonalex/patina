@@ -2856,25 +2856,23 @@ mod tests {
         use crate::core_syntax::{ALL_CORE_FORMS, CoreForm};
         let mut heap = Heap::new();
 
+        // Idempotence, which the loop below cannot show — it asks for each form
+        // exactly once.
         assert_eq!(
             heap.core_syntax(CoreForm::Begin).raw(),
             heap.core_syntax(CoreForm::Begin).raw()
         );
-        assert_ne!(
-            heap.core_syntax(CoreForm::Begin).raw(),
-            heap.core_syntax(CoreForm::If).raw()
-        );
 
-        // No two forms may share a marker — the failure a positional table
-        // would have made possible if its order drifted from the enum's.
-        let mut seen = std::collections::HashSet::new();
+        // And every form round-trips to itself. Distinctness is not asserted:
+        // the table is keyed by `CoreForm`, so two forms cannot share a marker
+        // by construction, and the one way two entries could collide —
+        // a duplicate in `ALL_CORE_FORMS` — is
+        // `all_core_forms_has_no_duplicates_and_unique_names` in `core_syntax`.
         for &form in ALL_CORE_FORMS {
-            let tv = heap.core_syntax(form);
-            assert!(
-                seen.insert(tv.raw()),
-                "{form} aliases another form's marker"
-            );
-            assert_eq!(heap.get_core_syntax(tv), Some(form));
+            // Extracted, not nested: `core_syntax` takes `&mut self` and
+            // `get_core_syntax` takes `&self`.
+            let marker = heap.core_syntax(form);
+            assert_eq!(heap.get_core_syntax(marker), Some(form));
         }
     }
 

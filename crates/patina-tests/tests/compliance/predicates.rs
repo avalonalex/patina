@@ -162,15 +162,9 @@ fn test_procedure_predicate() {
     assert_eval_to("(procedure? (car (map (lambda (x) +) '(1))))", "#t"); // List of procedures
 
     // Syntax is not a value at all, so the question is refused rather than
-    // answered. `syntax_as_a_value.rs` is where that rule lives; here it is
-    // asserted only to keep this list from drifting back.
-    //
-    // This block has been through both wrong answers. It first *errored* on the
-    // keywords and returned `#f` for the macros below — not a rule, but an
-    // accident: `if` had no binding to load, so the reference failed as unbound,
-    // while `cond` did have one. Keywords became bindings, which made both
-    // halves answer `#f` alike. They now both raise, which is what R7RS §7.1.3
-    // implies and §1.3.2 encourages without requiring.
+    // answered — keywords and macros alike. `syntax_as_a_value.rs` owns that
+    // rule and the reasoning; this list exists only to keep the predicate's
+    // own answers from drifting back.
     for expr in [
         "(procedure? if)",
         "(procedure? lambda)",
