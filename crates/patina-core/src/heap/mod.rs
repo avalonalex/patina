@@ -2843,6 +2843,41 @@ mod tests {
         assert_ne!(s1.raw(), s3.raw());
     }
 
+    /// A syntactic keyword's marker *is* its identity, so one form must intern
+    /// to one object however many times it is asked for — that is what makes a
+    /// keyword imported under a rename the same form as the original.
+    ///
+    /// This used to be assertable from Scheme as
+    /// `(import (scheme base) (rename (scheme base) (begin blk))) (eqv? begin blk)`,
+    /// which stopped evaluating when syntax became an error in value position.
+    /// Same property, kept where it can still be seen.
+    #[test]
+    fn core_syntax_is_interned_per_heap() {
+        use crate::core_syntax::{ALL_CORE_FORMS, CoreForm};
+        let mut heap = Heap::new();
+
+        assert_eq!(
+            heap.core_syntax(CoreForm::Begin).raw(),
+            heap.core_syntax(CoreForm::Begin).raw()
+        );
+        assert_ne!(
+            heap.core_syntax(CoreForm::Begin).raw(),
+            heap.core_syntax(CoreForm::If).raw()
+        );
+
+        // No two forms may share a marker — the failure a positional table
+        // would have made possible if its order drifted from the enum's.
+        let mut seen = std::collections::HashSet::new();
+        for &form in ALL_CORE_FORMS {
+            let tv = heap.core_syntax(form);
+            assert!(
+                seen.insert(tv.raw()),
+                "{form} aliases another form's marker"
+            );
+            assert_eq!(heap.get_core_syntax(tv), Some(form));
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Object tests
     // -------------------------------------------------------------------------

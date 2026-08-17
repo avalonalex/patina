@@ -69,15 +69,11 @@ fn test_local_bindings_still_shadow_keywords() {
 // Auxiliary syntax
 // ============================================================================
 
-/// `else` and `=>` used to be bound as *variables* holding their own symbol,
-/// purely so that `(import (only (scheme base) else))` had something to select.
-/// The workaround leaked: `(list else)` returned the symbol `else`. They are
-/// markers now, so it names what it is.
-#[test]
-fn test_auxiliary_syntax_is_not_a_symbol() {
-    assert_program_eval_to("(import (scheme base)) (list else)", "(#<syntax:else>)");
-    assert_program_eval_to("(import (scheme base)) (list =>)", "(#<syntax:=>>)");
-}
+// `else` and `=>` used to be bound as *variables* holding their own symbol,
+// purely so that `(import (only (scheme base) else))` had something to select,
+// and the workaround leaked: `(list else)` returned the symbol `else`. It
+// briefly returned `#<syntax:else>` once they became markers, and is now
+// refused outright — `syntax_as_a_value.rs` owns that rule and asserts it.
 
 /// In head position an auxiliary keyword is a mistake, and saying which beats
 /// reporting that a symbol is not a procedure — which is what `(else 1)` used
@@ -124,17 +120,12 @@ fn test_a_renamed_keyword_works_at_top_level() {
     assert_program_eval_to("(import (rename (scheme base) (begin blk))) (blk 1 2)", "2");
 }
 
-/// Renaming does not smuggle in a second spelling: `blk` is `begin`, and it is
-/// the *same object*, not a copy that merely behaves alike. Markers are
-/// interned per heap so that a form has one identity however it was imported.
-#[test]
-fn test_a_renamed_keyword_is_the_same_object() {
-    assert_program_eval_to(
-        "(import (scheme base) (rename (scheme base) (begin blk)))
-         (eqv? begin blk)",
-        "#t",
-    );
-}
+// Renaming does not smuggle in a second spelling: `blk` is `begin`, the same
+// interned marker rather than a copy that behaves alike. That used to be
+// assertable from Scheme as `(eqv? begin blk)`, which no longer evaluates now
+// that syntax is refused in value position. The property is unchanged and is
+// pinned where it can still be observed: `core_syntax_is_interned_per_heap` in
+// `patina-core`'s heap tests.
 
 /// `only` selecting a keyword works because there is now something to select.
 /// It used to *reject the program* — "Identifier 'begin' not found in import

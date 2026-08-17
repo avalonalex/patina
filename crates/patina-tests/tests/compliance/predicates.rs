@@ -161,29 +161,34 @@ fn test_procedure_predicate() {
     assert_eval_to("(procedure? (map (lambda (x) x) '(1 2)))", "#f"); // Returns list
     assert_eval_to("(procedure? (car (map (lambda (x) +) '(1))))", "#t"); // List of procedures
 
-    // Syntactic keywords are not procedures.
+    // Syntax is not a value at all, so the question is refused rather than
+    // answered. `syntax_as_a_value.rs` is where that rule lives; here it is
+    // asserted only to keep this list from drifting back.
     //
-    // These used to *error* — "core special forms are not first-class values" —
-    // while the macros below returned #f, and the difference was an accident of
-    // implementation rather than a rule: `if` had no binding to load, so the
-    // reference failed as unbound, whereas `cond` did. Keywords are bindings
-    // now (PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md), so both halves answer
-    // alike. R7RS makes referencing either an error, and neither Gauche nor
-    // Patina raises one; chibi does.
-    assert_eval_to("(procedure? if)", "#f");
-    assert_eval_to("(procedure? lambda)", "#f");
-    assert_eval_to("(procedure? define)", "#f");
-    assert_eval_to("(procedure? quote)", "#f");
-
-    // Note: let, let*, letrec, letrec*, and, or are macros defined in Scheme
-    assert_eval_to("(procedure? let)", "#f");
-    assert_eval_to("(procedure? let*)", "#f");
-    assert_eval_to("(procedure? letrec)", "#f");
-    assert_eval_to("(procedure? letrec*)", "#f");
-    assert_eval_to("(procedure? and)", "#f");
-    assert_eval_to("(procedure? or)", "#f");
-    assert_eval_to("(procedure? cond)", "#f");
-    assert_eval_to("(procedure? case)", "#f");
+    // This block has been through both wrong answers. It first *errored* on the
+    // keywords and returned `#f` for the macros below — not a rule, but an
+    // accident: `if` had no binding to load, so the reference failed as unbound,
+    // while `cond` did have one. Keywords became bindings, which made both
+    // halves answer `#f` alike. They now both raise, which is what R7RS §7.1.3
+    // implies and §1.3.2 encourages without requiring.
+    for expr in [
+        "(procedure? if)",
+        "(procedure? lambda)",
+        "(procedure? define)",
+        "(procedure? quote)",
+        // let, let*, letrec, letrec*, and, or, cond, case are macros defined in
+        // Scheme. They answer the same way: the split above is gone.
+        "(procedure? let)",
+        "(procedure? let*)",
+        "(procedure? letrec)",
+        "(procedure? letrec*)",
+        "(procedure? and)",
+        "(procedure? or)",
+        "(procedure? cond)",
+        "(procedure? case)",
+    ] {
+        assert_eval_error(expr);
+    }
 }
 
 // Numeric type predicates (R7RS Section 6.2)

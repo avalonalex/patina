@@ -286,6 +286,45 @@ impl Desugarer {
         self.shadowed_names.contains(name)
     }
 
+    /// Reject a reference to syntax where a value is expected.
+    ///
+    /// R7RS puts syntactic keywords and variables in disjoint categories (§3.1)
+    /// and its `⟨expression⟩` grammar (§7.1.3) admits only the latter, so
+    /// `(procedure? if)` is not a well-formed procedure call at all. The report
+    /// says "it is an error" rather than "an error is signaled", which §1.3.2
+    /// defines as *not* requiring detection — "though [implementations] are
+    /// encouraged to do so". This is Patina taking that encouragement; both
+    /// answers are conformant, and Gauche returns an opaque object here.
+    ///
+    /// Macros are included deliberately. Patina used to return `#<macro>` for
+    /// `(list cond)` and error only for `if` — an accident of `if` having had
+    /// no binding to load rather than a rule. Applying this to keywords alone
+    /// would rebuild that split from the other side.
+    ///
+    /// Shadowed names are exempt: a local binding wins, so `(lambda (else) else)`
+    /// is an ordinary variable reference. Quoted data never reaches here — it
+    /// desugars to a literal — and neither do `syntax-rules` patterns and
+    /// templates, which the macro expander handles.
+    fn reject_syntax_as_value(&self, name: &Rc<str>, scopes: &ScopeSet) -> Result<()> {
+        if self.is_shadowed(name) {
+            return Ok(());
+        }
+        let Some(tv) = self.env.get_with_scopes(name, scopes) else {
+            return Ok(());
+        };
+        let heap = self.env.heap().borrow();
+        let kind = if heap.get_core_syntax(tv).is_some() {
+            "a syntactic keyword"
+        } else if heap.get_macro(tv).is_some() {
+            "a macro"
+        } else {
+            return Ok(());
+        };
+        Err(DesugarError::InvalidSyntax(format!(
+            "invalid use of syntax as a value: `{name}` is {kind}"
+        )))
+    }
+
     /// Create a child desugarer with a new environment (for let-syntax bodies)
     ///
     /// This inherits the current shadowed_names and uses the new environment and scopes.
@@ -512,14 +551,15 @@ impl Desugarer {
 
         // Symbol - variable reference without scopes
         if let Some(name) = heap.get_symbol_name(tagged) {
-            return Ok(CoreExpr::new(CoreExprKind::Var {
-                name: Rc::from(name),
-                scopes: ScopeSet::new(),
-            }));
+            let name: Rc<str> = Rc::from(name);
+            let scopes = ScopeSet::new();
+            self.reject_syntax_as_value(&name, &scopes)?;
+            return Ok(CoreExpr::new(CoreExprKind::Var { name, scopes }));
         }
 
         // Identifier - variable reference with scopes (for hygiene)
         if let Some((name, scopes)) = utils::get_identifier_info(tagged, &heap) {
+            self.reject_syntax_as_value(&name, &scopes)?;
             return Ok(CoreExpr::new(CoreExprKind::Var { name, scopes }));
         }
 
