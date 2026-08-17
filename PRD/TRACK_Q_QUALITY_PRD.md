@@ -83,9 +83,9 @@ the live inventory. Each pins both backends' current behaviour and is written to
 **fail when the bug is fixed**, forcing collapse into a plain both-backends
 assertion. Prefer that file over this section when starting Q2.
 
-**Update 2026-08-16 — the VM half of every `apply` row is fixed, and the
-diagnosis above was wrong about why.** It was never the registry. Both apply
-instructions (`Instruction::Apply` and `Instruction::TailApply`) probed only
+**Update 2026-08-16 — the VM half of every `apply` row in the table is fixed,
+and the diagnosis above was wrong about why.** It was never the registry. Both
+apply instructions (`Instruction::Apply` and `Instruction::TailApply`) probed only
 primitive → parameter → closure, so a VM-intercepted control primitive was
 rejected *before* the registry was consulted — which is why the
 `with-exception-handler` row blames "the §1.1 stub" for an error the stub never
@@ -101,10 +101,26 @@ fix; `apply` was just a third way to reach it. `crates/patina-tests/tests/
 callability.rs` carries the callee-set tests, `backend_divergence.rs` the one
 remaining pin.
 
-**The lesson is the one §1.2 already teaches, applied to itself:** every row in
-that table was measured, but the *cause* attached to two of them was inferred
-from the error text and never checked. A registry name in an error message is
-not evidence the registry was reached.
+**A third VM dispatcher, `call_any`, still has the narrow probe set** and is
+what runs `call-with-values`' consumer, prompt handlers and exception handlers.
+So this row is fixed and its sibling is not:
+
+| Expression | VM | Tree-walker |
+|---|---|---|
+| `(let ((f apply)) (f + '(1 2 3)))` | `6` | `6` |
+| `(call-with-values (lambda () (values + '(1 2))) apply)` | ❌ `Undefined variable: patina.internal.control/apply` | `3` |
+
+Pinned in `crates/patina-tests/tests/callability.rs`. The fix is to give
+`call_any` `call_value`'s probe set, which needs an `exit_depth` its eleven call
+sites do not all have — a Q2 item, not a rider on the apply change.
+
+**The lesson is the one §1.2 already teaches, applied to itself, twice.** Every
+row in that table was measured, but the *cause* attached to two of them was
+inferred from the error text and never checked — a registry name in an error
+message is not evidence the registry was reached. And the first draft of this
+update generalised from the rows it had fixed to "every callee a direct call
+accepts", which the `call-with-values` row above falsifies in five tokens. Two
+dispatchers converging is not the same as the VM converging.
 
 **Shared root cause with an open Track L defect.** `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
 §6 records that Rust registry primitives ignore the import set at top level.

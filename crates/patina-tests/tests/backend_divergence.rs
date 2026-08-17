@@ -31,9 +31,17 @@
 //! primitive → parameter → closure, so a VM-intercepted control primitive was
 //! rejected before the registry was ever consulted — which is why the
 //! `with-exception-handler` row's note blamed a stub that never ran. Both now
-//! route through the same dispatcher `Call` uses. What remains is the
-//! tree-walker's genuine registry hole, still Q2 part 1's to fix, and `apply`
-//! is simply a third way to reach it.
+//! route through the same dispatcher `Call` uses. What remains on the
+//! tree-walker is its genuine registry hole, still Q2 part 1's to fix, and
+//! `apply` is simply a third way to reach it.
+//!
+//! **The VM keeps one narrow dispatcher**, `call_any`, with the same probe set
+//! the apply instructions shed — so a control primitive or continuation
+//! reached through `call-with-values`, a prompt handler or an exception
+//! handler still fails there:
+//! `(call-with-values (lambda () (values + '(1 2))) apply)`. Pinned in
+//! `callability.rs`, not here, because both backends do not disagree about it
+//! — only the VM is wrong, and the tree-walker is right.
 
 mod common;
 use common::*;
@@ -74,35 +82,23 @@ fn callcc_passed_to_higher_order_procedure() {
 
 // ─── apply on control ops (Track Q §1.2) ─────────────────────────────────────
 
-/// Converged. The VM used to report `Undefined variable:
-/// patina.internal.control/dynamic-wind`, because `Instruction::Apply` probed
-/// only primitive → parameter → closure and a VM-intercepted control primitive
-/// is none of those. It now routes through `call_value`, the same dispatcher
-/// `Call` uses, so `apply` accepts every callee a direct call accepts.
+/// Was "fails on both", recorded here so Q2 would not mistake backend
+/// *agreement* for correctness. Half of it is fixed: the VM now evaluates it to
+/// `1`, as R7RS requires and as chibi does, so what was a shared gap is now an
+/// ordinary divergence with the tree-walker on the wrong side.
+///
+/// The tree-walker's remaining hole is the one `callcc_bound_with_define` and
+/// `callcc_passed_to_higher_order_procedure` already describe — `call/cc` in
+/// value position resolves to a registry binding that is not there — and it is
+/// still Q2 part 1's to fix. `apply` is simply a third way to reach it.
 #[test]
-fn apply_dynamic_wind_agrees() {
-    assert_program_eval_to(
-        r#"
-        (define r '())
-        (apply dynamic-wind
-               (list (lambda () (set! r 1)) (lambda () 2) (lambda () (set! r 3))))
-        "#,
-        "2",
-    );
-}
-
-/// Converged with the entry above, and for the same reason. The note here used
-/// to blame a registered-but-stubbed primitive; the stub was never reached —
-/// `with-exception-handler` is VM-intercepted, so the dispatcher gave up before
-/// the registry was consulted.
-#[test]
-fn apply_with_exception_handler_agrees() {
-    assert_program_eval_to(
-        r#"
-        (apply with-exception-handler
-               (list (lambda (e) 43) (lambda () (raise-continuable 'x))))
-        "#,
-        "43",
+fn apply_callcc() {
+    assert_divergence(
+        "(apply call/cc (list (lambda (k) 1)))",
+        On::Vm,
+        "1",
+        ErrorClass::AtRuntime,
+        CONTROL_OPS,
     );
 }
 
@@ -179,26 +175,6 @@ fn reentered_continuation_keeps_exception_handler() {
 }
 
 // ─── Not divergences ─────────────────────────────────────────────────────────
-
-/// Was "fails on both", recorded here so Q2 would not mistake backend
-/// *agreement* for correctness. Half of it is fixed: the VM now evaluates it to
-/// `1`, as R7RS requires and as chibi does, so what was a shared gap is now an
-/// ordinary divergence with the tree-walker on the wrong side.
-///
-/// The tree-walker's remaining hole is the one `callcc_bound_with_define` and
-/// `callcc_passed_to_higher_order_procedure` already describe — `call/cc` in
-/// value position resolves to a registry binding that is not there — and it is
-/// still Q2 part 1's to fix. `apply` is simply a third way to reach it.
-#[test]
-fn apply_callcc() {
-    assert_divergence(
-        "(apply call/cc (list (lambda (k) 1)))",
-        On::Vm,
-        "1",
-        ErrorClass::AtRuntime,
-        CONTROL_OPS,
-    );
-}
 
 /// §1.2 recorded this as a VM failure (`Wrong number of arguments: expected 1,
 /// got 2`) at `7a6a797`; both backends return `7` as of `2d4ce29`. Kept as the
