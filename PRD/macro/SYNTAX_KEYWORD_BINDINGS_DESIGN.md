@@ -181,19 +181,42 @@ top-level and library declaration keyword rather than an export, and `expand`, a
 Both must reach `global_env` for a bare script to work; re-exporting them from `(scheme base)` is
 the least machinery, at the cost of a non-standard entry in that library's export list.
 
-### 2.5 Value position is free
+### 2.5 Value position: unified in stage 1, decided separately
 
 `(list cond)` already evaluates to `(#<macro>)` on both backends. A marker loading as
-`#<syntax if>` is the same convention, costs nothing, and finally makes `if` and `cond` behave
-alike — today `if` errors and `cond` does not. It is also Gauche's answer.
+`#<syntax:if>` is the same convention, costs nothing, and makes `if` and `cond` behave alike —
+before this work `if` errored and `cond` did not, which was an accident of implementation rather
+than a rule: `if` had no binding to load, so the reference failed as unbound.
 
-Rejected: a desugar-time "syntactic keyword used as an expression" error (chibi's answer). It is
-more correct, but it would require an environment lookup at every variable reference during
-desugaring, and it would be inconsistent to apply it to core syntax while `(list cond)` still
-yields an object. If it is ever wanted, it should be one change covering both.
+**Unifying the two is stage 1's job; choosing which answer they share is not.** Stage 1 takes
+Gauche's, because it is what Patina already does for macros and it costs nothing. A follow-up
+changes both to Chez's and chibi's — a desugar-time "syntactic keyword used as an expression"
+error — which is deliberately *not* in stage 1: it changes behaviour at every existing macro
+reference, not just at the keywords this work is about, and it should be bisectable from them.
+It is small in code (the two `CoreExprKind::Var` construction sites in the desugarer) and costs an
+environment lookup per variable reference during desugaring.
+
+**What R7RS actually says**, checked in `spec/r7rs-small-spec/` rather than recalled:
+
+- §3.1 (`basic.tex`): an identifier names *either* a type of syntax *or* a location. Disjoint, so a
+  keyword in expression position is not a variable reference at all.
+- §1.3.3 (`struct.tex`), auxiliary syntax: "Any use as an independent syntactic construct or
+  variable is an error."
+- §1.3.2 (`struct.tex`) is the decisive part. "An error **is signaled**" means implementations
+  *must* detect and report; a plain "**it is an error**" means they are "not required to detect or
+  report the error, though they are encouraged to do so." The keyword-as-expression rule uses the
+  plain form.
+
+So both answers are conformant, and the spec encourages the stricter one without requiring it.
+Chez 10.4.1 and chibi 0.12 raise (for macros as well as keywords); Gauche 0.9.15 and Patina do not.
 
 Nothing in `lib/` or the corpus reads `else` as a value; the only two hits are a `syntax-rules`
 literals list and a `cond-expand` clause, both structural.
+
+**R7RS is not neutral about §1's second symptom, however.** §5.3.1 (`prog.tex`) is normative and
+exact: "if ⟨variable⟩ is not bound, *or is a syntactic keyword*, then the definition will bind
+⟨variable⟩ to a new location before performing the assignment." A top-level `define` over a keyword
+is specified, not merely conventional, and Patina contradicted it.
 
 ### 2.6 What stays name-based, on purpose
 
@@ -230,7 +253,7 @@ to copy.
 Two PRs. The split is not ceremony: stage 1 cannot break a working program, stage 2 can, and they
 should be bisectable apart.
 
-### Stage 1 — a binding wins where there is one
+### Stage 1 — a binding wins where there is one  *(done)*
 
 Rule: if the head symbol resolves to a marker, dispatch on the marker; if it resolves to anything
 else, it is that thing; **if it is unbound, fall back to the spelling as today**.
@@ -242,14 +265,52 @@ lookup).
 
 Cannot break a working program: anything unbound behaves exactly as it does now.
 
-The one behaviour change is `(list else)` → `#<syntax else>` instead of `(else)`, which is Gauche's
+The one behaviour change is `(list else)` → `#<syntax:else>` instead of `(else)`, which is Gauche's
 answer and which nothing depends on.
+
+**One thing the plan did not foresee, and it was flagged as an argument rather than a test.** §6
+said making `_` and `...` bindings "should be inert, because the matcher compares name + scopes and
+never consults an environment." The matcher does not — but `resolve_literal_bindings`, which runs
+at macro *compile* time, does, and a literal that resolves is treated as bound. That broke
+`test_srfi46_ellipsis_as_literal_with_custom_ellipsis`, exactly the case §6 named.
+
+The cause was a pre-existing defect with nothing to do with keywords. `resolve_literal_bindings`
+recorded the *definition site's* scopes for a literal found in the plain, unscoped bindings, so a
+macro defined inside any scope could not match a global literal:
+
+```scheme
+(let ()
+  (define-syntax m (syntax-rules (car) ((_ car) 'matched) ((_ x) 'not-matched)))
+  (m car))
+;; chibi, Gauche => matched      Patina => not-matched
+```
+
+`car` is an ordinary procedure; nothing about this is syntactic. Making `...` a binding merely gave
+the macro a literal that resolved for the first time. Fixed by recording no scopes for an unscoped
+binding, which needed a new `Environment::has_scoped_binding` — `get_with_scopes` cannot answer the
+question, because it falls back to the plain bindings and returns a value either way, so asking it
+labelled every global binding as scoped.
+
+### Stage 1.5 — syntax in value position  *(follow-up, see §2.5)*
+
+Make a syntactic keyword *and a macro* an error where a value is expected, as Chez and chibi do.
+Separate because it changes behaviour at every macro reference, not only at keywords.
 
 ### Stage 2 — delete the fallback
 
 Removes the 17-arm `match`, and with it `DESUGARED_FORMS`, `SYNTAX_RULES_KEYWORDS` and
-`is_core_syntax` (workaround 1) and the `R5RS_SYNTAX` leak (workaround 2). `except`, `prefix` and
-`null-environment` become conformant.
+`is_core_syntax` (workaround 1) and the `R5RS_SYNTAX` leak (workaround 2).
+
+**Narrower than planned, because stage 1 took more than expected.** What is left is one thing: the
+*bare* spelling still resolves after an import set has excluded or moved it. `(except … begin)`
+still admits `begin`, `(prefix … s:)` still admits `begin`, and `(null-environment 5)` still admits
+`cond-expand` — all three because the name is unbound there and the fallback claims it.
+
+The *other* half of `prefix` needed no stage 2 at all and is conformant as of stage 1: `s:begin`
+resolves, because `prefix` copies the marker under the new name and the desugarer dispatches on the
+form. `s:let`, `s:if` and `s:quote` compose correctly too, which is the real check — `s:quote`
+carries the reader's `'` shorthand, so a prefixed base that got this wrong would fail on the first
+quoted datum. Pinned in `crates/patina-tests/tests/core_syntax_bindings.rs`.
 
 Requires:
 
@@ -279,11 +340,16 @@ what resolves, which is the kind of change that can break code that runs today �
 reasoning that has kept the lexer delimiter set open in Track L §6. The mitigation is the
 measurement above plus a compat re-run, not confidence.
 
-**`_` and `...` acquire bindings.** `lib/scheme/base.sld` records that they could not be made
-*variables* without breaking SRFI-46 custom ellipsis. Markers should be inert here, because the
-matcher compares `IdentifierKey` (name + scopes) and never consults an environment — but that is an
-argument, not a test. The SRFI-46 cases in `patina-macros`' interface tests are the check, and they
-must be run before the claim is repeated.
+**~~`_` and `...` acquire bindings.~~** ✅ **Materialized in stage 1, and the argument was wrong.**
+It said markers "should be inert, because the matcher compares `IdentifierKey` (name + scopes) and
+never consults an environment," and closed by saying the SRFI-46 tests were the check and had to be
+run before the claim was repeated. The tests were run, the claim was wrong, and the reason it was
+wrong is instructive: the *matcher* does not consult an environment, but
+`resolve_literal_bindings` at macro compile time does, and it was never in view. The write-up is
+under Stage 1 above.
+
+Worth keeping as a pattern rather than as a closed risk: an argument that names one mechanism
+("the matcher") and concludes about a behaviour ("literal matching") has not covered the behaviour.
 
 **Three near-copies of `process_import_set`.** The export loop was deduplicated into `build_library`
 by PR #81 precisely because three byte-identical copies drift. The import side still has its three.

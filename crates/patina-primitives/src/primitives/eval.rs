@@ -427,21 +427,33 @@ fn primitive_null_environment(
     }
 
     // Create environment with only syntactic keywords, sharing global heap for TaggedValue compatibility
-    // These are macros defined in (scheme base), so we need to get them from there
     let env = Rc::new(Environment::with_heap(ctx.heap().clone()));
 
-    // Load scheme base to get the macros
+    // Load scheme base to get the keywords
     let base_lib = ctx
         .load_scheme_library(&["scheme".to_string(), "base".to_string()])
         .map_err(|e| EvalError::InternalError(format!("Cannot load scheme base: {}", e)))?;
 
-    // Install only the syntactic keywords
+    // Install the syntactic keywords. This loop used to miss the core keywords
+    // (`if`, `lambda`, `quote`, `begin`, …) entirely, with a comment saying
+    // they were "handled by the evaluator and don't need to be in the
+    // environment" — true only because they were recognized in every scope,
+    // which is what made this environment not null. They are bindings now, so
+    // they arrive here like the Scheme-level macros always did.
+    //
+    // `delay` is the one name still expected to miss: R5RS lists it, but
+    // Patina puts it in `(scheme lazy)`. Pre-existing, and not worth chasing
+    // here — the macro expands to a `(scheme lazy)` primitive that a null
+    // environment would not have either.
     for name in R5RS_SYNTAX {
         if let Some(tv) = base_lib.get_export_tagged(name) {
             env.define(name.to_string(), tv);
+        } else {
+            debug_assert_eq!(
+                *name, "delay",
+                "R5RS_SYNTAX names a keyword (scheme base) does not export"
+            );
         }
-        // Some syntactic keywords are special forms handled by the evaluator
-        // and don't need to be in the environment (if, lambda, quote, etc.)
     }
 
     let heap = ctx.heap();

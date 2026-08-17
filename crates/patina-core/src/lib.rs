@@ -18,6 +18,7 @@ pub mod compiled_macro;
 pub mod cont_value;
 pub mod continuation;
 pub mod core_expr;
+pub mod core_syntax;
 pub mod cps_expr;
 pub mod debug_format;
 pub mod environment;
@@ -40,6 +41,7 @@ pub use compiled_macro::{
 };
 pub use continuation::{CpsContinuation, DynamicWindRecord};
 pub use core_expr::{CoreExpr, CoreExprKind, Formals, LambdaBody, ScopedParam, Symbol};
+pub use core_syntax::{ALL_CORE_FORMS, CoreForm};
 pub use cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
 pub use environment::{Environment, ScopedBinding};
 pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};

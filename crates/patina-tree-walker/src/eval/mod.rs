@@ -261,6 +261,14 @@ impl Evaluator {
             vec![
                 "patina".to_string(),
                 "internal".to_string(),
+                "syntax".to_string(),
+            ],
+            stdlib::build_internal_syntax,
+        );
+        rust_loader.register(
+            vec![
+                "patina".to_string(),
+                "internal".to_string(),
                 "eval".to_string(),
             ],
             stdlib::build_internal_eval,

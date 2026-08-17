@@ -74,7 +74,7 @@ pub use error::{DesugarError, Result};
 
 use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
-use patina_core::{SharedHeap, TaggedValue};
+use patina_core::{CoreForm, SharedHeap, TaggedValue};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
 use patina_macros::macro_expander::utils::list_to_vec_with_tail_tagged;
@@ -594,20 +594,32 @@ impl Desugarer {
             .map(|n| !is_macro_introduced && self.is_shadowed(n))
             .unwrap_or(false);
 
-        // Step 3: Check for macro (no heap borrow - env.get may access heap internally)
-        let macro_to_expand = if let (Some(env), Some(sym)) = (&self.env, &name) {
-            if !is_shadowed {
-                if let Some(tv) = env.get(sym) {
+        // Step 3: Resolve the head symbol, once, for everything a binding can
+        // make it mean.
+        //
+        // A `syntax-rules` macro and a core syntactic keyword are both syntax
+        // that the head names, and both are ordinary bindings, so one lookup
+        // must find whichever the environment holds. Asking only about macros
+        // here is what let `(define-syntax if …)` take effect while
+        // `(define (if a b c) …)` did not: the macro was looked up and the
+        // procedure was not, so the name `match` below still claimed the form.
+        //
+        // `head_is_bound` carries the third answer — bound to something that
+        // is neither — because that is what lets an ordinary definition shadow
+        // a keyword.
+        let (macro_to_expand, core_form, head_is_bound) = match (&self.env, &name) {
+            (Some(env), Some(sym)) if !is_shadowed => match env.get(sym) {
+                Some(tv) => {
                     let heap_ref = env.heap().borrow();
-                    heap_ref.get_macro(tv).cloned()
-                } else {
-                    None
+                    (
+                        heap_ref.get_macro(tv).cloned(),
+                        heap_ref.get_core_syntax(tv),
+                        true,
+                    )
                 }
-            } else {
-                None
-            }
-        } else {
-            None
+                None => (None, None, false),
+            },
+            _ => (None, None, false),
         };
 
         // Handle macro expansion
@@ -654,39 +666,98 @@ impl Desugarer {
             return Ok(expr);
         }
 
-        // Check if it's a core special form
-        let is_shadowed = name
-            .as_ref()
-            .map(|n| !is_macro_introduced && self.is_shadowed(n))
-            .unwrap_or(false);
+        // A core syntactic keyword, reached through its binding. Dispatch on
+        // the *form* rather than on the name it was reached by, which is what
+        // makes an import rename work: after `(rename (begin blk))`, `(blk 1 2)`
+        // arrives here as `Begin`.
+        if let Some(form) = core_form {
+            return self.desugar_core_form(form, cdr, shared_heap);
+        }
 
+        // `apply` is not a keyword and has no marker. The desugarer
+        // special-cases it as an optimization, but it is also a real procedure
+        // binding, so it is checked whatever the environment holds.
         if let Some(sym) = &name
             && !is_shadowed
+            && sym.as_ref() == "apply"
         {
-            match sym.as_ref() {
-                "quote" => return self.desugar_quote_tagged(cdr, shared_heap),
-                "quasiquote" => return self.desugar_quasiquote_tagged(cdr, shared_heap),
-                "lambda" => return self.desugar_lambda_tagged(cdr, shared_heap),
-                "if" => return self.desugar_if_tagged(cdr, shared_heap),
-                "set!" => return self.desugar_set_tagged(cdr, shared_heap),
-                "define" => return self.desugar_define_tagged(cdr, shared_heap),
-                "define-syntax" => return self.desugar_define_syntax_tagged(cdr, shared_heap),
-                "import" => return self.desugar_import_tagged(cdr, shared_heap),
-                "begin" => return self.desugar_begin_tagged(cdr, shared_heap),
-                "apply" => return self.desugar_apply_tagged(list, cdr, shared_heap),
-                "expand" => return self.desugar_expand_tagged(cdr, shared_heap),
-                "let-syntax" => return self.desugar_let_syntax_tagged(cdr, shared_heap),
-                "letrec-syntax" => return self.desugar_letrec_syntax_tagged(cdr, shared_heap),
-                "cond-expand" => return self.desugar_cond_expand_tagged(cdr, shared_heap),
-                "syntax-error" => return self.desugar_syntax_error_tagged(cdr, shared_heap),
-                "include" => return self.desugar_include_tagged(cdr, shared_heap, false),
-                "include-ci" => return self.desugar_include_tagged(cdr, shared_heap, true),
-                _ => {}
-            }
+            return self.desugar_apply_tagged(list, cdr, shared_heap);
+        }
+
+        // Stage 1 fallback: a keyword with no binding in scope is still
+        // recognized by spelling.
+        //
+        // `head_is_bound` is the whole of the new rule — a binding, any
+        // binding, now decides, and only an unbound name falls through to its
+        // spelling. That is why `(define (if a b c) …)` takes effect: `if`
+        // resolves to a procedure, so this never runs.
+        //
+        // Auxiliary keywords are excluded deliberately. Bound, they are an
+        // error in head position; unbound, they stay an ordinary application
+        // of an unbound name, which is what they were before this change.
+        //
+        // Stage 2 deletes this block, and with it the last place a keyword is
+        // recognized by spelling — see
+        // `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`.
+        if let Some(sym) = &name
+            && !is_shadowed
+            && !head_is_bound
+            && let Some(form) = CoreForm::from_name(sym)
+            && form.is_dispatching()
+        {
+            return self.desugar_core_form(form, cdr, shared_heap);
         }
 
         // Regular application
         self.desugar_app_tagged(list, shared_heap)
+    }
+
+    /// Desugar a core syntactic keyword in head position.
+    ///
+    /// The single dispatch point for the forms the desugarer implements. It
+    /// takes a [`CoreForm`] rather than a name so that a keyword reached under
+    /// an import rename or a prefix lands in the same arm as one spelled out.
+    fn desugar_core_form(
+        &self,
+        form: CoreForm,
+        cdr: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        match form {
+            CoreForm::Quote => self.desugar_quote_tagged(cdr, shared_heap),
+            CoreForm::Quasiquote => self.desugar_quasiquote_tagged(cdr, shared_heap),
+            CoreForm::Lambda => self.desugar_lambda_tagged(cdr, shared_heap),
+            CoreForm::If => self.desugar_if_tagged(cdr, shared_heap),
+            CoreForm::Set => self.desugar_set_tagged(cdr, shared_heap),
+            CoreForm::Define => self.desugar_define_tagged(cdr, shared_heap),
+            CoreForm::DefineSyntax => self.desugar_define_syntax_tagged(cdr, shared_heap),
+            CoreForm::LetSyntax => self.desugar_let_syntax_tagged(cdr, shared_heap),
+            CoreForm::LetrecSyntax => self.desugar_letrec_syntax_tagged(cdr, shared_heap),
+            CoreForm::Begin => self.desugar_begin_tagged(cdr, shared_heap),
+            CoreForm::Import => self.desugar_import_tagged(cdr, shared_heap),
+            CoreForm::CondExpand => self.desugar_cond_expand_tagged(cdr, shared_heap),
+            CoreForm::Include => self.desugar_include_tagged(cdr, shared_heap, false),
+            CoreForm::IncludeCi => self.desugar_include_tagged(cdr, shared_heap, true),
+            CoreForm::SyntaxError => self.desugar_syntax_error_tagged(cdr, shared_heap),
+            CoreForm::Expand => self.desugar_expand_tagged(cdr, shared_heap),
+
+            // Auxiliary keywords mean something only inside an enclosing form:
+            // `else` inside `cond`, `unquote` inside a template, `syntax-rules`
+            // inside `define-syntax`. In head position each is a mistake, and
+            // saying which beats reporting that a symbol is not a procedure —
+            // which is what `(else 1)` used to report, because `base.sld` bound
+            // `else` to the symbol `'else` to get it through an import set.
+            CoreForm::Unquote
+            | CoreForm::UnquoteSplicing
+            | CoreForm::SyntaxRules
+            | CoreForm::Underscore
+            | CoreForm::Ellipsis
+            | CoreForm::Else
+            | CoreForm::Arrow => Err(DesugarError::InvalidSyntax(format!(
+                "invalid use of auxiliary syntax: {}",
+                form
+            ))),
+        }
     }
 
     /// Desugar lambda using TaggedValue

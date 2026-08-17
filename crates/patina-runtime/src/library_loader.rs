@@ -153,22 +153,31 @@ pub fn build_library(
         match spec {
             ExportSpec::Identifier(name) => match library.env.get(name) {
                 Some(value) => library.export_tagged(name.clone(), value),
-                // A core syntactic keyword needs no export entry: it is
-                // recognized by name in every scope already, so the importer
-                // gets working syntax whether or not the table mentions it.
+                // A syntactic keyword this library never imported. It has no
+                // marker to carry, but the desugarer still recognizes it by
+                // spelling where nothing is bound, so the importer gets working
+                // syntax and there is nothing to report. Stage 2 removes that
+                // fallback, and with it this arm.
                 None if is_core_syntax(name) => {}
                 None => return Err(reject(name, "not defined")),
             },
             ExportSpec::Rename { internal, external } => match library.env.get(internal) {
+                // Renaming a keyword works like renaming anything else now: the
+                // marker goes out under the new name and the importer's
+                // desugarer dispatches on the form, not the spelling.
                 Some(value) => library.export_tagged(external.clone(), value),
-                // Renaming would need the *new* name to be recognized as
-                // syntax at the use site, and that recognition is by name.
-                // Say so, rather than reporting it as undefined or exporting a
-                // name that would not work.
+                // Except when the library never imported it, where there is no
+                // marker to send and the use site's fallback only knows the
+                // original spelling. Refused rather than exported as a name
+                // that would not work.
                 None if is_core_syntax(internal) => {
                     return Err(LibraryError::parse(
                         file.as_deref(),
-                        format!("Cannot rename core syntax '{}' on export", internal),
+                        format!(
+                            "Cannot rename core syntax '{}' on export: this library does not \
+                             import it",
+                            internal
+                        ),
                     ));
                 }
                 None => return Err(reject(internal, "not defined")),

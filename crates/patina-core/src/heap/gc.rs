@@ -430,6 +430,12 @@ impl<'h> GcVisitor<'h> {
         for &idx in heap.symbol_table.values() {
             marks.objects.set(idx as usize);
         }
+        // Syntactic-keyword markers are roots on the same terms: a marker is
+        // the identity of a form, so collecting one would let the next intern
+        // mint a different object for the same keyword. Leaves too.
+        for idx in heap.core_syntax_table.iter().flatten() {
+            marks.objects.set(*idx as usize);
+        }
         Self {
             heap,
             marks,
@@ -622,6 +628,7 @@ impl<'h> GcVisitor<'h> {
             | HeapObjectData::Identifier { .. }
             | HeapObjectData::PromptTag(_)
             | HeapObjectData::LabelPlaceholder(_)
+            | HeapObjectData::CoreSyntax(_)
             | HeapObjectData::Free => {}
 
             // Weak keys: the payload lives in VmState's side tables and is

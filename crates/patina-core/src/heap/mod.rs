@@ -113,6 +113,8 @@ pub enum HeapObjectType {
     VmDelimitedContinuationRef = 24,
     /// Tombstone left by the GC sweep; the slot is on the free list awaiting reuse
     Free = 25,
+    /// A syntactic keyword as a binding (`begin`, `if`, `else`, …)
+    CoreSyntax = 26,
 }
 
 /// State of a promise for lazy evaluation
@@ -197,6 +199,10 @@ pub enum HeapObjectData {
     /// Opaque handle to a delimited VM continuation.
     /// The actual `VmDelimitedContinuation` data lives in `VmState::delimited_continuation_store`.
     VmDelimitedContinuationRef(u64),
+    /// A syntactic keyword bound as a value, so that import sets and export
+    /// resolution can reach it through the ordinary path. Interned once per
+    /// heap — see `Heap::core_syntax`.
+    CoreSyntax(crate::core_syntax::CoreForm),
     /// Tombstone written by the GC sweep. Overwriting the dead slot (rather
     /// than leaving stale data until reuse) drops `Rc` payloads eagerly,
     /// which is what breaks closure ↔ environment cycles. Accessing a Free
@@ -235,6 +241,7 @@ impl HeapObjectData {
             HeapObjectData::VmDelimitedContinuationRef(_) => {
                 HeapObjectType::VmDelimitedContinuationRef
             }
+            HeapObjectData::CoreSyntax(_) => HeapObjectType::CoreSyntax,
             HeapObjectData::Free => HeapObjectType::Free,
         }
     }
@@ -279,6 +286,20 @@ pub struct Heap {
 
     /// Symbol intern table (name -> object index)
     symbol_table: std::collections::HashMap<String, HeapIndex>,
+
+    /// Syntactic-keyword markers, one per [`CoreForm`], parallel to
+    /// [`ALL_CORE_FORMS`]. Allocated lazily on first use and then permanent:
+    /// a marker is the identity of a form, so two lookups of `begin` must
+    /// return the same object however many environments it has been copied
+    /// between.
+    ///
+    /// Rooted in `GcVisitor::new` beside `symbol_table`, and for the same
+    /// reason — a dangling index here would break any collector, so it is a
+    /// heap invariant rather than collector policy.
+    ///
+    /// [`CoreForm`]: crate::core_syntax::CoreForm
+    /// [`ALL_CORE_FORMS`]: crate::core_syntax::ALL_CORE_FORMS
+    core_syntax_table: Vec<Option<HeapIndex>>,
 
     /// Free list for pairs (indices of freed pairs)
     free_pairs: Vec<HeapIndex>,
@@ -371,6 +392,7 @@ impl Heap {
             strings: Vec::with_capacity(strings),
             objects: Vec::new(),
             symbol_table: std::collections::HashMap::new(),
+            core_syntax_table: vec![None; crate::core_syntax::ALL_CORE_FORMS.len()],
             free_pairs: Vec::new(),
             free_vectors: Vec::new(),
             free_strings: Vec::new(),
@@ -801,6 +823,50 @@ impl Heap {
                 .insert(name.to_string(), tagged.heap_index());
             tagged
         }
+    }
+
+    /// The marker bound to a syntactic keyword, interning it on first use.
+    ///
+    /// One object per form per heap, so `eqv?` answers yes for two references
+    /// to the same keyword however they were imported — which is what lets a
+    /// renamed `blk` and the original `begin` still be one form.
+    pub fn core_syntax(&mut self, form: crate::core_syntax::CoreForm) -> TaggedValue {
+        let slot = Self::core_syntax_slot(form);
+        if let Some(index) = self.core_syntax_table[slot] {
+            return TaggedValue::object(index);
+        }
+        let tagged = self.alloc_object(HeapObjectData::CoreSyntax(form));
+        self.core_syntax_table[slot] = Some(tagged.heap_index());
+        tagged
+    }
+
+    /// The form this value denotes, if it is a syntactic-keyword marker.
+    #[inline]
+    pub fn get_core_syntax(&self, tv: TaggedValue) -> Option<crate::core_syntax::CoreForm> {
+        if !tv.is_object() {
+            return None;
+        }
+        match self.get_object(tv) {
+            HeapObjectData::CoreSyntax(form) => Some(*form),
+            _ => None,
+        }
+    }
+
+    /// Is this value a syntactic-keyword marker?
+    pub fn is_core_syntax(&self, tv: TaggedValue) -> bool {
+        self.get_core_syntax(tv).is_some()
+    }
+
+    /// Position of `form` in the intern table.
+    ///
+    /// By search rather than by `as usize`: the enum's declaration order and
+    /// `ALL_CORE_FORMS`'s order agree today, but nothing makes them, and a
+    /// silent mismatch would alias two keywords onto one marker.
+    fn core_syntax_slot(form: crate::core_syntax::CoreForm) -> usize {
+        crate::core_syntax::ALL_CORE_FORMS
+            .iter()
+            .position(|&f| f == form)
+            .expect("every CoreForm is listed in ALL_CORE_FORMS")
     }
 
     /// Allocate a native identifier with scope set
@@ -1580,6 +1646,7 @@ impl Heap {
                 HeapObjectData::Procedure(_) => "procedure",
                 HeapObjectData::Port(_) => "port",
                 HeapObjectData::Macro(_) => "macro",
+                HeapObjectData::CoreSyntax(_) => "syntax",
                 HeapObjectData::RecordType(_) => "record-type",
                 HeapObjectData::Record { .. } => "record",
                 HeapObjectData::Identifier { .. } => "identifier",

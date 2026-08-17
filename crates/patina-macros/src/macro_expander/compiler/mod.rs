@@ -125,14 +125,39 @@ impl Compiler {
                     // lambda parameter IS bound from the macro's perspective.
                     Some(definition_scopes.clone())
                 } else if let Some(env) = env {
-                    // Check if the literal has a binding in the environment
-                    // First try scoped lookup, then fall back to regular lookup
-                    if env.get_with_scopes(name, definition_scopes).is_some() {
+                    // Which *kind* of binding, not just whether there is one.
+                    // `get_with_scopes` cannot say: it falls back to the plain
+                    // bindings and returns a value either way, so asking it
+                    // labelled every global binding as scoped.
+                    if env.has_scoped_binding(name, definition_scopes) {
                         // The literal is bound with scopes - capture the definition scopes
                         Some(definition_scopes.clone())
                     } else if env.get(name).is_some() {
-                        // Bound in regular bindings (e.g., global)
-                        Some(definition_scopes.clone())
+                        // Bound in the plain, unscoped bindings — a global or a
+                        // library binding. Its identity has nothing to do with
+                        // where the macro happened to be *defined*, so record
+                        // no scopes rather than the definition's.
+                        //
+                        // Claiming `definition_scopes` here made any macro
+                        // defined inside a scope unable to match a global
+                        // literal written at the use site, because the matcher
+                        // then compared a non-empty definition scope set
+                        // against an unscoped input and called them different
+                        // bindings:
+                        //
+                        //   (let ()
+                        //     (define-syntax m
+                        //       (syntax-rules (car) ((_ car) 'matched)
+                        //                           ((_ x) 'not-matched)))
+                        //     (m car))
+                        //   ;; chibi, Gauche => matched; was not-matched
+                        //
+                        // Pre-existing and unrelated to what the literal is;
+                        // `car` above is an ordinary procedure. It surfaced
+                        // when syntactic keywords became bindings, because
+                        // `(syntax-rules ::: (...))` then had a literal that
+                        // resolved for the first time.
+                        Some(ScopeSet::new())
                     } else {
                         // Not bound - literal is free at definition time
                         None

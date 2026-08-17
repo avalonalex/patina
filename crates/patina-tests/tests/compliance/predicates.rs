@@ -161,15 +161,21 @@ fn test_procedure_predicate() {
     assert_eval_to("(procedure? (map (lambda (x) x) '(1 2)))", "#f"); // Returns list
     assert_eval_to("(procedure? (car (map (lambda (x) +) '(1))))", "#t"); // List of procedures
 
-    // Core special forms error when referenced (not first-class values)
-    assert_eval_error("(procedure? if)");
-    assert_eval_error("(procedure? lambda)");
-    assert_eval_error("(procedure? define)");
-    assert_eval_error("(procedure? quote)");
+    // Syntactic keywords are not procedures.
+    //
+    // These used to *error* — "core special forms are not first-class values" —
+    // while the macros below returned #f, and the difference was an accident of
+    // implementation rather than a rule: `if` had no binding to load, so the
+    // reference failed as unbound, whereas `cond` did. Keywords are bindings
+    // now (PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md), so both halves answer
+    // alike. R7RS makes referencing either an error, and neither Gauche nor
+    // Patina raises one; chibi does.
+    assert_eval_to("(procedure? if)", "#f");
+    assert_eval_to("(procedure? lambda)", "#f");
+    assert_eval_to("(procedure? define)", "#f");
+    assert_eval_to("(procedure? quote)", "#f");
 
-    // Macros are not procedures
-    // Note: let, let*, letrec, letrec*, and, or are now macros in bootstrap.scm
-    // They can be referenced (unlike special forms), but are not procedures
+    // Note: let, let*, letrec, letrec*, and, or are macros defined in Scheme
     assert_eval_to("(procedure? let)", "#f");
     assert_eval_to("(procedure? let*)", "#f");
     assert_eval_to("(procedure? letrec)", "#f");
