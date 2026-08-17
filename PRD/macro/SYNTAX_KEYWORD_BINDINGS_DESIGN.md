@@ -183,20 +183,24 @@ top-level and library declaration keyword rather than an export, and `expand`, a
 Both must reach `global_env` for a bare script to work; re-exporting them from `(scheme base)` is
 the least machinery, at the cost of a non-standard entry in that library's export list.
 
-### 2.5 Value position: unified in stage 1, decided separately
+### 2.5 Value position: unified in stage 1, made an error in stage 1.5  *(done)*
 
 `(list cond)` already evaluates to `(#<macro>)` on both backends. A marker loading as
 `#<syntax:if>` is the same convention, costs nothing, and makes `if` and `cond` behave alike —
 before this work `if` errored and `cond` did not, which was an accident of implementation rather
 than a rule: `if` had no binding to load, so the reference failed as unbound.
 
-**Unifying the two is stage 1's job; choosing which answer they share is not.** Stage 1 takes
-Gauche's, because it is what Patina already does for macros and it costs nothing. A follow-up
-changes both to Chez's and chibi's — a desugar-time "syntactic keyword used as an expression"
-error — which is deliberately *not* in stage 1: it changes behaviour at every existing macro
-reference, not just at the keywords this work is about, and it should be bisectable from them.
-It is small in code (the two `CoreExprKind::Var` construction sites in the desugarer) and costs an
-environment lookup per variable reference during desugaring.
+**Unifying the two was stage 1's job; choosing which answer they share was not.** Stage 1 took
+Gauche's, because it was what Patina already did for macros and it cost nothing. Stage 1.5 changed
+both to Chez's and chibi's — `reject_syntax_as_value` at the two `CoreExprKind::Var` construction
+sites — kept separate because it changes behaviour at every existing macro reference, not only at
+the keywords this design is about.
+
+The predicted cost did not materialise. An environment lookup per variable reference during
+desugaring is one or two `FxHashMap` probes (the desugarer's environment is the definition
+environment, one or two levels deep, never the local frame), and an interleaved A/B over a full
+stdlib bootstrap — the most desugar-heavy thing Patina does — could not separate the two binaries:
+~10 ms either way.
 
 **What R7RS actually says**, checked in `spec/r7rs-small-spec/` rather than recalled:
 
@@ -209,8 +213,40 @@ environment lookup per variable reference during desugaring.
   report the error, though they are encouraged to do so." The keyword-as-expression rule uses the
   plain form.
 
-So both answers are conformant, and the spec encourages the stricter one without requiring it.
-Chez 10.4.1 and chibi 0.12 raise (for macros as well as keywords); Gauche 0.9.15 and Patina do not.
+So both answers are conformant, and the report encourages the stricter one without requiring it.
+Chez 10.4.1 and chibi 0.12 raise, for macros as well as keywords; Gauche 0.9.15 does not. Patina
+now raises.
+
+**This is therefore a choice, not a conformance fix, and the write-up should keep saying so.** A
+scheme-reports thread on syntax objects records that an implementation may "accept it and
+initialize the variable with some object whose properties are not specified by R7RS" — which
+blesses the behaviour stage 1 had. Searching turned up no other substantive discussion: the R7RS
+errata list has nothing on it across all 33 entries, and neither does the working group's issue
+tracker. `crates/patina-tests/tests/syntax_as_a_value.rs` carries the reasoning so that reversing
+it later is a decision rather than a discovery.
+
+**`set!` is refused too, and that asymmetry is the report's.** §5.3.1 is normative that a
+*definition* over a syntactic keyword binds a new location; nothing licenses `set!`, whose
+⟨variable⟩ must already be one. chibi draws the line in exactly that place, rejecting `(set! if 5)`
+with the message it gives for `(list if)`; Gauche accepts it and then breaks inside its own startup
+code. Without this, reading syntax was an error while overwriting it silently succeeded.
+
+**Two residuals, recorded rather than implied.** The check asks what a name resolves to *while the
+form is being desugared*, so it misses a name that is not syntax yet (a forward reference to a
+later `define-syntax`) and one whose spelling is shadowed by an unrelated binding — both still load
+`#<macro>`. Both fail safe, never producing a wrong rejection, and both are pinned at the bottom of
+`syntax_as_a_value.rs`. Closing them means checking at every variable *read* instead: `LoadGlobal`
+on the VM, whose per-site inline cache stores a slot, so a fill-time check would be unsound and a
+per-load tag test would sit on the interpreter's hottest instruction. That price is the reason, and
+it is written down so the `#<macro>` formatting in `datum_writer.rs` is not mistaken for dead code.
+
+**One lookup, three askers.** Head position, value position and the `set!` target had grown three
+resolutions of the same question with two different shadowing rules and two different environment
+queries — the head path dropped the reference's scopes, the value path used them. They are now one
+`Desugarer::resolve_syntax`. Flattening them surfaced the rule that had been implicit: a
+*macro-introduced* reference is exempt from the spelling-keyed shadow test, because hygiene means
+`(let ((if 'captured)) (my-cond #t 'ok))` must still see the template's `if` as the special form.
+The hygiene suite caught it immediately, which is the argument for having merged them.
 
 Nothing in `lib/` or the corpus reads `else` as a value; the only two hits are a `syntax-rules`
 literals list and a `cond-expand` clause, both structural.
@@ -293,10 +329,15 @@ binding, which needed a new `Environment::has_scoped_binding` — `get_with_scop
 question, because it falls back to the plain bindings and returns a value either way, so asking it
 labelled every global binding as scoped.
 
-### Stage 1.5 — syntax in value position  *(follow-up, see §2.5)*
+### Stage 1.5 — syntax in value position  *(done)*
 
-Make a syntactic keyword *and a macro* an error where a value is expected, as Chez and chibi do.
-Separate because it changes behaviour at every macro reference, not only at keywords.
+A syntactic keyword *and a macro* are an error where a value is expected, as Chez and chibi do.
+Separate from stage 1 because it changes behaviour at every macro reference, not only at keywords.
+
+Retired two stage-1 assertions that had pinned the interim answer: `(list else)` returning
+`#<syntax:else>`, now refused, and `(eqv? begin blk)` proving a renamed keyword is the same
+interned marker — a property that is unchanged but no longer observable from Scheme, so it moved to
+`core_syntax_is_interned_per_heap` in `patina-core`'s heap tests.
 
 ### Stage 2 — delete the fallback  *(done)*
 

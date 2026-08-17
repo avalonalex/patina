@@ -363,8 +363,11 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         out.push_str("#<macro>");
         return;
     }
-    // Syntactic keyword. Names the form, not the binding it was reached
-    // through: a `begin` imported as `blk` still writes `#<syntax:begin>`.
+    // Syntactic keyword. Not dead, though it is hard to reach: a variable
+    // reference to syntax is refused at desugar time, so this formats the
+    // residual cases pinned in `patina-tests/tests/syntax_as_a_value.rs`
+    // (a forward reference, a shadowed spelling). Names the form rather than
+    // the binding it arrived through, so `blk` still writes `#<syntax:begin>`.
     if let Some(form) = heap.get_core_syntax(tv) {
         use std::fmt::Write;
         write!(out, "#<syntax:{}>", form).unwrap();

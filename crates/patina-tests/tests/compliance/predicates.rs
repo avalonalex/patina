@@ -161,29 +161,28 @@ fn test_procedure_predicate() {
     assert_eval_to("(procedure? (map (lambda (x) x) '(1 2)))", "#f"); // Returns list
     assert_eval_to("(procedure? (car (map (lambda (x) +) '(1))))", "#t"); // List of procedures
 
-    // Syntactic keywords are not procedures.
-    //
-    // These used to *error* — "core special forms are not first-class values" —
-    // while the macros below returned #f, and the difference was an accident of
-    // implementation rather than a rule: `if` had no binding to load, so the
-    // reference failed as unbound, whereas `cond` did. Keywords are bindings
-    // now (PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md), so both halves answer
-    // alike. R7RS makes referencing either an error, and neither Gauche nor
-    // Patina raises one; chibi does.
-    assert_eval_to("(procedure? if)", "#f");
-    assert_eval_to("(procedure? lambda)", "#f");
-    assert_eval_to("(procedure? define)", "#f");
-    assert_eval_to("(procedure? quote)", "#f");
-
-    // Note: let, let*, letrec, letrec*, and, or are macros defined in Scheme
-    assert_eval_to("(procedure? let)", "#f");
-    assert_eval_to("(procedure? let*)", "#f");
-    assert_eval_to("(procedure? letrec)", "#f");
-    assert_eval_to("(procedure? letrec*)", "#f");
-    assert_eval_to("(procedure? and)", "#f");
-    assert_eval_to("(procedure? or)", "#f");
-    assert_eval_to("(procedure? cond)", "#f");
-    assert_eval_to("(procedure? case)", "#f");
+    // Syntax is not a value at all, so the question is refused rather than
+    // answered — keywords and macros alike. `syntax_as_a_value.rs` owns that
+    // rule and the reasoning; this list exists only to keep the predicate's
+    // own answers from drifting back.
+    for expr in [
+        "(procedure? if)",
+        "(procedure? lambda)",
+        "(procedure? define)",
+        "(procedure? quote)",
+        // let, let*, letrec, letrec*, and, or, cond, case are macros defined in
+        // Scheme. They answer the same way: the split above is gone.
+        "(procedure? let)",
+        "(procedure? let*)",
+        "(procedure? letrec)",
+        "(procedure? letrec*)",
+        "(procedure? and)",
+        "(procedure? or)",
+        "(procedure? cond)",
+        "(procedure? case)",
+    ] {
+        assert_eval_error(expr);
+    }
 }
 
 // Numeric type predicates (R7RS Section 6.2)
