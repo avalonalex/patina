@@ -113,8 +113,12 @@
     ;; ── Derived syntax (macros) ─────────────────────────────────────────
     and or cond case do
     let let* letrec
-    ;; NOTE: let-syntax, letrec-syntax, begin, define, define-syntax, if,
-    ;; lambda, quote, quasiquote, set! are core syntax handled by the
-    ;; desugarer and cannot be re-exported as bindings. They are
-    ;; implicitly available in every environment.
+    ;; ── Core syntax ─────────────────────────────────────────────────────
+    ;; Real bindings since syntax keywords became importable (see the note
+    ;; in base.sld); a library whose only import is (scheme r5rs) has no
+    ;; other way to reach `define` — srfi-78's reference implementation in
+    ;; the vendored corpus is exactly that shape. Inventory matches chibi's
+    ;; (scheme r5rs).
+    begin define define-syntax if lambda quote quasiquote set!
+    let-syntax letrec-syntax syntax-rules else => ... _
     ))

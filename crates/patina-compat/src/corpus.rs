@@ -17,11 +17,15 @@ pub struct Package {
     /// Library names its libraries/programs import (all cond-expand branches
     /// pooled — an over-approximation is harmless, it only widens `-A`).
     pub depends: Vec<String>,
-    /// Library names only the package's *test* program imports, from the
-    /// package-level `(test-depends ...)` clause. Held apart from `depends`
-    /// because they are not part of what an importer of this package needs:
-    /// they widen `-A` for this package's own test run and are never followed
-    /// transitively.
+    /// Library names only the package's *test* program imports: the
+    /// package-level `(test-depends ...)` clause, plus whatever the test
+    /// script's own `(import ...)` forms name — upstream metadata routinely
+    /// omits the clause (srfi-235 imports `(srfi 64)` and declares nothing),
+    /// and a missed test dependency misfiles the package as
+    /// `missing-library` naming a library the corpus provides. Held apart
+    /// from `depends` because they are not part of what an importer of this
+    /// package needs: they widen `-A` for this package's own test run and
+    /// are never followed transitively.
     pub test_depends: Vec<String>,
     /// The package's own test program, when it ships one.
     pub test_script: Option<PathBuf>,
@@ -148,6 +152,10 @@ fn parse_package(
         }
     }
 
+    if let Some(script) = &test_script {
+        test_depends.extend(test_script_imports(script, heap));
+    }
+
     depends.sort();
     depends.dedup();
     test_depends.sort();
@@ -161,6 +169,66 @@ fn parse_package(
         test_script,
         off_path_libraries,
     })
+}
+
+/// Library names the package's test script imports, pooling every
+/// `cond-expand` branch — the same over-approximation `collect_component`
+/// applies to `(depends ...)`, and harmless for the same reason: an
+/// unresolvable name only widens `-A` by nothing.
+///
+/// A script the parser cannot read is scanned as empty, with a warning
+/// rather than silence: the metadata-only closure this falls back to is
+/// exactly the state that misfiled srfi-235, so the degradation should be
+/// visible when it happens.
+fn test_script_imports(script: &Path, heap: &SharedHeap) -> Vec<String> {
+    let forms = std::fs::read_to_string(script)
+        .map_err(|e| e.to_string())
+        .and_then(|source| sexp::parse_all(&source, heap));
+    let forms = match forms {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!(
+                "warning: {}: not scanned for test imports: {}",
+                script.display(),
+                e
+            );
+            return Vec::new();
+        }
+    };
+    let mut found = Vec::new();
+    for form in forms {
+        collect_imports(form, &mut found, heap);
+    }
+    found
+}
+
+/// Collect the library names of every `(import ...)` in `form`, descending
+/// into `cond-expand` clause bodies (conditions ignored).
+fn collect_imports(form: patina_core::TaggedValue, found: &mut Vec<String>, heap: &SharedHeap) {
+    if let Some(specs) = sexp::tagged_form(form, "import", heap) {
+        for spec in specs {
+            if let Some(name) = import_spec_library(spec, heap) {
+                found.push(name);
+            }
+        }
+    } else if let Some(body) = sexp::cond_expand_bodies(form, heap) {
+        for inner in body {
+            collect_imports(inner, found, heap);
+        }
+    }
+}
+
+/// The library a possibly-wrapped import spec names: R7RS's four modifiers
+/// unwrap to the spec in their first position — nesting included, as in
+/// `(rename (except (chibi test) test-equal) (test test-equal))` — and
+/// anything else is read as a library name.
+fn import_spec_library(spec: patina_core::TaggedValue, heap: &SharedHeap) -> Option<String> {
+    for wrapper in ["only", "except", "prefix", "rename"] {
+        if let Some(inner) = sexp::clause_argument(spec, wrapper, heap) {
+            return import_spec_library(inner, heap);
+        }
+    }
+    sexp::library_name(spec, heap)
 }
 
 /// The `.sld` of a `library` component whose declared path differs from the
@@ -204,18 +272,10 @@ fn collect_component(
                     depends.push(name);
                 }
             }
-        } else if let Some(clauses) = sexp::tagged_form(*decl, "cond-expand", heap) {
-            // Each clause is (condition decl ...); pool depends from every
-            // branch rather than evaluating conditions. Snow cond-expand
-            // branches only carry (depends ...), so passing `provides`
-            // through is harmless and keeps one signature.
-            for clause in clauses {
-                if let Some(elems) = sexp::list_elements(clause, heap)
-                    && elems.len() > 1
-                {
-                    collect_component(&elems[1..], provides, depends, heap);
-                }
-            }
+        } else if let Some(body) = sexp::cond_expand_bodies(*decl, heap) {
+            // Snow cond-expand branches only carry (depends ...), so passing
+            // `provides` through is harmless and keeps one signature.
+            collect_component(&body, provides, depends, heap);
         }
     }
 }
@@ -295,6 +355,73 @@ mod tests {
         assert_eq!(pkg.test_depends, vec!["scheme base", "srfi 64"]);
         // and they stay out of what an importer of this package would need
         assert!(!pkg.depends.contains(&"srfi 64".to_string()));
+    }
+
+    /// The srfi-235 shape: the test script imports its framework, the
+    /// metadata declares nothing. The closure must come from the script —
+    /// through `cond-expand` branches and R7RS import modifiers alike —
+    /// or the package is misfiled as `missing-library` naming a library
+    /// the corpus provides.
+    #[test]
+    fn scans_the_test_script_for_undeclared_test_imports() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("t.scm"),
+            r#"
+            (cond-expand
+              (chibi
+               (import (scheme base)
+                       (rename (except (chibi test) test-equal)
+                               (test test-equal))))
+              (else
+               (import (scheme base) (srfi 64))))
+            (import (only (srfi 1) fold))
+            "#,
+        )
+        .unwrap();
+
+        let pkg = parsed(
+            "srfi-235",
+            temp.path(),
+            r#"
+            (package
+              (library (name (srfi 235)) (depends (scheme base)))
+              (test "t.scm"))
+        "#,
+        );
+
+        for lib in ["srfi 64", "chibi test", "srfi 1"] {
+            assert!(
+                pkg.test_depends.contains(&lib.to_string()),
+                "test_depends missing {:?}: {:?}",
+                lib,
+                pkg.test_depends
+            );
+        }
+        // and none of it leaks into what an importer of the package needs
+        assert!(!pkg.depends.contains(&"srfi 64".to_string()));
+    }
+
+    /// A script the parser cannot read falls back to declared metadata
+    /// rather than failing discovery for the whole corpus.
+    #[test]
+    fn an_unparseable_test_script_degrades_to_declared_metadata() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("t.scm"), "(((").unwrap();
+
+        let pkg = parsed(
+            "broken-script",
+            temp.path(),
+            r#"
+            (package
+              (library (name (broken lib)))
+              (test "t.scm")
+              (test-depends (srfi 64)))
+        "#,
+        );
+
+        assert!(pkg.test_script.is_some());
+        assert_eq!(pkg.test_depends, vec!["srfi 64"]);
     }
 
     #[test]

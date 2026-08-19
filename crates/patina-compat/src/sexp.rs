@@ -47,6 +47,24 @@ pub fn clause_argument(tv: TaggedValue, head: &str, heap: &SharedHeap) -> Option
     tagged_form(tv, head, heap)?.first().copied()
 }
 
+/// The pooled bodies of a `(cond-expand ...)` form's clauses, or `None` if
+/// `tv` is not one. Each clause is `(condition form ...)`; the condition is
+/// skipped, never evaluated — corpus collectors pool every branch as a
+/// deliberate over-approximation — and a clause with no body contributes
+/// nothing.
+pub fn cond_expand_bodies(tv: TaggedValue, heap: &SharedHeap) -> Option<Vec<TaggedValue>> {
+    let clauses = tagged_form(tv, "cond-expand", heap)?;
+    let mut bodies = Vec::new();
+    for clause in clauses {
+        if let Some(elems) = list_elements(clause, heap)
+            && elems.len() > 1
+        {
+            bodies.extend_from_slice(&elems[1..]);
+        }
+    }
+    Some(bodies)
+}
+
 /// Render a library name list like `(chibi match)` or `(srfi 1)` as the
 /// canonical space-joined form `"chibi match"` / `"srfi 1"`.
 pub fn library_name(tv: TaggedValue, heap: &SharedHeap) -> Option<String> {

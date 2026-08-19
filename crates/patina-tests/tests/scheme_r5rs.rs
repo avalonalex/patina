@@ -25,6 +25,25 @@ fn test_exact_to_inexact_rational() {
     );
 }
 
+/// A library whose only import is (scheme r5rs) has no other way to reach
+/// `define`, `lambda`, `if` or `quote` — syntax keywords are real bindings
+/// and R5RS defines them, so the library must export them. srfi-78's
+/// reference implementation in the vendored corpus is exactly this shape;
+/// before the keywords were exported it failed with `unbound variable:
+/// define`. Top level does not cover this: core syntax is seeded there.
+#[test]
+fn test_r5rs_provides_core_syntax_inside_a_library_body() {
+    assert_program_eval_to(
+        "(define-library (t r5rs-only)
+           (export f)
+           (import (scheme r5rs))
+           (begin (define (f) (if #t 'ok 'no))))
+         (import (t r5rs-only))
+         (f)",
+        "ok",
+    );
+}
+
 // =============================================================================
 // R5RS re-exports from various libraries
 // =============================================================================
