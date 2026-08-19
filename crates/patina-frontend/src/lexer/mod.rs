@@ -45,9 +45,20 @@ pub enum LexError {
     InvalidCharacter,
 
     #[error(
-        "Reserved character (R7RS): {0}. Square brackets [ ] and curly braces {{ }} are reserved for future extensions"
+        "Reserved character (R7RS): {0}. Curly braces {{ }} are reserved for future extensions"
     )]
     ReservedCharacter(char),
+
+    /// A closer whose shape disagrees with the opener it would close —
+    /// `(let ([x 1)]) …)`. Naming both spellings is the whole value of the
+    /// message: the reader's complaint is about a `)` several characters
+    /// before the place a human would look for the missing `]`.
+    #[error("Mismatched delimiter: {opened} is closed by {}, not {closed}", .opened_by)]
+    MismatchedDelimiter {
+        opened: char,
+        opened_by: char,
+        closed: char,
+    },
 
     #[error("Unterminated vertical bar identifier")]
     UnterminatedVerticalBarIdentifier,
@@ -100,6 +111,43 @@ pub struct Lexer {
     /// Char offset just past the end of the token returned by the
     /// previous `next_token` call (0 before any token is returned)
     prev_token_end: usize,
+    /// The shape of each currently-open delimiter, innermost last, so a
+    /// closer can be checked against the opener it actually closes.
+    ///
+    /// `[` and `]` are read as parentheses (see [`Lexer::lex_token`]), which
+    /// on its own would let `(let ([x 1)]) …)` through as if it were written
+    /// with matched pairs. Every implementation that accepts brackets —
+    /// Gauche, Chez, Racket, Guile — rejects the mismatch instead, and it is
+    /// a typo worth catching rather than a dialect to accept. Unbalanced
+    /// *input* is not this stack's business: a closer with nothing open pops
+    /// nothing and reaches the parser as a plain `)`, which is what the REPL
+    /// needs while a form is still being typed.
+    open_delimiters: Vec<Delimiter>,
+}
+
+/// Which spelling opened a still-unclosed list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delimiter {
+    /// `(`, and the `(` of `#(`, `#u8(` and `#vu8(` — closed by `)`.
+    Paren,
+    /// `[` — closed by `]`.
+    Bracket,
+}
+
+impl Delimiter {
+    fn opener(self) -> char {
+        match self {
+            Delimiter::Paren => '(',
+            Delimiter::Bracket => '[',
+        }
+    }
+
+    fn closer(self) -> char {
+        match self {
+            Delimiter::Paren => ')',
+            Delimiter::Bracket => ']',
+        }
+    }
 }
 
 /// Drop a leading U+FEFF.
@@ -113,7 +161,11 @@ pub struct Lexer {
 /// reading. Only a *leading* one is dropped — anywhere else U+FEFF is a real
 /// (if inadvisable) character and stays.
 fn strip_byte_order_mark(input: &str) -> Vec<char> {
-    input.strip_prefix('\u{feff}').unwrap_or(input).chars().collect()
+    input
+        .strip_prefix('\u{feff}')
+        .unwrap_or(input)
+        .chars()
+        .collect()
 }
 
 impl Lexer {
@@ -125,6 +177,7 @@ impl Lexer {
             line: 1,
             column: 1,
             prev_token_end: 0,
+            open_delimiters: Vec::new(),
         }
     }
 
@@ -140,6 +193,7 @@ impl Lexer {
             line: 1,
             column: 1,
             prev_token_end: 0,
+            open_delimiters: Vec::new(),
         }
     }
 
@@ -174,6 +228,38 @@ impl Lexer {
         self.prev_token_end
     }
 
+    /// Pop the innermost open delimiter, requiring `closed` to be its match.
+    ///
+    /// A closer with nothing open is left alone: the parser reports it, with
+    /// the surrounding datum for context, and the REPL's incomplete-input
+    /// path depends on partial text lexing without complaint.
+    /// Read the `u8(` that both `#u8(` and `#vu8(` end with, positioned on
+    /// the `u`.
+    fn read_bytevector_open(&mut self) -> Result<Token, LexError> {
+        self.advance(); // consume u
+        if self.current_char() != '8' {
+            return Err(LexError::UnexpectedChar(self.current_char()));
+        }
+        self.advance();
+        if self.current_char() != '(' {
+            return Err(LexError::UnexpectedChar(self.current_char()));
+        }
+        self.advance();
+        self.open_delimiters.push(Delimiter::Paren);
+        Ok(Token::BytevectorOpen)
+    }
+
+    fn close_delimiter(&mut self, closed: char) -> Result<(), LexError> {
+        match self.open_delimiters.pop() {
+            Some(open) if open.closer() != closed => Err(LexError::MismatchedDelimiter {
+                opened: open.opener(),
+                opened_by: open.closer(),
+                closed,
+            }),
+            _ => Ok(()),
+        }
+    }
+
     fn lex_token(&mut self) -> Result<Token, LexError> {
         if self.is_at_end() {
             return Ok(Token::Eof);
@@ -182,16 +268,28 @@ impl Lexer {
         let ch = self.current_char();
 
         match ch {
-            '(' => {
+            // `[` and `]` are R6RS list delimiters, and the house style of
+            // Chez, Racket, Guile and Gauche. R7RS 7.1.1 reserves them, so no
+            // conforming R7RS program contains one and reading them only
+            // widens the accepted language — the same trade taken for the
+            // bare `@` token. Their shape is checked against the opener, so
+            // the pairing is still enforced.
+            '(' | '[' => {
                 self.advance();
+                self.open_delimiters.push(if ch == '[' {
+                    Delimiter::Bracket
+                } else {
+                    Delimiter::Paren
+                });
                 Ok(Token::LeftParen)
             }
-            ')' => {
+            ')' | ']' => {
                 self.advance();
+                self.close_delimiter(ch)?;
                 Ok(Token::RightParen)
             }
-            // R7RS reserves [ ] { } for future extensions
-            '[' | ']' | '{' | '}' => Err(LexError::ReservedCharacter(ch)),
+            // R7RS reserves { } for future extensions
+            '{' | '}' => Err(LexError::ReservedCharacter(ch)),
             '\'' => {
                 self.advance();
                 Ok(Token::Quote)
@@ -330,19 +428,30 @@ impl Lexer {
     /// Where a token ends.
     ///
     /// Narrower than R7RS 7.1.1's <delimiter>, which also lists `|`, and
-    /// narrower than what Gauche and chibi stop at (`'`, `` ` ``, `,`, and for
-    /// Gauche `[`/`]`). So `a'b` and `a,b` read as one symbol here and as two
-    /// tokens there, and `a[b]` swallows brackets a *leading* `[` would reject
-    /// as reserved. That is a real divergence and deliberately not changed
-    /// here — widening it can only *split* tokens that used to be whole, which
-    /// is the one kind of lexer change that can alter an existing program's
-    /// meaning, so it wants its own decision and its own cross-check.
+    /// narrower than what Gauche and chibi stop at (`'`, `` ` ``, `,`). So
+    /// `a'b` and `a,b` still read as one symbol here and as two tokens there.
+    /// That divergence is deliberately left alone — widening this set can only
+    /// *split* tokens that used to be whole, which is the one kind of lexer
+    /// change that can alter an existing program's meaning, so it wants its
+    /// own decision and its own cross-check.
+    ///
+    /// **`[` and `]` are the one such widening taken so far**, forced by
+    /// reading them as list delimiters: without it `[x 1]` ends at the `1]`,
+    /// which the number reader then rejects. It is safe in the direction the
+    /// warning above is about, because a bracket is not an `<initial>` or
+    /// `<subsequent>` in R7RS 7.1.1 — no conforming identifier contains one,
+    /// so nothing conforming is being split. Cross-checked against the whole
+    /// `compat/vendor/` corpus and `lib/`, where every occurrence outside a
+    /// string or comment is `#\[` or `#\]`, and those are unaffected:
+    /// `read_character` takes a delimiter first character as a complete
+    /// one-character literal, which is already how `#\(` is read. A symbol
+    /// that genuinely needs a bracket can still be written `|a[b]|`.
     ///
     /// What this function is for is making that decision live in one place:
     /// the set was written out seven times before, which is why the question
     /// had no home.
     fn is_delimiter(ch: char) -> bool {
-        ch.is_whitespace() || matches!(ch, '(' | ')' | '"' | ';')
+        ch.is_whitespace() || matches!(ch, '(' | ')' | '[' | ']' | '"' | ';')
     }
 
     fn is_delimiter_next(&self) -> bool {
@@ -607,18 +716,17 @@ impl Lexer {
             '\\' => self.read_character(),
             '(' => {
                 self.advance();
+                self.open_delimiters.push(Delimiter::Paren);
                 Ok(Token::VectorOpen)
             }
-            'u' => {
+            // `#u8(` is R7RS; `#vu8(` is R6RS's spelling of the same thing.
+            // Reading both costs one character of lookahead and is not
+            // ambiguous with anything R7RS admits.
+            'u' => self.read_bytevector_open(),
+            'v' => {
                 self.advance();
-                if self.current_char() == '8' {
-                    self.advance();
-                    if self.current_char() == '(' {
-                        self.advance();
-                        Ok(Token::BytevectorOpen)
-                    } else {
-                        Err(LexError::UnexpectedChar(self.current_char()))
-                    }
+                if self.current_char() == 'u' {
+                    self.read_bytevector_open()
                 } else {
                     Err(LexError::UnexpectedChar(self.current_char()))
                 }
@@ -1094,20 +1202,128 @@ mod tests {
     }
 
     #[test]
+    fn test_square_brackets_read_as_parentheses() {
+        let mut lexer = Lexer::new("[a]");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Identifier("a".to_string())
+        );
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_brackets_delimit_the_token_before_them() {
+        // The reason `is_delimiter` had to widen: without `]` in the set the
+        // number reader swallows it and rejects `1]` as a malformed number.
+        let mut lexer = Lexer::new("[x 1][y 2]");
+        for expected in [
+            Token::LeftParen,
+            Token::Identifier("x".to_string()),
+            Token::Number("1".to_string()),
+            Token::RightParen,
+            Token::LeftParen,
+            Token::Identifier("y".to_string()),
+            Token::Number("2".to_string()),
+            Token::RightParen,
+        ] {
+            assert_eq!(lexer.next_token_kind().unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn test_mismatched_delimiters_are_rejected() {
+        let mut lexer = Lexer::new("[a)");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Identifier("a".to_string())
+        );
+        assert!(matches!(
+            lexer.next_token_kind(),
+            Err(LexError::MismatchedDelimiter {
+                opened: '[',
+                closed: ')',
+                ..
+            })
+        ));
+
+        let mut lexer = Lexer::new("(a]");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Identifier("a".to_string())
+        );
+        assert!(matches!(
+            lexer.next_token_kind(),
+            Err(LexError::MismatchedDelimiter {
+                opened: '(',
+                closed: ']',
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_vector_and_bytevector_openers_close_with_a_paren() {
+        // `#(` and `#u8(` open with a parenthesis whatever precedes it, so a
+        // `]` must not close them.
+        for src in ["#(1]", "#u8(1]"] {
+            let mut lexer = Lexer::new(src);
+            lexer.next_token_kind().unwrap();
+            lexer.next_token_kind().unwrap();
+            assert!(
+                matches!(
+                    lexer.next_token_kind(),
+                    Err(LexError::MismatchedDelimiter { closed: ']', .. })
+                ),
+                "{src} should not accept a bracket as its closer"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unmatched_closer_is_left_to_the_parser() {
+        // The REPL lexes incomplete input while a form is still being typed,
+        // so a closer with nothing open must not be a lexer error.
+        let mut lexer = Lexer::new(")]");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+    }
+
+    #[test]
+    fn test_r6rs_bytevector_syntax() {
+        let mut lexer = Lexer::new("#vu8(1 2)");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::BytevectorOpen);
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("1".to_string())
+        );
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Number("2".to_string())
+        );
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
+
+        // `#v` not followed by `u8(` is still an error.
+        let mut lexer = Lexer::new("#vx");
+        assert!(lexer.next_token_kind().is_err());
+    }
+
+    #[test]
+    fn test_bracket_character_literals_are_unaffected() {
+        // `read_character` takes a delimiter first character as a complete
+        // one-character literal, so widening `is_delimiter` leaves these be.
+        let mut lexer = Lexer::new(r"#\[ #\]");
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character('['));
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Character(']'));
+    }
+
+    #[test]
     fn test_reject_reserved_characters() {
-        // R7RS reserves [ ] { } for future extensions
-        let mut lexer = Lexer::new("[");
-        assert!(matches!(
-            lexer.next_token_kind(),
-            Err(LexError::ReservedCharacter('['))
-        ));
-
-        let mut lexer = Lexer::new("]");
-        assert!(matches!(
-            lexer.next_token_kind(),
-            Err(LexError::ReservedCharacter(']'))
-        ));
-
+        // R7RS reserves { } for future extensions; [ ] are read as
+        // parentheses — see test_square_brackets_read_as_parentheses.
         let mut lexer = Lexer::new("{");
         assert!(matches!(
             lexer.next_token_kind(),
