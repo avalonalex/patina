@@ -181,14 +181,10 @@ fn parse_package(
 /// exactly the state that misfiled srfi-235, so the degradation should be
 /// visible when it happens.
 fn test_script_imports(script: &Path, heap: &SharedHeap) -> Vec<String> {
-    let source = match std::fs::read_to_string(script) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("warning: {}: not read: {}", script.display(), e);
-            return Vec::new();
-        }
-    };
-    let forms = match sexp::parse_all(&source, heap) {
+    let forms = std::fs::read_to_string(script)
+        .map_err(|e| e.to_string())
+        .and_then(|source| sexp::parse_all(&source, heap));
+    let forms = match forms {
         Ok(f) => f,
         Err(e) => {
             eprintln!(
@@ -207,7 +203,7 @@ fn test_script_imports(script: &Path, heap: &SharedHeap) -> Vec<String> {
 }
 
 /// Collect the library names of every `(import ...)` in `form`, descending
-/// into `cond-expand` clause bodies (conditions ignored) and `begin`.
+/// into `cond-expand` clause bodies (conditions ignored).
 fn collect_imports(form: patina_core::TaggedValue, found: &mut Vec<String>, heap: &SharedHeap) {
     if let Some(specs) = sexp::tagged_form(form, "import", heap) {
         for spec in specs {
@@ -215,17 +211,7 @@ fn collect_imports(form: patina_core::TaggedValue, found: &mut Vec<String>, heap
                 found.push(name);
             }
         }
-    } else if let Some(clauses) = sexp::tagged_form(form, "cond-expand", heap) {
-        for clause in clauses {
-            if let Some(elems) = sexp::list_elements(clause, heap)
-                && elems.len() > 1
-            {
-                for inner in &elems[1..] {
-                    collect_imports(*inner, found, heap);
-                }
-            }
-        }
-    } else if let Some(body) = sexp::tagged_form(form, "begin", heap) {
+    } else if let Some(body) = sexp::cond_expand_bodies(form, heap) {
         for inner in body {
             collect_imports(inner, found, heap);
         }
@@ -286,18 +272,10 @@ fn collect_component(
                     depends.push(name);
                 }
             }
-        } else if let Some(clauses) = sexp::tagged_form(*decl, "cond-expand", heap) {
-            // Each clause is (condition decl ...); pool depends from every
-            // branch rather than evaluating conditions. Snow cond-expand
-            // branches only carry (depends ...), so passing `provides`
-            // through is harmless and keeps one signature.
-            for clause in clauses {
-                if let Some(elems) = sexp::list_elements(clause, heap)
-                    && elems.len() > 1
-                {
-                    collect_component(&elems[1..], provides, depends, heap);
-                }
-            }
+        } else if let Some(body) = sexp::cond_expand_bodies(*decl, heap) {
+            // Snow cond-expand branches only carry (depends ...), so passing
+            // `provides` through is harmless and keeps one signature.
+            collect_component(&body, provides, depends, heap);
         }
     }
 }

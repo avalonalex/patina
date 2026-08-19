@@ -120,5 +120,5 @@
     ;; the vendored corpus is exactly that shape. Inventory matches chibi's
     ;; (scheme r5rs).
     begin define define-syntax if lambda quote quasiquote set!
-    let-syntax letrec-syntax syntax-rules else =>
+    let-syntax letrec-syntax syntax-rules else => ... _
     ))
