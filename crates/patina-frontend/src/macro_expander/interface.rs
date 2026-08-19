@@ -99,7 +99,7 @@ impl TestExpander {
             input_tv,
             heap,
             &std::collections::HashSet::new(),
-            &patina_runtime::ScopeSet::new(),
+            None,
         )
         .map_err(|e| format!("Expansion failed: {}", e))?;
 
@@ -138,7 +138,7 @@ impl TestExpander {
             input_tv,
             heap,
             &std::collections::HashSet::new(),
-            &patina_runtime::ScopeSet::new(),
+            None,
         )
         .map_err(|e| format!("Expansion error: {}", e))?;
 

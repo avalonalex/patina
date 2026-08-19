@@ -859,7 +859,10 @@ impl Desugarer {
                 list, // Pass TaggedValue directly
                 shared_heap,
                 &self.shadowed_names,
-                &self.current_scopes,
+                // The use site's environment, for the half of R7RS §4.3.2 that
+                // compares bindings rather than spellings: an auxiliary
+                // keyword imported under a rename still names its own literal.
+                Some(&self.env),
             )
             .map_err(|e| DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e)))?;
 

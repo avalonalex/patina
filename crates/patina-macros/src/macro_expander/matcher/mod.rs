@@ -23,7 +23,7 @@ pub use error::MatchError;
 use crate::macro_expander::Pattern;
 use crate::macro_expander::utils::pattern_to_string_with_names;
 use patina_core::{Heap, SharedHeap, TaggedValue};
-use patina_runtime::{LiteralBinding, MatchEnv, PVRef, ScopeSet};
+use patina_runtime::{LiteralBinding, MatchEnv, PVRef};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -54,16 +54,28 @@ pub struct Matcher {
     /// This is compile-time shadowing info from the desugarer's `shadowed_names`.
     shadowed_names: HashSet<Rc<str>>,
 
-    /// Scopes from the use-site (set from the input identifier's scopes)
-    /// Used to determine if an identifier's binding matches a literal's binding.
-    use_site_scopes: ScopeSet,
-
-    /// Literal identifiers from the macro definition with their binding information.
-    /// Used with use_site_scopes to check if literals have the same binding.
+    /// Literal identifiers from the macro definition with their binding
+    /// information — whether each was bound where the macro was written.
     literals: Vec<LiteralBinding>,
 
     /// Shared heap for TaggedValue storage in MatchEnv
     shared_heap: Option<SharedHeap>,
+
+    /// The environment the macro was defined in, and the one it is being used
+    /// in. A literal matches an input identifier that denotes the same
+    /// binding whatever it is spelled (R7RS §4.3.2), and resolving "the same
+    /// binding" needs both — the literal's name means what it meant where the
+    /// macro was written, the input's what it means here. Absent for the
+    /// direct-API paths, which have no environments; the spelling test alone
+    /// then applies, as before.
+    definition_env: Option<Rc<patina_runtime::Environment>>,
+    use_site_env: Option<Rc<patina_runtime::Environment>>,
+
+    /// The scope this expansion flipped onto its input. Everything being
+    /// matched carries it, so anything an input identifier carries *beyond*
+    /// it was put there by a macro that introduced the identifier — which is
+    /// how the shadow veto tells the user's identifiers from a template's.
+    macro_scope: Option<patina_runtime::ScopeId>,
 }
 
 impl Matcher {
@@ -76,9 +88,11 @@ impl Matcher {
             num_pvars,
             pvar_names: None,
             shadowed_names: HashSet::new(),
-            use_site_scopes: ScopeSet::new(),
             literals: Vec::new(),
             shared_heap: None,
+            definition_env: None,
+            use_site_env: None,
+            macro_scope: None,
         }
     }
 
@@ -92,9 +106,11 @@ impl Matcher {
             num_pvars,
             pvar_names: Some(pvar_names),
             shadowed_names: HashSet::new(),
-            use_site_scopes: ScopeSet::new(),
             literals: Vec::new(),
             shared_heap: None,
+            definition_env: None,
+            use_site_env: None,
+            macro_scope: None,
         }
     }
 
@@ -107,14 +123,12 @@ impl Matcher {
     /// * `num_pvars` - Total number of pattern variables in the pattern
     /// * `pvar_names` - Mapping from PVREF to variable names
     /// * `shadowed_names` - Names shadowed by local bindings at macro use site
-    /// * `use_site_scopes` - Scopes from the use-site for binding comparison
     /// * `literals` - Literal identifiers from the macro definition with binding info
     /// * `shared_heap` - Shared heap for TaggedValue storage
     pub fn new_with_heap(
         num_pvars: usize,
         pvar_names: HashMap<PVRef, Rc<str>>,
         shadowed_names: HashSet<Rc<str>>,
-        use_site_scopes: ScopeSet,
         literals: Vec<LiteralBinding>,
         shared_heap: SharedHeap,
     ) -> Self {
@@ -122,10 +136,30 @@ impl Matcher {
             num_pvars,
             pvar_names: Some(pvar_names),
             shadowed_names,
-            use_site_scopes,
             literals,
             shared_heap: Some(shared_heap),
+            definition_env: None,
+            use_site_env: None,
+            macro_scope: None,
         }
+    }
+
+    /// Give the matcher the two environments a binding comparison needs. Both
+    /// optional: without them the literal test is the spelling test alone.
+    pub fn with_environments(
+        mut self,
+        definition_env: Option<Rc<patina_runtime::Environment>>,
+        use_site_env: Option<Rc<patina_runtime::Environment>>,
+    ) -> Self {
+        self.definition_env = definition_env;
+        self.use_site_env = use_site_env;
+        self
+    }
+
+    /// Tell the matcher which scope this expansion flipped onto its input.
+    pub fn with_macro_scope(mut self, macro_scope: patina_runtime::ScopeId) -> Self {
+        self.macro_scope = Some(macro_scope);
+        self
     }
 
     /// Get reference to the shared heap (if available)
@@ -206,8 +240,8 @@ impl Matcher {
                     input,
                     heap,
                     &self.shadowed_names,
-                    &self.use_site_scopes,
                     &self.literals,
+                    self.macro_scope,
                 ) {
                     return Err(MatchError::LiteralMismatch {
                         expected: format!("{:?}", lit),
@@ -215,8 +249,18 @@ impl Matcher {
                     });
                 }
 
-                // Check for match using TaggedValue literal comparison
-                if literal::tagged_matches_literal(input, *lit, heap) {
+                // Check for match using TaggedValue literal comparison, then
+                // — for an input spelled differently — whether the two names
+                // denote the same binding after all.
+                if literal::tagged_matches_literal(input, *lit, heap)
+                    || literal::denotes_same_binding(
+                        *lit,
+                        input,
+                        heap,
+                        self.definition_env.as_ref(),
+                        self.use_site_env.as_ref(),
+                    )
+                {
                     Ok(())
                 } else {
                     Err(MatchError::LiteralMismatch {
@@ -296,9 +340,11 @@ mod tests {
             num_pvars,
             pvar_names: None,
             shadowed_names: HashSet::new(),
-            use_site_scopes: ScopeSet::new(),
             literals: Vec::new(),
             shared_heap: Some(heap.clone()),
+            definition_env: None,
+            use_site_env: None,
+            macro_scope: None,
         };
         (matcher, heap)
     }
