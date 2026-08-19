@@ -82,6 +82,21 @@ fn format_library_name(name: &[String]) -> String {
     format!("({})", name.join(" "))
 }
 
+/// The file extensions a library may be written in, tried in this order.
+///
+/// `.sld` is R7RS. `.sls` is what R6RS libraries are distributed as, and the
+/// parser reads a `(library …)` form out of either — the suffix records which
+/// dialect a file was written for, not which one it is allowed to contain.
+/// `.sld` is tried first *within each search path*, so a directory holding
+/// both spellings resolves to the R7RS one while an earlier search path still
+/// wins over a later one whatever it holds.
+///
+/// Shared because two resolvers must agree on it: this crate's
+/// `LibraryRegistry::find_library_file` and patina-frontend's
+/// `SchemeLibraryLoader::find_sld_file`, which is the one every actual library
+/// load goes through.
+pub const LIBRARY_FILE_EXTENSIONS: [&str; 2] = ["sld", "sls"];
+
 /// Entries of $PATINA_LIBRARY_PATH, in order. PATH-style splitting
 /// (colon-separated on Unix); empty entries are skipped.
 fn env_library_paths() -> Vec<PathBuf> {
@@ -288,8 +303,8 @@ impl LibraryRegistry {
 
     /// Find the file path for a library
     ///
-    /// Searches for a .sld file in the search paths.
-    /// Library name (scheme base) maps to scheme/base.sld
+    /// Searches the extensions in [`LIBRARY_FILE_EXTENSIONS`] in the search
+    /// paths. Library name (scheme base) maps to scheme/base.sld
     ///
     /// Returns None if the file is not found in any search path.
     pub fn find_library_file(&self, name: &[String]) -> Option<PathBuf> {
@@ -297,25 +312,25 @@ impl LibraryRegistry {
             return None;
         }
 
-        // Convert library name to file path: (scheme base) → scheme/base.sld
-        let mut file_path = PathBuf::new();
-        for part in name {
-            file_path.push(part);
+        // Convert library name to file path: (scheme base) → scheme/base.sld.
+        // The suffix is appended rather than set, so a name part that itself
+        // contains a dot keeps it.
+        let mut directory = PathBuf::new();
+        for part in &name[..name.len() - 1] {
+            directory.push(part);
         }
-
-        // Change the extension of the last component to .sld
-        if let Some(last_part) = name.last() {
-            file_path.pop(); // Remove the last part
-            file_path.push(format!("{}.sld", last_part));
-        }
+        let last_part = name.last().expect("name is non-empty");
 
         // Search in all configured paths
         for search_path in &self.search_paths {
-            let mut full_path = search_path.clone();
-            full_path.push(&file_path);
+            for extension in LIBRARY_FILE_EXTENSIONS {
+                let mut full_path = search_path.clone();
+                full_path.push(&directory);
+                full_path.push(format!("{last_part}.{extension}"));
 
-            if self.fs.is_file(&full_path) {
-                return Some(full_path);
+                if self.fs.is_file(&full_path) {
+                    return Some(full_path);
+                }
             }
         }
 

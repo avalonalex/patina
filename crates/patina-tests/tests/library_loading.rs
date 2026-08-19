@@ -3,6 +3,8 @@
 //! These tests verify that the library loading infrastructure works correctly
 //! for Rust libraries, Scheme libraries (.sld files), and mixed libraries.
 
+mod common;
+
 use patina_interpreter::TreeWalkInterpreter;
 use patina_runtime::{Environment, Library, LibraryError};
 use std::rc::Rc;
@@ -142,4 +144,46 @@ fn test_library_value_type() {
 
     // Note: We can't easily create Library values from Scheme yet,
     // but the predicate is registered and works
+}
+
+/// **Open defect, pinned.** An imported variable is a copy of its value at
+/// import time, not the exporting library's binding, so a mutation the library
+/// makes afterwards is invisible to the importer.
+///
+/// The library's own view is live — `peek` reads 2 — which locates the fault
+/// in what `import` installs rather than in how `set!` runs. Gauche and chibi
+/// both report 2 for `count` on the same program.
+///
+/// Both backends do this, and the chibi R7RS suite is 1226/1226 across it,
+/// because nothing there mutates a variable another library imported. Found
+/// 2026-08-18 while writing an R6RS library test, which is the kind of thing
+/// a second corpus is for.
+///
+/// Asserted as-is rather than as a divergence, because both backends agree
+/// and neither fails: they return a plausible wrong answer. **When this
+/// converges on 2, delete the `count` assertion and keep the `peek` one.**
+#[test]
+fn an_imported_variable_is_a_stale_copy_of_its_binding() {
+    let program = "(define-library (pinned counter)
+                     (export bump count peek)
+                     (import (scheme base))
+                     (begin
+                       (define count 0)
+                       (define (bump) (set! count (+ count 1)))
+                       (define (peek) count)))
+                   (import (pinned counter))
+                   (bump)
+                   (bump)
+                   (list count (peek))";
+
+    assert_eq!(
+        common::eval_program_tree_walker(program),
+        "(0 2)",
+        "tree-walker: expected the pinned wrong answer; if this is now (2 2) the defect is fixed"
+    );
+    assert_eq!(
+        common::eval_program_vm(program),
+        "(0 2)",
+        "vm: expected the pinned wrong answer; if this is now (2 2) the defect is fixed"
+    );
 }
