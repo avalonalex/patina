@@ -156,3 +156,95 @@ fn test_open_flags_are_combinable_and_fail_at_open() {
     );
     assert!(out.contains("requires FFI"), "got: {out}");
 }
+
+// -- delete-file-hierarchy -----------------------------------------------------
+//
+// Nothing below can reach a real file: `OverlayFs` routes every removal to the
+// in-memory overlay and never to its base, so even a regressed guard deletes
+// only overlay entries. That is what makes it safe to point the walk at "/".
+
+/// Upstream refuses `""` and `"/"` *before* touching anything; the hand-written
+/// branch used to start deleting immediately, so a computed-empty path was all
+/// it took to begin a depth-first walk of the root.
+#[test]
+fn test_delete_file_hierarchy_refuses_unsafe_directories() {
+    for dir in ["", "/"] {
+        let fs = overlay();
+        fs.overlay()
+            .add_text_file(std::path::PathBuf::from("/keep.txt"), "keep");
+        let out = eval_on(
+            &fs,
+            &format!(
+                "{IMPORT}
+                 (guard (e (#t (error-object-message e)))
+                   (delete-file-hierarchy \"{dir}\"))"
+            ),
+        );
+        assert!(
+            out.contains("won't delete unsafe directory"),
+            "{dir:?} should be refused, got: {out}"
+        );
+        // The refusal has to precede the walk, not merely survive it.
+        assert!(
+            fs.overlay()
+                .get_text_file(std::path::Path::new("/keep.txt"))
+                .is_some(),
+            "{dir:?} deleted overlay files before refusing"
+        );
+    }
+}
+
+#[test]
+fn test_delete_file_hierarchy_removes_a_tree() {
+    let fs = overlay();
+    assert_eq!(
+        eval_on(
+            &fs,
+            "(import (scheme base) (scheme file) (chibi filesystem))
+             (create-directory \"/tree\")
+             (create-directory \"/tree/sub\")
+             (call-with-output-file \"/tree/sub/a.txt\" (lambda (p) (write-string \"a\" p)))
+             (delete-file-hierarchy \"/tree\")
+             (list (file-directory? \"/tree\") (file-exists? \"/tree/sub/a.txt\"))"
+        ),
+        "(#f #f)"
+    );
+}
+
+/// `(delete-file-hierarchy dir [ignore-errors?])` — the optional argument was
+/// accepted and never read, so a caller asking for tolerance got an exception.
+#[test]
+fn test_delete_file_hierarchy_honours_ignore_errors() {
+    // Every entry below exists only in the base, and removals only reach the
+    // overlay — so each one fails, which is exactly the case under test.
+    let dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/examples/arithmetic"
+    );
+
+    let fs = overlay();
+    assert_eq!(
+        eval_on(
+            &fs,
+            &format!(
+                "{IMPORT}
+                 (guard (e (#t 'raised)) (delete-file-hierarchy \"{dir}\"))"
+            )
+        ),
+        "raised"
+    );
+
+    let fs = overlay();
+    assert_eq!(
+        eval_on(
+            &fs,
+            &format!("{IMPORT} (delete-file-hierarchy \"{dir}\" #t)")
+        ),
+        "#t"
+    );
+
+    assert!(
+        std::path::Path::new(dir).join("basic.scm").exists(),
+        "the base filesystem must be untouched"
+    );
+}

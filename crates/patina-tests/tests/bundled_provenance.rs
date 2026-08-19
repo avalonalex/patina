@@ -31,7 +31,7 @@ const PINNED: &[(&str, u64)] = &[
     // Pinned post-edit: upstream apart from the `(patina …)` cond-expand branch
     // recorded in lib/chibi/PROVENANCE.md. Same reason as lib/srfi/130.scm —
     // a recorded deviation must not be why the rest of a file goes unwatched.
-    ("lib/chibi/filesystem.sld", 0xe5b3fc5704428498),
+    ("lib/chibi/filesystem.sld", 0x6081884933750547),
     ("lib/chibi/optional.scm", 0xc690d10b2fa58f49),
     ("lib/chibi/optional.sld", 0x90f9ebb211b8bc6e),
     ("lib/chibi/string.scm", 0x40519db9f7f6ea77),
