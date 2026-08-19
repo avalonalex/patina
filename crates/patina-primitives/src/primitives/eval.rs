@@ -532,13 +532,14 @@ fn primitive_scheme_report_environment(
     // next unrelated error. Unreachable today (nothing user-written runs while
     // `(scheme inexact)` loads), and the only sentinel-protocol break the
     // audit's sweep of every `apply_proc`/`eval_expr` site found (F7).
-    let optional_library = |name: &str| -> Result<Option<Rc<patina_core::library::Library>>, EvalError> {
-        match ctx.load_scheme_library(&["scheme".to_string(), name.to_string()]) {
-            Ok(lib) => Ok(Some(lib)),
-            Err(EvalError::ContinuationEscape) => Err(EvalError::ContinuationEscape),
-            Err(_) => Ok(None),
-        }
-    };
+    let optional_library =
+        |name: &str| -> Result<Option<Rc<patina_core::library::Library>>, EvalError> {
+            match ctx.load_scheme_library(&["scheme".to_string(), name.to_string()]) {
+                Ok(lib) => Ok(Some(lib)),
+                Err(EvalError::ContinuationEscape) => Err(EvalError::ContinuationEscape),
+                Err(_) => Ok(None),
+            }
+        };
 
     // Try to load additional libraries for R5RS features
     // (scheme inexact) for sin, cos, etc.

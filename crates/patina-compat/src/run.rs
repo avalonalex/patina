@@ -568,17 +568,21 @@ fn test_suite_failed(stdout: &str) -> bool {
     {
         return true;
     }
-    ["# of failures", "# of unexpected successes", "# of unexpected passes"]
-        .iter()
-        .any(|phrase| {
-            stdout.match_indices(phrase).any(|(i, _)| {
-                stdout[i + phrase.len()..]
-                    .split_whitespace()
-                    .next()
-                    .and_then(|count| count.parse::<u64>().ok())
-                    .is_some_and(|count| count > 0)
-            })
+    [
+        "# of failures",
+        "# of unexpected successes",
+        "# of unexpected passes",
+    ]
+    .iter()
+    .any(|phrase| {
+        stdout.match_indices(phrase).any(|(i, _)| {
+            stdout[i + phrase.len()..]
+                .split_whitespace()
+                .next()
+                .and_then(|count| count.parse::<u64>().ok())
+                .is_some_and(|count| count > 0)
         })
+    })
 }
 
 #[cfg(test)]

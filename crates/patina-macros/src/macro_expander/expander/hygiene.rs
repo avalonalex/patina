@@ -130,7 +130,10 @@ impl Expander {
         let mut elems = Vec::new();
         let mut current = tv;
         loop {
-            let pair = current.is_pair().then(|| heap.borrow().try_pair(current)).flatten();
+            let pair = current
+                .is_pair()
+                .then(|| heap.borrow().try_pair(current))
+                .flatten();
             match pair {
                 Some((car, cdr)) => {
                     elems.push(car);
