@@ -527,10 +527,10 @@ fn extract_unbound_identifiers(parts: [&str; 2]) -> Vec<String> {
 
 /// Did the suite report failures?
 ///
-/// Three frameworks reach this and they say it three ways, so this knows all
-/// three. It is the only thing standing between a failing suite and a `pass`
-/// row, which makes a shape it does not know a *false green* rather than a
-/// missing detail.
+/// Four failure shapes reach this — three frameworks plus one bespoke test
+/// script — and each says it its own way, so this knows all four. It is the
+/// only thing standing between a failing suite and a `pass` row, which makes
+/// a shape it does not know a *false green* rather than a missing detail.
 ///
 /// `(chibi test)` prints per-case `FAIL: name` lines and a summary
 /// `3 failures (2.1%).` / `1 error.` — the count *before* the word.
@@ -549,8 +549,13 @@ fn extract_unbound_identifiers(parts: [&str; 2]) -> Vec<String> {
 /// again, but spelled `failed`, and printed as `0 failed.` on success. So the
 /// count has to be *read* rather than merely found, which is why the
 /// before-the-word test rejects a zero.
+///
+/// srfi-175's bespoke `want` macro prints `Failed: wanted X but got Y` per
+/// case and nothing on success — no count anywhere, and `FAIL` does not match
+/// it because the check is case-sensitive. Until this shape was added, a
+/// deliberately failing srfi-175 run classified as `Pass`.
 fn test_suite_failed(stdout: &str) -> bool {
-    if stdout.contains("FAIL") || stdout.contains("*** failed ***") {
+    if stdout.contains("FAIL") || stdout.contains("Failed:") || stdout.contains("*** failed ***") {
         return true;
     }
     let nonzero_count_before = |keyword: &str| {
@@ -906,6 +911,23 @@ mod tests {
             true,
         );
         assert_eq!(classify(&xpass, "test"), Status::WrongResult);
+    }
+
+    /// srfi-175's bespoke `want` macro: `Failed: wanted ...` per case, no
+    /// summary line, no count, exit 0. The audit shape — before the marker
+    /// was added, exactly this output classified as `Pass`.
+    #[test]
+    fn classifies_bespoke_want_failures() {
+        let failing = captured(
+            "Failed: wanted #t but got #f from (ascii-char? #\\a)\n",
+            "",
+            true,
+        );
+        assert_eq!(classify(&failing, "test"), Status::WrongResult);
+
+        // Success prints nothing at all, which must still pass.
+        let passing = captured("", "", true);
+        assert_eq!(classify(&passing, "test"), Status::Pass);
     }
 
     /// SRFI 78 spells it `failed`, prints the count before the word, and

@@ -1,10 +1,11 @@
-//! SRFI 151 bitwise operations, plus the two legacy spellings the ecosystem
+//! SRFI 151 bitwise operations, plus the legacy spellings the ecosystem
 //! actually imports.
 //!
 //! Bundled because it is the largest measured gap in the vendored corpus:
 //! `(srfi 60)` has an in-degree of 31 and `(srfi 33)` 19, against SRFI 151's
-//! standard-track status. All three are the same operations under three sets of
-//! names, so 60 and 33 are renames over 151 rather than separate ports.
+//! standard-track status; `(srfi 142)` is 151's own withdrawn predecessor.
+//! All four are the same operations under different sets of names, so 60, 33
+//! and 142 are renames over 151 rather than separate ports.
 //!
 //! The core operators are Rust primitives. Two's-complement semantics over
 //! unbounded integers is the part worth testing: negative operands behave as if
@@ -23,6 +24,10 @@ fn srfi60(expr: &str) -> String {
 
 fn srfi33(expr: &str) -> String {
     eval(&format!("(import (scheme base) (srfi 33)) {expr}"))
+}
+
+fn srfi142(expr: &str) -> String {
+    eval(&format!("(import (scheme base) (srfi 142)) {expr}"))
 }
 
 // ─── Core operators ──────────────────────────────────────────────────────────
@@ -157,6 +162,40 @@ fn test_srfi_60_conversions_are_msb_first() {
     assert_eq!(srfi60("(list->integer '(#t #t #f))"), "6");
     assert_eq!(srfi60("(list->integer (integer->list 12345))"), "12345");
     assert_eq!(srfi60("(booleans->integer #t #f #t #f)"), "10");
+}
+
+/// SRFI 142 (withdrawn, superseded by 151) is a rename over the same
+/// primitives, with one semantic twist: its `bitwise-if` takes bits from
+/// the *third* argument where the mask bit is 1 — the opposite of 151's —
+/// so the shim swaps the trailing arguments rather than aliasing.
+/// mask 5 (101), i 3 (011), j 0: 142 keeps i's mask-0 bits → 2, where 151
+/// keeps i's mask-1 bits → 1.
+#[test]
+fn test_srfi_142_bitwise_if_is_mask_zero_from_second() {
+    assert_eq!(srfi142("(bitwise-if 5 3 0)"), "2");
+    assert_eq!(srfi151("(bitwise-if 5 3 0)"), "1");
+}
+
+/// Unlike SRFI 60's MSB-first `integer->list`, SRFI 142's is LSB-first —
+/// the very family 151 renamed to `bits->list` without changing the order,
+/// so these are plain renames.
+#[test]
+fn test_srfi_142_conversions_are_lsb_first() {
+    assert_eq!(srfi142("(integer->list 6)"), "(#f #t #t)");
+    assert_eq!(srfi142("(list->integer '(#f #t #t))"), "6");
+    assert_eq!(srfi142("(vector->integer #(#f #t #t))"), "6");
+    assert_eq!(srfi142("(list->integer (integer->list 12345))"), "12345");
+}
+
+/// Headline operators reached through the 142 name — including the three
+/// jkode-sassy, the corpus package that imports it, actually calls.
+#[test]
+fn test_srfi_142_headline_operators() {
+    assert_eq!(srfi142("(bitwise-and 12 10)"), "8");
+    assert_eq!(srfi142("(bitwise-ior 12 10)"), "14");
+    assert_eq!(srfi142("(arithmetic-shift 1 8)"), "256");
+    assert_eq!(srfi142("(bit-count 7)"), "3");
+    assert_eq!(srfi142("(first-set-bit 12)"), "2");
 }
 
 /// SRFI 60 exports both spellings of eight operators -- `logand` *and*

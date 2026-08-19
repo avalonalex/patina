@@ -10,6 +10,34 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**`(scheme r5rs)` did not export the R5RS syntax keywords** — ✅ **fixed** (2026-08-19). Both
+backends. Found when the `(srfi 23)` shim let srfi-78's reference implementation load far enough
+to fail for its real reason.
+
+```scheme
+(define-library (t r5rs-only)
+  (export f)
+  (import (scheme r5rs))
+  (begin (define (f) 42)))
+;; before => Parse error in ...: runtime error: unbound variable: `define`
+;; chibi => fine
+```
+
+`lib/scheme/r5rs.sld` carried a NOTE saying `define`, `lambda`, `if` and the rest "are core syntax
+handled by the desugarer and cannot be re-exported as bindings … implicitly available in every
+environment". Both halves had expired: the sibling entry below ("A library could not re-export a
+core syntactic keyword") made such exports *legal* on 2026-08-16, and once syntax keywords became
+real bindings, a library body genuinely has only what it imports — so a library importing nothing
+but `(scheme r5rs)` had no `define` at all. Top level never showed it, because core syntax is
+seeded there. srfi-78's `78.sld` — `(import (srfi 23) (srfi 42) (scheme r5rs))`, then an include
+full of defines — is exactly this shape in the wild.
+
+The fix is inventory, not mechanism: the keyword set R5RS defines, taken from chibi's
+`(scheme r5rs)`, added to the export list. Guard test:
+`scheme_r5rs.rs::test_r5rs_provides_core_syntax_inside_a_library_body`. Worth keeping for the
+pattern: a comment recording *why a list is short* is a premise, and when the premise expires
+nothing fails — the list just stays silently wrong until a corpus package walks into the gap.
+
 **The lexer rejected a non-ASCII identifier** — ✅ **fixed** (2026-08-16). Both backends. Found once
 srfi-197's misfiled `missing-library` row was corrected and the package could report its real
 failure.

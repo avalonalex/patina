@@ -158,6 +158,14 @@ not been marked** — `lib/srfi/` and `lib/scheme/` are the current state, not t
 Near-free re-export shims to do alongside, since R7RS base already provides the functionality but
 packages import them by SRFI name: `(srfi 9)`, `(srfi 11)`, `(srfi 39)`, `(srfi 6)`.
 
+✅ **Four more shims landed 2026-08-19**, driven by the measured missing-library queue rather than
+the list above: `(srfi 23)` (`error`, re-export), `(srfi 98)` (environment access, re-export from
+`(scheme process-context)`), `(srfi 142)` (withdrawn predecessor of SRFI 151 — a rename over it,
+except `bitwise-if`, whose trailing arguments 142 reads the other way round, so the shim swaps
+them), and `(scheme small)` (the R7RS-small union library). Together with the harness's
+test-script import scanning from the same change, they flipped jkode-sassy, srfi-235 and srfi-78
+to pass and advanced chrisoei-cint to its real blocker, `(srfi 144)` — 121 → 124.
+
 *Note:* SRFI 64 is lower priority than its ubiquity elsewhere suggests — Snow packages overwhelmingly
 test with `(chibi test)`, which Patina **already ships**. Primitive-backed work goes under
 `crates/patina-runtime/src/stdlib/internal_*.rs`, registered in *both* the primitive registry and the
@@ -1091,6 +1099,7 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| `(scheme r5rs)` did not export the R5RS syntax keywords | 2026-08-19 |
 | The lexer rejected a non-ASCII identifier | 2026-08-16 |
 | A library could not re-export a core syntactic keyword | 2026-08-16 |
 | VM: an escape out of a re-entrant primitive crashed the process (call position) | 2026-08-15 |

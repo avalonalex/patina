@@ -1,11 +1,11 @@
 # Patina third-party compatibility (vm backend)
 
-**121 of 162 packages pass** — 121 of 160 achievable (excluding 2 out-of-scope pending FFI).
+**124 of 162 packages pass** — 124 of 160 achievable (excluding 2 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 121 |
-| missing-library | 19 |
+| pass | 124 |
+| missing-library | 16 |
 | parse-error | 14 |
 | load-error | 1 |
 | unbound-identifier | 1 |
@@ -21,18 +21,14 @@
 | (chibi) | 3 |
 | (foreign c) | 2 |
 | (srfi 114 comparators) | 2 |
+| (srfi 144) | 2 |
 | (chibi io) | 1 |
 | (rebottled pregexp) | 1 |
 | (retropikzel named-pipes) | 1 |
 | (scheme flonum) | 1 |
-| (scheme small) | 1 |
-| (srfi 142) | 1 |
-| (srfi 144) | 1 |
 | (srfi 160 base) | 1 |
 | (srfi 165) | 1 |
-| (srfi 23) | 1 |
 | (srfi 231) | 1 |
-| (srfi 64) | 1 |
 
 ## Parse errors
 
@@ -116,7 +112,7 @@
 | in-progress-hash-bimaps | test | missing-library |
 | in-progress-hash-tables | test | missing-library |
 | independentresearch-xattr | probe | missing-library |
-| jkode-sassy | test | missing-library |
+| jkode-sassy | test | pass |
 | lassik-dockerfile | test | pass |
 | lassik-shell-quote | test | pass |
 | lassik-string-inflection | test | pass |
@@ -210,7 +206,7 @@
 | srfi-197 | test | runtime-error |
 | srfi-2 | probe | pass |
 | srfi-227 | probe | pass |
-| srfi-235 | test | missing-library |
+| srfi-235 | test | pass |
 | srfi-25 | probe | pass |
 | srfi-26 | probe | pass |
 | srfi-28 | probe | pass |
@@ -225,5 +221,5 @@
 | srfi-51 | probe | pass |
 | srfi-63 | probe | pass |
 | srfi-64 | test | pass |
-| srfi-78 | probe | missing-library |
+| srfi-78 | probe | pass |
 | srfi-95 | probe | pass |
