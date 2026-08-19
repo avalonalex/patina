@@ -20,14 +20,21 @@
 //! errored and `(procedure? cond)` returned `#f`, which was an accident of `if`
 //! having had no binding to load.
 //!
-//! **It is a desugar-time rule, so it has two recorded residuals**, both pinned
-//! at the bottom of this file. The check asks what a name resolves to *while
-//! the form is being desugared*: a name that is not syntax yet, or whose
-//! spelling is shadowed by an unrelated binding, still loads `#<macro>` or
-//! `#<syntax:…>` as a value. Both directions are safe — a missed rejection,
-//! never a wrong one — and closing them means checking at every variable
-//! *read* instead, on the VM's hottest instruction. The residual is the price;
-//! it is written down rather than implied.
+//! **It is a desugar-time rule, so it has recorded residuals**, all pinned at
+//! the bottom of this file. The check asks what a name resolves to *while the
+//! form is being desugared*, and what the desugarer knows then is not
+//! everything: a name that is not syntax yet, or whose spelling is shadowed by
+//! an unrelated binding, still loads `#<macro>` or `#<syntax:…>` as a value.
+//!
+//! Those two are missed rejections. The third is not, and is why this
+//! paragraph no longer claims the rule "never" rejects wrongly: a keyword a
+//! *macro expansion* rebinds is invisible to the body scan that
+//! `body_definition_names` performs, so the check still sees the core binding
+//! and rejects a legal program. Written-out internal definitions are seen
+//! (audit C2); expansions are not. Closing any of the three means resolving
+//! later — at every variable *read*, on the VM's hottest instruction, or after
+//! expanding a body's macro uses. The residual is the price; it is written
+//! down rather than implied.
 
 mod common;
 use common::{
@@ -117,6 +124,77 @@ fn test_a_shadowed_keyword_is_an_ordinary_variable() {
     assert_program_eval_to(
         "(import (scheme base)) (let ((cond 1) (quote 2)) (+ cond quote))",
         "3",
+    );
+}
+
+/// An internal definition shadows like `letrec*` — over the whole body,
+/// including the forms before it (R7RS §5.3.2). The body scan has to run
+/// before any form is desugared, or #89's value-position check sees the core
+/// binding and rejects a legal program (audit C2), and head position silently
+/// picks the core form over the local binding (audit D6).
+#[test]
+fn test_an_internal_definition_shadows_a_keyword_over_the_whole_body() {
+    // C2: value position. Rejected outright before the scan existed.
+    assert_program_eval_to("(import (scheme base)) (let () (define if 3) (+ if 1))", "4");
+    assert_program_eval_to(
+        "(import (scheme base)) (let () (define when 3) (+ when 1))",
+        "4",
+    );
+    assert_program_eval_to(
+        "(import (scheme base)) ((lambda () (define if 3) (+ if 1)))",
+        "4",
+    );
+    // D6: head position. The pre-existing half — silently answered `2`,
+    // because core `if` claimed the head over the body's own binding.
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define (g) (define if (lambda (a b c) 'shadowed)) (if 1 2 3))
+         (g)",
+        "shadowed",
+    );
+    assert_program_eval_to(
+        "(import (scheme base)) (let () (define cond (lambda args 'shadowed-cond)) (cond 1 2))",
+        "shadowed-cond",
+    );
+    // `begin` splices into the body it appears in, so its definitions bind
+    // there too.
+    assert_program_eval_to(
+        "(import (scheme base)) ((lambda () (begin (define if 4)) (+ if 1)))",
+        "5",
+    );
+    // An inner body's definitions stay inside it.
+    assert_program_eval_to(
+        "(import (scheme base)) ((lambda () (define (g) (define if 7) if) (g)))",
+        "7",
+    );
+    // And a body that defines nothing of the sort is untouched.
+    assert_program_eval_to(
+        "(import (scheme base)) ((lambda () (define x 3) (if (> x 1) 'yes 'no)))",
+        "yes",
+    );
+}
+
+/// F4 — body-position `define-syntax` was the last keyword still recognized by
+/// spelling, so a body that binds the *name* still had its call read as a
+/// macro definition. Recognized through its binding now, like every other
+/// keyword since #88.
+#[test]
+fn test_body_position_define_syntax_is_recognized_through_its_binding() {
+    // Shadowed by a formal: `(define-syntax foo 2)` is an ordinary call of the
+    // procedure the formal is bound to. By spelling it was read as a macro
+    // definition named `foo` with `2` for a transformer, which fails to
+    // compile. chibi answers 12 here too.
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define foo 10)
+         ((lambda (define-syntax) (define-syntax foo 2)) (lambda (a b) (+ a b)))",
+        "12",
+    );
+    // Reached under an import rename, it still defines a macro.
+    assert_program_eval_to(
+        "(import (scheme base) (rename (scheme base) (define-syntax defmac)))
+         ((lambda () (defmac m (syntax-rules () ((_ x) (* x 3)))) (m 4)))",
+        "12",
     );
 }
 
@@ -254,6 +332,27 @@ fn test_a_forward_reference_to_syntax_is_not_caught() {
          (define-syntax foo (syntax-rules () ((_) 1)))
          (f)",
         "(#<macro>)",
+    );
+}
+
+/// A definition a macro *expands into* is not seen by the body scan.
+///
+/// `body_definition_names` reads the forms as written, before expansion, so a
+/// keyword bound by `define-record-type` or `define-values` is invisible to
+/// it. Same coarseness as the spelling test below and in the same direction —
+/// a missed shadow, never an invented one — but it costs a legal program here
+/// rather than a missed rejection, so it is the sharper of the two residuals.
+/// chibi accepts this.
+///
+/// Closing it means expanding the body's macro uses before scanning it, which
+/// reorders expansion against definition and is a change to when hygiene
+/// happens, not a bug fix.
+#[test]
+fn test_a_definition_introduced_by_a_macro_is_not_seen_by_the_body_scan() {
+    assert_program_eval_error(
+        "(import (scheme base))
+         (define (f) (define-values (if) (values 3)) (+ if 1))
+         (f)",
     );
 }
 
