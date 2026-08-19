@@ -28,10 +28,20 @@ C-backed SRFI 69; the resulting deviations are documented in its header,
 which is where this tree records deviation.
 
 `(srfi 69)` is **not** byte-identical and is deliberately absent from the table
-above: `69/srfi-69-impl.scm` carries one marked local fix, `PATINA DEVIATION` on
-`hash`, coercing its result to an exact integer so that an inexact key cannot
-crash the table. The reasoning stays in the file, where anyone diffing against
-upstream will be standing.
+above: `69/srfi-69-impl.scm` carries three marked local fixes, each `PATINA
+DEVIATION` at its site, and the reasoning stays in the file, where anyone
+diffing against upstream will be standing.
+
+1. `hash`'s result is coerced to an exact integer, so that an inexact key
+   cannot crash the table.
+2. `hash`'s `real?` branch is split, because `+inf.0`, `-inf.0` and `+nan.0`
+   are real but not rational and so reached `numerator`, which raises.
+3. `hash-by-identity` is a real identity hash rather than an alias for the
+   structural `hash`. Upstream can define it as an alias because chibi's SRFI
+   69 is C-backed and never runs this file; here it meant `(make-hash-table
+   eq?)` — and, since SRFI 125's `make-eq-comparator` routes through it, every
+   eq-comparator table — lost a key that was mutated after insertion, errored
+   on a procedure key, and did not terminate on a circular one.
 
 ## Licences
 

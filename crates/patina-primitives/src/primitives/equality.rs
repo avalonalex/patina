@@ -63,6 +63,21 @@ pub(super) fn equal_hash(
     Ok(TaggedValue::fixnum((h % 536870909) as i64))
 }
 
+pub(super) fn identity_hash(
+    heap: &SharedHeap,
+    args: &[TaggedValue],
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let h = heap.borrow().tagged_value_hash_identity(args[0]);
+    // Same reduction as `equal-hash`: a non-negative fixnum.
+    Ok(TaggedValue::fixnum((h % 536870909) as i64))
+}
+
 pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     use crate::registry::PrimitiveFn;
     use patina_runtime::Arity;
@@ -101,5 +116,14 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         Arity::Exact(1),
         "Returns a non-negative exact integer hash code for obj, consistent with equal?.",
         equal_hash,
+    ));
+
+    // identity-hash - hash consistent with eq?, for tables keyed by identity
+    registry.register(PrimitiveFn::new_heap(
+        "patina.internal.predicates",
+        "identity-hash",
+        Arity::Exact(1),
+        "Returns a non-negative exact integer hash code for obj, consistent with eq?.",
+        identity_hash,
     ));
 }

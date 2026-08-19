@@ -2105,6 +2105,45 @@ impl Heap {
         self.tagged_value_hash_depth(tv, 8)
     }
 
+    /// Compute a hash for a TaggedValue consistent with `eq?`.
+    ///
+    /// Identity, not structure. Hashing a mutable object's *contents* means
+    /// its hash moves when it is mutated, so an `eq?` table loses the key it
+    /// still holds; it also makes a procedure key an error (nothing about a
+    /// procedure is hashable structurally) and a circular key an unbounded
+    /// recursion. All three were live through `(make-hash-table eq?)`.
+    ///
+    /// The heap index is a sound identity because the collector does not move
+    /// objects — the same property [`Self::tagged_value_hash`] already relies
+    /// on for its own fallback. Three heap types need more than the index:
+    /// [`Self::values_eq`] compares procedures, record types and records by
+    /// the `Rc` behind them, so two indices can be `eq?` and must hash alike.
+    ///
+    /// Immediates fall through to the structural hash, which for a fixnum,
+    /// character, boolean or `()` already *is* the identity hash — `eq?`
+    /// compares those by raw value.
+    pub fn tagged_value_hash_identity(&self, tv: TaggedValue) -> u64 {
+        #[inline]
+        fn mix(x: u64) -> u64 {
+            let mut h = x.wrapping_mul(0x9e3779b97f4a7c15);
+            h ^= h >> 32;
+            h
+        }
+        if tv.is_object() {
+            let by_rc = match self.get_object(tv) {
+                HeapObjectData::Procedure(p) => Rc::as_ptr(p) as *const u8 as usize,
+                HeapObjectData::RecordType(t) => Rc::as_ptr(t) as *const u8 as usize,
+                HeapObjectData::Record { fields, .. } => Rc::as_ptr(fields) as *const u8 as usize,
+                _ => return mix(tv.heap_index() as u64),
+            };
+            return mix(by_rc as u64);
+        }
+        if tv.is_heap_pointer() {
+            return mix(tv.heap_index() as u64);
+        }
+        self.tagged_value_hash(tv)
+    }
+
     fn tagged_value_hash_depth(&self, tv: TaggedValue, depth: u32) -> u64 {
         // Null
         if tv.is_null() {

@@ -34,6 +34,7 @@ pub fn build_internal_predicates(_name: Vec<String>, env: Rc<Environment>) -> Ve
         ("equal?", Arity::Exact(2)),
         // === Hashing ===
         ("equal-hash", Arity::Exact(1)),
+        ("identity-hash", Arity::Exact(1)),
     ];
 
     let mut exports = Vec::new();

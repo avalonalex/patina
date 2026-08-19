@@ -65,8 +65,14 @@
      (cond ((integer? obj) (modulo (abs obj) bound))
            ((string? obj) (string-hash obj bound))
            ((symbol? obj) (symbol-hash obj bound))
-           ((real? obj) (modulo (abs (+ (numerator obj) (denominator obj)))
-                                bound))
+           ((rational? obj) (modulo (abs (+ (numerator obj) (denominator obj)))
+                                    bound))
+           ;; PATINA DEVIATION: +inf.0, -inf.0 and +nan.0 are `real?` but not
+           ;; `rational?`, so upstream's `real?` branch reached `numerator`,
+           ;; which raises on them — any such key errored rather than hashing.
+           ;; The `exact` wrap above fixed `2.0` and the rationals and left
+           ;; these three. Colliding them costs nothing; chibi hashes them too.
+           ((real? obj) 0)
            ((number? obj)
             (modulo (+ (hash (real-part obj)) (* 3 (hash (imag-part obj))))
                     bound))
@@ -79,7 +85,33 @@
            ((procedure? obj) (error "hash: procedures cannot be hashed" obj))
            (else 1)))))
 
-(define hash-by-identity hash)
+;; PATINA DEVIATION: a real identity hash.
+;;
+;; Upstream is `(define hash-by-identity hash)`, which hashes *structure* —
+;; wrong for the one table that chooses it, `(make-hash-table eq?)`, and
+;; newly load-bearing since SRFI 125's `make-eq-comparator` routes here.
+;; Three consequences, all of which chibi (whose SRFI 69 is C-backed and
+;; hashes by identity) gets right:
+;;
+;;   (define ht (make-hash-table eq?))
+;;   (define k (vector 1 2 3))
+;;   (hash-table-set! ht k 'v)
+;;   (vector-set! k 0 99)
+;;   (hash-table-ref/default ht k 'MISSING)  ;; was MISSING: the key moved
+;;
+;; a procedure key raised "hash: procedures cannot be hashed", and a circular
+;; pair key recursed until the stack ran out.
+;;
+;; `identity-hash` is `eq?`'s own hash: the heap index, which is stable
+;; because the collector does not move objects, and the immediates by value,
+;; which is what `eq?` compares them by.
+;;
+;; `eqv?` tables are deliberately left on the structural `hash`, which is what
+;; chibi does too — `(make-hash-table eqv?)` loses a mutated vector key there
+;; as well.
+(define (hash-by-identity obj . maybe-bound)
+  (let ((bound (if (null? maybe-bound) *default-bound* (car maybe-bound))))
+    (modulo (identity-hash obj) bound)))
 
 (define (vector-hash v bound)
   (let ((hashvalue 571)
