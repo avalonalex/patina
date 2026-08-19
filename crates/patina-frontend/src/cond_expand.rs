@@ -165,17 +165,42 @@ pub(crate) fn tagged_list_to_vec(
     }
 }
 
-/// Parse a library name from TaggedValue
+/// Parse a library name from TaggedValue.
+///
+/// A trailing R6RS version is accepted and discarded — `(rnrs base (6))`,
+/// `(rnrs base ((>= 6)))` and `(rnrs base)` all name the same library here.
+/// R6RS §7.1 puts the version last and makes it a *list*, while an R7RS
+/// library name is a flat sequence of identifiers and non-negative integers,
+/// so a nested list in the final position is unambiguously a version and
+/// nothing else. Discarding rather than matching it is the honest behaviour
+/// for an implementation with no version resolution: there is one library
+/// under the name, and pretending to check a constraint against it would
+/// report agreement it never established.
 pub(crate) fn parse_library_name_tagged(
     value: TaggedValue,
     shared_heap: &SharedHeap,
 ) -> Result<Vec<String>, ParseError> {
-    let items = tagged_list_to_vec(value, shared_heap)?;
+    let mut items = tagged_list_to_vec(value, shared_heap)?;
 
     if items.is_empty() {
         return Err(ParseError::InvalidSyntax(
             "Library name cannot be empty".to_string(),
         ));
+    }
+
+    let has_version = items.len() > 1
+        && items
+            .last()
+            .is_some_and(|last| last.is_null() || last.is_pair());
+    if has_version {
+        if !crate::dialect::allow_r6rs() {
+            return Err(ParseError::InvalidSyntax(
+                "R6RS version reference in a library name is not R7RS \
+                 (pass --allow-r6rs to read it)"
+                    .to_string(),
+            ));
+        }
+        items.pop();
     }
 
     let heap = shared_heap.borrow();

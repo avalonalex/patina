@@ -45,6 +45,10 @@ fn parse_args(args: &[String]) -> CliOptions {
                 process::exit(0);
             }
             "--tree-walker" => opts.use_tree_walker = true,
+            // Sets the variable the frontend reads, rather than threading a
+            // flag down to every Lexer construction site. The variable stays
+            // the interface; this is the discoverable spelling of it.
+            "--allow-r6rs" => unsafe { std::env::set_var("PATINA_ALLOW_R6RS", "1") },
             "--dump" | "--vm-dump" => opts.dump = true,
             "--trace" | "--vm-trace" => opts.trace = true,
             // Accept --vm for backwards compatibility (it's now the default).
@@ -193,6 +197,8 @@ fn print_help() {
     eprintln!("  --help, -h     Show this help message");
     eprintln!("  --version      Print the version and exit");
     eprintln!("  --tree-walker  Use the tree-walking backend instead of the VM");
+    eprintln!("  --allow-r6rs   Also read the R6RS syntax R7RS reserves: [ ], #vu8(,");
+    eprintln!("                 (library ...), and versioned library names");
     eprintln!("  --dump         Compile to bytecode and disassemble (no execution)");
     eprintln!("  --trace        Execute with instruction-level tracing to stderr");
     eprintln!("  -I <dir>       Prepend a directory to the library search path");
@@ -203,6 +209,7 @@ fn print_help() {
     eprintln!("Environment:");
     eprintln!("  PATINA_LIBRARY_PATH  Colon-separated library directories, searched");
     eprintln!("                       before the built-in defaults");
+    eprintln!("  PATINA_ALLOW_R6RS    Same as --allow-r6rs when set to anything but 0");
     eprintln!();
     eprintln!("If FILE is provided, run it as a script.");
     eprintln!("Otherwise, start an interactive REPL.");

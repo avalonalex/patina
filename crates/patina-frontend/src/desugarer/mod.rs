@@ -1069,7 +1069,8 @@ impl Desugarer {
             // Asked of `current_desugarer`, not `self`: the answer depends on
             // what `define-syntax` is bound to *here*, which the body's own
             // shadows and earlier internal macros can change.
-            let define_syntax_info = current_desugarer.try_parse_define_syntax_tagged(*tv, shared_heap);
+            let define_syntax_info =
+                current_desugarer.try_parse_define_syntax_tagged(*tv, shared_heap);
 
             if let Some((macro_name, transformer_tv)) = define_syntax_info {
                 // Compile the macro immediately

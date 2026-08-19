@@ -11,7 +11,7 @@ use patina_core::{FileSystem, SharedHeap, TaggedValue};
 use patina_runtime::library_loader::{
     EvaluatingLibraryLoader, ExportSpec, ImportSet, ParsedLibrary,
 };
-use patina_runtime::library_registry::LibraryError;
+use patina_runtime::library_registry::{LibraryError, find_library_file_in};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -51,17 +51,23 @@ impl SchemeLibraryLoader {
     }
 }
 
-/// Is this datum a `(define-library ...)` form?
+/// Is this datum a `(define-library ...)` or R6RS `(library ...)` form?
 ///
-/// Used by the backends to route a top-level inline `define-library` (in a
+/// Used by the backends to route a top-level inline library definition (in a
 /// script or the REPL) to the library loader instead of the desugarer.
+///
+/// `library` is not a procedure or syntactic keyword anywhere in Patina, so a
+/// form in this position with that head can only be an R6RS library.
 pub fn is_define_library_form(tv: TaggedValue, heap: &SharedHeap) -> bool {
     if !tv.is_pair() {
         return false;
     }
     let h = heap.borrow();
     let head = h.car(tv);
-    h.get_symbol_name(head) == Some("define-library")
+    matches!(
+        h.get_symbol_name(head),
+        Some("define-library") | Some("library")
+    )
 }
 
 /// Error label for a `define-library` form that has no backing file.
@@ -139,30 +145,12 @@ impl SchemeLibraryLoader {
         ))
     }
 
-    /// Find the .sld file for a library
+    /// Find the library file for a library name.
+    ///
+    /// This is the resolver every actual library load goes through; see
+    /// [`find_library_file_in`], which it shares with `LibraryRegistry`.
     fn find_sld_file(&self, name: &[String], search_paths: &[PathBuf]) -> Option<PathBuf> {
-        if name.is_empty() {
-            return None;
-        }
-
-        // Convert library name to file path: (scheme base) → scheme/base.sld
-        let mut file_path = PathBuf::new();
-        for part in &name[..name.len() - 1] {
-            file_path.push(part);
-        }
-        file_path.push(format!("{}.sld", name.last().unwrap()));
-
-        // Search in all configured paths
-        for search_path in search_paths {
-            let mut full_path = search_path.clone();
-            full_path.push(&file_path);
-
-            if self.fs.is_file(&full_path) {
-                return Some(full_path);
-            }
-        }
-
-        None
+        find_library_file_in(self.fs.as_ref(), name, search_paths)
     }
 
     /// Parse a .sld file into a ParsedLibrary with a library availability checker.

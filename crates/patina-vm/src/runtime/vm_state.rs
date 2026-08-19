@@ -3213,7 +3213,10 @@ fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Proc
 /// difference between writing a register in a live frame and writing one in a
 /// frame that no longer exists.
 fn signal_continuation_invoked(state: &mut VmState, arg_vals: &[TaggedValue]) -> VmError {
-    let primary = arg_vals.first().copied().unwrap_or(TaggedValue::UNSPECIFIED);
+    let primary = arg_vals
+        .first()
+        .copied()
+        .unwrap_or(TaggedValue::UNSPECIFIED);
     park_escape(state, primary)
 }
 

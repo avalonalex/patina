@@ -135,7 +135,10 @@ fn test_a_shadowed_keyword_is_an_ordinary_variable() {
 #[test]
 fn test_an_internal_definition_shadows_a_keyword_over_the_whole_body() {
     // C2: value position. Rejected outright before the scan existed.
-    assert_program_eval_to("(import (scheme base)) (let () (define if 3) (+ if 1))", "4");
+    assert_program_eval_to(
+        "(import (scheme base)) (let () (define if 3) (+ if 1))",
+        "4",
+    );
     assert_program_eval_to(
         "(import (scheme base)) (let () (define when 3) (+ when 1))",
         "4",

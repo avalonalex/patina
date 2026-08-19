@@ -123,24 +123,52 @@ impl LibraryDefinition {
             ));
         }
 
-        // First element must be the symbol 'define-library
-        Self::expect_symbol_tagged(list[0], heap, "define-library")?;
+        // First element is `define-library` (R7RS) or `library` (R6RS §7.1).
+        let r6rs = heap.borrow().get_symbol_name(list[0]) == Some("library");
+        if r6rs && !crate::dialect::allow_r6rs() {
+            return Err(ParseError::InvalidSyntax(
+                "R6RS (library ...) form is not R7RS; use define-library \
+                 (or pass --allow-r6rs to read it)"
+                    .to_string(),
+            ));
+        }
+        if !r6rs {
+            // Anything else is reported against `define-library`, so the
+            // message names the form the caller almost certainly meant.
+            Self::expect_symbol_tagged(list[0], heap, "define-library")?;
+        }
 
         if list.len() < 2 {
-            return Err(ParseError::InvalidSyntax(
-                "define-library requires a library name".to_string(),
-            ));
+            let keyword = if r6rs { "library" } else { "define-library" };
+            return Err(ParseError::InvalidSyntax(format!(
+                "{keyword} requires a library name"
+            )));
         }
 
         // Second element is the library name
         let name = parse_library_name_tagged(list[1], heap)?;
+
+        // R6RS spells the body as bare forms after the export and import
+        // clauses, where R7RS wraps it in `(begin …)`. Splitting at the first
+        // form that is not an `export` or `import` clause is the same reading
+        // as R6RS's fixed name/export/import/body order, without insisting the
+        // two clauses be present or in that sequence. For `define-library`
+        // there is no body to split off and every form is a declaration.
+        let split = if r6rs {
+            list[2..]
+                .iter()
+                .position(|&form| !Self::is_export_or_import_clause(form, heap))
+                .map_or(list.len(), |offset| 2 + offset)
+        } else {
+            list.len()
+        };
 
         // Rest are declarations
         let mut exports = Vec::new();
         let mut imports = Vec::new();
         let mut body_elements = Vec::new();
 
-        for &decl in &list[2..] {
+        for &decl in &list[2..split] {
             Self::parse_declaration_tagged(
                 decl,
                 &mut exports,
@@ -149,6 +177,10 @@ impl LibraryDefinition {
                 can_load_library,
                 heap,
             )?;
+        }
+
+        if split < list.len() {
+            body_elements.push(BodyElement::Begin(list[split..].to_vec()));
         }
 
         Ok(LibraryDefinition {
@@ -601,6 +633,23 @@ impl LibraryDefinition {
             import_set,
             renames,
         })
+    }
+
+    /// Does this form open with `export` or `import`?
+    ///
+    /// Used only to find where an R6RS library's clauses end and its body
+    /// begins. A body form with either head would be a call to a procedure of
+    /// that name, which R6RS does not permit in this position and Patina does
+    /// not define.
+    fn is_export_or_import_clause(tv: TaggedValue, heap: &SharedHeap) -> bool {
+        if !tv.is_pair() {
+            return false;
+        }
+        let h = heap.borrow();
+        matches!(
+            h.get_symbol_name(h.car(tv)),
+            Some("export") | Some("import")
+        )
     }
 
     /// Helper: expect a specific symbol in a TaggedValue

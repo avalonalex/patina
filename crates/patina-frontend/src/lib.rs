@@ -16,6 +16,7 @@
 
 pub mod cond_expand;
 pub mod desugarer;
+pub mod dialect;
 pub mod error;
 pub mod lexer;
 pub mod library_parser;

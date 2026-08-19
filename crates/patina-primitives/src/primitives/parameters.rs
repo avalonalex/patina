@@ -93,7 +93,8 @@ pub(super) fn parameter_convert(
     let converter = {
         let heap = ctx.heap();
         let heap = heap.borrow();
-        heap.get_parameter(param).and_then(|(_, converter)| converter)
+        heap.get_parameter(param)
+            .and_then(|(_, converter)| converter)
     };
     match converter {
         Some(conv) => ctx.apply_proc(conv, vec![value]),

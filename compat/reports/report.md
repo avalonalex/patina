@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**143 of 184 packages pass** — 143 of 182 achievable (excluding 2 out-of-scope pending FFI).
+**121 of 162 packages pass** — 121 of 160 achievable (excluding 2 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 143 |
+| pass | 121 |
 | missing-library | 19 |
 | parse-error | 14 |
 | load-error | 1 |
@@ -142,28 +142,6 @@
 | pfds-set | probe | pass |
 | pfds-vector | probe | pass |
 | postgresql | probe | parse-error |
-| r6rs-arithmetic-fixnums | probe | pass |
-| r6rs-base | probe | pass |
-| r6rs-bytevectors | probe | pass |
-| r6rs-control | probe | pass |
-| r6rs-enums | probe | pass |
-| r6rs-eval | probe | pass |
-| r6rs-exceptions | probe | pass |
-| r6rs-files | probe | pass |
-| r6rs-hashtables | probe | pass |
-| r6rs-io-simple | probe | pass |
-| r6rs-lists | probe | pass |
-| r6rs-mutable-pairs | probe | pass |
-| r6rs-mutable-strings | probe | pass |
-| r6rs-programs | probe | pass |
-| r6rs-r5rs | probe | pass |
-| r6rs-sorting | probe | pass |
-| r6rs-unicode | probe | pass |
-| r6rs-unicode-reference-unicode0 | probe | pass |
-| r6rs-unicode-reference-unicode1 | probe | pass |
-| r6rs-unicode-reference-unicode2 | probe | pass |
-| r6rs-unicode-reference-unicode3 | probe | pass |
-| r6rs-unicode-reference-unicode4 | probe | pass |
 | rebottled-cl-pdf | probe | missing-library |
 | rebottled-pstk | probe | pass |
 | retropikzel-pstk | probe | missing-library |
