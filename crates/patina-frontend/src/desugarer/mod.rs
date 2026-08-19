@@ -306,6 +306,111 @@ impl Desugarer {
         self.shadowed_names.contains(name)
     }
 
+    /// The names a body's internal definitions bind.
+    ///
+    /// R7RS §5.3.2 gives internal definitions `letrec*` scope: they bind over
+    /// the *whole* body, so `(define (f) (define if 3) (+ if 1))` is a legal
+    /// program in which `if` is a variable in both forms. That has to be known
+    /// before any form is desugared — otherwise the definition's own body, and
+    /// every later form, still resolves the name to whatever the enclosing
+    /// environment calls it, which since #89 means the value-position check
+    /// rejects a legal program and head position silently picks the core form
+    /// over the local binding.
+    ///
+    /// Only definitions *written* in the body are seen, not ones a macro use
+    /// expands into (`define-record-type`, `define-values`). That is the same
+    /// coarseness `resolve_syntax` already documents, and in the same
+    /// direction: a missed shadow, never an invented one.
+    fn body_definition_names(
+        &self,
+        body_tvs: &[TaggedValue],
+        shared_heap: &SharedHeap,
+    ) -> Vec<Rc<str>> {
+        let mut names = Vec::new();
+        for tv in body_tvs {
+            self.collect_definition_names(*tv, shared_heap, &mut names);
+        }
+        names
+    }
+
+    /// Add the names `tv` defines to `out`, descending through `begin`, which
+    /// splices its contents into the body it appears in.
+    ///
+    /// The head is resolved, not spelled, so a `define` reached under an
+    /// import rename counts and one shadowed by a parameter does not.
+    fn collect_definition_names(
+        &self,
+        tv: TaggedValue,
+        shared_heap: &SharedHeap,
+        out: &mut Vec<Rc<str>>,
+    ) {
+        if !tv.is_pair() {
+            return;
+        }
+        let (head, cdr) = {
+            let heap = shared_heap.borrow();
+            heap.get_pair(tv)
+        };
+        let Some((head_name, head_scopes)) = self.identifier_of(head, shared_heap) else {
+            return;
+        };
+        match self.resolve_syntax(&head_name, &head_scopes) {
+            Some(SyntaxRef::CoreSyntax(CoreForm::Define)) => {
+                let target = {
+                    let heap = shared_heap.borrow();
+                    cdr.is_pair().then(|| heap.get_pair(cdr).0)
+                };
+                if let Some(name) = target.and_then(|t| self.define_target_name(t, shared_heap)) {
+                    out.push(name);
+                }
+            }
+            Some(SyntaxRef::CoreSyntax(CoreForm::Begin)) => {
+                let mut current = cdr;
+                while current.is_pair() {
+                    let (car, next) = {
+                        let heap = shared_heap.borrow();
+                        heap.get_pair(current)
+                    };
+                    self.collect_definition_names(car, shared_heap, out);
+                    current = next;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The name a `define` target binds: the symbol itself, or — for the
+    /// procedure shorthand, curried arbitrarily deep — the one at the head of
+    /// the nested formals.
+    fn define_target_name(&self, tv: TaggedValue, shared_heap: &SharedHeap) -> Option<Rc<str>> {
+        let mut current = tv;
+        loop {
+            if let Some((name, _)) = self.identifier_of(current, shared_heap) {
+                return Some(name);
+            }
+            if !current.is_pair() {
+                return None;
+            }
+            current = {
+                let heap = shared_heap.borrow();
+                heap.get_pair(current).0
+            };
+        }
+    }
+
+    /// A symbol or identifier's name and scopes, if `tv` is one.
+    fn identifier_of(
+        &self,
+        tv: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Option<(Rc<str>, ScopeSet)> {
+        let heap = shared_heap.borrow();
+        if let Some(s) = heap.get_symbol_name(tv) {
+            return Some((Rc::from(s), ScopeSet::new()));
+        }
+        utils::get_identifier_info(tv, &heap)
+    }
+
     /// What syntax, if any, this identifier names here.
     ///
     /// The one answer to "is this name syntax?", used by all three places that
@@ -469,11 +574,40 @@ impl Desugarer {
         // a dotted one.
         let (mut elems, tail) = list_to_vec_with_tail_tagged(tv, &shared_heap.borrow());
 
+        // `` `(a . ,e) `` reads as `(quasiquote (a unquote e))`: the unquote
+        // keyword sits in the spine's *interior*, in cdr position, and governs
+        // the one element after it. Head position alone cannot see that, so
+        // the walk above rewrote `e` a level too deep and a library-private
+        // helper inside it was never relinked.
+        //
+        // The dual of the case #68 fixed, and guarded the same way: outside a
+        // template `(f unquote x)` is an ordinary call whose second argument
+        // happens to be spelled `unquote`, so this fires only at
+        // `quote_depth > 0`, and only for the `(… unquote x)` shape that ends
+        // the list — which is the only shape a dotted unquote can take.
+        let dotted_unquote = (quote_depth > 0 && tail.is_null() && elems.len() >= 3)
+            .then(|| {
+                let heap = shared_heap.borrow();
+                let i = elems.len() - 2;
+                matches!(
+                    heap.get_symbol_or_identifier_name(elems[i]),
+                    Some("unquote") | Some("unquote-splicing")
+                )
+                .then_some(i + 1)
+            })
+            .flatten();
+
         let mut changed = false;
         for (i, e) in elems.iter_mut().enumerate() {
             // The head is read at the enclosing depth; a quoting head governs
             // its arguments, not itself.
-            let depth = if i == 0 { quote_depth } else { rest_depth };
+            let depth = if i == 0 {
+                quote_depth
+            } else if Some(i) == dotted_unquote {
+                quote_depth.saturating_sub(1)
+            } else {
+                rest_depth
+            };
             let new_e = self.rewrite_refs(*e, renames, depth, shared_heap);
             changed |= new_e != *e;
             *e = new_e;
@@ -884,7 +1018,10 @@ impl Desugarer {
         // Desugar body with:
         // 1. The new scope set (for hygiene)
         // 2. Parameter names added to shadowed_names (so they don't trigger macro expansion)
+        // 3. The body's own internal definitions, which bind over all of it
         let body_desugarer = self.with_shadowed_names(param_names, body_scopes.clone());
+        let defined = body_desugarer.body_definition_names(&body_tvs, shared_heap);
+        let body_desugarer = body_desugarer.with_shadowed_names(defined, body_scopes.clone());
 
         // Desugar body expressions with internal define-syntax handling
         let body =
@@ -925,8 +1062,11 @@ impl Desugarer {
         let mut current_desugarer = initial_desugarer.with_new_env(env, body_scopes.clone());
 
         for tv in body_tvs {
-            // Check if this is a define-syntax form BEFORE desugaring
-            let define_syntax_info = self.try_parse_define_syntax_tagged(*tv, shared_heap);
+            // Check if this is a define-syntax form BEFORE desugaring.
+            // Asked of `current_desugarer`, not `self`: the answer depends on
+            // what `define-syntax` is bound to *here*, which the body's own
+            // shadows and earlier internal macros can change.
+            let define_syntax_info = current_desugarer.try_parse_define_syntax_tagged(*tv, shared_heap);
 
             if let Some((macro_name, transformer_tv)) = define_syntax_info {
                 // Compile the macro immediately
@@ -982,20 +1122,25 @@ impl Desugarer {
             return None;
         }
 
-        let heap = shared_heap.borrow();
-        let (car, cdr) = heap.get_pair(tagged);
-
-        // Check car is "define-syntax"
-        let is_define_syntax = if let Some(s) = heap.get_symbol_name(car) {
-            s == "define-syntax"
-        } else if let Some((name, _)) = utils::get_identifier_info(car, &heap) {
-            name.as_ref() == "define-syntax"
-        } else {
-            false
+        // Recognized through its binding, not its spelling — the class #88
+        // removed for every other keyword, and the last body-position site
+        // still deciding by name (audit F4). A shadowed `define-syntax` is an
+        // ordinary call, and one reached under an import rename still defines
+        // a macro.
+        let head = {
+            let heap = shared_heap.borrow();
+            heap.get_pair(tagged).0
         };
+        let is_define_syntax = self
+            .identifier_of(head, shared_heap)
+            .and_then(|(name, scopes)| self.resolve_syntax(&name, &scopes))
+            .is_some_and(|found| matches!(found, SyntaxRef::CoreSyntax(CoreForm::DefineSyntax)));
         if !is_define_syntax {
             return None;
         }
+
+        let heap = shared_heap.borrow();
+        let (_, cdr) = heap.get_pair(tagged);
 
         // Parse (name transformer) from cdr
         if !cdr.is_pair() {
@@ -1127,10 +1272,13 @@ impl Desugarer {
 
             let params = utils::convert_formals_tagged(formals_tv, shared_heap)?;
 
-            // Create body desugarer with shadowed names
+            // Create body desugarer with shadowed names — the formals, and the
+            // body's own internal definitions (see `body_definition_names`).
             let param_names = utils::formals_to_names(&params);
             let body_scopes = self.current_scopes.clone();
-            let body_desugarer = self.with_shadowed_names(param_names, body_scopes);
+            let body_desugarer = self.with_shadowed_names(param_names, body_scopes.clone());
+            let defined = body_desugarer.body_definition_names(&body_tvs, shared_heap);
+            let body_desugarer = body_desugarer.with_shadowed_names(defined, body_scopes);
 
             // Create a fresh binding scope for this lambda
             let binding_scope = ScopeId::fresh();

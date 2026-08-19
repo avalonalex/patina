@@ -730,7 +730,12 @@ mechanism — the error is neither routed to the handlers nor propagated.
 Not pinned as a divergence: `assert_divergence` needs the broken backend to *fail*, and this one
 silently succeeds. Worth fixing before anyone trusts converter errors.
 
-**The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ❌ **open**.
+**The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ✅ **fixed 2026-08-18** (#93),
+as part of the class sweep the audit's C1 entry called for. `mark_substituted_tagged` now flattens the
+spine once and decides head-ness at element 0, which is the durable fix named at the end of this entry.
+The honest limit below still stands: no observable repro was ever constructed, so this was fixed by
+shape and not by symptom — the attempts (a substituted `(f quote y)` / `(f define-syntax z)` reaching an
+inner macro's literal comparison) all agreed with chibi before and after.
 Found 2026-08-14 by auditing the *class* behind the `quote`-argument fix below, which is the practice
 this section already follows. `mark_substituted_tagged`
 (`patina-macros/src/macro_expander/expander/hygiene.rs`) walks a pair tree by recursing on the cdr

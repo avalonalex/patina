@@ -414,3 +414,70 @@ fn test_quote_substituted_into_a_nested_macro_pattern() {
     assert_eq!(exported_fixnum(&eval, "usen", "r"), 35);
     assert_eq!(exported_fixnum(&eval, "usen", "s"), 35);
 }
+
+/// `` `(a . ,e) `` reads as `(quasiquote (a unquote e))`: the unquote sits in
+/// the spine's *interior*, in cdr position. The spine walk that fixed
+/// `(f quote x)` treated it as an ordinary argument and rewrote `e` a level
+/// too deep, so the helper inside it was never relinked — the dual of the case
+/// that walk was written for (audit C1).
+#[test]
+fn test_dotted_quasiquote_relinks_its_unquoted_expression() {
+    let (eval, _t) = eval_with_libs(&[
+        (
+            "d.sld",
+            r#"(define-library (t d)
+                 (import (scheme base))
+                 (export mq-dotted mq-nested mq-proper)
+                 (begin
+                   (define (helper x) (* 5 x))
+                   (define-syntax mq-proper
+                     (syntax-rules () ((mq-proper x) `(a ,(helper x)))))
+                   (define-syntax mq-dotted
+                     (syntax-rules () ((mq-dotted x) `(a . ,(helper x)))))
+                   (define-syntax mq-nested
+                     (syntax-rules () ((mq-nested x) `((b . ,(helper x)) c))))))"#,
+        ),
+        (
+            "used.sld",
+            r#"(define-library (t used)
+                 (import (scheme base) (t d))
+                 (export proper dotted nested)
+                 (begin
+                   (define proper (car (cdr (mq-proper 2))))
+                   (define dotted (cdr (mq-dotted 2)))
+                   (define nested (cdr (car (mq-nested 2))))))"#,
+        ),
+    ]);
+    assert_eq!(exported_fixnum(&eval, "used", "proper"), 10);
+    assert_eq!(exported_fixnum(&eval, "used", "dotted"), 10);
+    assert_eq!(exported_fixnum(&eval, "used", "nested"), 10);
+}
+
+/// The guard that makes the above safe: outside a template, `(f unquote x)` is
+/// an ordinary call whose second argument is spelled `unquote`, and its third
+/// must still be relinked at depth 0. Symmetric with
+/// `test_quote_as_an_argument_does_not_stop_relinking`.
+#[test]
+fn test_unquote_as_an_argument_does_not_change_depth() {
+    let (eval, _t) = eval_with_libs(&[
+        (
+            "u.sld",
+            r#"(define-library (t u)
+                 (import (scheme base))
+                 (export mu)
+                 (begin
+                   (define (helper x) (* 5 x))
+                   (define-syntax pass (syntax-rules () ((pass a b) b)))
+                   (define-syntax mu
+                     (syntax-rules () ((mu x) (pass unquote (helper x)))))))"#,
+        ),
+        (
+            "useu.sld",
+            r#"(define-library (t useu)
+                 (import (scheme base) (t u))
+                 (export r)
+                 (begin (define r (mu 6))))"#,
+        ),
+    ]);
+    assert_eq!(exported_fixnum(&eval, "useu", "r"), 30);
+}

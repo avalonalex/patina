@@ -91,35 +91,54 @@ impl Expander {
             }
         }
 
-        // Handle native pairs recursively
+        // Pairs: walk the *form*, not each tail.
+        //
+        // This used to recurse on the cdr and re-read its head, so a
+        // substituted value shaped like `(f quote y)` had its tail `(quote y)`
+        // read as a quote form: `y`, and everything after it, never received
+        // the macro scope. A tail is not a form — the same defect #68 fixed in
+        // the desugarer's `rewrite_form` and the audit's C1 fixed in its dotted
+        // case. Flatten the spine once and decide head-ness at element 0,
+        // which is what `compile_template` and `rewrite_form` already do.
         if tv.is_pair() {
-            let (car, cdr) = heap.borrow().get_pair(tv);
-
-            // Check if this is a macro definition form or quote form (don't mark inside)
-            if self.is_macro_definition_tagged(car) || self.is_quote_form_tagged(car) {
+            let (elems, tail) = self.spine_of(tv);
+            let head = elems[0];
+            if self.is_macro_definition_tagged(head) || self.is_quote_form_tagged(head) {
                 return tv;
             }
-
-            let new_car = self.mark_substituted_tagged(car);
-            let new_cdr = self.mark_substituted_tagged(cdr);
-            return heap.borrow_mut().alloc_pair(new_car, new_cdr);
-        }
-
-        // Handle boxed pairs
-        let is_boxed_pair = tv.is_pair();
-        if is_boxed_pair && let Some((car_tv, cdr_tv)) = heap.borrow().try_pair(tv) {
-            // Check if this is a macro definition form or quote form
-            if self.is_macro_definition_tagged(car_tv) || self.is_quote_form_tagged(car_tv) {
-                return tv;
+            let marked: Vec<TaggedValue> = elems
+                .into_iter()
+                .map(|e| self.mark_substituted_tagged(e))
+                .collect();
+            let mut out = self.mark_substituted_tagged(tail);
+            let mut heap = heap.borrow_mut();
+            for e in marked.into_iter().rev() {
+                out = heap.alloc_pair(e, out);
             }
-
-            let new_car = self.mark_substituted_tagged(car_tv);
-            let new_cdr = self.mark_substituted_tagged(cdr_tv);
-            return heap.borrow_mut().alloc_pair(new_car, new_cdr);
+            return out;
         }
 
         // Other values (vectors, etc.) pass through unchanged
         tv
+    }
+
+    /// Flatten a pair's spine into its elements and whatever ends it — `()`
+    /// for a proper list, the final atom for a dotted one. Non-empty by
+    /// construction: the caller has already established `tv` is a pair.
+    fn spine_of(&self, tv: TaggedValue) -> (Vec<TaggedValue>, TaggedValue) {
+        let heap = self.heap();
+        let mut elems = Vec::new();
+        let mut current = tv;
+        loop {
+            let pair = current.is_pair().then(|| heap.borrow().try_pair(current)).flatten();
+            match pair {
+                Some((car, cdr)) => {
+                    elems.push(car);
+                    current = cdr;
+                }
+                None => return (elems, current),
+            }
+        }
     }
 
     /// Check if a TaggedValue is a macro definition form
