@@ -6,6 +6,8 @@
 //! Related issues:
 //! - https://github.com/avalonalex/patina/issues/12
 
+mod common;
+use common::assert_program_eval_to;
 use patina_interpreter::TreeWalkInterpreter;
 
 /// Test that macro-introduced identifiers don't capture user bindings
@@ -1177,4 +1179,87 @@ fn test_global_literal_matches_from_a_nested_scope() {
     );
     assert!(top_level.is_ok(), "Failed: {:?}", top_level);
     assert_eq!(interp.display_tagged(top_level.unwrap()), "matched");
+}
+
+// ============================================================================
+// Literal matching compares bindings, not spellings (R7RS §4.3.2)
+// ============================================================================
+//
+// "An element in the input matches a literal identifier if and only if it is
+// an identifier and either both its occurrence in the macro expression and its
+// occurrence in the macro definition have the same lexical binding, or the two
+// identifiers are the same and both have no lexical binding."
+//
+// Patina implemented the second clause and approximated the first. Audit
+// 2026-08-17, C4 / D3 / D4. These run on both backends; every expectation is
+// chibi's, and Gauche agrees on the ones the audit consulted it for.
+
+/// C4 — a use-site binding that merely shares a spelling must not veto a
+/// literal the *template* introduced.
+///
+/// `my-if2`'s `else` denotes base's `else`, the same binding `cond`'s literal
+/// names, so it must match however the use site spells its own variables.
+/// Vetoing it demoted the `else` clause to a test clause, and since #89 the
+/// demoted `else` was then rejected as syntax used as a value — a legal
+/// program turned into an error.
+#[test]
+fn test_a_template_introduced_literal_survives_a_use_site_shadow() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define-syntax my-if2 (syntax-rules () ((_ c t e) (cond (c t) (else e)))))
+         (let ((else #f)) (my-if2 #f 'wrong 'right))",
+        "right",
+    );
+}
+
+/// The other side of that veto, which must keep working: R7RS §4.3.2's own
+/// example. Here the `=>` *is* the user's, and the local binding does shadow
+/// it, so the clause is an ordinary test clause and answers `ok`.
+#[test]
+fn test_a_use_site_written_literal_is_still_shadowed() {
+    assert_program_eval_to(
+        "(import (scheme base)) (let ((=> #f)) (cond (#t => 'ok)))",
+        "ok",
+    );
+    assert_program_eval_to(
+        "(import (scheme base)) (let ((else 5)) (cond (#f 1) (else 9)))",
+        "9",
+    );
+    // And with nothing shadowing, the auxiliary keywords work as themselves.
+    assert_program_eval_to("(import (scheme base)) (cond (#f 1) (else 7))", "7");
+}
+
+/// D3 — a keyword imported under a rename denotes the same binding as the
+/// literal, so it matches. Spelling alone could never say so.
+#[test]
+fn test_a_renamed_keyword_matches_its_literal() {
+    assert_program_eval_to(
+        "(import (scheme base) (rename (scheme base) (else alt)))
+         (cond (#f 1) (alt 42))",
+        "42",
+    );
+    // The same for `=>`, and through a user macro's literal rather than a
+    // built-in one.
+    assert_program_eval_to(
+        "(import (scheme base) (rename (scheme base) (=> arrow)))
+         (cond ((assv 1 '((1 . one))) arrow cdr) (else 'no))",
+        "one",
+    );
+}
+
+/// D4 — a literal bound by the template's *own* binding form is not the
+/// user's identifier of the same name, even though neither is written at the
+/// use site. chibi and Gauche both answer `var`; Patina answered `lit`.
+#[test]
+fn test_a_literal_the_template_binds_is_not_the_users_identifier() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define-syntax m
+           (syntax-rules ()
+             ((_ e) (let ((k 1))
+                      (let-syntax ((n (syntax-rules (k) ((n k) 'lit) ((n x) 'var))))
+                        (n e))))))
+         (m k)",
+        "var",
+    );
 }

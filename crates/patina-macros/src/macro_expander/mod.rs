@@ -50,18 +50,18 @@ pub use utils::{
 /// * `compiled_macro` - The compiled macro definition
 /// * `flipped_args` - TaggedValue arguments with macro_scope already flipped
 /// * `shadowed_names` - Identifiers shadowed by local bindings
-/// * `use_site_scopes` - Scope set at the macro use site
 /// * `macro_scope` - The fresh scope for this expansion
 /// * `original_args` - Original unflipped TaggedValue args (for debug logging)
 /// * `shared_heap` - Shared heap for TaggedValue operations
+#[allow(clippy::too_many_arguments)]
 fn expand_macro_core_tagged(
     compiled_macro: &CompiledMacro,
     flipped_args: patina_core::TaggedValue,
     shadowed_names: &std::collections::HashSet<std::rc::Rc<str>>,
-    use_site_scopes: &patina_runtime::ScopeSet,
     macro_scope: patina_runtime::ScopeId,
     original_args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
+    use_site_env: Option<&std::rc::Rc<patina_runtime::Environment>>,
 ) -> Result<patina_core::TaggedValue, crate::error::MacroError> {
     use debug::{DebugContext, record_expansion_step};
 
@@ -94,10 +94,11 @@ fn expand_macro_core_tagged(
             rule.num_pvars,
             rule.pvar_names.clone(),
             shadowed_names.clone(),
-            use_site_scopes.clone(),
             compiled_macro.literals.clone(),
             shared_heap.clone(),
-        );
+        )
+        .with_environments(compiled_macro.definition_env.clone(), use_site_env.cloned())
+        .with_macro_scope(macro_scope);
 
         // Try to match against the pattern
         match matcher.match_pattern_tagged(&rule.pattern, flipped_args) {
@@ -279,13 +280,12 @@ fn flip_scope_on_tagged_impl(
 /// * `args` - The macro call arguments as TaggedValue
 /// * `shared_heap` - Shared heap for conversions (Rc<RefCell<Heap>>)
 /// * `shadowed_names` - Identifiers shadowed by local bindings at use site
-/// * `use_site_scopes` - Scope set at the macro use site
 pub fn expand_macro_with_shadowed_tagged(
     compiled_macro: &CompiledMacro,
     args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
     shadowed_names: &std::collections::HashSet<std::rc::Rc<str>>,
-    use_site_scopes: &patina_runtime::ScopeSet,
+    use_site_env: Option<&std::rc::Rc<patina_runtime::Environment>>,
 ) -> Result<patina_core::TaggedValue, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
 
@@ -305,10 +305,10 @@ pub fn expand_macro_with_shadowed_tagged(
         compiled_macro,
         flipped_args,
         shadowed_names,
-        use_site_scopes,
         macro_scope,
         args, // original args for debug logging
         shared_heap,
+        use_site_env,
     )?;
 
     // Step 4: Flip output scopes on expanded result
