@@ -1,5 +1,10 @@
 //! Shared helpers for the binary-spawn test suites.
 
+// Each test binary compiles its own copy of this module, so a helper only some
+// of them use reads as dead there — the same reason `patina-tests`'s common
+// module carries this.
+#![allow(dead_code)]
+
 use std::path::Path;
 use std::process::Command;
 
@@ -13,6 +18,11 @@ pub fn run_patina(cwd: &Path, args: &[&str]) -> (String, String, bool) {
 pub fn run_patina_env(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> (String, String, bool) {
     let output = Command::new(env!("CARGO_BIN_EXE_patina"))
         .args(args)
+        // A dialect inherited from the developer's shell would decide what the
+        // reader accepts, so tests that assert on it could pass or fail for a
+        // reason not written down anywhere in them. Callers that want it pass
+        // `--allow-r6rs`.
+        .env_remove("PATINA_ALLOW_R6RS")
         .envs(envs.iter().copied())
         .current_dir(cwd)
         .output()

@@ -16,134 +16,60 @@
 
 mod common;
 
+use patina_frontend::{ExportSpec, LibraryDefinition, Parser};
 use std::path::PathBuf;
 
 /// The R6RS libraries bundled under both names, as path fragments.
-const LIBRARIES: [&str; 17] = [
-    "base",
-    "unicode",
-    "bytevectors",
-    "lists",
-    "sorting",
-    "control",
-    "exceptions",
-    "hashtables",
-    "enums",
-    "io/simple",
-    "files",
-    "programs",
-    "arithmetic/fixnums",
-    "mutable-pairs",
-    "mutable-strings",
-    "r5rs",
-    "eval",
-];
+///
+/// Derived from [`EXERCISES`] so the two cannot drift; that table is the one
+/// place a library is listed.
+fn libraries() -> Vec<&'static str> {
+    EXERCISES.iter().map(|(path, _)| *path).collect()
+}
+
+/// `"io/simple"` → `"(rnrs io simple)"`.
+fn import_name(path: &str) -> String {
+    format!("(rnrs {})", path.replace('/', " "))
+}
 
 fn lib_dir() -> PathBuf {
     common::repo_root().join("lib")
 }
 
-/// Strip `;` line comments and `#| |#` blocks.
-fn strip_comments(source: &str) -> String {
-    let chars: Vec<char> = source.chars().collect();
-    let mut out = String::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == ';' {
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
-            }
-        } else if chars[i] == '#' && chars.get(i + 1) == Some(&'|') {
-            i += 2;
-            while i + 1 < chars.len() && !(chars[i] == '|' && chars[i + 1] == '#') {
-                i += 1;
-            }
-            i = (i + 2).min(chars.len());
-        } else {
-            out.push(chars[i]);
-            i += 1;
-        }
-    }
-    out
-}
-
-/// The names a `.sld` exports: a bare name, or the external half of a
-/// `(rename <internal> <external>)`.
-fn exported_names(source: &str) -> Vec<String> {
-    let text = strip_comments(source);
-    let chars: Vec<char> = text.chars().collect();
-    let start = text.find("(export").expect("library has an export clause");
-    let start = text[..start].chars().count();
-
-    let mut depth = 0usize;
-    let mut end = start;
-    for (offset, ch) in chars[start..].iter().enumerate() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = start + offset;
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let clause: Vec<char> = chars[start + "(export".chars().count()..end].to_vec();
-    let mut names = Vec::new();
-    let mut i = 0;
-    while i < clause.len() {
-        if clause[i].is_whitespace() {
-            i += 1;
-        } else if clause[i] == '(' {
-            let mut depth = 0usize;
-            let open = i;
-            while i < clause.len() {
-                match clause[i] {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
-            let inner: String = clause[open + 1..i].iter().collect();
-            let parts: Vec<&str> = inner.split_whitespace().collect();
-            assert_eq!(
-                parts.first(),
-                Some(&"rename"),
-                "only `rename` is expected inside an export clause, got {inner:?}"
-            );
-            assert_eq!(parts.len(), 3, "malformed rename: {inner:?}");
-            names.push(parts[2].to_string());
-            i += 1;
-        } else {
-            let open = i;
-            while i < clause.len() && !clause[i].is_whitespace() && clause[i] != ')' {
-                i += 1;
-            }
-            names.push(clause[open..i].iter().collect());
-        }
-    }
-    names
-}
-
+/// The names a bundled `.sld` exports, read with Patina's own reader.
+///
+/// Going through `Parser` and `LibraryDefinition` rather than scanning the text
+/// is not only shorter: a hand-rolled scanner has to get `#|…|#`, `#;`, a `)`
+/// inside a string and `#\(` right to answer correctly, and this file would be
+/// the second place in the tree that tries. The frontend already answers it,
+/// and answering it differently from the loader is the one way this check could
+/// pass while the shipped library disagreed.
 fn exports_of(tree: &str, library: &str) -> Vec<String> {
     let path = lib_dir().join(tree).join(format!("{library}.sld"));
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-    exported_names(&source)
+
+    let mut parser =
+        Parser::new(&source).unwrap_or_else(|e| panic!("lexing {}: {e:?}", path.display()));
+    let datum = parser
+        .parse()
+        .unwrap_or_else(|e| panic!("parsing {}: {e:?}", path.display()));
+    let definition = LibraryDefinition::from_tagged(datum, parser.heap())
+        .unwrap_or_else(|e| panic!("reading the library form in {}: {e:?}", path.display()));
+
+    definition
+        .exports
+        .iter()
+        .map(|export| match export {
+            ExportSpec::Identifier(name) => name.clone(),
+            ExportSpec::Rename { external, .. } => external.clone(),
+        })
+        .collect()
 }
 
 #[test]
 fn every_rnrs_shim_exports_exactly_what_its_r6rs_library_does() {
-    for library in LIBRARIES {
+    for library in libraries() {
         let mut upstream = exports_of("r6rs", library);
         let mut shim = exports_of("rnrs", library);
         upstream.sort();
@@ -180,7 +106,7 @@ fn a_shim_exists_for_every_bundled_r6rs_library() {
         .collect();
     bundled.sort();
 
-    let mut expected: Vec<String> = LIBRARIES.iter().map(|s| s.to_string()).collect();
+    let mut expected: Vec<String> = libraries().iter().map(|s| s.to_string()).collect();
     expected.sort();
 
     assert_eq!(
@@ -189,7 +115,7 @@ fn a_shim_exists_for_every_bundled_r6rs_library() {
          or removed without its (rnrs ...) shim"
     );
 
-    for library in LIBRARIES {
+    for library in libraries() {
         let shim = lib_dir().join("rnrs").join(format!("{library}.sld"));
         assert!(shim.exists(), "missing shim {}", shim.display());
     }
@@ -201,74 +127,60 @@ fn a_shim_exists_for_every_bundled_r6rs_library() {
 /// the failure mode this tree actually has is a `cond-expand` that leaves the
 /// library defined-but-empty and fails at the caller.
 const EXERCISES: [(&str, &str); 17] = [
-    ("(rnrs base)", "(list (div 7 2) (mod 7 2) (inexact 1/2))"),
+    ("base", "(list (div 7 2) (mod 7 2) (inexact 1/2))"),
     (
-        "(rnrs unicode)",
+        "unicode",
         "(list (char-upcase #\\a) (char-general-category #\\a))",
     ),
     (
-        "(rnrs bytevectors)",
+        "bytevectors",
         "(let ((b (make-bytevector 2 7))) (bytevector-u8-set! b 0 9) (bytevector->u8-list b))",
     ),
     (
-        "(rnrs lists)",
+        "lists",
         "(list (assp odd? '((2 . a) (3 . b))) (remp even? '(1 2 3)))",
     ),
-    ("(rnrs sorting)", "(list-sort < '(3 1 2))"),
+    ("sorting", "(list-sort < '(3 1 2))"),
     (
-        "(rnrs control)",
+        "control",
         "(call-with-values (lambda () (values 1 2)) (lambda (a b) (+ a b)))",
     ),
     (
-        "(rnrs exceptions)",
+        "exceptions",
         "(with-exception-handler (lambda (e) 'caught) (lambda () (raise-continuable 'x)))",
     ),
     // Non-fixnum keys on purpose: they are what the inert-cond-expand bug ate.
     (
-        "(rnrs hashtables)",
+        "hashtables",
         "(let ((h (make-eqv-hashtable)))
            (hashtable-set! h 2.718 'e)
            (hashtable-set! h 1/2 'half)
            (list (hashtable-ref h 2.718 #f) (hashtable-ref h 1/2 #f)))",
     ),
+    ("enums", "(enum-set->list (make-enumeration '(a b c)))"),
+    ("io/simple", "(begin (write-char #\\x) 'ok)"),
+    ("files", "(file-exists? \"Cargo.toml\")"),
+    ("programs", "(list? (command-line))"),
     (
-        "(rnrs enums)",
-        "(enum-set->list (make-enumeration '(a b c)))",
-    ),
-    ("(rnrs io simple)", "(begin (write-char #\\x) 'ok)"),
-    ("(rnrs files)", "(file-exists? \"Cargo.toml\")"),
-    ("(rnrs programs)", "(list? (command-line))"),
-    (
-        "(rnrs arithmetic fixnums)",
+        "arithmetic/fixnums",
         "(list (fx+ 1 2) (fx* 3 4) (fxzero? 0))",
     ),
+    ("mutable-pairs", "(let ((p (cons 1 2))) (set-car! p 9) p)"),
     (
-        "(rnrs mutable-pairs)",
-        "(let ((p (cons 1 2))) (set-car! p 9) p)",
-    ),
-    (
-        "(rnrs mutable-strings)",
+        "mutable-strings",
         "(let ((s (string-copy \"abc\"))) (string-set! s 0 #\\z) s)",
     ),
-    (
-        "(rnrs r5rs)",
-        "(list (exact->inexact 1) (inexact->exact 1.0))",
-    ),
-    ("(rnrs eval)", "(eval '(+ 1 2) (environment '(rnrs base)))"),
+    ("r5rs", "(list (exact->inexact 1) (inexact->exact 1.0))"),
+    ("eval", "(eval '(+ 1 2) (environment '(rnrs base)))"),
 ];
 
 #[test]
 fn every_rnrs_library_can_be_called_into() {
-    for (library, expr) in EXERCISES {
-        let program = format!("(import {library})\n{expr}");
-        for (backend, result) in [
-            ("tree-walker", common::eval_program_tree_walker(&program)),
-            ("vm", common::eval_program_vm(&program)),
-        ] {
-            assert!(
-                !result.is_empty() && !result.contains("rror"),
-                "[{backend}] {library} should be callable, got {result:?}"
-            );
-        }
+    for (path, expr) in EXERCISES {
+        let library = import_name(path);
+        // `eval_program` runs both backends, panics with both messages if
+        // either errors, and asserts the two agree on the value.
+        let result = common::eval_program(&format!("(import {library})\n{expr}"));
+        assert!(!result.is_empty(), "{library} produced no value");
     }
 }

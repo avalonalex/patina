@@ -87,15 +87,50 @@ fn format_library_name(name: &[String]) -> String {
 /// `.sld` is R7RS. `.sls` is what R6RS libraries are distributed as, and the
 /// parser reads a `(library …)` form out of either — the suffix records which
 /// dialect a file was written for, not which one it is allowed to contain.
-/// `.sld` is tried first *within each search path*, so a directory holding
-/// both spellings resolves to the R7RS one while an earlier search path still
-/// wins over a later one whatever it holds.
+const LIBRARY_FILE_EXTENSIONS: [&str; 2] = ["sld", "sls"];
+
+/// Resolve a library name to a file under `search_paths`.
 ///
-/// Shared because two resolvers must agree on it: this crate's
-/// `LibraryRegistry::find_library_file` and patina-frontend's
-/// `SchemeLibraryLoader::find_sld_file`, which is the one every actual library
-/// load goes through.
-pub const LIBRARY_FILE_EXTENSIONS: [&str; 2] = ["sld", "sls"];
+/// `(scheme base)` becomes `scheme/base.sld`, then `scheme/base.sls`, under
+/// each search path in turn. The extension preference is applied *within* a
+/// search path, so a directory holding both spellings resolves to the R7RS
+/// one while an earlier search path still wins over a later one whatever it
+/// holds. Returns `None` when no candidate exists.
+///
+/// One function rather than one per caller: this is reached both from
+/// [`LibraryRegistry::find_library_file`] and from patina-frontend's
+/// `SchemeLibraryLoader`, which is the resolver every actual library load goes
+/// through, and the two silently disagreeing is a failure with no symptom at
+/// the point of the mistake — an added extension or a changed search order
+/// would simply not apply to half the callers.
+///
+/// The suffix is appended rather than set, so a name part containing a dot
+/// keeps it.
+pub fn find_library_file_in(
+    fs: &dyn FileSystem,
+    name: &[String],
+    search_paths: &[PathBuf],
+) -> Option<PathBuf> {
+    let (last_part, directory_parts) = name.split_last()?;
+    let candidates = LIBRARY_FILE_EXTENSIONS.map(|extension| format!("{last_part}.{extension}"));
+
+    let mut directory = PathBuf::new();
+    for part in directory_parts {
+        directory.push(part);
+    }
+
+    for search_path in search_paths {
+        let base = search_path.join(&directory);
+        for candidate in &candidates {
+            let full_path = base.join(candidate);
+            if fs.is_file(&full_path) {
+                return Some(full_path);
+            }
+        }
+    }
+
+    None
+}
 
 /// Entries of $PATINA_LIBRARY_PATH, in order. PATH-style splitting
 /// (colon-separated on Unix); empty entries are skipped.
@@ -301,40 +336,11 @@ impl LibraryRegistry {
         self.libraries.get_mut(name)
     }
 
-    /// Find the file path for a library
+    /// Find the file path for a library, over this registry's search paths.
     ///
-    /// Searches the extensions in [`LIBRARY_FILE_EXTENSIONS`] in the search
-    /// paths. Library name (scheme base) maps to scheme/base.sld
-    ///
-    /// Returns None if the file is not found in any search path.
+    /// See [`find_library_file_in`], which does the work.
     pub fn find_library_file(&self, name: &[String]) -> Option<PathBuf> {
-        if name.is_empty() {
-            return None;
-        }
-
-        // Convert library name to file path: (scheme base) → scheme/base.sld.
-        // The suffix is appended rather than set, so a name part that itself
-        // contains a dot keeps it.
-        let mut directory = PathBuf::new();
-        for part in &name[..name.len() - 1] {
-            directory.push(part);
-        }
-        let last_part = name.last().expect("name is non-empty");
-
-        // Search in all configured paths
-        for search_path in &self.search_paths {
-            for extension in LIBRARY_FILE_EXTENSIONS {
-                let mut full_path = search_path.clone();
-                full_path.push(&directory);
-                full_path.push(format!("{last_part}.{extension}"));
-
-                if self.fs.is_file(&full_path) {
-                    return Some(full_path);
-                }
-            }
-        }
-
-        None
+        find_library_file_in(self.fs.as_ref(), name, &self.search_paths)
     }
 
     /// Begin loading a library (for circular dependency detection)

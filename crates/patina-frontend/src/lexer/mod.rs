@@ -57,12 +57,8 @@ pub enum LexError {
     /// `(let ([x 1)]) …)`. Naming both spellings is the whole value of the
     /// message: the reader's complaint is about a `)` several characters
     /// before the place a human would look for the missing `]`.
-    #[error("Mismatched delimiter: {opened} is closed by {}, not {closed}", .opened_by)]
-    MismatchedDelimiter {
-        opened: char,
-        opened_by: char,
-        closed: char,
-    },
+    #[error("Mismatched delimiter: expected {expected}, got {closed}")]
+    MismatchedDelimiter { expected: char, closed: char },
 
     #[error("Unterminated vertical bar identifier")]
     UnterminatedVerticalBarIdentifier,
@@ -118,7 +114,7 @@ pub struct Lexer {
     /// Whether the R6RS surface syntax R7RS reserves is read — resolved once
     /// here rather than per token. See [`crate::dialect`].
     allow_r6rs: bool,
-    /// The shape of each currently-open delimiter, innermost last, so a
+    /// The closer each currently-open delimiter expects, innermost last, so a
     /// closer can be checked against the opener it actually closes.
     ///
     /// `[` and `]` are read as parentheses (see [`Lexer::lex_token`]), which
@@ -129,32 +125,7 @@ pub struct Lexer {
     /// *input* is not this stack's business: a closer with nothing open pops
     /// nothing and reaches the parser as a plain `)`, which is what the REPL
     /// needs while a form is still being typed.
-    open_delimiters: Vec<Delimiter>,
-}
-
-/// Which spelling opened a still-unclosed list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Delimiter {
-    /// `(`, and the `(` of `#(`, `#u8(` and `#vu8(` — closed by `)`.
-    Paren,
-    /// `[` — closed by `]`.
-    Bracket,
-}
-
-impl Delimiter {
-    fn opener(self) -> char {
-        match self {
-            Delimiter::Paren => '(',
-            Delimiter::Bracket => '[',
-        }
-    }
-
-    fn closer(self) -> char {
-        match self {
-            Delimiter::Paren => ')',
-            Delimiter::Bracket => ']',
-        }
-    }
+    open_delimiters: Vec<char>,
 }
 
 /// Drop a leading U+FEFF.
@@ -195,14 +166,8 @@ impl Lexer {
     /// Identifiers will be folded to lowercase, matching R7RS `#!fold-case` behavior.
     pub fn new_case_insensitive(input: &str) -> Self {
         Lexer {
-            input: strip_byte_order_mark(input),
-            position: 0,
             fold_case: true,
-            line: 1,
-            column: 1,
-            prev_token_end: 0,
-            allow_r6rs: crate::dialect::allow_r6rs(),
-            open_delimiters: Vec::new(),
+            ..Lexer::new(input)
         }
     }
 
@@ -214,6 +179,7 @@ impl Lexer {
     /// otherwise have to set a variable every other test in the binary can
     /// see. Nothing in the interpreter calls this — the dialect comes from
     /// [`crate::dialect`] there.
+    #[cfg(test)]
     pub fn allowing_r6rs(mut self) -> Self {
         self.allow_r6rs = true;
         self
@@ -250,11 +216,6 @@ impl Lexer {
         self.prev_token_end
     }
 
-    /// Pop the innermost open delimiter, requiring `closed` to be its match.
-    ///
-    /// A closer with nothing open is left alone: the parser reports it, with
-    /// the surrounding datum for context, and the REPL's incomplete-input
-    /// path depends on partial text lexing without complaint.
     /// Read the `u8(` that both `#u8(` and `#vu8(` end with, positioned on
     /// the `u`.
     fn read_bytevector_open(&mut self) -> Result<Token, LexError> {
@@ -267,17 +228,20 @@ impl Lexer {
             return Err(LexError::UnexpectedChar(self.current_char()));
         }
         self.advance();
-        self.open_delimiters.push(Delimiter::Paren);
+        self.open_delimiters.push(')');
         Ok(Token::BytevectorOpen)
     }
 
+    /// Pop the innermost open delimiter, requiring `closed` to be its match.
+    ///
+    /// A closer with nothing open is left alone: the parser reports it, with
+    /// the surrounding datum for context, and the REPL's incomplete-input
+    /// path depends on partial text lexing without complaint.
     fn close_delimiter(&mut self, closed: char) -> Result<(), LexError> {
         match self.open_delimiters.pop() {
-            Some(open) if open.closer() != closed => Err(LexError::MismatchedDelimiter {
-                opened: open.opener(),
-                opened_by: open.closer(),
-                closed,
-            }),
+            Some(expected) if expected != closed => {
+                Err(LexError::MismatchedDelimiter { expected, closed })
+            }
             _ => Ok(()),
         }
     }
@@ -301,11 +265,7 @@ impl Lexer {
             }),
             '(' | '[' => {
                 self.advance();
-                self.open_delimiters.push(if ch == '[' {
-                    Delimiter::Bracket
-                } else {
-                    Delimiter::Paren
-                });
+                self.open_delimiters.push(if ch == '[' { ']' } else { ')' });
                 Ok(Token::LeftParen)
             }
             ')' | ']' => {
@@ -741,7 +701,7 @@ impl Lexer {
             '\\' => self.read_character(),
             '(' => {
                 self.advance();
-                self.open_delimiters.push(Delimiter::Paren);
+                self.open_delimiters.push(')');
                 Ok(Token::VectorOpen)
             }
             // `#u8(` is R7RS; `#vu8(` is R6RS's spelling of the same thing.
@@ -1287,9 +1247,8 @@ mod tests {
         assert!(matches!(
             lexer.next_token_kind(),
             Err(LexError::MismatchedDelimiter {
-                opened: '[',
-                closed: ')',
-                ..
+                expected: ']',
+                closed: ')'
             })
         ));
 
@@ -1302,9 +1261,8 @@ mod tests {
         assert!(matches!(
             lexer.next_token_kind(),
             Err(LexError::MismatchedDelimiter {
-                opened: '(',
-                closed: ']',
-                ..
+                expected: ')',
+                closed: ']'
             })
         ));
     }

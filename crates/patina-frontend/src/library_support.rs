@@ -11,7 +11,7 @@ use patina_core::{FileSystem, SharedHeap, TaggedValue};
 use patina_runtime::library_loader::{
     EvaluatingLibraryLoader, ExportSpec, ImportSet, ParsedLibrary,
 };
-use patina_runtime::library_registry::{LIBRARY_FILE_EXTENSIONS, LibraryError};
+use patina_runtime::library_registry::{LibraryError, find_library_file_in};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -145,36 +145,12 @@ impl SchemeLibraryLoader {
         ))
     }
 
-    /// Find the library file for a library name, over the extensions in
-    /// [`LIBRARY_FILE_EXTENSIONS`].
+    /// Find the library file for a library name.
+    ///
+    /// This is the resolver every actual library load goes through; see
+    /// [`find_library_file_in`], which it shares with `LibraryRegistry`.
     fn find_sld_file(&self, name: &[String], search_paths: &[PathBuf]) -> Option<PathBuf> {
-        if name.is_empty() {
-            return None;
-        }
-
-        // Convert library name to a directory and a stem:
-        // (scheme base) → scheme/ + base. The extension is appended rather
-        // than set, so a name part that itself contains a dot keeps it.
-        let mut directory = PathBuf::new();
-        for part in &name[..name.len() - 1] {
-            directory.push(part);
-        }
-        let last_part = name.last().expect("name is non-empty");
-
-        // Search in all configured paths
-        for search_path in search_paths {
-            for extension in LIBRARY_FILE_EXTENSIONS {
-                let mut full_path = search_path.clone();
-                full_path.push(&directory);
-                full_path.push(format!("{last_part}.{extension}"));
-
-                if self.fs.is_file(&full_path) {
-                    return Some(full_path);
-                }
-            }
-        }
-
-        None
+        find_library_file_in(self.fs.as_ref(), name, search_paths)
     }
 
     /// Parse a .sld file into a ParsedLibrary with a library availability checker.

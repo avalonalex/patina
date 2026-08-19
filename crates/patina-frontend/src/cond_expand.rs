@@ -188,19 +188,19 @@ pub(crate) fn parse_library_name_tagged(
         ));
     }
 
-    if items.len() > 1 {
-        let last = items[items.len() - 1];
-        let is_version = last.is_null() || shared_heap.borrow().try_pair(last).is_some();
-        if is_version {
-            if !crate::dialect::allow_r6rs() {
-                return Err(ParseError::InvalidSyntax(
-                    "R6RS version reference in a library name is not R7RS \
-                     (pass --allow-r6rs to read it)"
-                        .to_string(),
-                ));
-            }
-            items.pop();
+    let has_version = items.len() > 1
+        && items
+            .last()
+            .is_some_and(|last| last.is_null() || last.is_pair());
+    if has_version {
+        if !crate::dialect::allow_r6rs() {
+            return Err(ParseError::InvalidSyntax(
+                "R6RS version reference in a library name is not R7RS \
+                 (pass --allow-r6rs to read it)"
+                    .to_string(),
+            ));
         }
+        items.pop();
     }
 
     let heap = shared_heap.borrow();

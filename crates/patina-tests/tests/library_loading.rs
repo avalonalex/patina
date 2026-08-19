@@ -176,14 +176,11 @@ fn an_imported_variable_is_a_stale_copy_of_its_binding() {
                    (bump)
                    (list count (peek))";
 
+    // `eval_program` runs both backends and asserts they agree, so this pins
+    // the shared wrong answer *and* that it stays shared.
     assert_eq!(
-        common::eval_program_tree_walker(program),
+        common::eval_program(program),
         "(0 2)",
-        "tree-walker: expected the pinned wrong answer; if this is now (2 2) the defect is fixed"
-    );
-    assert_eq!(
-        common::eval_program_vm(program),
-        "(0 2)",
-        "vm: expected the pinned wrong answer; if this is now (2 2) the defect is fixed"
+        "expected the pinned wrong answer; if this is now (2 2) the defect is fixed"
     );
 }

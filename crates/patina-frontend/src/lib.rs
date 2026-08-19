@@ -28,7 +28,6 @@ pub mod source_map;
 // Re-export main types
 pub use cond_expand::evaluate_feature_requirement_tagged;
 pub use desugarer::{DesugarError, Desugarer};
-pub use dialect::allow_r6rs;
 pub use error::FrontendError;
 pub use lexer::{LexError, Lexer, Spanned, Token};
 pub use library_parser::{BodyElement, ExportSpec, ImportSet, LibraryDefinition};
