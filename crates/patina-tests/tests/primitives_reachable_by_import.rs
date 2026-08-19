@@ -18,27 +18,9 @@
 //! the thing that would actually break.
 
 mod common;
-use common::{files_under, repo_root};
+use common::{repo_root, shipped_libraries};
 use patina_interpreter::TreeWalkInterpreter;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-
-/// Library names for every `.sld` under `root`, e.g. `lib/srfi/130.sld` ->
-/// `["srfi", "130"]`.
-fn shipped_libraries(root: &Path) -> Vec<Vec<String>> {
-    files_under(root)
-        .into_iter()
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("sld"))
-        .map(|path| {
-            path.strip_prefix(root)
-                .expect("under lib/")
-                .with_extension("")
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect()
-        })
-        .collect()
-}
 
 #[test]
 fn every_registered_primitive_is_reachable_by_some_import() {

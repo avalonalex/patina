@@ -14,7 +14,12 @@ The SRFI suites are from chibi-scheme's `lib/`; the `chibi/` suites are from
 the same sha256-pinned snowballs the bundled libraries themselves came from
 (`lib/chibi/PROVENANCE.md`), so each suite is version-matched to the code it
 tests. Copied unmodified except where the table's note column says otherwise —
-every adaptation is described under the table.
+every adaptation is described under the table. All of them report through
+`(chibi test)`, which Patina bundles verbatim from the snow-fort 0.9.0
+snowball (sha256-pinned in `lib/chibi/PROVENANCE.md`, guarded by
+`bundled_provenance.rs`); running these suites at all is a consequence of
+that adoption, since the hand-written subset it replaced could not express
+`test-group` or report a failure count.
 
 | Suite | Assertions | Failing | Adapted? |
 |---|---|---|---|
@@ -40,8 +45,7 @@ left with them — and nothing re-added them here, so the bundled libraries'
 upstream tests ran *nowhere*. "Add a suite when Patina bundles the library"
 was prose; it is now enforced by
 `every_bundled_library_has_a_suite_or_a_recorded_reason` in the same test
-file, which walks `lib/srfi` and `lib/chibi` against the suite table plus an
-explicit `NO_SUITE` reasons list.
+file — how it decides is described under "Suites not included" below.
 
 **`chibi/diff-test.sld` and `chibi/optional-test.sld` are adapted in their
 imports only**: upstream wraps its `(chibi test)` import in
@@ -187,10 +191,11 @@ caught. All are now fixed; the newest is first.
 
 ## Suites not included, and why
 
-The authoritative list, with one reason per bundled library, is the
-`NO_SUITE` table in `upstream_srfi_suites.rs` — the guard test fails if it
-and the suite table together do not account for every `.sld` under
-`lib/srfi` and `lib/chibi`. The non-obvious entries:
+The authoritative lists are the `NO_SUITE` (per library) and
+`NO_SUITE_TREES` (per `lib/` tree) tables in `upstream_srfi_suites.rs` — the
+guard test fails if they and the suite table together do not account for
+every `.sld` under `lib/`, so a newly bundled library or tree is in scope by
+default. The non-obvious entries:
 
 - **SRFI 1, SRFI 69** — their suites import `(chibi)`, chibi's implementation
   core, which Patina does not provide.
@@ -217,18 +222,9 @@ blocker was upstream's inline framework shim, whose `test-error` lacks the
 two-argument form the suite uses — with the imports adapted to the real
 `(chibi test)`, the suite runs clean. The suite is now included.)
 
-Copied unmodified. They import `(chibi test)`, which Patina bundles verbatim
-from the snow-fort 0.9.0 snowball — byte-identical to the sha256-pinned
-tarball recorded in `lib/chibi/PROVENANCE.md`, and guarded by
-`crates/patina-tests/tests/bundled_provenance.rs`. Running these suites at all
-is a consequence of that adoption, since the hand-written subset it replaced
-could not express `test-group` or report a failure count.
-
 Kept here rather than under `lib/` so the shipped library tree stays free of
 test code. The directory is a library search root: `(srfi 151 test)` resolves to
 `srfi/151/test.sld` beneath it.
-
-Add a suite when Patina bundles the library it tests.
 
 ## Licence
 

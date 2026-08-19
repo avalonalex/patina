@@ -23,9 +23,9 @@
 //! rather than from a patch to the framework — the bundled `(chibi test)`
 //! stays verbatim (see `scheme_tests/upstream/README.md`).
 //!
-//! Add a `suite_test!` entry when Patina bundles a library whose upstream
-//! suite exists; one `#[test]` per suite, so a load failure in one cannot
-//! hide the others.
+//! One `#[test]` per suite, so a load failure in one cannot hide the
+//! others. The guard test at the bottom makes adding an entry (or a
+//! recorded reason not to) a condition of bundling a library at all.
 
 mod common;
 
@@ -81,15 +81,18 @@ fn counts_on<B: Backend>(interp: &Interpreter<B>, label: &str, program: &str) ->
 
 /// Run one suite on one backend, hold it to the expectations table, and
 /// return how many assertions ran (for the cross-backend agreement check).
+#[allow(clippy::too_many_arguments)]
 fn assert_suite<B: Backend>(
     interp: &Interpreter<B>,
     backend: &str,
     library: &str,
+    imports: &str,
+    body: &str,
     expected_failures: i64,
     min_assertions: i64,
 ) -> i64 {
     let label = format!("{library} on {backend}");
-    let program = harness_program(library, "(run-tests)");
+    let program = harness_program(imports, body);
     let (failures, assertions) = counts_on(interp, &label, &program);
     assert!(
         assertions >= min_assertions,
@@ -110,7 +113,16 @@ fn assert_suite<B: Backend>(
 /// Run one suite on both backends. Failure counts agree by construction (both
 /// are pinned to the same expectation), so the assertions-run count is the one
 /// number the backends could silently diverge on — compare it too.
-fn check_suite(library: &str, expected_failures: i64, min_assertions: i64) {
+///
+/// `imports`/`body` default to importing the suite and calling `(run-tests)`;
+/// a table row overrides them when the suite needs a pinned environment.
+fn check_suite(
+    library: &str,
+    imports: &str,
+    body: &str,
+    expected_failures: i64,
+    min_assertions: i64,
+) {
     let root = upstream_root();
     assert!(
         root.is_dir(),
@@ -126,13 +138,23 @@ fn check_suite(library: &str, expected_failures: i64, min_assertions: i64) {
         &tw,
         "tree-walker",
         library,
+        imports,
+        body,
         expected_failures,
         min_assertions,
     );
 
     let vm = Interpreter::new(VmBackend::new());
     vm.backend().add_library_search_path(root);
-    let vm_assertions = assert_suite(&vm, "vm", library, expected_failures, min_assertions);
+    let vm_assertions = assert_suite(
+        &vm,
+        "vm",
+        library,
+        imports,
+        body,
+        expected_failures,
+        min_assertions,
+    );
 
     assert_eq!(
         tw_assertions, vm_assertions,
@@ -145,11 +167,18 @@ fn check_suite(library: &str, expected_failures: i64, min_assertions: i64) {
 /// so a library can only join the bundle by adding a row here or a recorded
 /// reason there.
 macro_rules! suite_tests {
-    ($(($name:ident, $covers:expr, $library:expr, $expected_failures:expr, $min_assertions:expr)),* $(,)?) => {
+    // Internal: one runner call, with or without a row's imports/body override.
+    (@run $library:expr, $failures:expr, $floor:expr) => {
+        check_suite($library, $library, "(run-tests)", $failures, $floor)
+    };
+    (@run $library:expr, $failures:expr, $floor:expr, $imports:expr, $body:expr) => {
+        check_suite($library, $imports, $body, $failures, $floor)
+    };
+    ($(($name:ident, $covers:expr, $library:expr, $expected_failures:expr, $min_assertions:expr $(, $imports:expr, $body:expr)?)),* $(,)?) => {
         $(
             #[test]
             fn $name() {
-                check_suite($library, $expected_failures, $min_assertions);
+                suite_tests!(@run $library, $expected_failures, $min_assertions $(, $imports, $body)?);
             }
         )*
         /// The bundled libraries whose upstream suites run above.
@@ -187,22 +216,42 @@ suite_tests! {
     // by the real (chibi test), documented in scheme_tests/upstream/README.md.
     (chibi_string, "chibi string", "(chibi string-test)", 0, 52),
     (chibi_optional, "chibi optional", "(chibi optional-test)", 0, 11),
-    (chibi_diff, "chibi diff", "(chibi diff-test)", 0, 7),
+    // Two of its assertions expect ANSI escapes in edits->string/color's
+    // output unconditionally, but (chibi term ansi) initializes
+    // ansi-escapes-enabled? from ANSI_ESCAPES_ENABLED/TERM — so a bare run
+    // is green under a developer's xterm and red under CI's dumb TERM.
+    // Pin the parameter to the setting the suite assumes.
+    (chibi_diff, "chibi diff", "(chibi diff-test)", 0, 7,
+        "(chibi diff-test) (chibi term ansi)",
+        "(parameterize ((ansi-escapes-enabled? #t)) (run-tests))"),
     (chibi_term_ansi, "chibi term ansi", "(chibi term ansi-test)", 0, 234),
 }
 
-/// Every library bundled under `lib/srfi` and `lib/chibi` either has its
+/// Whole trees under `lib/` whose libraries are accounted for by another
+/// mechanism, with the reason. A tree not named here is in scope for the
+/// guard by default, so bundling a new tree cannot silently reopen the hole
+/// the guard exists to close — that is how the original one opened: the
+/// corpus builder's bundled-package exclusion (L4) dropped five chibi
+/// suites from everything that runs, and nothing noticed until an audit.
+const NO_SUITE_TREES: &[(&str, &str)] = &[
+    (
+        "scheme",
+        "the R7RS surface (gated by the chibi R7RS suite) plus alias libraries whose backing SRFIs this table covers, drift-checked in r7rs_large_aliases.rs",
+    ),
+    (
+        "r6rs",
+        "awaits its own vendored suite — Track L §L5.3; this entry retires when it lands",
+    ),
+    (
+        "rnrs",
+        "one-line shims over lib/r6rs, checked by r6rs_rnrs_shims.rs",
+    ),
+];
+
+/// Every library bundled in a `lib/` tree not excused above either has its
 /// upstream suite in the table above or a recorded reason here for not
 /// having one. Before this guard, "add a suite when Patina bundles the
-/// library" was a comment, and the corpus builder's bundled-package
-/// exclusion (L4) silently dropped five chibi suites from everything that
-/// runs — nothing noticed until an audit.
-///
-/// Scope is the two ported-third-party trees. `lib/scheme` is the R7RS
-/// surface (gated by the chibi R7RS suite) plus alias libraries whose
-/// backing SRFIs are what this table covers (drift-checked in
-/// `r7rs_large_aliases.rs`); `lib/r6rs`/`lib/rnrs` await their own vendored
-/// suite (Track L §L5.3).
+/// library" was a comment.
 ///
 /// Each reason is a claim to re-verify when circumstances change, not a
 /// permanent pass — several name the event that retires them.
@@ -257,25 +306,15 @@ const NO_SUITE: &[(&str, &str)] = &[
 
 #[test]
 fn every_bundled_library_has_a_suite_or_a_recorded_reason() {
-    let lib_root = repo_root().join("lib");
-    let mut bundled: Vec<String> = Vec::new();
-    for tree in ["srfi", "chibi"] {
-        for file in common::files_under(&lib_root.join(tree)) {
-            if file.extension().is_some_and(|e| e == "sld") {
-                let rel = file.strip_prefix(&lib_root).expect("under lib/");
-                let name: Vec<_> = rel
-                    .with_extension("")
-                    .iter()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .collect();
-                bundled.push(name.join(" "));
-            }
-        }
-    }
-    assert!(
-        !bundled.is_empty(),
-        "found no bundled .sld files — wrong root?"
-    );
+    let all = common::shipped_libraries(&repo_root().join("lib"));
+    assert!(!all.is_empty(), "found no bundled .sld files — wrong root?");
+
+    let excused_trees: Vec<&str> = NO_SUITE_TREES.iter().map(|(tree, _)| *tree).collect();
+    let bundled: Vec<String> = all
+        .iter()
+        .filter(|name| !excused_trees.contains(&name[0].as_str()))
+        .map(|name| name.join(" "))
+        .collect();
 
     let excused: Vec<&str> = NO_SUITE.iter().map(|(lib, _)| *lib).collect();
     for lib in &bundled {
@@ -291,11 +330,18 @@ fn every_bundled_library_has_a_suite_or_a_recorded_reason() {
             "({lib}) is both suited and excused — delete its NO_SUITE entry"
         );
     }
-    // A stale excuse is as misleading as a missing one.
+    // A stale excuse is as misleading as a missing one — for libraries and
+    // for whole trees alike.
     for lib in &excused {
         assert!(
             bundled.iter().any(|b| b == lib),
             "NO_SUITE names ({lib}), which is not bundled — delete the entry"
+        );
+    }
+    for tree in &excused_trees {
+        assert!(
+            all.iter().any(|name| name[0] == *tree),
+            "NO_SUITE_TREES names ({tree}), which holds no bundled libraries — delete the entry"
         );
     }
 }

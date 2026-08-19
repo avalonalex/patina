@@ -119,6 +119,25 @@ pub fn files_under(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     out
 }
 
+/// Library names for every `.sld` under `root`, e.g. `lib/srfi/130.sld` ->
+/// `["srfi", "130"]` (for `root` = `lib/`). The one home for the ".sld path
+/// is the library name" convention — three tests had grown three copies,
+/// disagreeing on extension matching and path-separator handling.
+pub fn shipped_libraries(root: &std::path::Path) -> Vec<Vec<String>> {
+    files_under(root)
+        .into_iter()
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("sld"))
+        .map(|path| {
+            path.strip_prefix(root)
+                .expect("under the given root")
+                .with_extension("")
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect()
+        })
+        .collect()
+}
+
 /// Format a TaggedValue for display (backend-agnostic).
 fn display_tagged(tv: TaggedValue, heap: &RefCell<patina_core::heap::Heap>) -> String {
     // Unpack multiple values (R7RS: each value displayed on its own line)
