@@ -70,6 +70,24 @@ fn test_case_with_arrow() {
     );
 }
 
+/// A clause with datums but no body. R7RS's grammar wants at least one
+/// expression, but chibi and Gauche both accept the empty body with an
+/// unspecified result, and real packages ship it — chibi-tar's
+/// `((#\g #\x))` metadata clause is how this surfaced (it classified the
+/// whole package as parse-error). Empty `(else)` is the same decision.
+#[test]
+fn test_case_empty_body_clause() {
+    // Matched empty clause: unspecified, and later clauses do not run.
+    assert_eval_to("(case 1 ((1)) (else 'other))", "#<unspecified>");
+    // Unmatched empty clause: dispatch continues past it.
+    assert_eval_to("(case 2 ((1)) (else 'other))", "other");
+    assert_eval_to("(case 3 ((1)) ((3) 'three) (else 'other))", "three");
+    // Empty clause as the only clause.
+    assert_eval_to("(case 1 ((1)))", "#<unspecified>");
+    // Empty else.
+    assert_eval_to("(case 2 ((1) 'one) (else))", "#<unspecified>");
+}
+
 #[test]
 fn test_case_no_match() {
     // No clause matches and no else - returns unspecified

@@ -125,9 +125,16 @@ names. Both are byte-identical snowball imports; the chain and its one deviation
 The result reorders what is left. **No missing library is now worth more than two packages**, and the
 one at three is `(chibi)`, chibi's implementation core, which is permanently out of reach. Bundling
 was the cheap lever for most of this track; it is close to spent. The remaining corpus failures are
-concentrated in the parse-error and load-error buckets — defects, not absent libraries — so the
-queue below should be read as a completeness exercise against the policy rather than as the ordered
-route to a higher score.
+concentrated in the parse-error and load-error buckets — so the queue below should be read as a
+completeness exercise against the policy rather than as the ordered route to a higher score.
+
+*Correction (2026-08-19):* an earlier revision of the paragraph above read the parse-error bucket
+as "defects, not absent libraries". Auditing it row by row found most of it is neither: **9 of 14
+rows are three upstream typos in cond-expand fallback branches chibi never compiles**, which Gauche
+rejects exactly as Patina does — see §6 "Upstream, not ours". One row was a real Patina defect
+(`case` with an empty-body clause, fixed) and one is an architectural gap (chibi-regexp's
+full-Unicode char-sets, §6 open). The honest pass-rate ceiling is correspondingly lower than the
+bucket suggested.
 
 Priority order, highest value first. **Items 1, 2, 4 and 5 have since shipped and this list had
 not been marked** — `lib/srfi/` and `lib/scheme/` are the current state, not the queue below.
@@ -772,7 +779,76 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 
 ## 6. Known defects surfaced by this track
 
+### Upstream, not ours — the parse-error bucket, audited (2026-08-19)
+
+The audit's follow-up hypothesis read the parse-error histogram as ~4 Patina
+macro-defect classes. Running the repros corrected that: **9 of the bucket's
+14 rows trace to three upstream defects in `cond-expand` fallback branches
+that chibi itself never compiles** — portability shims that, as far as the
+corpus can show, no non-chibi implementation ever ran. Each was cross-checked
+against chibi 0.12 and Gauche 0.9.15; Gauche rejects all three exactly as
+Patina does. Recorded here so no future session re-diagnoses them as ours.
+
+- **`(chibi bytevector)` — a dead 4-element rule** (`ieee-754.scm:16`,
+  `((_) bv off i)` — a parenthesization typo in `bytes-u8-set-all!`). The
+  file sits in the *else* branch; chibi's own branch imports
+  `(scheme bytevector)` instead and never reads it. Gauche: "malformed
+  macro". Owns 5 rows: chibi-bytevector, chibi-crypto-{md5,rsa,sha2},
+  postgresql (all via dependency).
+- **`(chibi monad environment)` — a `syntax-rules` with no literals list**
+  (`environment.sld:6`, `(syntax-rules ((_ x) 'x))`, the fallback definition
+  of `syntax-quote`; chibi's branch imports the real one from `(chibi)`).
+  Gauche: "literal list contains non-symbol". Owns 3 rows:
+  chibi-monad-environment, chibi-show, chibi-snow-commands (via dependency).
+- **`(chibi parse)` — the fallback `grammar-bind` generates an illegal
+  macro** (`parse.sld:66`): its inner `new-symbol?`'s pattern embeds the
+  use-site expression bound to `name`, so a grammar clause containing
+  `,(parse-char (lambda (ch) … ch …))` yields a pattern with `ch` twice.
+  Duplicate pattern variables are "an error" (R7RS §4.3.2); chibi tolerates
+  them, Gauche rejects ("Pattern variable ch appears more than once …
+  new-symbol?") and fails edn end-to-end exactly as Patina does. Owns 1 row:
+  edn. ((chibi parse) itself probes clean — the branch only runs at
+  `define-grammar` use.)
+- **chibi-app — an `else` clause mid-`case`** (`app.scm:467`, followed by a
+  `((1) …)` clause). R7RS puts `else` last; Gauche rejects with "'else'
+  clause followed by more clauses". Chibi accepts, first-match-wins — which
+  makes upstream's trailing clause *dead*, so on chibi the help printer
+  treats exactly-one-command like many (a real upstream behavior bug, just a
+  quiet one). Declining to imitate is §4 policy; what Patina owes here is a
+  better message than "No matching pattern for macro case" with no location.
+  Owns 1 row.
+
+The two rows that were genuinely ours: chibi-tar (the empty-body `case`
+clause — fixed, see below) and chibi-regexp (open, next entry). The lesson
+mirrors L2's cond-expand-no-else finding: **a fallback branch that upstream
+never runs is unreviewed code**, and the corpus is the first thing to ever
+execute it.
+
 ### Open
+
+**chibi-regexp: `(regexp 'grapheme)` feeds `#<unspecified>` into the NFA
+builder** — ❌ **open**, and the root is architectural. Gauche loads the
+library clean; Patina dies at the last form of `regexp.scm`
+(`(define re:grapheme (regexp 'grapheme))`) with upstream's own guard,
+`(error "expected a state" #<unspecified>)`.
+
+Diagnosis (2026-08-19, by truncation bisection): the grapheme SRE embeds
+char-set *objects* from `(chibi char-set boundary)`. That library's
+cond-expand prefers `(chibi char-set)` when it resolves — which it does under
+the harness, from the vendored corpus — and the vendored `(chibi char-set)`
+builds **iset-backed** sets. Patina's `(srfi 14)` char-sets are a different
+record type, so in `->rx` (`regexp.scm:761`) the embedded boundary sets
+satisfy neither `char-set?` nor any other arm, the `cond` falls off the end,
+and `#<unspecified>` flows into `make-state`. Gauche survives because its
+`(srfi 14)` is the built-in full-Unicode type and the same fallback keeps
+every set homogeneous. Patina cannot take that path today: our `(srfi 14)`
+is the Latin-1 reference port, and the boundary data is full-Unicode (hangul
+at `#xAC00`, regional indicators at `#x1F1E6`), which the port would refuse
+or silently truncate. **Blocked on a full-Unicode char-set story** (SRFI 14
+beyond Latin-1, or an iset-compatible representation); not a macro defect.
+Two cosmetic defects rode along and are worth fixing sooner: the raised
+error displays as `#<unknown>`, and the message doubles its "unhandled
+exception:" prefix.
 
 **An imported variable is a stale copy of its binding** — ❌ **open**. Found
 2026-08-19 while writing an R6RS library test.
@@ -1109,6 +1185,7 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| `case` rejected a clause with an empty body | 2026-08-19 |
 | SRFI 14 `ucs-range->char-set` discarded its base set | 2026-08-19 |
 | `(scheme r5rs)` did not export the R5RS syntax keywords | 2026-08-19 |
 | The lexer rejected a non-ASCII identifier | 2026-08-16 |

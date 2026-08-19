@@ -488,7 +488,11 @@ fn extract_missing_libraries(parts: [&str; 2]) -> Vec<String> {
 fn extract_parse_errors(parts: [&str; 2]) -> Vec<String> {
     fn from_loader(line: &str) -> Option<String> {
         let (_, rest) = line.split_once("Parse error in ")?;
-        let (_, detail) = rest.rsplit_once(": ")?;
+        // First ": " ends the path; everything after is the detail. Splitting
+        // on the *last* colon instead truncated any detail that itself
+        // contains one — edn's "Failed to compile macro new-symbol?:
+        // Invalid syntax: Duplicate pattern variable: ch" reported as `ch`.
+        let (_, detail) = rest.split_once(": ")?;
         Some(detail.trim().to_string())
     }
     fn from_include(line: &str) -> Option<String> {
@@ -828,6 +832,28 @@ mod tests {
             false,
         );
         assert!(matches!(classify(&out, "probe"), Status::ParseError(_)));
+    }
+
+    /// A detail that itself contains colons must survive whole — splitting on
+    /// the last one reported edn's duplicate-pattern-variable failure as the
+    /// two-letter histogram row `ch`.
+    #[test]
+    fn a_multi_colon_detail_is_not_truncated() {
+        let out = captured(
+            "",
+            "Error: Parse error in /x/edn.sld: desugar error: Invalid syntax: \
+             Failed to compile macro new-symbol?: Invalid syntax: \
+             Duplicate pattern variable: ch",
+            false,
+        );
+        assert_eq!(
+            classify(&out, "test"),
+            Status::ParseError(vec![
+                "desugar error: Invalid syntax: Failed to compile macro new-symbol?: \
+                 Invalid syntax: Duplicate pattern variable: ch"
+                    .to_string()
+            ])
+        );
     }
 
     /// `include` words a parse failure its own way and quotes the path. It is

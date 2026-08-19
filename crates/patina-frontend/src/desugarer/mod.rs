@@ -2052,9 +2052,10 @@ impl Desugarer {
             &self.shadowed_names,
             env.heap().clone(),
         );
-        compiler
-            .compile_macro(name, rules)
-            .map_err(|e| DesugarError::InvalidSyntax(format!("Failed to compile macro: {}", e)))
+        let macro_name = name.clone();
+        compiler.compile_macro(name, rules).map_err(|e| {
+            DesugarError::InvalidSyntax(format!("Failed to compile macro {macro_name}: {e}"))
+        })
     }
 
     /// Parse the literals list from TaggedValue: (lit1 lit2 ...)

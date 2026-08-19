@@ -10,6 +10,34 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**`case` rejected a clause with an empty body** — ✅ **fixed** (2026-08-19). Both backends.
+Found by auditing the corpus's "No matching pattern for macro case" rows; chibi-tar's is a
+metadata clause with datums and no expressions:
+
+```scheme
+(case n ((1)) (else 'other))   ;; chibi-tar's shape: ((#\g #\x)) — skip tar metadata blocks
+;; before => No matching pattern for macro case
+;; chibi  => unspecified on match     Gauche => unspecified on match
+```
+
+R7RS's grammar wants `((datum …) <sequence>)` with at least one expression, but **both references
+accept the empty body** with an unspecified result — the both-agree bar this track uses — and the
+same goes for empty `(else)`. Fixed with three new `syntax-rules` arms in
+`lib/scheme/base/conditionals.scm` (single/multi-clause datum forms and `(else)`), all yielding
+`(if #f #f)` on match and continuing dispatch on miss. Guard:
+`compliance/derived.rs::test_case_empty_body_clause`.
+
+Chibi-tar advanced from `parse-error` to `unbound-identifier: read-padded-string` — a reference
+that (chibi binary-record)'s generated accessors make into their *importer's* environment. The
+one- and two-level definition-environment repros both pass on Patina, so the failing shape is
+something deeper in that package's `define-binary-type`/auxiliary-syntax chain; undiagnosed, and
+recorded as such rather than guessed at.
+
+The sibling shape found in the same audit — chibi-app's `else` *followed by more clauses* — stays
+rejected on purpose: Gauche rejects it too, and on chibi the trailing clause is silently dead
+(§6's "Upstream, not ours"). What that row is owed is a location in the error message, not
+acceptance.
+
 **SRFI 14 `ucs-range->char-set` discarded its base set** — ✅ **fixed** (2026-08-19). Both
 backends. Found by `(srfi 14 test)` on its first run, the day the suite was restored to
 `scheme_tests/upstream/` — it had never run against Patina before.
