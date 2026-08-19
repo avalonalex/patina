@@ -97,3 +97,90 @@ fn test_inexact_keys_hash_to_exact_values() {
         "(#t #t #t #t real-branch integer-branch)",
     );
 }
+
+/// `(make-hash-table eq?)` keys by identity, so it must *hash* by identity
+/// too. Upstream's `hash-by-identity` is the structural `hash`, and SRFI 125's
+/// `make-eq-comparator` routes here, so the mismatch was load-bearing.
+///
+/// Three failures, one per way structure and identity part company: a key
+/// mutated after insertion moves out of its bucket, a procedure has no
+/// structure to hash, and a circular one has no end. All three are what chibi
+/// answers — its SRFI 69 is C-backed and hashes by identity.
+#[test]
+fn test_an_eq_table_hashes_by_identity() {
+    assert_program_eval_to(
+        r#"
+        (import (scheme base) (srfi 69))
+        (define ht (make-hash-table eq?))
+        (define k (vector 1 2 3))
+        (hash-table-set! ht k 'v)
+        (vector-set! k 0 99)
+        (hash-table-ref/default ht k 'MISSING)
+        "#,
+        "v",
+    );
+    assert_program_eval_to(
+        r#"
+        (import (scheme base) (srfi 69))
+        (define ht (make-hash-table eq?))
+        (hash-table-set! ht car 'v)
+        (hash-table-ref/default ht car 'MISSING)
+        "#,
+        "v",
+    );
+    assert_program_eval_to(
+        r#"
+        (import (scheme base) (srfi 69))
+        (define circ (list 1 2))
+        (set-cdr! (cdr circ) circ)
+        (define ht (make-hash-table eq?))
+        (hash-table-set! ht circ 'v)
+        (hash-table-ref/default ht circ 'MISSING)
+        "#,
+        "v",
+    );
+}
+
+/// Identity hashing must still agree with `eq?` on everything `eq?` accepts,
+/// and must still tell distinct objects apart.
+#[test]
+fn test_identity_hashing_agrees_with_eq() {
+    assert_program_eval_to(
+        r#"
+        (import (scheme base) (srfi 69))
+        (define-record-type <p> (mk a) p? (a p-a))
+        (define r (mk 1))
+        (define (round-trip key)
+          (let ((h (make-hash-table eq?)))
+            (hash-table-set! h key 'found)
+            (hash-table-ref/default h key 'MISSING)))
+        (define distinct
+          (let ((h (make-hash-table eq?)) (a (vector 1)) (b (vector 1)))
+            (hash-table-set! h a 'A)
+            (hash-table-set! h b 'B)
+            (list (hash-table-ref/default h a '?) (hash-table-ref/default h b '?))))
+        (list (round-trip r) (round-trip 'sym) (round-trip 42) (round-trip #\a)
+              (round-trip #t) (round-trip '()) (round-trip "s") distinct)
+        "#,
+        "(found found found found found found found (A B))",
+    );
+}
+
+/// D7 — `hash` reached `numerator` for any real that is not rational, so
+/// `+inf.0`, `-inf.0` and `+nan.0` raised instead of hashing. The `exact` wrap
+/// that fixed `2.0` and the rationals did not reach them.
+#[test]
+fn test_non_rational_reals_are_hashable() {
+    assert_program_eval_to(
+        r#"
+        (import (scheme base) (srfi 69))
+        (define ht (make-hash-table))
+        (hash-table-set! ht +inf.0 'inf)
+        (list (exact-integer? (hash +inf.0))
+              (exact-integer? (hash -inf.0))
+              (exact-integer? (hash +nan.0))
+              (hash-table-ref/default ht +inf.0 'MISSING))
+        "#,
+        "(#t #t #t inf)",
+    );
+}
