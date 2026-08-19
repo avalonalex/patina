@@ -47,11 +47,11 @@ pub enum LexError {
     #[error("Reserved character (R7RS): {0}. Reserved for future extensions")]
     ReservedCharacter(char),
 
-    /// R6RS syntax rejected because `PATINA_STRICT_R7RS` is set. Names the
-    /// setting, because the reader is refusing something it can perfectly well
-    /// read and the person seeing this may not have set it themselves.
-    #[error("{syntax} is R6RS syntax, not R7RS (unset PATINA_STRICT_R7RS to read it)")]
-    StrictR7rs { syntax: &'static str },
+    /// R6RS syntax refused by the R7RS default. Names the switch, because the
+    /// reader is refusing something it can perfectly well read and saying so
+    /// is the difference between a dead end and a one-flag fix.
+    #[error("{syntax} is R6RS syntax, not R7RS (pass --allow-r6rs to read it)")]
+    R6rsSyntax { syntax: &'static str },
 
     /// A closer whose shape disagrees with the opener it would close —
     /// `(let ([x 1)]) …)`. Naming both spellings is the whole value of the
@@ -115,9 +115,9 @@ pub struct Lexer {
     /// Char offset just past the end of the token returned by the
     /// previous `next_token` call (0 before any token is returned)
     prev_token_end: usize,
-    /// Whether the R6RS surface syntax R7RS reserves is rejected — read once
+    /// Whether the R6RS surface syntax R7RS reserves is read — resolved once
     /// here rather than per token. See [`crate::dialect`].
-    strict_r7rs: bool,
+    allow_r6rs: bool,
     /// The shape of each currently-open delimiter, innermost last, so a
     /// closer can be checked against the opener it actually closes.
     ///
@@ -184,7 +184,7 @@ impl Lexer {
             line: 1,
             column: 1,
             prev_token_end: 0,
-            strict_r7rs: crate::dialect::strict_r7rs(),
+            allow_r6rs: crate::dialect::allow_r6rs(),
             open_delimiters: Vec::new(),
         }
     }
@@ -201,9 +201,22 @@ impl Lexer {
             line: 1,
             column: 1,
             prev_token_end: 0,
-            strict_r7rs: crate::dialect::strict_r7rs(),
+            allow_r6rs: crate::dialect::allow_r6rs(),
             open_delimiters: Vec::new(),
         }
+    }
+
+    /// Read the R6RS syntax R7RS reserves, whatever the ambient setting says.
+    ///
+    /// The setting is an environment variable and therefore process-wide,
+    /// which is right for a person choosing how their program is read and
+    /// wrong for a caller that knows: a test asserting bracket behaviour would
+    /// otherwise have to set a variable every other test in the binary can
+    /// see. Nothing in the interpreter calls this — the dialect comes from
+    /// [`crate::dialect`] there.
+    pub fn allowing_r6rs(mut self) -> Self {
+        self.allow_r6rs = true;
+        self
     }
 
     /// Lex the next token, returning just the Token without position info.
@@ -283,7 +296,7 @@ impl Lexer {
             // widens the accepted language — the same trade taken for the
             // bare `@` token. Their shape is checked against the opener, so
             // the pairing is still enforced.
-            '[' | ']' if self.strict_r7rs => Err(LexError::StrictR7rs {
+            '[' | ']' if !self.allow_r6rs => Err(LexError::R6rsSyntax {
                 syntax: "square bracket",
             }),
             '(' | '[' => {
@@ -735,7 +748,7 @@ impl Lexer {
             // Reading both costs one character of lookahead and is not
             // ambiguous with anything R7RS admits.
             'u' => self.read_bytevector_open(),
-            'v' if self.strict_r7rs => Err(LexError::StrictR7rs { syntax: "#vu8(" }),
+            'v' if !self.allow_r6rs => Err(LexError::R6rsSyntax { syntax: "#vu8(" }),
             'v' => {
                 self.advance();
                 if self.current_char() == 'u' {
@@ -1215,8 +1228,26 @@ mod tests {
     }
 
     #[test]
-    fn test_square_brackets_read_as_parentheses() {
+    fn test_brackets_are_refused_by_default() {
+        // `Lexer::new` follows the ambient setting, which is R7RS unless a
+        // person asked otherwise; `allowing_r6rs` is what the rest of these
+        // cases use to opt in without touching a process-wide variable.
         let mut lexer = Lexer::new("[a]");
+        assert!(matches!(
+            lexer.next_token_kind(),
+            Err(LexError::R6rsSyntax { .. })
+        ));
+
+        let mut lexer = Lexer::new("#vu8(1)");
+        assert!(matches!(
+            lexer.next_token_kind(),
+            Err(LexError::R6rsSyntax { .. })
+        ));
+    }
+
+    #[test]
+    fn test_square_brackets_read_as_parentheses() {
+        let mut lexer = Lexer::new("[a]").allowing_r6rs();
         assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
             lexer.next_token_kind().unwrap(),
@@ -1230,7 +1261,7 @@ mod tests {
     fn test_brackets_delimit_the_token_before_them() {
         // The reason `is_delimiter` had to widen: without `]` in the set the
         // number reader swallows it and rejects `1]` as a malformed number.
-        let mut lexer = Lexer::new("[x 1][y 2]");
+        let mut lexer = Lexer::new("[x 1][y 2]").allowing_r6rs();
         for expected in [
             Token::LeftParen,
             Token::Identifier("x".to_string()),
@@ -1247,7 +1278,7 @@ mod tests {
 
     #[test]
     fn test_mismatched_delimiters_are_rejected() {
-        let mut lexer = Lexer::new("[a)");
+        let mut lexer = Lexer::new("[a)").allowing_r6rs();
         assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
             lexer.next_token_kind().unwrap(),
@@ -1262,7 +1293,7 @@ mod tests {
             })
         ));
 
-        let mut lexer = Lexer::new("(a]");
+        let mut lexer = Lexer::new("(a]").allowing_r6rs();
         assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
             lexer.next_token_kind().unwrap(),
@@ -1283,7 +1314,7 @@ mod tests {
         // `#(` and `#u8(` open with a parenthesis whatever precedes it, so a
         // `]` must not close them.
         for src in ["#(1]", "#u8(1]"] {
-            let mut lexer = Lexer::new(src);
+            let mut lexer = Lexer::new(src).allowing_r6rs();
             lexer.next_token_kind().unwrap();
             lexer.next_token_kind().unwrap();
             assert!(
@@ -1300,14 +1331,14 @@ mod tests {
     fn test_unmatched_closer_is_left_to_the_parser() {
         // The REPL lexes incomplete input while a form is still being typed,
         // so a closer with nothing open must not be a lexer error.
-        let mut lexer = Lexer::new(")]");
+        let mut lexer = Lexer::new(")]").allowing_r6rs();
         assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
         assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
     }
 
     #[test]
     fn test_r6rs_bytevector_syntax() {
-        let mut lexer = Lexer::new("#vu8(1 2)");
+        let mut lexer = Lexer::new("#vu8(1 2)").allowing_r6rs();
         assert_eq!(lexer.next_token_kind().unwrap(), Token::BytevectorOpen);
         assert_eq!(
             lexer.next_token_kind().unwrap(),
@@ -1320,7 +1351,7 @@ mod tests {
         assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
 
         // `#v` not followed by `u8(` is still an error.
-        let mut lexer = Lexer::new("#vx");
+        let mut lexer = Lexer::new("#vx").allowing_r6rs();
         assert!(lexer.next_token_kind().is_err());
     }
 

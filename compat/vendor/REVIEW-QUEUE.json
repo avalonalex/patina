@@ -4,6 +4,8 @@
     "version": "0.1.3",
     "pop": 23,
     "license": "GPL",
+    "license_evidence": "index-field",
+    "tarball_sha256": "f4c432673e7e11993b602fc04b9ef95083a8bc44e6d6de8de0d6f450328b80cc",
     "bucket": "COPYLEFT",
     "size_kb": 61,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/test/0.1.3/rapid-test-0.1.3.tgz"
@@ -13,6 +15,8 @@
     "version": "0.23.1",
     "pop": 12,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "1770e121e06ff5f16f9d1d562f34804d25e355e2db71312f2e1e34f3d9dfba31",
     "bucket": "UNKNOWN",
     "size_kb": 155,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/foreign/c/0.23.1/foreign-c-0.23.1.tgz"
@@ -22,6 +26,8 @@
     "version": "0.1.0",
     "pop": 12,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "3193a4cba66dbd5122d8a95d4de8c4e7bfb6365215167e2a24e519c7d60b412c",
     "bucket": "COPYLEFT",
     "size_kb": 12,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/receive/0.1.0/rapid-receive-0.1.0.tgz"
@@ -31,6 +37,8 @@
     "version": "0.1.0",
     "pop": 10,
     "license": "GPL",
+    "license_evidence": "index-field",
+    "tarball_sha256": "5ac3af285d859b0bbbf2e95605931d217272cf6e6ab4aa64ab973dc8ea2b20af",
     "bucket": "COPYLEFT",
     "size_kb": 78,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/list/0.1.0/rapid-list-0.1.0.tgz"
@@ -40,6 +48,8 @@
     "version": "0.1.1",
     "pop": 9,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "9769cb53680e1c8a0a8993bb267db0856ba1351c437696821e45387878f44426",
     "bucket": "COPYLEFT",
     "size_kb": 43,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/comparator/0.1.1/rapid-comparator-0.1.1.tgz"
@@ -49,6 +59,8 @@
     "version": "0.1.0",
     "pop": 9,
     "license": "GPL",
+    "license_evidence": "index-field",
+    "tarball_sha256": "519d46ff8e517d1e4a01ade8355233dbe3befbf7f03f4d3f717de802e974a8a4",
     "bucket": "COPYLEFT",
     "size_kb": 13,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/assume/0.1.0/rapid-assume-0.1.0.tgz"
@@ -58,6 +70,8 @@
     "version": "1.1.5",
     "pop": 6,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "4d1c47e90fe568be6eb88deac0fd6441b414a2a7cc71edfb5b5b7c9f9b3ff2ca",
     "bucket": "UNKNOWN",
     "size_kb": 7,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/system/1.1.5/retropikzel-system-1.1.5.tgz"
@@ -67,6 +81,8 @@
     "version": "0.1.2",
     "pop": 5,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "b80e6430fe0b735c76850cd085d0eaba7f02153b808134a0ad1292dfb2a33829",
     "bucket": "COPYLEFT",
     "size_kb": 45,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/syntax/0.1.2/rapid-syntax-0.1.2.tgz"
@@ -76,6 +92,8 @@
     "version": "0.1.0",
     "pop": 5,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "d2bcfff9e2502363ae30d11905245b95c05cd728ee6f67db1a103eb57982329f",
     "bucket": "COPYLEFT",
     "size_kb": 70,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/set/0.1.0/rapid-set-0.1.0.tgz"
@@ -85,6 +103,8 @@
     "version": "0.1.1",
     "pop": 5,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "6c00a8050b7187ba2ea1bfd774055e74827ba8439baf742a603fdd3dc2106fb6",
     "bucket": "COPYLEFT",
     "size_kb": 72,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/mapping/0.1.1/rapid-mapping-0.1.1.tgz"
@@ -94,6 +114,8 @@
     "version": "0.1.0",
     "pop": 5,
     "license": "GPL",
+    "license_evidence": "index-field",
+    "tarball_sha256": "d11cd9d2eed4406f7426f9661f6eea71d034417708045373b329c839575cd21d",
     "bucket": "COPYLEFT",
     "size_kb": 12,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/and-let/0.1.0/rapid-and-let-0.1.0.tgz"
@@ -103,6 +125,8 @@
     "version": "1.0",
     "pop": 4,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "d3b03eb7c0161eb71ce248226f6cfaf16f1540a66e6ee5838e86152d7bfef056",
     "bucket": "UNKNOWN",
     "size_kb": 5,
     "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/base/1.0/cyclone-iset-base-1.0.tgz"
@@ -112,6 +136,8 @@
     "version": "1.0.1",
     "pop": 4,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "ca96d13af4602e72309137d20062cdb0fd23e77068adc6f2212a619d07b8d51b",
     "bucket": "UNKNOWN",
     "size_kb": 6,
     "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/misc-util/1.0.1/bcaine-misc-util-1.0.1.tgz"
@@ -121,6 +147,8 @@
     "version": "0.1.0",
     "pop": 4,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "87e893f816b306731dd38b8ffe8121fd9d4e1ba5dc2fd5f789c6a0d54c8d2ed1",
     "bucket": "COPYLEFT",
     "size_kb": 14,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/vicinity/0.1.0/rapid-vicinity-0.1.0.tgz"
@@ -130,6 +158,8 @@
     "version": "1.0.3",
     "pop": 3,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "b0eb546c62d33051b630a23105d5e3e52608840fa8e29d33d17a6544302baf9b",
     "bucket": "UNKNOWN",
     "size_kb": 15,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/named-pipes/1.0.3/retropikzel-named-pipes-1.0.3.tgz"
@@ -139,6 +169,8 @@
     "version": "1.0",
     "pop": 3,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "cff79c0c5839c419526fcc29b347f72f8f518147751874e2d116f3865d1c98f4",
     "bucket": "UNKNOWN",
     "size_kb": 11,
     "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/iterators/1.0/cyclone-iset-iterators-1.0.tgz"
@@ -148,6 +180,8 @@
     "version": "0.0.1",
     "pop": 3,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "c5629185db68e53bafa5a82c7615c03c2984999c99cc10843b1cd16c7e428b25",
     "bucket": "UNKNOWN",
     "size_kb": 6,
     "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/format/0.0.1/bcaine-format-0.0.1.tgz"
@@ -157,6 +191,8 @@
     "version": "1.0.0",
     "pop": 2,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "0cb9d3269b8d434aad48ff746f5d8627c2bb250f70091b2374937a0647ba8124",
     "bucket": "UNKNOWN",
     "size_kb": 9,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/net/1.0.0/retropikzel-net-1.0.0.tgz"
@@ -166,6 +202,8 @@
     "version": "1.0",
     "pop": 2,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "b5c723719a348c312dede7c49faf656c72f790fb6532969fba0a1c980a9d7b7e",
     "bucket": "UNKNOWN",
     "size_kb": 17,
     "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/constructors/1.0/cyclone-iset-constructors-1.0.tgz"
@@ -175,6 +213,8 @@
     "version": "1.0.0",
     "pop": 2,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "83f797df3841d24fb1c812667d2bb0928080beaec96ac2f1c07aa06efeeaf9ba",
     "bucket": "UNKNOWN",
     "size_kb": 76,
     "url": "http://snow-fort.org/s/peterlane.info/peter/robin/statistics/1.0.0/robin-statistics-1.0.0.tgz"
@@ -184,6 +224,8 @@
     "version": "20050502",
     "pop": 2,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "dd3e4b6dcdbfdba88827f20f2ef5171251d98526c88764051f64bff88b72e08c",
     "bucket": "UNKNOWN",
     "size_kb": 53,
     "url": "http://snow-fort.org/s/peterlane.info/peter/rebottled/pregexp/20050502/rebottled-pregexp-20050502.tgz"
@@ -193,6 +235,8 @@
     "version": "0.1.3",
     "pop": 2,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "d66db1043ebdb03f7850229a5c0a1b8be2764777f85e9e8b4635caf2d139aa90",
     "bucket": "COPYLEFT",
     "size_kb": 55,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/read/0.1.3/rapid-read-0.1.3.tgz"
@@ -202,6 +246,8 @@
     "version": "0.1.0",
     "pop": 2,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "4bb64598eb63535d917429c67aa6763b1903e3de125f2b607b07c9a05d019ad4",
     "bucket": "COPYLEFT",
     "size_kb": 47,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/analyze-library/0.1.0/rapid-analyze-library-0.1.0.tgz"
@@ -211,6 +257,8 @@
     "version": "0.1.0",
     "pop": 2,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "fa3dc4ea1c85698b3ae98f763d6eccf02566c5c7da2fdf49fd95d9d84e760aed",
     "bucket": "COPYLEFT",
     "size_kb": 13,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/format/0.1.0/rapid-format-0.1.0.tgz"
@@ -220,6 +268,8 @@
     "version": "0.1.0",
     "pop": 2,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "7bf11c74ef0a52856ad446e6ba2edea993d058c7e703ea1cde905b4b13e41d56",
     "bucket": "COPYLEFT",
     "size_kb": 33,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/generator/0.1.0/rapid-generator-0.1.0.tgz"
@@ -229,6 +279,8 @@
     "version": "1.4.5",
     "pop": 1,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "fa1bbadfe0bcc1f1603f8f6897fba9f5a92f1256ad7b8ddb43f7384eda1769b4",
     "bucket": "UNKNOWN",
     "size_kb": 24,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/compile-r7rs/1.4.5/retropikzel-compile-r7rs-1.4.5.tgz"
@@ -238,6 +290,8 @@
     "version": "0.2.3",
     "pop": 1,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "0614a473334763be85d4ccfffcc8bc53d249112bacc77d43ab667b05593014fc",
     "bucket": "UNKNOWN",
     "size_kb": 15,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/c2foreign-c/sdl2-image/0.2.3/c2foreign-c-sdl2-image-0.2.3.tgz"
@@ -247,6 +301,8 @@
     "version": "0.2.3",
     "pop": 1,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "87d2ea51b6560833e447eb035ffebd97c06e06f109f507057b396b1cdbbf7c84",
     "bucket": "UNKNOWN",
     "size_kb": 139,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/c2foreign-c/sdl2/0.2.3/c2foreign-c-sdl2-0.2.3.tgz"
@@ -256,6 +312,8 @@
     "version": "1.0.0",
     "pop": 1,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "4247f5f99a3f0301280d943bfc3810338e20d500155852144147b327bfbfda32",
     "bucket": "UNKNOWN",
     "size_kb": 6,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/debug/1.0.0/retropikzel-debug-1.0.0.tgz"
@@ -265,6 +323,8 @@
     "version": "0.0.1",
     "pop": 1,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "a8dc0f55c99b23f2609a8cb8d7861491a8b33e4b45c93cfdb5ed5e94ffac2afc",
     "bucket": "UNKNOWN",
     "size_kb": 13,
     "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/defstruct/0.0.1/bcaine-defstruct-0.0.1.tgz"
@@ -274,6 +334,8 @@
     "version": "0.1.5",
     "pop": 1,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "51c6b1139c5b9136045be63cfda86ad50044f517296431315faff14cecef881e",
     "bucket": "COPYLEFT",
     "size_kb": 35,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/match/0.1.5/rapid-match-0.1.5.tgz"
@@ -283,6 +345,8 @@
     "version": "0.1.0",
     "pop": 1,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "3683420af145d9e9e792ff7f0c35741b85dcba5a72e5e431b86e7c3465e8e199",
     "bucket": "COPYLEFT",
     "size_kb": 30,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/graph/0.1.0/rapid-graph-0.1.0.tgz"
@@ -292,6 +356,8 @@
     "version": "0.1.0",
     "pop": 1,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "866ebac0723f6fb23936be5675cc3e24b340789cd6705d7ee2a6a77b0ed0e032",
     "bucket": "COPYLEFT",
     "size_kb": 29,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/rbtree/0.1.0/rapid-rbtree-0.1.0.tgz"
@@ -301,6 +367,8 @@
     "version": "0.1.0",
     "pop": 1,
     "license": "GPL",
+    "license_evidence": "index-field",
+    "tarball_sha256": "817924ee4ed96b7a6f85f1dc59d89289cbe9dc5697367c632c33174ca9434aa4",
     "bucket": "COPYLEFT",
     "size_kb": 12,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/identity/0.1.0/rapid-identity-0.1.0.tgz"
@@ -310,6 +378,8 @@
     "version": "0.1.1",
     "pop": 1,
     "license": "GPL",
+    "license_evidence": "index-field",
+    "tarball_sha256": "aa8fe3cb9350b96b790ad2d9f8da2a940c3e92704f485c71bca183c801ed6887",
     "bucket": "COPYLEFT",
     "size_kb": 25,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/quasiquote/0.1.1/rapid-quasiquote-0.1.1.tgz"
@@ -319,6 +389,8 @@
     "version": "0.1.1",
     "pop": 1,
     "license": "GPL",
+    "license_evidence": "index-field",
+    "tarball_sha256": "a0e289ae74115c75b40d738776555fc1d36791e76e07f9eb9dce77c998bd5d32",
     "bucket": "COPYLEFT",
     "size_kb": 12,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/box/0.1.1/rapid-box-0.1.1.tgz"
@@ -328,6 +400,8 @@
     "version": "1.6.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "ef23dbe873a2db791f814e1a1b8d2bec90fcb6ab9dca1af15e0b38269d901167",
     "bucket": "UNKNOWN",
     "size_kb": 15,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/test-r7rs/1.6.0/retropikzel-test-r7rs-1.6.0.tgz"
@@ -337,6 +411,8 @@
     "version": "1.0.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "bed6ae57cc60a65794cb2864adf590a57510f816c7b978a180e5782924d14be4",
     "bucket": "UNKNOWN",
     "size_kb": 16,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/dot-locking/1.0.1/retropikzel-dot-locking-1.0.1.tgz"
@@ -346,6 +422,8 @@
     "version": "0.3.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "c586a83d0dea5818ad8a734179b683efa30ff9683513db7e1d9f9a0dbfac49a3",
     "bucket": "UNKNOWN",
     "size_kb": 15,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/tap/0.3.1/retropikzel-tap-0.3.1.tgz"
@@ -355,6 +433,8 @@
     "version": "0.3.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "3432d18203c29bbb8c7b4dd8e624b0385a2b2212ce4c661671761198cfb4631d",
     "bucket": "UNKNOWN",
     "size_kb": 16,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/junit/0.3.1/retropikzel-junit-0.3.1.tgz"
@@ -364,6 +444,8 @@
     "version": "0.3.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "e991b980830640efa4ff4301a2c38006daace268e03a8af1e0cc363d92d861ec",
     "bucket": "UNKNOWN",
     "size_kb": 7,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/file-append/0.3.1/retropikzel-file-append-0.3.1.tgz"
@@ -373,6 +455,8 @@
     "version": "1.0.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "bb0b23a9da6e1a84432d2cd8b9751e07c98df9cd62ee6f8cf875690042c0ddf7",
     "bucket": "UNKNOWN",
     "size_kb": 9,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/download-file/1.0.0/retropikzel-download-file-1.0.0.tgz"
@@ -382,6 +466,8 @@
     "version": "0.1.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "48ce6889d7601f272fcb194834ab90d840eebce01a164349f282551af2c734da",
     "bucket": "UNKNOWN",
     "size_kb": 8,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/xml2scm/0.1.0/retropikzel-xml2scm-0.1.0.tgz"
@@ -391,6 +477,8 @@
     "version": "0.1.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "be23d5af5be81a137c7187489adeec59396f3c59cd94fcf0f53df5b1c1708cb4",
     "bucket": "UNKNOWN",
     "size_kb": 8,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/json2scm/0.1.0/retropikzel-json2scm-0.1.0.tgz"
@@ -400,6 +488,8 @@
     "version": "1.0.3",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "b7b931b6ca69a62a4eaa97ff4286c76b148a62bb494b261d8c7a8a1fb1fcb220",
     "bucket": "UNKNOWN",
     "size_kb": 20,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/c2foreign-c/1.0.3/retropikzel-c2foreign-c-1.0.3.tgz"
@@ -409,6 +499,8 @@
     "version": "0.3.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "b69fc7539520676c24d8e1c40ec1ac16785df84cbec74d5d67201b2fd8b70192",
     "bucket": "UNKNOWN",
     "size_kb": 30,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/spite/0.3.0/retropikzel-spite-0.3.0.tgz"
@@ -417,8 +509,10 @@
     "library": "srfi 5",
     "version": "0.1.0",
     "pop": 0,
-    "license": "SRFI-document-licence",
-    "bucket": "DOCUMENT-ONLY",
+    "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "905ba15b90d81b8a06f3df6fa51c00cdba81fc6e5d0aeed89782387fecabba06",
+    "bucket": "UNKNOWN",
     "size_kb": 10,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/5/0.1.0/srfi-5-0.1.0.tgz"
   },
@@ -427,6 +521,8 @@
     "version": "1.0.2",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "6b503e080bc22fe638c3042b7a47e68557d4c99e82689fa61edfa63cc922e8c4",
     "bucket": "UNKNOWN",
     "size_kb": 7,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/shell/1.0.2/retropikzel-shell-1.0.2.tgz"
@@ -436,6 +532,8 @@
     "version": "1.1.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "4dea03deae33bee74a14c319189125b4772b7433d0d637434dc180a121aca2ec",
     "bucket": "UNKNOWN",
     "size_kb": 13,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/leb128/1.1.1/retropikzel-leb128-1.1.1.tgz"
@@ -445,6 +543,8 @@
     "version": "1.2.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "5222a0b6c9d7fe0cfa44c18ed416e1433d3f897449e749fe1c4758ab902ec712",
     "bucket": "UNKNOWN",
     "size_kb": 14,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/ctrf/1.2.1/retropikzel-ctrf-1.2.1.tgz"
@@ -454,6 +554,8 @@
     "version": "1.0.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "f3707d21e0195eca54e4c0b232c7ffd0e9dfed0c085f0bf3803f8b56db33ac07",
     "bucket": "UNKNOWN",
     "size_kb": 7,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/mouth/1.0.0/retropikzel-mouth-1.0.0.tgz"
@@ -463,6 +565,8 @@
     "version": "0.1.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "f1e607b22fb448bf7ebddd5721f70b373855b2456cd322dd4309de6bfd05c4f3",
     "bucket": "UNKNOWN",
     "size_kb": 16,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/fcgi/0.1.1/retropikzel-fcgi-0.1.1.tgz"
@@ -472,6 +576,8 @@
     "version": "0.10.3",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "37c0109236546d45943a95495a22c37c77d6b20bf64570f170ba6839e16ec46e",
     "bucket": "UNKNOWN",
     "size_kb": 16,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/requests/0.10.3/retropikzel-requests-0.10.3.tgz"
@@ -481,6 +587,8 @@
     "version": "1.1.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "597f4364c727074d785d06fbfab71196f426de0da797ba7390ed85acd9d659e1",
     "bucket": "UNKNOWN",
     "size_kb": 22,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/scgi/1.1.0/retropikzel-scgi-1.1.0.tgz"
@@ -490,6 +598,8 @@
     "version": "1.2.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "8642b3d6cf741a655165ec997ca57424f5b4e12299fbc2f807b6df95e379d0a7",
     "bucket": "UNKNOWN",
     "size_kb": 21,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/cgi/1.2.0/retropikzel-cgi-1.2.0.tgz"
@@ -499,6 +609,8 @@
     "version": "1.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "b9913654a9e1be822b25d5e7e2250992566fab8e4acc4b6ba3557ad360840fed",
     "bucket": "UNKNOWN",
     "size_kb": 109,
     "url": "http://snow-fort.org/s/mcgoron.com/code/nitrate/1.0/nitrate-1.0.tgz"
@@ -508,6 +620,8 @@
     "version": "1.2.3",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "bee244ee61f5b2766aa654f7dcfe0c2060e6341cb01dc4cf293ed8c3940dbf8c",
     "bucket": "UNKNOWN",
     "size_kb": 8,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/hello/1.2.3/retropikzel-hello-1.2.3.tgz"
@@ -517,6 +631,8 @@
     "version": "0.1.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "856dbd735c018481943345b58d20d8dae87134637767c16fe47e75e51bf0a1a7",
     "bucket": "UNKNOWN",
     "size_kb": 11,
     "url": "http://snow-fort.org/s/iki.fi/retropikzel/retropikzel/gtk-server/0.1.1/retropikzel-gtk-server-0.1.1.tgz"
@@ -526,6 +642,8 @@
     "version": "0.1.1",
     "pop": 0,
     "license": "MPL-2.0",
+    "license_evidence": "spdx",
+    "tarball_sha256": "b077e4e751aba7046d9ce66e92e8a3a02d691b2baa7490b8bb2e9a5d4d1f29bd",
     "bucket": "COPYLEFT",
     "size_kb": 24,
     "url": "http://snow-fort.org/s/nytpu.com/alex/nytpu/contracts/0.1.1/nytpu-contracts-0.1.1.tgz"
@@ -535,6 +653,8 @@
     "version": "1.2.0",
     "pop": 0,
     "license": "MPL-2.0",
+    "license_evidence": "spdx",
+    "tarball_sha256": "ec1396b8885bb7e76b29277d12484a2a9129b6b3e47cbdab2079ce582f10d11a",
     "bucket": "COPYLEFT",
     "size_kb": 20,
     "url": "http://snow-fort.org/s/nytpu.com/alex/nytpu/getopt/1.2.0/nytpu-getopt-1.2.0.tgz"
@@ -544,6 +664,8 @@
     "version": "1.0.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "3e12f1347606c353018bf1a569226d7e0d7a6bd50cf37a9a7f42f155cfb22f65",
     "bucket": "UNKNOWN",
     "size_kb": 12,
     "url": "http://snow-fort.org/s/fisher.cx/robert/fisherro/pipe/1.0.0/fisherro-pipe-1.0.0.tgz"
@@ -553,6 +675,8 @@
     "version": "0.1.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "eff4b0cabee5608f7d8f706a4eb7d241f816af1e91b7240109d1f474e69a1a4a",
     "bucket": "UNKNOWN",
     "size_kb": 10,
     "url": "http://snow-fort.org/s/poseur.com/edw/thunknyc/expand-braces/0.1.1/thunknyc-expand-braces-0.1.1.tgz"
@@ -562,6 +686,8 @@
     "version": "0.1.3",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "b3d1d01b6a76875e3d1f7bb280e98b6bfd878e53697e9263527d19969617acf8",
     "bucket": "UNKNOWN",
     "size_kb": 11,
     "url": "http://snow-fort.org/s/poseur.com/edw/thunknyc/json/0.1.3/thunknyc-json-0.1.3.tgz"
@@ -571,6 +697,8 @@
     "version": "0.7",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "bd0aeb54c2e88567707c675e481a475d6a7431f5e1959b7e99ec07d361bda92f",
     "bucket": "UNKNOWN",
     "size_kb": 22,
     "url": "http://snow-fort.org/s/gmail.com/alexshinn/chibi/sqlite3/0.7/chibi-sqlite3-0.7.tgz"
@@ -580,6 +708,8 @@
     "version": "1.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "c1c3f2da8ab317baaad61c134e407bc297fa30b959ab449af15ebc9261b8c922",
     "bucket": "UNKNOWN",
     "size_kb": 13,
     "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/1.0/cyclone-iset-1.0.tgz"
@@ -589,6 +719,8 @@
     "version": "1.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "c24ee986262f9f6119715adb82e2c21ae7cd01a99b943b0ed1b96264955f6e3f",
     "bucket": "UNKNOWN",
     "size_kb": 10,
     "url": "http://snow-fort.org/s/gmail.com/arthurmaciel/cyclone/iset/optimize/1.0/cyclone-iset-optimize-1.0.tgz"
@@ -598,6 +730,8 @@
     "version": "0.0.7",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "6257e168626eeafdb2cc951a2f32cba19e30dc0ea15657a94c6bf35b894e6247",
     "bucket": "UNKNOWN",
     "size_kb": 49,
     "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/obj/0.0.7/bcaine-obj-0.0.7.tgz"
@@ -607,6 +741,8 @@
     "version": "0.0.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "c7b305e067469be7e68f4a46dab6dbf39ff435fc442921274f84ea7ace10de18",
     "bucket": "UNKNOWN",
     "size_kb": 8,
     "url": "http://snow-fort.org/s/gmail.com/brian.d.caine/bcaine/sld-stub-expand/0.0.1/bcaine-sld-stub-expand-0.0.1.tgz"
@@ -616,6 +752,8 @@
     "version": "1.0.1",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "5a7c4d8171f98e37e40b4f3af9b5fe3d2ab24dfd6a73f28014f0ba87abfc6f2d",
     "bucket": "UNKNOWN",
     "size_kb": 7,
     "url": "http://snow-fort.org/s/gmail.com/taknamay/yasos/1.0.1/yasos-1.0.1.tgz"
@@ -625,6 +763,8 @@
     "version": "1.0.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "11fc58780ddc06fa797a2b7c13e45c9ee99c0ed3edd6f929b6995670c0ffbaac",
     "bucket": "UNKNOWN",
     "size_kb": 44,
     "url": "http://snow-fort.org/s/peterlane.info/peter/robin/directory/1.0.0/robin-directory-1.0.0.tgz"
@@ -634,6 +774,8 @@
     "version": "20150602",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "7da22ea8b90c28a8c1812cf6fa43b0f30bfdf8629d5b8a7863b766f297eca7c5",
     "bucket": "UNKNOWN",
     "size_kb": 41,
     "url": "http://snow-fort.org/s/peterlane.info/peter/rebottled/schelog/20150602/rebottled-schelog-20150602.tgz"
@@ -643,6 +785,8 @@
     "version": "SLIB-3b5-r7rs-1",
     "pop": 0,
     "license": "GPL",
+    "license_evidence": "text-match",
+    "tarball_sha256": "2c24d746496b212d590217c35e02aa2cf70da13adee3c2e22780149c1ed60d83",
     "bucket": "COPYLEFT",
     "size_kb": 50,
     "url": "http://snow-fort.org/s/peterlane.info/peter/slib/wt-tree/SLIB-3b5-r7rs-1/slib-wt-tree-SLIB-3b5-r7rs-1.tgz"
@@ -652,6 +796,8 @@
     "version": "1.0.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "167e0708526084bfd055be88601adce8f869fc42ab67a97cf148ce90e665c4e0",
     "bucket": "UNKNOWN",
     "size_kb": 75,
     "url": "http://snow-fort.org/s/peterlane.info/peter/robin/text/1.0.0/robin-text-1.0.0.tgz"
@@ -661,6 +807,8 @@
     "version": "1.0.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "664f85a03adf1b2d430f1786619c19aa6588d13485d33cbf31016c22cef3b5ca",
     "bucket": "UNKNOWN",
     "size_kb": 31,
     "url": "http://snow-fort.org/s/peterlane.info/peter/robin/logger/1.0.0/robin-logger-1.0.0.tgz"
@@ -670,6 +818,8 @@
     "version": "1.0.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "07417505109644442a1cc449dfe246cb340c41ef441b09d65093f991e0f70027",
     "bucket": "UNKNOWN",
     "size_kb": 37,
     "url": "http://snow-fort.org/s/peterlane.info/peter/robin/disjoint-set/1.0.0/robin-disjoint-set-1.0.0.tgz"
@@ -679,6 +829,8 @@
     "version": "1.0.0",
     "pop": 0,
     "license": null,
+    "license_evidence": "none",
+    "tarball_sha256": "4f4700313dbea75851051aec7d4bff1d4b3751dc5481639050db778fa6b9f835",
     "bucket": "UNKNOWN",
     "size_kb": 28,
     "url": "http://snow-fort.org/s/peterlane.info/peter/robin/abbrev/1.0.0/robin-abbrev-1.0.0.tgz"
@@ -688,6 +840,8 @@
     "version": "0.1.0",
     "pop": 0,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "d0434238f4bc78ee7df4747de2970105a70208d74fd7f48dfb30468fc744ef92",
     "bucket": "COPYLEFT",
     "size_kb": 72,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/vector/0.1.0/rapid-vector-0.1.0.tgz"
@@ -697,6 +851,8 @@
     "version": "0.1.0",
     "pop": 0,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "9aa5859eb01a0708d0170c1e7baca0dfd7d9fd49425f6dfd31c555f61256c606",
     "bucket": "COPYLEFT",
     "size_kb": 18,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/args-fold/0.1.0/rapid-args-fold-0.1.0.tgz"
@@ -706,6 +862,8 @@
     "version": "0.1.0",
     "pop": 0,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "53a6c14289c95f247c4dc6ffb761ce990b64f3abd43cd196c15c000f4df75efd",
     "bucket": "COPYLEFT",
     "size_kb": 17,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/eliminate-mutable-variables/0.1.0/rapid-eliminate-mutable-variables-0.1.0.tgz"
@@ -715,6 +873,8 @@
     "version": "0.1.0",
     "pop": 0,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "8daba123e1fc21f8b75df7231aae1a8686f146ef45c11d284b702308752f12ce",
     "bucket": "COPYLEFT",
     "size_kb": 23,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/fix-letrec/0.1.0/rapid-fix-letrec-0.1.0.tgz"
@@ -724,6 +884,8 @@
     "version": "0.1.2",
     "pop": 0,
     "license": "GPL-3.0",
+    "license_evidence": "index-field",
+    "tarball_sha256": "87c8bde40d0bf15469d65af98ca5229fffc224780fbe87dec5cd40bd2c9f53bc",
     "bucket": "COPYLEFT",
     "size_kb": 46,
     "url": "http://snow-fort.org/s/rapid-scheme.org/marc/rapid/library-definition/0.1.2/rapid-library-definition-0.1.2.tgz"

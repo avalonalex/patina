@@ -192,10 +192,10 @@ pub(crate) fn parse_library_name_tagged(
         let last = items[items.len() - 1];
         let is_version = last.is_null() || shared_heap.borrow().try_pair(last).is_some();
         if is_version {
-            if crate::dialect::strict_r7rs() {
+            if !crate::dialect::allow_r6rs() {
                 return Err(ParseError::InvalidSyntax(
                     "R6RS version reference in a library name is not R7RS \
-                     (unset PATINA_STRICT_R7RS to read it)"
+                     (pass --allow-r6rs to read it)"
                         .to_string(),
                 ));
             }
