@@ -1,9 +1,11 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
+**Updated:** 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**143 of 184** vendored packages pass, 2026-08-16); L1/L2 continue against the measured queue
+(**121 of 162** vendored packages pass, 2026-08-19 — was 143/184 before L5.2 bundled 22 packages;
+like-for-like unchanged); L5's reader and libraries landed, its suite is next; L1/L2 continue
+against the measured queue
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -127,13 +129,14 @@ concentrated in the parse-error and load-error buckets — defects, not absent l
 queue below should be read as a completeness exercise against the policy rather than as the ordered
 route to a higher score.
 
-Priority order, highest value first:
-1. **Bitwise: SRFI 151, plus `(srfi 60)` / `(srfi 33)` shims.** Standard-track *and* the largest
-   ecosystem gap — 31 packages import `(srfi 60)`, 19 import `(srfi 33)`, and R7RS-large names 151.
-   Shipping 151 alone leaves all of them failing. Needs Rust primitives; portable Scheme would be
-   unusably slow.
-2. **`(scheme …)` alias libraries** for the six Red-edition SRFIs already shipped (1, 111, 113, 128,
-   132, 133) and for 158. A `.sld` re-export each — the cheapest R7RS-large progress available.
+Priority order, highest value first. **Items 1, 2, 4 and 5 have since shipped and this list had
+not been marked** — `lib/srfi/` and `lib/scheme/` are the current state, not the queue below.
+1. ✅ **Bitwise: SRFI 151, plus `(srfi 60)` / `(srfi 33)` shims** — **done**; `lib/srfi/151`,
+   `60.sld`, `33.sld`. Standard-track *and* the largest ecosystem gap — 31 packages import
+   `(srfi 60)`, 19 import `(srfi 33)`, and R7RS-large names 151. Needed Rust primitives; portable
+   Scheme would have been unusably slow.
+2. ✅ **`(scheme …)` alias libraries** for the Red-edition SRFIs — **done**; `box`, `comparator`,
+   `list`, `set`, `sort`, `vector`, `generator`, `hash-table` all sit in `lib/scheme/`.
 3. ~~**SRFI 125** hash tables … Needs a `HeapObjectData::HashMap` variant.~~ — ✅ **done
    2026-08-16, and that premise was wrong.** No new runtime support was needed, and checking why is
    the useful part: the piece that genuinely cannot be written in Scheme, `equal-hash`, has been a
@@ -143,8 +146,8 @@ Priority order, highest value first:
    `(srfi 69)` is unchanged as the substrate rather than becoming an alias; a Rust-backed table
    stays available as a *performance* decision for Track P, to be taken on a profile rather than
    assumed here.
-4. **SRFI 27** random — impossible without an RNG primitive; in-degree 9.
-5. **SRFI 143** fixnums — must match the VM's actual fixnum width.
+4. ✅ **SRFI 27** random — **done**; `lib/srfi/27.sld`. Needed an RNG primitive; in-degree 9.
+5. ✅ **SRFI 143** fixnums — **done**; `lib/srfi/143`, matched to the VM's fixnum width.
 6. ~~**SRFI 14** char-sets (in-degree 4)~~ — ✅ **done 2026-08-14**, pulled forward by SRFI 130.
    Then the remaining standard-track set with little measured demand: Red 41, 101, 116, 117, 124,
    127, 134, 135 and Tangerine 146, 159, 160.
@@ -592,8 +595,158 @@ exist only to make the interim state safe.
 
 ---
 
+### L5 — Read R6RS, so the corpus has a second opinion  *(in execution — bridge landed 2026-08-19; suite deferred)*
+
+**Why this is in Track L rather than beside it.** The track's headline is a
+compatibility number, and the number was measuring less than it appeared to.
+Of the 184 packages then vendored, **137 ran in probe mode** — the harness
+synthesises `(import …)` of everything a package provides and checks it does
+not error; nothing is ever called. Only 47 run a test suite, and **29 of those
+47 are chibi packages**, because chibi is the only ecosystem whose snowballs
+ship their suites. So 113 packages — every slib, every pfds, most srfi — never
+executed an assertion, and the behavioural half of the score was chibi's. That
+is not a harness failing: only 2 of the 137 probe packages ship a test file at
+all. It is a property of the corpus.
+
+The R7RS gate has the same shape one level up. `scheme_tests/chibi/r7rs-tests.scm`
+is one file by one author, and the eight upstream SRFI suites, though genuinely
+the specifications' own, all arrive through chibi's `lib/`.
+
+R6RS is where an independent, specification-derived suite exists, written by
+different people against a different standard. Reading R6RS is the prerequisite
+for running it, and the ceiling is worth knowing before starting: `syntax-case`
+is Phase 3, and the record, condition and port libraries are not bundled, so
+what a suite can reach is bounded — see the table below.
+
+#### L5.0 — The reader  *(done — 2026-08-19)*
+
+Four gaps, each verified against the binary before the work and each a syntax
+R7RS 7.1.1 *reserves*, so reading it cannot change what a conforming program
+means — the trade the bare `@` decision already settled.
+
+| Gap | Before |
+|---|---|
+| `[` `]` | `Reserved character (R7RS): [` |
+| `#vu8(1 2 3)` | `Unexpected character: v` |
+| `(rnrs base (6))` | `Library name parts must be identifiers or non-negative integers, got: pair` |
+| `(library …)` | no code path — only `define-library` |
+
+`#!r6rs` already worked, as a consequence of L0's shebang handling.
+
+Bracket **pairing is enforced**: `(let ([x 1)]) x)` is refused. Cross-checked
+rather than assumed — Gauche accepts brackets and rejects the mismatch, chibi
+does not read brackets as parentheses at all, and Chez, Racket and Guile agree
+with Gauche. Accepting them unpaired would have been a dialect nobody has.
+
+`is_delimiter` had to widen to match, and that function's comment had flagged
+the widening as wanting "its own decision and its own cross-check": without `]`
+in the set, `[x 1]` runs to the end of `1]`, which the number reader rejects.
+Safe in the direction the comment warns about — a bracket is neither an
+`<initial>` nor a `<subsequent>`, so no conforming identifier contains one —
+and cross-checked across `compat/vendor/` and `lib/`, where every bracket
+outside a string or comment is `#\[` or `#\]`. Those are unaffected:
+`read_character` already takes a delimiter first character as a complete
+one-character literal, the path `#\(` has always used.
+
+Version references are **discarded, not matched**. Patina resolves one library
+per name and has nowhere to put a second, so checking `((>= 6))` against it
+would report agreement it never established.
+
+`.sls` resolves alongside `.sld`. Doing that surfaced that the resolution
+exists **twice** — `LibraryRegistry::find_library_file` and
+`SchemeLibraryLoader::find_sld_file` — and that only the second is on the path
+an actual load takes, so the first appeared fixed while nothing loaded. The
+extension list is now one shared constant rather than two lists and a comment
+asking them to agree.
+
+#### L5.1 — `--allow-r6rs`, off by default  *(done — 2026-08-19)*
+
+The reader extensions are **off unless asked**. The widening argument above is
+sound and is why they can be switched on at all; what it does not cover is that
+Patina is a teaching implementation, and a learner who writes `(let ([x 1]) …)`,
+watches it work, and concludes brackets are standard has been taught something
+false by us.
+
+One switch, not an inferred per-file mode. A mode needs a trigger and every
+candidate is unreliable — `#!r6rs` is optional in R6RS and routinely omitted,
+`.sls` is convention rather than normative, and an inline `(library …)` at the
+REPL has no file — so an inferred mode would be right most of the time and
+*silently* wrong the rest. The cost is granularity: the switch is process-wide,
+so a program run with it gets R6RS reading for every file it loads. The
+refinement available later is to **widen, never narrow**, for a file that
+declares itself by `.sls` or `#!r6rs`; that does not reopen the objection,
+because such a file is opting in about itself and the switch remains the escape
+hatch for one that does not.
+
+#### L5.2 — Bundle the R6RS libraries  *(done — 2026-08-19)*
+
+William D Clinger's R7RS ports, byte-identical from the snow-fort tarballs
+under `lib/r6rs/`, with a generated re-export `.sld` per library under
+`lib/rnrs/` so R6RS source resolves without being rewritten. 17 libraries.
+
+**They work, and that was measured by calling into them rather than importing
+them** — the same distinction this item exists to fix. `div`/`mod`, `assp`/
+`remp`, fixnum ops, enum sets, hashtables with non-fixnum keys,
+`char-general-category`, `raise-continuable`, and `eval` with
+`(environment '(rnrs base))`: **17 of 17**.
+
+Two findings, both in `lib/r6rs/PROVENANCE.md`:
+
+- **`(r6rs no-rnrs)` is required and upstream provides it.** Every guard in the
+  tree defers to a host `(rnrs …)` when one exists. Patina's `(rnrs …)` *is*
+  these libraries, so that branch closes a cycle; defining upstream's marker
+  says "that is not a host implementation" and sends every guard to the
+  portable branch, which is why the tree needs no edit.
+- **One guard was missing the escape.** `hashtables.sld`'s first `cond-expand`
+  tests `(library (rnrs hashtables))` alone where its two siblings in the same
+  file do not. With the shim present it fires, `inexact-hash` is never defined,
+  and every non-fixnum key fails **at the caller**. A/B'd: shim absent, float,
+  rational and symbol keys all work; shim present, none do. This is the
+  `(chibi filesystem)` hazard again — a `cond-expand` that leaves a library
+  parsed and empty, reported anywhere but at the cause — and it is why
+  `r6rs_rnrs_shims.rs` calls into each library instead of importing it.
+
+Per L4's policy the corpus drops what Patina bundles, so the headline moves
+**143/184 → 121/162**. Like-for-like unchanged: the per-package matrix is
+identical once the 22 bundled rows are removed, and every failure bucket keeps
+its count.
+
+#### L5.3 — Vendor and run the R6RS test suite  *(next)*
+
+The payload, and the only part that produces a second number. The suite is the
+R6RS editors' own, mirrored by `racket/r6rs` and by Larceny; it is not in this
+repo and not in the local reference checkouts, so it needs a fetch — deferred
+to its own PR by decision, not by obstacle.
+
+**What it can reach is bounded by what is not bundled.** Nine of the 25 R6RS
+libraries are absent, and the gap is not uniform:
+
+| Missing | Cost |
+|---|---|
+| `(rnrs records syntactic/procedural/inspection)` | R6RS `define-record-type` has genuinely different syntax from R7RS's — real work, not a re-export |
+| `(rnrs conditions)` | R6RS's structured condition hierarchy; R7RS has only `error-object?` |
+| `(rnrs io ports)` | the full port layer; only `(rnrs io simple)` is here |
+| `(rnrs arithmetic bitwise)` | cheap — SRFI 151 ships, so a rename shim |
+| `(rnrs arithmetic flonums)` | mostly `(scheme inexact)` renames |
+| `(rnrs syntax-case)` | Phase 3; bounds the reachable third-party ecosystem |
+
+Note what `(rnrs exceptions)` is: a four-name re-export of R7RS's procedures.
+It passes an exercise and would pass a probe, and **an R6RS program catching a
+structured condition will get an R7RS error object and behave differently
+without failing**. That is the probe-versus-behaviour trap this item was
+written about, now inside our own bundle, and it is the argument for getting
+the suite in sooner rather than bundling more first.
+
+---
+
 ## 5. Sequencing within the track
 **L0** (edge cases) → **L0.5** (CLI surface) → **L0.75** (survey) → **L3 harness + baseline run** → **L1** (SRFIs: pure-Scheme set first, then primitive-backed) → **L2** (`chibi` libs) → **L3 re-run**, then loop L1/L2 against the refreshed histogram until the curve flattens.
+
+**L5 is not on that loop, and that is the point.** L1/L2 raise the score against
+the corpus we have; L5 asks whether that corpus is measuring what the headline
+claims. It was added once the loop's own numbers showed the answer was partly no
+— 137 of 184 packages checked only that they load, and the behavioural remainder
+was 62% chibi — so it runs beside the loop rather than after it.
 
 Note the deliberate departure from numeric order: **L3 is built before L1/L2, not after.** The items are numbered by when they were conceived, not by when they run. Standing the harness up early is cheap once `-A` exists, and it converts the rest of the track from a guessed list of SRFIs into a measured queue — every subsequent port is chosen because it unblocks counted, named libraries. L1's primitive-backed SRFIs (125/143/151/27) can proceed in parallel with the pure-Scheme set.
 
@@ -602,6 +755,38 @@ Note the deliberate departure from numeric order: **L3 is built before L1/L2, no
 ## 6. Known defects surfaced by this track
 
 ### Open
+
+**An imported variable is a stale copy of its binding** — ❌ **open**. Found
+2026-08-19 while writing an R6RS library test.
+
+```scheme
+(define-library (m counter)
+  (export bump count peek)
+  (import (scheme base))
+  (begin (define count 0)
+         (define (bump) (set! count (+ count 1)))
+         (define (peek) count)))
+(import (m counter))
+(bump) (bump)
+(list count (peek))
+;; Patina (both backends) => (0 2)
+;; Gauche, chibi          => (2 2)
+```
+
+`import` installs the *value* a variable had when the library was imported
+rather than aliasing the library's binding, so a later mutation by the library
+is invisible to the importer. The library's own view is live — `peek` reads 2 —
+which puts the fault in what `import` installs, not in how `set!` runs.
+
+**The chibi suite is 1226/1226 across it**, because nothing there mutates a
+variable another library imported. That is the whole argument for a second
+corpus in one example: the defect is not exotic, it is simply outside what one
+suite happens to do.
+
+Pinned in `crates/patina-tests/tests/library_loading.rs`. Asserted as-is rather
+than via `assert_divergence`, which needs a backend to *fail*: both backends
+agree and neither errors, they return a plausible wrong answer. The test says
+what to do when it converges.
 
 **VM: invoking a continuation inside its own `dynamic-wind` re-runs the thunks** — ❌ **open**.
 No primitive involved; the minimal repro is a bare `call/cc`.
