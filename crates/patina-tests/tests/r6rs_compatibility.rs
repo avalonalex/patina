@@ -277,3 +277,99 @@ fn an_earlier_search_path_wins_over_a_later_one_whatever_it_holds() {
         path.display()
     );
 }
+
+// =============================================================================
+// PATINA_STRICT_R7RS
+// =============================================================================
+
+/// The strict switch is process-global (an environment variable read by the
+/// frontend), so these cases go through the binary rather than in-process,
+/// where a parallel test would see another's setting.
+mod strict {
+    use std::process::Command;
+
+    fn patina() -> std::path::PathBuf {
+        // The integration test binary sits beside the one under test.
+        let mut path = std::env::current_exe().expect("test binary path");
+        path.pop(); // deps/
+        path.pop();
+        path.push("patina");
+        path
+    }
+
+    /// Run `patina -p <expr> …`, strictly or not, returning (stdout, stderr).
+    ///
+    /// Each expression is a separate `-p`, so each is read as a *top-level*
+    /// form — which is where a library definition has to sit.
+    fn eval(exprs: &[&str], strict: bool) -> (String, String) {
+        let mut cmd = Command::new(patina());
+        if strict {
+            cmd.arg("--strict-r7rs");
+        }
+        for expr in exprs {
+            cmd.args(["-p", expr]);
+        }
+        let out = cmd.output().expect("failed to run patina");
+        (
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        )
+    }
+
+    /// Every extension, as a program and the value its last form has when the
+    /// syntax is read.
+    const R6RS_SYNTAX: [(&[&str], &str); 4] = [
+        (&["(let ([x 1]) x)"], "1"),
+        (&["(bytevector-u8-ref '#vu8(9) 0)"], "9"),
+        (&["(import (scheme base (6)))", "'ok"], "ok"),
+        (
+            &[
+                "(library (s t) (export v) (import (scheme base)) (define v 5))",
+                "(import (s t))",
+                "v",
+            ],
+            "5",
+        ),
+    ];
+
+    #[test]
+    fn the_extensions_are_read_by_default() {
+        for (program, expected) in R6RS_SYNTAX {
+            let (stdout, stderr) = eval(program, false);
+            assert!(
+                stdout.lines().last() == Some(expected),
+                "{program:?} should evaluate to {expected}; got stdout {stdout:?} stderr {stderr:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_mode_rejects_every_extension() {
+        for (program, _) in R6RS_SYNTAX {
+            let (stdout, stderr) = eval(program, true);
+            assert!(
+                stderr.contains("PATINA_STRICT_R7RS"),
+                "{program:?} should be refused with a message naming the setting, \
+                 got stdout {stdout:?} stderr {stderr:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_mode_leaves_r7rs_alone() {
+        // The point of the switch is that conforming programs are unaffected,
+        // including the R7RS spellings of the two reader extensions.
+        for (expr, expected) in [
+            ("(let ((x 1)) x)", "1"),
+            ("(bytevector-u8-ref '#u8(9) 0)", "9"),
+            (r"(char->integer #\[)", "91"),
+            (r#"(string-length "[a]")"#, "3"),
+        ] {
+            let (stdout, stderr) = eval(&[expr], true);
+            assert_eq!(
+                stdout, expected,
+                "{expr} is R7RS and must survive strict mode; stderr: {stderr}"
+            );
+        }
+    }
+}

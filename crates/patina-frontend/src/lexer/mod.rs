@@ -44,10 +44,14 @@ pub enum LexError {
     #[error("Invalid character literal")]
     InvalidCharacter,
 
-    #[error(
-        "Reserved character (R7RS): {0}. Curly braces {{ }} are reserved for future extensions"
-    )]
+    #[error("Reserved character (R7RS): {0}. Reserved for future extensions")]
     ReservedCharacter(char),
+
+    /// R6RS syntax rejected because `PATINA_STRICT_R7RS` is set. Names the
+    /// setting, because the reader is refusing something it can perfectly well
+    /// read and the person seeing this may not have set it themselves.
+    #[error("{syntax} is R6RS syntax, not R7RS (unset PATINA_STRICT_R7RS to read it)")]
+    StrictR7rs { syntax: &'static str },
 
     /// A closer whose shape disagrees with the opener it would close —
     /// `(let ([x 1)]) …)`. Naming both spellings is the whole value of the
@@ -111,6 +115,9 @@ pub struct Lexer {
     /// Char offset just past the end of the token returned by the
     /// previous `next_token` call (0 before any token is returned)
     prev_token_end: usize,
+    /// Whether the R6RS surface syntax R7RS reserves is rejected — read once
+    /// here rather than per token. See [`crate::dialect`].
+    strict_r7rs: bool,
     /// The shape of each currently-open delimiter, innermost last, so a
     /// closer can be checked against the opener it actually closes.
     ///
@@ -177,6 +184,7 @@ impl Lexer {
             line: 1,
             column: 1,
             prev_token_end: 0,
+            strict_r7rs: crate::dialect::strict_r7rs(),
             open_delimiters: Vec::new(),
         }
     }
@@ -193,6 +201,7 @@ impl Lexer {
             line: 1,
             column: 1,
             prev_token_end: 0,
+            strict_r7rs: crate::dialect::strict_r7rs(),
             open_delimiters: Vec::new(),
         }
     }
@@ -274,6 +283,9 @@ impl Lexer {
             // widens the accepted language — the same trade taken for the
             // bare `@` token. Their shape is checked against the opener, so
             // the pairing is still enforced.
+            '[' | ']' if self.strict_r7rs => Err(LexError::StrictR7rs {
+                syntax: "square bracket",
+            }),
             '(' | '[' => {
                 self.advance();
                 self.open_delimiters.push(if ch == '[' {
@@ -723,6 +735,7 @@ impl Lexer {
             // Reading both costs one character of lookahead and is not
             // ambiguous with anything R7RS admits.
             'u' => self.read_bytevector_open(),
+            'v' if self.strict_r7rs => Err(LexError::StrictR7rs { syntax: "#vu8(" }),
             'v' => {
                 self.advance();
                 if self.current_char() == 'u' {

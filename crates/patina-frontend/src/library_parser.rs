@@ -126,6 +126,13 @@ impl LibraryDefinition {
         // First element is `define-library` (R7RS) or `library` (R6RS §7.1).
         let head = heap.borrow().get_symbol_name(list[0]).map(str::to_string);
         let r6rs = match head.as_deref() {
+            Some("library") if crate::dialect::strict_r7rs() => {
+                return Err(ParseError::InvalidSyntax(
+                    "R6RS (library ...) form is not R7RS; use define-library \
+                     (unset PATINA_STRICT_R7RS to read it)"
+                        .to_string(),
+                ));
+            }
             Some("library") => true,
             // Anything else is reported against `define-library`, so the
             // message names the form the caller almost certainly meant.
