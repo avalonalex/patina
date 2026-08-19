@@ -30,7 +30,9 @@
 //! it is written down rather than implied.
 
 mod common;
-use common::{assert_program_eval_error, assert_program_eval_to};
+use common::{
+    ErrorClass, assert_program_eval_error, assert_program_eval_error_at, assert_program_eval_to,
+};
 
 // ============================================================================
 // Rejected
@@ -51,6 +53,38 @@ fn test_a_syntactic_keyword_is_not_a_value() {
         "(list =>)",
     ] {
         assert_program_eval_error(&format!("(import (scheme base)) {expr}"));
+    }
+}
+
+/// A keyword unquoted into a quasiquote template is the same rejection,
+/// reached through the one path that used to *panic* instead (audit A1).
+///
+/// The unquote is desugared by whoever expands the template, and until this
+/// was fixed neither expander could say so: the VM's
+/// `compiler/quasiquote_expand.rs` panicked outright — a process abort from
+/// `` `(1 ,if) `` — and the tree-walker's `cps_eval/quasiquote.rs` wrapped the
+/// diagnostic in `InternalError`, which reads as an interpreter bug rather
+/// than the program error it is.
+///
+/// The stages differ and always will: the VM expands templates while
+/// compiling, the tree-walker while evaluating. The diagnostic is the part
+/// that has to match, and does.
+#[test]
+fn test_a_keyword_unquoted_into_a_template_is_not_a_value() {
+    for (expr, expected) in [
+        ("`(1 ,if)", "`if` is a syntactic keyword"),
+        ("`(1 ,@if)", "`if` is a syntactic keyword"),
+        ("`(1 ,when)", "`when` is a macro"),
+        ("`(a . ,if)", "`if` is a syntactic keyword"),
+        ("`#(1 ,if)", "`if` is a syntactic keyword"),
+        ("`(1 `(2 ,,if))", "`if` is a syntactic keyword"),
+    ] {
+        assert_program_eval_error_at(
+            &format!("(import (scheme base)) {expr}"),
+            ErrorClass::AtRuntime,
+            ErrorClass::BeforeRun,
+            expected,
+        );
     }
 }
 

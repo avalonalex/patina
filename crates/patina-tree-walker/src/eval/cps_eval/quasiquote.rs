@@ -24,8 +24,16 @@ fn eval_tagged_via_cps(
 ) -> Result<TaggedValue, EvalError> {
     let heap = evaluator.global_env.heap();
     let desugarer = Desugarer::with_env(env.clone());
+    // A failure here is the program's, not the interpreter's: `,if` names a
+    // syntactic keyword, and #89 made the desugarer say so. `InternalError`
+    // mis-stated that as an interpreter bug and hid the diagnostic behind its
+    // own wrapper — see the VM's `quasiquote_expand::desugar_tagged`, which
+    // used to panic outright on the same input.
     let core_expr = desugarer.desugar_tagged(expr, heap).map_err(|e| {
-        EvalError::InternalError(format!("quasiquote: failed to desugar unquote: {}", e))
+        EvalError::InvalidSyntax(match e {
+            patina_frontend::DesugarError::InvalidSyntax(message) => message,
+            other => other.to_string(),
+        })
     })?;
     eval_cps(&core_expr, env.clone(), evaluator)
 }

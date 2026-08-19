@@ -82,6 +82,17 @@ impl From<patina_frontend::DesugarError> for VmBackendError {
     }
 }
 
+impl From<crate::error::CompileError> for VmBackendError {
+    fn from(e: crate::error::CompileError) -> Self {
+        match e {
+            // Reported as what it is: a desugar failure the compiler happened
+            // to be the one to hit (an unquote inside a quasiquote template).
+            crate::error::CompileError::Desugar(message) => VmBackendError::Desugar(message),
+            other => VmBackendError::Compile(other.to_string()),
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // VmBackend
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,8 +231,7 @@ impl VmBackend {
         // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
         let registry = Rc::clone(&self.state.borrow().primitive_registry);
         let (top, nested) =
-            compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)
-                .map_err(|e| VmBackendError::Compile(e.to_string()))?;
+            compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)?;
 
         let top_id = top.id;
         let mut state = self.state.borrow_mut();
@@ -435,8 +445,7 @@ impl VmBackend {
 
             let registry = Rc::clone(&self.state.borrow().primitive_registry);
             let (top, nested) =
-                compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)
-                    .map_err(|e| VmBackendError::Compile(e.to_string()))?;
+                compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)?;
 
             disassemble(&top, &nested);
         }
