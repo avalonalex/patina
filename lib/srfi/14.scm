@@ -415,11 +415,17 @@
     (cond ((<= lower i) (%set1! bs i) (lp (- i 1))))))
 
 (define (ucs-range->char-set lower upper . rest)
+  ;; PATINA LOCAL EDIT: %default-base takes the maybe-base *rest list* (its
+  ;; pair? test is how it tells "given" from "defaulted"), as the four other
+  ;; callers pass it. This one has error? in front, so the base's rest list
+  ;; is the tail. Handing it the char-set itself silently defaulted the base
+  ;; to empty — caught by (srfi 14 test), upstream's own suite. Deviation
+  ;; recorded in lib/srfi/PROVENANCE.md.
   (let ((error? (if (not (null? rest)) (car rest) #f))
-        (base-cs (if (= (length rest) 2) (list-ref rest 1) (string->char-set ""))))
-    (let ((bs (%default-base base-cs ucs-range->char-set)))
-      (%ucs-range->char-set! lower upper error? bs ucs-range->char-set)
-      (make-char-set bs))))
+        (bs (%default-base (if (pair? rest) (cdr rest) '())
+                           ucs-range->char-set)))
+    (%ucs-range->char-set! lower upper error? bs ucs-range->char-set)
+    (make-char-set bs)))
 
 (define (ucs-range->char-set! lower upper error? base-cs)
   (%ucs-range->char-set! lower upper error?

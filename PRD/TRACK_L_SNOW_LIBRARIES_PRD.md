@@ -566,6 +566,16 @@ vendored one is Jaffer's SLIB implementation, so comparing them measures a delib
 than a defect. Keeping both would also have meant answering, for every corpus run, which copy a test
 resolved against.
 
+**Postscript (2026-08-19): the exclusion had a side effect nothing caught for a week.** The dropped
+packages' snowballs ship their test suites, and while they were vendored those suites ran in the
+compat harness; excluding the packages silently removed the suites from everything that runs, so
+five bundled chibi libraries had no upstream tests anywhere. Closed by restoring the suites to
+`scheme_tests/upstream/` (four run clean — string 52, optional 11, diff 7, term ansi 234;
+filesystem is FFI-blocked and recorded as such), running `(srfi 14 test)` alongside them — which
+immediately caught a real defect, §6's `ucs-range->char-set` entry — and adding a guard test
+(`every_bundled_library_has_a_suite_or_a_recorded_reason`) that walks `lib/srfi` + `lib/chibi`
+against the suite table plus a `NO_SUITE` reasons list, so a future bundling cannot reopen the hole.
+
 **Target state:** every bundled library is a faithful import of its upstream reference rather than a
 subset or a local adaptation; the **bundled version is canonical**; and the vendored duplicate is
 gone from the corpus, so there is no shadowing question to answer and no second copy to keep in sync.
@@ -1099,6 +1109,7 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| SRFI 14 `ucs-range->char-set` discarded its base set | 2026-08-19 |
 | `(scheme r5rs)` did not export the R5RS syntax keywords | 2026-08-19 |
 | The lexer rejected a non-ASCII identifier | 2026-08-16 |
 | A library could not re-export a core syntactic keyword | 2026-08-16 |

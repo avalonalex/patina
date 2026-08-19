@@ -27,6 +27,14 @@ Patina's own, because upstream's imports `(chibi ast)` and relies on chibi's
 C-backed SRFI 69; the resulting deviations are documented in its header,
 which is where this tree records deviation.
 
+`(srfi 14)`'s `14.scm` carries **one marked local fix** (2026-08-19, `PATINA
+LOCAL EDIT` at the site, pinned post-edit): upstream's `ucs-range->char-set`
+passed its extracted base char-set to `%default-base`, which expects the
+maybe-base *rest list* — its `pair?` test read the record as "no base given"
+and silently defaulted it to empty. Caught by chibi's `(srfi 14 test)` (72
+assertions, `scheme_tests/upstream/`) the day that suite was restored; the
+write-up is in `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md`.
+
 `(srfi 69)` is **not** byte-identical and is deliberately absent from the table
 above: `69/srfi-69-impl.scm` carries three marked local fixes, each `PATINA
 DEVIATION` at its site, and the reasoning stays in the file, where anyone

@@ -140,32 +140,165 @@ fn check_suite(library: &str, expected_failures: i64, min_assertions: i64) {
     );
 }
 
-macro_rules! suite_test {
-    ($name:ident, $library:expr, $expected_failures:expr, $min_assertions:expr) => {
-        #[test]
-        fn $name() {
-            check_suite($library, $expected_failures, $min_assertions);
-        }
+/// One `#[test]` per suite, plus a `COVERED` table naming the bundled
+/// library each suite tests — the guard test below walks `lib/` against it,
+/// so a library can only join the bundle by adding a row here or a recorded
+/// reason there.
+macro_rules! suite_tests {
+    ($(($name:ident, $covers:expr, $library:expr, $expected_failures:expr, $min_assertions:expr)),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                check_suite($library, $expected_failures, $min_assertions);
+            }
+        )*
+        /// The bundled libraries whose upstream suites run above.
+        const COVERED: &[&str] = &[$($covers),*];
     };
 }
 
-// The expectations table: (test name, library, expected failures, minimum
-// assertions run). Not a skip list — a non-zero failure entry is a defect in
-// *our* port, recorded rather than hidden, and the assertion floor is the
-// count the suite ran when the expectation was recorded (2026-08-12).
-suite_test!(srfi_151_bitwise, "(srfi 151 test)", 0, 145);
-suite_test!(srfi_143_fixnum, "(srfi 143 test)", 0, 141);
-suite_test!(srfi_132_sort, "(srfi 132 test)", 0, 221);
-suite_test!(srfi_133_vector, "(srfi 133 test)", 0, 93);
-suite_test!(srfi_113_set, "(srfi 113 test)", 0, 253);
-// Adapted, not verbatim: its two chibi char-set imports were replaced by
-// `(srfi 14)`, test bodies untouched. Why, in
-// scheme_tests/upstream/README.md.
-suite_test!(srfi_130_string, "(srfi 130 test)", 0, 219);
-suite_test!(srfi_158_generator, "(srfi 158 test)", 0, 76);
-// The other adapted suite: imports adapted, test bodies untouched. Why, in
-// scheme_tests/upstream/README.md.
-suite_test!(srfi_125_hash_table, "(srfi 125 test)", 0, 74);
+// The expectations table: (test name, library under test, suite library,
+// expected failures, minimum assertions run). Not a skip list — a non-zero
+// failure entry is a defect in *our* port, recorded rather than hidden, and
+// the assertion floor is the count the suite ran when the expectation was
+// recorded (2026-08-12; chibi rows and SRFI 14, 2026-08-19).
+suite_tests! {
+    (srfi_151_bitwise, "srfi 151", "(srfi 151 test)", 0, 145),
+    (srfi_143_fixnum, "srfi 143", "(srfi 143 test)", 0, 141),
+    (srfi_132_sort, "srfi 132", "(srfi 132 test)", 0, 221),
+    (srfi_133_vector, "srfi 133", "(srfi 133 test)", 0, 93),
+    (srfi_113_set, "srfi 113", "(srfi 113 test)", 0, 253),
+    // Adapted, not verbatim: its two chibi char-set imports were replaced by
+    // `(srfi 14)`, test bodies untouched. Why, in
+    // scheme_tests/upstream/README.md.
+    (srfi_130_string, "srfi 130", "(srfi 130 test)", 0, 219),
+    (srfi_158_generator, "srfi 158", "(srfi 158 test)", 0, 76),
+    // The other adapted suite: imports adapted, test bodies untouched. Why,
+    // in scheme_tests/upstream/README.md.
+    (srfi_125_hash_table, "srfi 125", "(srfi 125 test)", 0, 74),
+    // Its first run caught ucs-range->char-set discarding its base set —
+    // see the note at that procedure in lib/srfi/14.scm.
+    (srfi_14_char_set, "srfi 14", "(srfi 14 test)", 0, 72),
+    // The chibi suites are from the same pinned snowballs as the bundled
+    // libraries themselves (lib/chibi/PROVENANCE.md), restored after the
+    // corpus stopped vendoring packages Patina bundles — which had silently
+    // dropped these suites from everything that runs. string-test is
+    // verbatim; the other three had their inline framework shims replaced
+    // by the real (chibi test), documented in scheme_tests/upstream/README.md.
+    (chibi_string, "chibi string", "(chibi string-test)", 0, 52),
+    (chibi_optional, "chibi optional", "(chibi optional-test)", 0, 11),
+    (chibi_diff, "chibi diff", "(chibi diff-test)", 0, 7),
+    (chibi_term_ansi, "chibi term ansi", "(chibi term ansi-test)", 0, 234),
+}
+
+/// Every library bundled under `lib/srfi` and `lib/chibi` either has its
+/// upstream suite in the table above or a recorded reason here for not
+/// having one. Before this guard, "add a suite when Patina bundles the
+/// library" was a comment, and the corpus builder's bundled-package
+/// exclusion (L4) silently dropped five chibi suites from everything that
+/// runs — nothing noticed until an audit.
+///
+/// Scope is the two ported-third-party trees. `lib/scheme` is the R7RS
+/// surface (gated by the chibi R7RS suite) plus alias libraries whose
+/// backing SRFIs are what this table covers (drift-checked in
+/// `r7rs_large_aliases.rs`); `lib/r6rs`/`lib/rnrs` await their own vendored
+/// suite (Track L §L5.3).
+///
+/// Each reason is a claim to re-verify when circumstances change, not a
+/// permanent pass — several name the event that retires them.
+const NO_SUITE: &[(&str, &str)] = &[
+    (
+        "srfi 1",
+        "upstream suite imports (chibi), chibi's implementation core",
+    ),
+    ("srfi 8", "no upstream suite exists (receive: one macro)"),
+    (
+        "srfi 23",
+        "re-export shim over (scheme base)'s error; reexport_shims.rs pins it",
+    ),
+    (
+        "srfi 27",
+        "upstream suite imports (scheme flonum) — SRFI 144, not bundled; add the suite when it lands",
+    ),
+    (
+        "srfi 33",
+        "rename shim over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the renames",
+    ),
+    (
+        "srfi 60",
+        "rename shim over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the MSB-first deviations",
+    ),
+    (
+        "srfi 69",
+        "upstream suite imports (chibi), chibi's implementation core",
+    ),
+    (
+        "srfi 98",
+        "re-export shim over (scheme process-context); reexport_shims.rs pins it",
+    ),
+    ("srfi 111", "no upstream suite exists (boxes)"),
+    (
+        "srfi 128",
+        "upstream suite uses SRFI 162's comparator constants (boolean-comparator …), which chibi folds into its (srfi 128) and Patina does not bundle — same follow-up as the SRFI 125 note in scheme_tests/upstream/README.md",
+    ),
+    (
+        "srfi 142",
+        "rename shim over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the bitwise-if swap",
+    ),
+    (
+        "chibi filesystem",
+        "upstream suite opens a raw file descriptor before its directory tests, hitting the bundled FFI stub outside any test form, which aborts the run; add the suite when FFI lands",
+    ),
+    (
+        "chibi test",
+        "the framework itself — exercised by every suite above, the self-check below, and the chibi R7RS gate",
+    ),
+];
+
+#[test]
+fn every_bundled_library_has_a_suite_or_a_recorded_reason() {
+    let lib_root = repo_root().join("lib");
+    let mut bundled: Vec<String> = Vec::new();
+    for tree in ["srfi", "chibi"] {
+        for file in common::files_under(&lib_root.join(tree)) {
+            if file.extension().is_some_and(|e| e == "sld") {
+                let rel = file.strip_prefix(&lib_root).expect("under lib/");
+                let name: Vec<_> = rel
+                    .with_extension("")
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                bundled.push(name.join(" "));
+            }
+        }
+    }
+    assert!(
+        !bundled.is_empty(),
+        "found no bundled .sld files — wrong root?"
+    );
+
+    let excused: Vec<&str> = NO_SUITE.iter().map(|(lib, _)| *lib).collect();
+    for lib in &bundled {
+        let covered = COVERED.contains(&lib.as_str());
+        let has_excuse = excused.contains(&lib.as_str());
+        assert!(
+            covered || has_excuse,
+            "({lib}) is bundled but its upstream suite does not run: add a suite_tests! \
+             row (see scheme_tests/upstream/README.md) or a NO_SUITE reason"
+        );
+        assert!(
+            !(covered && has_excuse),
+            "({lib}) is both suited and excused — delete its NO_SUITE entry"
+        );
+    }
+    // A stale excuse is as misleading as a missing one.
+    for lib in &excused {
+        assert!(
+            bundled.iter().any(|b| b == lib),
+            "NO_SUITE names ({lib}), which is not bundled — delete the entry"
+        );
+    }
+}
 
 /// Proves the harness can actually report a failure — and actually counts.
 ///
