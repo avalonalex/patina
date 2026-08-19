@@ -410,6 +410,17 @@ fn classify(out: &Captured, mode: &str) -> Status {
         return Status::UnboundIdentifier(unbound);
     }
 
+    // A suite that reported failures is a `wrong-result` even if it also
+    // reached an FFI stub. Checked before the stub classification, not after:
+    // both orders lose information, and this one errs by blaming us for
+    // something FFI may have caused, while the other excuses a genuine failure
+    // as out-of-scope. Overstating our own defects creates work; understating
+    // them creates false confidence, which is the thing this harness exists
+    // not to produce (audit E3).
+    if mode == "test" && test_suite_failed(&out.stdout) {
+        return Status::WrongResult;
+    }
+
     // A bundled library can be honest about its own limits. `(chibi filesystem)`
     // implements its portable half and stubs the POSIX half with this marker
     // (lib/chibi/filesystem.sld), so a package that reaches one of those stubs
@@ -418,10 +429,6 @@ fn classify(out: &Captured, mode: &str) -> Status {
     // as a runtime-error, i.e. as our defect.
     if let Some(stubs) = extract_ffi_stubs(parts) {
         return Status::OutOfScope(stubs);
-    }
-
-    if mode == "test" && test_suite_failed(&out.stdout) {
-        return Status::WrongResult;
     }
 
     // Resilient test runs always exit 0, so "Error:" on stderr is the only
@@ -518,14 +525,59 @@ fn extract_unbound_identifiers(parts: [&str; 2]) -> Vec<String> {
     found
 }
 
-/// Did a `(chibi test)` run report failures? The summary prints lines like
-/// "3 failures (2.1%)." / "1 error." and per-case "FAIL: name" lines.
+/// Did the suite report failures?
+///
+/// Three frameworks reach this and they say it three ways, so this knows all
+/// three. It is the only thing standing between a failing suite and a `pass`
+/// row, which makes a shape it does not know a *false green* rather than a
+/// missing detail.
+///
+/// `(chibi test)` prints per-case `FAIL: name` lines and a summary
+/// `3 failures (2.1%).` / `1 error.` — the count *before* the word.
+///
+/// SRFI 64's reference runner (`compat/vendor/srfi-64`) prints
+/// `# of failures             3`: the count *after* the phrase, lowercase,
+/// with the per-case detail going to a `.log` file rather than to stdout, and
+/// exit code 0 either way. Nothing in the shape above matched it, so a
+/// deliberately failing one-test suite classified as `Pass` (audit E1). Two
+/// of its neighbours must *not* count — `# of expected passes` and
+/// `# of expected failures`, the latter being an xfail, which the old shape
+/// already got right — while `# of unexpected successes` (an xpass) must.
+///
+/// SRFI 78's `check` prints `*** failed ***` per case and a summary
+/// `; *** checks *** : 9 correct, 1 failed.` — the count before the word
+/// again, but spelled `failed`, and printed as `0 failed.` on success. So the
+/// count has to be *read* rather than merely found, which is why the
+/// before-the-word test rejects a zero.
 fn test_suite_failed(stdout: &str) -> bool {
-    stdout.contains("FAIL")
-        || [" failure", " error"].iter().any(|keyword| {
-            stdout
-                .match_indices(keyword)
-                .any(|(i, _)| stdout[..i].ends_with(|c: char| c.is_ascii_digit()))
+    if stdout.contains("FAIL") || stdout.contains("*** failed ***") {
+        return true;
+    }
+    let nonzero_count_before = |keyword: &str| {
+        stdout.match_indices(keyword).any(|(i, _)| {
+            stdout[..i]
+                .chars()
+                .rev()
+                .take_while(char::is_ascii_digit)
+                .any(|c| c != '0')
+        })
+    };
+    if [" failure", " error", " failed"]
+        .iter()
+        .any(|keyword| nonzero_count_before(keyword))
+    {
+        return true;
+    }
+    ["# of failures", "# of unexpected successes", "# of unexpected passes"]
+        .iter()
+        .any(|phrase| {
+            stdout.match_indices(phrase).any(|(i, _)| {
+                stdout[i + phrase.len()..]
+                    .split_whitespace()
+                    .next()
+                    .and_then(|count| count.parse::<u64>().ok())
+                    .is_some_and(|count| count > 0)
+            })
         })
 }
 
@@ -814,6 +866,73 @@ mod tests {
             true,
         );
         assert_eq!(classify(&out, "test"), Status::Pass);
+    }
+
+    /// The shape that made this detector's own coverage the audit's E1
+    /// finding: SRFI 64 puts the count *after* the phrase, lowercase, and
+    /// exits 0. A deliberately failing one-test suite, run exactly as the
+    /// harness runs it, produced this and classified as `Pass`.
+    #[test]
+    fn classifies_srfi_64_failures() {
+        let out = captured(
+            "%%%% Starting test example  (Writing full log to \"example.log\")\n\
+             # of expected passes      2\n\
+             # of failures             1\n",
+            "",
+            true,
+        );
+        assert_eq!(classify(&out, "test"), Status::WrongResult);
+    }
+
+    /// The near-miss on either side of it. `# of expected failures` is an
+    /// xfail — a test that was *supposed* to fail — and is not a failure;
+    /// `# of unexpected successes` is an xpass and is.
+    #[test]
+    fn srfi_64_expected_failures_pass_and_xpasses_do_not() {
+        let xfail = captured(
+            "# of expected passes      2\n# of expected failures    1\n",
+            "",
+            true,
+        );
+        assert_eq!(classify(&xfail, "test"), Status::Pass);
+
+        let xpass = captured(
+            "# of expected passes      2\n# of unexpected successes 1\n",
+            "",
+            true,
+        );
+        assert_eq!(classify(&xpass, "test"), Status::WrongResult);
+    }
+
+    /// SRFI 78 spells it `failed`, prints the count before the word, and
+    /// prints `0 failed.` on success — so the count has to be read.
+    #[test]
+    fn classifies_srfi_78_failures() {
+        let failing = captured("; *** checks *** : 9 correct, 1 failed.\n", "", true);
+        assert_eq!(classify(&failing, "test"), Status::WrongResult);
+
+        let passing = captured("; *** checks *** : 10 correct, 0 failed.\n", "", true);
+        assert_eq!(classify(&passing, "test"), Status::Pass);
+    }
+
+    /// A suite that fails *and* reaches an FFI stub is a `wrong-result`, not
+    /// `out-of-scope`: the excusing bucket must not swallow a real failure.
+    #[test]
+    fn a_failing_suite_outranks_an_ffi_stub() {
+        let out = captured(
+            "FAIL: something\n",
+            "Error: requires FFI, unavailable in Patina: file-owner",
+            true,
+        );
+        assert_eq!(classify(&out, "test"), Status::WrongResult);
+
+        // With no failure, the stub still classifies as out-of-scope.
+        let stubbed = captured(
+            "",
+            "Error: requires FFI, unavailable in Patina: file-owner",
+            true,
+        );
+        assert!(matches!(classify(&stubbed, "test"), Status::OutOfScope(_)));
     }
 
     #[test]

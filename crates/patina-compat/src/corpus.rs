@@ -135,6 +135,14 @@ fn parse_package(
                 let path = root.join(&name);
                 if path.is_file() {
                     test_script = Some(path);
+                } else {
+                    // A package that declares a test and does not ship it
+                    // silently becomes a probe-mode row — which still passes,
+                    // and which nothing else would notice. A typo here would
+                    // drop a suite and improve the score (audit E2).
+                    eprintln!(
+                        "warning: {slug}: package.scm names test \"{name}\",                          which is not there — running it as a probe instead"
+                    );
                 }
             }
         }
