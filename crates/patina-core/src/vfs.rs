@@ -225,6 +225,37 @@ impl MemoryFs {
         self.files.lock().unwrap().get(path).cloned()
     }
 
+    /// Names of everything directly under `path`, whether or not `path` was
+    /// ever created as a directory here.
+    ///
+    /// `read_dir` gates on `is_dir` because a `MemoryFs` used alone has to be
+    /// able to fail the way the native one does. `OverlayFs` needs the
+    /// ungated answer: a file written into a directory that exists only in the
+    /// *base* is a real entry of that directory, and gating it away hid every
+    /// such write from a listing.
+    pub fn children_of(&self, path: &Path) -> Vec<String> {
+        let child_name = |p: &Path| -> Option<String> {
+            (p.parent() == Some(path))
+                .then(|| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .flatten()
+        };
+        let mut names: Vec<String> = self
+            .files
+            .lock()
+            .unwrap()
+            .keys()
+            .filter_map(|p| child_name(p))
+            .collect();
+        names.extend(
+            self.dirs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|p| child_name(p)),
+        );
+        names
+    }
+
     /// Read back a text file (for test assertions).
     pub fn get_text_file(&self, path: &Path) -> Option<String> {
         self.get_file(path)
@@ -318,26 +349,7 @@ impl FileSystem for MemoryFs {
                 format!("not a directory: {}", path.display()),
             ));
         }
-        let child_name = |p: &Path| -> Option<String> {
-            (p.parent() == Some(path))
-                .then(|| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                .flatten()
-        };
-        let mut names: Vec<String> = self
-            .files
-            .lock()
-            .unwrap()
-            .keys()
-            .filter_map(|p| child_name(p))
-            .collect();
-        names.extend(
-            self.dirs
-                .lock()
-                .unwrap()
-                .iter()
-                .filter_map(|p| child_name(p)),
-        );
-        Ok(names)
+        Ok(self.children_of(path))
     }
 
     fn create_dir(&self, path: &Path) -> io::Result<()> {
@@ -360,10 +372,20 @@ impl FileSystem for MemoryFs {
     }
 
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        // A file where a directory has to go is an error, not something to
+        // paper over: `mkdir -p` reports it and so does `std::fs`, and letting
+        // both exist at one path makes `is_file` and `is_dir` both true there.
+        {
+            let files = self.files.lock().unwrap();
+            if let Some(clash) = path.ancestors().find(|a| files.contains_key(*a)) {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("not a directory: {}", clash.display()),
+                ));
+            }
+        }
         let mut dirs = self.dirs.lock().unwrap();
-        let mut ancestors: Vec<&Path> = path.ancestors().collect();
-        ancestors.reverse();
-        for dir in ancestors {
+        for dir in path.ancestors() {
             dirs.insert(dir.to_path_buf());
         }
         Ok(())
@@ -479,7 +501,12 @@ impl FileSystem for OverlayFs {
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
-        let overlay = self.overlay.read_dir(path).unwrap_or_default();
+        // `children_of` rather than `read_dir`: a file written into a
+        // directory that exists only in the base is a real entry of that
+        // directory, and the overlay's own `read_dir` refuses a path it was
+        // never told is a directory — so an `unwrap_or_default` here dropped
+        // exactly the writes the overlay exists to hold.
+        let overlay = self.overlay.children_of(path);
         let base = if self.base.is_dir(path) {
             self.base.read_dir(path)?
         } else if overlay.is_empty() && !self.overlay.is_dir(path) {
@@ -499,7 +526,18 @@ impl FileSystem for OverlayFs {
         Ok(names)
     }
 
+    // The write side has to agree with the merged read side: a parent that
+    // `is_dir` says exists — because the base has it — must be a parent you
+    // can create in, and a directory you can change into. Consulting only the
+    // overlay made `create-directory` fail on a path the same filesystem had
+    // just reported as a directory.
     fn create_dir(&self, path: &Path) -> io::Result<()> {
+        if let Some(parent) = path.parent()
+            && !self.overlay.is_dir(parent)
+            && self.base.is_dir(parent)
+        {
+            self.overlay.create_dir_all(parent)?;
+        }
         self.overlay.create_dir(path)
     }
 
@@ -516,6 +554,11 @@ impl FileSystem for OverlayFs {
     }
 
     fn set_current_dir(&self, path: &Path) -> io::Result<()> {
+        // Same rule: a base-only directory is one this filesystem has, so it
+        // is one you can change into.
+        if !self.overlay.is_dir(path) && self.base.is_dir(path) {
+            self.overlay.create_dir_all(path)?;
+        }
         self.overlay.set_current_dir(path)
     }
 }
@@ -600,5 +643,100 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
         assert_eq!(line, "line1\n");
+    }
+
+    // ─── the directory API ───────────────────────────────────────────────
+    //
+    // Added with the fixes for the gaps the 2026-08-17 audit found (F8).
+    // Nothing covered this surface before, which is how three of them lasted.
+
+    #[test]
+    fn memory_read_dir_lists_files_and_subdirectories() {
+        let fs = MemoryFs::new();
+        fs.create_dir(Path::new("/d")).unwrap();
+        fs.create_dir(Path::new("/d/sub")).unwrap();
+        fs.add_text_file("/d/a.txt", "a");
+        let mut names = fs.read_dir(Path::new("/d")).unwrap();
+        names.sort();
+        assert_eq!(names, vec!["a.txt".to_string(), "sub".to_string()]);
+    }
+
+    #[test]
+    fn memory_read_dir_and_create_dir_fail_the_way_the_native_one_does() {
+        let fs = MemoryFs::new();
+        assert!(fs.read_dir(Path::new("/nope")).is_err());
+        // A missing parent, and an existing directory, are both errors.
+        assert!(fs.create_dir(Path::new("/a/b")).is_err());
+        fs.create_dir(Path::new("/a")).unwrap();
+        assert!(fs.create_dir(Path::new("/a")).is_err());
+    }
+
+    #[test]
+    fn memory_create_dir_all_refuses_to_bury_a_file() {
+        let fs = MemoryFs::new();
+        fs.add_text_file("/a", "i am a file");
+        // Both the path itself and a path *through* it.
+        assert!(fs.create_dir_all(Path::new("/a")).is_err());
+        assert!(fs.create_dir_all(Path::new("/a/b/c")).is_err());
+        assert!(!fs.is_dir(Path::new("/a")));
+    }
+
+    #[test]
+    fn memory_remove_dir_requires_an_empty_directory() {
+        let fs = MemoryFs::new();
+        fs.create_dir_all(Path::new("/d")).unwrap();
+        fs.add_text_file("/d/a.txt", "a");
+        assert!(fs.remove_dir(Path::new("/d")).is_err());
+        fs.remove_file(Path::new("/d/a.txt")).unwrap();
+        fs.remove_dir(Path::new("/d")).unwrap();
+        assert!(!fs.is_dir(Path::new("/d")));
+    }
+
+    /// A file the overlay wrote into a directory only the base has is still an
+    /// entry of that directory. The overlay's own `read_dir` refuses a path it
+    /// was never told is a directory, so listing through it dropped the write.
+    #[test]
+    fn overlay_read_dir_shows_writes_into_a_base_only_directory() {
+        let base = MemoryFs::new();
+        base.create_dir(Path::new("/b")).unwrap();
+        base.add_text_file("/b/from-base.txt", "base");
+        let fs = OverlayFs::new(Arc::new(base));
+        fs.overlay().add_text_file("/b/from-overlay.txt", "overlay");
+
+        let mut names = fs.read_dir(Path::new("/b")).unwrap();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["from-base.txt".to_string(), "from-overlay.txt".to_string()]
+        );
+    }
+
+    /// The write side has to agree with the merged read side.
+    #[test]
+    fn overlay_can_write_into_and_enter_a_base_only_directory() {
+        let base = MemoryFs::new();
+        base.create_dir(Path::new("/b")).unwrap();
+        let fs = OverlayFs::new(Arc::new(base));
+
+        assert!(fs.is_dir(Path::new("/b")), "the merged view has it");
+        fs.create_dir(Path::new("/b/sub")).unwrap();
+        assert!(fs.is_dir(Path::new("/b/sub")));
+        fs.set_current_dir(Path::new("/b")).unwrap();
+        assert_eq!(fs.current_dir().unwrap(), PathBuf::from("/b"));
+    }
+
+    /// Removals never reach the base — the property every test that points a
+    /// destructive operation at a real path relies on.
+    #[test]
+    fn overlay_removals_leave_the_base_alone() {
+        let base = MemoryFs::new();
+        base.create_dir(Path::new("/b")).unwrap();
+        base.add_text_file("/b/keep.txt", "keep");
+        let fs = OverlayFs::new(Arc::new(base.clone()));
+
+        assert!(fs.remove_file(Path::new("/b/keep.txt")).is_err());
+        assert!(fs.remove_dir(Path::new("/b")).is_err());
+        assert!(base.file_exists(Path::new("/b/keep.txt")));
+        assert!(base.is_dir(Path::new("/b")));
     }
 }

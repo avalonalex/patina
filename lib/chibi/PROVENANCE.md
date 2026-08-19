@@ -102,6 +102,16 @@ same reason. Those need the FFI layer (`PRD/FFI_DESIGN.md`), not more Scheme,
 and raise a marker string that `crates/patina-compat` classifies as
 out-of-scope rather than as our defect.
 
+The directory primitives the branch is built on **raise where chibi's return
+`#f`** — `create-directory`, `delete-directory` and `change-directory` — and
+`directory-files` raises where chibi returns `'()` for an unreadable
+directory. Deliberate, and recorded here because it is what chibi-ecosystem
+code notices: anything that *branches* on `#f`, including upstream's own
+`(or (file-directory? dir) … (create-directory dir))` idiom in
+`create-directory*`, gets an exception instead. Everything is catchable and
+panic-free. The reasoning is at the primitives themselves, in
+`crates/patina-primitives/src/primitives/io/directory.rs`.
+
 `delete-file-hierarchy` is the branch's one deviation from upstream *behaviour*
 (audit 2026-08-17, B1/B2). Upstream refuses `""` and `"/"` before touching
 anything and honours an `ignore-errors?` argument; the branch had neither, so a

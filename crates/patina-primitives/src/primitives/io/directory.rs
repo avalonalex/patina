@@ -9,6 +9,22 @@
 //! Names follow `(chibi filesystem)`, which is what the ecosystem imports:
 //! `directory-files` rather than `read-dir`, `current-directory` as a getter
 //! with `change-directory` as the separate setter.
+//!
+//! **Failures raise here; chibi's return `#f`.** `create-directory`,
+//! `delete-directory` and `change-directory` answer `#f` on failure upstream,
+//! and `directory-files` answers `'()` for a directory it cannot read. Every
+//! one of these raises a catchable `IOError` instead, which is a deliberate
+//! deviation and a recorded one (audit F1): a silent `#f` is how a caller ends
+//! up deleting the wrong tree, and the raising form is what Patina's own
+//! callers are written against.
+//!
+//! The cost is real and belongs here rather than in a commit message:
+//! chibi-ecosystem code that *branches* on `#f` gets an exception instead —
+//! including upstream's own `create-directory*` idiom, `(or (file-directory?
+//! dir) … (create-directory dir))`. `lib/chibi/filesystem.sld`'s `(patina …)`
+//! branch is written against the raising form (its `delete-file-hierarchy`
+//! spells tolerance with `guard` rather than a return-value test), and
+//! `lib/chibi/PROVENANCE.md` records it for that tree.
 
 use crate::apply_context::ApplyContext;
 use patina_core::{Heap, TaggedValue};

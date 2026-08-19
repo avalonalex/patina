@@ -102,10 +102,24 @@ pub struct Lexer {
     prev_token_end: usize,
 }
 
+/// Drop a leading U+FEFF.
+///
+/// A byte-order mark is what a Windows editor puts at the head of a UTF-8
+/// file, and it is not whitespace and not a delimiter, so it started an
+/// identifier: a file that differs from a working one only by its first three
+/// bytes failed with `unbound variable: ` and an empty-looking name. R7RS has
+/// nothing to say about it and neither does chibi, which reads it the same
+/// way, but a mark that means "this is UTF-8" is not program text under any
+/// reading. Only a *leading* one is dropped — anywhere else U+FEFF is a real
+/// (if inadvisable) character and stays.
+fn strip_byte_order_mark(input: &str) -> Vec<char> {
+    input.strip_prefix('\u{feff}').unwrap_or(input).chars().collect()
+}
+
 impl Lexer {
     pub fn new(input: &str) -> Self {
         Lexer {
-            input: input.chars().collect(),
+            input: strip_byte_order_mark(input),
             position: 0,
             fold_case: false,
             line: 1,
@@ -120,7 +134,7 @@ impl Lexer {
     /// Identifiers will be folded to lowercase, matching R7RS `#!fold-case` behavior.
     pub fn new_case_insensitive(input: &str) -> Self {
         Lexer {
-            input: input.chars().collect(),
+            input: strip_byte_order_mark(input),
             position: 0,
             fold_case: true,
             line: 1,

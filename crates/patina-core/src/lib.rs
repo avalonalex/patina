@@ -54,7 +54,7 @@ pub use record_type::{RecordTypeDescriptor, next_record_type_id};
 pub use scope::{ScopeId, ScopeSet};
 
 // TaggedValue and heap types for compact value representation
-pub use debug_format::{format_tagged, format_tagged_with_scopes};
+pub use debug_format::{escape_invisible, format_tagged, format_tagged_with_scopes};
 pub use heap::gc::{
     ArenaCounts, Collector, GcController, GcDeferGuard, GcMode, GcRoots, GcStats, GcVisitor,
     MarkBits, MarkSweepCollector, run_mark_phase,

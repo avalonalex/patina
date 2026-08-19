@@ -111,3 +111,39 @@ fn test_three_levels_of_nesting() {
         "(l1 7)"
     );
 }
+
+/// A `guard` whose clauses all fail re-raises **in the raiser's dynamic
+/// extent** (R7RS §4.2.7), so a `dynamic-wind` between the two guards should
+/// be re-entered before the re-raise and exited again after it.
+///
+/// Patina does not rewind: it re-raises where the `guard` stands. Both
+/// backends agree, so this is a deviation from the report and from chibi
+/// rather than a divergence — recorded here because it is observable, and
+/// only with side-effecting wind thunks (audit F9).
+///
+/// ```text
+/// Patina  => (in out)          chibi => (in out in out)
+/// ```
+///
+/// Fixing it means the re-raise carrying a continuation back into the raiser's
+/// wind stack, which is `guard`'s expansion, not the handler machinery. The
+/// value the whole expression produces is the same either way, which is why
+/// nothing else notices.
+#[test]
+fn test_a_guard_re_raise_does_not_rewind_into_the_raiser() {
+    assert_eq!(
+        eval(
+            "(import (scheme base))
+             (define log '())
+             (define result
+               (guard (e ((symbol? e) (list 'outer e)))
+                 (guard (e ((string? e) 'inner))
+                   (dynamic-wind
+                     (lambda () (set! log (cons 'in log)))
+                     (lambda () (raise 'boom))
+                     (lambda () (set! log (cons 'out log)))))))
+             (list result (reverse log))"
+        ),
+        "((outer boom) (in out))"
+    );
+}

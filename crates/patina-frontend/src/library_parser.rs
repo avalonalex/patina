@@ -16,6 +16,19 @@ use crate::ParseError;
 use crate::cond_expand::{parse_library_name_tagged, tagged_list_to_vec};
 use patina_core::{SharedHeap, TaggedValue};
 
+/// The declaration keywords this parser implements — the same list the
+/// dispatch in `parse_declaration_tagged` matches on, named here so a
+/// malformed one can be reported as itself rather than as "unknown".
+const KNOWN_DECLARATIONS: [&str; 7] = [
+    "export",
+    "import",
+    "begin",
+    "include",
+    "include-ci",
+    "cond-expand",
+    "include-library-declarations",
+];
+
 // Re-export library types from runtime (they moved there to fix dependency issues)
 pub use patina_runtime::library_loader::{ExportSpec, ImportSet};
 
@@ -163,8 +176,13 @@ impl LibraryDefinition {
         let list = match tagged_list_to_vec(tv, heap) {
             Ok(list) => list,
             Err(_) => {
-                let described = heap.borrow().type_name(tv).to_string();
-                return Self::skip_or_reject_declaration(&described);
+                // The shape test fires before anything looks at the head, so a
+                // *known* keyword in a malformed declaration was reported as
+                // "unknown library declaration `pair`" and its exports quietly
+                // dropped — the importer then failed on an unrelated unbound
+                // variable. Name the keyword when the head still has one; the
+                // lenient policy is unchanged, only what it says (F3).
+                return Self::skip_or_reject_declaration(&Self::describe_malformed(tv, heap));
             }
         };
 
@@ -228,11 +246,30 @@ impl LibraryDefinition {
                     body_elements.push(BodyElement::IncludeLibraryDeclarations { paths });
                     Ok(())
                 }
-                _ => Self::skip_or_reject_declaration(&keyword),
+                _ => Self::skip_or_reject_declaration(&format!("unknown declaration `{keyword}`")),
             }
         } else {
             let described = heap.borrow().type_name(list[0]).to_string();
-            Self::skip_or_reject_declaration(&described)
+            Self::skip_or_reject_declaration(&format!("a declaration headed by a {described}"))
+        }
+    }
+
+    /// Describe a declaration that is not a proper list, naming its keyword
+    /// when the head is one this parser knows.
+    fn describe_malformed(tv: TaggedValue, heap: &SharedHeap) -> String {
+        let h = heap.borrow();
+        let head = h.try_pair(tv).map(|(car, _)| car);
+        let keyword = head.and_then(|car| h.get_symbol_name(car));
+        match keyword {
+            Some(keyword) if KNOWN_DECLARATIONS.contains(&keyword) => format!(
+                "malformed `{keyword}` declaration; everything it would have \
+                 contributed goes with it"
+            ),
+            Some(keyword) => format!("unknown declaration `{keyword}`"),
+            None => format!(
+                "a declaration that is not a proper list (a {})",
+                h.type_name(tv)
+            ),
         }
     }
 
@@ -246,14 +283,10 @@ impl LibraryDefinition {
     fn skip_or_reject_declaration(described: &str) -> Result<(), ParseError> {
         if strict_library_syntax() {
             Err(ParseError::InvalidSyntax(format!(
-                "Unknown library declaration: {}",
-                described
+                "define-library: rejected {described}"
             )))
         } else {
-            eprintln!(
-                "warning: ignoring unknown library declaration `{}` in define-library",
-                described
-            );
+            eprintln!("warning: define-library: ignoring {described}");
             Ok(())
         }
     }

@@ -24,7 +24,7 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum EvalError {
-    #[error("Undefined variable: {0}")]
+    #[error("Undefined variable: {}", patina_core::escape_invisible(_0))]
     UndefinedVariable(String),
 
     #[error("Not a procedure: {0}")]

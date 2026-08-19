@@ -7,7 +7,7 @@ use thiserror::Error;
 /// Errors produced during bytecode compilation (the 5-pass pipeline).
 #[derive(Debug, Error)]
 pub enum CompileError {
-    #[error("unbound variable: `{name}`")]
+    #[error("unbound variable: `{}`", patina_core::escape_invisible(name))]
     UnboundVariable { name: Symbol },
 
     #[error("invalid syntax at {location}: {message}")]
@@ -33,7 +33,7 @@ pub enum CompileError {
 /// Errors produced during VM execution.
 #[derive(Debug, Error)]
 pub enum VmError {
-    #[error("unbound variable: `{name}`")]
+    #[error("unbound variable: `{}`", patina_core::escape_invisible(name))]
     UnboundVariable { name: Symbol },
 
     #[error("wrong number of arguments: expected {expected}, got {got}")]

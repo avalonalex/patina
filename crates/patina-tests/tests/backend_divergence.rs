@@ -371,3 +371,36 @@ fn unbound_variable_is_catchable_in_every_position() {
         );
     }
 }
+
+// ─── the nested trampoline, in its resource-corruption form ──────────────────
+
+/// Tree-walker: `I/O error: port is closed`.
+///
+/// A `call/cc` retry loop inside a `call-with-port` callback. The callback has
+/// not returned — the continuation resumes *inside* it — but the tree-walker's
+/// nested trampoline reads the invoke as an escape and closes the port, so the
+/// next write in the same callback fails on a port the program still holds.
+///
+/// The root cause is the already-tracked nested-trampoline defect (Track L §6):
+/// wind and callback thunks run on a trampoline that does not share the outer
+/// one's state, so what came back through Rust cannot be told from what
+/// escaped. What is new here is the *manifestation* — a resource closed while
+/// still in use, rather than an error routed to the wrong handler — which is
+/// why it earns its own row (audit F6). VM and chibi both answer `"012"`.
+#[test]
+fn call_with_port_closes_the_port_on_an_in_extent_continuation_invoke() {
+    assert_divergence(
+        r#"(call-with-port (open-output-string)
+             (lambda (p)
+               (let ((n 0))
+                 (let ((k (call/cc (lambda (c) c))))
+                   (write-string (number->string n) p)
+                   (set! n (+ n 1))
+                   (if (< n 3) (k k)))
+                 (get-output-string p))))"#,
+        On::Vm,
+        "\"012\"",
+        ErrorClass::AtRuntime,
+        GUARD_UNWIND_ORDER,
+    );
+}

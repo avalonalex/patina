@@ -718,7 +718,12 @@ instead of fabricating an empty one.
 established correct answer — chibi loops forever on that repro, so no reference could arbitrate.
 Establish the right answer first. Pinned in `crates/patina-tests/tests/callability.rs`.
 
-**VM: a raising parameter converter produces no output at all** — ❌ **open**. Found 2026-08-15.
+**VM: a raising parameter converter produces no output at all** — ✅ **fixed** (no longer reproduces;
+confirmed 2026-08-18 on `origin/main` as well as on the audit branch, so it was fixed by #73/#77
+rather than by anything after). `(guard (e (#t 'caught)) (p 9))` with a converter that raises for
+that value answers `caught` on both backends and leaves the parameter unchanged, which is what chibi
+does. Found 2026-08-15; the original text follows.
+
 `(guard (e (#t 'caught)) (p 9))` where `p`'s converter raises exits 0 having written nothing —
 neither an error nor a catch, where the tree-walker catches it.
 
