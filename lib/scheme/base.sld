@@ -164,6 +164,10 @@
     ;; === Dynamic bindings (§4.2.6) ===
     make-parameter
     parameterize  ;; macro defined in base/parameters.scm
+    ;; Internal primitives for the parameterize macro, exported for the same
+    ;; reason the record ones below are: a registered primitive no library
+    ;; exports is unreachable (`primitives_reachable_by_import`).
+    %parameter-convert %parameterize-swap!
 
     ;; === Record types (§5.5) ===
     ;; Internal primitives for define-record-type macro

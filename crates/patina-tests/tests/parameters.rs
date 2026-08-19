@@ -152,3 +152,81 @@ fn test_a_parameter_is_accepted_where_a_procedure_is_required() {
 fn test_a_parameter_prints_as_a_parameter() {
     assert_program_eval_to("(make-parameter 1)", "#<parameter>");
 }
+
+// ─── Convert once, before the wind (R7RS §4.2.6) ─────────────────────────────
+
+/// D2 — the restore must not run the converter again.
+///
+/// `parameterize` restored by calling the parameter, and calling a parameter
+/// converts. So the old value, which the converter had already produced, went
+/// through it a second time on the way out.
+#[test]
+fn test_the_converter_does_not_run_again_on_restore() {
+    assert_program_eval_to(
+        "(define p (make-parameter 10 (lambda (x) (* x 2))))
+         (define before (p))
+         (define inside (parameterize ((p 1)) (p)))
+         (list before inside (p))",
+        "(20 2 20)",
+    );
+    // A type-changing converter makes the second application *raise*, so the
+    // restore itself failed rather than merely producing the wrong value.
+    assert_program_eval_to(
+        "(define q (make-parameter 1 number->string))
+         (define inside (parameterize ((q 2)) (q)))
+         (list inside (q))",
+        r#"("2" "1")"#,
+    );
+}
+
+/// D1 — a `parameterize` that fails partway leaves nothing bound.
+///
+/// The bindings were installed inside `dynamic-wind`'s *before*-thunk, so a
+/// later one raising meant the after-thunk never ran and the earlier ones
+/// stayed installed for good.
+#[test]
+fn test_a_failed_parameterize_leaves_no_binding_changed() {
+    // A converter that raises — the failure a real parameter can have.
+    assert_program_eval_to(
+        "(define a (make-parameter 'a0))
+         (define b (make-parameter 'b0 (lambda (v) (if (eq? v 'bad) (error \"no\") v))))
+         (define caught (guard (e (#t 'caught)) (parameterize ((a 'a1) (b 'bad)) 'body)))
+         (list caught (a) (b))",
+        "(caught a0 b0)",
+    );
+    // An install that raises — the failure the standard ports have, since they
+    // are procedures over a thread-local and validate on assignment. #70 put
+    // every program write behind this: a leak here sent all later output to
+    // `sink` for the rest of the run.
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define sink (open-output-string))
+         (define caught
+           (guard (e (#t 'caught))
+             (parameterize ((current-output-port sink) (current-input-port 5)) 'body)))
+         (display \"visible\")
+         (list caught (string-length (get-output-string sink)))",
+        "(caught 0)",
+    );
+}
+
+/// The converter runs once per `parameterize`, not once per entry — which is
+/// what converting outside the wind buys beyond the two bugs above. A
+/// continuation that re-enters the body re-installs the value; it must not
+/// re-convert it.
+#[test]
+fn test_the_converter_runs_once_per_parameterize() {
+    assert_program_eval_to(
+        "(define calls 0)
+         (define p (make-parameter 0 (lambda (v) (set! calls (+ calls 1)) v)))
+         (define k #f)
+         (define n 0)
+         (parameterize ((p 1))
+           (call/cc (lambda (c) (set! k c)))
+           (set! n (+ n 1))
+           (if (< n 2) (k #f)))
+         (list n calls)",
+        // One conversion for `(make-parameter 0 …)`, one for `(p 1)`.
+        "(2 2)",
+    );
+}
