@@ -102,6 +102,14 @@ same reason. Those need the FFI layer (`PRD/FFI_DESIGN.md`), not more Scheme,
 and raise a marker string that `crates/patina-compat` classifies as
 out-of-scope rather than as our defect.
 
+`delete-file-hierarchy` is the branch's one deviation from upstream *behaviour*
+(audit 2026-08-17, B1/B2). Upstream refuses `""` and `"/"` before touching
+anything and honours an `ignore-errors?` argument; the branch had neither, so a
+computed-empty path began a depth-first walk of the root. Both are restored, but
+the tolerance is spelled with `guard` rather than upstream's return-value test,
+because Patina's `delete-file`/`delete-directory` raise where chibi's return
+`#f` (the same deviation `F1` records for the directory primitives generally).
+
 `filesystem.scm` and `filesystem.stub` are **not** vendored. Both are reachable
 only from the `chibi` branch, which also needs `include-shared` and the C shim,
 so shipping them would put unreachable C-dependent Scheme in the library tree.
