@@ -207,7 +207,9 @@ and the suite table together do not account for every `.sld` under
   (`(open tmp-file open/write)`) before its directory tests, hitting the
   bundled library's FFI stub *outside any test form*, which aborts the run:
   4 of its assertions pass and the directory half — the part Patina actually
-  implements — is never reached. Add the suite when FFI lands.
+  implements — is never reached. `chibi/filesystem-test.sld` is staged here
+  verbatim (it is in no table row and nothing runs it) so that when FFI
+  lands, enabling it is one `suite_tests!` row.
 
 (An earlier note here said `(chibi optional)`'s suite "fails to desugar with
 'Parameter must be a symbol, got pair'". Re-run 2026-08-19: the actual
