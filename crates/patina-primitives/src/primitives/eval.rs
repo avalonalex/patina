@@ -525,10 +525,24 @@ fn primitive_scheme_report_environment(
         }
     }
 
+    // Two optional libraries: absent is fine, but a *failure* is not the same
+    // as absent. `load_scheme_library` is a re-entry boundary, so its error
+    // may be the continuation-escape sentinel with a value parked on the VM —
+    // discarding that would leave the escape in flight to be misread by the
+    // next unrelated error. Unreachable today (nothing user-written runs while
+    // `(scheme inexact)` loads), and the only sentinel-protocol break the
+    // audit's sweep of every `apply_proc`/`eval_expr` site found (F7).
+    let optional_library = |name: &str| -> Result<Option<Rc<patina_core::library::Library>>, EvalError> {
+        match ctx.load_scheme_library(&["scheme".to_string(), name.to_string()]) {
+            Ok(lib) => Ok(Some(lib)),
+            Err(EvalError::ContinuationEscape) => Err(EvalError::ContinuationEscape),
+            Err(_) => Ok(None),
+        }
+    };
+
     // Try to load additional libraries for R5RS features
     // (scheme inexact) for sin, cos, etc.
-    if let Ok(inexact_lib) = ctx.load_scheme_library(&["scheme".to_string(), "inexact".to_string()])
-    {
+    if let Some(inexact_lib) = optional_library("inexact")? {
         for name in &[
             "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "sqrt",
         ] {
@@ -539,8 +553,7 @@ fn primitive_scheme_report_environment(
     }
 
     // (scheme complex) for make-rectangular, etc.
-    if let Ok(complex_lib) = ctx.load_scheme_library(&["scheme".to_string(), "complex".to_string()])
-    {
+    if let Some(complex_lib) = optional_library("complex")? {
         for name in &[
             "make-rectangular",
             "make-polar",

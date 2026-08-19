@@ -11,19 +11,19 @@ terms are, how each was determined, and what obligations they place on this repo
 
 | Licence | Packages | Class |
 |---|---|---|
-| BSD | 63 | permissive |
+| BSD | 61 | permissive |
 | MIT | 53 | permissive |
 | SLIB (Aubrey Jaffer) | 44 | **non-standard permissive** |
 | public domain | 17 | permissive |
 | ISC | 5 | permissive |
 | CC0-1.0 | 2 | permissive |
-| MIT Scheme, 1988–1995 form | 1 | **non-standard permissive** |
+| MIT Scheme, 1988–1995 form | 0 | **non-standard permissive** — see below |
 | Apache-2.0 | 1 | permissive |
 | Expat | 1 | permissive |
 
-**Also excluded:** nine packages whose library Patina bundles itself — see `README.md`.
+**Also excluded:** thirteen packages whose library Patina bundles itself — see `README.md`.
 
-**Excluded and not vendored:** GPL-3.0 (18), GPL (8), MPL-2.0 (2), 53 packages with no discoverable
+**Excluded and not vendored:** GPL-3.0 (18), GPL (8), MPL-2.0 (2), 52 packages with no discoverable
 licence, and `(srfi 5)` under a document-only licence (see below). Listed in `REVIEW-QUEUE.json`.
 
 ## How each licence was determined
@@ -71,11 +71,12 @@ carries BSD-3-Clause on the parts derived from scsh.
 
 ## Non-standard permissive licences
 
-46 packages are under two old, permissive, non-OSI-listed licences. Both grant everything needed for
-this use — copy, modify, redistribute, any purpose — and **neither is copyleft**. They are called out
-because they are not off-the-shelf terms and carry conditions worth knowing.
+44 packages are under one old, permissive, non-OSI-listed licence, and a second is recorded below
+for a package that has since left the corpus. Both grant everything needed for this use — copy,
+modify, redistribute, any purpose — and **neither is copyleft**. They are called out because they
+are not off-the-shelf terms and carry conditions worth knowing.
 
-### SLIB licence (Aubrey Jaffer) — 45 packages
+### SLIB licence (Aubrey Jaffer) — 44 packages
 
 Notably including `(srfi 60)`, the third most-depended-on library in the entire snow-fort ecosystem.
 Verbatim, as it appears in the sources:
@@ -94,7 +95,12 @@ Verbatim, as it appears in the sources:
 >    name in any advertising, promotional, or sales literature without prior written consent in each
 >    case.
 
-### MIT Scheme licence, 1988–1995 form — 1 package
+### MIT Scheme licence, 1988–1995 form — no packages, kept on record
+
+`(srfi 14)` was the only package under it, and Patina now bundles that library, so the package left
+the corpus (`lib/srfi/14.scm` carries this text at the end of the file, and `lib/srfi/PROVENANCE.md`
+records it for that tree). The text stays here because it is unusual enough to be worth one copy in
+the repository whichever tree holds the code.
 
 `(srfi 14)`, the SRFI 14 char-set reference implementation, derived from the MIT Scheme runtime. This
 is **not** the MIT/Expat licence and it is **not** the GPL that modern MIT/GNU Scheme uses; it is the
@@ -148,7 +154,7 @@ because 43 packages ship no notice of their own (below), so for those the terms 
 in this repository. Each package's own copyright line is its publisher's, listed in that table;
 the bodies are the standard ones.
 
-### BSD 3-Clause — 63 packages
+### BSD 3-Clause — 61 packages
 
 Reproduced from chibi-scheme's `COPYING`, the origin of most BSD packages here. `lib/chibi/PROVENANCE.md`
 carries the same text for the libraries Patina actually bundles.

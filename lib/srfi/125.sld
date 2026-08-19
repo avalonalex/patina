@@ -61,6 +61,16 @@
 ;; separate published SRFI with its own narrower spec and 16 importers in the
 ;; compat corpus, so changing it would alter results for code that never asked
 ;; for SRFI 125.
+;;
+;; One thing upstream does that this list does not change, recorded because it
+;; is a silent one: `(make-hash-table comparator [weakness])` drops the
+;; weakness argument. SRFI 125 says an error should be signalled for a
+;; weakness the implementation does not support, and Patina supports none —
+;; `hash.scm`'s `make-hash-table` reads `o` only for a hash function. Left
+;; matching upstream rather than fixed, because signalling would reject code
+;; that runs on chibi today, and because the argument asks for a memory
+;; property rather than a behavioural one: a table that holds its keys
+;; strongly is a conforming table that leaks, not a wrong answer (audit F2).
 (define-library (srfi 125)
   (import (scheme base)
           ;; SRFI 128 also binds `string-hash` and `string-ci-hash`, to the
