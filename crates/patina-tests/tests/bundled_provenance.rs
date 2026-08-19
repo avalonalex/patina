@@ -40,7 +40,9 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/chibi/term/ansi.sld", 0xcb7a30ac04c2fb00),
     ("lib/chibi/test.scm", 0x41e9de8d4b7cc1ec),
     ("lib/chibi/test.sld", 0xf810b0f46bc155d7),
-    ("lib/srfi/14.scm", 0xd1a60e0a57f95349),
+    // Pinned post-edit: one PATINA LOCAL EDIT (ucs-range->char-set's base
+    // set), recorded in lib/srfi/PROVENANCE.md.
+    ("lib/srfi/14.scm", 0xb971a3e4e5280a08),
     ("lib/srfi/14.sld", 0xa30fdc16bb8de140),
     ("lib/srfi/27.scm", 0xf12c3dd28221b826),
     ("lib/srfi/27.sld", 0xa55b16b061696cdf),

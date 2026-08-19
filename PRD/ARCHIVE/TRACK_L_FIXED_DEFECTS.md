@@ -10,6 +10,28 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**SRFI 14 `ucs-range->char-set` discarded its base set** — ✅ **fixed** (2026-08-19). Both
+backends. Found by `(srfi 14 test)` on its first run, the day the suite was restored to
+`scheme_tests/upstream/` — it had never run against Patina before.
+
+```scheme
+(ucs-range->char-set 97 103 #t (string->char-set "12345"))
+;; before => chars a-f only        SRFI 14, chibi => a-f plus 1-5
+```
+
+`%default-base` takes the maybe-base *rest list* — `pair?` is how it tells "given" from
+"defaulted", and a non-pair falls through to an empty 256-slot string. Four of its five callers
+pass the rest list; `ucs-range->char-set`, the one procedure whose optional handling was rewritten
+(it has `error?` in front of the base), extracted the char-set first and passed *it* — a record,
+not a pair — so the base silently defaulted to empty. The `!` variant takes its base positionally
+and mutates it, so it was unaffected, and the suite's neighbouring `test-not` passed for the wrong
+reason (the broken result was unequal to the decoy too).
+
+Fix: pass `(cdr rest)`, restoring the convention (`lib/srfi/14.scm`, comment at the site). Guard:
+`upstream_srfi_suites.rs::srfi_14_char_set`, 72 assertions. Worth keeping for the pattern: the
+defect sat precisely in the one spot where a port departed from the reference's own shape — the
+same lesson as SRFI 132's three defects, all in hand-written replacements.
+
 **`(scheme r5rs)` did not export the R5RS syntax keywords** — ✅ **fixed** (2026-08-19). Both
 backends. Found when the `(srfi 23)` shim let srfi-78's reference implementation load far enough
 to fail for its real reason.

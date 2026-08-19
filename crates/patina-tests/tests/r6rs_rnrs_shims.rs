@@ -92,16 +92,9 @@ fn every_rnrs_shim_exports_exactly_what_its_r6rs_library_does() {
 fn a_shim_exists_for_every_bundled_r6rs_library() {
     // `unicode-reference/*` is upstream's internal implementation split, not an
     // R6RS library name, and `no-rnrs` is Patina's marker — neither gets a shim.
-    let mut bundled: Vec<String> = common::files_under(&lib_dir().join("r6rs"))
+    let mut bundled: Vec<String> = common::shipped_libraries(&lib_dir().join("r6rs"))
         .into_iter()
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("sld"))
-        .map(|p| {
-            p.strip_prefix(lib_dir().join("r6rs"))
-                .expect("under lib/r6rs")
-                .with_extension("")
-                .to_string_lossy()
-                .replace('\\', "/")
-        })
+        .map(|name| name.join("/"))
         .filter(|name| !name.starts_with("unicode-reference/") && name != "no-rnrs")
         .collect();
     bundled.sort();

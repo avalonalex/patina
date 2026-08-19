@@ -1,7 +1,8 @@
-# Upstream SRFI test suites
+# Upstream test suites
 
-The reference test suites for the SRFIs Patina bundles, run against Patina's
-implementations by `crates/patina-tests/tests/upstream_srfi_suites.rs`.
+The reference test suites for the libraries Patina bundles — SRFIs and
+`(chibi …)` libraries — run against Patina's implementations by
+`crates/patina-tests/tests/upstream_srfi_suites.rs`.
 
 These are the specification authors' own tests, not ours. That is the point:
 a hand-written test only checks the cases its author thought of, and the author
@@ -9,19 +10,60 @@ here is the same person who wrote the implementation. `srfi/151/test.sld` alone
 is 145 assertions against the 13 in
 `crates/patina-tests/tests/srfi_151_bitwise.rs`.
 
-All from chibi-scheme's `lib/`, copied unmodified except
-`srfi/130/test.sld`'s import list — see the note under the table.
+The SRFI suites are from chibi-scheme's `lib/`; the `chibi/` suites are from
+the same sha256-pinned snowballs the bundled libraries themselves came from
+(`lib/chibi/PROVENANCE.md`), so each suite is version-matched to the code it
+tests. Copied unmodified except where the table's note column says otherwise —
+every adaptation is described under the table. All of them report through
+`(chibi test)`, which Patina bundles verbatim from the snow-fort 0.9.0
+snowball (sha256-pinned in `lib/chibi/PROVENANCE.md`, guarded by
+`bundled_provenance.rs`); running these suites at all is a consequence of
+that adoption, since the hand-written subset it replaced could not express
+`test-group` or report a failure count.
 
-| Suite | Assertions | Failing |
-|---|---|---|
-| `srfi/151/test.sld` | 145 | 0 |
-| `srfi/143/test.sld` | 141 | 0 |
-| `srfi/132/test.sld` | 221 | 0 |
-| `srfi/133/test.sld` | 93 | 0 |
-| `srfi/113/test.sld` | 253 | 0 |
-| `srfi/130/test.sld` | 219 | 0 |
-| `srfi/158/test.sld` | 76 | 0 |
-| `srfi/125/test.sld` | 74 | 0 |
+| Suite | Assertions | Failing | Adapted? |
+|---|---|---|---|
+| `srfi/151/test.sld` | 145 | 0 | verbatim |
+| `srfi/143/test.sld` | 141 | 0 | verbatim |
+| `srfi/132/test.sld` | 221 | 0 | verbatim |
+| `srfi/133/test.sld` | 93 | 0 | verbatim |
+| `srfi/113/test.sld` | 253 | 0 | verbatim |
+| `srfi/130/test.sld` | 219 | 0 | imports |
+| `srfi/158/test.sld` | 76 | 0 | verbatim |
+| `srfi/125/test.sld` | 74 | 0 | imports |
+| `srfi/14/test.sld` | 72 | 0 | verbatim |
+| `chibi/string-test.sld` | 52 | 0 | verbatim |
+| `chibi/optional-test.sld` | 11 | 0 | imports |
+| `chibi/diff-test.sld` | 7 | 0 | imports |
+| `chibi/term/ansi-test.sld` | 234 | 0 | framework shim |
+
+**The chibi rows exist because of a hole the 2026-08-19 audit found.** Each
+snowball ships its suite, and while the packages were vendored in
+`compat/vendor/` those suites ran in the compat harness. When the corpus
+builder started excluding packages Patina bundles (Track L §L4), the suites
+left with them — and nothing re-added them here, so the bundled libraries'
+upstream tests ran *nowhere*. "Add a suite when Patina bundles the library"
+was prose; it is now enforced by
+`every_bundled_library_has_a_suite_or_a_recorded_reason` in the same test
+file — how it decides is described under "Suites not included" below.
+
+**`chibi/diff-test.sld` and `chibi/optional-test.sld` are adapted in their
+imports only**: upstream wraps its `(chibi test)` import in
+`(cond-expand (chibi …) (else …))` where the else branch inlines a minimal
+framework shim "to avoid circular dependencies in snow installations". Patina
+bundles `(chibi test)` but does not advertise the `chibi` feature, so the
+else branch would win — and the shim neither counts failures nor reports
+through `current-test-reporter`, which the counting harness requires (in
+optional-test the shim's own `test-error` also lacks the two-argument form
+the suite's body uses, so it cannot even expand). The cond-expand is resolved
+by hand to upstream's own chibi branch: `(import (chibi test))`. Test bodies
+untouched.
+
+**`chibi/term/ansi-test.sld` goes one step further**: it has no chibi branch
+at all — the framework shim is unconditional. Its five framework definitions
+(`test`, `test-assert`, `test-error`, `test-begin`, `test-end`) are replaced
+by `(import (chibi test))`; the suite's two domain-specific helper macros and
+every test body are untouched.
 
 **`srfi/125/test.sld` is adapted too**, in two places, test bodies untouched.
 Its imports exclude `string-hash` and `string-ci-hash` from `(srfi 128)` so
@@ -64,8 +106,26 @@ expectations table, not a skip list. Every suite runs on both backends.
 
 ## What running them found
 
-Seven defects, none of which the hand-written tests beside these libraries had
-caught. All are now fixed; the last is recorded below.
+Eight defects, none of which the hand-written tests beside these libraries had
+caught. All are now fixed; the newest is first.
+
+- **SRFI 14 `ucs-range->char-set` discarded its base set** — fixed 2026-08-19,
+  found by `srfi/14/test.sld` on its first run. The port handed
+  `%default-base` the extracted char-set where every other caller hands it
+  the maybe-base *rest list*; the helper's `pair?` test — its way of telling
+  "given" from "defaulted" — is false for a char-set record, so the base
+  silently defaulted to empty:
+
+  ```scheme
+  (ucs-range->char-set 97 103 #t (string->char-set "12345"))
+  ;; was  => chars a-f only
+  ;; SRFI => chars a-f plus 1-5
+  ```
+
+  The `!` variant was unaffected (it takes the base positionally and mutates
+  it). One more instance of the pattern this file exists for: the defect sat
+  in the one procedure whose optional-argument handling was rewritten rather
+  than kept in the reference's shape.
 
 - **SRFI 113 `set-unfold` / `bag-unfold` took their arguments in the wrong
   order** — fixed. The SRFI orders them `(comparator stop? mapper successor
@@ -131,30 +191,45 @@ caught. All are now fixed; the last is recorded below.
 
 ## Suites not included, and why
 
+The authoritative lists are the `NO_SUITE` (per library) and
+`NO_SUITE_TREES` (per `lib/` tree) tables in `upstream_srfi_suites.rs` — the
+guard test fails if they and the suite table together do not account for
+every `.sld` under `lib/`, so a newly bundled library or tree is in scope by
+default. The non-obvious entries:
+
 - **SRFI 1, SRFI 69** — their suites import `(chibi)`, chibi's implementation
   core, which Patina does not provide.
-- **SRFI 128** — its suite does not parse here; worth investigating whether that
-  is our reader or chibi-specific syntax.
-- **`(chibi optional)`** — its suite fails to desugar with "Parameter must be a
-  symbol, got pair", which looks like a Patina defect in formals handling rather
-  than a test problem. Also worth investigating.
+- **SRFI 128** — its suite uses SRFI 162's comparator constants
+  (`boolean-comparator`, `real-comparator`, …), which chibi folds into its
+  `(srfi 128)` and Patina does not bundle — the same follow-up as the five
+  constants the SRFI 125 note above describes. (An earlier version of this
+  file said the suite "does not parse here"; that was the interpreter's
+  overloaded "Parse error in …" prefix wrapping what is actually an unbound
+  variable at library load.)
+- **SRFI 27** — its suite imports `(scheme flonum)`, i.e. SRFI 144, which
+  Patina does not bundle yet. Add the suite when SRFI 144 lands.
+- **`(chibi filesystem)`** — its suite opens a raw file descriptor
+  (`(open tmp-file open/write)`) before its directory tests, hitting the
+  bundled library's FFI stub *outside any test form*, which aborts the run:
+  4 of its assertions pass and the directory half — the part Patina actually
+  implements — is never reached. `chibi/filesystem-test.sld` is staged here
+  verbatim (it is in no table row and nothing runs it) so that when FFI
+  lands, enabling it is one `suite_tests!` row.
 
-Copied unmodified. They import `(chibi test)`, which Patina bundles verbatim
-from the snow-fort 0.9.0 snowball — byte-identical to the sha256-pinned
-tarball recorded in `lib/chibi/PROVENANCE.md`, and guarded by
-`crates/patina-tests/tests/bundled_provenance.rs`. Running these suites at all
-is a consequence of that adoption, since the hand-written subset it replaced
-could not express `test-group` or report a failure count.
+(An earlier note here said `(chibi optional)`'s suite "fails to desugar with
+'Parameter must be a symbol, got pair'". Re-run 2026-08-19: the actual
+blocker was upstream's inline framework shim, whose `test-error` lacks the
+two-argument form the suite uses — with the imports adapted to the real
+`(chibi test)`, the suite runs clean. The suite is now included.)
 
 Kept here rather than under `lib/` so the shipped library tree stays free of
 test code. The directory is a library search root: `(srfi 151 test)` resolves to
 `srfi/151/test.sld` beneath it.
 
-Add a suite when Patina bundles the library it tests.
-
 ## Licence
 
-Every suite here is from chibi-scheme's `lib/`, by Alex Shinn under the BSD
+Every suite here is by Alex Shinn — the SRFI suites from chibi-scheme's
+`lib/`, the `chibi/` suites from his snow-fort snowballs — under the BSD
 3-Clause licence in chibi's `COPYING`. None of the files carries an in-file
 notice — upstream's own state — and the licence's first condition requires that
 redistributions "retain the above copyright notice, this list of conditions and
