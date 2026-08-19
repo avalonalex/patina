@@ -145,10 +145,27 @@
                              (lp (cdr ls) (fold (path-join file (car ls)) acc))))))
                 (here file acc)))))
 
+      ;; Upstream refuses "" and "/" before touching anything, and honours
+      ;; `ignore-errors?`. Both matter here: a computed-empty path would
+      ;; otherwise start a depth-first delete of the filesystem root. Patina's
+      ;; `delete-file`/`delete-directory` raise where chibi's return #f, so
+      ;; tolerance is spelled with `guard` rather than a return-value test.
       (define (delete-file-hierarchy dir . o)
-        (directory-fold-tree
-         dir #f (lambda (d acc) (delete-directory d)) (lambda (f acc) (delete-file f)))
-        #t)
+        (let ((ignore-errors? (and (pair? o) (car o))))
+          (if (member dir '("" "/"))
+              (error "won't delete unsafe directory" dir))
+          (directory-fold-tree
+           dir
+           #f
+           (lambda (d acc)
+             (if ignore-errors?
+                 (guard (e (#t #f)) (delete-directory d))
+                 (delete-directory d)))
+           (lambda (f acc)
+             (if ignore-errors?
+                 (guard (e (#t #f)) (delete-file f))
+                 (delete-file f))))
+          #t))
 
       (define (with-directory dir thunk)
         (let ((pwd (current-directory)))
