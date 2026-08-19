@@ -515,6 +515,26 @@ def write_inventory(target: Path, manifest: list[dict], pkgs: list[dict]) -> Non
     (target / "INVENTORY.md").write_text("\n".join(lines))
 
 
+def adopt_manifest_timestamp(committed: Path, rebuilt: Path) -> None:
+    """Give the rebuilt manifest the committed one's `generated` date.
+
+    The manifest records the day it was written, so `--check` compared a
+    rebuild stamped today against a file stamped whenever the corpus was last
+    vendored, and reported drift on every day but that one — the check could
+    never stay green and so could never gate anything. What it is for is the
+    *content*: every other field still differs if anything drifted.
+    """
+    if not (committed.is_file() and rebuilt.is_file()):
+        return
+    try:
+        stamp = json.loads(committed.read_text())["generated"]
+    except (json.JSONDecodeError, KeyError, OSError):
+        return
+    data = json.loads(rebuilt.read_text())
+    data["generated"] = stamp
+    rebuilt.write_text(json.dumps(data, indent=2) + "\n")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     # The default rebuilds from the pinned cache, and --refresh is the opt-in to
@@ -535,8 +555,17 @@ def main() -> None:
     if args.check:
         with tempfile.TemporaryDirectory() as tmp:
             out = build(Path(tmp) / "vendor", offline)
+            adopt_manifest_timestamp(VENDOR / "MANIFEST.json",
+                                     Path(tmp) / "vendor" / "MANIFEST.json")
+            # The two files about packages we *declined* to vendor cannot be
+            # rebuilt faithfully from the cache — a package that is neither
+            # vendored nor cached reads as licence-unknown, which is the note
+            # printed above. Comparing them offline would fail the check for a
+            # reason the tool has already announced. Under --refresh they are
+            # rebuilt from the index and are compared like everything else.
+            incomplete_offline = ["REVIEW-QUEUE.json", "INVENTORY.md"] if offline else []
             d = filecmp.dircmp(str(VENDOR), str(Path(tmp) / "vendor"),
-                               ignore=list(KEEP) + [".DS_Store"])
+                               ignore=list(KEEP) + [".DS_Store"] + incomplete_offline)
             drift = d.left_only + d.right_only + d.diff_files
             print(f"{len(out['selected'])} packages; drift: {drift or 'none'}")
             sys.exit(1 if drift else 0)
