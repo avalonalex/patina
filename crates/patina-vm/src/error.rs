@@ -21,6 +21,13 @@ pub enum CompileError {
 
     #[error("internal compiler error: {0}")]
     Internal(String),
+
+    /// A sub-expression the compiler had to desugar itself failed to desugar
+    /// — the unquotes inside a quasiquote template are the only such site.
+    /// The message is the desugarer's own, and `VmBackendError` reports it as
+    /// a desugar error, so `` `(1 ,if) `` reads exactly like a bare `if` does.
+    #[error("{0}")]
+    Desugar(String),
 }
 
 /// Errors produced during VM execution.
@@ -53,6 +60,17 @@ pub enum VmError {
     /// A Scheme exception that wasn't caught by any handler.
     #[error("unhandled exception: {message}")]
     SchemeException { message: String },
+
+    /// A continuation was invoked and the frames it restored are not the ones
+    /// the current Rust call chain was running. Never reaches a user: the
+    /// value the continuation carries is parked on `VmState::pending_escape`
+    /// and the dispatch loop that owns the resumed frame consumes both.
+    ///
+    /// Its own variant, and deliberately non-catchable, so that neither a
+    /// `guard` nor a `?` on the way out can mistake an unwind for a program
+    /// error. See `VmState::pending_escape`.
+    #[error("continuation escaped past a synchronous boundary")]
+    ContinuationEscape,
 
     /// Wraps an inner error with a source location for error reporting.
     #[error("{error}")]

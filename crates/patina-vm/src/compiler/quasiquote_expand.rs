@@ -6,6 +6,7 @@
 //! This runs before the main 5-pass compiler pipeline so that the compiler
 //! never needs to handle `Quasiquote` directly.
 
+use crate::error::CompileError;
 use patina_core::core_expr::{CoreExpr, CoreExprKind};
 use patina_core::heap::SharedHeap;
 use patina_core::tagged_value::TaggedValue;
@@ -18,13 +19,27 @@ use std::rc::Rc;
 /// Must be called before the compiler pipeline. Requires the shared heap
 /// (to walk tagged-value templates) and the environment (to create a
 /// desugarer for unquote sub-expressions).
-pub fn expand_quasiquotes(expr: &CoreExpr, heap: &SharedHeap, env: &Rc<Environment>) -> CoreExpr {
+pub fn expand_quasiquotes(
+    expr: &CoreExpr,
+    heap: &SharedHeap,
+    env: &Rc<Environment>,
+) -> Result<CoreExpr, CompileError> {
     let desugarer = Desugarer::with_env(env.clone());
     expand_qq_expr(expr, heap, &desugarer)
 }
 
 /// Recursively walk a CoreExpr tree, expanding any Quasiquote nodes.
-fn expand_qq_expr(expr: &CoreExpr, heap: &SharedHeap, desugarer: &Desugarer) -> CoreExpr {
+fn expand_qq_expr(
+    expr: &CoreExpr,
+    heap: &SharedHeap,
+    desugarer: &Desugarer,
+) -> Result<CoreExpr, CompileError> {
+    let each = |exprs: &[CoreExpr]| -> Result<Vec<CoreExpr>, CompileError> {
+        exprs
+            .iter()
+            .map(|e| expand_qq_expr(e, heap, desugarer))
+            .collect()
+    };
     let kind = match &expr.kind {
         CoreExprKind::Quasiquote(template) => {
             return expand_template(*template, heap, desugarer, 0);
@@ -37,55 +52,41 @@ fn expand_qq_expr(expr: &CoreExpr, heap: &SharedHeap, desugarer: &Desugarer) -> 
             binding_scope,
         } => CoreExprKind::Lambda {
             params: params.clone(),
-            body: body
-                .iter()
-                .map(|e| expand_qq_expr(e, heap, desugarer))
-                .collect(),
+            body: each(body)?,
             binding_scope: *binding_scope,
         },
 
         CoreExprKind::If { test, then, else_ } => CoreExprKind::If {
-            test: Rc::new(expand_qq_expr(test, heap, desugarer)),
-            then: Rc::new(expand_qq_expr(then, heap, desugarer)),
-            else_: Rc::new(expand_qq_expr(else_, heap, desugarer)),
+            test: Rc::new(expand_qq_expr(test, heap, desugarer)?),
+            then: Rc::new(expand_qq_expr(then, heap, desugarer)?),
+            else_: Rc::new(expand_qq_expr(else_, heap, desugarer)?),
         },
 
         CoreExprKind::Set { var, scopes, value } => CoreExprKind::Set {
             var: var.clone(),
             scopes: scopes.clone(),
-            value: Rc::new(expand_qq_expr(value, heap, desugarer)),
+            value: Rc::new(expand_qq_expr(value, heap, desugarer)?),
         },
 
-        CoreExprKind::Begin(exprs) => CoreExprKind::Begin(
-            exprs
-                .iter()
-                .map(|e| expand_qq_expr(e, heap, desugarer))
-                .collect(),
-        ),
+        CoreExprKind::Begin(exprs) => CoreExprKind::Begin(each(exprs)?),
 
         CoreExprKind::Define { name, value } => CoreExprKind::Define {
             name: name.clone(),
-            value: Rc::new(expand_qq_expr(value, heap, desugarer)),
+            value: Rc::new(expand_qq_expr(value, heap, desugarer)?),
         },
 
         CoreExprKind::App { func, args } => CoreExprKind::App {
-            func: Rc::new(expand_qq_expr(func, heap, desugarer)),
-            args: args
-                .iter()
-                .map(|e| expand_qq_expr(e, heap, desugarer))
-                .collect(),
+            func: Rc::new(expand_qq_expr(func, heap, desugarer)?),
+            args: each(args)?,
         },
 
         CoreExprKind::Apply { func, args } => CoreExprKind::Apply {
-            func: Rc::new(expand_qq_expr(func, heap, desugarer)),
-            args: args
-                .iter()
-                .map(|e| expand_qq_expr(e, heap, desugarer))
-                .collect(),
+            func: Rc::new(expand_qq_expr(func, heap, desugarer)?),
+            args: each(args)?,
         },
 
         CoreExprKind::Expand { expr: inner } => CoreExprKind::Expand {
-            expr: Rc::new(expand_qq_expr(inner, heap, desugarer)),
+            expr: Rc::new(expand_qq_expr(inner, heap, desugarer)?),
         },
 
         // Leaf nodes: no expansion needed
@@ -95,10 +96,10 @@ fn expand_qq_expr(expr: &CoreExpr, heap: &SharedHeap, desugarer: &Desugarer) -> 
         | CoreExprKind::Import { .. } => expr.kind.clone(),
     };
 
-    CoreExpr {
+    Ok(CoreExpr {
         kind,
         source: expr.source.clone(),
-    }
+    })
 }
 
 // ─── Template expansion ──────────────────────────────────────────────────────
@@ -110,15 +111,15 @@ fn expand_template(
     heap: &SharedHeap,
     desugarer: &Desugarer,
     depth: i32,
-) -> CoreExpr {
+) -> Result<CoreExpr, CompileError> {
     // Self-evaluating atoms
     if template.is_fixnum() || template.is_boolean() || template.is_char() || template.is_null() {
-        return CoreExpr::new(CoreExprKind::Quote(template));
+        return Ok(CoreExpr::new(CoreExprKind::Quote(template)));
     }
 
     // Symbols → quote as-is
     if heap.borrow().is_symbol(template) {
-        return CoreExpr::new(CoreExprKind::Quote(template));
+        return Ok(CoreExpr::new(CoreExprKind::Quote(template)));
     }
 
     // Identifiers → convert to plain symbol (strip scope marks) for consistency
@@ -132,14 +133,14 @@ fn expand_template(
             .map(String::from);
         if let Some(name) = name {
             let sym = heap.borrow_mut().intern_symbol(&name);
-            return CoreExpr::new(CoreExprKind::Quote(sym));
+            return Ok(CoreExpr::new(CoreExprKind::Quote(sym)));
         }
-        return CoreExpr::new(CoreExprKind::Quote(template));
+        return Ok(CoreExpr::new(CoreExprKind::Quote(template)));
     }
 
     // Strings, bytevectors → quote
     if template.is_string() || heap.borrow().is_bytevector(template) {
-        return CoreExpr::new(CoreExprKind::Quote(template));
+        return Ok(CoreExpr::new(CoreExprKind::Quote(template)));
     }
 
     // Vectors: expand elements, use list->vector
@@ -165,14 +166,14 @@ fn expand_template(
                 "quasiquote" => {
                     // Nested quasiquote: increment depth
                     let (inner, _rest) = pair_parts(cdr, heap);
-                    let expanded = expand_template(inner, heap, desugarer, depth + 1);
+                    let expanded = expand_template(inner, heap, desugarer, depth + 1)?;
                     // Reconstruct (quasiquote <expanded>) using a plain symbol
                     // (car may be an identifier with scope marks; we need a bare symbol)
                     let qq_sym = heap.borrow_mut().intern_symbol("quasiquote");
-                    return make_list_call(vec![
+                    return Ok(make_list_call(vec![
                         CoreExpr::new(CoreExprKind::Quote(qq_sym)),
                         expanded,
-                    ]);
+                    ]));
                 }
 
                 "unquote" => {
@@ -182,12 +183,12 @@ fn expand_template(
                         return desugar_tagged(inner, heap, desugarer);
                     } else {
                         // Inside nested quasiquote: decrement depth
-                        let expanded = expand_template(inner, heap, desugarer, depth - 1);
+                        let expanded = expand_template(inner, heap, desugarer, depth - 1)?;
                         let uq_sym = heap.borrow_mut().intern_symbol("unquote");
-                        return make_list_call(vec![
+                        return Ok(make_list_call(vec![
                             CoreExpr::new(CoreExprKind::Quote(uq_sym)),
                             expanded,
-                        ]);
+                        ]));
                     }
                 }
 
@@ -199,12 +200,12 @@ fn expand_template(
                         return desugar_tagged(inner, heap, desugarer);
                     } else {
                         let (inner, _rest) = pair_parts(cdr, heap);
-                        let expanded = expand_template(inner, heap, desugarer, depth - 1);
+                        let expanded = expand_template(inner, heap, desugarer, depth - 1)?;
                         let uqs_sym = heap.borrow_mut().intern_symbol("unquote-splicing");
-                        return make_list_call(vec![
+                        return Ok(make_list_call(vec![
                             CoreExpr::new(CoreExprKind::Quote(uqs_sym)),
                             expanded,
-                        ]);
+                        ]));
                     }
                 }
 
@@ -217,7 +218,7 @@ fn expand_template(
     }
 
     // Other types: quote as-is
-    CoreExpr::new(CoreExprKind::Quote(template))
+    Ok(CoreExpr::new(CoreExprKind::Quote(template)))
 }
 
 /// Expand a pair/list template, handling unquote-splicing in list elements.
@@ -226,7 +227,7 @@ fn expand_pair_template(
     heap: &SharedHeap,
     desugarer: &Desugarer,
     depth: i32,
-) -> CoreExpr {
+) -> Result<CoreExpr, CompileError> {
     // Collect segments: each segment is either a list of normal elements
     // or a splice expression. This lets us generate efficient code:
     //   `(a b ,@xs c d) → (append (list 'a 'b) xs (list 'c 'd))
@@ -242,7 +243,7 @@ fn expand_pair_template(
 
         if !current.is_pair() {
             // Improper list tail
-            tail_expr = Some(expand_template(current, heap, desugarer, depth));
+            tail_expr = Some(expand_template(current, heap, desugarer, depth)?);
             break;
         }
 
@@ -255,7 +256,7 @@ fn expand_pair_template(
         if depth == 0 && heap.borrow().is_named(car, "unquote") && cdr.is_pair() {
             let (uq_expr, rest) = pair_parts(cdr, heap);
             if rest.is_null() {
-                tail_expr = Some(desugar_tagged(uq_expr, heap, desugarer));
+                tail_expr = Some(desugar_tagged(uq_expr, heap, desugarer)?);
                 break;
             }
         }
@@ -280,7 +281,7 @@ fn expand_pair_template(
                     splice_expr,
                     heap,
                     desugarer,
-                )));
+                )?));
 
                 current = cdr;
                 continue;
@@ -298,15 +299,15 @@ fn expand_pair_template(
                 let (unquote_expr, rest) = pair_parts(cdr_cdr, heap);
                 if rest.is_null() {
                     // This is (... car . ,expr)
-                    current_elems.push(expand_template(car, heap, desugarer, depth));
-                    tail_expr = Some(desugar_tagged(unquote_expr, heap, desugarer));
+                    current_elems.push(expand_template(car, heap, desugarer, depth)?);
+                    tail_expr = Some(desugar_tagged(unquote_expr, heap, desugarer)?);
                     break;
                 }
             }
         }
 
         // Regular element
-        current_elems.push(expand_template(car, heap, desugarer, depth));
+        current_elems.push(expand_template(car, heap, desugarer, depth)?);
         current = cdr;
     }
 
@@ -318,18 +319,18 @@ fn expand_pair_template(
     // Generate code from segments
     if segments.is_empty() {
         // Empty list
-        return match tail_expr {
+        return Ok(match tail_expr {
             Some(tail) => tail,
             None => CoreExpr::new(CoreExprKind::Quote(TaggedValue::NULL)),
-        };
+        });
     }
 
     if segments.len() == 1 && tail_expr.is_none() {
         // Single segment, no tail
-        return match segments.into_iter().next().unwrap() {
+        return Ok(match segments.into_iter().next().unwrap() {
             Segment::List(elems) => make_list_call(elems),
             Segment::Splice(expr) => expr,
-        };
+        });
     }
 
     // Multiple segments or has tail: use append
@@ -345,7 +346,7 @@ fn expand_pair_template(
     }
 
     // (append seg1 seg2 ... segN)
-    make_app("append", append_args)
+    Ok(make_app("append", append_args))
 }
 
 /// Expand a vector template: convert to list, expand with pair logic (handles splicing),
@@ -355,7 +356,7 @@ fn expand_vector_template(
     heap: &SharedHeap,
     desugarer: &Desugarer,
     depth: i32,
-) -> CoreExpr {
+) -> Result<CoreExpr, CompileError> {
     // Convert vector to a proper list on the heap, then use pair expansion
     // which handles unquote-splicing correctly.
     let borrowed = heap.borrow();
@@ -370,11 +371,11 @@ fn expand_vector_template(
     let list_expr = if list.is_null() {
         CoreExpr::new(CoreExprKind::Quote(TaggedValue::NULL))
     } else {
-        expand_pair_template(list, heap, desugarer, depth)
+        expand_pair_template(list, heap, desugarer, depth)?
     };
 
     // (list->vector <list-expr>)
-    make_app("list->vector", vec![list_expr])
+    Ok(make_app("list->vector", vec![list_expr]))
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -391,16 +392,21 @@ fn pair_parts(tv: TaggedValue, heap: &SharedHeap) -> (TaggedValue, TaggedValue) 
 }
 
 /// Desugar a TaggedValue expression (from an unquote) into CoreExpr.
-fn desugar_tagged(tv: TaggedValue, heap: &SharedHeap, desugarer: &Desugarer) -> CoreExpr {
-    match desugarer.desugar_tagged(tv, heap) {
-        Ok(core_expr) => {
-            // Recursively expand any nested quasiquotes
-            expand_qq_expr(&core_expr, heap, desugarer)
-        }
-        Err(e) => {
-            panic!("quasiquote: failed to desugar unquote: {}", e);
-        }
-    }
+///
+/// The failure is a real program error, not an internal one: `,if` names a
+/// syntactic keyword, and #89 made the desugarer say so. Reporting it as
+/// itself is what lets `` `(1 ,if) `` produce the same diagnostic the bare
+/// `if` gets, instead of the panic this used to be.
+fn desugar_tagged(
+    tv: TaggedValue,
+    heap: &SharedHeap,
+    desugarer: &Desugarer,
+) -> Result<CoreExpr, CompileError> {
+    let core_expr = desugarer
+        .desugar_tagged(tv, heap)
+        .map_err(|e| CompileError::Desugar(e.to_string()))?;
+    // Recursively expand any nested quasiquotes
+    expand_qq_expr(&core_expr, heap, desugarer)
 }
 
 /// Build `(list e1 e2 ... eN)` as a CoreExpr::App.
@@ -443,7 +449,7 @@ mod tests {
         let env = make_env(&heap);
         let template = TaggedValue::fixnum(42);
         let expr = CoreExpr::new(CoreExprKind::Quasiquote(template));
-        let expanded = expand_quasiquotes(&expr, &heap, &env);
+        let expanded = expand_quasiquotes(&expr, &heap, &env).expect("template desugars");
 
         match &expanded.kind {
             CoreExprKind::Quote(v) => assert_eq!(v.as_fixnum(), Some(42)),
@@ -457,7 +463,7 @@ mod tests {
         let env = make_env(&heap);
         let sym = heap.borrow_mut().intern_symbol("foo");
         let expr = CoreExpr::new(CoreExprKind::Quasiquote(sym));
-        let expanded = expand_quasiquotes(&expr, &heap, &env);
+        let expanded = expand_quasiquotes(&expr, &heap, &env).expect("template desugars");
 
         match &expanded.kind {
             CoreExprKind::Quote(v) => assert!(heap.borrow().is_symbol(*v)),
@@ -479,7 +485,7 @@ mod tests {
             h.alloc_pair(a, t2)
         };
         let expr = CoreExpr::new(CoreExprKind::Quasiquote(template));
-        let expanded = expand_quasiquotes(&expr, &heap, &env);
+        let expanded = expand_quasiquotes(&expr, &heap, &env).expect("template desugars");
 
         // Should become (list 'a 'b 'c)
         match &expanded.kind {

@@ -325,6 +325,50 @@ pub fn assert_eval_error(expr: &str) {
     expect_error(Which::Both, expr, Mode::Expr);
 }
 
+/// Pin a program **both** backends reject but at different [`ErrorClass`]es,
+/// asserting each one's stage and that both diagnostics contain `message`.
+///
+/// Deliberately narrower than [`assert_program_eval_error`], which requires
+/// the stages to agree. The one shape that legitimately cannot: the VM expands
+/// quasiquote templates during compilation while the tree-walker evaluates
+/// them, so a template whose *unquote* is bad is rejected before the run on
+/// one backend and during it on the other. Pinning the message keeps the
+/// diagnostic itself under test, which is the part that has to match.
+pub fn assert_program_eval_error_at(
+    code: &str,
+    tree_walker: ErrorClass,
+    vm: ErrorClass,
+    message: &str,
+) {
+    for (backend, expected) in [("tree-walker", tree_walker), ("vm", vm)] {
+        let which = if backend == "vm" {
+            Which::Vm
+        } else {
+            Which::TreeWalker
+        };
+        for (_, outcome) in outcomes(which, code, Mode::Program) {
+            match outcome {
+                Ok(value) => {
+                    panic!("\n[{backend}] expected an error\nProgram:\n{code}\nGot: {value}")
+                }
+                Err(e) => {
+                    assert_eq!(
+                        e.class, expected,
+                        "\n[{backend}] rejected at the wrong stage\nProgram:\n{code}\n{}",
+                        e.message
+                    );
+                    assert!(
+                        e.message.contains(message),
+                        "\n[{backend}] wrong diagnostic\nProgram:\n{code}\n\
+                         expected it to contain: {message}\ngot: {}",
+                        e.message
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Pin a **known divergence** between the backends: `works_on` must produce
 /// `expected`, and the other backend must still fail **at the recorded
 /// stage** (`broken_fails`). `tracking` names the document that records the

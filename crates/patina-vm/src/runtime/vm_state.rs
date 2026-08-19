@@ -767,11 +767,46 @@ fn call_closure_from_regs(
     Ok(())
 }
 
+/// How a dispatch loop ended.
+#[derive(Clone, Copy)]
+enum LoopExit {
+    /// The frame this loop was driving returned normally. The value is its
+    /// result, and the loop's caller still owns the frame below it.
+    Returned(TaggedValue),
+    /// A continuation unwound the stack to or past this loop's exit depth.
+    /// The value is the one that continuation carries — it belongs to the
+    /// resumed computation, and the loop's caller owns no live frame to put
+    /// it in.
+    Escaped(TaggedValue),
+}
+
+impl LoopExit {
+    fn value(self) -> TaggedValue {
+        match self {
+            LoopExit::Returned(v) | LoopExit::Escaped(v) => v,
+        }
+    }
+}
+
+/// [`run_loop_until_outcome`] for callers that are not synchronous boundaries
+/// — the top-level `execute`, which has no frame left to corrupt, and the
+/// nested entry points that route the distinction through `across_reentry`
+/// instead.
+fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue, VmError> {
+    run_loop_until_outcome(state, exit_depth).map(LoopExit::value)
+}
+
 /// The main dispatch loop. Runs until `state.frames.len() == exit_depth`.
 ///
 /// Use `exit_depth = 0` to run until the frame stack is fully empty (top-level).
 /// Use `exit_depth = N` to run a nested thunk until it returns to depth N.
-fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue, VmError> {
+///
+/// This is the only place that decides whether a continuation invocation is
+/// this loop's business: the frames it restored are either ones this loop
+/// still owns (resume) or ones further out (exit, reporting `Escaped`). Every
+/// synchronous boundary below reports the invocation as
+/// [`VmError::ContinuationEscape`] and lets the decision happen here once.
+fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<LoopExit, VmError> {
     // Every dispatch loop defers collection for its own extent; only the
     // outermost one reaches its safe point un-deferred. A nested loop's
     // caller has live values in Rust locals — capture-time register clones,
@@ -794,7 +829,7 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
         maybe_collect(state, is_outermost);
 
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
-            Ok(Some(val)) => return Ok(val),
+            Ok(Some(val)) => return Ok(LoopExit::Returned(val)),
             Ok(None) => continue,
             Err(e) => {
                 // Checked before the catchability test on purpose: the
@@ -803,7 +838,7 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
                 // to a `guard`. See `VmState::pending_escape`.
                 if let Some(value) = state.pending_escape.take() {
                     if state.frames.len() <= exit_depth {
-                        return Ok(value);
+                        return Ok(LoopExit::Escaped(value));
                     }
                     // Control resumed in a frame this loop still owns.
                     cur_code = state.current_code()?;
@@ -1349,14 +1384,15 @@ fn dispatch_one_instruction(
             };
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
 
-            // Run dynamic-wind exit thunks for the unwound portion.
-            let exit_winds: Vec<_> = state.dynamic_winds[prompt.dynamic_wind_depth..]
-                .iter()
-                .rev()
-                .cloned()
-                .collect();
-            for record in exit_winds {
-                run_thunk(state, record.after)?;
+            // Run dynamic-wind exit thunks for the unwound portion, popping
+            // each before it runs (see `vm_raise_value`).
+            while state.dynamic_winds.len() > prompt.dynamic_wind_depth {
+                let after = state
+                    .dynamic_winds
+                    .pop()
+                    .expect("loop condition guarantees a record")
+                    .after;
+                run_thunk(state, after)?;
             }
 
             // Unwind the call stack.
@@ -2140,11 +2176,40 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
     }
 }
 
-/// Run a thunk (0-arg closure) to completion, returning its result.
+/// Run a thunk (0-arg closure) to completion and *require* that it returned.
+///
+/// The internal boundaries that only ever run bookkeeping thunks — the wind
+/// transitions and the resolved-wind sweep — use this: a continuation invoked
+/// inside one of those does not resume here, it unwinds, so the sentinel is
+/// simply propagated. Callers that have a result to place (`dynamic-wind`'s
+/// body, `call-with-values`' producer) use [`run_thunk_outcome`] instead and
+/// decide for themselves.
+fn run_thunk(state: &mut VmState, thunk: TaggedValue) -> Result<TaggedValue, VmError> {
+    match run_thunk_outcome(state, thunk)? {
+        ThunkOutcome::Returned(v) => Ok(v),
+        ThunkOutcome::Escaped(v) => {
+            state.pending_escape = Some(v);
+            Err(VmError::ContinuationEscape)
+        }
+    }
+}
+
+/// How a thunk run at a synchronous boundary ended. The same distinction
+/// [`LoopExit`] makes, restated for the boundary's benefit.
+enum ThunkOutcome {
+    Returned(TaggedValue),
+    /// A continuation unwound past this boundary. The caller owns no live
+    /// frame: it must not write a register, must not run its own cleanup
+    /// (the wind transition already ran the after-thunks), and must hand the
+    /// unwind on.
+    Escaped(TaggedValue),
+}
+
+/// Run a thunk (0-arg closure) to completion, reporting whether it returned.
 ///
 /// Pushes the thunk's frame, runs the execution loop until that frame returns,
 /// then returns the result. Used by `dynamic-wind` and wind-transition hooks.
-fn run_thunk(state: &mut VmState, thunk: TaggedValue) -> Result<TaggedValue, VmError> {
+fn run_thunk_outcome(state: &mut VmState, thunk: TaggedValue) -> Result<ThunkOutcome, VmError> {
     let depth_before = state.frames.len();
 
     // Use a return_reg beyond the caller's register window so the thunk's
@@ -2160,10 +2225,13 @@ fn run_thunk(state: &mut VmState, thunk: TaggedValue) -> Result<TaggedValue, VmE
 
     // If thunk is a primitive (rare but possible), call it directly.
     if let Some(result) = call_any(state, thunk, &[], return_reg)? {
-        return Ok(result);
+        return Ok(ThunkOutcome::Returned(result));
     }
     // VM closure was pushed; run until it returns.
-    run_loop_until(state, depth_before)
+    Ok(match run_loop_until_outcome(state, depth_before)? {
+        LoopExit::Returned(v) => ThunkOutcome::Returned(v),
+        LoopExit::Escaped(v) => ThunkOutcome::Escaped(v),
+    })
 }
 
 /// Handle a VM-intercepted control primitive call.
@@ -2189,30 +2257,32 @@ fn handle_control_primitive(
                     got: args.len(),
                 });
             }
-            let before_result = run_thunk(state, args[0])?;
-            if state.frames.is_empty() {
-                return Ok(Some(before_result));
-            }
+            // Only the value form reaches here; head-position `dynamic-wind`
+            // compiles to `PushWind`/`PopWind`. Each thunk can be escaped out
+            // of, and on escape this call owns no frame to deliver into — the
+            // `dst` it holds is numbered in a window that no longer exists.
+            // The `frames.is_empty()` tests this replaces were never true: a
+            // captured continuation's frame stack is never empty, so the
+            // escape always fell through to `set_reg` on a dead frame.
+            run_thunk(state, args[0])?;
             let wind_depth = state.dynamic_winds.len();
             state.dynamic_winds.push(DynamicWindRecord {
                 before: args[0],
                 after: args[2],
                 stack_depth: state.frames.len(),
             });
-            let result = run_thunk(state, args[1])?;
-            // If a continuation escape emptied the frame stack, the result
-            // was already delivered — don't try to write to a dead frame.
-            if state.frames.is_empty() {
-                return Ok(Some(result));
-            }
+            let result = match run_thunk_outcome(state, args[1])? {
+                ThunkOutcome::Returned(v) => v,
+                // The wind transition the continuation ran already executed
+                // this record's after-thunk and replaced the frames: nothing
+                // left to clean up, and nothing of ours to write.
+                ThunkOutcome::Escaped(v) => return Err(park_escape(state, v)),
+            };
             // If the body aborted, the abort already ran exit thunks and
             // truncated dynamic_winds. Only do cleanup if our record is still there.
             if state.dynamic_winds.len() > wind_depth {
                 state.dynamic_winds.pop();
                 run_thunk(state, args[2])?;
-            }
-            if state.frames.is_empty() {
-                return Ok(Some(result));
             }
             state.set_reg(dst, result);
         }
@@ -2290,13 +2360,15 @@ fn handle_control_primitive(
             };
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
 
-            let exit_winds: Vec<_> = state.dynamic_winds[prompt.dynamic_wind_depth..]
-                .iter()
-                .rev()
-                .cloned()
-                .collect();
-            for record in exit_winds {
-                run_thunk(state, record.after)?;
+            // Popped before each after-thunk runs, for the reason spelled out
+            // in `vm_raise_value`.
+            while state.dynamic_winds.len() > prompt.dynamic_wind_depth {
+                let after = state
+                    .dynamic_winds
+                    .pop()
+                    .expect("loop condition guarantees a record")
+                    .after;
+                run_thunk(state, after)?;
             }
 
             state.frames.truncate(prompt.stack_depth);
@@ -2370,7 +2442,14 @@ fn handle_control_primitive(
             // so we only see values produced by this thunk.
             state.value_buffer.clear();
             // Run producer (0 args), collect multiple values from value_buffer
-            let primary = run_thunk(state, producer)?;
+            let primary = match run_thunk_outcome(state, producer)? {
+                ThunkOutcome::Returned(v) => v,
+                // The producer escaped. Running the consumer here would run it
+                // on the escape value and then overwrite that value with the
+                // consumer's result — the whole `call-with-values` call is
+                // abandoned, not completed.
+                ThunkOutcome::Escaped(v) => return Err(park_escape(state, v)),
+            };
             let produced_vals = if !state.value_buffer.is_empty() {
                 std::mem::take(&mut state.value_buffer)
             } else if let Some(vals) = state.heap.borrow().get_values_as_tagged(primary) {
@@ -2529,16 +2608,34 @@ fn vm_raise_value(
     if let Some(handler_entry) = state.exception_handlers.pop() {
         // Unwind dynamic-wind after-thunks back to the handler's installation point
         let target_wind_depth = handler_entry.dynamic_winds.len();
-        let exit_winds: Vec<_> = state.dynamic_winds[target_wind_depth..]
-            .iter()
-            .rev()
-            .cloned()
-            .collect();
-        for record in exit_winds {
-            // Best-effort: ignore errors from wind thunks during exception unwinding
-            let _ = run_thunk(state, record.after);
+        // Pop each record *before* running its after-thunk, never after. A
+        // continuation invoked inside an after-thunk re-enters the wind
+        // machinery, and a record still on `dynamic_winds` has its after-thunk
+        // run again — and again, with no depth guard: native recursion that
+        // aborts the process instead of reporting a stack overflow.
+        // `pop_resolved_winds` has always had this ordering; this loop and
+        // `run_wind_transition` collected the records up front and truncated
+        // afterwards.
+        while state.dynamic_winds.len() > target_wind_depth {
+            let after = state
+                .dynamic_winds
+                .pop()
+                .expect("loop condition guarantees a record")
+                .after;
+            match run_thunk_outcome(state, after) {
+                Ok(ThunkOutcome::Returned(_)) => {}
+                Ok(ThunkOutcome::Escaped(v)) => return Err(park_escape(state, v)),
+                // Best-effort: a wind thunk that fails on its own terms during
+                // unwinding loses to the exception already in flight. An
+                // escape parked by something deeper is not a failure and must
+                // not be swallowed here.
+                Err(e) => {
+                    if state.pending_escape.is_some() {
+                        return Err(e);
+                    }
+                }
+            }
         }
-        state.dynamic_winds.truncate(target_wind_depth);
 
         if continuable {
             // Continuable: run handler synchronously, return its value
@@ -2547,7 +2644,14 @@ fn vm_raise_value(
                 None => {
                     // Handler is a VM closure — run it
                     let depth_before = state.frames.len() - 1;
-                    run_loop_until(state, depth_before)?
+                    match run_loop_until_outcome(state, depth_before)? {
+                        LoopExit::Returned(v) => v,
+                        // The handler escaped: the continuation restored its
+                        // own handler stack, so this entry must not be
+                        // re-pushed, and `dst` names a register in a frame
+                        // that is gone.
+                        LoopExit::Escaped(v) => return Err(park_escape(state, v)),
+                    }
                 }
             };
             // Re-push the handler
@@ -2617,7 +2721,7 @@ fn maybe_route_error(state: &mut VmState, err: VmError, dst: u16) -> Result<(), 
 #[allow(dead_code)]
 fn is_catchable(err: &VmError) -> bool {
     match err {
-        VmError::StackOverflow | VmError::Compile(_) => false,
+        VmError::StackOverflow | VmError::Compile(_) | VmError::ContinuationEscape => false,
         VmError::WithLocation { error, .. } => is_catchable(error),
         _ => true,
     }
@@ -2676,7 +2780,9 @@ fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, String) {
         // Unwrap location wrapper and classify the inner error.
         VmError::WithLocation { error, .. } => classify_error(error),
         // Non-catchable (shouldn't reach here due to is_catchable check)
-        VmError::StackOverflow | VmError::Compile(_) => (ExceptionKind::Error, err.to_string()),
+        VmError::StackOverflow | VmError::Compile(_) | VmError::ContinuationEscape => {
+            (ExceptionKind::Error, err.to_string())
+        }
     }
 }
 
@@ -2742,14 +2848,17 @@ fn run_wind_transition(
             .count()
     };
 
-    // Run 'after' thunks for records being exited (innermost first).
-    let exit_winds: Vec<_> = state.dynamic_winds[common..]
-        .iter()
-        .rev()
-        .cloned()
-        .collect();
-    for record in exit_winds {
-        run_thunk(state, record.after)?;
+    // Run 'after' thunks for records being exited (innermost first), popping
+    // each *before* it runs — see `vm_raise_value` for why the other order is
+    // unbounded recursion. Truncating as we go is also what the callers want:
+    // every one of them replaces `dynamic_winds` wholesale afterwards.
+    while state.dynamic_winds.len() > common {
+        let after = state
+            .dynamic_winds
+            .pop()
+            .expect("loop condition guarantees a record")
+            .after;
+        run_thunk(state, after)?;
     }
 
     // Run 'before' thunks for records being entered (outermost first).
@@ -3091,6 +3200,30 @@ fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Proc
     matches!(proc.as_ref(), Procedure::Primitive { .. }).then_some(proc)
 }
 
+/// Report that a continuation was just invoked, replacing or extending the
+/// frames the caller was running.
+///
+/// Always an unwind, never a return. The frames now on `state` may belong to
+/// any enclosing dispatch loop — or to none of them, if the escape targets a
+/// frame further out — and only `run_loop_until` knows its own `exit_depth`,
+/// so it is the one place allowed to decide whether to resume or exit. Every
+/// synchronous boundary in between (`run_thunk`, and through it `dynamic-wind`,
+/// `call-with-values`, the wind transitions) sees the sentinel and learns that
+/// the value is the resumed computation's, not its own — which is the whole
+/// difference between writing a register in a live frame and writing one in a
+/// frame that no longer exists.
+fn signal_continuation_invoked(state: &mut VmState, arg_vals: &[TaggedValue]) -> VmError {
+    let primary = arg_vals.first().copied().unwrap_or(TaggedValue::UNSPECIFIED);
+    park_escape(state, primary)
+}
+
+/// Park `value` for the dispatch loop that owns the resumed frame and return
+/// the sentinel that unwinds the Rust frames in between.
+fn park_escape(state: &mut VmState, value: TaggedValue) -> VmError {
+    state.pending_escape = Some(value);
+    VmError::ContinuationEscape
+}
+
 /// Dispatch a call to an arbitrary callee value — the body of the `Call`
 /// instruction, also used by `CallPrimitive`'s deopt path. Returns
 /// `Some(value)` when an invoked continuation unwound to or past
@@ -3137,20 +3270,7 @@ fn call_value_with_probe(
             return Ok(None);
         }
         if try_invoke_continuation(state, func_val, arg_vals)? {
-            // Continuation was invoked — stack has been replaced/appended.
-            // Safety net: if frames dropped to or below exit_depth, the
-            // continuation escaped past a synchronous run_thunk boundary
-            // (e.g. dynamic-wind body, with-exception-handler thunk, or
-            // indirect call-with-values). Return the primary value so the
-            // enclosing run_loop_until exits correctly.
-            if state.frames.len() <= exit_depth {
-                let primary = arg_vals
-                    .first()
-                    .copied()
-                    .unwrap_or(TaggedValue::UNSPECIFIED);
-                return Ok(Some(primary));
-            }
-            return Ok(None);
+            return Err(signal_continuation_invoked(state, arg_vals));
         }
     }
     let code_id = match closure_code_id {
@@ -3241,16 +3361,7 @@ fn tail_call_value_with_probe(
 
         // Continuation invocation in tail position.
         if try_invoke_continuation(state, func_val, arg_vals)? {
-            // Safety net: if frames dropped to or below exit_depth, the
-            // continuation escaped past a synchronous run_thunk boundary.
-            if state.frames.len() <= exit_depth {
-                let primary = arg_vals
-                    .first()
-                    .copied()
-                    .unwrap_or(TaggedValue::UNSPECIFIED);
-                return Ok(Some(primary));
-            }
-            return Ok(None);
+            return Err(signal_continuation_invoked(state, arg_vals));
         }
 
         // Parameters in tail position: same as primitives.

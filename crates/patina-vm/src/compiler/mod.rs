@@ -72,6 +72,6 @@ pub fn compile_with_qq_resolving(
     env: &Rc<Environment>,
     registry: &PrimitiveRegistry,
 ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
-    let expanded = quasiquote_expand::expand_quasiquotes(expr, heap, env);
+    let expanded = quasiquote_expand::expand_quasiquotes(expr, heap, env)?;
     compile_pipeline(&expanded, Some((heap, env, registry)))
 }

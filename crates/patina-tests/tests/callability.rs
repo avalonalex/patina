@@ -164,6 +164,17 @@ fn test_a_control_primitive_error_is_catchable_in_every_position() {
 /// to arbitrate. What this row asserts is only that the two backends disagree
 /// — the tree-walker dies where the VM does not. Establish the right answer
 /// before converging them.
+///
+/// The VM's half moved from `handled` to `caught` with the audit's A3 fix
+/// (wind records are popped before their after-thunk runs). Both are
+/// unarbitrated, but `caught` is the explicable one: the after-thunk's own
+/// `(car 7)` error reaches the enclosing `guard`, which is where an error
+/// raised during unwinding should land. `handled` came from the old ordering
+/// swallowing that error and letting the original `raise` reach the handler
+/// — and chibi calls a handler returning from a non-continuable `raise` an
+/// error in its own right (`(with-exception-handler (lambda (c) 'handled)
+/// (lambda () (raise 'x)))` answers `caught` there, where the VM still
+/// answers `handled`).
 #[test]
 fn test_an_error_inside_a_wind_thunk_still_escapes_on_the_tree_walker() {
     assert_divergence(
@@ -174,7 +185,7 @@ fn test_an_error_inside_a_wind_thunk_still_escapes_on_the_tree_walker() {
                                (lambda () (raise 'x))
                                (lambda () (car 7))))))"#,
         On::Vm,
-        "handled",
+        "caught",
         ErrorClass::AtRuntime,
         "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6",
     );
