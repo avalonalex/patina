@@ -2042,7 +2042,7 @@ impl Desugarer {
 
         // Parse rules as (pattern, template) pairs, converting to Value at the boundary
         let rules_start = literals_index + 1;
-        let rules = self.parse_macro_rules_tagged(&list[rules_start..], shared_heap)?;
+        let rules = self.parse_macro_rules_tagged(&list[rules_start..], &name, shared_heap)?;
 
         let mut compiler = Compiler::with_env_scopes_and_shadowed(
             literals,
@@ -2085,16 +2085,20 @@ impl Desugarer {
     /// Parse macro rules from a slice of TaggedValue
     ///
     /// Each rule is a TaggedValue list `(pattern template)`. Returns the
-    /// pattern/template pairs directly as TaggedValue.
+    /// pattern/template pairs directly as TaggedValue. `name` is for error
+    /// messages — a rule-shape error in a library with fifty macros is
+    /// undiagnosable without it, and this message is the most frequent row
+    /// in the compat harness's parse-error histogram.
     fn parse_macro_rules_tagged(
         &self,
         rules_tvs: &[TaggedValue],
+        name: &str,
         shared_heap: &SharedHeap,
     ) -> Result<Vec<(TaggedValue, TaggedValue)>> {
         if rules_tvs.is_empty() {
-            return Err(DesugarError::InvalidSyntax(
-                "syntax-rules must have at least one rule".to_string(),
-            ));
+            return Err(DesugarError::InvalidSyntax(format!(
+                "syntax-rules must have at least one rule, in macro {name}"
+            )));
         }
 
         let mut rules = Vec::new();
@@ -2102,10 +2106,10 @@ impl Desugarer {
             let rule_list = utils::list_to_vec_tagged(rule_tv, shared_heap)?;
 
             if rule_list.len() != 2 {
-                return Err(DesugarError::InvalidSyntax(
-                    "Each syntax-rules rule must have exactly 2 elements (pattern template)"
-                        .to_string(),
-                ));
+                return Err(DesugarError::InvalidSyntax(format!(
+                    "Each syntax-rules rule must have exactly 2 elements \
+                     (pattern template), in macro {name}"
+                )));
             }
 
             rules.push((rule_list[0], rule_list[1]));

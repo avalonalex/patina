@@ -91,7 +91,9 @@
     ;; Empty else — R7RS's grammar wants at least one expression, but both
     ;; chibi and Gauche accept the empty body with an unspecified result,
     ;; and real packages ship it (chibi-tar's `((#\g #\x))` metadata clause
-    ;; is the datum-clause sibling below). `key` is still evaluated once.
+    ;; is the datum-clause sibling below). `key` is evaluated here per R7RS;
+    ;; the non-empty else arm above drops it, a pre-existing quirk this arm
+    ;; does not inherit.
     ((case key (else))
      (begin key (if #f #f)))
 
@@ -111,11 +113,6 @@
        (if (memv temp '(datum ...))
            (begin result1 result2 ...))))
 
-    ;; Empty-body datum clause, single: match yields an unspecified value.
-    ((case key ((datum ...)))
-     (let ((temp key))
-       (if (memv temp '(datum ...))
-           (if #f #f))))
 
     ;; Multiple clauses with => in first
     ((case key ((datum ...) => proc) clause ...)
@@ -131,9 +128,8 @@
            (begin result1 result2 ...)
            (case temp clause ...))))
 
-    ;; Empty-body datum clause followed by more clauses.
+    ;; Empty-body datum clause, alone or followed by more clauses
+    ;; (`clause ...` matches zero): delegate to the arms above with an
+    ;; explicitly unspecified body, rather than copying their dispatch.
     ((case key ((datum ...)) clause ...)
-     (let ((temp key))
-       (if (memv temp '(datum ...))
-           (if #f #f)
-           (case temp clause ...))))))
+     (case key ((datum ...) (if #f #f)) clause ...))))

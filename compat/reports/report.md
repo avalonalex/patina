@@ -34,13 +34,13 @@
 
 | Error | Packages |
 |---|---|
-| `desugar error: Invalid syntax: Each syntax-rules rule must have exactly 2 elements (pattern template)` | 5 |
-| `desugar error: Invalid syntax: syntax-rules literals must be symbols` | 3 |
-| `desugar error: Invalid syntax: Body must contain at least one expression (not just define-syntax)` | 1 |
-| `desugar error: Invalid syntax: Failed to compile macro new-symbol?: Invalid syntax: Duplicate pattern variable: ch` | 1 |
-| `desugar error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro case` | 1 |
-| `desugar error: Invalid syntax: Macro expansion failed: Invalid syntax: No matching pattern for macro ssax:make-parser/positional-args` | 1 |
-| `runtime error: unhandled exception: unhandled exception: #<unknown>` | 1 |
+| `Each syntax-rules rule must have exactly 2 elements (pattern template), in macro bytes-u8-set-all!` | 5 |
+| `syntax-rules literals must be symbols` | 3 |
+| `Body must contain at least one expression (not just define-syntax)` | 1 |
+| `Failed to compile macro new-symbol?: Invalid syntax: Duplicate pattern variable: ch` | 1 |
+| `Macro expansion failed: Invalid syntax: No matching pattern for macro case` | 1 |
+| `Macro expansion failed: Invalid syntax: No matching pattern for macro ssax:make-parser/positional-args` | 1 |
+| `unhandled exception: unhandled exception: #<unknown>` | 1 |
 
 ## Load errors
 

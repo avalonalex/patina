@@ -488,11 +488,16 @@ fn extract_missing_libraries(parts: [&str; 2]) -> Vec<String> {
 fn extract_parse_errors(parts: [&str; 2]) -> Vec<String> {
     fn from_loader(line: &str) -> Option<String> {
         let (_, rest) = line.split_once("Parse error in ")?;
-        // First ": " ends the path; everything after is the detail. Splitting
-        // on the *last* colon instead truncated any detail that itself
-        // contains one — edn's "Failed to compile macro new-symbol?:
-        // Invalid syntax: Duplicate pattern variable: ch" reported as `ch`.
+        // First ": " ends the path; the detail may itself contain colons —
+        // see `a_multi_colon_detail_is_not_truncated`. The constant layer
+        // tags are then stripped so the histogram keys stay short and
+        // stable against rewording: the section header already says "Parse
+        // errors", so they carry no information there.
         let (_, detail) = rest.split_once(": ")?;
+        let detail = detail
+            .trim_start_matches("desugar error: ")
+            .trim_start_matches("runtime error: ");
+        let detail = detail.strip_prefix("Invalid syntax: ").unwrap_or(detail);
         Some(detail.trim().to_string())
     }
     fn from_include(line: &str) -> Option<String> {
@@ -836,7 +841,8 @@ mod tests {
 
     /// A detail that itself contains colons must survive whole — splitting on
     /// the last one reported edn's duplicate-pattern-variable failure as the
-    /// two-letter histogram row `ch`.
+    /// two-letter histogram row `ch` — while the constant layer tags
+    /// ("desugar error: ", one "Invalid syntax: ") are stripped from the key.
     #[test]
     fn a_multi_colon_detail_is_not_truncated() {
         let out = captured(
@@ -849,7 +855,7 @@ mod tests {
         assert_eq!(
             classify(&out, "test"),
             Status::ParseError(vec![
-                "desugar error: Invalid syntax: Failed to compile macro new-symbol?: \
+                "Failed to compile macro new-symbol?: \
                  Invalid syntax: Duplicate pattern variable: ch"
                     .to_string()
             ])

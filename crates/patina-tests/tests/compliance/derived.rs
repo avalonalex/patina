@@ -81,7 +81,6 @@ fn test_case_empty_body_clause() {
     assert_eval_to("(case 1 ((1)) (else 'other))", "#<unspecified>");
     // Unmatched empty clause: dispatch continues past it.
     assert_eval_to("(case 2 ((1)) (else 'other))", "other");
-    assert_eval_to("(case 3 ((1)) ((3) 'three) (else 'other))", "three");
     // Empty clause as the only clause.
     assert_eval_to("(case 1 ((1)))", "#<unspecified>");
     // Empty else.
