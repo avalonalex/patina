@@ -346,11 +346,13 @@ impl Compiler {
                 .map(|(key, pvref)| (*pvref, key.name.clone()))
                 .collect();
 
-            // Validate the rule before adding it
+            // Validate the rule before adding it. The macro name is NOT
+            // embedded here: the desugarer funnel wraps every compile error
+            // with it, and naming at both layers printed it twice.
             if let Err(e) = super::validator::validate_rule(&pattern, &template, &pvar_names) {
                 return Err(MacroError::InvalidSyntax(format!(
-                    "Macro '{}' validation failed: {}",
-                    name, e
+                    "validation failed: {}",
+                    e
                 )));
             }
 

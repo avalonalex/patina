@@ -6,9 +6,9 @@
 |---|---|
 | pass | 124 |
 | missing-library | 16 |
-| parse-error | 14 |
+| parse-error | 13 |
 | load-error | 1 |
-| unbound-identifier | 1 |
+| unbound-identifier | 2 |
 | wrong-result | 3 |
 | runtime-error | 1 |
 | timeout | 0 |
@@ -34,13 +34,13 @@
 
 | Error | Packages |
 |---|---|
-| `Each syntax-rules rule must have exactly 2 elements (pattern template)` | 5 |
+| `Each syntax-rules rule must have exactly 2 elements (pattern template), in macro bytes-u8-set-all!` | 5 |
 | `syntax-rules literals must be symbols` | 3 |
-| `No matching pattern for macro case` | 2 |
-| `#<unknown>` | 1 |
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
-| `No matching pattern for macro ssax:make-parser/positional-args` | 1 |
-| `ch` | 1 |
+| `Failed to compile macro new-symbol?: Invalid syntax: Duplicate pattern variable: ch` | 1 |
+| `Macro expansion failed: Invalid syntax: No matching pattern for macro case` | 1 |
+| `Macro expansion failed: Invalid syntax: No matching pattern for macro ssax:make-parser/positional-args` | 1 |
+| `unhandled exception: unhandled exception: #<unknown>` | 1 |
 
 ## Load errors
 
@@ -53,6 +53,7 @@
 | Identifier | Packages |
 |---|---|
 | `load` | 1 |
+| `read-padded-string` | 1 |
 | `test-exit` | 1 |
 | `test-group` | 1 |
 | `use` | 1 |
@@ -97,7 +98,7 @@
 | chibi-snow-commands | probe | parse-error |
 | chibi-ssl | test | missing-library |
 | chibi-sxml | probe | pass |
-| chibi-tar | test | parse-error |
+| chibi-tar | test | unbound-identifier |
 | chibi-temp-file | probe | pass |
 | chibi-term-edit-line | probe | pass |
 | chibi-uri | test | pass |
