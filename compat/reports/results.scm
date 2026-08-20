@@ -26,7 +26,7 @@
   ((slug "chibi-math-prime") (mode test) (status pass))
   ((slug "chibi-math-stats") (mode test) (status missing-library) (missing "scheme flonum"))
   ((slug "chibi-mecab") (mode test) (status load-error) (errors "Exported identifier 'mecab?' not defined"))
-  ((slug "chibi-mime") (mode test) (status wrong-result))
+  ((slug "chibi-mime") (mode test) (status pass))
   ((slug "chibi-monad-environment") (mode probe) (status parse-error) (errors "syntax-rules literals must be symbols"))
   ((slug "chibi-net-dns") (mode test) (status out-of-scope) (missing "chibi net"))
   ((slug "chibi-net-smtp") (mode test) (status out-of-scope) (missing "chibi net"))

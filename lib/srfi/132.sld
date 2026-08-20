@@ -11,8 +11,17 @@
 ;;
 ;; Every included .scm file is byte-identical to upstream (verified against
 ;; the pinned commit, 2026-08-12; enforced by
-;; crates/patina-tests/tests/bundled_provenance.rs). The one deviation is
-;; this .sld itself, which replaces upstream's sorting/132.sld: upstream
+;; crates/patina-tests/tests/bundled_provenance.rs), with one marked
+;; exception: sort.scm's `list-sort` (2026-08-19, PATINA LOCAL EDIT at the
+;; site, pinned post-edit). Upstream's is a heap sort, which reverses ties;
+;; SRFI 132 allows an unstable list-sort, but chibi and Gauche both ship a
+;; stable one — neither uses this reference file for it — and real code
+;; (chibi-voting's sort-pairs) breaks residual ties by input order. Ours is
+;; now an alias for list-merge-sort, the file's own stable sort. The claim
+;; is deliberately list-only: vector-sort keeps upstream's unstable
+;; quicksort, because there the references disagree (chibi's vector-sort is
+;; stable, Gauche's is not) and nothing measured asks for it. The other
+;; deviation is this .sld itself, which replaces upstream's sorting/132.sld: upstream
 ;; splits the library in two and cond-expands on (rnrs sorting), which
 ;; Patina does not provide, so this is a single library over the same source
 ;; files, with upstream's own import structure — the (except ...)/(rename ...)

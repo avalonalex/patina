@@ -1,15 +1,15 @@
 # Patina third-party compatibility (vm backend)
 
-**124 of 162 packages pass** — 124 of 160 achievable (excluding 2 out-of-scope pending FFI).
+**125 of 162 packages pass** — 125 of 160 achievable (excluding 2 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 124 |
+| pass | 125 |
 | missing-library | 16 |
 | parse-error | 13 |
 | load-error | 1 |
 | unbound-identifier | 2 |
-| wrong-result | 3 |
+| wrong-result | 2 |
 | runtime-error | 1 |
 | timeout | 0 |
 | out-of-scope | 2 |
@@ -85,7 +85,7 @@
 | chibi-math-prime | test | pass |
 | chibi-math-stats | test | missing-library |
 | chibi-mecab | test | load-error |
-| chibi-mime | test | wrong-result |
+| chibi-mime | test | pass |
 | chibi-monad-environment | probe | parse-error |
 | chibi-net-dns | test | out-of-scope |
 | chibi-net-smtp | test | out-of-scope |
