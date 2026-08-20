@@ -17,7 +17,10 @@
 ;; SRFI 132 allows an unstable list-sort, but chibi and Gauche both ship a
 ;; stable one — neither uses this reference file for it — and real code
 ;; (chibi-voting's sort-pairs) breaks residual ties by input order. Ours is
-;; now an alias for list-merge-sort, the file's own stable sort. The other
+;; now an alias for list-merge-sort, the file's own stable sort. The claim
+;; is deliberately list-only: vector-sort keeps upstream's unstable
+;; quicksort, because there the references disagree (chibi's vector-sort is
+;; stable, Gauche's is not) and nothing measured asks for it. The other
 ;; deviation is this .sld itself, which replaces upstream's sorting/132.sld: upstream
 ;; splits the library in two and cond-expands on (rnrs sorting), which
 ;; Patina does not provide, so this is a single library over the same source

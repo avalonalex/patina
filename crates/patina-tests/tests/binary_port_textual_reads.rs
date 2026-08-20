@@ -1,26 +1,11 @@
-//! Two port widenings the compat corpus asked for, both mirroring the
-//! references rather than R7RS's minimum.
-//!
-//! **`read-line` takes an optional max-chars** (chibi's extension): read at
-//! most n characters, still stopping early at a newline (consumed, not
-//! included), leftovers staying in the port. R7RS makes the extra argument
-//! "an error" — implementation freedom — and both references accept it:
-//! chibi honors the limit, Gauche ignores the argument. chibi-mime reads
-//! every header line through `(read-line port mime-line-length-limit)`.
-//!
-//! **Textual reads work on binary ports**: `read-char`, `peek-char` and
-//! `read-line` decode UTF-8 from a bytevector port. R7RS calls textual I/O
-//! on a binary port an error — freedom again — and both references allow
-//! it. chibi-mime parses the header section of a binary message port with
-//! `read-line` before switching to `read-u8` for the body; rejecting it
-//! failed the suite's whole binary half.
+//! Two port widenings the compat corpus asked for: `read-line`'s optional
+//! max-chars argument (why: the note on `text_input::read_line`) and
+//! textual reads decoding UTF-8 from binary ports (why: `decode_utf8_at`
+//! in `port.rs`). Both mirror the references; chibi-mime exercises both.
 
 mod common;
 use common::eval_program as eval;
 
-/// The truncation semantics, matched against chibi exactly: at most n
-/// chars per call, newline still terminates (and is consumed), the
-/// remainder stays in the port, EOF only when nothing is left.
 #[test]
 fn test_read_line_max_chars_matches_chibi() {
     assert_eq!(
@@ -31,6 +16,20 @@ fn test_read_line_max_chars_matches_chibi() {
                    (read-line p 4) (read-line p 4) (eof-object? (read-line p 4)))"
         ),
         "(\"hell\" \"o wo\" \"rld\" \"seco\" \"nd\" #t)"
+    );
+}
+
+/// The limit counts characters, not bytes — chibi's unit. Written with
+/// two-byte λs so a byte-counting regression truncates visibly early.
+#[test]
+fn test_read_line_max_chars_counts_chars_not_bytes() {
+    assert_eq!(
+        eval(
+            "(import (scheme base))
+             (define p (open-input-string \"λλλλλ\"))
+             (list (read-line p 4) (read-line p 4))"
+        ),
+        "(\"λλλλ\" \"λ\")"
     );
 }
 
@@ -48,8 +47,13 @@ fn test_read_line_max_chars_larger_than_line() {
     );
 }
 
-/// CRLF handling carries over from the unlimited path: a line terminated
-/// within the limit drops its \r, a mid-line cut keeps every char as data.
+/// CRLF handling: a line terminated within the limit drops its \r. A cut
+/// landing between the \r and the \n keeps the \r as data and the next
+/// read sees the bare \n as an empty line — chibi goes further here (it
+/// treats \r as a terminator and swallows a terminator adjacent to a
+/// limit-hit), but only \n terminates lines everywhere else in Patina's
+/// ports, and the cut-mid-CRLF case is unreachable for the real caller
+/// (mime's limit is 4096). Deliberately ours, pinned as such.
 #[test]
 fn test_read_line_max_chars_crlf() {
     assert_eq!(
@@ -59,6 +63,14 @@ fn test_read_line_max_chars_crlf() {
              (list (read-line p 10) (read-line p 10))"
         ),
         "(\"ab\" \"cd\")"
+    );
+    assert_eq!(
+        eval(
+            "(import (scheme base))
+             (define p (open-input-string \"ab\\r\\ncd\"))
+             (list (read-line p 3) (read-line p 3) (read-line p 3))"
+        ),
+        "(\"ab\\r\" \"\" \"cd\")"
     );
 }
 

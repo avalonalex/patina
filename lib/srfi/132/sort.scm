@@ -13,7 +13,10 @@
 ;; references ship a stable list-sort (chibi's delegates to its native sort
 ;; rather than to this reference; so does Gauche's), and real code depends
 ;; on it: chibi-voting's sort-pairs breaks residual ties by input order.
-;; Deviation recorded in lib/srfi/PROVENANCE.md.
+;; vector-sort below deliberately keeps upstream's unstable quicksort: the
+;; both-references argument does not extend there (chibi's vector-sort is
+;; stable, but Gauche routes vector-sort to its unstable sort!), and no
+;; corpus package implicates it. Deviation recorded in the 132.sld header.
 (define list-sort list-merge-sort)
 
 (define list-sort! list-merge-sort!)

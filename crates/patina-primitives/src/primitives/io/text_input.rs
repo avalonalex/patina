@@ -73,7 +73,8 @@ pub(super) fn char_ready_p(
 /// (read-line [port [max-chars]]) - Read a line as a string
 ///
 /// The second argument is chibi's extension, not R7RS: read at most
-/// `max-chars` characters, still stopping early at a newline (consumed, not
+/// `max-chars` *characters* (chibi's unit — not bytes, so a multi-byte
+/// character counts once), still stopping early at a newline (consumed, not
 /// included), with anything past the limit left in the port. R7RS makes the
 /// extra argument "an error", i.e. implementation freedom, and both
 /// references accept it — chibi honors the limit, Gauche ignores the
@@ -103,24 +104,28 @@ pub(super) fn read_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
             }
         };
         let mut line = String::new();
+        let mut chars_read = 0;
         let mut hit_newline = false;
-        while line.len() < max {
+        while chars_read < max {
             match port.read_char() {
                 Ok(Some('\n')) => {
                     hit_newline = true;
                     break;
                 }
-                Ok(Some(c)) => line.push(c),
+                Ok(Some(c)) => {
+                    line.push(c);
+                    chars_read += 1;
+                }
+                // The source ended before anything was read: that is EOF.
+                Ok(None) if line.is_empty() => return Ok(TaggedValue::EOF),
                 Ok(None) => break,
                 Err(e) => return Err(EvalError::IOError(e.to_string())),
             }
         }
-        if line.is_empty() && !hit_newline {
-            // Nothing read: EOF, unless the limit is 0 with input remaining.
-            let at_eof = matches!(port.peek_char(), Ok(None));
-            if at_eof {
-                return Ok(TaggedValue::EOF);
-            }
+        // max = 0 skips the loop entirely; peek to tell EOF from
+        // data-remaining (the one case the loop could not decide).
+        if max == 0 && matches!(port.peek_char(), Ok(None)) {
+            return Ok(TaggedValue::EOF);
         }
         if hit_newline && line.ends_with('\r') {
             line.pop();

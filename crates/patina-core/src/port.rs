@@ -102,8 +102,18 @@ fn decode_utf8_at(bytes: &[u8], position: usize) -> io::Result<Option<(char, usi
     if position >= bytes.len() {
         return Ok(None);
     }
-    let first = bytes[position];
-    let len = if first & 0x80 == 0 {
+    let end = (position + utf8_char_len(bytes[position])).min(bytes.len());
+    let s = std::str::from_utf8(&bytes[position..end])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    Ok(s.chars().next().map(|c| (c, c.len_utf8())))
+}
+
+/// The encoded length a UTF-8 lead byte announces. Invalid lead bytes
+/// (stray continuations, ≥ 0xF8) are deliberately lumped into 4 and left
+/// for `from_utf8` to reject — every caller validates the bytes it gathers.
+/// The one home for this table; it used to be written out at each read site.
+fn utf8_char_len(first: u8) -> usize {
+    if first & 0x80 == 0 {
         1
     } else if first & 0xE0 == 0xC0 {
         2
@@ -111,11 +121,7 @@ fn decode_utf8_at(bytes: &[u8], position: usize) -> io::Result<Option<(char, usi
         3
     } else {
         4
-    };
-    let end = (position + len).min(bytes.len());
-    let s = std::str::from_utf8(&bytes[position..end])
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    Ok(s.chars().next().map(|c| (c, c.len_utf8())))
+    }
 }
 
 /// Data for a file-based port
@@ -371,16 +377,7 @@ impl Port {
                     Ok(0) => Ok(None), // EOF
                     Ok(_) => {
                         // Try to read a complete UTF-8 character
-                        let first_byte = buf[0];
-                        let char_len = if first_byte & 0x80 == 0 {
-                            1
-                        } else if first_byte & 0xE0 == 0xC0 {
-                            2
-                        } else if first_byte & 0xF0 == 0xE0 {
-                            3
-                        } else {
-                            4
-                        };
+                        let char_len = utf8_char_len(buf[0]);
                         if char_len > 1 {
                             handle.read_exact(&mut buf[1..char_len])?;
                         }
@@ -402,16 +399,7 @@ impl Port {
                         Ok(0) => Ok(None), // EOF
                         Ok(_) => {
                             // Determine UTF-8 character length from first byte
-                            let first_byte = buf[0];
-                            let char_len = if first_byte & 0x80 == 0 {
-                                1
-                            } else if first_byte & 0xE0 == 0xC0 {
-                                2
-                            } else if first_byte & 0xF0 == 0xE0 {
-                                3
-                            } else {
-                                4
-                            };
+                            let char_len = utf8_char_len(buf[0]);
                             if char_len > 1 {
                                 reader.read_exact(&mut buf[1..char_len])?;
                             }
@@ -755,8 +743,10 @@ impl Port {
                     ))
                 }
             }
-            // In-memory: a char is ready iff bytes remain (paired with the
-            // textual reads above, which decode UTF-8 from binary ports).
+            // Mirrors the String arm above: ready iff data remains. Note the
+            // whole family (String/File/u8_ready too) returns false at EOF,
+            // where R7RS 6.13.2 says #t (a read would not block — it returns
+            // the EOF object); a fix belongs to all arms at once, not here.
             PortData::Bytevector(b) => Ok(b.position < b.content.len()),
             PortData::Closed => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -1529,6 +1519,9 @@ mod tests {
         assert_eq!(port.read_line().unwrap(), Some("B\n".to_string()));
         assert_eq!(port.read_line().unwrap(), Some("rest".to_string()));
         assert_eq!(port.read_char().unwrap(), None);
+        // Pins consistency with the sibling arms, not R7RS: 6.13.2 wants #t
+        // at EOF, and every in-memory arm predates this one in saying false.
+        // Flip this together with them if that family-wide deviation is fixed.
         assert!(!port.char_ready().unwrap());
 
         // A multi-byte character decodes whole, not byte-by-byte.
