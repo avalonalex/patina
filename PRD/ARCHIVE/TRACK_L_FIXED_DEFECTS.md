@@ -10,6 +10,49 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**`read-line` rejected chibi's max-chars argument; textual reads rejected binary ports** — ✅
+**fixed** (2026-08-19). Both backends. Found by running chibi-mime's suite, the first of the
+wrong-result rows: 5 of 9, all four failures raising through the same two gaps.
+
+```scheme
+(read-line port 4096)                          ;; was: arity error — chibi honors the limit,
+                                               ;; Gauche accepts and ignores the argument
+(read-line (open-input-bytevector bv))         ;; was: "read-char: not a textual port" —
+                                               ;; both references allow textual reads there
+```
+
+R7RS makes both "an error" — implementation freedom — and both references take it; chibi-mime
+leans on each (`mime-line-length-limit` on every header read, and header parsing on binary message
+ports before switching to `read-u8` for bodies). The max-chars semantics match chibi exactly —
+at most n chars, newline still terminates and is consumed, the remainder stays in the port — and
+binary-port textual reads decode UTF-8 in place (`decode_utf8_at` in `port.rs`), invalid bytes
+erroring as on the file path. Widening only: no previously-working program changes.
+
+Result: chibi-mime 5/9 → **9/9**. Guards: `binary_port_textual_reads.rs`, six tests on both
+backends.
+
+**`list-sort` reversed ties** — ✅ **fixed** (2026-08-19). Both backends. Found by chibi-voting's
+suite: `sort-pairs` returned the right counts in the wrong tie order.
+
+```scheme
+(list-sort (lambda (x y) (> (cdr x) (cdr y))) '((a . 1) (b . 2) (c . 1) (d . 2) (e . 1)))
+;; chibi, Gauche => ((b . 2) (d . 2) (a . 1) (c . 1) (e . 1))
+;; Patina was    => ((d . 2) (b . 2) (e . 1) (c . 1) (a . 1))
+```
+
+The input to the failing sort was fully deterministic (candidate vectors, not hash order), which
+pointed at `list-sort` itself: Shivers' reference implements it with `vector-heap-sort!`, and heap
+sort reverses ties. SRFI 132 permits that — stability is `list-stable-sort`'s contract — but
+**neither reference actually ships the reference's list-sort**: chibi delegates to its stable
+native sort, Gauche likewise. chibi-voting, written against chibi, breaks residual ties by input
+order. Fixed by aliasing `list-sort` to `list-merge-sort`, the file's own stable sort — a marked
+`PATINA LOCAL EDIT` in `lib/srfi/132/sort.scm`, recorded in `132.sld`'s header, both pins updated.
+The 221-assertion upstream SRFI 132 suite is unaffected (it never asserts instability).
+
+Result: chibi-voting 5/7 → 6/7 — level with Gauche; the residual failure is upstream's
+order-sensitive `instant-runoff-rank` expectation (§6 "Upstream, not ours"). Guards:
+`srfi_132_list_sort_stability.rs`.
+
 **`case` rejected a clause with an empty body** — ✅ **fixed** (2026-08-19). Both backends.
 Found by auditing the corpus's "No matching pattern for macro case" rows; chibi-tar's is a
 metadata clause with datums and no expressions:

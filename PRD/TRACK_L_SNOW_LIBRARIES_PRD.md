@@ -824,6 +824,18 @@ mirrors L2's cond-expand-no-else finding: **a fallback branch that upstream
 never runs is unreviewed code**, and the corpus is the first thing to ever
 execute it.
 
+**One more member, from the wrong-result bucket (2026-08-19):** chibi-voting's
+`instant-runoff-rank` test expectation depends on hash-table iteration order.
+The algorithm walks `(hash-table->alist ...)` and `min-candidate` breaks
+count ties by list position, so tied eliminations follow whatever order the
+implementation's hash table yields — R7RS-level unspecified. Three
+implementations produce three rankings on the suite's fixture (chibi
+`(A C D B)` — the baked-in expectation; Gauche `(C A B D)`, failing the suite
+exactly as we do; Patina `(A B D C)`). The suite's other failure on that row,
+`sort-pairs`, *was* ours — the `list-sort` stability fix below — so
+chibi-voting now scores 6/7, identical to Gauche, and the row's residual
+failure is upstream's.
+
 ### Open
 
 **chibi-regexp: `(regexp 'grapheme)` feeds `#<unspecified>` into the NFA
@@ -1102,24 +1114,37 @@ prefixed name nowhere while leaving the bare one working, `(null-environment 5)`
 `cond-expand`, and `(list else)` returns a symbol because of the `base.sld` workaround. They are
 kept there rather than repeated here: they are one defect, and it now has one document.
 
-**`match-letrec` does not match** — ❌ **open**. Both backends. The one remaining failure in
-`(chibi match)`'s suite (74 of 75) after the relinking fix below, and the reason chibi-match scores
-`wrong-result` rather than `pass`. Every `match-letrec` fails, including the simplest one, while the
-neighbouring `match-let` works:
+**`match-letrec` collapses its per-expansion temporaries** — ❌ **open**. Both backends. The one
+remaining failure in `(chibi match)`'s suite (74 of 75), and the reason chibi-match scores
+`wrong-result` rather than `pass`.
+
+*Corrected 2026-08-19 by re-running the entry* (the previous text said "every `match-letrec` fails,
+including the simplest one" — no longer true, and the diagnosis is now much sharper):
 
 ```scheme
-(match-letrec (((x y) (list 1 2))) (list x y))
-;; chibi => (1 2)
-;; Patina => Error: type error: error: first argument must be a string
+(match-letrec ((x 1)) x)                      ;; works — was failing when first recorded
+(match-letrec ((x 1) (y 2)) (list x y))       ;; => Desugar error: Duplicate parameter 'p-ls' in lambda
+(match-letrec (((x y) (list 1 2))) (list x y)) ;; => match failure ("no matching pattern")
+;; chibi => 1, (1 2), (1 2)
 ```
 
-**Read that error carefully — it is not the failure.** The match fails, and chibi's failure branch
-is `(error 'match "no matching pattern")` (`match.scm:327`), whose first argument is a *symbol*.
-R7RS 6.11 gives `error` a string message, so Patina rejects the call and reports a type error about
-`error` itself, burying the real problem. Chez and Gauche accept a symbol there, so this is chibi
-leniency of the kind §4 already declines to imitate — but it is the second time in this track that
-a lenient `error` has hidden the defect underneath it, which is worth weighing if the question is
-ever reopened. Diagnosing this one means neutralising that call first.
+Both failures are one defect. `match-extract-vars` (`match.scm:882`) pairs each pattern variable
+with a **template-introduced** temporary, `p-ls`; every expansion must mint a hygienically distinct
+one. With two variables, Patina's two copies collapse into indistinguishable identifiers: in the
+two-bindings shape they meet as parameters of one lambda (`Duplicate parameter 'p-ls'` — the
+desugarer compares by name), and in the list-pattern shape the rewritten pattern becomes
+effectively `(p-ls p-ls)`, which `match` reads as an equality constraint that `(1 2)` fails —
+surfacing as chibi's "no matching pattern" branch, whose symbol-message `error` call Patina then
+rejects (that display defect is real but downstream; the old entry mistook it for the story).
+
+**The collapse needs the real chain.** Isolated reproductions all behave correctly on Patina —
+plain CPS accumulation of a template temp across two expansions, the same through a generated
+`let-syntax` trampoline, the full `match-extract-vars` shape with a substituted pattern and
+substituted literals, `match-rewrite` + the Petrofsky `match-identifier=?` — each keeps the two
+temps distinct (verified 2026-08-19, chibi and Gauche agreeing). So the losing step is further into
+the composition, and the next diagnosis should instrument the actual chibi-match expansion rather
+than build another synthetic repro. Same neighborhood as the vector-hygiene/relinking pair below —
+scope-set identity on template-introduced identifiers — and probably wants their fix first.
 
 **Hygiene is not applied inside a quasiquoted vector** — ❌ **open**. Both backends. Six lines, and
 it captures in *both* directions at once — the template's own binding and the caller's argument each
@@ -1185,6 +1210,8 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| `read-line` rejected chibi's max-chars argument; textual reads rejected binary ports | 2026-08-19 |
+| `list-sort` reversed ties (reference heap sort; both references are stable) | 2026-08-19 |
 | `case` rejected a clause with an empty body | 2026-08-19 |
 | SRFI 14 `ucs-range->char-set` discarded its base set | 2026-08-19 |
 | `(scheme r5rs)` did not export the R5RS syntax keywords | 2026-08-19 |

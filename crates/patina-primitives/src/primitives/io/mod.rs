@@ -313,7 +313,9 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     registry.register(PrimitiveFn::new_heap(
         "scheme.base",
         "read-line",
-        Arity::Range(0, 1),
+        // 0..=2: the optional second argument is chibi's max-chars
+        // extension — see the note on `text_input::read_line`.
+        Arity::Range(0, 2),
         "Reads a line from the input port.",
         text_input::read_line,
     ));

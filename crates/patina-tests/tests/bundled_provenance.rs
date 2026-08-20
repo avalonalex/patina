@@ -62,11 +62,14 @@ const PINNED: &[(&str, u64)] = &[
     // Byte-identical to chibi 0.12.0's, per lib/srfi/PROVENANCE.md. Its `.sld`
     // is Patina's own and so is not pinned.
     ("lib/srfi/125/hash.scm", 0xf1aeae0530c9f659),
-    ("lib/srfi/132.sld", 0xe954f0fc6682a300),
+    ("lib/srfi/132.sld", 0x5e0c2c8107173941),
     ("lib/srfi/132/delndups.scm", 0xabcb04a8827d44f4),
     ("lib/srfi/132/lmsort.scm", 0xf84cd67deda00bb8),
     ("lib/srfi/132/select.scm", 0x9c14f2f4637715a2),
-    ("lib/srfi/132/sort.scm", 0xf50fca73a351fa49),
+    // Pinned post-edit: one PATINA LOCAL EDIT (list-sort is the stable
+    // merge sort, not upstream's tie-reversing heap sort), recorded in
+    // 132.sld's header.
+    ("lib/srfi/132/sort.scm", 0xd458d460a74c317b),
     ("lib/srfi/132/sortp.scm", 0xa2f0c01190fcbc5a),
     ("lib/srfi/132/vector-util.scm", 0x5647564455a96fbf),
     ("lib/srfi/132/vhsort.scm", 0x9e2b48d547525a38),

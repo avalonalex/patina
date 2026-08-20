@@ -70,11 +70,20 @@ pub(super) fn char_ready_p(
     }
 }
 
-/// (read-line [port]) - Read a line as a string
+/// (read-line [port [max-chars]]) - Read a line as a string
+///
+/// The second argument is chibi's extension, not R7RS: read at most
+/// `max-chars` characters, still stopping early at a newline (consumed, not
+/// included), with anything past the limit left in the port. R7RS makes the
+/// extra argument "an error", i.e. implementation freedom, and both
+/// references accept it — chibi honors the limit, Gauche ignores the
+/// argument. Real code relies on it: chibi-mime reads every header line
+/// through `(read-line port mime-line-length-limit)` as a DoS guard, and
+/// rejecting the arity failed its whole suite.
 pub(super) fn read_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if args.len() > 1 {
+    if args.len() > 2 {
         return Err(EvalError::WrongArity {
-            expected: "read-line expects 0 or 1 arguments".to_string(),
+            expected: "read-line expects 0 to 2 arguments".to_string(),
             actual: args.len(),
         });
     }
@@ -83,6 +92,42 @@ pub(super) fn read_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
         let heap_ref = heap.borrow();
         get_input_port_tagged(args, 0, &heap_ref)?
     };
+
+    if args.len() == 2 {
+        let max = match args[1].as_fixnum() {
+            Some(n) if n >= 0 => n as usize,
+            _ => {
+                return Err(EvalError::TypeError(
+                    "read-line: max-chars must be a non-negative integer".to_string(),
+                ));
+            }
+        };
+        let mut line = String::new();
+        let mut hit_newline = false;
+        while line.len() < max {
+            match port.read_char() {
+                Ok(Some('\n')) => {
+                    hit_newline = true;
+                    break;
+                }
+                Ok(Some(c)) => line.push(c),
+                Ok(None) => break,
+                Err(e) => return Err(EvalError::IOError(e.to_string())),
+            }
+        }
+        if line.is_empty() && !hit_newline {
+            // Nothing read: EOF, unless the limit is 0 with input remaining.
+            let at_eof = matches!(port.peek_char(), Ok(None));
+            if at_eof {
+                return Ok(TaggedValue::EOF);
+            }
+        }
+        if hit_newline && line.ends_with('\r') {
+            line.pop();
+        }
+        return Ok(heap.borrow_mut().alloc_string(line));
+    }
+
     match port.read_line() {
         Ok(Some(mut line)) => {
             // Remove trailing newline if present (R7RS behavior)

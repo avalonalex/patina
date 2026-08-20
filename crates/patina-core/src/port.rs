@@ -89,6 +89,35 @@ pub struct BytevectorPortData {
     pub position: usize,
 }
 
+/// Decode the UTF-8 character at `position` in `bytes`, returning it with
+/// its encoded length, or `None` at the end.
+///
+/// This is what lets the textual operations read from a *binary* port. R7RS
+/// calls that an error (i.e. leaves it open), and both references allow it —
+/// chibi's ports are byte-based underneath, and Gauche accepts it too — with
+/// real code relying on the freedom: chibi-mime parses the header section of
+/// a binary message port with `read-line` before switching to `read-u8` for
+/// the body. Invalid UTF-8 is an error, exactly as on the file-port path.
+fn decode_utf8_at(bytes: &[u8], position: usize) -> io::Result<Option<(char, usize)>> {
+    if position >= bytes.len() {
+        return Ok(None);
+    }
+    let first = bytes[position];
+    let len = if first & 0x80 == 0 {
+        1
+    } else if first & 0xE0 == 0xC0 {
+        2
+    } else if first & 0xF0 == 0xE0 {
+        3
+    } else {
+        4
+    };
+    let end = (position + len).min(bytes.len());
+    let s = std::str::from_utf8(&bytes[position..end])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    Ok(s.chars().next().map(|c| (c, c.len_utf8())))
+}
+
 /// Data for a file-based port
 pub struct FilePortData {
     /// The file path (for display/debugging)
@@ -399,10 +428,15 @@ impl Port {
                     ))
                 }
             }
-            PortData::Bytevector(_) => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "read-char: not a textual port",
-            )),
+            // Textual reads from a binary port decode UTF-8 in place — see
+            // `decode_utf8_at` for why this is allowed at all.
+            PortData::Bytevector(b) => match decode_utf8_at(&b.content, b.position)? {
+                Some((ch, len)) => {
+                    b.position += len;
+                    Ok(Some(ch))
+                }
+                None => Ok(None),
+            },
             PortData::Closed => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "port is closed",
@@ -673,10 +707,9 @@ impl Port {
                     ))
                 }
             }
-            PortData::Bytevector(_) => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "peek-char: not a textual port",
-            )),
+            PortData::Bytevector(b) => {
+                Ok(decode_utf8_at(&b.content, b.position)?.map(|(ch, _)| ch))
+            }
             PortData::Closed => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "port is closed",
@@ -722,10 +755,9 @@ impl Port {
                     ))
                 }
             }
-            PortData::Bytevector(_) => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "char-ready?: not a textual port",
-            )),
+            // In-memory: a char is ready iff bytes remain (paired with the
+            // textual reads above, which decode UTF-8 from binary ports).
+            PortData::Bytevector(b) => Ok(b.position < b.content.len()),
             PortData::Closed => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "port is closed",
@@ -1130,10 +1162,22 @@ impl Port {
                     ))
                 }
             }
-            PortData::Bytevector(_) => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "read-line: not a textual port",
-            )),
+            PortData::Bytevector(b) => {
+                if b.position >= b.content.len() {
+                    return Ok(None);
+                }
+                let remaining = &b.content[b.position..];
+                let end = remaining
+                    .iter()
+                    .position(|&byte| byte == b'\n')
+                    .map(|i| i + 1)
+                    .unwrap_or(remaining.len());
+                let line = std::str::from_utf8(&remaining[..end])
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                    .to_string();
+                b.position += end;
+                Ok(Some(line))
+            }
             PortData::Closed => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "port is closed",
@@ -1476,14 +1520,25 @@ mod tests {
     }
 
     #[test]
-    fn test_textual_operations_on_binary_port_fail() {
-        let port = Port::new_input_bytevector(vec![65, 66, 67]);
+    fn test_textual_reads_on_binary_port_decode_utf8() {
+        // Textual reads on a binary port decode UTF-8 — both references
+        // allow this and chibi-mime relies on it; see `decode_utf8_at`.
+        let port = Port::new_input_bytevector(b"AB\nrest".to_vec());
+        assert_eq!(port.peek_char().unwrap(), Some('A'));
+        assert_eq!(port.read_char().unwrap(), Some('A'));
+        assert_eq!(port.read_line().unwrap(), Some("B\n".to_string()));
+        assert_eq!(port.read_line().unwrap(), Some("rest".to_string()));
+        assert_eq!(port.read_char().unwrap(), None);
+        assert!(!port.char_ready().unwrap());
 
-        // Textual operations should fail on binary port
+        // A multi-byte character decodes whole, not byte-by-byte.
+        let port = Port::new_input_bytevector("λx".as_bytes().to_vec());
+        assert_eq!(port.read_char().unwrap(), Some('λ'));
+        assert_eq!(port.read_char().unwrap(), Some('x'));
+
+        // Invalid UTF-8 is an error, as on the file path.
+        let port = Port::new_input_bytevector(vec![0xFF, 0xFE]);
         assert!(port.read_char().is_err());
-        assert!(port.peek_char().is_err());
-        assert!(port.read_line().is_err());
-        assert!(port.char_ready().is_err());
     }
 
     #[test]

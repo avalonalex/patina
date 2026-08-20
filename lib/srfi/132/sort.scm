@@ -8,10 +8,13 @@
 ;;; This file just defines the general sort API in terms of some
 ;;; algorithm-specific calls.
 
-(define (list-sort < l)			; Sort lists by converting to
-  (let ((v (list->vector l)))		; a vector and sorting that.
-    (vector-heap-sort! < v)
-    (vector->list v)))
+;; PATINA LOCAL EDIT: upstream sorts via vector-heap-sort!, which reverses
+;; ties. SRFI 132 allows that — list-sort need not be stable — but both
+;; references ship a stable list-sort (chibi's delegates to its native sort
+;; rather than to this reference; so does Gauche's), and real code depends
+;; on it: chibi-voting's sort-pairs breaks residual ties by input order.
+;; Deviation recorded in lib/srfi/PROVENANCE.md.
+(define list-sort list-merge-sort)
 
 (define list-sort! list-merge-sort!)
 
