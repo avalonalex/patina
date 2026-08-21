@@ -55,11 +55,22 @@ impl Compiler {
 
             // Not a pattern variable - apply hygiene handling
             if !self.definition_scopes.is_empty() {
-                // Scope-based hygiene: tag with definition scopes
-                return Ok(Template::Symbol(Identifier::with_scopes(
-                    s,
-                    self.definition_scopes.clone(),
-                )));
+                // Scope-based hygiene: tag with definition scopes, KEEPING any
+                // scopes the identifier already carries. Replacing them
+                // collapsed identity: when a macro-generated macro's template
+                // captures identifiers introduced by *different* expansions of
+                // the same outer rule — chibi-match's per-variable `p-ls`
+                // temporaries, spelled alike and distinguished only by their
+                // expansion scopes — stamping all of them with this macro's
+                // one definition scope set made them indistinguishable, so
+                // match-letrec bound two variables to one temporary. The union
+                // preserves the distinction and still contains everything the
+                // definition-scope resolution looks for.
+                let mut scopes = self.definition_scopes.clone();
+                for scope in key.scopes.iter() {
+                    scopes.add_scope(*scope);
+                }
+                return Ok(Template::Symbol(Identifier::with_scopes(s, scopes)));
             } else {
                 // Fall back to marks-and-ribs hygiene (no scopes available)
                 let should_capture = self.env.as_ref().is_some_and(|env| env.get(&s).is_some());

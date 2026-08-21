@@ -1,15 +1,15 @@
 # Patina third-party compatibility (vm backend)
 
-**125 of 162 packages pass** — 125 of 160 achievable (excluding 2 out-of-scope pending FFI).
+**126 of 162 packages pass** — 126 of 160 achievable (excluding 2 out-of-scope pending FFI).
 
 | Status | Packages |
 |---|---|
-| pass | 125 |
+| pass | 126 |
 | missing-library | 16 |
 | parse-error | 13 |
 | load-error | 1 |
 | unbound-identifier | 2 |
-| wrong-result | 2 |
+| wrong-result | 1 |
 | runtime-error | 1 |
 | timeout | 0 |
 | out-of-scope | 2 |
@@ -80,7 +80,7 @@
 | chibi-irregex | probe | pass |
 | chibi-iset | test | pass |
 | chibi-locale | test | pass |
-| chibi-match | test | wrong-result |
+| chibi-match | test | pass |
 | chibi-math-linalg | test | missing-library |
 | chibi-math-prime | test | pass |
 | chibi-math-stats | test | missing-library |

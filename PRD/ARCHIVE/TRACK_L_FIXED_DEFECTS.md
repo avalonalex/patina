@@ -10,6 +10,47 @@ re-running before designing against it — three separate entries below were fil
 turned out not to be the cause, and one test was written that passed against unfixed code.
 
 
+**A generated macro's template collapsed identifiers from different expansions** — ✅ **fixed**
+(2026-08-20). Both backends. The `match-letrec` defect, finally run to ground — and the fix is one
+line in the template compiler.
+
+```scheme
+(match-letrec ((x 1) (y 2)) (list x y))        ;; was: Duplicate parameter 'p-ls' in lambda
+(match-letrec (((x y) (list 1 2))) (list x y)) ;; was: match failure, reported as a type error
+;; chibi, Gauche, and now Patina => (1 2)
+```
+
+`match-extract-vars` pairs each pattern variable with a template-introduced temporary spelled
+`p-ls`; hygiene must keep each expansion's copy distinct, and their identity lives only in their
+expansion scopes — `p-ls{S138}` vs `p-ls{S142}`. Four synthetic repro attempts (recorded in the
+previous entry) all preserved the distinction, because they routed the temporaries through
+*pattern-variable substitution*, which takes the scope-preserving `mark_substituted` path. What the
+real chain does differently: `match-identifier=?` embeds the continuations holding the temporaries
+into the **rules of a generated macro** (the Petrofsky `eq` trick), so at that macro's compilation
+the temporaries are template *text*, not substitutions. `compile_template`'s symbol case stamped
+every non-pattern-variable identifier with the macro's one `definition_scopes` set — **replacing**
+the scopes it carried — so both temporaries came out `p-ls{S139, S143, S149}`: indistinguishable.
+Two bindings then met as duplicate lambda parameters; a list pattern became the equality constraint
+`(p-ls p-ls)`, which `(1 2)` fails.
+
+The fix: union the identifier's own scopes with the definition scopes instead of replacing
+(`compile_template`, patina-macros). Distinctness rides along; everything definition-scope
+resolution looks for is still present. `(chibi match)`'s suite goes **74 → 75 of 75** on both
+backends and the package's corpus row flips to pass (125 → 126).
+
+Two method notes worth keeping. The diagnosis that four synthetic repros could not deliver took
+one instrumented run: `(macro-debug-mode 'on)` prints scope-set annotations per expansion, and
+grepping the log for `p-ls{` showed the two introductions (S138, S142) and then a third scope
+family containing neither — the collapse, timestamped to the exact expansion. Start there next
+time. And the previous entry's closing guess — "probably wants the vector-hygiene/relinking fix
+first" — was wrong: both of those §6 entries still reproduce after this fix, which is independent
+of them. Predictions about unexplored defects belong in the entry as questions, not as sequencing
+advice.
+
+Guard: `hygiene.rs::test_generated_template_capture_keeps_expansions_distinct`, a distilled
+vendor-free shape verified to fail pre-fix ("Duplicate parameter 'tmp'") and to agree with chibi
+and Gauche post-fix.
+
 **`read-line` rejected chibi's max-chars argument; textual reads rejected binary ports** — ✅
 **fixed** (2026-08-19). Both backends. Found by running chibi-mime's suite, the first of the
 wrong-result rows: 5 of 9, all four failures raising through the same two gaps.
