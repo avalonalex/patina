@@ -1263,3 +1263,38 @@ fn test_a_literal_the_template_binds_is_not_the_users_identifier() {
         "var",
     );
 }
+
+/// Two expansions of the same rule each introduce a temporary spelled
+/// `tmp`; a later macro captures both in a *generated* macro's template —
+/// not as pattern-variable substitutions, but as free template text. Each
+/// copy's identity lives only in its expansion scope, and the template
+/// compiler used to *replace* those scopes with the generated macro's
+/// definition scopes, collapsing the two into one identifier: this program
+/// failed with "Duplicate parameter 'tmp' in lambda". The scopes are now
+/// unioned instead (compile_template's symbol case).
+///
+/// This is the distilled shape of chibi-match's `match-letrec`, whose
+/// per-variable `p-ls` temporaries pass through the generated Petrofsky
+/// `eq` macro of `match-identifier=?` — the collapse made
+/// `(match-letrec ((x 1) (y 2)) ...)` a duplicate-parameter error and gave
+/// a single list pattern an accidental equality constraint. chibi and
+/// Gauche both answer (1 2).
+#[test]
+fn test_generated_template_capture_keeps_expansions_distinct() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define-syntax bind-tmp
+           (syntax-rules ()
+             ((_ (k ...) v) (k ... (tmp . v)))))
+         (define-syntax through-template
+           (syntax-rules ()
+             ((_ k v)
+              (let-syntax ((go (syntax-rules () ((go) (k v)))))
+                (go)))))
+         (define-syntax done
+           (syntax-rules ()
+             ((_ (a b)) ((lambda (a b) (list a b)) 1 2))))
+         (bind-tmp (bind-tmp (through-template done)) ())",
+        "(1 2)",
+    );
+}

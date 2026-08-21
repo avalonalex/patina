@@ -380,7 +380,8 @@ correctness guard against future misfiling, not a source of the numbers above.
 move and that is the honest report: chibi-match went from `parse-error` — the library dead, its
 suite unrunnable — to `wrong-result`, with **74 of its 75 upstream tests passing**. A package scores
 `pass` or it does not, so a suite that goes from zero to 74/75 registers as no change at all. The
-remaining failure is `match-letrec` (§6). Worth noting for reading the number: the corpus counts
+remaining failure is `match-letrec` (§6; fixed 2026-08-20 — the suite is 75/75 and the package
+passes). Worth noting for reading the number: the corpus counts
 packages, not tests, so it under-reports exactly this kind of progress.
 
 **Ports became parameter objects, 2026-08-15 (137 → 138 of 184).** lassik-dockerfile was the corpus's
@@ -1114,38 +1115,6 @@ prefixed name nowhere while leaving the bare one working, `(null-environment 5)`
 `cond-expand`, and `(list else)` returns a symbol because of the `base.sld` workaround. They are
 kept there rather than repeated here: they are one defect, and it now has one document.
 
-**`match-letrec` collapses its per-expansion temporaries** — ❌ **open**. Both backends. The one
-remaining failure in `(chibi match)`'s suite (74 of 75), and the reason chibi-match scores
-`wrong-result` rather than `pass`.
-
-*Corrected 2026-08-19 by re-running the entry* (the previous text said "every `match-letrec` fails,
-including the simplest one" — no longer true, and the diagnosis is now much sharper):
-
-```scheme
-(match-letrec ((x 1)) x)                      ;; works — was failing when first recorded
-(match-letrec ((x 1) (y 2)) (list x y))       ;; => Desugar error: Duplicate parameter 'p-ls' in lambda
-(match-letrec (((x y) (list 1 2))) (list x y)) ;; => match failure ("no matching pattern")
-;; chibi => 1, (1 2), (1 2)
-```
-
-Both failures are one defect. `match-extract-vars` (`match.scm:882`) pairs each pattern variable
-with a **template-introduced** temporary, `p-ls`; every expansion must mint a hygienically distinct
-one. With two variables, Patina's two copies collapse into indistinguishable identifiers: in the
-two-bindings shape they meet as parameters of one lambda (`Duplicate parameter 'p-ls'` — the
-desugarer compares by name), and in the list-pattern shape the rewritten pattern becomes
-effectively `(p-ls p-ls)`, which `match` reads as an equality constraint that `(1 2)` fails —
-surfacing as chibi's "no matching pattern" branch, whose symbol-message `error` call Patina then
-rejects (that display defect is real but downstream; the old entry mistook it for the story).
-
-**The collapse needs the real chain.** Isolated reproductions all behave correctly on Patina —
-plain CPS accumulation of a template temp across two expansions, the same through a generated
-`let-syntax` trampoline, the full `match-extract-vars` shape with a substituted pattern and
-substituted literals, `match-rewrite` + the Petrofsky `match-identifier=?` — each keeps the two
-temps distinct (verified 2026-08-19, chibi and Gauche agreeing). So the losing step is further into
-the composition, and the next diagnosis should instrument the actual chibi-match expansion rather
-than build another synthetic repro. Same neighborhood as the vector-hygiene/relinking pair below —
-scope-set identity on template-introduced identifiers — and probably wants their fix first.
-
 **Hygiene is not applied inside a quasiquoted vector** — ❌ **open**. Both backends. Six lines, and
 it captures in *both* directions at once — the template's own binding and the caller's argument each
 resolve to the other:
@@ -1210,6 +1179,7 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| A generated macro's template collapsed identifiers from different expansions | 2026-08-20 |
 | `read-line` rejected chibi's max-chars argument; textual reads rejected binary ports | 2026-08-19 |
 | `list-sort` reversed ties (reference heap sort; both references are stable) | 2026-08-19 |
 | `case` rejected a clause with an empty body | 2026-08-19 |
