@@ -10,6 +10,7 @@ own record. One home per tree.
 |---|---|---|---|---|
 | `(srfi 14)` | 0.1.0 | `14.sld`, `14.scm` | snow-fort, Retropikzel's R7RS port of Olin Shivers' char-set reference implementation (MIT-Scheme-old) | `de94f90d7b032ea554ed51b4cbce942b22df6fefe68497d661b9c26e3c7e690e` |
 | `(srfi 125)` | chibi 0.12.0 | `125/hash.scm` | chibi-scheme's `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause) | file sha256 `d469201d00fa0b955ba23a01e02707034dad5ba2ef1a29cd7b12b880e76f1053` |
+| SRFI 162 | — | `128/162-impl.scm` | the SRFI's own sample implementation, `https://srfi.schemers.org/srfi-162/srfi/128/162-impl.scm` (John Cowan, MIT) | file sha256 `973b7a5e6557ecfaa5e218a2d51e63077572235973f27c3db484ab5bac9513f2` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
 Tarball URLs:
@@ -19,6 +20,22 @@ Tarball URLs:
 corpus drops packages Patina provides). Each `.scm` sits beside its `.sld`
 rather than in a numbered subdirectory so the `(include "…")` resolves
 unchanged.
+
+**SRFI 162 has no library of its own, deliberately.** Its bindings are exported
+from `(srfi 128)` because SRFI 162 says to: *"Implementers are urged to add them
+to their SRFI 128 libraries, for which reason they are not packaged as a
+separate library."* So there is no `lib/srfi/162.sld`, and adding one would name
+a library the SRFI declined to define. Two things fall out of following that
+rather than inventing a name: chibi's SRFI 128 suite runs here **verbatim**, and
+the five constants `scheme_tests/upstream/srfi/125/test.sld` used to define for
+itself now come from the library it is testing against.
+
+The file is upstream's, not chibi's, and the difference is one line: chibi
+comments out `default-comparator` because its own `comparators.scm` defines it,
+while the SRFI 128 reference implementation Patina uses does not. Taking the
+SRFI's copy means the import is byte-identical to the specification's own
+sample implementation, and `bundled_provenance.rs` pins it — unlike the rest of
+`128/`, which is the adapted port.
 
 `(srfi 125)` is the one entry not from a snow-fort tarball: snow-fort has no
 SRFI 125 package, so `125/hash.scm` is taken from the pinned chibi checkout and

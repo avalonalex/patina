@@ -197,6 +197,11 @@ suite_tests! {
     (srfi_132_sort, "srfi 132", "(srfi 132 test)", 0, 221),
     (srfi_133_vector, "srfi 133", "(srfi 133 test)", 0, 93),
     (srfi_113_set, "srfi 113", "(srfi 113 test)", 0, 253),
+    // Verbatim, and it needed no adaptation because SRFI 162's constants are
+    // exported from `(srfi 128)` — which is where SRFI 162 says to put them.
+    // Adapting the import list, as SRFI 125's and 130's suites needed, would
+    // have been the wrong fix here.
+    (srfi_128_comparator, "srfi 128", "(srfi 128 test)", 0, 170),
     // Adapted, not verbatim: its two chibi char-set imports were replaced by
     // `(srfi 14)`, test bodies untouched. Why, in
     // scheme_tests/upstream/README.md.
@@ -286,10 +291,6 @@ const NO_SUITE: &[(&str, &str)] = &[
         "re-export shim over (scheme process-context); reexport_shims.rs pins it",
     ),
     ("srfi 111", "no upstream suite exists (boxes)"),
-    (
-        "srfi 128",
-        "upstream suite uses SRFI 162's comparator constants (boolean-comparator …), which chibi folds into its (srfi 128) and Patina does not bundle — same follow-up as the SRFI 125 note in scheme_tests/upstream/README.md",
-    ),
     (
         "srfi 142",
         "rename shim over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the bitwise-if swap",

@@ -28,6 +28,7 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/132/test.sld` | 221 | 0 | verbatim |
 | `srfi/133/test.sld` | 93 | 0 | verbatim |
 | `srfi/113/test.sld` | 253 | 0 | verbatim |
+| `srfi/128/test.sld` | 170 | 0 | verbatim |
 | `srfi/130/test.sld` | 219 | 0 | imports |
 | `srfi/158/test.sld` | 76 | 0 | verbatim |
 | `srfi/125/test.sld` | 74 | 0 | imports |
@@ -71,11 +72,17 @@ they resolve to SRFI 125's — the tests call them with a bound, which is SRFI
 69's convention and what SRFI 125 re-exports, while SRFI 128's take one
 argument. Upstream needs no exclusion because chibi binds a single native
 procedure under both names, so the ambiguity never arises there; without the
-exclusion two assertions error. It also defines five comparator constants
+exclusion two assertions error.
+
+It used to carry a second adaptation as well: five comparator constants
 (`default-comparator`, `eq-comparator`, `eqv-comparator`, `string-comparator`,
-`string-ci-comparator`) that belong to SRFI 162, which chibi folds into its
-`(srfi 128)` and Patina does not bundle — an obvious follow-up, and the reason
-these five sit in the test file rather than in a library.
+`string-ci-comparator`) defined in the test file because they belong to SRFI
+162, which was not bundled. **Retired 2026-08-23** — Patina exports SRFI 162
+from `(srfi 128)`, where SRFI 162 asks implementers to put it, so the suite
+imports them like upstream does. Worth stating why that is better and not
+merely shorter: a constant re-derived inside the test file is not the one the
+library builds, so those five assertions were testing a local copy rather than
+the code under test. The suite still reports 74 of 74.
 
 **`srfi/130/test.sld` is the other adapted suite.** Upstream imports
 `(chibi char-set)` and `(chibi char-set full)`; the latter imports `(chibi)`,
@@ -199,13 +206,6 @@ default. The non-obvious entries:
 
 - **SRFI 1, SRFI 69** — their suites import `(chibi)`, chibi's implementation
   core, which Patina does not provide.
-- **SRFI 128** — its suite uses SRFI 162's comparator constants
-  (`boolean-comparator`, `real-comparator`, …), which chibi folds into its
-  `(srfi 128)` and Patina does not bundle — the same follow-up as the five
-  constants the SRFI 125 note above describes. (An earlier version of this
-  file said the suite "does not parse here"; that was the interpreter's
-  overloaded "Parse error in …" prefix wrapping what is actually an unbound
-  variable at library load.)
 - **SRFI 27** — its suite imports `(scheme flonum)`, i.e. SRFI 144, which
   Patina does not bundle yet. Add the suite when SRFI 144 lands.
 - **`(chibi filesystem)`** — its suite opens a raw file descriptor
