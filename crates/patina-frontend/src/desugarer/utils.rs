@@ -240,8 +240,22 @@ fn strip_identifiers_impl(
 
 /// Parse define function syntax from TaggedValue
 ///
-/// Returns (name, formals_tagged) where formals is the rest of the list.
+/// Returns (name, name_scopes, formals_tagged) where formals is the rest of the list.
 /// Takes SharedHeap for heap operations.
+/// A symbol or a scoped identifier as `(name, scopes)`.
+///
+/// The one answer to "what is this identifier called and what scopes does it
+/// carry" — `Desugarer::identifier_of` is this function with the borrow taken
+/// for you. Worth having exactly one: a copy of it that dropped the scopes is
+/// what let a recursive macro's per-expansion definitions collapse onto a
+/// single binding.
+pub fn symbol_or_identifier(tv: TaggedValue, heap: &Heap) -> Option<(Symbol, ScopeSet)> {
+    if let Some(s) = heap.get_symbol_name(tv) {
+        return Some((Rc::from(s), ScopeSet::new()));
+    }
+    get_identifier_info(tv, heap)
+}
+
 pub fn parse_define_function_tagged(
     pattern: TaggedValue,
     shared_heap: &SharedHeap,
@@ -251,15 +265,9 @@ pub fn parse_define_function_tagged(
         let heap = shared_heap.borrow();
         let (car, cdr) = heap.get_pair(pattern);
 
-        let (name, scopes) = if let Some(s) = heap.get_symbol_name(car) {
-            (Rc::from(s), ScopeSet::new())
-        } else if let Some(id) = get_identifier_info(car, &heap) {
-            id
-        } else {
-            return Err(DesugarError::InvalidSyntax(
-                "define function name must be a symbol".to_string(),
-            ));
-        };
+        let (name, scopes) = symbol_or_identifier(car, &heap).ok_or_else(|| {
+            DesugarError::InvalidSyntax("define function name must be a symbol".to_string())
+        })?;
 
         return Ok((name, scopes, cdr));
     }

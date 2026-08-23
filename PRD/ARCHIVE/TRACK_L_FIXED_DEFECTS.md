@@ -811,9 +811,35 @@ a later `set!` on the original binding is visible, which copying the value at ex
 silently freeze."* The lesson is narrower than "don't copy": the mechanism this needed already
 existed and said so at the site, and the second cell was invented beside it.
 
-Regression tests in `crates/patina-tests/tests/compliance/macros_advanced.rs`, both backends, six of
-them: the collapse at top level and in a body, the same through `define-values`, the two
-`jabberwocky` shapes that must not regress, and the mutation case the first attempt broke.
+**The read/write asymmetry was the second thing review caught.** `get` gained the name-only view of
+a scoped definition and `set` did not, so a definition became readable and unassignable — visible
+when the `set!` sits inside a macro the expansion *generated*, which arrives relinked to the bare
+name rather than carrying scopes. `alias_bindings` states the rule this broke: "Reads follow
+aliases in `get`; writes have to as well or the two disagree." Both now go through one
+`visible_scoped_index`, so the two cannot pick different bindings.
+
+**Two VM shapes remain wrong, both strictly better than before this change**, and both trace to the
+same place — a renamed top-level definition is a global under a new name, minted from a counter
+that `alpha_rename` resets per top-level form:
+
+```scheme
+(mk ((a 1) (b 2)) ()) (mk ((c 3) (d 4)) ()) (list (a) (b) (c) (d))
+;; chibi, tree-walker (1 2 3 4) · VM (3 4 3 4) · before this change (4 4 4 4)
+
+(define tmp 5) (mk ((a 1) (b 2)) ()) (list tmp (a) (b))
+;; chibi, tree-walker (5 1 2) · VM (2 1 2) · before this change (2 2 2)
+```
+
+The first is the counter; the second is the name-only alias the rename forces, which defines the
+bare name and so clobbers a source-written global. The deeper fix names itself: derive the unique
+name from the binding's scope set — `ScopeId`s are already process-unique — which makes renaming
+unconditional and unique across forms, and install the alias through `Environment::define_alias`,
+which is checked *after* real bindings and is an indirection rather than a copy. That is a VM
+design change rather than a defect fix, so it is recorded here rather than attempted.
+
+Regression tests in `crates/patina-tests/tests/compliance/macros_advanced.rs`, both backends, seven
+of them: the collapse at top level and in a body, the same through `define-values`, the two
+`jabberwocky` shapes that must not regress, and the two mutation cases the first attempts broke.
 
 **Recursive macros could not introduce a fresh binding per expansion** — ✅ **fixed** (2026-08-14).
 Both backends. `check_no_duplicates_scoped` in `patina-frontend/src/desugarer/utils.rs` keyed its

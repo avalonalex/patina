@@ -75,8 +75,8 @@ fn expand_qq_expr(
             scopes,
             value,
         } => CoreExprKind::Define {
-            scopes: scopes.clone(),
             name: name.clone(),
+            scopes: scopes.clone(),
             value: Rc::new(expand_qq_expr(value, heap, desugarer)?),
         },
 

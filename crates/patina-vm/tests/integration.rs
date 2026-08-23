@@ -5,6 +5,7 @@
 
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
 use patina_core::environment::Environment;
+use patina_core::scope::ScopeSet;
 use patina_core::tagged_value::TaggedValue;
 use patina_vm::compiler::compile;
 use patina_vm::runtime::{VmState, execute};
@@ -32,7 +33,7 @@ fn run(expr: CoreExpr) -> TaggedValue {
 fn var(name: &str) -> CoreExpr {
     CoreExpr::new(CoreExprKind::Var {
         name: Rc::from(name),
-        scopes: Default::default(),
+        scopes: ScopeSet::new(),
     })
 }
 
@@ -82,7 +83,7 @@ fn if_(test: CoreExpr, then: CoreExpr, else_: CoreExpr) -> CoreExpr {
 
 fn define(name: &str, value: CoreExpr) -> CoreExpr {
     CoreExpr::new(CoreExprKind::Define {
-        scopes: Default::default(),
+        scopes: ScopeSet::new(),
         name: Rc::from(name),
         value: Rc::new(value),
     })
@@ -91,7 +92,7 @@ fn define(name: &str, value: CoreExpr) -> CoreExpr {
 fn set(name: &str, value: CoreExpr) -> CoreExpr {
     CoreExpr::new(CoreExprKind::Set {
         var: Rc::from(name),
-        scopes: Default::default(),
+        scopes: ScopeSet::new(),
         value: Rc::new(value),
     })
 }
@@ -234,16 +235,16 @@ fn tail_call_self_recursion() {
         app(
             CoreExpr::new(CoreExprKind::Var {
                 name: self_sym.clone(),
-                scopes: Default::default(),
+                scopes: ScopeSet::new(),
             }),
             vec![
                 CoreExpr::new(CoreExprKind::Var {
                     name: self_sym.clone(),
-                    scopes: Default::default(),
+                    scopes: ScopeSet::new(),
                 }),
                 CoreExpr::new(CoreExprKind::Var {
                     name: n_sym.clone(),
-                    scopes: Default::default(),
+                    scopes: ScopeSet::new(),
                 }),
             ],
         ),
@@ -263,12 +264,12 @@ fn tail_call_self_recursion() {
     let outer_body = app(
         CoreExpr::new(CoreExprKind::Var {
             name: f_sym.clone(),
-            scopes: Default::default(),
+            scopes: ScopeSet::new(),
         }),
         vec![
             CoreExpr::new(CoreExprKind::Var {
                 name: f_sym.clone(),
-                scopes: Default::default(),
+                scopes: ScopeSet::new(),
             }),
             lit(0),
         ],

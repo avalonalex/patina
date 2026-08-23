@@ -180,7 +180,7 @@ impl<'a> CpsEvaluator<'a> {
                     //
                     // Bound under its scopes, with a name-only view of the
                     // same cell — see `Environment::define_scoped_definition`.
-                    def_env.define_scoped_definition(name.to_string(), scopes, val);
+                    def_env.define_scoped_definition(name.to_string(), scopes.clone(), val);
                     current_expr = cont.as_ref().clone();
                 }
 

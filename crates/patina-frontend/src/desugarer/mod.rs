@@ -404,11 +404,7 @@ impl Desugarer {
         tv: TaggedValue,
         shared_heap: &SharedHeap,
     ) -> Option<(Rc<str>, ScopeSet)> {
-        let heap = shared_heap.borrow();
-        if let Some(s) = heap.get_symbol_name(tv) {
-            return Some((Rc::from(s), ScopeSet::new()));
-        }
-        utils::get_identifier_info(tv, &heap)
+        utils::symbol_or_identifier(tv, &shared_heap.borrow())
     }
 
     /// What syntax, if any, this identifier names here.

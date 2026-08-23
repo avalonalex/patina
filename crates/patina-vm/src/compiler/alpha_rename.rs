@@ -17,6 +17,7 @@
 
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
 use patina_core::scope::{ScopeId, ScopeSet};
+use rustc_hash::FxHashMap;
 use std::rc::Rc;
 
 /// A binding in the rename environment.
@@ -172,14 +173,17 @@ fn collect_define_bindings(
     // Lambda-body definitions are locals: they are renamed unconditionally,
     // and no alias is involved because nothing outside the body resolves them
     // by name.
-    for i in 0..bindings.len() {
-        let duplicated = only_scoped
-            && bindings
-                .iter()
-                .enumerate()
-                .any(|(j, other)| j != i && other.name == bindings[i].name);
-        if !only_scoped || duplicated {
-            bindings[i].unique_name = env.make_unique_name(&bindings[i].name.clone());
+    if only_scoped {
+        let mut counts: FxHashMap<Symbol, u32> = FxHashMap::default();
+        for b in &bindings {
+            *counts.entry(b.name.clone()).or_default() += 1;
+        }
+        for b in bindings.iter_mut().filter(|b| counts[&b.name] > 1) {
+            b.unique_name = env.make_unique_name(&b.name);
+        }
+    } else {
+        for b in bindings.iter_mut() {
+            b.unique_name = env.make_unique_name(&b.name);
         }
     }
     bindings
@@ -191,33 +195,43 @@ fn collect_define_bindings(
 /// The alias exists for the reason `Environment::define_scoped_definition`
 /// documents: the definition-environment relinking resolves its target by
 /// name, so a renamed-only binding is unreachable from a macro-generated
-/// macro's template. Only a definition whose name collided is renamed at all
-/// (see `collect_define_bindings`), so this fires exactly where the name has
-/// stopped identifying one binding.
+/// macro's template.
+///
+/// At top level this fires only where a name collided, because that is the
+/// only case `collect_define_bindings` renames. In a lambda body every
+/// internal definition is renamed, so it fires for each macro-introduced one
+/// — an extra node through the five passes and an extra store at run time,
+/// scaling with how many a macro introduces.
 ///
 /// Spliced flat rather than wrapped in a nested `Begin`, because the passes
 /// downstream scan a `Begin`'s immediate children for definitions.
 fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
     let mut out = Vec::with_capacity(exprs.len());
     for expr in exprs {
-        let alias = match &expr.kind {
-            CoreExprKind::Define { name, scopes, .. } if !scopes.is_empty() => env
-                .resolve(name, scopes)
-                .filter(|renamed| renamed != name)
-                .map(|renamed| (name.clone(), renamed)),
-            _ => None,
-        };
-        out.push(rename_expr(expr, env));
-        if let Some((original, renamed)) = alias {
-            out.push(CoreExpr::new(CoreExprKind::Define {
-                name: original,
+        let renamed = rename_expr(expr, env);
+        // Read the new name off the renamed node rather than resolving a
+        // second time: the two answers have to agree, and this way they are
+        // the same answer.
+        if let (
+            CoreExprKind::Define { name, scopes, .. },
+            CoreExprKind::Define { name: new_name, .. },
+        ) = (&expr.kind, &renamed.kind)
+            && !scopes.is_empty()
+            && new_name != name
+        {
+            let alias = CoreExpr::new(CoreExprKind::Define {
+                name: name.clone(),
                 scopes: ScopeSet::new(),
                 value: CoreExpr::rc(CoreExprKind::Var {
-                    name: renamed,
+                    name: new_name.clone(),
                     scopes: ScopeSet::new(),
                 }),
-            }));
+            });
+            out.push(renamed);
+            out.push(alias);
+            continue;
         }
+        out.push(renamed);
     }
     out
 }

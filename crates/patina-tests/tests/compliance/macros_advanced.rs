@@ -1024,6 +1024,32 @@ fn test_a_generated_macro_sees_a_mutation_of_an_introduced_definition() {
     );
 }
 
+/// ...and it must be able to *write* it, not only read it.
+///
+/// The `set!` here sits in a macro the expansion generated, so it arrives
+/// relinked to the bare name rather than carrying scopes — a different path
+/// from the test above, whose `set!` is in the outer template. Giving reads a
+/// name-only view of a scoped definition without giving writes the same one
+/// left the name readable and unassignable.
+///
+/// Verified against chibi and Gauche, which both answer `5`.
+#[test]
+fn test_a_generated_macro_can_assign_to_an_introduced_definition() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax jab
+          (syntax-rules ()
+            ((_ h s) (begin (define mh 1)
+                            (define-syntax h (syntax-rules () ((_) mh)))
+                            (define-syntax s (syntax-rules () ((_ v) (set! mh v))))))))
+        (jab get put)
+        (put 5)
+        (get)
+        "#,
+        "5",
+    );
+}
+
 /// The same, inside a body.
 #[test]
 fn test_generated_macro_reaches_an_introduced_definition_in_a_body() {

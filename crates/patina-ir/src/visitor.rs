@@ -252,7 +252,7 @@ mod tests {
     fn test_node_counter_nested() {
         // (define f (lambda (x) x))  →  define, lambda, var(x) = 3 nodes
         let expr = CoreExpr::new(CoreExprKind::Define {
-            scopes: Default::default(),
+            scopes: ScopeSet::new(),
             name: "f".into(),
             value: std::rc::Rc::new(lambda(vec!["x"], vec![var("x")])),
         });
@@ -360,7 +360,7 @@ mod tests {
             }),
             CoreExpr::new(CoreExprKind::Begin(vec![lit(), var("x")])),
             CoreExpr::new(CoreExprKind::Define {
-                scopes: Default::default(),
+                scopes: ScopeSet::new(),
                 name: "x".into(),
                 value: std::rc::Rc::new(lit()),
             }),
