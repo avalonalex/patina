@@ -12,10 +12,25 @@ use patina_core::SharedHeap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+/// Make `text` safe to drop into a markdown table cell.
+///
+/// A note is free prose written by whoever added an exclusion, and an
+/// unescaped `|` silently splits the row — the renderer drops the overflow,
+/// so the justification vanishes from the committed report with no error.
+fn cell(text: &str) -> String {
+    text.replace('|', "\\|").replace(['\n', '\r'], " ")
+}
+
 /// The detail list a status carries, with its serialization key.
 fn status_detail(status: &Status) -> Option<(&'static str, &[String])> {
     match status {
-        Status::MissingLibrary(l) | Status::OutOfScope(l) => Some(("missing", l)),
+        Status::MissingLibrary(l) => Some(("missing", l)),
+        // Not `missing`: this payload is whatever the evidence named, which
+        // for an `include-shared` library is a shared object and for a
+        // reached stub is a procedure. Recording `(missing "mecab")` would
+        // put a `.so` where a reader — and any future histogram — expects a
+        // library name.
+        Status::OutOfScope(l) => Some(("needs", l)),
         Status::UnboundIdentifier(l) => Some(("unbound", l)),
         Status::ParseError(l) | Status::LoadError(l) => Some(("errors", l)),
         _ => None,
@@ -81,7 +96,7 @@ fn parse_result_row(
     };
     // The detail list is variadic, so it is the one field that reads the
     // whole clause rather than its first argument.
-    let names: Vec<String> = ["missing", "unbound", "errors"]
+    let names: Vec<String> = ["missing", "needs", "unbound", "errors"]
         .iter()
         .find_map(|key| fields.iter().find_map(|f| sexp::tagged_form(*f, key, heap)))
         .map(|rest| {
@@ -138,9 +153,17 @@ pub fn render(
         .copied()
         .filter(|(r, e)| r.status.key() != e.expect)
         .collect();
+    // Only an entry that still describes its package excuses it. A drifted
+    // entry is reported *and stays in scope* — reporting it while still
+    // subtracting it would be exactly the quiet absorption this mechanism
+    // exists to prevent, and would keep its failure out of the work queues
+    // too. It returns to the score until someone corrects the entry.
+    let drifted_slugs: BTreeSet<&str> = drifted.iter().map(|(r, _)| r.slug.as_str()).collect();
     let counted: Vec<&PackageResult> = results
         .iter()
-        .filter(|r| !excluded.contains_key(r.slug.as_str()))
+        .filter(|r| {
+            !excluded.contains_key(r.slug.as_str()) || drifted_slugs.contains(r.slug.as_str())
+        })
         .collect();
     let counted_pass = counted.iter().filter(|r| r.status.key() == "pass").count();
     let unmatched: Vec<&Exclusion> = if full_corpus {
@@ -154,6 +177,16 @@ pub fn render(
     } else {
         Vec::new()
     };
+    // The drift check in the other direction. Nothing subtracts an
+    // evidence-derived `out-of-scope` from the score by itself — the file
+    // does that — so a package the harness newly proves FFI-bound would
+    // otherwise sit in the denominator as though Patina had a defect, and the
+    // in-scope number would fall with nothing in any diff to explain it.
+    let unlisted: Vec<&PackageResult> = counted
+        .iter()
+        .copied()
+        .filter(|r| r.status.key() == "out-of-scope")
+        .collect();
 
     let mut out = String::new();
     let _ = writeln!(
@@ -176,10 +209,26 @@ pub fn render(
     if !drifted.is_empty() {
         let _ = writeln!(
             out,
-            "> ⚠️ **{} exclusion(s) no longer match what the package does.** See \
-             *Exclusions that have drifted* below — an entry whose reason has stopped \
-             being true is due for retirement, not for a new expectation.\n",
+            "> ⚠️ **{} exclusion(s) no longer match what the package does**, and are \
+             counted in the score until they do. See *Exclusions that have drifted* \
+             below — an entry whose reason has stopped being true is due for \
+             retirement, not for a new expectation.\n",
             drifted.len()
+        );
+    }
+    if !unlisted.is_empty() {
+        let _ = writeln!(
+            out,
+            "> ⚠️ **{} package(s) proved they need FFI but have no entry in \
+             `compat/EXCLUSIONS.scm`:** {}. They are counted against the in-scope \
+             score until one is added, which is deliberate — the alternative is a \
+             number that quietly discounts whatever the harness decided on its own.\n",
+            unlisted.len(),
+            unlisted
+                .iter()
+                .map(|r| format!("`{}`", r.slug))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
 
@@ -209,6 +258,11 @@ pub fn render(
     // something bundling can fix — `(srfi 160 base)` and `(chibi io)` each
     // sat in this table with one requester, and both requesters are C-shim
     // packages that would still fail with the library in hand.
+    //
+    // The consequence for a library wanted by both kinds of package is that
+    // the count is actionable demand rather than total demand, which is the
+    // right ordering signal for bundling work but is not what "Packages"
+    // says — so the column names it.
     histogram_section(
         &mut out,
         &counted,
@@ -270,7 +324,7 @@ pub fn render(
                 e.expect,
                 r.status.key(),
                 e.reason.key(),
-                e.note
+                cell(&e.note)
             );
         }
     }
@@ -294,7 +348,13 @@ pub fn render(
             let _ = writeln!(out, "\n### {} ({})\n", reason.heading(), rows.len());
             out.push_str("| Package | Status | Why |\n|---|---|---|\n");
             for (r, e) in rows {
-                let _ = writeln!(out, "| {} | {} | {} |", r.slug, r.status.key(), e.note);
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} |",
+                    r.slug,
+                    r.status.key(),
+                    cell(&e.note)
+                );
             }
         }
     }
@@ -343,7 +403,7 @@ fn histogram_section<'a>(
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
 
     let _ = writeln!(out, "\n## {}\n", title);
-    let _ = writeln!(out, "| {} | Packages |\n|---|---|", column);
+    let _ = writeln!(out, "| {} | In-scope packages |\n|---|---|", column);
     for (name, n) in rows {
         let _ = writeln!(out, "| {} | {} |", decorate(name), n);
     }
@@ -483,6 +543,51 @@ mod tests {
         assert!(!dropped.contains("| (srfi 160 base) |"), "{}", dropped);
     }
 
+    /// Drift is reported *and* the package returns to the score. Reporting it
+    /// while still subtracting it would be the quiet absorption the mechanism
+    /// exists to prevent.
+    #[test]
+    fn a_drifted_exclusion_stops_excusing_its_package() {
+        // `a` passes; the entry expects out-of-scope, so it has drifted.
+        let report = render(&two_results(), "vm", &excluding("a", "out-of-scope"), true);
+        assert!(
+            report.contains("Exclusions that have drifted"),
+            "{}",
+            report
+        );
+        // Both packages counted: the drifted one is back in scope.
+        assert!(report.contains("**1 of 2 in scope**"), "{}", report);
+    }
+
+    /// The drift check in the other direction. Nothing discounts an
+    /// evidence-derived out-of-scope row by itself, so one with no entry must
+    /// be visible rather than silently dragging the in-scope number down.
+    #[test]
+    fn an_out_of_scope_package_with_no_entry_is_reported() {
+        let report = render(
+            &two_results(),
+            "vm",
+            &excluding("a", "missing-library"),
+            true,
+        );
+        assert!(report.contains("proved they need FFI"), "{}", report);
+        assert!(report.contains("`b`"), "{}", report);
+    }
+
+    /// A note is free prose; an unescaped `|` silently splits its row and the
+    /// justification disappears from the rendered report.
+    #[test]
+    fn a_note_containing_a_pipe_does_not_split_its_row() {
+        let exclusions = vec![Exclusion {
+            slug: "b".into(),
+            reason: Reason::Ffi,
+            expect: "out-of-scope",
+            note: "fails on (or a | b) upstream".into(),
+        }];
+        let report = render(&two_results(), "vm", &exclusions, true);
+        assert!(report.contains(r"(or a \| b)"), "{}", report);
+    }
+
     /// A full run can tell a stale entry from an unrun one, and says so:
     /// an entry matching nothing subtracts nothing, and reads as if it did.
     #[test]
@@ -490,7 +595,7 @@ mod tests {
         let report = render(
             &two_results(),
             "vm",
-            &excluding("gone-from-corpus", "pass"),
+            &excluding("gone-from-corpus", "missing-library"),
             true,
         );
         assert!(report.contains("no longer has"), "{}", report);
@@ -505,7 +610,7 @@ mod tests {
         let report = render(
             &two_results(),
             "vm",
-            &excluding("not-in-this-run", "pass"),
+            &excluding("not-in-this-run", "missing-library"),
             false,
         );
         assert!(report.contains("**1 of 2 packages pass.**"), "{}", report);

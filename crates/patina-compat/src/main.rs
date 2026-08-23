@@ -64,10 +64,13 @@ struct Options {
     /// subset run cannot overwrite the canonical copy of the *other* one.
     results_path: Option<PathBuf>,
     report_path: Option<PathBuf>,
-    /// Opt-out list, `None` meaning the canonical committed location and
-    /// `Some("none")` meaning "score every package" — the escape hatch that
-    /// makes the raw corpus reachable without editing a committed file.
+    /// Opt-out list, `None` meaning the canonical committed location.
     exclusions_path: Option<PathBuf>,
+    /// Score every package — the escape hatch that makes the raw corpus
+    /// reachable without editing a committed file. Its own flag rather than a
+    /// magic path value, so "which file" and "whether to use one" stay
+    /// separate questions and no real filename is unreachable.
+    no_exclusions: bool,
     filter: Option<String>,
     tree_walker: bool,
     timeout: Duration,
@@ -89,11 +92,14 @@ impl Options {
 
     /// The opt-out list to apply, `None` when the caller asked for none.
     fn exclusions_path(&self) -> Option<PathBuf> {
-        match self.exclusions_path.as_deref() {
-            Some(p) if p == std::path::Path::new("none") => None,
-            Some(p) => Some(p.to_path_buf()),
-            None => Some(workspace_root().join("compat/EXCLUSIONS.scm")),
+        if self.no_exclusions {
+            return None;
         }
+        Some(
+            self.exclusions_path
+                .clone()
+                .unwrap_or_else(|| workspace_root().join("compat/EXCLUSIONS.scm")),
+        )
     }
 }
 
@@ -130,6 +136,7 @@ fn parse_args() -> Options {
         results_path: None,
         report_path: None,
         exclusions_path: None,
+        no_exclusions: false,
         filter: None,
         tree_walker: false,
         timeout: Duration::from_secs(30),
@@ -155,6 +162,7 @@ fn parse_args() -> Options {
             "--exclusions" => {
                 opts.exclusions_path = Some(PathBuf::from(require_value(&mut iter, "--exclusions")))
             }
+            "--no-exclusions" => opts.no_exclusions = true,
             "--filter" => opts.filter = Some(require_value(&mut iter, "--filter")),
             "--tree-walker" => opts.tree_walker = true,
             "--timeout" => {
@@ -320,12 +328,14 @@ fn report_command(opts: &Options) {
     // part in re-rendering.
     let exclusions = load_exclusions(opts, &heap);
     match report::from_sexp(&source, &heap) {
-        // A snapshot is whatever it was written from; re-rendering cannot
-        // know whether that was the whole corpus, and the committed one
-        // always is.
-        Ok((results, backend)) => {
-            println!("{}", report::render(&results, &backend, &exclusions, true))
-        }
+        // A snapshot is whatever it was written from, and re-rendering cannot
+        // tell. Only the committed one is known to cover the whole corpus —
+        // `--results` honours an arbitrary file, including the subset a
+        // `--filter` run writes, so naming one withdraws the assumption.
+        Ok((results, backend)) => println!(
+            "{}",
+            report::render(&results, &backend, &exclusions, opts.results_path.is_none())
+        ),
         Err(e) => {
             eprintln!("Error: {}", e);
             process::exit(2);

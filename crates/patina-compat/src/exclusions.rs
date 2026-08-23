@@ -141,6 +141,17 @@ fn parse_row(row: patina_core::TaggedValue, heap: &SharedHeap) -> Result<Exclusi
         .ok_or_else(|| format!("{}: unknown reason `{}`", slug, reason_key))?;
     let expect_key =
         sexp::row_symbol(&fields, "expect", heap).ok_or_else(|| format!("{}: no expect", slug))?;
+    // `pass` is refused rather than merely unusual: a package that passes is
+    // in scope by definition, and an entry expecting it would match forever,
+    // silently removing a pass from both halves of the ratio with nothing
+    // ever reported. It is the one spelling that would defeat the retirement
+    // rule this file's `expect` exists to enforce.
+    if expect_key == "pass" {
+        return Err(format!(
+            "{}: `expect pass` would exclude a package that works.              A passing package is in scope — delete the entry instead.",
+            slug
+        ));
+    }
     let expect = crate::run::Status::KEYS
         .into_iter()
         .find(|k| *k == expect_key)
@@ -189,6 +200,18 @@ mod tests {
         let src = SAMPLE.replace("(reason ffi)", "(reason because-i-said-so)");
         let err = parse(&src, &heap()).unwrap_err();
         assert!(err.contains("unknown reason"), "{}", err);
+    }
+
+    /// The one status that must not be excludable: it would match forever.
+    #[test]
+    fn rejects_an_entry_that_expects_a_pass() {
+        let src = SAMPLE.replace("(expect out-of-scope)", "(expect pass)");
+        let err = parse(&src, &heap()).unwrap_err();
+        assert!(
+            err.contains("would exclude a package that works"),
+            "{}",
+            err
+        );
     }
 
     #[test]

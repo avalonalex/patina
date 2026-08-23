@@ -18,7 +18,7 @@
 
 ## Missing libraries — the bundling work queue
 
-| Library | Packages |
+| Library | In-scope packages |
 |---|---|
 | (srfi 114 comparators) | 2 |
 | (srfi 144) | 2 |
@@ -28,7 +28,7 @@
 
 ## Parse errors
 
-| Error | Packages |
+| Error | In-scope packages |
 |---|---|
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
 | `Macro expansion failed: Invalid syntax: No matching pattern for macro ssax:make-parser/positional-args` | 1 |
@@ -36,7 +36,7 @@
 
 ## Unbound identifiers
 
-| Identifier | Packages |
+| Identifier | In-scope packages |
 |---|---|
 | `read-padded-string` | 1 |
 

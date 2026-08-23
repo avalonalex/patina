@@ -1375,3 +1375,40 @@ fn test_inline_define_library_with_include_shared_is_refused() {
         "native extension",
     );
 }
+
+/// The refusal survives a spelling the shape check rejects before the keyword
+/// dispatch ever sees it.
+///
+/// `include-shared` was added to the parser's known-declaration list so a
+/// malformed one could be *named*; that alone routed it back onto the lenient
+/// warn-and-skip path, where a well-formed one is refused. Leniency is for
+/// declarations whose loss costs nothing, and this is the one whose loss
+/// costs the whole library.
+#[test]
+fn test_a_malformed_include_shared_is_still_refused() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    fs::write(
+        lib_dir.join("improper.sld"),
+        r#"
+        (define-library (test improper)
+          (import (scheme base))
+          (export native-thing)
+          (include-shared . "somelib"))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let err = eval
+        .load_library(&["test".to_string(), "improper".to_string()])
+        .expect_err("a malformed include-shared must not be skipped");
+    assert!(err.to_string().contains("cannot skip"), "got: {err}");
+}
