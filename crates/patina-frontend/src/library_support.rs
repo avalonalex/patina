@@ -6,7 +6,7 @@
 //! The loader is stateless and only handles parsing. The evaluator handles
 //! import resolution and evaluation, eliminating the need for circular references.
 
-use crate::{BodyElement, LibraryDefinition};
+use crate::{BodyElement, LibraryDefinition, ParseError};
 use patina_core::{FileSystem, SharedHeap, TaggedValue};
 use patina_runtime::library_loader::{
     EvaluatingLibraryLoader, ExportSpec, ImportSet, ParsedLibrary,
@@ -89,11 +89,31 @@ impl SchemeLibraryLoader {
     ) -> Result<ParsedLibrary, LibraryError> {
         let lib_def =
             LibraryDefinition::from_tagged_with_library_checker(lib_form, &heap, can_load_library)
-                .map_err(|e| LibraryError::ParseError {
-                    file: INLINE_SOURCE_LABEL.to_string(),
-                    message: format!("{:?}", e),
-                })?;
+                .map_err(|e| Self::library_error_from_parse(INLINE_SOURCE_LABEL, e))?;
         self.resolve_definition(lib_def, base_dir, None, heap)
+    }
+
+    /// Attribute a failure to parse a `define-library` form to the file it
+    /// came from.
+    ///
+    /// One function rather than a `map_err` per call site so the one variant
+    /// that must *not* be flattened into a parse error keeps its identity:
+    /// `include-shared` says the library is a compiled shared object, which
+    /// is a scope limit rather than a defect, and Track L's harness reads it
+    /// as such. Everything else keeps the existing wording.
+    fn library_error_from_parse(file: &str, e: ParseError) -> LibraryError {
+        match e {
+            ParseError::NativeExtensionRequired(extension) => {
+                LibraryError::NativeExtensionRequired {
+                    file: file.to_string(),
+                    extension,
+                }
+            }
+            other => LibraryError::ParseError {
+                file: file.to_string(),
+                message: format!("{:?}", other),
+            },
+        }
     }
 
     /// Resolve a parsed definition's body elements against `base_dir` and
@@ -199,10 +219,7 @@ impl SchemeLibraryLoader {
         // Parse the define-library form into structured data with library checker
         let lib_def =
             LibraryDefinition::from_tagged_with_library_checker(lib_form, &heap, can_load_library)
-                .map_err(|e| LibraryError::ParseError {
-                    file: path.display().to_string(),
-                    message: format!("{:?}", e),
-                })?;
+                .map_err(|e| Self::library_error_from_parse(&path.display().to_string(), e))?;
 
         // Verify the library name matches
         if lib_def.name != name {
@@ -426,11 +443,17 @@ impl SchemeLibraryLoader {
             h.alloc_pair(define_library_sym, with_name)
         };
 
-        let lib_def = LibraryDefinition::from_tagged(dummy_lib, heap).map_err(|e| {
-            LibraryError::ParseError {
-                file: source_file.display().to_string(),
-                message: format!("Invalid library declaration: {:?}", e),
+        let lib_def = LibraryDefinition::from_tagged(dummy_lib, heap).map_err(|e| match e {
+            ParseError::NativeExtensionRequired(extension) => {
+                LibraryError::NativeExtensionRequired {
+                    file: source_file.display().to_string(),
+                    extension,
+                }
             }
+            other => LibraryError::ParseError {
+                file: source_file.display().to_string(),
+                message: format!("Invalid library declaration: {:?}", other),
+            },
         })?;
 
         // Convert frontend types to runtime types

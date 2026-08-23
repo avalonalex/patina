@@ -98,6 +98,10 @@ pub struct RunConfig {
 /// inventory (see PRD Track L §L2's out-of-scope list); deliberately
 /// conservative — anything not listed counts as a real gap.
 const FFI_BOUND: &[&str] = &[
+    // chibi's own FFI interface library. A package importing it is asking for
+    // C bindings by name, which is the deferred work item in Track L §3, not a
+    // library Patina could bundle.
+    "foreign c",
     "chibi ast",
     "chibi disasm",
     "chibi emscripten",
@@ -381,6 +385,24 @@ fn classify(out: &Captured, mode: &str) -> Status {
 
     let parts = [out.stdout.as_str(), out.stderr.as_str()];
 
+    // The library's implementation is a compiled shared object, and Patina
+    // refused that clause deliberately. First of all the buckets, for the
+    // reason the parse-error/unbound ordering below already encodes: a
+    // library that never loads leaves its importer unbound and its test
+    // program's entry point undefined, so every later marker here is a
+    // symptom of this one. `chibi-mecab` arrived as
+    // `unbound-identifier: run-chibi-mecab-test-tests` until this moved up.
+    //
+    // It also outranks a missing library, which the stub check below
+    // deliberately does not. The difference is what each proves: a missing
+    // library says a package needs something we could bundle, while this says
+    // the package needs a `.so` and would still need it afterwards. Matched
+    // on a constant this crate links against rather than on wording — see
+    // `patina_runtime::NATIVE_EXTENSION_MARKER`.
+    if let Some(extensions) = extract_native_extensions(parts) {
+        return Status::OutOfScope(extensions);
+    }
+
     let missing = extract_missing_libraries(parts);
     if !missing.is_empty() {
         return if missing.iter().all(|l| FFI_BOUND.contains(&l.as_str())) {
@@ -438,6 +460,30 @@ fn classify(out: &Captured, mode: &str) -> Status {
     }
 
     Status::Pass
+}
+
+/// Names of the shared objects an `include-shared` declaration asked for.
+///
+/// Patina refuses that declaration deliberately (`LibraryError::
+/// NativeExtensionRequired`), so this reads a marker the interpreter emits on
+/// purpose rather than wording that could be reworded — the shared constant is
+/// the contract, and it is a compile-time one.
+fn extract_native_extensions(parts: [&str; 2]) -> Option<Vec<String>> {
+    let mut found: Vec<String> = parts
+        .iter()
+        .flat_map(|s| s.lines())
+        .filter_map(|line| {
+            let (_, rest) = line.split_once(patina_runtime::NATIVE_EXTENSION_MARKER)?;
+            let rest = rest.trim();
+            let inner = rest.strip_prefix('"')?;
+            let (name, _) = inner.split_once('"')?;
+            Some(name.to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    found.sort();
+    found.dedup();
+    (!found.is_empty()).then_some(found)
 }
 
 /// Names of the FFI-stub procedures a run actually reached, if any.
@@ -750,6 +796,33 @@ mod tests {
         assert_eq!(
             classify(&out, "probe"),
             Status::OutOfScope(vec!["chibi ast".to_string()])
+        );
+    }
+
+    #[test]
+    fn classifies_foreign_c_as_out_of_scope() {
+        let out = captured("", "Error: Library (foreign c) not found", false);
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::OutOfScope(vec!["foreign c".to_string()])
+        );
+    }
+
+    /// A library whose implementation is a shared object is out of scope, and
+    /// says so at the cause. Before Patina recognised `include-shared` this
+    /// arrived as `Exported identifier 'mecab?' not defined` — a load error
+    /// naming a symptom two steps downstream.
+    #[test]
+    fn classifies_a_native_extension_as_out_of_scope() {
+        let out = captured(
+            "",
+            "Error: Library in chibi/mecab.sld requires the native extension \"mecab\" \
+             (include-shared), which Patina cannot load — it needs a foreign-function interface",
+            false,
+        );
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::OutOfScope(vec!["mecab".to_string()])
         );
     }
 

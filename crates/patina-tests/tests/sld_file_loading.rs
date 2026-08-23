@@ -1265,3 +1265,113 @@ fn test_cond_expand_library_check_sld_library() {
         "(library (test helper)) should be found"
     );
 }
+
+// ============================================================================
+// A library whose implementation is a compiled shared object
+// ============================================================================
+
+/// `include-shared` names a `.so` that Patina cannot load, and it is refused
+/// at the declaration rather than skipped.
+///
+/// The lenient unknown-clause policy above is right for a vendor annotation
+/// that contributes nothing; it is wrong here, because this clause *is* the
+/// library's implementation. Skipping it left the library parsed and empty
+/// and moved the failure to the importer, which then blamed an export — the
+/// same shape as the `(chibi filesystem)` cond-expand hazard in Track L §L2.
+/// `(chibi mecab)` reported `Exported identifier 'mecab?' not defined` for
+/// exactly this reason.
+#[test]
+fn test_sld_with_include_shared_names_the_extension() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    fs::write(
+        lib_dir.join("native.sld"),
+        r#"
+        (define-library (test native)
+          (import (scheme base))
+          (export native-thing)
+          (include-shared "somelib"))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let err = eval
+        .load_library(&["test".to_string(), "native".to_string()])
+        .expect_err("a library that is a shared object must not load silently");
+    let message = err.to_string();
+    assert!(
+        message.contains(patina_runtime::NATIVE_EXTENSION_MARKER),
+        "the error must carry the marker the compat harness classifies on, got: {message}"
+    );
+    assert!(
+        message.contains("somelib"),
+        "the error must name the shared object, got: {message}"
+    );
+}
+
+/// The refusal is a property of the declaration being *reached*, so a branch
+/// of a `cond-expand` that is not taken keeps its portable path.
+///
+/// This is what separates a package that genuinely needs FFI from one that
+/// merely ships a `.stub` for chibi: `(chibi crypto sha2)` and `(chibi math
+/// linalg)` both carry `include-shared` inside a `chibi`-only branch and both
+/// run on Patina. Reading FFI-boundness off the presence of a file would
+/// misfile both.
+#[test]
+fn test_include_shared_in_an_untaken_branch_is_not_reached() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("test");
+    fs::create_dir(&lib_dir).unwrap();
+
+    fs::write(
+        lib_dir.join("guarded.sld"),
+        r#"
+        (define-library (test guarded)
+          (import (scheme base))
+          (export answer)
+          (cond-expand
+           (chibi (include-shared "somelib"))
+           (else (begin (define answer 42)))))
+    "#,
+    )
+    .unwrap();
+
+    let eval = Evaluator::new();
+    eval.add_library_search_path(temp.path().to_path_buf());
+
+    let lib = eval
+        .load_library(&["test".to_string(), "guarded".to_string()])
+        .expect("the portable branch must still load");
+    assert_eq!(lib.env.get("answer").unwrap().as_fixnum(), Some(42));
+}
+
+/// The inline path shares the parser, so it shares the refusal — on both
+/// backends. It is `AtRuntime` because an inline `define-library` is a form
+/// the backends intercept while evaluating, not a file the loader reads
+/// ahead of the program.
+#[test]
+fn test_inline_define_library_with_include_shared_is_refused() {
+    common::assert_program_eval_error_at(
+        r#"
+        (define-library (inline native)
+          (import (scheme base))
+          (export native-thing)
+          (include-shared "somelib"))
+        (import (inline native))
+        "#,
+        common::ErrorClass::AtRuntime,
+        common::ErrorClass::AtRuntime,
+        "native extension",
+    );
+}

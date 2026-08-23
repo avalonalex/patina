@@ -32,6 +32,17 @@ pub enum ParseError {
 
     #[error("Duplicate datum label: #{0}=")]
     DuplicateLabel(usize),
+
+    /// A `define-library` reached an `include-shared` declaration: its
+    /// implementation is a compiled shared object, which Patina cannot load.
+    ///
+    /// Its own variant rather than an `InvalidSyntax` string because the
+    /// compatibility harness classifies on it — the library is out of scope
+    /// pending FFI, not broken — and because a caller that wants to say so in
+    /// its own words needs to be able to tell it apart. See
+    /// `LibraryError::NativeExtensionRequired`.
+    #[error("requires the native extension \"{0}\" (include-shared)")]
+    NativeExtensionRequired(String),
 }
 
 pub struct Parser {

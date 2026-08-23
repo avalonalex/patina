@@ -19,7 +19,7 @@ use patina_core::{SharedHeap, TaggedValue};
 /// The declaration keywords this parser implements — the same list the
 /// dispatch in `parse_declaration_tagged` matches on, named here so a
 /// malformed one can be reported as itself rather than as "unknown".
-const KNOWN_DECLARATIONS: [&str; 7] = [
+const KNOWN_DECLARATIONS: [&str; 8] = [
     "export",
     "import",
     "begin",
@@ -27,6 +27,7 @@ const KNOWN_DECLARATIONS: [&str; 7] = [
     "include-ci",
     "cond-expand",
     "include-library-declarations",
+    "include-shared",
 ];
 
 // Re-export library types from runtime (they moved there to fix dependency issues)
@@ -278,6 +279,22 @@ impl LibraryDefinition {
                     body_elements.push(BodyElement::IncludeLibraryDeclarations { paths });
                     Ok(())
                 }
+                // Not an unknown clause, and deliberately not on the lenient
+                // path: `include-shared` names a compiled shared object that
+                // *is* the library's implementation, so skipping it leaves the
+                // library parsed and empty and the failure surfaces at the
+                // importer, naming an export instead of the cause — the
+                // `(chibi filesystem)` hazard recorded in Track L §L2. Refuse
+                // it here, where the cause is still in hand.
+                //
+                // A branch of a `cond-expand` that is not taken never reaches
+                // this dispatch, so a library whose `include-shared` sits in
+                // an implementation-specific branch (chibi's `(chibi crypto
+                // sha2)` and `(chibi math linalg)` both do) keeps its portable
+                // path.
+                "include-shared" => Err(ParseError::NativeExtensionRequired(
+                    Self::parse_shared_object_name(&list[1..], heap),
+                )),
                 _ => Self::skip_or_reject_declaration(&format!("unknown declaration `{keyword}`")),
             }
         } else {
@@ -320,6 +337,24 @@ impl LibraryDefinition {
         } else {
             eprintln!("warning: define-library: ignoring {described}");
             Ok(())
+        }
+    }
+
+    /// Name the shared object an `include-shared` declaration asks for, for
+    /// the error that refuses it. Upstream always writes a single string, but
+    /// this is reporting rather than loading, so anything unexpected is
+    /// described rather than rejected — a second error about the shape of a
+    /// declaration we are about to refuse anyway would bury the real one.
+    fn parse_shared_object_name(values: &[TaggedValue], heap: &SharedHeap) -> String {
+        let h = heap.borrow();
+        let names: Vec<String> = values
+            .iter()
+            .filter_map(|&tv| h.get_string_contents(tv))
+            .collect();
+        if names.is_empty() {
+            "<unnamed>".to_string()
+        } else {
+            names.join("\", \"")
         }
     }
 
