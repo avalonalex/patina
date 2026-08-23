@@ -174,7 +174,7 @@ fn collect(
             refs
         }
 
-        CoreExprKind::Define { name: _, value } => {
+        CoreExprKind::Define { value, .. } => {
             // Top-level define: the name is not a free-var reference.
             collect(value, outer_bindings, counter, info)
         }

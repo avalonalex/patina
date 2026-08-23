@@ -108,7 +108,12 @@ pub trait ExprVisitor {
     }
 
     /// Visit a top-level definition.  Default recurses into the value expression.
-    fn visit_define(&mut self, _name: &Symbol, value: &CoreExpr) {
+    ///
+    /// `scopes` is the defined identifier's hygiene scope set, passed for the
+    /// same reason `visit_var` and `visit_set` take theirs: two expansions of
+    /// one macro template define the same *name* and differ only in scope, so
+    /// an implementor keying on the name alone silently merges them.
+    fn visit_define(&mut self, _name: &Symbol, _scopes: &ScopeSet, value: &CoreExpr) {
         self.visit_expr(value);
     }
 
@@ -163,7 +168,11 @@ pub trait ExprVisitor {
             CoreExprKind::If { test, then, else_ } => self.visit_if(test, then, else_),
             CoreExprKind::Set { var, scopes, value } => self.visit_set(var, scopes, value),
             CoreExprKind::Begin(exprs) => self.visit_begin(exprs),
-            CoreExprKind::Define { name, value } => self.visit_define(name, value),
+            CoreExprKind::Define {
+                name,
+                scopes,
+                value,
+            } => self.visit_define(name, scopes, value),
             CoreExprKind::Import { import_sets } => self.visit_import(import_sets),
             CoreExprKind::Expand { expr } => self.visit_expand(expr),
             CoreExprKind::App { func, args } => self.visit_app(func, args),
@@ -243,6 +252,7 @@ mod tests {
     fn test_node_counter_nested() {
         // (define f (lambda (x) x))  →  define, lambda, var(x) = 3 nodes
         let expr = CoreExpr::new(CoreExprKind::Define {
+            scopes: ScopeSet::new(),
             name: "f".into(),
             value: std::rc::Rc::new(lambda(vec!["x"], vec![var("x")])),
         });
@@ -350,6 +360,7 @@ mod tests {
             }),
             CoreExpr::new(CoreExprKind::Begin(vec![lit(), var("x")])),
             CoreExpr::new(CoreExprKind::Define {
+                scopes: ScopeSet::new(),
                 name: "x".into(),
                 value: std::rc::Rc::new(lit()),
             }),

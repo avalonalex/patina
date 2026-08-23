@@ -204,7 +204,20 @@ pub enum CoreExprKind {
 
     /// Top-level definition
     /// Example: (define x 42), (define (f x) x)
-    Define { name: Symbol, value: Rc<CoreExpr> },
+    ///
+    /// `scopes` is the hygiene scope set of the *defined* identifier, and is
+    /// empty for a name written in source. A macro template that introduces a
+    /// binding gets a fresh scope per expansion, so a recursive macro that
+    /// defines one temporary per element must produce as many distinct
+    /// bindings as it has elements — which it cannot do if the name alone
+    /// identifies the binding. `Var` and `ScopedParam` have carried their
+    /// scopes all along; this variant did not, so every such temporary
+    /// collapsed onto the last one.
+    Define {
+        name: Symbol,
+        scopes: ScopeSet,
+        value: Rc<CoreExpr>,
+    },
 
     /// Import: load library bindings
     /// Example: (import (scheme base))
@@ -297,8 +310,13 @@ impl CoreExprKind {
 
             CoreExprKind::Begin(exprs) => CoreExprKind::Begin(exprs.iter().map(f).collect()),
 
-            CoreExprKind::Define { name, value } => CoreExprKind::Define {
+            CoreExprKind::Define {
+                name,
+                scopes,
+                value,
+            } => CoreExprKind::Define {
                 name: name.clone(),
+                scopes: scopes.clone(),
                 value: Rc::new(f(value)),
             },
 
@@ -380,8 +398,17 @@ impl std::fmt::Display for CoreExprKind {
                 }
                 write!(f, ")")
             }
-            CoreExprKind::Define { name, value } => {
-                write!(f, "(define {} {})", name, value)
+            CoreExprKind::Define {
+                name,
+                scopes,
+                value,
+            } => {
+                if scopes.is_empty() {
+                    write!(f, "(define {} {})", name, value)
+                } else {
+                    // `name@{scopes}`, the spelling `Var` and `Set` use above.
+                    write!(f, "(define {}@{} {})", name, scopes, value)
+                }
             }
             CoreExprKind::Import { import_sets } => {
                 write!(f, "(import")?;

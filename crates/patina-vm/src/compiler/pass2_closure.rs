@@ -359,7 +359,7 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
             ClosedExprKind::Begin(exprs.iter().map(|e| convert(e, ctx)).collect())
         }
 
-        CoreExprKind::Define { name, value } => {
+        CoreExprKind::Define { name, value, .. } => {
             let converted_val = convert(value, ctx);
             match ctx.lookup(name) {
                 VarLoc::Local => ClosedExprKind::SetLocal {

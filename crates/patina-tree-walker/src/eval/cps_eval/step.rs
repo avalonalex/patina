@@ -164,7 +164,12 @@ impl<'a> CpsEvaluator<'a> {
                     current_expr = cont.as_ref().clone();
                 }
 
-                CpsExprKind::Define { name, value, cont } => {
+                CpsExprKind::Define {
+                    name,
+                    scopes,
+                    value,
+                    cont,
+                } => {
                     let val =
                         try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
                     // Define in the "definition environment", not current_env
@@ -172,7 +177,10 @@ impl<'a> CpsEvaluator<'a> {
                     // - For lambda body: def_env is the lambda's body environment
                     // This matches direct evaluator behavior where internal defines
                     // go to the lambda's body scope, not to LetVal temporaries
-                    def_env.define(name.to_string(), val);
+                    //
+                    // Bound under its scopes, with a name-only view of the
+                    // same cell — see `Environment::define_scoped_definition`.
+                    def_env.define_scoped_definition(name.to_string(), scopes.clone(), val);
                     current_expr = cont.as_ref().clone();
                 }
 

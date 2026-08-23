@@ -744,6 +744,103 @@ Watch the interaction with the fix below: the two `space` parameters were *corre
 rejecting them was right. The defect was upstream of that, in the guard that should have stopped the
 second one being created.
 
+**A recursive macro's per-expansion definitions collapsed onto one binding** — ✅ **fixed**
+(2026-08-23). Both backends. The sibling of the entry below, and the half it left undone:
+`ScopedParam` and `Var` carried their hygiene scopes, `CoreExprKind::Define` did not. A template
+that introduces a binding gets a fresh scope per expansion, so a recursive macro defining one
+temporary per element must produce that many bindings; with the name alone identifying it, each
+definition overwrote the last.
+
+```scheme
+(define-syntax bind-each
+  (syntax-rules ()
+    ((_ () ((name val tmp) ...))
+     (begin (define tmp val) ... (define name tmp) ...))
+    ((_ ((n v) . rest) (acc ...))
+     (bind-each rest (acc ... (n v tmp))))))
+(bind-each ((a 1) (b 2) (c 3)) ())
+(list a b c)
+;; before        => (3 3 3)
+;; chibi, Gauche => (1 2 3)
+```
+
+Found by probing Track L's "bundlable" queue rather than from the queue itself: `(srfi 166)` was
+filed as blocked on a missing `(srfi 165)`, and staging that library showed the real blocker was
+ours. SRFI 165's `define-computation-type` builds exactly this shape, so it failed at three or more
+fields — and `(srfi 166 base)` declares 22. The corpus reported it as
+`Parse error in srfi/166/base.sld: runtime error: Type error: cdr expects a pair`, three steps from
+the cause.
+
+`Define` now carries a `ScopeSet`, populated by the desugarer from the identifier it defines and
+consumed differently by each backend, matching how each already handles a scoped parameter:
+
+- **Tree-walker** binds at run time through the new `Environment::define_scoped_definition`.
+- **VM** renames in `alpha_rename`, which had two holes of its own. It collected a body's
+  definitions with `ScopeSet::new()` — discarding what `Define` had no field to carry — and it
+  looked one level into `Begin`, so a macro expanding via `define-values` (itself a `begin` of
+  definitions) hid every definition inside a group the scan did see. Top-level definitions got a
+  frame they never had.
+
+**The R7RS suite caught the fix's own overreach, which is the part worth keeping.** A first version
+bound the definition under its scopes *only* — correct-looking, and it broke `jabberwocky`:
+
+```scheme
+(define-syntax jabberwocky
+  (syntax-rules ()
+    ((_ hatter)
+     (begin (define march-hare 42)
+            (define-syntax hatter (syntax-rules () ((_) march-hare)))))))
+(jabberwocky mad-hatter)
+(mad-hatter)  ;; => 42
+```
+
+The reasoning that failed was "an introduced identifier is hygienic, so only the expansion that
+produced it can refer to it, and that expansion is inside this one form". A macro-generated *macro*
+outlives the form, and the reference from its template is resolved **by name**, through
+`link_definition_env_refs` — which Track L §6 separately records as rewriting by name. So a
+scope-only binding is unreachable from exactly the code that most needs it. Both backends keep a
+name-only view of the scoped definition — the most recent one, which is what happened when
+definitions carried no scopes at all — and both reach the *binding* rather than a copy of its
+value, so a mutation through either path is visible from the other.
+
+**The first attempt at that view was a copy, and review caught it.** Storing the value under the
+bare name as well as under its scopes made a `set!` through the scoped path leave the two
+disagreeing — `main`, chibi and Gauche answer `2` where it answered `1`. `Environment` already
+documents why, at the field the relinking uses: *"resolving through the alias on every lookup means
+a later `set!` on the original binding is visible, which copying the value at expansion time would
+silently freeze."* The lesson is narrower than "don't copy": the mechanism this needed already
+existed and said so at the site, and the second cell was invented beside it.
+
+**The read/write asymmetry was the second thing review caught.** `get` gained the name-only view of
+a scoped definition and `set` did not, so a definition became readable and unassignable — visible
+when the `set!` sits inside a macro the expansion *generated*, which arrives relinked to the bare
+name rather than carrying scopes. `alias_bindings` states the rule this broke: "Reads follow
+aliases in `get`; writes have to as well or the two disagree." Both now go through one
+`visible_scoped_index`, so the two cannot pick different bindings.
+
+**Two VM shapes remain wrong, both strictly better than before this change**, and both trace to the
+same place — a renamed top-level definition is a global under a new name, minted from a counter
+that `alpha_rename` resets per top-level form:
+
+```scheme
+(mk ((a 1) (b 2)) ()) (mk ((c 3) (d 4)) ()) (list (a) (b) (c) (d))
+;; chibi, tree-walker (1 2 3 4) · VM (3 4 3 4) · before this change (4 4 4 4)
+
+(define tmp 5) (mk ((a 1) (b 2)) ()) (list tmp (a) (b))
+;; chibi, tree-walker (5 1 2) · VM (2 1 2) · before this change (2 2 2)
+```
+
+The first is the counter; the second is the name-only alias the rename forces, which defines the
+bare name and so clobbers a source-written global. The deeper fix names itself: derive the unique
+name from the binding's scope set — `ScopeId`s are already process-unique — which makes renaming
+unconditional and unique across forms, and install the alias through `Environment::define_alias`,
+which is checked *after* real bindings and is an indirection rather than a copy. That is a VM
+design change rather than a defect fix, so it is recorded here rather than attempted.
+
+Regression tests in `crates/patina-tests/tests/compliance/macros_advanced.rs`, both backends, seven
+of them: the collapse at top level and in a body, the same through `define-values`, the two
+`jabberwocky` shapes that must not regress, and the two mutation cases the first attempts broke.
+
 **Recursive macros could not introduce a fresh binding per expansion** — ✅ **fixed** (2026-08-14).
 Both backends. `check_no_duplicates_scoped` in `patina-frontend/src/desugarer/utils.rs` keyed its
 `HashSet` on the parameter *name*, so two params introduced by different expansions of the same

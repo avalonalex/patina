@@ -907,6 +907,168 @@ fn test_recursive_macro_introduces_distinct_params() {
     );
 }
 
+/// ...and the same rule applies to a *definition*, which is where it was
+/// still broken: `CoreExprKind::Define` carried no scopes, so every expansion
+/// of one template defined the same variable and the last value won.
+///
+/// `tmp` below is introduced once per element, so the three definitions must
+/// be three bindings. Patina answered `(3 3 3)`; chibi and Gauche both give
+/// `(1 2 3)`. This is the shape SRFI 165's `define-computation-type` builds,
+/// which is why `(srfi 166)` could not load: it declares 22 fields.
+#[test]
+fn test_recursive_macro_introduces_distinct_definitions() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax bind-each
+          (syntax-rules ()
+            ((_ () ((name val tmp) ...))
+             (begin (define tmp val) ...
+                    (define name tmp) ...))
+            ((_ ((n v) . rest) (acc ...))
+             (bind-each rest (acc ... (n v tmp))))))
+        (bind-each ((a 1) (b 2) (c 3)) ())
+        (list a b c)
+        "#,
+        "(1 2 3)",
+    );
+}
+
+/// The same, inside a body rather than at top level — the two travel
+/// different paths through the VM's alpha-renaming pass.
+#[test]
+fn test_recursive_macro_distinct_definitions_in_a_body() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax bind-each
+          (syntax-rules ()
+            ((_ () ((name val tmp) ...))
+             (begin (define tmp val) ...
+                    (define name tmp) ...))
+            ((_ ((n v) . rest) (acc ...))
+             (bind-each rest (acc ... (n v tmp))))))
+        (define (f)
+          (bind-each ((a 1) (b 2) (c 3)) ())
+          (list a b c))
+        (f)
+        "#,
+        "(1 2 3)",
+    );
+}
+
+/// The definitions may arrive nested inside another macro's `begin` —
+/// `define-values` expands to one, so a macro using it produces two levels.
+/// A one-level scan for definitions found the outer group and none of its
+/// members, which left the collapse in place on the VM only.
+#[test]
+fn test_distinct_definitions_through_define_values() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax bind-each
+          (syntax-rules ()
+            ((_ () ((name val tmp) ...))
+             (begin (define-values (tmp ...) (values val ...))
+                    (define name tmp) ...))
+            ((_ ((n v) . rest) (acc ...))
+             (bind-each rest (acc ... (n v tmp))))))
+        (bind-each ((a 1) (b 2) (c 3)) ())
+        (list a b c)
+        "#,
+        "(1 2 3)",
+    );
+}
+
+/// The counterpart the fix must not break: a macro-introduced definition has
+/// to stay reachable from a macro that the same expansion *generated*, even
+/// though that reference is resolved by name rather than by scopes
+/// (`link_definition_env_refs`). This is the R7RS suite's `jabberwocky`
+/// shape, and making the definition scope-only broke it.
+#[test]
+fn test_generated_macro_reaches_an_introduced_definition() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax jabberwocky
+          (syntax-rules ()
+            ((_ hatter)
+             (begin
+               (define march-hare 42)
+               (define-syntax hatter
+                 (syntax-rules ()
+                   ((_) march-hare)))))))
+        (jabberwocky mad-hatter)
+        (mad-hatter)
+        "#,
+        "42",
+    );
+}
+
+/// ...and it must reach the *binding*, not a copy of its value. Giving the
+/// definition a second, name-only cell made the two disagree the moment the
+/// expansion mutated one of them — the freeze `Environment::alias_bindings`
+/// documents as the reason its own indirection exists.
+///
+/// Verified against chibi and Gauche, which both answer `2`.
+#[test]
+fn test_a_generated_macro_sees_a_mutation_of_an_introduced_definition() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax jab
+          (syntax-rules ()
+            ((_ h b) (begin (define mh 1)
+                            (define (b) (set! mh 2))
+                            (define-syntax h (syntax-rules () ((_) mh)))))))
+        (jab get bump)
+        (bump)
+        (get)
+        "#,
+        "2",
+    );
+}
+
+/// ...and it must be able to *write* it, not only read it.
+///
+/// The `set!` here sits in a macro the expansion generated, so it arrives
+/// relinked to the bare name rather than carrying scopes — a different path
+/// from the test above, whose `set!` is in the outer template. Giving reads a
+/// name-only view of a scoped definition without giving writes the same one
+/// left the name readable and unassignable.
+///
+/// Verified against chibi and Gauche, which both answer `5`.
+#[test]
+fn test_a_generated_macro_can_assign_to_an_introduced_definition() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax jab
+          (syntax-rules ()
+            ((_ h s) (begin (define mh 1)
+                            (define-syntax h (syntax-rules () ((_) mh)))
+                            (define-syntax s (syntax-rules () ((_ v) (set! mh v))))))))
+        (jab get put)
+        (put 5)
+        (get)
+        "#,
+        "5",
+    );
+}
+
+/// The same, inside a body.
+#[test]
+fn test_generated_macro_reaches_an_introduced_definition_in_a_body() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax def-and-use
+          (syntax-rules ()
+            ((_ getter)
+             (begin (define secret 42)
+                    (define-syntax getter (syntax-rules () ((_) secret)))))))
+        (define (f)
+          (def-and-use get-it)
+          (get-it))
+        (f)
+        "#,
+        "42",
+    );
+}
+
 /// The same rule applies to the rest parameter of an improper formals list.
 #[test]
 fn test_recursive_macro_distinct_params_with_rest() {
