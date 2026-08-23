@@ -69,6 +69,34 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt
 ```
 
+### CI runs the full gate — don't serialize it locally
+
+`.github/workflows/ci.yml` runs on **every push to main and every PR**, in
+3–5 minutes, and covers more than a local run does:
+
+| Job | What it runs |
+|---|---|
+| Test Suite | `cargo test --all --lib --tests` on **ubuntu and macos** (`SKIP_CHIBI_TESTS=1`) |
+| R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh` |
+| GC differential | `run_gc_differential.sh` on release **and** on debug with poison assertions |
+| Rustfmt / Clippy | `cargo fmt --check`, `clippy --all-targets --all-features -D warnings` |
+
+The GC lanes and the macOS/Linux split have no local equivalent that anyone
+runs by hand, so pushing is *stronger* verification than the commands above,
+not weaker.
+
+**So run locally only what tells you whether your specific change works** — a
+release build, the repro you are chasing, and the test file you touched — then
+push and let CI do the matrix. Check it with `gh run list --limit 3` or
+`gh run watch`.
+
+Run the full local gate when the answer has to be in hand before the run
+finishes: writing a PR description that states a result, bumping
+`rust-toolchain.toml`, or a change whose blast radius you cannot bound (a
+`CoreExpr`/`CpsExpr` variant, `Environment`, the desugarer). Otherwise
+re-running `cargo test --all` after each edit costs 5–10 minutes an iteration
+to learn what a push would have told you anyway.
+
 ## Documentation
 
 **Do not create new markdown files without user approval.**
