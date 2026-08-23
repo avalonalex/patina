@@ -40,6 +40,10 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/chibi/term/ansi.sld", 0xcb7a30ac04c2fb00),
     ("lib/chibi/test.scm", 0x41e9de8d4b7cc1ec),
     ("lib/chibi/test.sld", 0xf810b0f46bc155d7),
+    // SRFI 162's own sample implementation, byte-identical. The rest of
+    // lib/srfi/128/ is the adapted SRFI 128 port and is deliberately unpinned
+    // (see the module docs); this file is not adapted, so it is watched.
+    ("lib/srfi/128/162-impl.scm", 0xf93547f60a36817a),
     // Pinned post-edit: one PATINA LOCAL EDIT (ucs-range->char-set's base
     // set), recorded in lib/srfi/PROVENANCE.md.
     ("lib/srfi/14.scm", 0xb971a3e4e5280a08),

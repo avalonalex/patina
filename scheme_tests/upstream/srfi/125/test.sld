@@ -1,24 +1,21 @@
 (define-library (srfi 125 test)
   (export run-tests)
-  ;; PATINA: two import adaptations, test bodies untouched. See
+  ;; PATINA: one import adaptation, test bodies untouched. See
   ;; scheme_tests/upstream/README.md.
-  ;;  1. `string-hash`/`string-ci-hash` are excluded from (srfi 128) so they
-  ;;     resolve to SRFI 125's, which is what the tests calling them with a
-  ;;     bound expect. Upstream needs no exclusion because chibi binds one
-  ;;     native procedure under both names.
-  ;;  2. The comparator constants below come from SRFI 162, which chibi folds
-  ;;     into its (srfi 128) and Patina does not bundle.
+  ;;  `string-hash`/`string-ci-hash` are excluded from (srfi 128) so they
+  ;;  resolve to SRFI 125's, which is what the tests calling them with a
+  ;;  bound expect. Upstream needs no exclusion because chibi binds one
+  ;;  native procedure under both names.
+  ;;
+  ;; The five comparator constants this file used to define for itself are
+  ;; now imported: they are SRFI 162's, and Patina exports them from
+  ;; (srfi 128) as SRFI 162 asks. That is the better source — the local
+  ;; definitions were re-derived here, so nothing tied them to the library
+  ;; the suite is meant to be testing against.
   (import (scheme base) (scheme char) (scheme write)
           (srfi 125) (except (srfi 128) string-hash string-ci-hash) (srfi 132)
           (chibi test))
   (begin
-    (define default-comparator (make-default-comparator))
-    (define eq-comparator (make-eq-comparator))
-    (define eqv-comparator (make-eqv-comparator))
-    (define string-comparator
-      (make-comparator string? string=? string<? string-hash))
-    (define string-ci-comparator
-      (make-comparator string? string-ci=? string-ci<? string-ci-hash))
     (define (run-tests)
       (define number-comparator
         (make-comparator real? = < (lambda (x . o) (exact (abs (round x))))))

@@ -39,6 +39,7 @@ to the Patina project.
 | 111 | Boxes | [srfi-111](https://srfi.schemers.org/srfi-111/) | John Cowan |
 | 113 | Sets and Bags | [srfi-113](https://srfi.schemers.org/srfi-113/) | John Cowan |
 | 128 | Comparators (reduced) | [srfi-128](https://srfi.schemers.org/srfi-128/) | John Cowan |
+| 162 | Comparators (sublibrary) | [srfi-162](https://srfi.schemers.org/srfi-162/) — exported from `(srfi 128)`, which is where SRFI 162 asks implementers to put it | John Cowan |
 | 132 | Sort Libraries | [srfi-132](https://srfi.schemers.org/srfi-132/), pinned commit in `132.sld` | Olin Shivers, John Cowan |
 | 133 | Vector Library | [srfi-133](https://srfi.schemers.org/srfi-133/) | Taylor Campbell (SRFI 43), John Cowan (SRFI 133) |
 | 143 | Fixnums | chibi-scheme's implementation | John Cowan (spec) |
