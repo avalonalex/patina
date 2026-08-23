@@ -1257,6 +1257,7 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| A recursive macro's per-expansion *definitions* collapsed onto one binding | 2026-08-23 |
 | A generated macro's template collapsed identifiers from different expansions | 2026-08-20 |
 | `read-line` rejected chibi's max-chars argument; textual reads rejected binary ports | 2026-08-19 |
 | `list-sort` reversed ties (reference heap sort; both references are stable) | 2026-08-19 |

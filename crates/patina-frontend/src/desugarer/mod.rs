@@ -1267,7 +1267,8 @@ impl Desugarer {
 
         // Check if it's function shorthand: (define (name params...) body...)
         if first.is_pair() {
-            let (name, formals_tv) = utils::parse_define_function_tagged(first, shared_heap)?;
+            let (name, name_scopes, formals_tv) =
+                utils::parse_define_function_tagged(first, shared_heap)?;
             let body_tvs: Vec<_> = args_vec[1..].to_vec();
 
             if body_tvs.is_empty() {
@@ -1294,6 +1295,7 @@ impl Desugarer {
 
             return Ok(CoreExpr::new(CoreExprKind::Define {
                 name,
+                scopes: name_scopes,
                 value: CoreExpr::rc(CoreExprKind::Lambda {
                     params,
                     body,
@@ -1303,12 +1305,17 @@ impl Desugarer {
         }
 
         // Simple variable define: (define name value)
-        let name = {
+        //
+        // The scope set travels with the name. A macro-introduced binding is
+        // only distinguishable from the same name introduced by another
+        // expansion by its scopes, so dropping them here is what made a
+        // recursive macro's per-element temporaries collapse onto one.
+        let (name, name_scopes) = {
             let heap = shared_heap.borrow();
             if let Some(s) = heap.get_symbol_name(first) {
-                Rc::from(s)
-            } else if let Some((id_name, _)) = utils::get_identifier_info(first, &heap) {
-                id_name
+                (Rc::from(s), ScopeSet::new())
+            } else if let Some(id) = utils::get_identifier_info(first, &heap) {
+                id
             } else {
                 return Err(DesugarError::InvalidSyntax(
                     "define requires a symbol as first argument".to_string(),
@@ -1329,6 +1336,7 @@ impl Desugarer {
 
         Ok(CoreExpr::new(CoreExprKind::Define {
             name,
+            scopes: name_scopes,
             value: Rc::new(value),
         }))
     }
@@ -2428,7 +2436,7 @@ mod tests {
             ],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Define { name, value } = result.kind {
+        if let CoreExprKind::Define { name, value, .. } = result.kind {
             assert_eq!(name.as_ref(), "x");
             assert!(
                 matches!(&value.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
@@ -2450,7 +2458,7 @@ mod tests {
         let body = make_list(&heap, &[sym(&heap, "+"), sym(&heap, "x"), sym(&heap, "y")]);
         let list = make_list(&heap, &[sym(&heap, "define"), name_params, body]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Define { name, value } = result.kind {
+        if let CoreExprKind::Define { name, value, .. } = result.kind {
             assert_eq!(name.as_ref(), "add");
             assert!(matches!(&value.kind, CoreExprKind::Lambda { .. }));
         } else {
@@ -2471,7 +2479,7 @@ mod tests {
             &[sym(&heap, "define"), name_params, sym(&heap, "args")],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Define { name, value } = result.kind {
+        if let CoreExprKind::Define { name, value, .. } = result.kind {
             assert_eq!(name.as_ref(), "f");
             if let CoreExprKind::Lambda { params, .. } = &value.kind {
                 assert!(matches!(params, Formals::Variadic(_)));
@@ -2500,7 +2508,7 @@ mod tests {
             &[sym(&heap, "define"), name_params, sym(&heap, "rest")],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Define { name, value } = result.kind {
+        if let CoreExprKind::Define { name, value, .. } = result.kind {
             assert_eq!(name.as_ref(), "f");
             if let CoreExprKind::Lambda { params, .. } = &value.kind {
                 if let Formals::Mixed { fixed, rest } = params {

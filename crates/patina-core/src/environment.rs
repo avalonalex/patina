@@ -332,6 +332,31 @@ impl Environment {
         }
     }
 
+    /// Define a binding that answers both scoped and name-only lookups.
+    ///
+    /// This is what `define` needs and `define_with_scopes` deliberately does
+    /// not do. A macro-introduced *parameter* should be invisible to a
+    /// reference written in source, so `define_with_scopes` files it under
+    /// scopes alone. A macro-introduced *definition* cannot be: the
+    /// definition-environment relinking that lets a macro-generated macro
+    /// reach its defining environment rewrites references by name
+    /// (`link_definition_env_refs`, and Track L §6 records that it does), so a
+    /// scoped-only binding is unreachable from the generated macro's template.
+    /// The R7RS suite's `jabberwocky` test is exactly that shape.
+    ///
+    /// So both go in. The scoped entry is what makes two expansions of one
+    /// template distinguishable; the plain entry is the name-based fallback,
+    /// last definition winning, which is the behaviour that existed when a
+    /// definition carried no scopes at all. Nothing that resolves correctly
+    /// today starts resolving differently — the scoped entry is only ever
+    /// preferred by a lookup that supplies matching scopes.
+    pub fn define_scoped_definition(&self, name: String, scopes: ScopeSet, value: TaggedValue) {
+        if !scopes.is_empty() {
+            self.define_with_scopes(name.clone(), scopes, value);
+        }
+        self.bindings.borrow_mut().insert(name, value);
+    }
+
     /// Set an existing scoped binding (searches parent environments)
     ///
     /// Finds the binding matching the scope set and updates its value.

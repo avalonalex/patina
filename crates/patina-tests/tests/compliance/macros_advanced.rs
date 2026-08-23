@@ -907,6 +907,119 @@ fn test_recursive_macro_introduces_distinct_params() {
     );
 }
 
+/// ...and the same rule applies to a *definition*, which is where it was
+/// still broken: `CoreExprKind::Define` carried no scopes, so every expansion
+/// of one template defined the same variable and the last value won.
+///
+/// `tmp` below is introduced once per element, so the three definitions must
+/// be three bindings. Patina answered `(3 3 3)`; chibi and Gauche both give
+/// `(1 2 3)`. This is the shape SRFI 165's `define-computation-type` builds,
+/// which is why `(srfi 166)` could not load: it declares 22 fields.
+#[test]
+fn test_recursive_macro_introduces_distinct_definitions() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax bind-each
+          (syntax-rules ()
+            ((_ () ((name val tmp) ...))
+             (begin (define tmp val) ...
+                    (define name tmp) ...))
+            ((_ ((n v) . rest) (acc ...))
+             (bind-each rest (acc ... (n v tmp))))))
+        (bind-each ((a 1) (b 2) (c 3)) ())
+        (list a b c)
+        "#,
+        "(1 2 3)",
+    );
+}
+
+/// The same, inside a body rather than at top level — the two travel
+/// different paths through the VM's alpha-renaming pass.
+#[test]
+fn test_recursive_macro_distinct_definitions_in_a_body() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax bind-each
+          (syntax-rules ()
+            ((_ () ((name val tmp) ...))
+             (begin (define tmp val) ...
+                    (define name tmp) ...))
+            ((_ ((n v) . rest) (acc ...))
+             (bind-each rest (acc ... (n v tmp))))))
+        (define (f)
+          (bind-each ((a 1) (b 2) (c 3)) ())
+          (list a b c))
+        (f)
+        "#,
+        "(1 2 3)",
+    );
+}
+
+/// The definitions may arrive nested inside another macro's `begin` —
+/// `define-values` expands to one, so a macro using it produces two levels.
+/// A one-level scan for definitions found the outer group and none of its
+/// members, which left the collapse in place on the VM only.
+#[test]
+fn test_distinct_definitions_through_define_values() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax bind-each
+          (syntax-rules ()
+            ((_ () ((name val tmp) ...))
+             (begin (define-values (tmp ...) (values val ...))
+                    (define name tmp) ...))
+            ((_ ((n v) . rest) (acc ...))
+             (bind-each rest (acc ... (n v tmp))))))
+        (bind-each ((a 1) (b 2) (c 3)) ())
+        (list a b c)
+        "#,
+        "(1 2 3)",
+    );
+}
+
+/// The counterpart the fix must not break: a macro-introduced definition has
+/// to stay reachable from a macro that the same expansion *generated*, even
+/// though that reference is resolved by name rather than by scopes
+/// (`link_definition_env_refs`). This is the R7RS suite's `jabberwocky`
+/// shape, and making the definition scope-only broke it.
+#[test]
+fn test_generated_macro_reaches_an_introduced_definition() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax jabberwocky
+          (syntax-rules ()
+            ((_ hatter)
+             (begin
+               (define march-hare 42)
+               (define-syntax hatter
+                 (syntax-rules ()
+                   ((_) march-hare)))))))
+        (jabberwocky mad-hatter)
+        (mad-hatter)
+        "#,
+        "42",
+    );
+}
+
+/// The same, inside a body.
+#[test]
+fn test_generated_macro_reaches_an_introduced_definition_in_a_body() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax def-and-use
+          (syntax-rules ()
+            ((_ getter)
+             (begin (define secret 42)
+                    (define-syntax getter (syntax-rules () ((_) secret)))))))
+        (define (f)
+          (def-and-use get-it)
+          (get-it))
+        (f)
+        "#,
+        "42",
+    );
+}
+
 /// The same rule applies to the rest parameter of an improper formals list.
 #[test]
 fn test_recursive_macro_distinct_params_with_rest() {

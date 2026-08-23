@@ -82,6 +82,7 @@ fn if_(test: CoreExpr, then: CoreExpr, else_: CoreExpr) -> CoreExpr {
 
 fn define(name: &str, value: CoreExpr) -> CoreExpr {
     CoreExpr::new(CoreExprKind::Define {
+        scopes: Default::default(),
         name: Rc::from(name),
         value: Rc::new(value),
     })

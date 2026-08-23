@@ -164,7 +164,12 @@ impl<'a> CpsEvaluator<'a> {
                     current_expr = cont.as_ref().clone();
                 }
 
-                CpsExprKind::Define { name, value, cont } => {
+                CpsExprKind::Define {
+                    name,
+                    scopes,
+                    value,
+                    cont,
+                } => {
                     let val =
                         try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
                     // Define in the "definition environment", not current_env
@@ -172,7 +177,14 @@ impl<'a> CpsEvaluator<'a> {
                     // - For lambda body: def_env is the lambda's body environment
                     // This matches direct evaluator behavior where internal defines
                     // go to the lambda's body scope, not to LetVal temporaries
-                    def_env.define(name.to_string(), val);
+                    //
+                    // Bound under its scopes *and* its bare name: two
+                    // expansions of one template introduce the same name and
+                    // differ only in scope, so a name-only define makes the
+                    // second overwrite the first — while the name-only entry is
+                    // still what the definition-environment relinking reaches
+                    // for. See `Environment::define_scoped_definition`.
+                    def_env.define_scoped_definition(name.to_string(), scopes.clone(), val);
                     current_expr = cont.as_ref().clone();
                 }
 

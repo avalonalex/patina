@@ -331,8 +331,13 @@ pub enum CpsExprKind {
     },
 
     /// Define (top-level binding)
+    ///
+    /// `scopes` mirrors `Set`'s, and for the same reason: the defined
+    /// identifier's hygiene scopes are part of which binding this is, not
+    /// decoration on it. Empty for a name written in source.
     Define {
         name: Symbol,
+        scopes: ScopeSet,
         value: Rc<CpsExpr>, // Must be trivial
         cont: Rc<CpsExpr>,  // What to do after definition
     },
@@ -656,7 +661,9 @@ impl std::fmt::Display for CpsExprKind {
             } => {
                 write!(f, "(set! {} {} {})", var, value, cont)
             }
-            CpsExprKind::Define { name, value, cont } => {
+            CpsExprKind::Define {
+                name, value, cont, ..
+            } => {
                 write!(f, "(define {} {} {})", name, value, cont)
             }
             CpsExprKind::CallCC { proc, cont } => {

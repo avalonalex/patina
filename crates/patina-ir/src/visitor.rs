@@ -163,7 +163,7 @@ pub trait ExprVisitor {
             CoreExprKind::If { test, then, else_ } => self.visit_if(test, then, else_),
             CoreExprKind::Set { var, scopes, value } => self.visit_set(var, scopes, value),
             CoreExprKind::Begin(exprs) => self.visit_begin(exprs),
-            CoreExprKind::Define { name, value } => self.visit_define(name, value),
+            CoreExprKind::Define { name, value, .. } => self.visit_define(name, value),
             CoreExprKind::Import { import_sets } => self.visit_import(import_sets),
             CoreExprKind::Expand { expr } => self.visit_expand(expr),
             CoreExprKind::App { func, args } => self.visit_app(func, args),
@@ -243,6 +243,7 @@ mod tests {
     fn test_node_counter_nested() {
         // (define f (lambda (x) x))  →  define, lambda, var(x) = 3 nodes
         let expr = CoreExpr::new(CoreExprKind::Define {
+            scopes: Default::default(),
             name: "f".into(),
             value: std::rc::Rc::new(lambda(vec!["x"], vec![var("x")])),
         });
@@ -350,6 +351,7 @@ mod tests {
             }),
             CoreExpr::new(CoreExprKind::Begin(vec![lit(), var("x")])),
             CoreExpr::new(CoreExprKind::Define {
+                scopes: Default::default(),
                 name: "x".into(),
                 value: std::rc::Rc::new(lit()),
             }),

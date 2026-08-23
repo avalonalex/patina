@@ -245,23 +245,23 @@ fn strip_identifiers_impl(
 pub fn parse_define_function_tagged(
     pattern: TaggedValue,
     shared_heap: &SharedHeap,
-) -> Result<(Symbol, TaggedValue)> {
+) -> Result<(Symbol, ScopeSet, TaggedValue)> {
     // Fast path: native pair
     if pattern.is_pair() {
         let heap = shared_heap.borrow();
         let (car, cdr) = heap.get_pair(pattern);
 
-        let name = if let Some(s) = heap.get_symbol_name(car) {
-            Rc::from(s)
+        let (name, scopes) = if let Some(s) = heap.get_symbol_name(car) {
+            (Rc::from(s), ScopeSet::new())
         } else if let Some(id) = get_identifier_info(car, &heap) {
-            id.0
+            id
         } else {
             return Err(DesugarError::InvalidSyntax(
                 "define function name must be a symbol".to_string(),
             ));
         };
 
-        return Ok((name, cdr));
+        return Ok((name, scopes, cdr));
     }
 
     // Not a native pair — error

@@ -70,7 +70,12 @@ fn expand_qq_expr(
 
         CoreExprKind::Begin(exprs) => CoreExprKind::Begin(each(exprs)?),
 
-        CoreExprKind::Define { name, value } => CoreExprKind::Define {
+        CoreExprKind::Define {
+            name,
+            scopes,
+            value,
+        } => CoreExprKind::Define {
+            scopes: scopes.clone(),
             name: name.clone(),
             value: Rc::new(expand_qq_expr(value, heap, desugarer)?),
         },

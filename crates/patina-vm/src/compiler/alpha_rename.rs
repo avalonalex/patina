@@ -110,7 +110,120 @@ impl RenameEnv {
 /// Alpha-rename a CoreExpr tree for hygienic variable resolution.
 pub fn alpha_rename(expr: &CoreExpr) -> CoreExpr {
     let mut env = RenameEnv::new();
-    rename_expr(expr, &mut env)
+
+    // Top-level definitions normally keep their names — they are globals, and
+    // a later top-level form has to be able to find them. A *macro-introduced*
+    // one is the exception: its scopes make it unreachable from anywhere but
+    // the expansion that produced it, and that expansion is inside this same
+    // form, so renaming it is both safe and necessary. Without a frame here,
+    // a recursive macro's per-element temporaries all define the same global
+    // and the last one wins.
+    let bindings = collect_define_bindings(std::slice::from_ref(expr), &mut env, true);
+    if bindings.is_empty() {
+        rename_expr(expr, &mut env)
+    } else {
+        env.push_frame(bindings);
+        let mut out = rename_body(std::slice::from_ref(expr), &mut env);
+        env.pop_frame();
+        if out.len() == 1 {
+            out.pop().expect("one element")
+        } else {
+            CoreExpr::new(CoreExprKind::Begin(out))
+        }
+    }
+}
+
+/// Bindings for the definitions `exprs` contributes, looking through `Begin`
+/// at any depth.
+///
+/// The depth matters: `begin` splices, so a definition nested in one is a
+/// definition of the enclosing body, and a macro that expands to several often
+/// produces several levels of it — `(define-values (a b c) …)` expands to a
+/// `begin` of `define`s, which a macro then wraps in a `begin` of its own. A
+/// one-level walk found the outer group and missed every definition in it.
+///
+/// `Lambda` is deliberately not descended into: its body gets its own frame.
+///
+/// `only_scoped` selects the top-level rule — rename what a macro introduced
+/// and leave source-written globals alone — from the lambda-body rule, where
+/// every internal definition is a local and gets renamed.
+///
+/// A binding is visible to unscoped lookups only when it has no scopes of its
+/// own, matching `build_bindings` for parameters: a macro-introduced name must
+/// not answer a reference written in source.
+fn collect_define_bindings(
+    exprs: &[CoreExpr],
+    env: &mut RenameEnv,
+    only_scoped: bool,
+) -> Vec<Binding> {
+    let mut bindings = Vec::new();
+    collect_define_bindings_into(exprs, env, only_scoped, &mut bindings);
+    bindings
+}
+
+/// Rename a body or `Begin`, splicing a name-only alias after any definition
+/// whose name was rewritten because it carried hygiene scopes.
+///
+/// The alias exists for the same reason `Environment::define_scoped_definition`
+/// keeps a plain entry: the definition-environment relinking that lets a
+/// macro-generated macro reach its defining environment rewrites references by
+/// *name*, so a renamed-only binding is unreachable from that template — the
+/// R7RS suite's `jabberwocky` test. Scoped references resolve to the unique
+/// name and stay distinct; name-based ones find the alias, last definition
+/// winning, which is what happened before definitions carried scopes at all.
+///
+/// Spliced flat rather than wrapped in a nested `Begin`, because the passes
+/// downstream scan a `Begin`'s immediate children for definitions.
+fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
+    let mut out = Vec::with_capacity(exprs.len());
+    for expr in exprs {
+        let alias = match &expr.kind {
+            CoreExprKind::Define { name, scopes, .. } if !scopes.is_empty() => env
+                .resolve(name, scopes)
+                .filter(|renamed| renamed != name)
+                .map(|renamed| (name.clone(), renamed)),
+            _ => None,
+        };
+        out.push(rename_expr(expr, env));
+        if let Some((original, renamed)) = alias {
+            out.push(CoreExpr::new(CoreExprKind::Define {
+                name: original,
+                scopes: ScopeSet::new(),
+                value: CoreExpr::rc(CoreExprKind::Var {
+                    name: renamed,
+                    scopes: ScopeSet::new(),
+                }),
+            }));
+        }
+    }
+    out
+}
+
+fn collect_define_bindings_into(
+    exprs: &[CoreExpr],
+    env: &mut RenameEnv,
+    only_scoped: bool,
+    bindings: &mut Vec<Binding>,
+) {
+    for expr in exprs {
+        match &expr.kind {
+            CoreExprKind::Define { name, scopes, .. } => {
+                if only_scoped && scopes.is_empty() {
+                    continue;
+                }
+                bindings.push(Binding {
+                    name: name.clone(),
+                    scopes: scopes.clone(),
+                    is_simple: scopes.is_empty(),
+                    unique_name: env.make_unique_name(name),
+                });
+            }
+            CoreExprKind::Begin(inner) => {
+                collect_define_bindings_into(inner, env, only_scoped, bindings)
+            }
+            _ => {}
+        }
+    }
 }
 
 fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
@@ -157,39 +270,16 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
         } => {
             let mut bindings = build_bindings(params, *binding_scope, env);
 
-            // Add bindings for internal defines (treated as simple, local bindings).
-            for expr in body.iter() {
-                match &expr.kind {
-                    CoreExprKind::Define { name, .. } => {
-                        let unique_name = env.make_unique_name(name);
-                        bindings.push(Binding {
-                            name: name.clone(),
-                            scopes: ScopeSet::new(),
-                            is_simple: true,
-                            unique_name,
-                        });
-                    }
-                    CoreExprKind::Begin(exprs) => {
-                        for e in exprs {
-                            if let CoreExprKind::Define { name, .. } = &e.kind {
-                                let unique_name = env.make_unique_name(name);
-                                bindings.push(Binding {
-                                    name: name.clone(),
-                                    scopes: ScopeSet::new(),
-                                    is_simple: true,
-                                    unique_name,
-                                });
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            // Add bindings for the body's internal defines. Each keeps the
+            // scopes of the identifier it defines: they were forced to
+            // `ScopeSet::new()` here, which made every expansion of one macro
+            // template collapse onto a single local.
+            bindings.extend(collect_define_bindings(body, env, false));
 
             let renamed_params = build_renamed_formals(params, &bindings);
 
             env.push_frame(bindings);
-            let renamed_body: Vec<CoreExpr> = body.iter().map(|e| rename_expr(e, env)).collect();
+            let renamed_body: Vec<CoreExpr> = rename_body(body, env);
             env.pop_frame();
 
             CoreExprKind::Lambda {
@@ -205,16 +295,19 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
             else_: Rc::new(rename_expr(else_, env)),
         },
 
-        CoreExprKind::Begin(exprs) => {
-            CoreExprKind::Begin(exprs.iter().map(|e| rename_expr(e, env)).collect())
-        }
+        CoreExprKind::Begin(exprs) => CoreExprKind::Begin(rename_body(exprs, env)),
 
-        CoreExprKind::Define { name, value } => {
-            let renamed_name = env
-                .resolve(name, &ScopeSet::new())
-                .unwrap_or_else(|| name.clone());
+        CoreExprKind::Define {
+            name,
+            scopes,
+            value,
+        } => {
+            let renamed_name = env.resolve(name, scopes).unwrap_or_else(|| name.clone());
             CoreExprKind::Define {
                 name: renamed_name,
+                // Consumed: the pass exists so everything downstream can
+                // resolve by name alone, as it does for `Var` above.
+                scopes: ScopeSet::new(),
                 value: Rc::new(rename_expr(value, env)),
             }
         }

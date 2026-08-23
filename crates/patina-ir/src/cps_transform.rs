@@ -250,7 +250,11 @@ impl CpsTransformer {
                 }
             }
 
-            CoreExprKind::Define { name, value } => {
+            CoreExprKind::Define {
+                name,
+                scopes,
+                value,
+            } => {
                 // Transform: (define name value)
                 // Into: evaluate value, do define, continue with unspecified
 
@@ -258,6 +262,7 @@ impl CpsTransformer {
                     let cps_value = self.transform_trivial(value);
                     CpsExpr::new(CpsExprKind::Define {
                         name: name.clone(),
+                        scopes: scopes.clone(),
                         value: Rc::new(cps_value),
                         cont: CpsExpr::rc(CpsExprKind::Continue {
                             cont: k.clone(),
@@ -270,6 +275,7 @@ impl CpsTransformer {
 
                     let def_expr = CpsExpr::new(CpsExprKind::Define {
                         name: name.clone(),
+                        scopes: scopes.clone(),
                         value: CpsExpr::rc(CpsExprKind::Var {
                             name: val_var.clone(),
                             scopes: ScopeSet::new(),

@@ -507,6 +507,7 @@ mod tests {
         let env = Rc::new(Environment::new());
         let expr = CoreExpr::new(CoreExprKind::Define {
             name: Rc::from("x"),
+            scopes: Default::default(),
             value: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(
                 42,
             )))),
