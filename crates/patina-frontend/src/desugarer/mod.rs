@@ -1310,18 +1310,9 @@ impl Desugarer {
         // only distinguishable from the same name introduced by another
         // expansion by its scopes, so dropping them here is what made a
         // recursive macro's per-element temporaries collapse onto one.
-        let (name, name_scopes) = {
-            let heap = shared_heap.borrow();
-            if let Some(s) = heap.get_symbol_name(first) {
-                (Rc::from(s), ScopeSet::new())
-            } else if let Some(id) = utils::get_identifier_info(first, &heap) {
-                id
-            } else {
-                return Err(DesugarError::InvalidSyntax(
-                    "define requires a symbol as first argument".to_string(),
-                ));
-            }
-        };
+        let (name, name_scopes) = self.identifier_of(first, shared_heap).ok_or_else(|| {
+            DesugarError::InvalidSyntax("define requires a symbol as first argument".to_string())
+        })?;
 
         if args_vec.len() != 2 {
             return Err(DesugarError::WrongArgCount {

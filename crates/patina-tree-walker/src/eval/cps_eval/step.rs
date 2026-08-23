@@ -178,13 +178,9 @@ impl<'a> CpsEvaluator<'a> {
                     // This matches direct evaluator behavior where internal defines
                     // go to the lambda's body scope, not to LetVal temporaries
                     //
-                    // Bound under its scopes *and* its bare name: two
-                    // expansions of one template introduce the same name and
-                    // differ only in scope, so a name-only define makes the
-                    // second overwrite the first — while the name-only entry is
-                    // still what the definition-environment relinking reaches
-                    // for. See `Environment::define_scoped_definition`.
-                    def_env.define_scoped_definition(name.to_string(), scopes.clone(), val);
+                    // Bound under its scopes, with a name-only view of the
+                    // same cell — see `Environment::define_scoped_definition`.
+                    def_env.define_scoped_definition(name.to_string(), scopes, val);
                     current_expr = cont.as_ref().clone();
                 }
 

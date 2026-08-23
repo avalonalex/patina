@@ -13,6 +13,16 @@ pub struct ScopedBinding {
     pub scopes: ScopeSet,
     /// Internal storage uses TaggedValue for efficiency
     pub(crate) tagged_value: TaggedValue,
+    /// Whether a name-only lookup may fall back to this binding.
+    ///
+    /// False for a macro-introduced *parameter*, which must stay invisible to
+    /// a reference written in source. True for a macro-introduced
+    /// *definition*, which cannot: the definition-environment relinking that
+    /// lets a macro-generated macro reach its defining environment resolves
+    /// its target by name (see `alias_bindings`), so a definition reachable
+    /// only under scopes is unreachable from exactly the code that needs it —
+    /// the R7RS suite's `jabberwocky` test.
+    pub(crate) visible_by_name: bool,
 }
 
 /// Where a macro-expansion alias points: the environment holding the real
@@ -259,6 +269,13 @@ impl Environment {
         if let Some((target_env, target_name)) = self.alias_target(name) {
             return target_env.get(&target_name);
         }
+        // A macro-introduced definition lives under its scopes; this is the
+        // name-only view of it. Checked after real bindings and aliases, and
+        // guarded on the map being non-empty, so an environment with no such
+        // definitions pays one `is_empty` on the way to its parent.
+        if let Some(tv) = self.scoped_definition(name) {
+            return Some(tv);
+        }
         self.parent.as_ref().and_then(|p| p.get(name))
     }
 
@@ -323,6 +340,7 @@ impl Environment {
             let binding = ScopedBinding {
                 scopes,
                 tagged_value: value,
+                visible_by_name: false,
             };
             self.scoped_bindings
                 .borrow_mut()
@@ -350,11 +368,43 @@ impl Environment {
     /// definition carried no scopes at all. Nothing that resolves correctly
     /// today starts resolving differently — the scoped entry is only ever
     /// preferred by a lookup that supplies matching scopes.
-    pub fn define_scoped_definition(&self, name: String, scopes: ScopeSet, value: TaggedValue) {
-        if !scopes.is_empty() {
-            self.define_with_scopes(name.clone(), scopes, value);
+    pub fn define_scoped_definition(&self, name: String, scopes: &ScopeSet, value: TaggedValue) {
+        if scopes.is_empty() {
+            self.define(name, value);
+            return;
         }
-        self.bindings.borrow_mut().insert(name, value);
+        self.scoped_bindings
+            .borrow_mut()
+            .entry(name)
+            .or_default()
+            .push(ScopedBinding {
+                scopes: scopes.clone(),
+                tagged_value: value,
+                visible_by_name: true,
+            });
+    }
+
+    /// The most recent name-visible scoped definition of `name` here, if any.
+    ///
+    /// This is the name-only view of a macro-introduced definition. It is one
+    /// cell, not a copy: an earlier version of this stored the value under the
+    /// bare name as well, and a `set!` through the scoped path then left the
+    /// two disagreeing — the freeze `alias_bindings` documents as the reason
+    /// its own indirection exists.
+    ///
+    /// Most recent wins, which is the behaviour from when a definition carried
+    /// no scopes at all and each expansion simply overwrote the last.
+    fn scoped_definition(&self, name: &str) -> Option<TaggedValue> {
+        let scoped = self.scoped_bindings.borrow();
+        if scoped.is_empty() {
+            return None;
+        }
+        scoped
+            .get(name)?
+            .iter()
+            .rev()
+            .find(|b| b.visible_by_name)
+            .map(|b| b.tagged_value)
     }
 
     /// Set an existing scoped binding (searches parent environments)

@@ -1001,6 +1001,29 @@ fn test_generated_macro_reaches_an_introduced_definition() {
     );
 }
 
+/// ...and it must reach the *binding*, not a copy of its value. Giving the
+/// definition a second, name-only cell made the two disagree the moment the
+/// expansion mutated one of them — the freeze `Environment::alias_bindings`
+/// documents as the reason its own indirection exists.
+///
+/// Verified against chibi and Gauche, which both answer `2`.
+#[test]
+fn test_a_generated_macro_sees_a_mutation_of_an_introduced_definition() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax jab
+          (syntax-rules ()
+            ((_ h b) (begin (define mh 1)
+                            (define (b) (set! mh 2))
+                            (define-syntax h (syntax-rules () ((_) mh)))))))
+        (jab get bump)
+        (bump)
+        (get)
+        "#,
+        "2",
+    );
+}
+
 /// The same, inside a body.
 #[test]
 fn test_generated_macro_reaches_an_introduced_definition_in_a_body() {

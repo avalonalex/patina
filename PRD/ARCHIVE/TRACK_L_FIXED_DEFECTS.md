@@ -798,13 +798,22 @@ The reasoning that failed was "an introduced identifier is hygienic, so only the
 produced it can refer to it, and that expansion is inside this one form". A macro-generated *macro*
 outlives the form, and the reference from its template is resolved **by name**, through
 `link_definition_env_refs` — which Track L §6 separately records as rewriting by name. So a
-scope-only binding is unreachable from exactly the code that most needs it. Both backends now keep
-the plain-name entry beside the scoped one: scoped references stay distinct, name-based ones find
-the last definition, which is what happened when definitions carried no scopes at all.
+scope-only binding is unreachable from exactly the code that most needs it. Both backends keep a
+name-only view of the scoped definition — the most recent one, which is what happened when
+definitions carried no scopes at all — and both reach the *binding* rather than a copy of its
+value, so a mutation through either path is visible from the other.
 
-Regression tests in `crates/patina-tests/tests/compliance/macros_advanced.rs`, both backends, five
-of them: the collapse at top level and in a body, the same through `define-values`, and the two
-`jabberwocky` shapes that must not regress.
+**The first attempt at that view was a copy, and review caught it.** Storing the value under the
+bare name as well as under its scopes made a `set!` through the scoped path leave the two
+disagreeing — `main`, chibi and Gauche answer `2` where it answered `1`. `Environment` already
+documents why, at the field the relinking uses: *"resolving through the alias on every lookup means
+a later `set!` on the original binding is visible, which copying the value at expansion time would
+silently freeze."* The lesson is narrower than "don't copy": the mechanism this needed already
+existed and said so at the site, and the second cell was invented beside it.
+
+Regression tests in `crates/patina-tests/tests/compliance/macros_advanced.rs`, both backends, six of
+them: the collapse at top level and in a body, the same through `define-values`, the two
+`jabberwocky` shapes that must not regress, and the mutation case the first attempt broke.
 
 **Recursive macros could not introduce a fresh binding per expansion** — ✅ **fixed** (2026-08-14).
 Both backends. `check_no_duplicates_scoped` in `patina-frontend/src/desugarer/utils.rs` keyed its

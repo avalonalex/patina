@@ -406,7 +406,8 @@ impl std::fmt::Display for CoreExprKind {
                 if scopes.is_empty() {
                     write!(f, "(define {} {})", name, value)
                 } else {
-                    write!(f, "(define {}{} {})", name, scopes, value)
+                    // `name@{scopes}`, the spelling `Var` and `Set` use above.
+                    write!(f, "(define {}@{} {})", name, scopes, value)
                 }
             }
             CoreExprKind::Import { import_sets } => {

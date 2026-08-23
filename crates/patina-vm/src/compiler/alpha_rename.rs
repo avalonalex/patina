@@ -119,17 +119,16 @@ pub fn alpha_rename(expr: &CoreExpr) -> CoreExpr {
     // a recursive macro's per-element temporaries all define the same global
     // and the last one wins.
     let bindings = collect_define_bindings(std::slice::from_ref(expr), &mut env, true);
-    if bindings.is_empty() {
-        rename_expr(expr, &mut env)
+    env.push_frame(bindings);
+    let mut out = rename_body(std::slice::from_ref(expr), &mut env);
+    env.pop_frame();
+
+    // One expression in, one or two out: `rename_body` splices an alias after a
+    // definition it renamed, and the two then need a `Begin` to live in.
+    if out.len() == 1 {
+        out.pop().expect("one element")
     } else {
-        env.push_frame(bindings);
-        let mut out = rename_body(std::slice::from_ref(expr), &mut env);
-        env.pop_frame();
-        if out.len() == 1 {
-            out.pop().expect("one element")
-        } else {
-            CoreExpr::new(CoreExprKind::Begin(out))
-        }
+        CoreExpr::new(CoreExprKind::Begin(out))
     }
 }
 
@@ -157,20 +156,44 @@ fn collect_define_bindings(
     only_scoped: bool,
 ) -> Vec<Binding> {
     let mut bindings = Vec::new();
-    collect_define_bindings_into(exprs, env, only_scoped, &mut bindings);
+    collect_define_bindings_into(exprs, only_scoped, &mut bindings);
+
+    // Rename only what has to be renamed.
+    //
+    // A top-level definition becomes a *global*, so renaming one costs
+    // something the lambda-body case does not pay: the original name has to be
+    // aliased so the definition-environment relinking can still reach it, and
+    // an alias is a second cell that a `set!` through the renamed name leaves
+    // stale. Renaming is what disambiguates two expansions of one template, so
+    // it is needed exactly when a name arrives more than once — and for the
+    // single-definition case, which is every `jabberwocky`-shaped macro, not
+    // renaming keeps one cell and the mutation stays visible.
+    //
+    // Lambda-body definitions are locals: they are renamed unconditionally,
+    // and no alias is involved because nothing outside the body resolves them
+    // by name.
+    for i in 0..bindings.len() {
+        let duplicated = only_scoped
+            && bindings
+                .iter()
+                .enumerate()
+                .any(|(j, other)| j != i && other.name == bindings[i].name);
+        if !only_scoped || duplicated {
+            bindings[i].unique_name = env.make_unique_name(&bindings[i].name.clone());
+        }
+    }
     bindings
 }
 
 /// Rename a body or `Begin`, splicing a name-only alias after any definition
 /// whose name was rewritten because it carried hygiene scopes.
 ///
-/// The alias exists for the same reason `Environment::define_scoped_definition`
-/// keeps a plain entry: the definition-environment relinking that lets a
-/// macro-generated macro reach its defining environment rewrites references by
-/// *name*, so a renamed-only binding is unreachable from that template — the
-/// R7RS suite's `jabberwocky` test. Scoped references resolve to the unique
-/// name and stay distinct; name-based ones find the alias, last definition
-/// winning, which is what happened before definitions carried scopes at all.
+/// The alias exists for the reason `Environment::define_scoped_definition`
+/// documents: the definition-environment relinking resolves its target by
+/// name, so a renamed-only binding is unreachable from a macro-generated
+/// macro's template. Only a definition whose name collided is renamed at all
+/// (see `collect_define_bindings`), so this fires exactly where the name has
+/// stopped identifying one binding.
 ///
 /// Spliced flat rather than wrapped in a nested `Begin`, because the passes
 /// downstream scan a `Begin`'s immediate children for definitions.
@@ -201,7 +224,6 @@ fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
 
 fn collect_define_bindings_into(
     exprs: &[CoreExpr],
-    env: &mut RenameEnv,
     only_scoped: bool,
     bindings: &mut Vec<Binding>,
 ) {
@@ -215,11 +237,13 @@ fn collect_define_bindings_into(
                     name: name.clone(),
                     scopes: scopes.clone(),
                     is_simple: scopes.is_empty(),
-                    unique_name: env.make_unique_name(name),
+                    // Filled in by the caller for the top-level rule; every
+                    // lambda-body definition is a local and is renamed.
+                    unique_name: name.clone(),
                 });
             }
             CoreExprKind::Begin(inner) => {
-                collect_define_bindings_into(inner, env, only_scoped, bindings)
+                collect_define_bindings_into(inner, only_scoped, bindings)
             }
             _ => {}
         }
