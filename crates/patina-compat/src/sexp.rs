@@ -47,6 +47,51 @@ pub fn clause_argument(tv: TaggedValue, head: &str, heap: &SharedHeap) -> Option
     tagged_form(tv, head, heap)?.first().copied()
 }
 
+/// The rows of a two-level document: `(<doc> ... (<rows> <row> ...) ...)`.
+///
+/// Both files this harness owns are that shape — `results.scm` and
+/// `EXCLUSIONS.scm` — so the walk, and the wording of the error when the
+/// head is wrong, live here rather than once per reader. Other sections
+/// (`results.scm` carries `backend`) come back in `sections` for the caller
+/// to scan; only the row list is common enough to name.
+pub fn document_rows(
+    source: &str,
+    doc_head: &str,
+    rows_head: &str,
+    heap: &SharedHeap,
+) -> Result<(Vec<TaggedValue>, Vec<TaggedValue>), String> {
+    let forms = parse_all(source, heap)?;
+    let sections = forms
+        .first()
+        .and_then(|f| tagged_form(*f, doc_head, heap))
+        .ok_or_else(|| format!("not a {doc_head} file"))?;
+    let rows = sections
+        .iter()
+        .filter_map(|s| tagged_form(*s, rows_head, heap))
+        .flatten()
+        .collect();
+    Ok((sections, rows))
+}
+
+/// The argument of the `key` clause among a row's fields.
+///
+/// A row is a list of one-argument clauses — `((slug "x") (reason ffi) ...)`
+/// — which both readers walk the same way. Naming it keeps the accessor
+/// closures out of each `parse_*_row`.
+pub fn row_field(fields: &[TaggedValue], key: &str, heap: &SharedHeap) -> Option<TaggedValue> {
+    fields.iter().find_map(|f| clause_argument(*f, key, heap))
+}
+
+/// The `key` clause's argument as a string, if it is one.
+pub fn row_string(fields: &[TaggedValue], key: &str, heap: &SharedHeap) -> Option<String> {
+    row_field(fields, key, heap).and_then(|tv| string_value(tv, heap))
+}
+
+/// The `key` clause's argument as a symbol name, if it is one.
+pub fn row_symbol(fields: &[TaggedValue], key: &str, heap: &SharedHeap) -> Option<String> {
+    row_field(fields, key, heap).and_then(|tv| symbol_name(tv, heap))
+}
+
 /// The pooled bodies of a `(cond-expand ...)` form's clauses, or `None` if
 /// `tv` is not one. Each clause is `(condition form ...)`; the condition is
 /// skipped, never evaluated — corpus collectors pool every branch as a

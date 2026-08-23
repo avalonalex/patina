@@ -462,6 +462,28 @@ fn classify(out: &Captured, mode: &str) -> Status {
     Status::Pass
 }
 
+/// Every distinct, non-empty name `read_name` recovers from the text after
+/// `marker`, over both captured streams.
+///
+/// The scan-sort-dedup spine is the same for every marker the classifier
+/// reads; naming it leaves each extractor as the one line that says how to
+/// read its own tail.
+fn extract_after_marker(
+    parts: [&str; 2],
+    marker: &str,
+    read_name: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let mut found: Vec<String> = parts
+        .iter()
+        .flat_map(|s| s.lines())
+        .filter_map(|line| read_name(line.split_once(marker)?.1))
+        .filter(|s| !s.is_empty())
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// Names of the shared objects an `include-shared` declaration asked for.
 ///
 /// Patina refuses that declaration deliberately (`LibraryError::
@@ -469,20 +491,10 @@ fn classify(out: &Captured, mode: &str) -> Status {
 /// purpose rather than wording that could be reworded — the shared constant is
 /// the contract, and it is a compile-time one.
 fn extract_native_extensions(parts: [&str; 2]) -> Option<Vec<String>> {
-    let mut found: Vec<String> = parts
-        .iter()
-        .flat_map(|s| s.lines())
-        .filter_map(|line| {
-            let (_, rest) = line.split_once(patina_runtime::NATIVE_EXTENSION_MARKER)?;
-            let rest = rest.trim();
-            let inner = rest.strip_prefix('"')?;
-            let (name, _) = inner.split_once('"')?;
-            Some(name.to_string())
-        })
-        .filter(|s| !s.is_empty())
-        .collect();
-    found.sort();
-    found.dedup();
+    let found = extract_after_marker(parts, patina_runtime::NATIVE_EXTENSION_MARKER, |rest| {
+        let (name, _) = rest.trim().strip_prefix('"')?.split_once('"')?;
+        Some(name.to_string())
+    });
     (!found.is_empty()).then_some(found)
 }
 
@@ -491,18 +503,9 @@ fn extract_native_extensions(parts: [&str; 2]) -> Option<Vec<String>> {
 /// The marker is raised by `define-unimplemented` in a bundled library, so it
 /// is our own string and not pattern-matching on a third party's prose.
 fn extract_ffi_stubs(parts: [&str; 2]) -> Option<Vec<String>> {
-    const MARKER: &str = "requires FFI, unavailable in Patina:";
-    let mut found: Vec<String> = parts
-        .iter()
-        .flat_map(|s| s.lines())
-        .filter_map(|line| {
-            let (_, rest) = line.split_once(MARKER)?;
-            Some(rest.trim().trim_matches(['"', '\'']).to_string())
-        })
-        .filter(|s| !s.is_empty())
-        .collect();
-    found.sort();
-    found.dedup();
+    let found = extract_after_marker(parts, "requires FFI, unavailable in Patina:", |rest| {
+        Some(rest.trim().trim_matches(['"', '\'']).to_string())
+    });
     (!found.is_empty()).then_some(found)
 }
 
@@ -812,14 +815,20 @@ mod tests {
     /// says so at the cause. Before Patina recognised `include-shared` this
     /// arrived as `Exported identifier 'mecab?' not defined` — a load error
     /// naming a symptom two steps downstream.
+    ///
+    /// The message is *rendered from the real error* rather than pasted in as
+    /// a literal, so the whole shape this extractor depends on — the marker,
+    /// and the quoted name after it — is checked against the producing site.
+    /// A pasted literal would only have pinned the copy in this file, leaving
+    /// a Display reformat free to reclassify chibi-mecab with a green build.
     #[test]
     fn classifies_a_native_extension_as_out_of_scope() {
-        let out = captured(
-            "",
-            "Error: Library in chibi/mecab.sld requires the native extension \"mecab\" \
-             (include-shared), which Patina cannot load — it needs a foreign-function interface",
-            false,
-        );
+        let rendered = patina_runtime::LibraryError::NativeExtensionRequired {
+            file: "chibi/mecab.sld".to_string(),
+            extension: "mecab".to_string(),
+        }
+        .to_string();
+        let out = captured("", &format!("Error: {rendered}"), false);
         assert_eq!(
             classify(&out, "probe"),
             Status::OutOfScope(vec!["mecab".to_string()])

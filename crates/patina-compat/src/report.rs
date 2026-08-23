@@ -9,7 +9,7 @@ use crate::exclusions::{Exclusion, Reason};
 use crate::run::{PackageResult, Status};
 use crate::sexp;
 use patina_core::SharedHeap;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 /// The detail list a status carries, with its serialization key.
@@ -54,28 +54,16 @@ pub fn to_sexp(results: &[PackageResult], backend: &str) -> String {
 /// Parse a results snapshot back into `PackageResult`s and the backend it
 /// was measured on (for `report`).
 pub fn from_sexp(source: &str, heap: &SharedHeap) -> Result<(Vec<PackageResult>, String), String> {
-    let forms = sexp::parse_all(source, heap)?;
-    let top = forms
-        .first()
-        .and_then(|f| sexp::tagged_form(*f, "patina-compat-results", heap))
-        .ok_or("not a patina-compat-results file")?;
-
-    let mut backend = "vm".to_string();
-    let mut results = Vec::new();
-    for section in top {
-        if let Some(rest) = sexp::tagged_form(section, "backend", heap) {
-            if let Some(name) = rest.first().and_then(|tv| sexp::string_value(*tv, heap)) {
-                backend = name;
-            }
-            continue;
-        }
-        let Some(rows) = sexp::tagged_form(section, "results", heap) else {
-            continue;
-        };
-        for row in rows {
-            results.push(parse_result_row(row, heap)?);
-        }
-    }
+    let (sections, rows) = sexp::document_rows(source, "patina-compat-results", "results", heap)?;
+    let backend = sections
+        .iter()
+        .find_map(|s| sexp::clause_argument(*s, "backend", heap))
+        .and_then(|tv| sexp::string_value(tv, heap))
+        .unwrap_or_else(|| "vm".to_string());
+    let results = rows
+        .into_iter()
+        .map(|row| parse_result_row(row, heap))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok((results, backend))
 }
 
@@ -84,22 +72,18 @@ fn parse_result_row(
     heap: &SharedHeap,
 ) -> Result<PackageResult, String> {
     let fields = sexp::list_elements(row, heap).ok_or("malformed result row")?;
-    let field = |key: &str| fields.iter().find_map(|f| sexp::tagged_form(*f, key, heap));
-    let field_symbol = |key: &str| {
-        field(key).and_then(|rest| rest.first().and_then(|tv| sexp::symbol_name(*tv, heap)))
-    };
 
-    let slug = field("slug")
-        .and_then(|rest| rest.first().and_then(|tv| sexp::string_value(*tv, heap)))
-        .ok_or("result row without slug")?;
-    let mode = if field_symbol("mode").as_deref() == Some("test") {
+    let slug = sexp::row_string(&fields, "slug", heap).ok_or("result row without slug")?;
+    let mode = if sexp::row_symbol(&fields, "mode", heap).as_deref() == Some("test") {
         "test"
     } else {
         "probe"
     };
+    // The detail list is variadic, so it is the one field that reads the
+    // whole clause rather than its first argument.
     let names: Vec<String> = ["missing", "unbound", "errors"]
         .iter()
-        .find_map(|key| field(key))
+        .find_map(|key| fields.iter().find_map(|f| sexp::tagged_form(*f, key, heap)))
         .map(|rest| {
             rest.iter()
                 .filter_map(|tv| sexp::string_value(*tv, heap))
@@ -107,7 +91,7 @@ fn parse_result_row(
         })
         .unwrap_or_default();
 
-    let status = match field_symbol("status").as_deref() {
+    let status = match sexp::row_symbol(&fields, "status", heap).as_deref() {
         Some("pass") => Status::Pass,
         Some("missing-library") => Status::MissingLibrary(names),
         Some("parse-error") => Status::ParseError(names),
@@ -159,11 +143,13 @@ pub fn render(
         .filter(|r| !excluded.contains_key(r.slug.as_str()))
         .collect();
     let counted_pass = counted.iter().filter(|r| r.status.key() == "pass").count();
-    let measured: BTreeMap<&str, ()> = results.iter().map(|r| (r.slug.as_str(), ())).collect();
     let unmatched: Vec<&Exclusion> = if full_corpus {
+        // Derived from `applied` rather than from `results`: it is the smaller
+        // side (25 against 162) and it is already built.
+        let matched: BTreeSet<&str> = applied.iter().map(|(r, _)| r.slug.as_str()).collect();
         exclusions
             .iter()
-            .filter(|e| !measured.contains_key(e.slug.as_str()))
+            .filter(|e| !matched.contains(e.slug.as_str()))
             .collect()
     } else {
         Vec::new()
@@ -297,8 +283,11 @@ pub fn render(
              as it records everything else.\n",
         );
         for reason in Reason::ALL {
-            let rows: Vec<&(&PackageResult, &Exclusion)> =
-                applied.iter().filter(|(_, e)| e.reason == reason).collect();
+            let rows: Vec<(&PackageResult, &Exclusion)> = applied
+                .iter()
+                .copied()
+                .filter(|(_, e)| e.reason == reason)
+                .collect();
             if rows.is_empty() {
                 continue;
             }
@@ -436,11 +425,11 @@ mod tests {
         ]
     }
 
-    fn excluding(slug: &str, expect: &str) -> Vec<Exclusion> {
+    fn excluding(slug: &str, expect: &'static str) -> Vec<Exclusion> {
         vec![Exclusion {
             slug: slug.into(),
             reason: Reason::Ffi,
-            expect: expect.into(),
+            expect,
             note: "needs libfoo".into(),
         }]
     }

@@ -210,6 +210,11 @@ fn run_command(opts: &Options) {
     }
 
     let heap = patina_core::new_shared_heap();
+    // Loaded before the corpus runs, not after it: a malformed list exits,
+    // and doing that on the far side of ~162 subprocess spawns would throw
+    // away minutes of work to report something that costs milliseconds to
+    // check.
+    let exclusions = load_exclusions(opts, &heap);
     let universe = match corpus::discover(&opts.vendor, &heap) {
         Ok(p) => p,
         Err(e) => {
@@ -246,7 +251,6 @@ fn run_command(opts: &Options) {
     };
     let results = run::run_corpus(&selected, &universe, &providers, &config);
 
-    let exclusions = load_exclusions(opts, &heap);
     let rendered = report::render(&results, backend, &exclusions, opts.filter.is_none());
 
     // Both artifacts are written, not just the snapshot: the rendered matrix

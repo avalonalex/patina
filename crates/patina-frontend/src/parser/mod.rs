@@ -41,7 +41,12 @@ pub enum ParseError {
     /// pending FFI, not broken — and because a caller that wants to say so in
     /// its own words needs to be able to tell it apart. See
     /// `LibraryError::NativeExtensionRequired`.
-    #[error("requires the native extension \"{0}\" (include-shared)")]
+    // The wording deliberately does not restate
+    // `patina_runtime::NATIVE_EXTENSION_MARKER`: that phrase is a contract the
+    // compat harness links against, and a second copy here would read like one
+    // without being checked. `LibraryError::NativeExtensionRequired` is where
+    // the marker belongs, and it is what every caller renders.
+    #[error("include-shared \"{0}\"")]
     NativeExtensionRequired(String),
 }
 

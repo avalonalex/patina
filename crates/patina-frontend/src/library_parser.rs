@@ -341,21 +341,21 @@ impl LibraryDefinition {
     }
 
     /// Name the shared object an `include-shared` declaration asks for, for
-    /// the error that refuses it. Upstream always writes a single string, but
-    /// this is reporting rather than loading, so anything unexpected is
-    /// described rather than rejected — a second error about the shape of a
-    /// declaration we are about to refuse anyway would bury the real one.
+    /// the error that refuses it.
+    ///
+    /// The first string, because that is what the declaration carries — all
+    /// seven occurrences across `compat/vendor/` write exactly one — and
+    /// because the one consumer, the compat harness, reads back one quoted
+    /// name. Nothing is rejected here: this is reporting rather than loading,
+    /// and a second error about the shape of a declaration we are refusing
+    /// anyway would bury the real one.
     fn parse_shared_object_name(values: &[TaggedValue], heap: &SharedHeap) -> String {
         let h = heap.borrow();
-        let names: Vec<String> = values
+        values
             .iter()
-            .filter_map(|&tv| h.get_string_contents(tv))
-            .collect();
-        if names.is_empty() {
-            "<unnamed>".to_string()
-        } else {
-            names.join("\", \"")
-        }
+            .find_map(|&tv| h.get_string_contents(tv))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "<unnamed>".to_string())
     }
 
     /// Parse include file paths from a slice of TaggedValues

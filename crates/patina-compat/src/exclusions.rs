@@ -28,7 +28,7 @@ use std::path::Path;
 
 /// Why a package does not count. A closed set: a reason that does not fit
 /// one of these is a reason to think again, not to add prose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
     /// Needs a foreign-function interface — an `include-shared` shared
     /// object, `(foreign c)`, or a C-backed `(chibi …)` library. Deferred by
@@ -53,6 +53,15 @@ pub enum Reason {
 }
 
 impl Reason {
+    /// Every reason, in the order the report groups them.
+    pub const ALL: [Reason; 4] = [
+        Reason::Ffi,
+        Reason::DependencyNotVendored,
+        Reason::UpstreamSourceDefect,
+        Reason::UpstreamTestDefect,
+    ];
+
+    /// The spelling used in the file.
     pub fn key(&self) -> &'static str {
         match self {
             Reason::Ffi => "ffi",
@@ -62,24 +71,7 @@ impl Reason {
         }
     }
 
-    fn from_key(key: &str) -> Option<Reason> {
-        match key {
-            "ffi" => Some(Reason::Ffi),
-            "dependency-not-vendored" => Some(Reason::DependencyNotVendored),
-            "upstream-source-defect" => Some(Reason::UpstreamSourceDefect),
-            "upstream-test-defect" => Some(Reason::UpstreamTestDefect),
-            _ => None,
-        }
-    }
-
-    /// The heading this reason gets in the report, in declaration order.
-    pub const ALL: [Reason; 4] = [
-        Reason::Ffi,
-        Reason::DependencyNotVendored,
-        Reason::UpstreamSourceDefect,
-        Reason::UpstreamTestDefect,
-    ];
-
+    /// The heading this reason gets in the report.
     pub fn heading(&self) -> &'static str {
         match self {
             Reason::Ffi => "Needs a foreign-function interface",
@@ -87,6 +79,13 @@ impl Reason {
             Reason::UpstreamSourceDefect => "Upstream source defect",
             Reason::UpstreamTestDefect => "Upstream test defect",
         }
+    }
+
+    /// Derived from `ALL` and `key` rather than a second table: a new variant
+    /// then cannot be readable in one direction and silently rejected in the
+    /// other.
+    fn from_key(key: &str) -> Option<Reason> {
+        Reason::ALL.into_iter().find(|r| r.key() == key)
     }
 }
 
@@ -96,7 +95,10 @@ pub struct Exclusion {
     pub reason: Reason,
     /// The status bucket this entry was written against. A package that
     /// produces a different one has drifted — see the module docs.
-    pub expect: String,
+    ///
+    /// Held as the `Status::KEYS` entry it validated against, so an entry
+    /// that got past `parse` cannot be carrying a key no status has.
+    pub expect: &'static str,
     /// One line saying what is actually wrong, specific enough that a reader
     /// can check it without re-deriving the diagnosis.
     pub note: String,
@@ -114,25 +116,15 @@ pub fn load(path: &Path, heap: &SharedHeap) -> Result<Vec<Exclusion>, String> {
 }
 
 pub fn parse(source: &str, heap: &SharedHeap) -> Result<Vec<Exclusion>, String> {
-    let forms = sexp::parse_all(source, heap)?;
-    let top = forms
-        .first()
-        .and_then(|f| sexp::tagged_form(*f, "patina-compat-exclusions", heap))
-        .ok_or("not a patina-compat-exclusions file")?;
-
-    let mut out = Vec::new();
-    for section in top {
-        let Some(rows) = sexp::tagged_form(section, "exclusions", heap) else {
-            continue;
-        };
-        for row in rows {
-            out.push(parse_row(row, heap)?);
-        }
-    }
+    let (_, rows) = sexp::document_rows(source, "patina-compat-exclusions", "exclusions", heap)?;
+    let out = rows
+        .into_iter()
+        .map(|row| parse_row(row, heap))
+        .collect::<Result<Vec<Exclusion>, _>>()?;
 
     let mut seen = std::collections::BTreeSet::new();
     for e in &out {
-        if !seen.insert(e.slug.clone()) {
+        if !seen.insert(e.slug.as_str()) {
             return Err(format!("duplicate exclusion for {}", e.slug));
         }
     }
@@ -141,23 +133,20 @@ pub fn parse(source: &str, heap: &SharedHeap) -> Result<Vec<Exclusion>, String> 
 
 fn parse_row(row: patina_core::TaggedValue, heap: &SharedHeap) -> Result<Exclusion, String> {
     let fields = sexp::list_elements(row, heap).ok_or("malformed exclusion row")?;
-    let field = |key: &str| fields.iter().find_map(|f| sexp::tagged_form(*f, key, heap));
-    let string_field = |key: &str| {
-        field(key).and_then(|rest| rest.first().and_then(|tv| sexp::string_value(*tv, heap)))
-    };
-    let symbol_field = |key: &str| {
-        field(key).and_then(|rest| rest.first().and_then(|tv| sexp::symbol_name(*tv, heap)))
-    };
 
-    let slug = string_field("slug").ok_or("exclusion row without slug")?;
-    let reason_key = symbol_field("reason").ok_or_else(|| format!("{}: no reason", slug))?;
+    let slug = sexp::row_string(&fields, "slug", heap).ok_or("exclusion row without slug")?;
+    let reason_key =
+        sexp::row_symbol(&fields, "reason", heap).ok_or_else(|| format!("{}: no reason", slug))?;
     let reason = Reason::from_key(&reason_key)
         .ok_or_else(|| format!("{}: unknown reason `{}`", slug, reason_key))?;
-    let expect = symbol_field("expect").ok_or_else(|| format!("{}: no expect", slug))?;
-    if !crate::run::Status::KEYS.contains(&expect.as_str()) {
-        return Err(format!("{}: unknown expected status `{}`", slug, expect));
-    }
-    let note = string_field("note").ok_or_else(|| format!("{}: no note", slug))?;
+    let expect_key =
+        sexp::row_symbol(&fields, "expect", heap).ok_or_else(|| format!("{}: no expect", slug))?;
+    let expect = crate::run::Status::KEYS
+        .into_iter()
+        .find(|k| *k == expect_key)
+        .ok_or_else(|| format!("{}: unknown expected status `{}`", slug, expect_key))?;
+    let note =
+        sexp::row_string(&fields, "note", heap).ok_or_else(|| format!("{}: no note", slug))?;
     if note.trim().is_empty() {
         return Err(format!("{}: empty note", slug));
     }

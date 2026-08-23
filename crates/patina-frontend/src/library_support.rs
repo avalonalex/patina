@@ -89,29 +89,31 @@ impl SchemeLibraryLoader {
     ) -> Result<ParsedLibrary, LibraryError> {
         let lib_def =
             LibraryDefinition::from_tagged_with_library_checker(lib_form, &heap, can_load_library)
-                .map_err(|e| Self::library_error_from_parse(INLINE_SOURCE_LABEL, e))?;
+                .map_err(|e| {
+                    Self::library_error_from_parse(Path::new(INLINE_SOURCE_LABEL), "", e)
+                })?;
         self.resolve_definition(lib_def, base_dir, None, heap)
     }
 
     /// Attribute a failure to parse a `define-library` form to the file it
-    /// came from.
+    /// came from, prefixing the message with `context`.
     ///
-    /// One function rather than a `map_err` per call site so the one variant
-    /// that must *not* be flattened into a parse error keeps its identity:
-    /// `include-shared` says the library is a compiled shared object, which
-    /// is a scope limit rather than a defect, and Track L's harness reads it
-    /// as such. Everything else keeps the existing wording.
-    fn library_error_from_parse(file: &str, e: ParseError) -> LibraryError {
+    /// Every `LibraryDefinition::from_tagged*` call site goes through here, so
+    /// the one variant that must *not* be flattened into a parse error keeps
+    /// its identity in one place: `include-shared` says the library is a
+    /// compiled shared object, which is a scope limit rather than a defect,
+    /// and Track L's harness reads it as such. Everything else keeps the
+    /// existing wording, which is what `context` is for — the
+    /// `include-library-declarations` path prefixes its own.
+    fn library_error_from_parse(file: &Path, context: &str, e: ParseError) -> LibraryError {
+        let file = file.display().to_string();
         match e {
             ParseError::NativeExtensionRequired(extension) => {
-                LibraryError::NativeExtensionRequired {
-                    file: file.to_string(),
-                    extension,
-                }
+                LibraryError::NativeExtensionRequired { file, extension }
             }
             other => LibraryError::ParseError {
-                file: file.to_string(),
-                message: format!("{:?}", other),
+                file,
+                message: format!("{context}{:?}", other),
             },
         }
     }
@@ -219,7 +221,7 @@ impl SchemeLibraryLoader {
         // Parse the define-library form into structured data with library checker
         let lib_def =
             LibraryDefinition::from_tagged_with_library_checker(lib_form, &heap, can_load_library)
-                .map_err(|e| Self::library_error_from_parse(&path.display().to_string(), e))?;
+                .map_err(|e| Self::library_error_from_parse(&path, "", e))?;
 
         // Verify the library name matches
         if lib_def.name != name {
@@ -443,17 +445,8 @@ impl SchemeLibraryLoader {
             h.alloc_pair(define_library_sym, with_name)
         };
 
-        let lib_def = LibraryDefinition::from_tagged(dummy_lib, heap).map_err(|e| match e {
-            ParseError::NativeExtensionRequired(extension) => {
-                LibraryError::NativeExtensionRequired {
-                    file: source_file.display().to_string(),
-                    extension,
-                }
-            }
-            other => LibraryError::ParseError {
-                file: source_file.display().to_string(),
-                message: format!("Invalid library declaration: {:?}", other),
-            },
+        let lib_def = LibraryDefinition::from_tagged(dummy_lib, heap).map_err(|e| {
+            Self::library_error_from_parse(source_file, "Invalid library declaration: ", e)
         })?;
 
         // Convert frontend types to runtime types
