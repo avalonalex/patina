@@ -520,6 +520,7 @@ version = "0.1.0"
 dependencies = [
  "patina-core",
  "patina-frontend",
+ "patina-runtime",
  "tempfile",
 ]
 

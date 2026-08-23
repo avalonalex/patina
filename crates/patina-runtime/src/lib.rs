@@ -37,5 +37,5 @@ pub use error::RuntimeError;
 pub use eval_error::EvalError;
 pub use features::{FeatureRegistry, default_features};
 pub use library_loader::{LibraryLoader, LibraryLoaderRegistry, RustLibraryBuilder};
-pub use library_registry::{LibraryError, LibraryRegistry};
+pub use library_registry::{LibraryError, LibraryRegistry, NATIVE_EXTENSION_MARKER};
 pub use rust_library_loader::RustLibraryLoader;

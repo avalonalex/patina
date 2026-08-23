@@ -5,16 +5,32 @@
 //! report renders the headline number, the per-status breakdown, and the
 //! failure histograms that constitute the L1/L2 work queue.
 
+use crate::exclusions::{Exclusion, Reason};
 use crate::run::{PackageResult, Status};
 use crate::sexp;
 use patina_core::SharedHeap;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+
+/// Make `text` safe to drop into a markdown table cell.
+///
+/// A note is free prose written by whoever added an exclusion, and an
+/// unescaped `|` silently splits the row — the renderer drops the overflow,
+/// so the justification vanishes from the committed report with no error.
+fn cell(text: &str) -> String {
+    text.replace('|', "\\|").replace(['\n', '\r'], " ")
+}
 
 /// The detail list a status carries, with its serialization key.
 fn status_detail(status: &Status) -> Option<(&'static str, &[String])> {
     match status {
-        Status::MissingLibrary(l) | Status::OutOfScope(l) => Some(("missing", l)),
+        Status::MissingLibrary(l) => Some(("missing", l)),
+        // Not `missing`: this payload is whatever the evidence named, which
+        // for an `include-shared` library is a shared object and for a
+        // reached stub is a procedure. Recording `(missing "mecab")` would
+        // put a `.so` where a reader — and any future histogram — expects a
+        // library name.
+        Status::OutOfScope(l) => Some(("needs", l)),
         Status::UnboundIdentifier(l) => Some(("unbound", l)),
         Status::ParseError(l) | Status::LoadError(l) => Some(("errors", l)),
         _ => None,
@@ -53,28 +69,16 @@ pub fn to_sexp(results: &[PackageResult], backend: &str) -> String {
 /// Parse a results snapshot back into `PackageResult`s and the backend it
 /// was measured on (for `report`).
 pub fn from_sexp(source: &str, heap: &SharedHeap) -> Result<(Vec<PackageResult>, String), String> {
-    let forms = sexp::parse_all(source, heap)?;
-    let top = forms
-        .first()
-        .and_then(|f| sexp::tagged_form(*f, "patina-compat-results", heap))
-        .ok_or("not a patina-compat-results file")?;
-
-    let mut backend = "vm".to_string();
-    let mut results = Vec::new();
-    for section in top {
-        if let Some(rest) = sexp::tagged_form(section, "backend", heap) {
-            if let Some(name) = rest.first().and_then(|tv| sexp::string_value(*tv, heap)) {
-                backend = name;
-            }
-            continue;
-        }
-        let Some(rows) = sexp::tagged_form(section, "results", heap) else {
-            continue;
-        };
-        for row in rows {
-            results.push(parse_result_row(row, heap)?);
-        }
-    }
+    let (sections, rows) = sexp::document_rows(source, "patina-compat-results", "results", heap)?;
+    let backend = sections
+        .iter()
+        .find_map(|s| sexp::clause_argument(*s, "backend", heap))
+        .and_then(|tv| sexp::string_value(tv, heap))
+        .unwrap_or_else(|| "vm".to_string());
+    let results = rows
+        .into_iter()
+        .map(|row| parse_result_row(row, heap))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok((results, backend))
 }
 
@@ -83,22 +87,18 @@ fn parse_result_row(
     heap: &SharedHeap,
 ) -> Result<PackageResult, String> {
     let fields = sexp::list_elements(row, heap).ok_or("malformed result row")?;
-    let field = |key: &str| fields.iter().find_map(|f| sexp::tagged_form(*f, key, heap));
-    let field_symbol = |key: &str| {
-        field(key).and_then(|rest| rest.first().and_then(|tv| sexp::symbol_name(*tv, heap)))
-    };
 
-    let slug = field("slug")
-        .and_then(|rest| rest.first().and_then(|tv| sexp::string_value(*tv, heap)))
-        .ok_or("result row without slug")?;
-    let mode = if field_symbol("mode").as_deref() == Some("test") {
+    let slug = sexp::row_string(&fields, "slug", heap).ok_or("result row without slug")?;
+    let mode = if sexp::row_symbol(&fields, "mode", heap).as_deref() == Some("test") {
         "test"
     } else {
         "probe"
     };
-    let names: Vec<String> = ["missing", "unbound", "errors"]
+    // The detail list is variadic, so it is the one field that reads the
+    // whole clause rather than its first argument.
+    let names: Vec<String> = ["missing", "needs", "unbound", "errors"]
         .iter()
-        .find_map(|key| field(key))
+        .find_map(|key| fields.iter().find_map(|f| sexp::tagged_form(*f, key, heap)))
         .map(|rest| {
             rest.iter()
                 .filter_map(|tv| sexp::string_value(*tv, heap))
@@ -106,7 +106,7 @@ fn parse_result_row(
         })
         .unwrap_or_default();
 
-    let status = match field_symbol("status").as_deref() {
+    let status = match sexp::row_symbol(&fields, "status", heap).as_deref() {
         Some("pass") => Status::Pass,
         Some("missing-library") => Status::MissingLibrary(names),
         Some("parse-error") => Status::ParseError(names),
@@ -122,12 +122,71 @@ fn parse_result_row(
 }
 
 /// Render the markdown report.
-pub fn render(results: &[PackageResult], backend: &str) -> String {
+///
+/// `exclusions` is the committed opt-out list. It never changes what was
+/// measured — only which rows the scoped number counts and which rows reach
+/// the work queues. Both numbers are printed, in that order, so the scoped
+/// one can never be read without the raw one beside it.
+/// `full_corpus` says whether `results` covers every package. Only then can
+/// an exclusion that matched nothing be called stale rather than merely
+/// out of view, so only then is it reported.
+pub fn render(
+    results: &[PackageResult],
+    backend: &str,
+    exclusions: &[Exclusion],
+    full_corpus: bool,
+) -> String {
     let total = results.len();
     let count = |key: &str| results.iter().filter(|r| r.status.key() == key).count();
     let pass = count("pass");
-    let out_of_scope = count("out-of-scope");
-    let achievable = total - out_of_scope;
+
+    let excluded: BTreeMap<&str, &Exclusion> =
+        exclusions.iter().map(|e| (e.slug.as_str(), e)).collect();
+    // Only exclusions that matched a package in *this* run are subtracted; a
+    // filtered run must not shrink its own denominator by rows it never ran.
+    let applied: Vec<(&PackageResult, &Exclusion)> = results
+        .iter()
+        .filter_map(|r| excluded.get(r.slug.as_str()).map(|e| (r, *e)))
+        .collect();
+    let drifted: Vec<(&PackageResult, &Exclusion)> = applied
+        .iter()
+        .copied()
+        .filter(|(r, e)| r.status.key() != e.expect)
+        .collect();
+    // Only an entry that still describes its package excuses it. A drifted
+    // entry is reported *and stays in scope* — reporting it while still
+    // subtracting it would be exactly the quiet absorption this mechanism
+    // exists to prevent, and would keep its failure out of the work queues
+    // too. It returns to the score until someone corrects the entry.
+    let drifted_slugs: BTreeSet<&str> = drifted.iter().map(|(r, _)| r.slug.as_str()).collect();
+    let counted: Vec<&PackageResult> = results
+        .iter()
+        .filter(|r| {
+            !excluded.contains_key(r.slug.as_str()) || drifted_slugs.contains(r.slug.as_str())
+        })
+        .collect();
+    let counted_pass = counted.iter().filter(|r| r.status.key() == "pass").count();
+    let unmatched: Vec<&Exclusion> = if full_corpus {
+        // Derived from `applied` rather than from `results`: it is the smaller
+        // side (25 against 162) and it is already built.
+        let matched: BTreeSet<&str> = applied.iter().map(|(r, _)| r.slug.as_str()).collect();
+        exclusions
+            .iter()
+            .filter(|e| !matched.contains(e.slug.as_str()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // The drift check in the other direction. Nothing subtracts an
+    // evidence-derived `out-of-scope` from the score by itself — the file
+    // does that — so a package the harness newly proves FFI-bound would
+    // otherwise sit in the denominator as though Patina had a defect, and the
+    // in-scope number would fall with nothing in any diff to explain it.
+    let unlisted: Vec<&PackageResult> = counted
+        .iter()
+        .copied()
+        .filter(|r| r.status.key() == "out-of-scope")
+        .collect();
 
     let mut out = String::new();
     let _ = writeln!(
@@ -135,20 +194,78 @@ pub fn render(results: &[PackageResult], backend: &str) -> String {
         "# Patina third-party compatibility ({} backend)\n",
         backend
     );
-    let _ = writeln!(
-        out,
-        "**{} of {} packages pass** — {} of {} achievable (excluding {} out-of-scope pending FFI).\n",
-        pass, total, pass, achievable, out_of_scope
-    );
-
-    out.push_str("| Status | Packages |\n|---|---|\n");
-    for key in Status::KEYS {
-        let _ = writeln!(out, "| {} | {} |", key, count(key));
+    let _ = writeln!(out, "**{} of {} packages pass.**\n", pass, total);
+    if !applied.is_empty() {
+        let _ = writeln!(
+            out,
+            "**{} of {} in scope** — {} packages are excluded from the score by \
+             `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of \
+             Patina. The raw number above never moves because of that file.\n",
+            counted_pass,
+            counted.len(),
+            applied.len()
+        );
+    }
+    if !drifted.is_empty() {
+        let _ = writeln!(
+            out,
+            "> ⚠️ **{} exclusion(s) no longer match what the package does**, and are \
+             counted in the score until they do. See *Exclusions that have drifted* \
+             below — an entry whose reason has stopped being true is due for \
+             retirement, not for a new expectation.\n",
+            drifted.len()
+        );
+    }
+    if !unlisted.is_empty() {
+        let _ = writeln!(
+            out,
+            "> ⚠️ **{} package(s) proved they need FFI but have no entry in \
+             `compat/EXCLUSIONS.scm`:** {}. They are counted against the in-scope \
+             score until one is added, which is deliberate — the alternative is a \
+             number that quietly discounts whatever the harness decided on its own.\n",
+            unlisted.len(),
+            unlisted
+                .iter()
+                .map(|r| format!("`{}`", r.slug))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 
+    if !unmatched.is_empty() {
+        let _ = writeln!(
+            out,
+            "> ⚠️ **{} exclusion(s) name a package the corpus no longer has:** {}. \
+             An entry that matches nothing excludes nothing, so it is dead weight rather \
+             than a silent subtraction — delete it, or fix the slug.\n",
+            unmatched.len(),
+            unmatched
+                .iter()
+                .map(|e| format!("`{}`", e.slug))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    out.push_str("| Status | Packages | In scope |\n|---|---|---|\n");
+    for key in Status::KEYS {
+        let in_scope = counted.iter().filter(|r| r.status.key() == key).count();
+        let _ = writeln!(out, "| {} | {} | {} |", key, count(key), in_scope);
+    }
+
+    // The histograms are work queues, so they read the in-scope packages
+    // only. A missing library named solely by an excluded package is not
+    // something bundling can fix — `(srfi 160 base)` and `(chibi io)` each
+    // sat in this table with one requester, and both requesters are C-shim
+    // packages that would still fail with the library in hand.
+    //
+    // The consequence for a library wanted by both kinds of package is that
+    // the count is actionable demand rather than total demand, which is the
+    // right ordering signal for bundling work but is not what "Packages"
+    // says — so the column names it.
     histogram_section(
         &mut out,
-        results,
+        &counted,
         "Missing libraries — the bundling work queue",
         "Library",
         |s| match s {
@@ -159,7 +276,7 @@ pub fn render(results: &[PackageResult], backend: &str) -> String {
     );
     histogram_section(
         &mut out,
-        results,
+        &counted,
         "Parse errors",
         "Error",
         |s| match s {
@@ -170,7 +287,7 @@ pub fn render(results: &[PackageResult], backend: &str) -> String {
     );
     histogram_section(
         &mut out,
-        results,
+        &counted,
         "Load errors",
         "Error",
         |s| match s {
@@ -181,7 +298,7 @@ pub fn render(results: &[PackageResult], backend: &str) -> String {
     );
     histogram_section(
         &mut out,
-        results,
+        &counted,
         "Unbound identifiers",
         "Identifier",
         |s| match s {
@@ -191,10 +308,72 @@ pub fn render(results: &[PackageResult], backend: &str) -> String {
         |name| name.to_string(),
     );
 
+    if !drifted.is_empty() {
+        out.push_str("\n## Exclusions that have drifted\n\n");
+        out.push_str(
+            "Each row was excluded on the understanding that it produces the status in \
+             *Expected*. It does not any more, so the recorded reason needs re-checking \
+             — and if the package now passes, the entry should go.\n\n",
+        );
+        out.push_str("| Package | Expected | Actual | Reason | Note |\n|---|---|---|---|---|\n");
+        for (r, e) in &drifted {
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {} | {} |",
+                r.slug,
+                e.expect,
+                r.status.key(),
+                e.reason.key(),
+                cell(&e.note)
+            );
+        }
+    }
+
+    if !applied.is_empty() {
+        out.push_str("\n## Excluded from the score\n\n");
+        out.push_str(
+            "These packages still run on every pass — exclusion decides whether a result \
+             counts, never whether it is measured, and `results.scm` records them exactly \
+             as it records everything else.\n",
+        );
+        for reason in Reason::ALL {
+            let rows: Vec<(&PackageResult, &Exclusion)> = applied
+                .iter()
+                .copied()
+                .filter(|(_, e)| e.reason == reason)
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            let _ = writeln!(out, "\n### {} ({})\n", reason.heading(), rows.len());
+            out.push_str("| Package | Status | Why |\n|---|---|---|\n");
+            for (r, e) in rows {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} |",
+                    r.slug,
+                    r.status.key(),
+                    cell(&e.note)
+                );
+            }
+        }
+    }
+
     out.push_str("\n## Per-package matrix\n\n");
-    out.push_str("| Package | Mode | Status |\n|---|---|---|\n");
+    out.push_str("| Package | Mode | Status | Scope |\n|---|---|---|---|\n");
     for r in results {
-        let _ = writeln!(out, "| {} | {} | {} |", r.slug, r.mode, r.status.key());
+        let scope = match excluded.get(r.slug.as_str()) {
+            Some(e) => e.reason.key(),
+            None => "in scope",
+        };
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} |",
+            r.slug,
+            r.mode,
+            r.status.key(),
+            scope
+        );
     }
     out
 }
@@ -203,7 +382,7 @@ pub fn render(results: &[PackageResult], backend: &str) -> String {
 /// across packages, most-blocked first.
 fn histogram_section<'a>(
     out: &mut String,
-    results: &'a [PackageResult],
+    results: &[&'a PackageResult],
     title: &str,
     column: &str,
     select: impl Fn(&'a Status) -> Option<&'a Vec<String>>,
@@ -224,7 +403,7 @@ fn histogram_section<'a>(
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
 
     let _ = writeln!(out, "\n## {}\n", title);
-    let _ = writeln!(out, "| {} | Packages |\n|---|---|", column);
+    let _ = writeln!(out, "| {} | In-scope packages |\n|---|---|", column);
     for (name, n) in rows {
         let _ = writeln!(out, "| {} | {} |", decorate(name), n);
     }
@@ -291,9 +470,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn report_headline_counts_achievable() {
-        let results = vec![
+    fn two_results() -> Vec<PackageResult> {
+        vec![
             PackageResult {
                 slug: "a".into(),
                 mode: "test",
@@ -304,9 +482,138 @@ mod tests {
                 mode: "probe",
                 status: Status::OutOfScope(vec!["chibi ast".into()]),
             },
-        ];
-        let report = render(&results, "vm");
-        assert!(report.contains("**1 of 2 packages pass**"));
-        assert!(report.contains("1 of 1 achievable"));
+        ]
+    }
+
+    fn excluding(slug: &str, expect: &'static str) -> Vec<Exclusion> {
+        vec![Exclusion {
+            slug: slug.into(),
+            reason: Reason::Ffi,
+            expect,
+            note: "needs libfoo".into(),
+        }]
+    }
+
+    /// The raw number is the measurement and does not move; the scoped one
+    /// appears beside it only when something was actually excluded.
+    #[test]
+    fn report_headline_keeps_the_raw_number() {
+        let report = render(&two_results(), "vm", &[], true);
+        assert!(report.contains("**1 of 2 packages pass.**"), "{}", report);
+        assert!(!report.contains("in scope**"), "{}", report);
+    }
+
+    #[test]
+    fn an_exclusion_narrows_only_the_scoped_number() {
+        let report = render(&two_results(), "vm", &excluding("b", "out-of-scope"), true);
+        assert!(report.contains("**1 of 2 packages pass.**"), "{}", report);
+        assert!(report.contains("**1 of 1 in scope**"), "{}", report);
+        assert!(
+            report.contains("Needs a foreign-function interface (1)"),
+            "{}",
+            report
+        );
+    }
+
+    /// The point of `expect`: an entry that no longer describes the package
+    /// is reported, not silently applied.
+    #[test]
+    fn an_exclusion_that_no_longer_matches_is_reported_as_drift() {
+        let report = render(&two_results(), "vm", &excluding("a", "out-of-scope"), true);
+        assert!(
+            report.contains("Exclusions that have drifted"),
+            "{}",
+            report
+        );
+        assert!(report.contains("no longer match"), "{}", report);
+    }
+
+    /// A work queue must not list a library only an excluded package wants:
+    /// bundling it would not move that package.
+    #[test]
+    fn the_bundling_queue_ignores_excluded_packages() {
+        let results = vec![PackageResult {
+            slug: "b".into(),
+            mode: "probe",
+            status: Status::MissingLibrary(vec!["srfi 160 base".into()]),
+        }];
+        let queued = render(&results, "vm", &[], true);
+        assert!(queued.contains("(srfi 160 base)"), "{}", queued);
+        let dropped = render(&results, "vm", &excluding("b", "missing-library"), true);
+        assert!(!dropped.contains("| (srfi 160 base) |"), "{}", dropped);
+    }
+
+    /// Drift is reported *and* the package returns to the score. Reporting it
+    /// while still subtracting it would be the quiet absorption the mechanism
+    /// exists to prevent.
+    #[test]
+    fn a_drifted_exclusion_stops_excusing_its_package() {
+        // `a` passes; the entry expects out-of-scope, so it has drifted.
+        let report = render(&two_results(), "vm", &excluding("a", "out-of-scope"), true);
+        assert!(
+            report.contains("Exclusions that have drifted"),
+            "{}",
+            report
+        );
+        // Both packages counted: the drifted one is back in scope.
+        assert!(report.contains("**1 of 2 in scope**"), "{}", report);
+    }
+
+    /// The drift check in the other direction. Nothing discounts an
+    /// evidence-derived out-of-scope row by itself, so one with no entry must
+    /// be visible rather than silently dragging the in-scope number down.
+    #[test]
+    fn an_out_of_scope_package_with_no_entry_is_reported() {
+        let report = render(
+            &two_results(),
+            "vm",
+            &excluding("a", "missing-library"),
+            true,
+        );
+        assert!(report.contains("proved they need FFI"), "{}", report);
+        assert!(report.contains("`b`"), "{}", report);
+    }
+
+    /// A note is free prose; an unescaped `|` silently splits its row and the
+    /// justification disappears from the rendered report.
+    #[test]
+    fn a_note_containing_a_pipe_does_not_split_its_row() {
+        let exclusions = vec![Exclusion {
+            slug: "b".into(),
+            reason: Reason::Ffi,
+            expect: "out-of-scope",
+            note: "fails on (or a | b) upstream".into(),
+        }];
+        let report = render(&two_results(), "vm", &exclusions, true);
+        assert!(report.contains(r"(or a \| b)"), "{}", report);
+    }
+
+    /// A full run can tell a stale entry from an unrun one, and says so:
+    /// an entry matching nothing subtracts nothing, and reads as if it did.
+    #[test]
+    fn a_full_run_reports_an_exclusion_that_matches_nothing() {
+        let report = render(
+            &two_results(),
+            "vm",
+            &excluding("gone-from-corpus", "missing-library"),
+            true,
+        );
+        assert!(report.contains("no longer has"), "{}", report);
+        assert!(report.contains("gone-from-corpus"), "{}", report);
+    }
+
+    /// An exclusion for a package this run did not measure must not shrink
+    /// the denominator — otherwise a filtered run reports a better ratio than
+    /// it earned.
+    #[test]
+    fn an_exclusion_for_an_unrun_package_changes_nothing() {
+        let report = render(
+            &two_results(),
+            "vm",
+            &excluding("not-in-this-run", "missing-library"),
+            false,
+        );
+        assert!(report.contains("**1 of 2 packages pass.**"), "{}", report);
+        assert!(!report.contains("in scope**"), "{}", report);
     }
 }

@@ -42,9 +42,18 @@ pub enum Status {
     RuntimeError,
     /// Did not finish within the per-package budget.
     Timeout,
-    /// Every missing library is C-backed upstream — unreachable until FFI
-    /// exists, so it bounds the achievable score rather than counting as a
-    /// defect (PRD §6 risk: "the pass rate has a ceiling").
+    /// The package needs a foreign-function interface, proved three ways:
+    /// every library it is missing is C-backed upstream (`FFI_BOUND`), a
+    /// library it imports is a compiled shared object (`include-shared`), or
+    /// it reached a bundled library's FFI stub at run time. The payload is
+    /// whichever of those the evidence named — library names, shared-object
+    /// names or stub procedures — which is why it serializes under the
+    /// neutral `needs` key rather than `missing`.
+    ///
+    /// This classification does **not** discount the package from the score
+    /// on its own; `compat/EXCLUSIONS.scm` does that, and the report warns
+    /// about a row that lands here without an entry (PRD §6 risk: "the pass
+    /// rate has a ceiling").
     OutOfScope(Vec<String>),
 }
 
@@ -98,6 +107,10 @@ pub struct RunConfig {
 /// inventory (see PRD Track L §L2's out-of-scope list); deliberately
 /// conservative — anything not listed counts as a real gap.
 const FFI_BOUND: &[&str] = &[
+    // chibi's own FFI interface library. A package importing it is asking for
+    // C bindings by name, which is the deferred work item in Track L §3, not a
+    // library Patina could bundle.
+    "foreign c",
     "chibi ast",
     "chibi disasm",
     "chibi emscripten",
@@ -405,6 +418,33 @@ fn classify(out: &Captured, mode: &str) -> Status {
         return Status::LoadError(load_errors);
     }
 
+    // The library's implementation is a compiled shared object, and Patina
+    // refused that clause deliberately. Placed with the load-stage failures
+    // above rather than at the top of the function, and the two halves of
+    // that are separate decisions:
+    //
+    // *Below* missing libraries and parse errors, because this is an excusing
+    // bucket and one must never swallow a real failure (audit E3). A package
+    // that needs a `.so` **and** trips a genuine parse error in some other
+    // library still reports the parse error, so it reaches the work queue.
+    //
+    // *Above* unbound identifiers, for the reason the parse/unbound ordering
+    // already encodes: a library that never loads leaves its importer unbound
+    // and its test program's entry point undefined, so this is the cause and
+    // those are its symptoms. `chibi-mecab` classified as
+    // `unbound-identifier: run-chibi-mecab-test-tests` until it moved up.
+    //
+    // Note this is *not* the ordering the FFI-stub check below gets, and the
+    // difference is what each proves. A stub marker is raised at run time, so
+    // the suite did run and its verdict is real evidence to weigh. This
+    // refusal happens before anything runs at all.
+    //
+    // Matched on a constant this crate links against rather than on wording —
+    // see `patina_runtime::NATIVE_EXTENSION_MARKER`.
+    if let Some(extensions) = extract_native_extensions(parts) {
+        return Status::OutOfScope(extensions);
+    }
+
     let unbound = extract_unbound_identifiers(parts);
     if !unbound.is_empty() {
         return Status::UnboundIdentifier(unbound);
@@ -440,40 +480,66 @@ fn classify(out: &Captured, mode: &str) -> Status {
     Status::Pass
 }
 
+/// Every distinct, non-empty name `read_name` recovers from the text after
+/// `marker`, over both captured streams.
+///
+/// The scan-sort-dedup spine is the same for every marker the classifier
+/// reads; naming it leaves each extractor as the one line that says how to
+/// read its own tail.
+fn extract_after_marker(
+    parts: [&str; 2],
+    marker: &str,
+    read_name: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let mut found: Vec<String> = parts
+        .iter()
+        .flat_map(|s| s.lines())
+        .filter_map(|line| read_name(line.split_once(marker)?.1))
+        .filter(|s| !s.is_empty())
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// Names of the shared objects an `include-shared` declaration asked for.
+///
+/// Patina refuses that declaration deliberately (`LibraryError::
+/// NativeExtensionRequired`), so this reads a marker the interpreter emits on
+/// purpose rather than wording that could be reworded.
+///
+/// What the shared constant actually buys, stated precisely because it is
+/// easy to overstate: rewording the message in *this tree* fails to compile
+/// here. It says nothing about the binary under test, which `--patina` may
+/// point anywhere — against an older or stale build the marker is simply
+/// absent and the package classifies on whatever that build said instead.
+/// The `expect` field in `compat/EXCLUSIONS.scm` is what surfaces that, as
+/// drift on every affected row at once.
+fn extract_native_extensions(parts: [&str; 2]) -> Option<Vec<String>> {
+    let found = extract_after_marker(parts, patina_runtime::NATIVE_EXTENSION_MARKER, |rest| {
+        let (name, _) = rest.trim().strip_prefix('"')?.split_once('"')?;
+        Some(name.to_string())
+    });
+    (!found.is_empty()).then_some(found)
+}
+
 /// Names of the FFI-stub procedures a run actually reached, if any.
 ///
 /// The marker is raised by `define-unimplemented` in a bundled library, so it
 /// is our own string and not pattern-matching on a third party's prose.
 fn extract_ffi_stubs(parts: [&str; 2]) -> Option<Vec<String>> {
-    const MARKER: &str = "requires FFI, unavailable in Patina:";
-    let mut found: Vec<String> = parts
-        .iter()
-        .flat_map(|s| s.lines())
-        .filter_map(|line| {
-            let (_, rest) = line.split_once(MARKER)?;
-            Some(rest.trim().trim_matches(['"', '\'']).to_string())
-        })
-        .filter(|s| !s.is_empty())
-        .collect();
-    found.sort();
-    found.dedup();
+    let found = extract_after_marker(parts, "requires FFI, unavailable in Patina:", |rest| {
+        Some(rest.trim().trim_matches(['"', '\'']).to_string())
+    });
     (!found.is_empty()).then_some(found)
 }
 
 /// Pull `(lib name)` out of every "Library (lib name) not found" message.
 fn extract_missing_libraries(parts: [&str; 2]) -> Vec<String> {
-    let mut found: Vec<String> = parts
-        .iter()
-        .flat_map(|s| s.lines())
-        .filter_map(|line| {
-            let (_, rest) = line.split_once("Library (")?;
-            let (lib, _) = rest.split_once(") not found")?;
-            Some(lib.to_string())
-        })
-        .collect();
-    found.sort();
-    found.dedup();
-    found
+    extract_after_marker(parts, "Library (", |rest| {
+        rest.split_once(") not found")
+            .map(|(lib, _)| lib.to_string())
+    })
 }
 
 /// Pull the error description out of a parse failure — the detail alone, so
@@ -517,6 +583,12 @@ fn extract_parse_errors(parts: [&str; 2]) -> Vec<String> {
 
 /// Pull the identifier out of "Undefined variable: x" / "unbound variable: x"
 /// (the two backends word it differently).
+///
+/// Not on `extract_after_marker`, and neither is `extract_parse_errors`: both
+/// read *two* markers per line — this one because the backends disagree on
+/// the wording, that one because an included file's failure is reported by
+/// `include` rather than by the loader. Threading a marker list through the
+/// helper to absorb them would cost more than the five lines it saves.
 fn extract_unbound_identifiers(parts: [&str; 2]) -> Vec<String> {
     let mut found: Vec<String> = ["Undefined variable: ", "unbound variable: "]
         .iter()
@@ -750,6 +822,82 @@ mod tests {
         assert_eq!(
             classify(&out, "probe"),
             Status::OutOfScope(vec!["chibi ast".to_string()])
+        );
+    }
+
+    /// The excusing bucket must not swallow a real failure — the rule the
+    /// FFI-stub check states as audit E3. A package that needs a `.so` and
+    /// also trips a genuine parse error reports the parse error, so it still
+    /// reaches the work queue.
+    #[test]
+    fn a_parse_error_outranks_a_native_extension() {
+        let rendered = patina_runtime::LibraryError::NativeExtensionRequired {
+            file: "chibi/ssl.sld".to_string(),
+            extension: "ssl".to_string(),
+        }
+        .to_string();
+        let out = captured(
+            "",
+            &format!("Error: Parse error in other.sld: bad macro\nError: {rendered}"),
+            false,
+        );
+        assert_eq!(
+            classify(&out, "test"),
+            Status::ParseError(vec!["bad macro".to_string()])
+        );
+    }
+
+    /// ...but a downstream symptom must not. The test program's entry point
+    /// is undefined *because* the library never loaded, so the refusal is the
+    /// cause and the unbound name is its consequence.
+    #[test]
+    fn a_native_extension_outranks_the_unbound_symptom_it_causes() {
+        let rendered = patina_runtime::LibraryError::NativeExtensionRequired {
+            file: "chibi/mecab.sld".to_string(),
+            extension: "mecab".to_string(),
+        }
+        .to_string();
+        let out = captured(
+            "",
+            &format!("Error: {rendered}\nError: unbound variable: `run-chibi-mecab-test-tests`"),
+            false,
+        );
+        assert_eq!(
+            classify(&out, "test"),
+            Status::OutOfScope(vec!["mecab".to_string()])
+        );
+    }
+
+    #[test]
+    fn classifies_foreign_c_as_out_of_scope() {
+        let out = captured("", "Error: Library (foreign c) not found", false);
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::OutOfScope(vec!["foreign c".to_string()])
+        );
+    }
+
+    /// A library whose implementation is a shared object is out of scope, and
+    /// says so at the cause. Before Patina recognised `include-shared` this
+    /// arrived as `Exported identifier 'mecab?' not defined` — a load error
+    /// naming a symptom two steps downstream.
+    ///
+    /// The message is *rendered from the real error* rather than pasted in as
+    /// a literal, so the whole shape this extractor depends on — the marker,
+    /// and the quoted name after it — is checked against the producing site.
+    /// A pasted literal would only have pinned the copy in this file, leaving
+    /// a Display reformat free to reclassify chibi-mecab with a green build.
+    #[test]
+    fn classifies_a_native_extension_as_out_of_scope() {
+        let rendered = patina_runtime::LibraryError::NativeExtensionRequired {
+            file: "chibi/mecab.sld".to_string(),
+            extension: "mecab".to_string(),
+        }
+        .to_string();
+        let out = captured("", &format!("Error: {rendered}"), false);
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::OutOfScope(vec!["mecab".to_string()])
         );
     }
 

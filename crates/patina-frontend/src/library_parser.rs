@@ -16,10 +16,26 @@ use crate::ParseError;
 use crate::cond_expand::{parse_library_name_tagged, tagged_list_to_vec};
 use patina_core::{SharedHeap, TaggedValue};
 
+/// Declarations that carry a library's implementation, so skipping one leaves
+/// the library parsed and empty rather than merely incomplete.
+///
+/// The leniency policy is written for declarations that contribute nothing —
+/// a vendor annotation, or the inert `#f` a cond-expand branch for another
+/// implementation leaves behind. These are the opposite, and the failure mode
+/// of skipping one is the `(chibi filesystem)` hazard Track L records three
+/// times over: the library loads defining nothing and the error surfaces at
+/// the importer, naming an export instead of the cause.
+///
+/// Kept as a rule rather than only as a dispatch arm because the shape check
+/// runs *before* the keyword dispatch: `(include-shared . "x")` never reaches
+/// the arm that refuses `(include-shared "x")`, and would otherwise take the
+/// lenient path on the strength of being a recognized keyword.
+const NEVER_SKIP: [&str; 1] = ["include-shared"];
+
 /// The declaration keywords this parser implements — the same list the
 /// dispatch in `parse_declaration_tagged` matches on, named here so a
 /// malformed one can be reported as itself rather than as "unknown".
-const KNOWN_DECLARATIONS: [&str; 7] = [
+const KNOWN_DECLARATIONS: [&str; 8] = [
     "export",
     "import",
     "begin",
@@ -27,6 +43,7 @@ const KNOWN_DECLARATIONS: [&str; 7] = [
     "include-ci",
     "cond-expand",
     "include-library-declarations",
+    "include-shared",
 ];
 
 // Re-export library types from runtime (they moved there to fix dependency issues)
@@ -214,7 +231,16 @@ impl LibraryDefinition {
                 // dropped — the importer then failed on an unrelated unbound
                 // variable. Name the keyword when the head still has one; the
                 // lenient policy is unchanged, only what it says (F3).
-                return Self::skip_or_reject_declaration(&Self::describe_malformed(tv, heap));
+                let keyword = {
+                    let h = heap.borrow();
+                    h.try_pair(tv)
+                        .and_then(|(car, _)| h.get_symbol_name(car))
+                        .map(|s| s.to_string())
+                };
+                return Self::skip_or_reject_declaration(
+                    keyword.as_deref(),
+                    &Self::describe_malformed(tv, heap),
+                );
             }
         };
 
@@ -278,11 +304,33 @@ impl LibraryDefinition {
                     body_elements.push(BodyElement::IncludeLibraryDeclarations { paths });
                     Ok(())
                 }
-                _ => Self::skip_or_reject_declaration(&format!("unknown declaration `{keyword}`")),
+                // Not an unknown clause, and deliberately not on the lenient
+                // path: `include-shared` names a compiled shared object that
+                // *is* the library's implementation, so skipping it leaves the
+                // library parsed and empty and the failure surfaces at the
+                // importer, naming an export instead of the cause — the
+                // `(chibi filesystem)` hazard recorded in Track L §L2. Refuse
+                // it here, where the cause is still in hand.
+                //
+                // A branch of a `cond-expand` that is not taken never reaches
+                // this dispatch, so a library whose `include-shared` sits in
+                // an implementation-specific branch (chibi's `(chibi crypto
+                // sha2)` and `(chibi math linalg)` both do) keeps its portable
+                // path.
+                "include-shared" => Err(ParseError::NativeExtensionRequired(
+                    Self::parse_shared_object_name(&list[1..], heap),
+                )),
+                _ => Self::skip_or_reject_declaration(
+                    Some(keyword.as_str()),
+                    &format!("unknown declaration `{keyword}`"),
+                ),
             }
         } else {
             let described = heap.borrow().type_name(list[0]).to_string();
-            Self::skip_or_reject_declaration(&format!("a declaration headed by a {described}"))
+            Self::skip_or_reject_declaration(
+                None,
+                &format!("a declaration headed by a {described}"),
+            )
         }
     }
 
@@ -305,14 +353,30 @@ impl LibraryDefinition {
         }
     }
 
-    /// Handle a `define-library` declaration this parser does not implement.
+    /// Handle a `define-library` declaration this parser does not implement,
+    /// or cannot read in the shape it was written.
     ///
     /// Portable `.sld` files occasionally carry vendor-specific declarations,
     /// and cond-expand branches meant for other implementations can leave
     /// shapes that are not declarations at all. Skipping one keeps the rest of
     /// the library loadable; aborting the whole load is opt-in via
     /// `PATINA_STRICT_LIBRARY_SYNTAX=1`.
-    fn skip_or_reject_declaration(described: &str) -> Result<(), ParseError> {
+    ///
+    /// `keyword` names the head when there still is one, so a declaration in
+    /// `NEVER_SKIP` is refused whatever shape it arrived in — leniency is for
+    /// declarations whose loss costs nothing.
+    fn skip_or_reject_declaration(
+        keyword: Option<&str>,
+        described: &str,
+    ) -> Result<(), ParseError> {
+        if let Some(keyword) = keyword
+            && NEVER_SKIP.contains(&keyword)
+        {
+            return Err(ParseError::InvalidSyntax(format!(
+                "define-library: cannot skip {described} — it carries the library's \
+                 implementation, and skipping it would leave the library empty"
+            )));
+        }
         if strict_library_syntax() {
             Err(ParseError::InvalidSyntax(format!(
                 "define-library: rejected {described}"
@@ -321,6 +385,24 @@ impl LibraryDefinition {
             eprintln!("warning: define-library: ignoring {described}");
             Ok(())
         }
+    }
+
+    /// Name the shared object an `include-shared` declaration asks for, for
+    /// the error that refuses it.
+    ///
+    /// The first string, because that is what the declaration carries — all
+    /// seven occurrences across `compat/vendor/` write exactly one — and
+    /// because the one consumer, the compat harness, reads back one quoted
+    /// name. Nothing is rejected here: this is reporting rather than loading,
+    /// and a second error about the shape of a declaration we are refusing
+    /// anyway would bury the real one.
+    fn parse_shared_object_name(values: &[TaggedValue], heap: &SharedHeap) -> String {
+        let h = heap.borrow();
+        values
+            .iter()
+            .filter_map(|&tv| h.get_string_contents(tv))
+            .find(|name| !name.is_empty())
+            .unwrap_or_else(|| "<unnamed>".to_string())
     }
 
     /// Parse include file paths from a slice of TaggedValues

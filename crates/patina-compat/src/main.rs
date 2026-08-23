@@ -10,6 +10,7 @@
 //!     cargo run -p patina-compat --release -- report
 
 mod corpus;
+mod exclusions;
 mod report;
 mod run;
 mod sexp;
@@ -41,6 +42,7 @@ fn print_help() {
     eprintln!(
         "  --report <file>   Rendered matrix path, run only (default: compat/reports/report.md)"
     );
+    eprintln!("  --exclusions <f>  Opt-out list (default: compat/EXCLUSIONS.scm; `none` disables)");
     eprintln!("  --filter <substr> Only packages whose slug contains <substr>");
     eprintln!("  --tree-walker     Test the tree-walking backend instead of the VM");
     eprintln!("  --timeout <secs>  Per-package budget (default: 30)");
@@ -62,6 +64,13 @@ struct Options {
     /// subset run cannot overwrite the canonical copy of the *other* one.
     results_path: Option<PathBuf>,
     report_path: Option<PathBuf>,
+    /// Opt-out list, `None` meaning the canonical committed location.
+    exclusions_path: Option<PathBuf>,
+    /// Score every package — the escape hatch that makes the raw corpus
+    /// reachable without editing a committed file. Its own flag rather than a
+    /// magic path value, so "which file" and "whether to use one" stay
+    /// separate questions and no real filename is unreachable.
+    no_exclusions: bool,
     filter: Option<String>,
     tree_walker: bool,
     timeout: Duration,
@@ -79,6 +88,34 @@ impl Options {
         self.report_path
             .clone()
             .unwrap_or_else(|| workspace_root().join("compat/reports/report.md"))
+    }
+
+    /// The opt-out list to apply, `None` when the caller asked for none.
+    fn exclusions_path(&self) -> Option<PathBuf> {
+        if self.no_exclusions {
+            return None;
+        }
+        Some(
+            self.exclusions_path
+                .clone()
+                .unwrap_or_else(|| workspace_root().join("compat/EXCLUSIONS.scm")),
+        )
+    }
+}
+
+/// Load the opt-out list, or exit: a malformed list must stop the run rather
+/// than silently score every package, which would look like a jump in the
+/// headline number with nothing in the diff to explain it.
+fn load_exclusions(opts: &Options, heap: &patina_core::SharedHeap) -> Vec<exclusions::Exclusion> {
+    let Some(path) = opts.exclusions_path() else {
+        return Vec::new();
+    };
+    match exclusions::load(&path, heap) {
+        Ok(list) => list,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            process::exit(2);
+        }
     }
 }
 
@@ -98,6 +135,8 @@ fn parse_args() -> Options {
         vendor: root.join("compat/vendor"),
         results_path: None,
         report_path: None,
+        exclusions_path: None,
+        no_exclusions: false,
         filter: None,
         tree_walker: false,
         timeout: Duration::from_secs(30),
@@ -120,6 +159,10 @@ fn parse_args() -> Options {
             "--report" => {
                 opts.report_path = Some(PathBuf::from(require_value(&mut iter, "--report")))
             }
+            "--exclusions" => {
+                opts.exclusions_path = Some(PathBuf::from(require_value(&mut iter, "--exclusions")))
+            }
+            "--no-exclusions" => opts.no_exclusions = true,
             "--filter" => opts.filter = Some(require_value(&mut iter, "--filter")),
             "--tree-walker" => opts.tree_walker = true,
             "--timeout" => {
@@ -175,6 +218,11 @@ fn run_command(opts: &Options) {
     }
 
     let heap = patina_core::new_shared_heap();
+    // Loaded before the corpus runs, not after it: a malformed list exits,
+    // and doing that on the far side of ~162 subprocess spawns would throw
+    // away minutes of work to report something that costs milliseconds to
+    // check.
+    let exclusions = load_exclusions(opts, &heap);
     let universe = match corpus::discover(&opts.vendor, &heap) {
         Ok(p) => p,
         Err(e) => {
@@ -211,7 +259,7 @@ fn run_command(opts: &Options) {
     };
     let results = run::run_corpus(&selected, &universe, &providers, &config);
 
-    let rendered = report::render(&results, backend);
+    let rendered = report::render(&results, backend, &exclusions, opts.filter.is_none());
 
     // Both artifacts are written, not just the snapshot: the rendered matrix
     // is committed too, and printing it to stdout alone left it stale unless
@@ -278,8 +326,16 @@ fn report_command(opts: &Options) {
     let heap = patina_core::new_shared_heap();
     // The snapshot records which backend it measured; the CLI flag plays no
     // part in re-rendering.
+    let exclusions = load_exclusions(opts, &heap);
     match report::from_sexp(&source, &heap) {
-        Ok((results, backend)) => println!("{}", report::render(&results, &backend)),
+        // A snapshot is whatever it was written from, and re-rendering cannot
+        // tell. Only the committed one is known to cover the whole corpus —
+        // `--results` honours an arbitrary file, including the subset a
+        // `--filter` run writes, so naming one withdraws the assumption.
+        Ok((results, backend)) => println!(
+            "{}",
+            report::render(&results, &backend, &exclusions, opts.results_path.is_none())
+        ),
         Err(e) => {
             eprintln!("Error: {}", e);
             process::exit(2);

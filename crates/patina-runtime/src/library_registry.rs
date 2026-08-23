@@ -32,7 +32,24 @@ pub enum LibraryError {
 
     /// Parse error in library file
     ParseError { file: String, message: String },
+
+    /// The library's implementation is a compiled shared object
+    /// (`include-shared`), which Patina cannot load.
+    ///
+    /// Distinct from `ParseError` because it is not a defect in the library
+    /// or in Patina's reader: the source is well-formed and the library is
+    /// simply out of reach until there is an FFI. Track L's harness reads
+    /// `NATIVE_EXTENSION_MARKER` to classify such a package as out-of-scope
+    /// rather than counting it against the compatibility score.
+    NativeExtensionRequired { file: String, extension: String },
 }
+
+/// The stable substring of `LibraryError::NativeExtensionRequired`'s message.
+///
+/// Exported so the compatibility harness can match on a constant it links
+/// against rather than on wording it hopes nobody edits — the "unenforced
+/// prose contract" Track L §L3 records as debt, paid off for this one marker.
+pub const NATIVE_EXTENSION_MARKER: &str = "requires the native extension";
 
 impl LibraryError {
     /// A failure while reading or installing a library, attributed to the file
@@ -70,6 +87,14 @@ impl std::fmt::Display for LibraryError {
             }
             LibraryError::ParseError { file, message } => {
                 write!(f, "Parse error in {}: {}", file, message)
+            }
+            LibraryError::NativeExtensionRequired { file, extension } => {
+                write!(
+                    f,
+                    "Library in {} {} \"{}\" (include-shared), which Patina cannot load — \
+                     it needs a foreign-function interface",
+                    file, NATIVE_EXTENSION_MARKER, extension
+                )
             }
         }
     }

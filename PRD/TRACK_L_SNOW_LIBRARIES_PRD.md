@@ -1,11 +1,12 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
+**Updated:** 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**121 of 162** vendored packages pass, 2026-08-19 — was 143/184 before L5.2 bundled 22 packages;
-like-for-like unchanged); L5's reader and libraries landed, its suite is next; L1/L2 continue
-against the measured queue
+(**126 of 162** vendored packages pass, 2026-08-22, of which **126 of 137 are in scope** — the
+other 25 are excluded by `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and
+libraries landed, **its suite (L5.3) is the only unstarted work item**; L1/L2's queue is down to
+five actionable rows
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -531,6 +532,77 @@ matrix to stdout and wrote only `results.scm` — so the committed copy went sta
 redirected into it. `run` now writes both artifacts under the same subset-run guard (`--report` sets
 the path); `report` still only prints, which is its job.
 
+**The score stopped counting packages nobody can fix, 2026-08-22 (126 of 162 → 126 of 137 in
+scope).** The raw number does not move and is still printed first; what changed is that 25 of the
+36 failures now say, in a committed file, why they are not a measurement of Patina — and, more
+usefully, stopped appearing in the work queue. Two pieces:
+
+**1. Patina reads `include-shared`.** It was an unknown declaration, so L0's warn-and-skip
+swallowed it and the library loaded defining nothing; `(chibi mecab)` then failed at its importer
+with `Exported identifier 'mecab?' not defined`. That is the `(chibi filesystem)` hazard for the
+third time in this track — a library left parsed and empty, reported anywhere but at the cause —
+and this time the cause is not a missing branch but a clause we can never honour. It is now a
+known declaration that is refused where it appears, with its own `LibraryError` variant naming the
+shared object.
+
+The important property is that **cond-expand already separates the two cases for free**. A branch
+that is not taken never reaches the dispatch, so `(chibi crypto sha2)` and `(chibi math linalg)` —
+which both ship a `.stub` and both put `include-shared` in a `chibi`-only branch — keep their
+portable paths and are *not* FFI-bound. Any rule based on the presence of a `.stub` or `.c` file in
+the package would have misfiled both; two of the seven, which is the whole argument for letting the
+runtime answer instead of a scan.
+
+This is also the first piece of the "unenforced prose contract" debt recorded above to be paid:
+`patina_runtime::NATIVE_EXTENSION_MARKER` is a `pub const` the harness links against, so rewording
+that message breaks the build rather than silently moving a package between buckets.
+
+**2. `compat/EXCLUSIONS.scm`, the opt-out list.** A committed s-expression naming each package that
+cannot pass for a reason that is not about Patina, under a closed set of reasons: `ffi` (9),
+`dependency-not-vendored` (2), `upstream-source-defect` (10), `upstream-test-defect` (4). The
+`upstream-source-defect` rows are the audit above, entry for entry, each carrying the file, the
+line and the implementation that agrees with us in rejecting it.
+
+Three properties keep it from becoming somewhere to park failures, and they are the reason it is
+worth having at all rather than a footnote in this document:
+
+- **An excluded package still runs**, on every pass, and `results.scm` records its status exactly
+  as before. Exclusion decides whether a result counts, never whether it is measured. The snapshot
+  is the measurement, this file is the policy, and the report is the join — so the three can be
+  reviewed separately and a change to one is visible in the diff of one.
+- **Every entry declares the status it expects**, and the report calls out an entry that no longer
+  matches instead of applying it. A package that starts *passing* is drift too: that is how an
+  entry gets retired rather than outliving its reason. A slug the corpus no longer has is reported
+  as well — an entry matching nothing subtracts nothing while reading as though it did.
+- **The raw number is printed first and is never affected by the file.** `--exclusions none` scores
+  every package.
+
+What the exclusions bought, and it is the part worth keeping: **the bundling queue is now five
+rows, all actionable** — `(srfi 114 comparators)` ×2, `(srfi 144)` ×2, `(scheme flonum)`, `(srfi
+165)`, `(srfi 231)`. It previously carried `(chibi io)` ×1, `(srfi 160 base)` ×1 and `(chibi)` ×3,
+and **every one of those five was un-actionable**: the first two are wanted only by C-shim packages
+that would still fail with the library in hand, and the `(chibi)` row is corrected below.
+
+**`(chibi)` ×3 was not three packages needing chibi's core.** Two — chibi-xlib,
+independentresearch-xattr — are `include-shared` packages that reported `(chibi)` on the way to
+needing a `.so`. The third, chibi-assert, has a **portable library that works on Patina today**:
+its `cond-expand` else branch is a pure-Scheme `assert`, verified by running it. Only
+`chibi/assert-test.sld` imports `(chibi)`, for `protect` and `exception-irritants`. So the row that
+this document twice described as the largest permanently-out-of-reach dependency was one C-shim
+pair and one chibi-only *test program*. A histogram row is a count of symptoms, not a diagnosis —
+the same lesson as the `load-error` bucket of two that turned out to be a conformance gap.
+
+**Scope decision recorded, not taken:** whether the FFI packages are eventually dropped from the
+corpus or rescoped onto a future Rust FFI is left open. The opt-out is what both futures need, and
+it is deliberately not the same mechanism as either — dropping them is a `build_corpus.py` policy
+change, and rescoping them is a new track. Note for whoever takes it: a Rust FFI would **not** make
+these packages load unchanged. They are `include-shared` against a chibi-compiled `.stub`, so what
+they need is chibi's C ABI, not any FFI.
+
+One row is knowingly imprecise: **chibi-xgboost is FFI-bound but reports `missing-library`**,
+because its test library's `(srfi 160 base)` import fails before `(chibi xgboost)` is ever reached.
+Its exclusion records the real reason and expects the shadowed status, so if SRFI 160 is ever
+bundled the entry drifts and asks to be looked at again.
+
 #### Original spec
 A new workspace crate, `crates/patina-compat/`, that owns the whole loop. Everything it needs is in this repo; it shells out to nothing but the Patina binary under test.
 
@@ -789,6 +861,12 @@ that chibi itself never compiles** — portability shims that, as far as the
 corpus can show, no non-chibi implementation ever ran. Each was cross-checked
 against chibi 0.12 and Gauche 0.9.15; Gauche rejects all three exactly as
 Patina does. Recorded here so no future session re-diagnoses them as ours.
+
+Since 2026-08-22 each of these rows also has a machine-readable home in
+`compat/EXCLUSIONS.scm` under `upstream-source-defect`, carrying the same
+file, line and cross-check. The prose here is the reasoning; that file is
+what the score reads. If they ever disagree, the file is the one a run
+acts on — so change both.
 
 - **`(chibi bytevector)` — a dead 4-element rule** (`ieee-754.scm:16`,
   `((_) bv off i)` — a parenthesization typo in `bytes-u8-set-all!`). The
