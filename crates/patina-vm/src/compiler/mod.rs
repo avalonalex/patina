@@ -15,6 +15,7 @@
 //! See VM_COMPILER.md for the full specification.
 
 pub mod alpha_rename;
+mod body_defines;
 pub mod pass1_analysis;
 pub mod pass2_closure;
 pub mod pass3_tail;
@@ -22,6 +23,8 @@ pub mod pass4_registers;
 pub mod pass5_codegen;
 pub mod primitive_calls;
 pub mod quasiquote_expand;
+
+pub(crate) use body_defines::for_each_define;
 
 use crate::error::CompileError;
 use crate::types::CodeObject;
@@ -39,7 +42,27 @@ fn compile_pipeline(
     expr: &CoreExpr,
     resolver: PrimitiveResolver<'_>,
 ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
-    let renamed = alpha_rename::alpha_rename(expr);
+    let alpha_rename::Renamed {
+        expr: renamed,
+        global_aliases,
+    } = alpha_rename::alpha_rename(expr);
+
+    // A macro-introduced top-level definition was renamed to a global no
+    // source code mentions; this makes its bare name resolve to it. An alias
+    // rather than a definition of that name, because `Environment::get`
+    // consults aliases only after real bindings — so a user's own global of
+    // the same spelling still wins — and because an alias forwards each
+    // access instead of freezing a copy, so a later `set!` is visible.
+    //
+    // Without an environment there is nothing to install into; that path
+    // (`compile`) compiles hand-built `CoreExpr` trees, which have no macro
+    // expansion and so no such definitions.
+    if let Some((_, env, _)) = resolver {
+        for (bare, renamed_to) in global_aliases {
+            env.define_alias(bare.to_string(), env.clone(), renamed_to);
+        }
+    }
+
     let analysis = pass1_analysis::Pass1Analysis::run(&renamed);
     let closed = pass2_closure::Pass2Closure::run(&renamed, &analysis);
     let tailed = pass3_tail::Pass3Tail::run(&closed);

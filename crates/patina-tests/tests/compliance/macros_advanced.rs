@@ -1069,6 +1069,81 @@ fn test_generated_macro_reaches_an_introduced_definition_in_a_body() {
     );
 }
 
+/// Two *separate* top-level forms expanding the same macro must not share the
+/// definitions it introduces.
+///
+/// The VM renames a macro-introduced top-level definition to a global no
+/// source code mentions, and that name used to come from a counter
+/// `alpha_rename` resets per form — so the second form minted the same name
+/// and silently took the first's binding. The name is derived from the
+/// definition's scope set now, which is process-unique by construction.
+#[test]
+fn test_two_forms_expanding_one_macro_get_separate_definitions() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax mk
+          (syntax-rules ()
+            ((_ () ((name val tmp) ...))
+             (begin (define tmp val) ... (define (name) tmp) ...))
+            ((_ ((n v) . rest) (acc ...)) (mk rest (acc ... (n v tmp))))))
+        (mk ((a 1) (b 2)) ())
+        (mk ((c 3) (d 4)) ())
+        (list (a) (b) (c) (d))
+        "#,
+        "(1 2 3 4)",
+    );
+}
+
+/// A macro's introduced definition must not overwrite a global of the same
+/// name that source code wrote.
+///
+/// The bare name is answered by an `Environment` alias rather than a
+/// definition, and `get` consults aliases only after real bindings — so the
+/// user's `tmp` wins here, while `jabberwocky`'s bare name, which has no real
+/// binding to lose to, still resolves.
+#[test]
+fn test_an_introduced_definition_does_not_clobber_a_users_global() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax mk
+          (syntax-rules ()
+            ((_ () ((name val tmp) ...))
+             (begin (define tmp val) ... (define (name) tmp) ...))
+            ((_ ((n v) . rest) (acc ...)) (mk rest (acc ... (n v tmp))))))
+        (define tmp 5)
+        (mk ((a 1) (b 2)) ())
+        (list tmp (a) (b))
+        "#,
+        "(5 1 2)",
+    );
+}
+
+/// A definition nested two `begin` levels deep in a body is still that body's
+/// definition, so each call gets its own.
+///
+/// `define-values` expands to a `begin` of definitions, which a macro then
+/// wraps in another — and the VM's two passes disagreed about how deep to
+/// look, so `alpha_rename` renamed it to a local that `pass1_analysis` never
+/// gave a slot, leaving it a global shared by every call.
+#[test]
+fn test_a_definition_two_begins_deep_is_local_to_its_body() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax two
+          (syntax-rules ()
+            ((_ a b) (begin (define-values (a b) (values 1 2))))))
+        (define (mk) (two p q) (lambda () (set! p (+ p 10)) p))
+        (define c1 (mk))
+        (define c2 (mk))
+        (define r1 (c1))
+        (define r2 (c2))
+        (define r3 (c1))
+        (list r1 r2 r3)
+        "#,
+        "(11 11 21)",
+    );
+}
+
 /// The same rule applies to the rest parameter of an improper formals list.
 #[test]
 fn test_recursive_macro_distinct_params_with_rest() {

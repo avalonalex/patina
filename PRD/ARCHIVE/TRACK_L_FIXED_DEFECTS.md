@@ -818,9 +818,9 @@ name rather than carrying scopes. `alias_bindings` states the rule this broke: "
 aliases in `get`; writes have to as well or the two disagree." Both now go through one
 `visible_scoped_index`, so the two cannot pick different bindings.
 
-**Two VM shapes remain wrong, both strictly better than before this change**, and both trace to the
-same place — a renamed top-level definition is a global under a new name, minted from a counter
-that `alpha_rename` resets per top-level form:
+**Two VM shapes remained wrong after the first attempt** — both fixed 2026-08-23, in the follow-up
+described below this block. They traced to the same place: a renamed top-level definition is a
+global under a new name, minted from a counter that `alpha_rename` resets per top-level form:
 
 ```scheme
 (mk ((a 1) (b 2)) ()) (mk ((c 3) (d 4)) ()) (list (a) (b) (c) (d))
@@ -831,11 +831,37 @@ that `alpha_rename` resets per top-level form:
 ```
 
 The first is the counter; the second is the name-only alias the rename forces, which defines the
-bare name and so clobbers a source-written global. The deeper fix names itself: derive the unique
-name from the binding's scope set — `ScopeId`s are already process-unique — which makes renaming
-unconditional and unique across forms, and install the alias through `Environment::define_alias`,
-which is checked *after* real bindings and is an indirection rather than a copy. That is a VM
-design change rather than a defect fix, so it is recorded here rather than attempted.
+bare name and so clobbers a source-written global.
+
+**Both closed 2026-08-23, and they had to be closed together.** The unique name for a top-level
+definition is now derived from its scope set — `ScopeId`s come from a process-global counter, so
+the name is unique across compilation units by construction rather than by arithmetic that has to
+be got right. That alone made things worse before the second half landed: renaming became
+unconditional, so the alias fired for every macro-introduced definition instead of only collided
+ones, and a copying alias goes stale on `set!`. The collision-only rule had been hiding that.
+
+The second half removes the copy. `alpha_rename` no longer emits a `Define` of the bare name for a
+*global*; it returns the pairs in `Renamed::global_aliases` and the pipeline installs them with
+`Environment::define_alias`. That is the mechanism whose own documentation states both properties
+this needed — it is consulted only after real bindings, so a user's global of the same spelling
+wins, and it forwards each access rather than freezing a copy, so a later `set!` is visible. A
+lambda-body definition keeps the spliced `Define`, because nothing outside the body resolves it.
+
+**A third, unrelated shape went with them.** `pass1_analysis::collect_internal_define_names` still
+scanned one `Begin` level deep while `alpha_rename` had been taught to scan any depth, so the two
+passes disagreed about which definitions a body has: one nested deeper than that was renamed to a
+local by one and never given a slot by the other, leaving it a global that every call to the
+enclosing lambda shared.
+
+```scheme
+(define-syntax two (syntax-rules () ((_ a b) (begin (define-values (a b) (values 1 2))))))
+(define (mk) (two p q) (lambda () (set! p (+ p 10)) p))
+;; two closures from mk: VM (11 21 31) · tree-walker, chibi, Gauche (11 11 21)
+```
+
+Pre-existing, and reachable because `define-values` expands to a `begin` of definitions that a
+caller's macro then wraps in another. Both passes now share one `for_each_define`
+(`compiler/body_defines.rs`), so the question has one answer.
 
 Regression tests in `crates/patina-tests/tests/compliance/macros_advanced.rs`, both backends, seven
 of them: the collapse at top level and in a body, the same through `define-values`, the two
