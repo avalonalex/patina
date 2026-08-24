@@ -61,6 +61,11 @@ cargo test --all --lib --tests
 # Integration tests only
 cargo test --package patina-tests
 
+# Larceny's R7RS suites (second opinion; not vendored — LGPL — so this runs
+# from ~/Project/reference/larceny, which the script tells you how to fetch)
+./scripts/run_larceny_tests.sh            # R7RS-small + Red edition, VM
+./scripts/run_larceny_tests.sh --r6rs     # (r6rs …) emulation libraries
+
 # Specific crate
 cargo test --package patina-frontend
 
