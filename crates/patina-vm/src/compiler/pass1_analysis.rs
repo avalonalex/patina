@@ -17,6 +17,7 @@
 //!
 //! See VM_COMPILER.md §Pass 1.
 
+use crate::compiler::for_each_define;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, Symbol};
 use std::collections::{HashMap, HashSet};
 
@@ -199,23 +200,16 @@ fn collect(
     }
 }
 
-/// Scan the body of a lambda for internal `define` names.
-/// Only considers direct children and one level of `Begin` wrapping.
+/// Scan the body of a lambda for internal `define` names, through `Begin` at
+/// any depth.
+///
+/// Shares `for_each_define` with `alpha_rename`, which renames these same
+/// definitions: the two must agree on which definitions a body has, and when
+/// they did not, one nested deeper than this scan reached was renamed to a
+/// local here and allocated as a global there.
 fn collect_internal_define_names(body: &[CoreExpr]) -> Vec<Symbol> {
     let mut names = Vec::new();
-    for expr in body {
-        match &expr.kind {
-            CoreExprKind::Define { name, .. } => names.push(name.clone()),
-            CoreExprKind::Begin(exprs) => {
-                for e in exprs {
-                    if let CoreExprKind::Define { name, .. } = &e.kind {
-                        names.push(name.clone());
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    for_each_define(body, &mut |name, _| names.push(name.clone()));
     names
 }
 

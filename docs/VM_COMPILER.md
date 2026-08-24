@@ -91,7 +91,9 @@ markers (not raw identifiers with scope marks).
 
 **File:** `alpha_rename.rs`
 **Input:** `CoreExpr` (after quasiquote expansion)
-**Output:** `CoreExpr` with all variables uniquely renamed, scope sets cleared
+**Output:** `Renamed { expr, global_aliases }` — the tree with all variables
+uniquely renamed and scope sets cleared, plus the environment aliases the
+*pipeline* installs for it after codegen (see §5.1)
 
 This pass bridges the gap between the tree-walker's runtime scope-set resolution
 and the VM's compile-time variable resolution:
@@ -102,8 +104,34 @@ and the VM's compile-time variable resolution:
 3. Distinguishes "simple" bindings (non-macro params) from "scoped" bindings
    (macro-introduced params)
 4. Uses `binding_scope` from Lambda nodes to give non-macro params proper scopes
-5. Detects internal `define` forms and adds them to the current lambda's scope frame
+5. Detects internal `define` forms and adds them to the current lambda's scope
+   frame. The walk is `body_defines::for_each_define`, shared with Pass 1 —
+   both passes must agree on which definitions a body has, and they look
+   through `begin` at any depth because `begin` splices
 6. Renames all parameters to unique names; clears scope sets in output
+
+### 5.1 Macro-introduced top-level definitions
+
+A definition a macro introduces at top level becomes a **global**, so it is
+renamed like any other binding — but under a name derived from its *scope set*
+rather than the per-form counter used for locals. `alpha_rename` runs once per
+top-level form and the counter restarts each time, so two forms expanding one
+macro otherwise mint the same global.
+
+The generated spelling contains a space (`tmp #136`). That is deliberate: a
+space is a delimiter, so the reader cannot produce the symbol from source, and
+these names outlive the form that made them.
+
+Renaming leaves the bare name unbound, and the desugarer's definition-environment
+relinking still resolves by that bare name. So the pass returns
+`global_aliases`, and `compile_pipeline` installs each with
+`Environment::define_alias` **after** codegen — after, so a compile that fails
+leaves the environment untouched. An alias rather than a definition of the bare
+name, because `get` consults real bindings first (a user's global of that
+spelling wins) and an alias forwards each access rather than freezing a copy (a
+later `set!` is visible). The alias table is keyed by the bare name, so where
+two forms introduce one spelling the later wins — the one place hygiene
+identity collapses back to a name, tracked in Track L §6.
 
 ```rust
 struct Binding {
