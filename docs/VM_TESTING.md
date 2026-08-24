@@ -48,6 +48,15 @@ cargo clippy --all-targets --all-features -- -D warnings
 correctness gate. `./scripts/run_chibi_tests_tree_walker.sh` runs the same suite
 against the tree-walker backend.
 
+`./scripts/run_larceny_tests.sh` is the second opinion: Larceny's R7RS test
+suites (Will Clinger's rewrite of Racket's R6RS suite — 33 suites covering
+R7RS-small and the Red-edition libraries, plus an R6RS lane behind `--r6rs`).
+They are LGPL, so they are not vendored; the script runs them from a reference
+checkout outside the repo and prints the fetch command when it is missing. It
+is local and on-demand, not a CI gate; its reports land in
+`scheme_tests/reports/larceny*.md`. See Track L §L5.3 for the baseline and the
+defect queue it produced.
+
 ### Layer 3 — Shared Integration Tests
 
 The helpers in `crates/patina-tests/tests/common/mod.rs` evaluate each program

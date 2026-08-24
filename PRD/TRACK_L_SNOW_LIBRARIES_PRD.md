@@ -1,11 +1,12 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
+**Updated:** 2026-08-24 — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
 (**126 of 162** vendored packages pass, 2026-08-22, of which **126 of 137 are in scope** — the
 other 25 are excluded by `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and
-libraries landed, **its suite (L5.3) is the only unstarted work item**; L1/L2's queue is down to
+libraries landed; **L5.3's harness landed 2026-08-24** (12 of 33 R7RS suites clean, 4070 of 4100
+reachable assertions, and a measured defect queue — see L5.3); L1/L2's queue is down to
 five actionable rows
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
@@ -809,33 +810,114 @@ Per L4's policy the corpus drops what Patina bundles, so the headline moves
 identical once the 22 bundled rows are removed, and every failure bucket keeps
 its count.
 
-#### L5.3 — Vendor and run the R6RS test suite  *(next)*
+#### L5.3 — Run Larceny's R7RS suites from a reference checkout  *(harness landed 2026-08-24; baseline measured)*
 
-The payload, and the only part that produces a second number. The suite is the
-R6RS editors' own, mirrored by `racket/r6rs` and by Larceny; it is not in this
-repo and not in the local reference checkouts, so it needs a fetch — deferred
-to its own PR by decision, not by obstacle.
+**Retargeted.** This item was written as "vendor and run the R6RS test suite",
+and the first thing scoping it found was that the suite cannot load here: its
+harness `tests/r6rs/test.sls` imports the composite `(rnrs)` and uses R6RS
+`define-record-type`, neither of which is bundled. The second thing it found
+was better than the fix: **Will Clinger already rewrote that suite for R7RS**,
+in Larceny's `test/R7RS/Lib/` — two suites over one R7RS-small harness,
+`(tests scheme test)`, which imports only `(scheme base)`, `(scheme cxr)` and
+`(scheme write)`:
 
-**What it can reach is bounded by what is not bundled.** Nine of the 25 R6RS
-libraries are absent, and the gap is not uniform:
+- `tests/scheme/` — 33 suites: every R7RS-small library plus the Red-edition
+  ones (box, comparator, generator, hash-table, ideque, ilist, list,
+  list-queue, lseq, rlist, set, sort, stream, text, vector, charset, flonum,
+  ephemeron).
+- `tests/r6rs/` — the R6RS suite in `define-library` syntax against
+  `(r6rs …)` — the exact libraries L5.2 bundled. No `(rnrs)` composite, no
+  R6RS record syntax.
 
-| Missing | Cost |
-|---|---|
-| `(rnrs records syntactic/procedural/inspection)` | R6RS `define-record-type` has genuinely different syntax from R7RS's — real work, not a re-export |
-| `(rnrs conditions)` | R6RS's structured condition hierarchy; R7RS has only `error-object?` |
-| `(rnrs io ports)` | the full port layer; only `(rnrs io simple)` is here |
-| `(rnrs arithmetic bitwise)` | cheap — SRFI 151 ships, so a rename shim |
-| `(rnrs arithmetic flonums)` | mostly `(scheme inexact)` renames |
-| `(rnrs syntax-case)` | Phase 3; bounds the reachable third-party ecosystem |
+This is the second opinion L5 wanted, and a better one than R6RS's: the same
+standard as the headline, a different author and provenance (Racket's suite,
+mostly by Matthew Flatt, rewritten by Clinger), and coverage of the
+Red-edition libraries Patina bundled that until now had only chibi's suites.
+Racket's own R7RS package was checked for this role and rejected: its tests
+are five small Racket-specific files plus a copy of chibi's `r7rs-tests.scm`.
 
-Note what `(rnrs exceptions)` is: a four-name re-export of R7RS's procedures.
-It passes an exercise and would pass a probe, and **an R6RS program catching a
-structured condition will get an R7RS error object and behave differently
-without failing**. That is the probe-versus-behaviour trap this item was
-written about, now inside our own bundle, and it is the argument for getting
-the suite in sooner rather than bundling more first.
+**Not vendored, by decision.** The suite is LGPL — Larceny's README: derived
+from Racket's R6RS tests and "covered by the LGPL license due to its
+derivative nature". Racket has since relicensed its copy to Apache-2.0/MIT,
+but Clinger's rewrite carries the LGPL notice and Larceny is unmaintained.
+Patina is MIT and `compat/vendor/` is permissive-only. So the suite lives in
+a reference checkout outside the repo — the same arrangement as
+`~/Project/reference/chibi-scheme` — and `scripts/run_larceny_tests.sh` runs
+it from there, pinned to `fef550c` (2017-09-08, Larceny's last commit) and
+warning on drift. The cost is the CI lane: this is a local, on-demand second
+opinion, not a gate. The reports it writes (`scheme_tests/reports/larceny*.md`)
+are tracked; the per-suite logs beside them are not.
 
----
+**Runner.** `./scripts/run_larceny_tests.sh [--tree-walker] [--r6rs] [suite…]`.
+One `run/<suite>.sps` program per suite, run from the Lib directory with
+`-I .` as upstream's own scripts do (`base.sld` includes
+`tests/scheme/base-test1.scm` cwd-relative); the R6RS lane adds
+`--allow-r6rs` because those sources use `#vu8(` and brackets. Tallies are
+the harness's own (`N tests passed` / `N of M tests failed.`), never
+re-derived. A suite whose library fails to load reaches no tally and is
+reported as **error** with zero assertions, so the assertion total
+under-reports exactly as much as is broken and the *suite* column is the one
+to watch. Crashes and timeouts (perl `alarm`, 300 s — macOS has no `timeout`)
+are their own statuses.
+
+**Baseline, 2026-08-24:**
+
+| Lane | Suites clean | Assertions | Blocked outright |
+|---|---|---|---|
+| R7RS, VM | 12 of 33 | 4070 of 4100 (99.3%) | 10 unbundled Red-edition libraries · `base` (include) · `lazy`, `read` (stack overflow) |
+| R7RS, tree-walker | 12 of 33 | 3931 of 3961 (99.2%) | the same, plus `char` (stack overflow) |
+| R6RS, VM | 10 of 16 | 4008 of 4022 (99.7%) | `base` (`(let-syntax ())`) · `mutable-pairs` (hang) |
+
+The ratio flatters; the suite column does not. Of the 21 R7RS suites that are
+not clean, 10 never load because the library under test is not bundled —
+`(scheme charset)`, `ephemeron`, `flonum`/SRFI 144, `ideque`, `ilist`,
+`list-queue`, `lseq`, `rlist`, `stream`, `text` — which is L1's item 6 ("the
+remaining standard-track set with little measured demand") acquiring a
+measured suite each. `(scheme charset)` is a one-line alias over the bundled
+`(srfi 14)`.
+
+**Where the detail lives.** Each lane's report (`scheme_tests/reports/larceny*.md`)
+is organised by kind of problem and links every failing assertion to its test
+case upstream by permalink — nothing from the suite is quoted. The map from
+*defect family* to those links, and to our own original test case for each
+family, is `scheme_tests/reports/larceny_triage.md` — a working document,
+deleted when the queue is empty. The original cases are
+`crates/patina-tests/tests/larceny_families.rs`, pinned so that each fix
+trips its test.
+
+**What it found — ours**, in the order they are worth fixing (§6 has the repros):
+
+| Defect | Suites | Backends |
+|---|---|---|
+| A nested `include` resolves against the wrong directory, and the base is chosen nondeterministically | base (blocks ~900 assertions) | both |
+| `equal?` does not terminate on circular structures | read (crash), r6rs mutable-pairs (hang) | both |
+| `delay-force` is not iterative — 100 000 deep overflows the stack | lazy | both |
+| VM: a discarded call to `values` poisons the next `call-with-values` | vector | VM |
+| Tree-walker: SRFI 1's `zip` (n-ary `map` via `apply`) raises a wrong-arity error | list (9) | tree-walker |
+| Tree-walker: a 1.1M-iteration `do` loop building a list overflows the stack | char | tree-walker |
+| Unicode case: `(char-upcase #\ß)` ⇒ `#\S`; `char-ci=?` on final sigma; `string-ci=?` full folding; `digit-value` over every Nd character | char (8), r6rs unicode (6) | both |
+| `string->number`: `"+inf.0"`, `"+nan.0"` ⇒ `#f`; `"1+2i"` ⇒ `#f`; `#e1e1000` ⇒ `+inf.0` instead of an exact integer | inexact (7), complex (2) | both |
+| `rationalize` with infinities; `(log -0.0)` loses its imaginary part; `(sqrt -inf.0)` | inexact (4), complex (1) | both |
+| `environment` rejects a nested import set, `(prefix (only …) …)` | eval, r6rs eval | both |
+| Binary file ports: `open-binary-output-file` then the port predicates / `write-u8` error | file (2) | both |
+| `write` spells the symbol `@` as `\|@\|` — consistent with reading it bare, but the suite expects `@` | write (3) | both |
+| R6RS lane: `(make-bytevector 10 -1)` (a signed fill byte); enum `(color black)` | r6rs bytevectors (4), enums (3) | both |
+
+**Not ours**, recorded so nobody re-diagnoses them: `set-map` — the suite
+calls `(set-map proc comparator set)`; SRFI 113's text, chibi and Patina all
+have `(set-map comparator proc set)`. `delete-duplicates!` — the suite
+requires the result to reuse the input's cells, which SRFI 1 permits but does
+not require. `(let-syntax ())` with an empty body, which is what blocks the
+R6RS `base` suite — R6RS's splicing `let-syntax` allows it and R7RS's does
+not; Gauche and Chez accept it, chibi rejects it as we do, so it is a
+leniency decision rather than a defect. Tree-walker `time` — a one-second
+busy loop measured at two seconds, i.e. speed.
+
+For calibration: chibi 0.12 fails `base` on the same nested include
+(`couldn't open input file: "base-test4.scm"`), and Gauche 0.9.15 rejects
+`base.sld` outright at a `syntax-rules` template check, so neither reference
+runs the largest suite either; upstream's README records the same for chibi
+0.7.3 and Gauche 0.9.5.
 
 ## 5. Sequencing within the track
 **L0** (edge cases) → **L0.5** (CLI surface) → **L0.75** (survey) → **L3 harness + baseline run** → **L1** (SRFIs: pure-Scheme set first, then primitive-backed) → **L2** (`chibi` libs) → **L3 re-run**, then loop L1/L2 against the refreshed histogram until the curve flattens.
@@ -916,6 +998,114 @@ chibi-voting now scores 6/7, identical to Gauche, and the row's residual
 failure is upstream's.
 
 ### Open
+
+*The six entries below were found 2026-08-24 by Larceny's suites (L5.3); each
+is one of that item's queue rows, with the repro that pins it.*
+
+**A nested `include` resolves against the wrong directory** — ❌ **open**.
+Blocks Larceny's `base` suite (~900 assertions). `base.sld` says
+`(include "tests/scheme/base-test1.scm")` (cwd-relative, upstream's
+convention), and `base-test3.scm` in turn says `(include "base-test4.scm")`,
+which every implementation that runs the suite resolves relative to
+`base-test3.scm`. Patina reports `cannot read 'base-test4.scm'`. Two causes in
+`desugar_include_tagged` / `resolve_include_base_dir`
+(`patina-frontend/src/desugarer/mod.rs`):
+
+- an included file is parsed with `Parser::new_with_heap`, so its forms have
+  no source and a nested include has nothing to be relative *to*; and
+- the base directory is "the first location in the source map with a file
+  path" — a `HashMap` walk, so which file wins is not even deterministic. A
+  library body is worse off still: `SchemeLibraryLoader` parses `.sld` files
+  without a source map, so for `include` inside a library the only candidate
+  is whatever *program* happens to be in the map.
+
+chibi 0.12 fails this file the same way (its top-level `include` is
+cwd-relative too), Gauche resolves relative to the including file. The fix
+that satisfies both conventions: a stack of include directories in the
+desugarer, seeded by the backends from `ParsedLibrary::source` for a library
+body and pushed by each `include` while its file is desugared; look there
+first, then the cwd. Nothing that works today changes — a path found from
+the cwd is still found — and the `HashMap` walk goes.
+
+**`equal?` does not terminate on circular structures** — ❌ **open**, both
+backends. R7RS 6.1: "`equal?` must always terminate even if its arguments are
+circular data structures". Two suites hit it two ways:
+
+```scheme
+(define a (list 1 2))   (set-cdr! (cdr a) a)        ;; period 2
+(define b (list 1 2 1 2)) (set-cdr! (cdddr b) b)    ;; period 4, same unrolling
+(equal? a b)                                        ;; hangs; chibi, Gauche => #t
+(equal? (read (open-input-string "#1=#(1 #1#)"))
+        (read (open-input-string "#1=#(1 #1#)")))   ;; stack overflow
+```
+
+`(equal? a a)` is fine — `eq?` short-circuits — so it only shows when two
+*distinct* cyclic structures are compared (the suites compare a freshly read
+cyclic datum against a hand-built one). The reader itself builds the
+cycles correctly (`#1=(a . #1#)` reads and prints as `#0=(a . #0#)`); this is
+`Heap::tagged_values_equal` (`patina-core/src/heap/mod.rs`) recursing without
+a visited set. The standard technique is a union-find / pair-of-pointers
+table consulted after a depth budget, so the acyclic fast path stays fast.
+
+**`delay-force` is not iterative** — ❌ **open**, both backends. R7RS 7.3
+(the `(scheme lazy)` reference implementation) exists so that this runs in
+bounded space; Patina overflows the Rust stack at 100 000:
+
+```scheme
+(import (scheme lazy))
+(define (count-down n)
+  (if (= n 0) (delay 'done) (delay-force (count-down (- n 1)))))
+(force (count-down 100000))          ;; stack overflow; the suite's leak tests go to 1 000 000
+```
+
+Both backends, so it is in the shared promise machinery rather than in
+either evaluator: `force` must iterate on a `delay-force` result (re-point
+the outer promise at the inner one and loop) instead of recursing into it.
+
+**VM: a discarded call to `values` poisons the next `call-with-values`** —
+❌ **open**, VM only; the tree-walker is right. Found through the `vector`
+suite, where `(vector-unfold values 7)` made the *following* test's thunk
+evaluate to `6`.
+
+```scheme
+(define (call1 f) (f 42))
+(call1 values)                                       ;; result discarded
+(call-with-values (lambda () 'c) (lambda x x))       ;; VM => (42)   tree-walker, chibi => (c)
+```
+
+Calling `values` with one argument in a non-tail position leaves the VM's
+multiple-values state set; the next `call-with-values` whose producer
+returns a plain single value picks it up instead. Not caught by the chibi
+suite because nothing there calls `values` for effect and then immediately
+uses `call-with-values`. Pinning as a divergence would work here: the VM
+returns a wrong value rather than failing.
+
+**Tree-walker: SRFI 1's `zip` raises a wrong-arity error** — ❌ **open**,
+tree-walker only. Nine assertions in the `list` suite, all the n-ary
+variants (`zip`, `fold`, `filter-map`, `any`, `every`, `list-index` with two
+or more lists).
+
+```scheme
+(import (scheme list))
+(zip '(1 2 3) '(4 5 6))    ;; tree-walker => Wrong number of arguments: expected 1, got 2
+                           ;; VM, chibi   => ((1 4) (2 5) (3 6))
+```
+
+`zip` is `(apply map list list1 more-lists)` inside `srfi-1-reference.scm`,
+where `map` is SRFI 1's own n-ary definition. The same `apply` shape written
+at top level against `(scheme base)`'s `map` works on the tree-walker, so the
+fault is in how the library-internal `map` — or something it calls — is
+applied there, not in `apply` itself. Undiagnosed beyond that.
+
+**Tree-walker: a 1.1M-iteration `do` loop overflows the stack** — ❌
+**open**, tree-walker only (the VM runs the same suite in 4 s).
+`filter-all-chars` in Larceny's `char.body.scm` is a plain `do` from 0 to
+`#x110000` consing matches onto an accumulator — a tail loop with no
+recursion in the Scheme. Something under it recurses per iteration on the
+tree-walker; the suspects are the collector marking a long continuation
+chain or a long list recursively. Reproduce with the suite
+(`./scripts/run_larceny_tests.sh --tree-walker char`, ~74 s to the crash)
+until a smaller loop is found that does it.
 
 **chibi-regexp: `(regexp 'grapheme)` feeds `#<unspecified>` into the NFA
 builder** — ❌ **open**, and the root is architectural. Gauche loads the
