@@ -18,6 +18,7 @@
 use crate::compiler::for_each_define;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
 use patina_core::scope::{ScopeId, ScopeSet};
+use rustc_hash::FxHashMap;
 use std::rc::Rc;
 
 /// A binding in the rename environment.
@@ -40,7 +41,11 @@ struct RenameEnv {
     counter: u32,
     /// `(bare name, renamed global)` for each macro-introduced top-level
     /// definition that was renamed. See `Renamed::global_aliases`.
-    global_aliases: Vec<(Symbol, Symbol)>,
+    ///
+    /// A map, not a list: installing is a keyed insert, so a repeated bare
+    /// name would install and immediately overwrite. Last write wins here for
+    /// the same reason it wins there.
+    global_aliases: FxHashMap<Symbol, Symbol>,
     /// Whether definitions seen right now become globals.
     ///
     /// True until a lambda body is entered, and false inside it — including
@@ -55,7 +60,7 @@ impl RenameEnv {
         Self {
             frames: vec![],
             counter: 0,
-            global_aliases: Vec::new(),
+            global_aliases: FxHashMap::default(),
             at_top_level: true,
         }
     }
@@ -137,12 +142,20 @@ impl RenameEnv {
 /// (`ScopeId::fresh`), so naming the binding after it is unique by
 /// construction rather than by arithmetic that has to be got right.
 fn scoped_global_name(name: &Symbol, scopes: &ScopeSet) -> Symbol {
-    let ids: Vec<String> = scopes.iter().map(|s| s.0.to_string()).collect();
+    use std::fmt::Write as _;
     // The space is load-bearing: it is a delimiter, so the reader cannot
     // produce this symbol from source outside `|…|`. `make_unique_name`'s
     // `__#N` spelling *is* writable, which only ever mattered for locals that
     // die with the tree — these are globals that outlive it.
-    Rc::from(format!("{name} #{}", ids.join(".")).as_str())
+    let mut unique = format!("{name} #");
+    for (i, scope) in scopes.iter().enumerate() {
+        if i > 0 {
+            unique.push('.');
+        }
+        // Infallible: writing an integer into a String.
+        let _ = write!(unique, "{}", scope.0);
+    }
+    Rc::from(unique)
 }
 
 /// The output of alpha-renaming: the tree, and the environment aliases the
@@ -169,7 +182,7 @@ pub(crate) struct Renamed {
     /// identity collapses back to a name, and it is where it has to: the
     /// relinking that consumes this resolves by name. `define_alias` records
     /// the rule.
-    pub(crate) global_aliases: Vec<(Symbol, Symbol)>,
+    pub(crate) global_aliases: FxHashMap<Symbol, Symbol>,
 }
 
 /// Alpha-rename a CoreExpr tree for hygienic variable resolution.
@@ -182,11 +195,18 @@ pub(crate) fn alpha_rename(expr: &CoreExpr) -> Renamed {
     let mut out = rename_body(std::slice::from_ref(expr), &mut env);
     env.pop_frame();
 
-    // One expression in, one out: only the lambda-body arm of `rename_body`
-    // splices a second, and a lambda's body is spliced inside `rename_expr`.
-    debug_assert_eq!(out.len(), 1, "alpha_rename is 1:1 at top level");
+    // One expression in, one out today: only the lambda-body arm of
+    // `rename_body` splices a second, and a lambda's body is spliced inside
+    // `rename_expr`. The `Begin` is not dead code for that reason — it is what
+    // keeps this total, so a future change that does splice here produces a
+    // correct program rather than one silently missing its first node.
+    let expr = if out.len() == 1 {
+        out.pop().expect("one element")
+    } else {
+        CoreExpr::new(CoreExprKind::Begin(out))
+    };
     Renamed {
-        expr: out.pop().expect("one expression in, one out"),
+        expr,
         global_aliases: env.global_aliases,
     }
 }
@@ -278,7 +298,7 @@ fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
                 // A global: the bare name is answered by an environment alias
                 // the caller installs, so a user's own global of that name
                 // still wins and a `set!` is not frozen into a copy.
-                env.global_aliases.push((name, new_name));
+                env.global_aliases.insert(name, new_name);
             } else {
                 // A local: nothing outside this body resolves it, so the bare
                 // name can simply be bound here too.

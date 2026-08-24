@@ -53,7 +53,13 @@ impl std::ops::DerefMut for ScopedTable {
 
 /// Where a macro-expansion alias points: the environment holding the real
 /// binding, and the name it has there.
-type AliasTarget = (Rc<Environment>, Rc<str>);
+/// `None` for the environment holding the alias.
+///
+/// Not an optimisation: an `Rc<Environment>` pointing at the environment that
+/// owns the table is a cycle refcounting can never break, so a self-alias
+/// would pin that environment — and its heap — for the process. It also saves
+/// an `Rc` clone and drop on every alias hit.
+type AliasTarget = (Option<Rc<Environment>>, Rc<str>);
 
 /// Alias name -> the binding it forwards to.
 type AliasBindings = FxHashMap<String, AliasTarget>;
@@ -272,7 +278,10 @@ impl Environment {
         // binding private to its defining library works. Reads follow aliases
         // in `get`; writes have to as well or the two disagree.
         if let Some((target_env, target_name)) = self.alias_target(name) {
-            return target_env.set(&target_name, value);
+            return match target_env {
+                Some(env) => env.set(&target_name, value),
+                None => self.set(&target_name, value),
+            };
         }
         // The write side of the same fallback `get` takes, and it has to be
         // here for the reason `alias_bindings` gives for its own pair: a name
@@ -305,7 +314,10 @@ impl Environment {
         // wins, and before the parent so the alias is not shadowed by an
         // unrelated outer binding of the same (unique) name.
         if let Some((target_env, target_name)) = self.alias_target(name) {
-            return target_env.get(&target_name);
+            return match target_env {
+                Some(env) => env.get(&target_name),
+                None => self.get(&target_name),
+            };
         }
         // A macro-introduced definition lives under its scopes; this is the
         // name-only view of it. Checked after real bindings and aliases, so a
@@ -352,18 +364,28 @@ impl Environment {
     /// - The desugarer installs a **generated, unique** `alias`, so it cannot
     ///   shadow anything the program wrote.
     /// - The VM's compiler installs one under a **bare** name, for a
-    ///   macro-introduced global it renamed. That is safe because `get`
-    ///   consults `bindings` first, so a real binding of that name always
-    ///   wins — but only in an environment with no parent, since `get`
-    ///   *returns* on an alias hit rather than falling through, so a bare
-    ///   alias whose target is unbound would eclipse a parent's binding. The
+    ///   macro-introduced global it renamed. `get` consults `bindings` first,
+    ///   so a real binding of that name wins — which is what keeps a macro's
+    ///   temporary from overwriting a user's global of the same spelling, and
+    ///   is *also* why a user's later global of that spelling steals the
+    ///   macro's private definition (`(jab get 10) (define mh 99) (get)` is
+    ///   99 here, 10 in chibi and Gauche). Both directions follow from the
+    ///   bare name, and neither is fixable while relinking resolves by name;
+    ///   Track L §6 records that as the open defect it is.
+    ///
+    ///   The bare kind is sound only in an environment with **no parent**,
+    ///   since `get` *returns* on an alias hit rather than falling through, so
+    ///   one whose target is unbound would eclipse a parent's binding. The
     ///   environments that path compiles against are the parentless global
-    ///   ones; a future caller with a parent needs the fall-through first.
+    ///   ones, asserted at the install site.
     ///
     /// Keyed by `alias`, so a second install under the same name replaces the
     /// first. For the bare-name kind that means the most recently compiled
     /// definition of a given spelling is the one relinking reaches.
     pub fn define_alias(&self, alias: String, target_env: Rc<Environment>, target_name: Rc<str>) {
+        // A target that is this environment is stored as `None`: see
+        // `AliasTarget`.
+        let target_env = (target_env.env_id() != self.env_id()).then_some(target_env);
         self.alias_bindings
             .borrow_mut()
             .insert(alias, (target_env, target_name));
@@ -740,7 +762,11 @@ impl Environment {
     /// slot, so `for_each_local_value` cannot see it.
     pub fn for_each_alias_target(&self, f: &mut dyn FnMut(&Environment)) {
         for (env, _) in self.alias_bindings.borrow().values() {
-            f(env);
+            // A `None` target is this environment, which the caller is already
+            // tracing.
+            if let Some(env) = env {
+                f(env);
+            }
         }
     }
 }

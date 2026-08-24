@@ -1221,6 +1221,32 @@ producing the identifiers one would expect. Start by confirming what the expande
 contains before changing the flip.
 
 **Definition-env relinking rewrites by name** — ❌ **open**, and blocked on the entry above.
+
+*Two more symptoms, recorded 2026-08-23 while reviewing the VM hygiene work.*
+Both are the bare name collapsing an identity the rest of the pipeline keeps
+distinct, both are on **main before that work** and on both backends, and both
+are right in chibi and Gauche:
+
+```scheme
+(define-syntax jab
+  (syntax-rules ()
+    ((_ h v) (begin (define mh v) (define-syntax h (syntax-rules () ((_) mh)))))))
+
+(jab get1 10) (jab get2 20) (list (get1) (get2))
+;; Patina (20 20) · chibi, Gauche (10 20)   — two expansions share one binding
+
+(jab get 10) (define mh 99) (get)
+;; Patina 99 · chibi, Gauche 10             — a later user global steals it
+```
+
+The VM now gives the two `mh`s genuinely distinct globals, and the tree-walker
+gives them distinct scoped bindings — the collapse is entirely in the alias
+that answers the *bare* name, because that is what relinking asks for. The
+second shape is the same mechanism read the other way: `get` consults real
+bindings before aliases, which is what stops a macro's temporary overwriting a
+user's global, and is therefore also what lets a user's global capture the
+macro's. Fixing either means giving the relinker the scope set it already has
+in hand — the entry above — not adjusting the alias.
 `link_definition_env_refs` / `rewrite_refs` (`patina-frontend/src/desugarer/mod.rs`) collect
 `template_symbols: HashSet<Rc<str>>` and then rewrite every occurrence of those *names* in the
 expanded output. By expansion time that tree also holds use-site material substituted from pattern
