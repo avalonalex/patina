@@ -17,6 +17,7 @@
 //!
 //! See VM_COMPILER.md §Pass 1.
 
+use crate::compiler::for_each_define;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, Symbol};
 use std::collections::{HashMap, HashSet};
 
@@ -208,7 +209,7 @@ fn collect(
 /// local here and allocated as a global there.
 fn collect_internal_define_names(body: &[CoreExpr]) -> Vec<Symbol> {
     let mut names = Vec::new();
-    crate::compiler::for_each_define(body, &mut |name, _| names.push(name.clone()));
+    for_each_define(body, &mut |name, _| names.push(name.clone()));
     names
 }
 

@@ -17,6 +17,12 @@
 //! enclosing body however deep it sits — and a macro reaches two levels
 //! easily, since `define-values` expands to a `begin` of definitions that a
 //! caller's own macro then wraps in another.
+//!
+//! "Shared" means shared by the `CoreExpr` passes here. There is a sibling
+//! question one IR earlier — `Desugarer::is_regular_define_tagged` decides
+//! whether a body has internal definitions by looking at direct children of a
+//! *datum*, and also does not see through `begin` — which this cannot serve
+//! because it is a different type, not because anyone chose to duplicate it.
 
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Symbol};
 use patina_core::scope::ScopeSet;

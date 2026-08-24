@@ -863,6 +863,22 @@ Pre-existing, and reachable because `define-values` expands to a `begin` of defi
 caller's macro then wraps in another. Both passes now share one `for_each_define`
 (`compiler/body_defines.rs`), so the question has one answer.
 
+**Two costs of the scope-derived name, measured during review and left standing:**
+
+- A macro-introduced global is now minted afresh on every *re-expansion*, because each expansion
+  draws new `ScopeId`s — 200 `eval`s of one macro-expanding form leave 200 permanent globals where
+  the per-form counter reused one name. The tree-walker accumulates the same way and for the same
+  reason (`insert_scoped` overwrites only on an exact scope-set match, and the sets are never
+  equal across expansions), so this is a property of minting fresh scopes per expansion rather
+  than of this change. Closing it means deriving the name from the macro *use site* instead — the
+  same source position re-expanding to the same name — which is a change to what identity means,
+  not a cleanup.
+- A bare name reached through the alias cannot be inline-cached (`GlobalCacheEntry::probe` caches
+  only a queried environment's own slots), so each access costs about 28 ns against a cached
+  global's ~0 — measured at 1.5× on a tight loop. It applies only to names a relinked generated
+  macro's template reaches: the whole chibi suite records 1,239 alias hits, of which 2 come from
+  this path.
+
 Regression tests in `crates/patina-tests/tests/compliance/macros_advanced.rs`, both backends, seven
 of them: the collapse at top level and in a body, the same through `define-values`, the two
 `jabberwocky` shapes that must not regress, and the two mutation cases the first attempts broke.

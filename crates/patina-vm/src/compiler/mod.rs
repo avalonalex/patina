@@ -47,22 +47,6 @@ fn compile_pipeline(
         global_aliases,
     } = alpha_rename::alpha_rename(expr);
 
-    // A macro-introduced top-level definition was renamed to a global no
-    // source code mentions; this makes its bare name resolve to it. An alias
-    // rather than a definition of that name, because `Environment::get`
-    // consults aliases only after real bindings — so a user's own global of
-    // the same spelling still wins — and because an alias forwards each
-    // access instead of freezing a copy, so a later `set!` is visible.
-    //
-    // Without an environment there is nothing to install into; that path
-    // (`compile`) compiles hand-built `CoreExpr` trees, which have no macro
-    // expansion and so no such definitions.
-    if let Some((_, env, _)) = resolver {
-        for (bare, renamed_to) in global_aliases {
-            env.define_alias(bare.to_string(), env.clone(), renamed_to);
-        }
-    }
-
     let analysis = pass1_analysis::Pass1Analysis::run(&renamed);
     let closed = pass2_closure::Pass2Closure::run(&renamed, &analysis);
     let tailed = pass3_tail::Pass3Tail::run(&closed);
@@ -72,7 +56,21 @@ fn compile_pipeline(
             primitive_calls::resolve_primitive_calls(&allocated, heap, env, registry)
         })
         .unwrap_or_default();
-    pass5_codegen::Pass5Codegen::run(&allocated, prim_calls)
+    let code = pass5_codegen::Pass5Codegen::run(&allocated, prim_calls)?;
+
+    // Install last, so the passes above stay a pure function of their input
+    // and a compile that fails leaves the environment untouched. See
+    // `Renamed::global_aliases` for what these are and why they are aliases.
+    //
+    // Without an environment there is nothing to install into; that path
+    // (`compile`) compiles hand-built `CoreExpr` trees, which have no macro
+    // expansion and so no such definitions.
+    if let Some((_, env, _)) = resolver {
+        for (bare, renamed_to) in global_aliases {
+            env.define_alias(bare.to_string(), env.clone(), renamed_to);
+        }
+    }
+    Ok(code)
 }
 
 /// Compile a `CoreExpr` into a `CodeObject` (plus any nested `CodeObject`s).

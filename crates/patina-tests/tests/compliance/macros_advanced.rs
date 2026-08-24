@@ -1144,6 +1144,31 @@ fn test_a_definition_two_begins_deep_is_local_to_its_body() {
     );
 }
 
+/// The name the VM mints for a macro-introduced global must not be one a
+/// program can write.
+///
+/// These names outlive the form that made them, so a collision is a silent
+/// wrong value rather than a shadowing inside one tree. The spelling carries
+/// a space, which is a delimiter — so the reader cannot produce it outside
+/// `|…|`, and the `__#N` form a user *can* type reaches nothing.
+#[test]
+fn test_a_generated_global_name_is_not_writable_from_source() {
+    assert_program_eval_to(
+        r#"
+        (define-syntax mk
+          (syntax-rules ()
+            ((_ () ((name val tmp) ...))
+             (begin (define tmp val) ... (define (name) tmp) ...))
+            ((_ ((n v) . rest) (acc ...)) (mk rest (acc ... (n v tmp))))))
+        (mk ((a 41) (b 2)) ())
+        (define tmp__#0 99)
+        (define tmp__#1 99)
+        (list (a) (b))
+        "#,
+        "(41 2)",
+    );
+}
+
 /// The same rule applies to the rest parameter of an improper formals list.
 #[test]
 fn test_recursive_macro_distinct_params_with_rest() {

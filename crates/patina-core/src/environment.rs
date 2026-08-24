@@ -347,8 +347,22 @@ impl Environment {
     /// Install a macro-expansion alias: `alias` resolves to `target_name` as
     /// bound in `target_env`, looked up afresh on every access.
     ///
-    /// `alias` is expected to be a name expansion generated and therefore
-    /// unique, so this cannot shadow anything the program itself wrote.
+    /// Two kinds of caller, and they rely on different things:
+    ///
+    /// - The desugarer installs a **generated, unique** `alias`, so it cannot
+    ///   shadow anything the program wrote.
+    /// - The VM's compiler installs one under a **bare** name, for a
+    ///   macro-introduced global it renamed. That is safe because `get`
+    ///   consults `bindings` first, so a real binding of that name always
+    ///   wins — but only in an environment with no parent, since `get`
+    ///   *returns* on an alias hit rather than falling through, so a bare
+    ///   alias whose target is unbound would eclipse a parent's binding. The
+    ///   environments that path compiles against are the parentless global
+    ///   ones; a future caller with a parent needs the fall-through first.
+    ///
+    /// Keyed by `alias`, so a second install under the same name replaces the
+    /// first. For the bare-name kind that means the most recently compiled
+    /// definition of a given spelling is the one relinking reaches.
     pub fn define_alias(&self, alias: String, target_env: Rc<Environment>, target_name: Rc<str>) {
         self.alias_bindings
             .borrow_mut()
