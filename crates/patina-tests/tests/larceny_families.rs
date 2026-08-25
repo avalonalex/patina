@@ -543,21 +543,22 @@ fn a_flipped_cyclic_argument_is_a_closed_copy() {
 // ---------------------------------------------------------------------------
 
 /// R7RS 4.2.2: `let-values` evaluates every init in the outer environment
-/// before binding any of the formals; ours binds each clause before
-/// evaluating the next, like `let*-values`.
-///
-/// **When this converges on `(x y a b)`, replace with
-/// `assert_program_eval_to` and update the triage doc.**
+/// before binding any of the formals; ours bound each clause before
+/// evaluating the next, like `let*-values`, until 2026-08-25 (now the
+/// reference implementation of R7RS 7.3). Also covers a dotted and a rest
+/// formal. (A `(() (values))` clause works on the VM but not the
+/// tree-walker — that is family 18, zero values arriving as one.)
 #[test]
 fn let_values_binds_all_clauses_in_parallel() {
-    assert_eq!(
-        eval_program(
-            "(let ((a 'a) (b 'b) (x 'x) (y 'y))
-               (let-values (((a b) (values x y)) ((x y) (values a b)))
-                 (list a b x y)))"
-        ),
-        "(x y x y)",
-        "expected the pinned wrong answer; if this is now (x y a b) the defect is fixed"
+    assert_program_eval_to(
+        "(let ((a 'a) (b 'b) (x 'x) (y 'y))
+           (list (let-values (((a b) (values x y)) ((x y) (values a b)))
+                   (list a b x y))
+                 (let-values (((p . q) (values 1 2 3)) (r (values 4 5)))
+                   (list p q r))
+                 (let*-values (((a b) (values x y)) ((x y) (values a b)))
+                   (list a b x y))))",
+        "((x y a b) (1 (2 3) (4 5)) (x y x y))",
     );
 }
 
@@ -642,18 +643,17 @@ fn a_continuation_is_a_procedure_for_with_exception_handler() {
 
 /// `read-line` ends a line at a bare return as well as at a newline and at
 /// return+newline (R7RS 6.13.2 defers to 7.1.1's line endings; chibi and
-/// Gauche split all three).
-///
-/// **When this converges on `("abc" "abc" "abc")`, replace with
-/// `assert_program_eval_to` and update the triage doc.**
+/// Gauche split all three). Fixed 2026-08-25; a return+newline pair is one
+/// ending, so the second line of "abc\r\ndef" is "def", not "".
 #[test]
 fn read_line_ends_at_a_bare_return() {
-    assert_eq!(
-        eval_program(
-            "(map (lambda (s) (call-with-port (open-input-string s) read-line))
-                  '(\"abc\\ndef\" \"abc\\rdef\" \"abc\\r\\ndef\"))"
-        ),
-        "(\"abc\" \"abc\\rdef\" \"abc\")",
-        "expected the pinned wrong answer; if this is now (\"abc\" \"abc\" \"abc\") the defect is fixed"
+    assert_program_eval_to(
+        "(define (lines s)
+           (let ((p (open-input-string s)))
+             (let loop ((acc '()))
+               (let ((l (read-line p)))
+                 (if (eof-object? l) (reverse acc) (loop (cons l acc)))))))
+         (map lines '(\"abc\\ndef\" \"abc\\rdef\" \"abc\\r\\ndef\" \"abc\\r\" \"\\r\\n\\n\"))",
+        "((\"abc\" \"def\") (\"abc\" \"def\") (\"abc\" \"def\") (\"abc\") (\"\" \"\"))",
     );
 }

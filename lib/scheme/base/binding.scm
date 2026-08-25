@@ -43,14 +43,31 @@
 ;; Multiple value binding (R7RS Section 4.2.2)
 
 ;; let-values - bind multiple values from expressions
+;; R7RS 4.2.2: every <init> is evaluated in the *outer* environment before
+;; any formal is bound, so (let-values (((a b) (values x y)) ((x y) (values a
+;; b))) ...) sees the outer a and b — like `let`, not `let*`. The reference
+;; implementation of R7RS 7.3: each clause's values are received into fresh
+;; temporaries, and one `let` binds all the formals at the end. The earlier
+;; nested-call-with-values version bound each clause before evaluating the
+;; next, which was `let*-values`. Larceny's base suite caught it.
 (define-syntax let-values
   (syntax-rules ()
-    ((let-values ((formals expression) rest ...) body ...)
-     (call-with-values (lambda () expression)
-                       (lambda formals
-                         (let-values (rest ...) body ...))))
-    ((let-values () body ...)
-     (begin body ...))))
+    ((let-values (binding ...) body0 body1 ...)
+     (let-values "bind" (binding ...) () (begin body0 body1 ...)))
+    ((let-values "bind" () tmps body)
+     (let tmps body))
+    ((let-values "bind" ((b0 e0) binding ...) tmps body)
+     (let-values "mktmp" b0 e0 () (binding ...) tmps body))
+    ((let-values "mktmp" () e0 args bindings tmps body)
+     (call-with-values
+       (lambda () e0)
+       (lambda args (let-values "bind" bindings tmps body))))
+    ((let-values "mktmp" (a . b) e0 (arg ...) bindings (tmp ...) body)
+     (let-values "mktmp" b e0 (arg ... x) bindings (tmp ... (a x)) body))
+    ((let-values "mktmp" a e0 (arg ...) bindings (tmp ...) body)
+     (call-with-values
+       (lambda () e0)
+       (lambda (arg ... . x) (let-values "bind" bindings (tmp ... (a x)) body))))))
 
 ;; let*-values - sequential binding of multiple values
 ;; Each binding can reference values from previous bindings

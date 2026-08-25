@@ -94,59 +94,52 @@ pub(super) fn read_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
         get_input_port_tagged(args, 0, &heap_ref)?
     };
 
-    if args.len() == 2 {
-        let max = match args[1].as_fixnum() {
+    // Both forms go through one character loop, so the line endings are the
+    // same with and without a max: R7RS 7.1.1's newline, return, and
+    // return+newline (`Port::read_line`, kept for the reader, is
+    // newline-only and used to leave "abc\rdef" as one line).
+    let max = if args.len() == 2 {
+        match args[1].as_fixnum() {
             Some(n) if n >= 0 => n as usize,
             _ => {
                 return Err(EvalError::TypeError(
                     "read-line: max-chars must be a non-negative integer".to_string(),
                 ));
             }
-        };
-        let mut line = String::new();
-        let mut chars_read = 0;
-        let mut hit_newline = false;
-        while chars_read < max {
-            match port.read_char() {
-                Ok(Some('\n')) => {
-                    hit_newline = true;
-                    break;
+        }
+    } else {
+        usize::MAX
+    };
+    let mut line = String::new();
+    let mut chars_read = 0;
+    while chars_read < max {
+        match port.read_char() {
+            Ok(Some('\n')) => break,
+            // A bare return ends the line too, and return+newline is one
+            // ending: the newline that may follow is consumed rather than
+            // read as an empty next line.
+            Ok(Some('\r')) => {
+                if matches!(port.peek_char(), Ok(Some('\n'))) {
+                    let _ = port.read_char();
                 }
-                Ok(Some(c)) => {
-                    line.push(c);
-                    chars_read += 1;
-                }
-                // The source ended before anything was read: that is EOF.
-                Ok(None) if line.is_empty() => return Ok(TaggedValue::EOF),
-                Ok(None) => break,
-                Err(e) => return Err(EvalError::IOError(e.to_string())),
+                break;
             }
-        }
-        // max = 0 skips the loop entirely; peek to tell EOF from
-        // data-remaining (the one case the loop could not decide).
-        if max == 0 && matches!(port.peek_char(), Ok(None)) {
-            return Ok(TaggedValue::EOF);
-        }
-        if hit_newline && line.ends_with('\r') {
-            line.pop();
-        }
-        return Ok(heap.borrow_mut().alloc_string(line));
-    }
-
-    match port.read_line() {
-        Ok(Some(mut line)) => {
-            // Remove trailing newline if present (R7RS behavior)
-            if line.ends_with('\n') {
-                line.pop();
-                if line.ends_with('\r') {
-                    line.pop();
-                }
+            Ok(Some(c)) => {
+                line.push(c);
+                chars_read += 1;
             }
-            Ok(heap.borrow_mut().alloc_string(line))
+            // The source ended before anything was read: that is EOF.
+            Ok(None) if line.is_empty() => return Ok(TaggedValue::EOF),
+            Ok(None) => break,
+            Err(e) => return Err(EvalError::IOError(e.to_string())),
         }
-        Ok(None) => Ok(TaggedValue::EOF),
-        Err(e) => Err(EvalError::IOError(e.to_string())),
     }
+    // max = 0 skips the loop entirely; peek to tell EOF from data-remaining
+    // (the one case the loop could not decide).
+    if max == 0 && matches!(port.peek_char(), Ok(None)) {
+        return Ok(TaggedValue::EOF);
+    }
+    Ok(heap.borrow_mut().alloc_string(line))
 }
 
 /// (read-string k [port]) - Read k characters from port

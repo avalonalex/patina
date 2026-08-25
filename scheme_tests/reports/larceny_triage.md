@@ -114,8 +114,9 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - Ours: `datum_labels_are_scoped_to_one_datum`
 - Found flattening `base` for bisection. The parser that reads a program datum by datum (`parse` — the script runner and `eval_program`; `read` builds a fresh parser per call and was never affected, contrary to an earlier note) kept the label table across data and reported "Duplicate datum label" on a file that reuses `#0=` (R7RS 2.4 scopes a label to its outermost datum). Now cleared per datum, also after a failed one; and a `#n#` whose `#n=` never comes is an error (`UndefinedLabel`) instead of a placeholder object left in the data.
 
-### 21. `let-values` binds its clauses sequentially — both backends
-- Ours: `let_values_binds_all_clauses_in_parallel` (pinned)
+### 21. `let-values` binds its clauses sequentially — both backends — ✅ fixed 2026-08-25
+- Ours: `let_values_binds_all_clauses_in_parallel`
+- Fix: `let-values` is R7RS 7.3's reference implementation — each clause's values go into fresh temporaries and one `let` binds every formal at the end — instead of a nest of `call-with-values` that bound each clause before evaluating the next (`let*-values`, which is still defined in terms of `let-values` and still sequential).
 - Upstream: [tests/scheme/base.sld#L730](tests/scheme/base.sld#L730). R7RS 4.2.2: every init is evaluated before any formal is bound; ours behaves as `let*-values`. chibi, Gauche and Chez give `(x y a b)`.
 
 ### 22. A `guard` re-raise does not re-enter the dynamic extent — both backends
@@ -131,8 +132,9 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - Fix: the handler check asks `is_callable` (procedures *or* continuations), and the VM's generic call path (`call_any` — exception handlers, `call-with-values` consumers, wind thunks, parameter converters) can invoke a continuation, signalling the dispatch loop the way the instruction-level call paths already did. chibi and Gauche give `obj` for `(call/cc (lambda (k) (with-exception-handler k (lambda () (raise 'obj)))))`; so does Patina now.
 - Upstream: [tests/scheme/base.sld#L2741](tests/scheme/base.sld#L2741), [#L2748](tests/scheme/base.sld#L2748) — the R7RS idiom for capturing a raised object, `(call/cc (lambda (k) (with-exception-handler k …)))`. "expected a procedure, got object" on the VM; the tree-walker accepts it and then answers `read-error?`/`file-error?` correctly with `#f`.
 
-### 25. `read-line` does not end a line at a bare return — both backends
-- Ours: `read_line_ends_at_a_bare_return` (pinned)
+### 25. `read-line` does not end a line at a bare return — both backends — ✅ fixed 2026-08-25
+- Ours: `read_line_ends_at_a_bare_return`
+- Fix: the `read-line` primitive reads through one character loop with or without a max, ending at newline, return, or return+newline (the newline of a pair consumed with it); the newline-only `Port::read_line` stays for the reader.
 - Upstream: [tests/scheme/base.sld#L2805](tests/scheme/base.sld#L2805). The lexer's line endings were fixed in #112 (family 16); the port reader has its own notion. chibi and Gauche split `"abc\rdef"`.
 
 ### 16. A line comment is not ended by a bare return — both backends — ✅ fixed 2026-08-24
