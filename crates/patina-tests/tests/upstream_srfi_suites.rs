@@ -213,6 +213,11 @@ suite_tests! {
     // Its first run caught ucs-range->char-set discarding its base set —
     // see the note at that procedure in lib/srfi/14.scm.
     (srfi_14_char_set, "srfi 14", "(srfi 14 test)", 0, 72),
+    // Philip Bewig's own suite for SRFI 41, verbatim from chibi's R7RS
+    // adaptation of it — the same file the reference implementation ships
+    // with, so it exercises `stream-match` too (ours is chibi's macro over
+    // the reference body; see lib/srfi/PROVENANCE.md).
+    (srfi_41_stream, "srfi 41", "(srfi 41 test)", 0, 186),
     // The chibi suites are from the same pinned snowballs as the bundled
     // libraries themselves (lib/chibi/PROVENANCE.md), restored after the
     // corpus stopped vendoring packages Patina bundles — which had silently
