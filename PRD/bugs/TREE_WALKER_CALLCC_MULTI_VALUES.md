@@ -1,6 +1,6 @@
 # Tree-walker: call/cc continuations don't deliver multiple values
 
-**Status:** Open
+**Status:** Fixed 2026-08-25
 **Severity:** Medium
 **Created:** 2026-03-19
 **Backend:** Tree-walker only (VM backend fixed)
@@ -38,6 +38,28 @@ Single-value case also fails:
 - Blocks SRFI 1 `%cars+cdrs` abort pattern on tree-walker (uses `(abort '() '())`)
 - Any code using `call/cc` continuation invocation with multiple values through `call-with-values`
 
+## Fix (2026-08-25)
+
+`crates/patina-tree-walker/src/eval/cps_eval/application.rs`, in the branch
+that invokes a captured continuation: a call with any argument count but one
+now delivers a `#<values>` heap object, exactly as `(values …)` returns one,
+instead of raising a wrong-arity error. `call-with-values` unpacks it; a
+plain continuation receives the object. The VM had reached the same protocol
+from the other direction in #113, when its `value_buffer` side channel was
+removed — so the two backends now agree by construction rather than by two
+mechanisms.
+
+The prediction below ("the continuation closure should handle multi-value
+returns by populating the values continuation") was aimed at the VM's old
+buffer design, which no longer exists.
+
+**What this was costing, unrecognised.** SRFI 1's `%cars+cdrs` bails out of
+an exhausted list with `(abort '() '())`. Every n-ary procedure that walks
+more than one list goes through it, so `zip`, `fold`, `any`, `every` and
+`list-index` over two or more lists all failed on the tree-walker — nine
+assertions in Larceny's `list` suite, tracked separately as triage family 5
+and diagnosed as "undiagnosed beyond" the `apply` shape. It was this bug.
+
 ## Notes
 
 The VM backend fixed this with two changes:
@@ -62,9 +84,8 @@ was only caught when the quarantine was changed to assert that the tree-walker
 actually fails. It is now a plain both-backends test back in `cps_features.rs`.
 The scope of this bug is *multi-value* continuation returns, as the title says.
 
-Each is written as `assert_divergence(code, On::Vm, expected, "…")`, which
-asserts the VM's correct answer **and** that the tree-walker still fails. So
-**fixing this bug will make those three tests fail** — that is intentional. The
-panic message tells you to replace each `assert_divergence` call with a plain
-`assert_program_eval_to`, which puts both backends back under the same
-expectation. Delete this section at the same time.
+Both were `assert_divergence(code, On::Vm, expected, "…")` — asserting the
+VM's correct answer *and* that the tree-walker still failed — so the fix made
+them fail, as designed, and they are now plain `assert_program_eval_to` calls
+holding both backends to the same expectation. The abort-pattern test carries
+the SRFI 1 shapes with it, so the connection above cannot be lost again.
