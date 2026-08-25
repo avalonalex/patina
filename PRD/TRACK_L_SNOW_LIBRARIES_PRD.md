@@ -1,7 +1,7 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-08-24 — L5.3's low-hanging fixes landed (nested `include`, port-open predicates, `rationalize`, Unicode simple case mapping, `(scheme charset)`): 13 of 33 suites, 4172 of 4193. Earlier the same day — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
+**Updated:** 2026-08-24 — second round: `equal?` on cycles, iterative `delay-force`, `string->number` = reader syntax (15 of 33 suites, 4258 of 4270). Earlier the same day — L5.3's low-hanging fixes landed (nested `include`, port-open predicates, `rationalize`, Unicode simple case mapping, `(scheme charset)`): 13 of 33 suites, 4172 of 4193. Earlier the same day — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
 (**126 of 162** vendored packages pass, 2026-08-22, of which **126 of 137 are in scope** — the
 other 25 are excluded by `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and
@@ -868,6 +868,12 @@ are their own statuses.
 | R7RS, tree-walker | 12 of 33 | 3931 of 3961 (99.2%) | the same, plus `char` (stack overflow) |
 | R6RS, VM | 10 of 16 | 4008 of 4022 (99.7%) | `base` (`(let-syntax ())`) · `mutable-pairs` (hang) |
 
+**Second round, 2026-08-24 (#112):** `equal?` terminates on cycles, `delay-force` is iterative on
+both backends, and `string->number` is the reader's number syntax with exact `#e` decimals, and a `;` comment ends at
+a bare return — R7RS lane **15 of 33 suites, 4258 of 4270 (VM)**, tree-walker 15 of 33 / 4113 of
+4131, R6RS lane 12 of 16 / 4017 of 4025. `lazy`, `read` and R6RS `mutable-pairs` are clean;
+`inexact` and `complex` are down to the two expectations that are upstream's own.
+
 **Low-hanging fixes, 2026-08-24 (same day):** nested `include`, the port-open predicates, `rationalize`
 at the infinities, Unicode simple case mapping, `(scheme charset)` — R7RS lane
 **13 of 33 suites, 4172 of 4193 (VM)**, tree-walker 13 of 33 / 4027 of 4054, R6RS lane 11 of 16 /
@@ -900,13 +906,13 @@ trips its test.
 | ✅ A nested `include` resolves against the wrong directory, and the base is chosen nondeterministically — *fixed 2026-08-24* | base | both |
 | A shadowed `...` is still the ellipsis (`(let ((... 19)) …)` around a `define-syntax`; R7RS 4.3.2 identifies it by binding) — per-token in `Compiler::is_ellipsis`; **now what blocks `base`** (~900 assertions) | base | both |
 | A template's reference to a definition-site local spelled like a keyword (`(let ((if …)) …)` around a `define-syntax`) is rejected as syntax — the scope-aware shadowing `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves; blocks `base` next | base | both |
-| `equal?` does not terminate on circular structures | read (crash), r6rs mutable-pairs (hang) | both |
-| `delay-force` is not iterative — 100 000 deep overflows the stack | lazy | both |
+| ✅ `equal?` does not terminate on circular structures — *fixed 2026-08-24* (worklist + lazily allocated visited set) | read, r6rs mutable-pairs | both |
+| ✅ `delay-force` is not iterative — 100 000 deep overflows the stack — *fixed 2026-08-24* (R7RS 7.3's iterative `force` with `promise-update!`, in the primitive and in the tree-walker's CPS `force`) | lazy | both |
 | VM: a discarded call to `values` poisons the next `call-with-values` | vector | VM |
 | Tree-walker: SRFI 1's `zip` (n-ary `map` via `apply`) raises a wrong-arity error | list (9) | tree-walker |
 | Tree-walker: a 1.1M-iteration `do` loop building a list overflows the stack | char | tree-walker |
 | ✅ Unicode case: `(char-upcase #\ß)` ⇒ `#\S`; `char-ci=?` on final sigma; `string-ci=?` full folding — *fixed 2026-08-24* with the simple mappings (a generated table where std's full mapping expands); `digit-value` over every Nd character still open | char (2), r6rs unicode | both |
-| `string->number`: `"+inf.0"`, `"+nan.0"` ⇒ `#f`; `"1+2i"` ⇒ `#f`; `#e1e1000` ⇒ `+inf.0` instead of an exact integer | inexact (7), complex (2) | both |
+| ✅ `string->number`: `"+inf.0"`, `"+nan.0"` ⇒ `#f`; `"1+2i"` ⇒ `#f`; `#e1e1000` ⇒ `+inf.0` instead of an exact integer — *fixed 2026-08-24* (`string->number` is the reader's number syntax; `#e` on a decimal is exact from the text, in the reader too) | inexact, complex | both |
 | ✅ `rationalize` with infinities — *fixed 2026-08-24*. `(log -0.0)` and `(sqrt -inf.0)` turned out not to be ours: chibi, Gauche and Chez all answer as Patina does | inexact (1), complex (1) | both |
 | `environment` rejects a nested import set, `(prefix (only …) …)` | eval, r6rs eval | both |
 | ✅ `input-port-open?` on an output-only port was a type error, not `#f` — *fixed 2026-08-24*; `file` is clean | file | both |

@@ -17,7 +17,9 @@ Links below are relative to
 `https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/`.
 
 Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
-3931/3961); R6RS lane 10 of 16 (4008/4022).
+3931/3961); R6RS lane 10 of 16 (4008/4022). After #111 and #112 (same day): R7RS
+lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
+(4017/4025).
 
 ## Ours
 
@@ -28,13 +30,15 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 - Upstream: [tests/scheme/base.sld#L359](tests/scheme/base.sld#L359) starts the chain; [tests/scheme/base-test3.scm#L1](tests/scheme/base-test3.scm#L1) is the include that fails. Blocks the whole `base` suite (~900 assertions) on both backends.
 - Note: chibi 0.12 fails this file the same way; Gauche resolves relative to the including file.
 
-### 2. `equal?` does not terminate on circular structures — both backends
-- Ours: `equal_terminates_on_two_distinct_cyclic_lists` (hang), `equal_terminates_on_two_distinct_cyclic_vectors` (stack overflow) — both `#[ignore]`
+### 2. `equal?` does not terminate on circular structures — both backends — ✅ fixed 2026-08-24
+- Ours: `equal_terminates_on_two_distinct_cyclic_lists`, `equal_terminates_on_two_distinct_cyclic_vectors`
+- Fix: `Heap::tagged_values_equal` walks pairs and vectors with an explicit worklist (so a long list cannot overflow either) and, once the walk is long enough to suggest a cycle, records every (a, b) pair of containers it enters and treats a revisit as equal — the coinductive reading every implementation uses. The set is allocated lazily; the acyclic case pays nothing.
 - Upstream: [tests/scheme/read.sld#L307](tests/scheme/read.sld#L307) (crashes the `read` suite); [tests/r6rs/mutable-pairs.sld#L18](tests/r6rs/mutable-pairs.sld#L18) (hangs the R6RS `mutable-pairs` suite to the timeout)
-- Cause: `Heap::tagged_values_equal` recurses with no visited set. The reader builds the cycles correctly.
+- The reader was never at fault: it builds the cycles correctly.
 
-### 3. `delay-force` is not iterative — both backends
-- Ours: `a_long_delay_force_chain_runs_in_bounded_space` — `#[ignore]`
+### 3. `delay-force` is not iterative — both backends — ✅ fixed 2026-08-24
+- Ours: `a_long_delay_force_chain_runs_in_bounded_space`
+- Fix: R7RS 7.3's `force` in both places it lives — the Rust primitive (a loop) and the tree-walker's CPS `ForceCache` continuation (re-force with the *same* continuation instead of nesting one per link). When a `delay-force` thunk yields a promise, the outer takes over the inner's state and the inner is aliased to the outer's box (`Heap::set_promise_cell` — `promise-update!`), so either forced later sees one memoized value and SRFI 45's leak tests hold. A promise forced re-entrantly by its own thunk keeps the value it left (R7RS's `(1 6)`-style example gives 6). A million links in 0.7 s on the VM.
 - Upstream: the SRFI 45 leak tests, [tests/scheme/lazy.sld#L313](tests/scheme/lazy.sld#L313) through [#L361](tests/scheme/lazy.sld#L361) (crash the `lazy` suite on both backends)
 
 ### 4. VM: a discarded call to `values` poisons the next `call-with-values` — VM only
@@ -56,8 +60,9 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 - Upstream: [tests/scheme/char.sld#L57](tests/scheme/char.sld#L57) (`char-upcase`), [#L59](tests/scheme/char.sld#L59) (`char-foldcase`), [#L69](tests/scheme/char.sld#L69) (`char-ci=?`), [#L113](tests/scheme/char.sld#L113), [#L114](tests/scheme/char.sld#L114) (`string-ci=?`); the R6RS lane repeats them at [tests/r6rs/unicode.sld#L11](tests/r6rs/unicode.sld#L11), [#L14](tests/r6rs/unicode.sld#L14), [#L39](tests/r6rs/unicode.sld#L39), [#L116](tests/r6rs/unicode.sld#L116)–[#L118](tests/r6rs/unicode.sld#L118)
 - Also in this family, **no original case yet**: `digit-value` disagrees with `char-numeric?` somewhere in the full Nd sweep — [tests/scheme/char.body.scm#L109](tests/scheme/char.body.scm#L109), [#L123](tests/scheme/char.body.scm#L123). Spot checks (`#\3`, Arabic-Indic three) are right; the sweep is over every code point.
 
-### 8. `string->number` rejects what the reader accepts — both backends
+### 8. `string->number` rejects what the reader accepts — both backends — ✅ fixed 2026-08-24
 - Ours: `string_to_number_accepts_what_the_reader_accepts`
+- Fix: `string->number` *is* the reader's number syntax now (`Parser::number_from_str`: the whole string must lex as one number token; a radix argument becomes a prefix unless the string has its own), and `#e` on a decimal literal is the exact value of the text (`#e1.5` ⇒ 3/2, `#e1e400` ⇒ 10^400) rather than of the double — in the reader too, which used to reject those. The second number parser in `conversion.rs` is gone. Whitespace-padded strings now answer `#f`, as in Gauche and Chez.
 - Upstream: infinities and NaN — [tests/scheme/inexact.sld#L405](tests/scheme/inexact.sld#L405)–[#L407](tests/scheme/inexact.sld#L407); `#e` with a large exponent — [#L91](tests/scheme/inexact.sld#L91), [#L95](tests/scheme/inexact.sld#L95), [#L388](tests/scheme/inexact.sld#L388), [#L389](tests/scheme/inexact.sld#L389); complex — [tests/scheme/complex.sld#L55](tests/scheme/complex.sld#L55), [#L56](tests/scheme/complex.sld#L56)
 
 ### 9. `rationalize` at the infinities — both backends — ✅ fixed 2026-08-24
@@ -93,6 +98,11 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 - Ours: `a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword` (pinned as the error it is today)
 - Upstream: [tests/scheme/base.sld#L1163](tests/scheme/base.sld#L1163) — the second of the pair; blocks `base` next, at desugar time of the library.
 - Cause: `resolve_syntax`'s shadow test is by spelling and exempts scoped (macro-introduced) references, which hygiene needs for an *outer* macro's `if`. A macro defined *inside* `(let ((if …)) …)` has that binding in its definition scopes, so its template's `if` is the variable. Making the shadow test scope-aware is the hygiene change `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves — not a one-liner.
+
+### 16. A line comment is not ended by a bare return — both backends — ✅ fixed 2026-08-24
+- Ours: `a_line_comment_ends_at_a_bare_return`
+- Upstream: [tests/scheme/read.sld#L279](tests/scheme/read.sld#L279) — the one assertion left in `read` once `equal?` terminated on cycles.
+- Fix: the lexer's `;` comment stops at `\r` as well as `\n` (R7RS 7.1.1 line endings).
 
 ## Not ours — recorded so nobody re-diagnoses them
 

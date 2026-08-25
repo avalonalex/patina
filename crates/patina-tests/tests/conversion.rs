@@ -232,10 +232,14 @@ fn test_string_to_number_invalid() {
     assert_eval_to("(string->number \"1 2\")", "#f");
 }
 
+/// Whitespace is not number syntax (R7RS 6.2.7), so a padded string is
+/// not a number. Gauche and Chez answer #f; chibi tolerates *leading*
+/// whitespace only. This used to assert the trimmed answer.
 #[test]
 fn test_string_to_number_whitespace() {
-    assert_eval_to("(string->number \"  100  \")", "100");
-    assert_eval_to("(string->number \"\\t42\\n\")", "42");
+    assert_eval_to("(string->number \"  100  \")", "#f");
+    assert_eval_to("(string->number \"\\t42\\n\")", "#f");
+    assert_eval_to("(string->number \"100\")", "100");
 }
 
 #[test]

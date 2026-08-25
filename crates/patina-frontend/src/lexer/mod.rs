@@ -359,8 +359,10 @@ impl Lexer {
                 // keeps it a visible error. See that function.
                 ' ' | '\t' | '\n' | '\r' | '\x0C' => self.advance(),
                 ';' => {
-                    // Line comment: skip until end of line
-                    while !self.is_at_end() && self.current_char() != '\n' {
+                    // Line comment: skip to the line ending. R7RS 7.1.1 makes
+                    // a bare return one as well, not only newline and
+                    // return+newline, so `;c\rnot` is a comment and a datum.
+                    while !self.is_at_end() && !matches!(self.current_char(), '\n' | '\r') {
                         self.advance();
                     }
                 }

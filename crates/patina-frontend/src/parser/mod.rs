@@ -691,6 +691,16 @@ impl Parser {
             )));
         }
 
+        // `#e` on a decimal literal: the exact value of the *text*, not of the
+        // double it would round to — `#e1.5` is 3/2 and `#e1e400` is 10^400,
+        // which no f64 holds.
+        if exactness == Some(true) && radix == 10 {
+            let exact = Self::exact_decimal(rest);
+            if let Some(ratio) = exact {
+                return Ok(self.tagged_rational(ratio));
+            }
+        }
+
         // Parse the number based on radix
         let tv = if radix == 10 {
             // For decimal, use the main parse_number logic (handles floats, rationals, complex, etc.)
@@ -706,6 +716,118 @@ impl Parser {
 
         // Apply exactness conversion if specified
         self.apply_exactness(tv, exactness, s)
+    }
+
+    /// The exact rational a plain decimal literal denotes —
+    /// `[sign] digits [. digits] [e [sign] digits]` with any R7RS exponent
+    /// marker — or `None` if `s` is not that shape (a rational, a complex, an
+    /// infinity: those take the ordinary path).
+    fn exact_decimal(s: &str) -> Option<BigRational> {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        let negative = match bytes.first() {
+            Some(b'-') => {
+                i += 1;
+                true
+            }
+            Some(b'+') => {
+                i += 1;
+                false
+            }
+            _ => false,
+        };
+        let mut mantissa = String::new();
+        let mut frac_digits: i64 = 0;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            mantissa.push(bytes[i] as char);
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                mantissa.push(bytes[i] as char);
+                frac_digits += 1;
+                i += 1;
+            }
+        }
+        if mantissa.is_empty() {
+            return None;
+        }
+        let mut exponent: i64 = 0;
+        if i < bytes.len() {
+            if !matches!(
+                bytes[i],
+                b'e' | b'E' | b's' | b'S' | b'f' | b'F' | b'd' | b'D' | b'l' | b'L'
+            ) {
+                return None;
+            }
+            i += 1;
+            let exp_negative = match bytes.get(i) {
+                Some(b'-') => {
+                    i += 1;
+                    true
+                }
+                Some(b'+') => {
+                    i += 1;
+                    false
+                }
+                _ => false,
+            };
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == start || i != bytes.len() {
+                return None;
+            }
+            exponent = s[start..i].parse::<i64>().ok()?;
+            if exp_negative {
+                exponent = -exponent;
+            }
+        }
+        let mut value = BigRational::from(BigInt::from_str(&mantissa).ok()?);
+        let scale = exponent - frac_digits;
+        let ten = BigInt::from(10u32);
+        let pow = num_traits::pow(BigRational::from(ten), scale.unsigned_abs() as usize);
+        value = if scale >= 0 { value * pow } else { value / pow };
+        Some(if negative { -value } else { value })
+    }
+
+    /// The whole of `s` as one numeric literal, or `None` — R7RS 6.2.7's
+    /// `string->number`. Reuses the reader: `s` must lex as exactly one
+    /// number token, so everything the reader accepts (`1+2i`, `+inf.0`,
+    /// `#e1e400`, `#x1/10`) `string->number` accepts too, and nothing else.
+    /// `radix` applies unless `s` carries its own radix prefix.
+    pub fn number_from_str(s: &str, radix: u32, heap: SharedHeap) -> Option<TaggedValue> {
+        // The reader skips whitespace; a numeric string does not have any.
+        if s.is_empty() || s != s.trim() {
+            return None;
+        }
+        let lower = s.to_ascii_lowercase();
+        let has_radix_prefix = ["#b", "#o", "#d", "#x"].iter().any(|p| lower.contains(p));
+        let prefixed;
+        let input = if radix == 10 || has_radix_prefix {
+            s
+        } else {
+            let marker = match radix {
+                2 => 'b',
+                8 => 'o',
+                16 => 'x',
+                _ => return None,
+            };
+            prefixed = format!("#{marker}{s}");
+            &prefixed
+        };
+        let mut parser = Parser::new_with_heap(input, heap).ok()?;
+        let text = match &parser.current_token {
+            Token::Number(text) => text.clone(),
+            _ => return None,
+        };
+        parser.advance().ok()?;
+        if parser.current_token != Token::Eof {
+            return None;
+        }
+        parser.parse_number(&text).ok()
     }
 
     /// Parse a rational number string: "numerator/denominator"
