@@ -681,3 +681,57 @@ fn error_accepts_a_message_that_is_not_a_string() {
         "(\"foo\" (\"bar\" 1) \"stream-car\" \"plain\" (2))",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Family 28 — an exception handler runs after the unwind, not in the raise's
+//             dynamic extent
+// ---------------------------------------------------------------------------
+
+/// R7RS 6.11: a handler is called "in the dynamic environment of the call to
+/// `raise`, except that the current exception handler is the outer one".
+/// Both backends unwind to the handler's own wind depth *first*, so the
+/// handler runs outside the extent — and the after-thunk runs twice.
+///
+/// This is the root cause of family 22 (a `guard` re-raise cannot re-enter
+/// an extent that has already been left), found 2026-08-25 while attempting
+/// that one; the triage doc records the order the two want fixing in. Note
+/// what is *not* broken: re-entering a captured continuation does run the
+/// before-thunk, so the machinery exists and the raise path simply does not
+/// use it — that half is asserted here as the control.
+///
+/// **When the log converges on `(in handler out)`, replace the assertion
+/// with `assert_program_eval_to` and update the triage doc.**
+#[test]
+fn an_exception_handler_runs_in_the_raises_dynamic_extent() {
+    let program = "(define v '())
+                   (define (log x) (set! v (cons x v)))
+                   (define answer
+                     (with-exception-handler
+                       (lambda (e) (log 'handler) 'handled)
+                       (lambda ()
+                         (dynamic-wind (lambda () (log 'in))
+                                       (lambda () (raise-continuable 'x))
+                                       (lambda () (log 'out))))))
+                   (list answer (reverse v))";
+    assert_eq!(
+        eval_program(program),
+        "(handled (in out handler out))",
+        "expected the pinned wrong answer; if this is now (handled (in handler out)) \
+         — chibi's and Gauche's — the defect is fixed"
+    );
+
+    // The control: re-entry itself works, on both backends and as in both
+    // references. Nothing to fix here, and a regression would be a
+    // regression.
+    assert_program_eval_to(
+        "(define v '())
+         (define k #f)
+         (define done #f)
+         (dynamic-wind (lambda () (set! v (cons 'in v)))
+                       (lambda () (call/cc (lambda (c) (set! k c))))
+                       (lambda () (set! v (cons 'out v))))
+         (if (not done) (begin (set! done #t) (k 'back)))
+         (reverse v)",
+        "(in out in out)",
+    );
+}
