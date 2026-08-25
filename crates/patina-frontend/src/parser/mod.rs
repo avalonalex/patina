@@ -62,6 +62,10 @@ pub struct Parser {
     /// Datum labels for shared/cyclic structure support (R7RS Section 2.4)
     /// Maps label number to the labelled value
     labels: HashMap<usize, TaggedValue>,
+    /// Labels referenced by `#n#` before (or without) their `#n=`. Checked
+    /// once the outermost datum is complete: one still undefined then is an
+    /// error, not a placeholder left in the datum.
+    pending_refs: Vec<usize>,
     /// Optional source map for recording source positions of parsed forms
     source_map: Option<Rc<RefCell<SourceMap>>>,
     /// Name of the source being parsed (e.g., file path, "<repl>", "<eval>")
@@ -81,6 +85,7 @@ impl Parser {
             current_token_column: spanned.column,
             heap,
             labels: HashMap::new(),
+            pending_refs: Vec::new(),
             source_map: None,
             source_name: Rc::from("<unknown>"),
         })
@@ -127,6 +132,7 @@ impl Parser {
             current_token_column: spanned.column,
             heap,
             labels: HashMap::new(),
+            pending_refs: Vec::new(),
             source_map: Some(source_map),
             source_name,
         })
@@ -149,6 +155,7 @@ impl Parser {
             current_token_column: spanned.column,
             heap,
             labels: HashMap::new(),
+            pending_refs: Vec::new(),
             source_map: None,
             source_name: Rc::from("<unknown>"),
         })
@@ -192,9 +199,28 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<TaggedValue, ParseError> {
-        let result = self.parse_expr()?;
-        // After parsing the outermost datum, resolve any label placeholders
-        Ok(self.resolve_labels(result))
+        let result = self.parse_expr().and_then(|tv| self.finish_datum(tv));
+        // A label's scope is its outermost datum (R7RS 2.4): the table is
+        // cleared for the next one — also after a failed datum, so one bad
+        // form cannot poison the next with "Duplicate datum label".
+        self.labels.clear();
+        self.pending_refs.clear();
+        result
+    }
+
+    /// Resolve the placeholders of a complete outermost datum, and reject a
+    /// `#n#` whose `#n=` never came: R7RS 2.4 scopes labels to the datum,
+    /// so nothing later can define it, and a placeholder object left in the
+    /// data would be garbage to every consumer.
+    fn finish_datum(&mut self, tv: TaggedValue) -> Result<TaggedValue, ParseError> {
+        if let Some(&n) = self
+            .pending_refs
+            .iter()
+            .find(|n| !self.labels.contains_key(n))
+        {
+            return Err(ParseError::UndefinedLabel(n));
+        }
+        Ok(self.resolve_labels(tv))
     }
 
     /// Parse all expressions from the input until EOF.
@@ -206,9 +232,10 @@ impl Parser {
         while self.current_token != Token::Eof {
             let expr = self.parse_expr()?;
             // Resolve labels for each top-level expression
-            exprs.push(self.resolve_labels(expr));
+            exprs.push(self.finish_datum(expr)?);
             // Clear labels between top-level expressions
             self.labels.clear();
+            self.pending_refs.clear();
         }
         Ok(exprs)
     }
@@ -332,7 +359,9 @@ impl Parser {
                 if let Some(value) = self.labels.get(&label) {
                     Ok(*value)
                 } else {
-                    // Return a placeholder - will be resolved after parsing completes
+                    // Return a placeholder - will be resolved after parsing
+                    // completes (or reported by `finish_datum` if it never can be)
+                    self.pending_refs.push(label);
                     Ok(self.heap.borrow_mut().alloc_label_placeholder(label))
                 }
             }
@@ -2139,18 +2168,19 @@ mod tests {
 
     #[test]
     fn test_datum_label_undefined() {
-        // #99# -> undefined label (no error at parse time, placeholder left)
-        // Note: Our implementation leaves placeholders for undefined labels
-        // which is technically valid per R7RS (implementation-defined)
-        let mut parser = Parser::new("#99#").unwrap();
-        let result = parser.parse().unwrap();
-        // Should return a placeholder since label 99 is never defined
-        let display = patina_core::format_tagged(result, &parser.heap().borrow());
-        assert!(
-            display.contains("label-placeholder") && display.contains("99"),
-            "Expected LabelPlaceholder(99), got {}",
-            display
-        );
+        // #99# with no #99= anywhere in the datum: R7RS 2.4 scopes a label to
+        // its outermost datum, so nothing later can define it, and a
+        // placeholder object left in the data would be garbage to every
+        // consumer. It is an error at the end of the datum.
+        let mut parser = Parser::new("(a #99# b)").unwrap();
+        match parser.parse() {
+            Err(ParseError::UndefinedLabel(99)) => {}
+            other => panic!("expected UndefinedLabel(99), got {other:?}"),
+        }
+        // A label defined *after* its first reference in the same datum is
+        // fine — that is what placeholders are for.
+        let mut parser = Parser::new("(#0# . #0=(x))").unwrap();
+        assert!(parser.parse().is_ok());
     }
 
     #[test]

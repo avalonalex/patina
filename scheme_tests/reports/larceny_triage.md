@@ -19,7 +19,9 @@ Links below are relative to
 Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 3931/3961); R6RS lane 10 of 16 (4008/4022). After #111 and #112 (same day): R7RS
 lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
-(4017/4025). After the values fix (2026-08-25): VM 16 of 33, 4260/4270.
+(4017/4025). After the values fix (2026-08-25): VM 16 of 33, 4260/4270. After `base`
+ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 1046 of
+1064 — then the hygiene half was backed out and `base` is gated again (families 14/15).
 
 ## Ours
 
@@ -93,21 +95,44 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 
 ### 14. A shadowed `...` is no longer the ellipsis (R7RS 4.3.2) — both backends
 - Ours: `a_shadowed_ellipsis_is_an_ordinary_pattern_variable` (pinned as the error it is today)
-- Upstream: [tests/scheme/base.sld#L1155](tests/scheme/base.sld#L1155) — the first of a pair; **this is what gates `base` now** (~900 assertions), at load time, once its includes resolve. chibi and Gauche reject it too; Larceny, Kawa and Sagittarius accept.
-- Tried and backed out (review of #111): a whole-macro sentinel ellipsis when `...` is a shadowed *spelling*, plus compiling internal `define-syntax` with the body's desugarer. The second fed lambda parameter names into literal resolution, so a literal spelled like a parameter matched a *nested* rebinding (`(lit lit)` where chibi says `(lit var)`); the first lost an ellipsis an *outer* macro introduced via `(... ...)` whenever the expansion landed in a scope binding `...`. The decision is per token and scope-aware — it belongs in `Compiler::is_ellipsis`, which already has the scopes and a native no-ellipsis mode — and a global `(define ... …)` should disable it too (Larceny resolves the ellipsis by `syntactic-lookup`).
+- Upstream: [tests/scheme/base.sld#L1155](tests/scheme/base.sld#L1155) — the first of the pair that gates `base` at load time. chibi, Larceny, Kawa and Sagittarius accept it; Gauche rejects, as we do.
+- Two attempts, both backed out after review. #111: a whole-macro sentinel ellipsis keyed on the *spelling* being shadowed — lost an ellipsis an outer macro introduced via `(... ...)`, and compiling internal `define-syntax` with the body's desugarer let a literal spelled like a parameter match a nested rebinding. #114: a per-token rule keyed on the enclosing bindings' *scope sets* (`EllipsisBinding`), the escape emitting a scoped symbol — right for the direct cases and for `(... ...)`, but wrong for a SRFI 46 `:::` (the binding was looked up for the spelling `...`), for a bare `...` substituted through a pattern variable (arrives as an identifier with *empty* scopes and takes the wrong branch), and for a generated macro (the template compiler unions the body's definition scopes into tokens the outer macro introduced, so the containment test then finds the body's binding in them). Every one of those is the same fact: a token's original scopes cannot be recovered after the union.
+- What it needs: one binding resolution shared by the desugarer and the macro compiler, ordered innermost-first, where a local variable and a keyword are the same kind of binding — `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`. Acceptance cases from the two reviews (all verified against chibi): the two `base` shapes; `(... ...)` from an outer macro inside `(let ((... 'dots)) …)`; `(syntax-rules ::: …)` inside that let; a `...` passed through a pattern variable into a generated `syntax-rules`; `def-mid`'s generated macro using `if` inside `(let ((if …)) …)` ⇒ `yes`; `(define (f if) (my-if …))` ⇒ `ok`; a template-introduced `(let ((if 1)) e)` around a user macro using `if` ⇒ `a`; an outer `(let ((if 'v)) (let-syntax ((if …)) …))` where the inner keyword wins.
 
 ### 15. A template's reference to a definition-site local spelled like a keyword is rejected as syntax — both backends
 - Ours: `a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword` (pinned as the error it is today)
-- Upstream: [tests/scheme/base.sld#L1163](tests/scheme/base.sld#L1163) — the second of the pair; blocks `base` next, at desugar time of the library.
-- Cause: `resolve_syntax`'s shadow test is by spelling and exempts scoped (macro-introduced) references, which hygiene needs for an *outer* macro's `if`. A macro defined *inside* `(let ((if …)) …)` has that binding in its definition scopes, so its template's `if` is the variable. Making the shadow test scope-aware is the hygiene change `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves — not a one-liner.
+- Upstream: [tests/scheme/base.sld#L1163](tests/scheme/base.sld#L1163) — the second of the pair.
+- The #114 attempt (`bound_scopes`: the desugarer records each local binding's scope set, `resolve_syntax` checks containment for a scoped reference) made both `base` shapes work and passed every existing hygiene test — and captured a parameter named `if` in the `(define (f if) …)` shorthand (no fresh scope there), let an *outer* variable veto an *inner* `let-syntax` of the same name (containment has no ordering), captured a same-spelled reference inside a template-introduced binder, and broke macro-generating macros (family 14's union problem). Same project as family 14; together they gate `base`. With both in place `base` ran at 1046 of 1064, which is how families 21–25 were found.
 
-### 17. Tree-walker: a continuation invoked with other than one value is an arity error — tree-walker only
-- Ours: `a_continuation_invoked_with_two_values_on_the_tree_walker` (`assert_divergence`)
-- Found 2026-08-25 while removing the VM's values buffer; chibi gives `(4 5)`, the VM now does too.
+### 19. The macro expander's walkers never returned on a cyclic datum — both backends — ✅ fixed 2026-08-25
+- Ours: `a_cyclic_quoted_datum_can_be_a_macro_argument`
+- Upstream: the `equal?` tests on labelled literals in `base`, e.g. [tests/scheme/base.sld#L730](tests/scheme/base.sld#L730)'s neighbours — `(test (equal? '#0=(a b . #0#) …))` handed to the `test` macro. Once families 14/15 let the library compile, `contains_identifier_tagged` walked the cycle forever and the suite hung to the timeout.
+- Fix: the identifier scan carries a revisit guard (`CycleGuard`, recording pairs after a budget; a revisit holds no identifiers). The scope flip is a memoized copy from the first pair: expander output is a DAG (a pattern variable used twice shares its pairs) and a labelled literal is a cycle, so the copy shares where the original shared and closes on itself where the original did — review of #114 caught a budgeted "keep the original subtree" version losing `eq?` across the cycle, splicing the original's tail into the copy, and giving a nested macro's second occurrence the wrong scope past the budget.
+- Left for later (pre-existing, review of #114): the *other* walkers — `mark_substituted_tagged`, the matcher's `list_to_vec_tagged`, the template compiler's `collect_list_items` — still loop or overflow on a cyclic datum that is not under `quote` (`(m #0=(a . #0#))`, a cyclic *template*); chibi reports an error for each.
 
-### 18. Tree-walker: `(values)` reaches a consumer as one unspecified value — tree-walker only
-- Ours: `zero_values_reach_the_consumer_as_no_arguments` (per-backend pins)
-- Same discovery; chibi and the VM give `()`.
+### 20. A datum label was scoped to the parse, not the datum — both backends — ✅ fixed 2026-08-25
+- Ours: `datum_labels_are_scoped_to_one_datum`
+- Found flattening `base` for bisection. The parser that reads a program datum by datum (`parse` — the script runner and `eval_program`; `read` builds a fresh parser per call and was never affected, contrary to an earlier note) kept the label table across data and reported "Duplicate datum label" on a file that reuses `#0=` (R7RS 2.4 scopes a label to its outermost datum). Now cleared per datum, also after a failed one; and a `#n#` whose `#n=` never comes is an error (`UndefinedLabel`) instead of a placeholder object left in the data.
+
+### 21. `let-values` binds its clauses sequentially — both backends
+- Ours: `let_values_binds_all_clauses_in_parallel` (pinned)
+- Upstream: [tests/scheme/base.sld#L730](tests/scheme/base.sld#L730). R7RS 4.2.2: every init is evaluated before any formal is bound; ours behaves as `let*-values`. chibi, Gauche and Chez give `(x y a b)`.
+
+### 22. A `guard` re-raise does not re-enter the dynamic extent — both backends
+- Ours: `a_guard_reraise_reenters_the_dynamic_extent` (pinned)
+- Upstream: [tests/scheme/base.sld#L849](tests/scheme/base.sld#L849), [#L889](tests/scheme/base.sld#L889). R7RS 4.2.7: with no matching clause the object is re-raised "in the dynamic environment of the original call to `raise`", so `dynamic-wind`'s before-thunk runs on the way back in and the after-thunk again on the way out to the outer `guard`: `(out in out in)`. Ours re-raises from the guard's own environment: `(out in)`. chibi and Gauche agree with the suite. Related to the tree-walker's own `guard` entries in PRD §6 but present on both backends.
+
+### 23. `let-syntax` splices its body's definitions, and a `let-syntax` transformer sees its siblings — both backends
+- Ours: `let_syntax_body_definitions_and_transformer_scope` (pinned)
+- Upstream: [tests/scheme/base.sld#L1003](tests/scheme/base.sld#L1003), [#L1014](tests/scheme/base.sld#L1014) (definitions), [#L1118](tests/scheme/base.sld#L1118), [#L1126](tests/scheme/base.sld#L1126) (transformer scope). R7RS 4.3.1: the body of `let-syntax` is a body, so a `define` in it is local (`x` stays 13 outside); and only `letrec-syntax` makes the bound keywords visible inside the transformers — under `let-syntax`, `g`'s `(f x)` is the *outer* `f`. Ours gives `(56 70)` and `(2 2)` for both forms; chibi and Gauche give `(13 70)`, `(1 2)` and `(1 1)`.
+
+### 24. VM: `with-exception-handler` rejects a continuation as its handler — VM only
+- Ours: `a_continuation_is_a_procedure_for_with_exception_handler` (`assert_divergence`)
+- Upstream: [tests/scheme/base.sld#L2741](tests/scheme/base.sld#L2741), [#L2748](tests/scheme/base.sld#L2748) — the R7RS idiom for capturing a raised object, `(call/cc (lambda (k) (with-exception-handler k …)))`. "expected a procedure, got object" on the VM; the tree-walker accepts it and then answers `read-error?`/`file-error?` correctly with `#f`.
+
+### 25. `read-line` does not end a line at a bare return — both backends
+- Ours: `read_line_ends_at_a_bare_return` (pinned)
+- Upstream: [tests/scheme/base.sld#L2805](tests/scheme/base.sld#L2805). The lexer's line endings were fixed in #112 (family 16); the port reader has its own notion. chibi and Gauche split `"abc\rdef"`.
 
 ### 16. A line comment is not ended by a bare return — both backends — ✅ fixed 2026-08-24
 - Ours: `a_line_comment_ends_at_a_bare_return`
@@ -120,6 +145,10 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 - **`delete-duplicates!` cell reuse** — [tests/scheme/list.sld#L589](tests/scheme/list.sld#L589) requires the result to reuse the input's cells; SRFI 1 permits that, it does not require it.
 - **`(let-syntax ())` with an empty body** — [tests/r6rs/base.sld#L1571](tests/r6rs/base.sld#L1571) blocks the R6RS `base` suite. R6RS's splicing `let-syntax` allows it, R7RS's does not; Gauche and Chez accept, chibi rejects as we do. A leniency decision, not a defect.
 - **Tree-walker `time`** — [tests/scheme/time.sld#L49](tests/scheme/time.sld#L49): a one-second busy loop measured at two seconds. Speed, not correctness.
+- **Multi-expression `unquote`** — [tests/scheme/base.sld#L918](tests/scheme/base.sld#L918)–[#L927](tests/scheme/base.sld#L927): `(unquote e1 e2 …)` splicing several expressions is R6RS 11.17; R7RS 7.1.4's grammar gives `unquote` one template. chibi answers `(foo)` exactly as we do (Gauche and Chez accept the R6RS form). The suite is derived from R6RS's.
+- **Overrunning `vector-copy!`** — [tests/scheme/base.sld#L2301](tests/scheme/base.sld#L2301), which upstream itself marks `; FIXME: R7RS doesn't say`: copying five elements to index 2 of a five-vector is "an error" in R7RS 6.8; the suite expects a truncated copy. chibi and Gauche raise, as we do.
+- **`(make-bytevector n -1)`** — [tests/scheme/base.sld#L2346](tests/scheme/base.sld#L2346), [#L2347](tests/scheme/base.sld#L2347): R7RS 6.9 requires a byte; chibi and Gauche accept a signed byte and answer 255. A leniency decision, same as the R6RS lane's family 13.
+- **Spelling-based literal matching and `apply`-head check** (review of #114, pre-existing): the literal matcher and the `apply` head test judge by spelling, so `(let ((else #f)) …)` around a macro using `my-cond`'s `else` literal, or a local `apply` around a template's `(apply f x)`, answer differently from chibi. Same project as families 14/15.
 - **`charset`, now that it loads** (2 of 93): [tests/scheme/charset.sld](tests/scheme/charset.sld) expects `char-set:full` to hold every code point — the bundled SRFI 14 is the Latin-1 reference port (PRD §6, chibi-regexp entry: blocked on a full-Unicode char-set story) — and expects `char-set-cursor` to iterate ascending, which SRFI 14 leaves unspecified.
 
 ## Not defects — bundling queue (L1 item 6, now with a suite each)

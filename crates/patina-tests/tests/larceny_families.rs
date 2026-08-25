@@ -25,7 +25,7 @@ mod common;
 
 use common::{
     ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
-    eval_program_tree_walker, eval_program_vm, scratch_path,
+    eval_program, eval_program_tree_walker, eval_program_vm, scratch_path,
 };
 use tempfile::TempDir;
 
@@ -322,25 +322,35 @@ fn input_port_open_on_an_output_only_port_is_false() {
 // ---------------------------------------------------------------------------
 
 /// Where `...` is bound as a variable, a `syntax-rules` written in that scope
-/// has no ellipsis: `(_ a b ...)` is a three-variable pattern. Larceny, Kawa
-/// and Sagittarius agree; chibi and Gauche reject the definition, as Patina
-/// does. This blocks Larceny's `base` suite at load time.
+/// has no ellipsis: `(_ a b ...)` is a three-variable pattern (R7RS 4.3.2
+/// identifies the ellipsis by binding). chibi, Larceny, Kawa and Sagittarius
+/// agree; Gauche rejects the definition, as Patina does. This blocks
+/// Larceny's `base` suite at load time.
 ///
-/// A whole-macro answer (a sentinel ellipsis name when `...` is a shadowed
-/// spelling) was tried and backed out: it is a per-token, scope-aware
-/// decision — an ellipsis introduced by an *outer* macro via `(... ...)`
-/// must stay an ellipsis even when the expansion lands inside a scope that
-/// binds `...` — and it belongs in `Compiler::is_ellipsis`, which already has
-/// the scopes. See the triage doc, family 14.
+/// Two attempts were backed out after review (#111, #114): a whole-macro
+/// sentinel ellipsis, and a per-token rule keyed on the enclosing bindings'
+/// scope sets. Both fail the same way — they cannot tell a token's *own*
+/// scopes from the ones the template compiler unions in — so a bound `...`
+/// captured an outer macro's `(... ...)` escape, a generated macro's
+/// ellipsis, or (in the second attempt) a SRFI 46 `:::`. The fix is a
+/// binding-resolution the desugarer and the macro compiler share, ordered
+/// innermost-first, which is `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`'s
+/// project; the cases in the triage doc's family 14 are its acceptance
+/// tests.
 ///
 /// **When this stops erroring, replace the assertion with
-/// `assert_program_eval_to(program, "(2 1 3)")` and update the triage doc.**
+/// `assert_program_eval_to(program, "((2 1 3) (1))")` and update the triage
+/// doc.**
 #[test]
 fn a_shadowed_ellipsis_is_an_ordinary_pattern_variable() {
-    let program = "(let ((... 'dots))
+    let program = "(define-syntax def-first
+                     (syntax-rules ()
+                       ((_ name) (define-syntax name (syntax-rules () ((_ a b (... ...)) (list a)))))))
+                   (let ((... 'dots))
                      (define-syntax swap-first-two
                        (syntax-rules () ((_ a b ...) (list b a ...))))
-                     (swap-first-two 1 2 3))";
+                     (def-first first-of)
+                     (list (swap-first-two 1 2 3) (first-of 1 2 3 4)))";
     assert_program_eval_error(program);
 }
 
@@ -353,19 +363,22 @@ fn a_shadowed_ellipsis_is_an_ordinary_pattern_variable() {
 /// (or `if`) is that local variable — the definition scopes say so. The
 /// syntax-as-a-value check is by spelling and exempts scoped references
 /// (hygiene: an *outer* macro's `if` must stay the special form), so it
-/// reports the keyword instead. Making it scope-aware is the hygiene change
-/// `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves; this is what now
-/// gates Larceny's `base` suite.
+/// reports the keyword instead. A containment test on the enclosing
+/// bindings' scope sets (#114) was backed out: it also captured a parameter
+/// named `if` in a `define` shorthand, let an outer variable veto an inner
+/// `let-syntax`, and broke macro-generating macros. Same project as family
+/// 14; this is what gates Larceny's `base` suite behind it.
 ///
 /// **When this stops erroring, replace the assertion with
-/// `assert_program_eval_to(program, "((1 dots) (2 nineteen))")` and update
-/// the triage doc.**
+/// `assert_program_eval_to(program, "((1 dots) (2 nineteen) outer-if-is-syntax)")`
+/// and update the triage doc.**
 #[test]
 fn a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword() {
-    let program = "(let ((... 'dots) (if 'nineteen))
+    let program = "(define-syntax my-if (syntax-rules () ((_ c a b) (if c a b))))
+                   (let ((... 'dots) (if 'nineteen))
                      (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
                      (define-syntax mention-if (syntax-rules () ((_ a) (list a if))))
-                     (list (mention-dots 1) (mention-if 2)))";
+                     (list (mention-dots 1) (mention-if 2) (my-if #t 'outer-if-is-syntax 'no)))";
     assert_program_eval_error(program);
 }
 
@@ -468,5 +481,178 @@ fn a_shebang_line_ends_at_a_bare_return() {
         "(import (scheme read))
          (read (open-input-string \"#!/usr/bin/env patina\\r42\"))",
         "42",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Family 19 — the macro expander's walkers never returned on a cyclic datum
+// ---------------------------------------------------------------------------
+
+/// A quoted datum with labels is a legitimate macro argument (Larceny's
+/// `base` suite hands `test` several), and until 2026-08-25 the expander's
+/// identifier scan and scope flip walked the cycle forever — the whole suite
+/// hung at load. Cycles only come from the reader, so a revisited pair holds
+/// no identifiers and is skipped.
+#[test]
+fn a_cyclic_quoted_datum_can_be_a_macro_argument() {
+    assert_program_eval_to(
+        "(define-syntax same? (syntax-rules () ((_ x y) (equal? x y))))
+         (list (same? '#0=(a b . #0#) '#1=(a b a b . #1#))
+               (same? '#2=(a b . #2#) '#3=(a b c . #3#)))",
+        "(#t #f)",
+    );
+}
+
+/// A datum label's scope is the outermost datum it appears in (R7RS 2.4).
+/// The parser that reads a whole program datum by datum (`parse`, used by
+/// the script runner and `eval_program`; `read` builds a fresh parser per
+/// call and never had the problem) kept the table across data and rejected
+/// a reused label — and a `#n#` whose `#n=` never came was left in the
+/// datum as a placeholder object rather than reported.
+#[test]
+fn datum_labels_are_scoped_to_one_datum() {
+    assert_program_eval_to(
+        "(define a '#0=(x . #0#))
+         (define b '#0=(y . #0#))
+         (list (car a) (car b) (eq? a (cdr a)))",
+        "(x y #t)",
+    );
+    assert_program_eval_error("(define a '#0=(x . #0#)) (define b '(y #0# z)) b");
+}
+
+/// The expander's scope flip copies a macro argument pair by pair; the copy
+/// must share where the original shared and close on itself where the
+/// original did — a memo from the first pair — rather than splice the
+/// original's tail in after a budget, which lost `eq?` identity across the
+/// cycle and left `write` a shape it could not print.
+#[test]
+fn a_flipped_cyclic_argument_is_a_closed_copy() {
+    assert_program_eval_to(
+        "(define-syntax both (syntax-rules () ((_ x) (list x x))))
+         (let ((v '#0=(1 . #0#)))
+           (list (eq? v (cdr v))
+                 (let ((w (car (both v)))) (eq? w (cdr w)))
+                 (let ((p (both '#1=(a b . #1#)))) (eq? (car p) (cadr p)))))",
+        "(#t #t #t)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// What `base` found once it ran (2026-08-25) — each pinned as it is today,
+// so the fix trips the test. chibi and Gauche agree on every expectation.
+// ---------------------------------------------------------------------------
+
+/// R7RS 4.2.2: `let-values` evaluates every init in the outer environment
+/// before binding any of the formals; ours binds each clause before
+/// evaluating the next, like `let*-values`.
+///
+/// **When this converges on `(x y a b)`, replace with
+/// `assert_program_eval_to` and update the triage doc.**
+#[test]
+fn let_values_binds_all_clauses_in_parallel() {
+    assert_eq!(
+        eval_program(
+            "(let ((a 'a) (b 'b) (x 'x) (y 'y))
+               (let-values (((a b) (values x y)) ((x y) (values a b)))
+                 (list a b x y)))"
+        ),
+        "(x y x y)",
+        "expected the pinned wrong answer; if this is now (x y a b) the defect is fixed"
+    );
+}
+
+/// R7RS 4.2.7: a `guard` with no matching clause re-raises "in the dynamic
+/// environment of the original call to `raise`" — so the `dynamic-wind`
+/// before-thunk runs again on the way back in, and the after-thunk again
+/// on the way out to the outer guard. Ours re-raises from the guard's own
+/// environment and runs neither.
+///
+/// **When this converges on `(out in out in)`, replace with
+/// `assert_program_eval_to` and update the triage doc.**
+#[test]
+fn a_guard_reraise_reenters_the_dynamic_extent() {
+    assert_eq!(
+        eval_program(
+            "(define v '())
+             (guard (exn ((equal? exn 5) 'five))
+               (guard (exn ((equal? exn 6) 'six))
+                 (dynamic-wind (lambda () (set! v (cons 'in v)))
+                               (lambda () (raise 5))
+                               (lambda () (set! v (cons 'out v))))))
+             v"
+        ),
+        "(out in)",
+        "expected the pinned wrong answer; if this is now (out in out in) the defect is fixed"
+    );
+}
+
+/// R7RS 4.3.1: a `let-syntax` body is a body — its definitions are local
+/// to it, not spliced into the enclosing one — and the macro names it binds
+/// are visible in the transformers only under `letrec-syntax`. Ours
+/// splices the definition out (`x` becomes 56 outside) and resolves a
+/// `let-syntax` transformer's reference to a sibling keyword.
+///
+/// **When this converges on `((13 70) (1 2) (1 1))`, replace with
+/// `assert_program_eval_to` and update the triage doc.**
+#[test]
+fn let_syntax_body_definitions_and_transformer_scope() {
+    assert_eq!(
+        eval_program(
+            "(define (defs)
+               (let ((x 13))
+                 (define y 14)
+                 (let-syntax ((def (syntax-rules () ((_ var val) (define var val)))))
+                   (def x 56)
+                   (set! y (+ x y)))
+                 (list x y)))
+             (define (scope)
+               (let ((f (lambda (x) (+ x 1))))
+                 (let-syntax ((f (syntax-rules () ((f x) x)))
+                              (g (syntax-rules () ((g x) (f x)))))
+                   (list (f 1) (g 1)))))
+             (define (rec-scope)
+               (let ((f (lambda (x) (+ x 1))))
+                 (letrec-syntax ((f (syntax-rules () ((f x) x)))
+                                 (g (syntax-rules () ((g x) (f x)))))
+                   (list (f 1) (g 1)))))
+             (list (defs) (scope) (rec-scope))"
+        ),
+        "((56 70) (2 1) (2 1))",
+        "expected the pinned wrong answer; if this is now ((13 70) (1 2) (1 1)) the defect is fixed"
+    );
+}
+
+/// VM: `with-exception-handler` rejects a continuation as its handler
+/// ("expected a procedure, got object"), so the R7RS idiom for capturing a
+/// raised object — `(call/cc (lambda (k) (with-exception-handler k …)))` —
+/// fails there. The tree-walker accepts it and, with the object in hand,
+/// `read-error?` and `file-error?` answer `#f` as R7RS 6.11 requires.
+#[test]
+fn a_continuation_is_a_procedure_for_with_exception_handler() {
+    assert_divergence(
+        "(define e (call/cc (lambda (k) (with-exception-handler k (lambda () (error \"plain\"))))))
+         (list (read-error? e) (file-error? e) (read-error? 42) (file-error? 'x))",
+        On::TreeWalker,
+        "(#f #f #f #f)",
+        ErrorClass::AtRuntime,
+        TRIAGE,
+    );
+}
+
+/// `read-line` ends a line at a bare return as well as at a newline and at
+/// return+newline (R7RS 6.13.2 defers to 7.1.1's line endings; chibi and
+/// Gauche split all three).
+///
+/// **When this converges on `("abc" "abc" "abc")`, replace with
+/// `assert_program_eval_to` and update the triage doc.**
+#[test]
+fn read_line_ends_at_a_bare_return() {
+    assert_eq!(
+        eval_program(
+            "(map (lambda (s) (call-with-port (open-input-string s) read-line))
+                  '(\"abc\\ndef\" \"abc\\rdef\" \"abc\\r\\ndef\"))"
+        ),
+        "(\"abc\" \"abc\\rdef\" \"abc\")",
+        "expected the pinned wrong answer; if this is now (\"abc\" \"abc\" \"abc\") the defect is fixed"
     );
 }

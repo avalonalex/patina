@@ -176,21 +176,56 @@ pub fn flip_scope_on_tagged(
 
 /// Check if a TaggedValue tree contains any Identifier nodes
 ///
-/// Fast traversal that returns true as soon as an Identifier is found.
+/// Fast traversal that returns true as soon as an Identifier is found. The
+/// tree may be cyclic — a quoted datum with labels (`'#0=(a b . #0#)`) is a
+/// legitimate macro argument, and Larceny's `base` suite hands `test` several
+/// — so pairs are recorded once the walk is long enough to suggest a cycle
+/// and never entered twice. Cycles only come from the reader, whose data
+/// holds symbols, not identifiers, so a revisited pair contributes nothing.
 fn contains_identifier_tagged(
     tv: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
+) -> bool {
+    let mut guard = CycleGuard::default();
+    contains_identifier_impl(tv, shared_heap, &mut guard)
+}
+
+/// A revisit guard for walks over reader data that may be cyclic. Records
+/// nothing for the first `BUDGET` pairs — the acyclic common case — and every
+/// pair after that; `enter` says whether a pair is new.
+#[derive(Default)]
+pub(crate) struct CycleGuard {
+    steps: usize,
+    seen: std::collections::HashSet<u64>,
+}
+
+impl CycleGuard {
+    const BUDGET: usize = 4096;
+
+    /// `true` if the pair should be walked, `false` if it was walked already.
+    pub(crate) fn enter(&mut self, tv: patina_core::TaggedValue) -> bool {
+        self.steps += 1;
+        self.steps <= Self::BUDGET || self.seen.insert(tv.raw_bits())
+    }
+}
+
+fn contains_identifier_impl(
+    tv: patina_core::TaggedValue,
+    shared_heap: &patina_core::SharedHeap,
+    guard: &mut CycleGuard,
 ) -> bool {
     // Immediate values (fixnum, char, bool, null) never contain identifiers
     if tv.is_fixnum() || tv.is_char() || tv.is_special() {
         return false;
     }
 
-    // Check for native pairs
     if tv.is_pair() {
+        if !guard.enter(tv) {
+            return false;
+        }
         let (car, cdr) = shared_heap.borrow().get_pair(tv);
-        return contains_identifier_tagged(car, shared_heap)
-            || contains_identifier_tagged(cdr, shared_heap);
+        return contains_identifier_impl(car, shared_heap, guard)
+            || contains_identifier_impl(cdr, shared_heap, guard);
     }
 
     // Non-object types can't contain identifiers
@@ -199,39 +234,53 @@ fn contains_identifier_tagged(
     }
 
     // Check for identifier (native or boxed) via unified method
-    if shared_heap.borrow().get_identifier_data_any(tv).is_some() {
-        return true;
-    }
-
-    // Check for boxed pairs
-    let is_pair = tv.is_pair();
-    if is_pair && let Some((car_tv, cdr_tv)) = shared_heap.borrow().try_pair(tv) {
-        return contains_identifier_tagged(car_tv, shared_heap)
-            || contains_identifier_tagged(cdr_tv, shared_heap);
-    }
-
-    false
+    shared_heap.borrow().get_identifier_data_any(tv).is_some()
 }
 
 /// Implementation of flip_scope for TaggedValue
+///
+/// Copies the pair structure, flipping every identifier's scopes. The copy
+/// is memoized pair by pair, from the first one: expander output is a DAG
+/// (a pattern variable used twice shares its pairs), and a quoted datum with
+/// labels is a cycle — a memo makes the copy share where the original shared
+/// and close on itself where the original did, instead of either walking
+/// forever or splicing the original's tail into the copy. The new pair is
+/// registered *before* its fields are copied, which is what lets a back edge
+/// find it.
 fn flip_scope_on_tagged_impl(
     tv: patina_core::TaggedValue,
     scope: patina_runtime::ScopeId,
     shared_heap: &patina_core::SharedHeap,
+) -> patina_core::TaggedValue {
+    let mut memo: std::collections::HashMap<u64, patina_core::TaggedValue> =
+        std::collections::HashMap::new();
+    flip_scope_memo(tv, scope, shared_heap, &mut memo)
+}
+
+fn flip_scope_memo(
+    tv: patina_core::TaggedValue,
+    scope: patina_runtime::ScopeId,
+    shared_heap: &patina_core::SharedHeap,
+    memo: &mut std::collections::HashMap<u64, patina_core::TaggedValue>,
 ) -> patina_core::TaggedValue {
     // Immediate values pass through unchanged
     if tv.is_fixnum() || tv.is_char() || tv.is_special() {
         return tv;
     }
 
-    // Handle native pairs
     if tv.is_pair() {
+        if let Some(copy) = memo.get(&tv.raw_bits()) {
+            return *copy;
+        }
         let (car, cdr) = shared_heap.borrow().get_pair(tv);
-
-        let new_car = flip_scope_on_tagged_impl(car, scope, shared_heap);
-        let new_cdr = flip_scope_on_tagged_impl(cdr, scope, shared_heap);
-
-        return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
+        let copy = shared_heap.borrow_mut().alloc_pair(car, cdr);
+        memo.insert(tv.raw_bits(), copy);
+        let new_car = flip_scope_memo(car, scope, shared_heap, memo);
+        let new_cdr = flip_scope_memo(cdr, scope, shared_heap, memo);
+        let mut heap = shared_heap.borrow_mut();
+        heap.set_car(copy, new_car);
+        heap.set_cdr(copy, new_cdr);
+        return copy;
     }
 
     // Non-object types pass through unchanged
@@ -250,14 +299,6 @@ fn flip_scope_on_tagged_impl(
     if let Some((name, scopes)) = id_data {
         let new_scopes = scopes.flip_scope(scope);
         return shared_heap.borrow_mut().alloc_identifier(name, new_scopes);
-    }
-
-    // Handle boxed pairs
-    let is_pair = tv.is_pair();
-    if is_pair && let Some((car_tv, cdr_tv)) = shared_heap.borrow().try_pair(tv) {
-        let new_car = flip_scope_on_tagged_impl(car_tv, scope, shared_heap);
-        let new_cdr = flip_scope_on_tagged_impl(cdr_tv, scope, shared_heap);
-        return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
     }
 
     // All other values (vectors, etc.) pass through unchanged

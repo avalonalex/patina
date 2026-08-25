@@ -1,7 +1,7 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-08-25 — the VM's values side buffer removed (16 of 33 suites, 4260 of 4270). Earlier, 2026-08-24 — second round: `equal?` on cycles, iterative `delay-force`, `string->number` = reader syntax (15 of 33 suites, 4258 of 4270). Earlier the same day — L5.3's low-hanging fixes landed (nested `include`, port-open predicates, `rationalize`, Unicode simple case mapping, `(scheme charset)`): 13 of 33 suites, 4172 of 4193. Earlier the same day — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
+**Updated:** 2026-08-25 — cycle-safe expansion walkers and per-datum reader labels; `base` ran briefly under a scope-aware-shadowing attempt that review showed unsound and was backed out — its five new findings are pinned (families 21–25). Earlier the same day — the VM's values side buffer removed (4260 of 4270). Earlier, 2026-08-24 — second round: `equal?` on cycles, iterative `delay-force`, `string->number` = reader syntax (15 of 33 suites, 4258 of 4270). Earlier the same day — L5.3's low-hanging fixes landed (nested `include`, port-open predicates, `rationalize`, Unicode simple case mapping, `(scheme charset)`): 13 of 33 suites, 4172 of 4193. Earlier the same day — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
 (**126 of 162** vendored packages pass, 2026-08-22, of which **126 of 137 are in scope** — the
 other 25 are excluded by `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and
@@ -868,6 +868,14 @@ are their own statuses.
 | R7RS, tree-walker | 12 of 33 | 3931 of 3961 (99.2%) | the same, plus `char` (stack overflow) |
 | R6RS, VM | 10 of 16 | 4008 of 4022 (99.7%) | `base` (`(let-syntax ())`) · `mutable-pairs` (hang) |
 
+**Fourth round, 2026-08-25 — `base` ran, briefly.** Scope-aware shadowing plus a per-token ellipsis
+let the suite load (1046 of 1064), which is how five more families were found and pinned; review
+then showed the shadowing rule capturing a parameter named `if`, letting an outer variable veto an
+inner `let-syntax`, and breaking macro-generating macros, and it was backed out. What stays: cycle
+guards on the expansion walkers (a labelled literal as a macro argument no longer hangs the load —
+the scope flip is a memoized, cycle-closing copy) and per-datum reader labels. `base` is gated on
+the syntax-keyword-bindings project again, now with the two reviews' cases as its acceptance tests.
+
 **Third round, 2026-08-25:** the VM's multiple-values side buffer is gone — R7RS lane **16 of 33
 suites, 4260 of 4270 (VM)**; `vector` is clean. Two tree-walker gaps found on the way are pinned
 (a continuation invoked with other than one value; `(values)` reaching a consumer as one value).
@@ -908,8 +916,9 @@ trips its test.
 | Defect | Suites | Backends |
 |---|---|---|
 | ✅ A nested `include` resolves against the wrong directory, and the base is chosen nondeterministically — *fixed 2026-08-24* | base | both |
-| A shadowed `...` is still the ellipsis (`(let ((... 19)) …)` around a `define-syntax`; R7RS 4.3.2 identifies it by binding) — per-token in `Compiler::is_ellipsis`; **now what blocks `base`** (~900 assertions) | base | both |
-| A template's reference to a definition-site local spelled like a keyword (`(let ((if …)) …)` around a `define-syntax`) is rejected as syntax — the scope-aware shadowing `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves; blocks `base` next | base | both |
+| A shadowed `...` is still the ellipsis, and a template's reference to a keyword-spelled definition-site local is rejected as syntax — **gate `base`** (~1000 assertions). Two attempts backed out after review (#111, #114); what they need is one innermost-first binding resolution shared by the desugarer and the macro compiler — `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` — with the reviews' cases as acceptance tests (triage families 14/15) | base | both |
+| ✅ The macro expander's walkers looped forever on a cyclic quoted datum (the scope flip is now a memoized, cycle-closing copy), and the program parser scoped datum labels to the parse rather than the datum — *fixed 2026-08-25* | base | both |
+| What `base` found while it briefly ran (triage families 21–25, each pinned): `let-values` binds sequentially; a `guard` re-raise does not re-enter the dynamic extent; `let-syntax` splices its body's definitions and its transformers see their siblings; VM: `with-exception-handler` rejects a continuation as handler; `read-line` does not end at a bare return | base (18) | both / VM |
 | ✅ `equal?` does not terminate on circular structures — *fixed 2026-08-24* (worklist + lazily allocated visited set) | read, r6rs mutable-pairs | both |
 | ✅ `delay-force` is not iterative — 100 000 deep overflows the stack — *fixed 2026-08-24* (R7RS 7.3's iterative `force` with `promise-update!`, in the primitive and in the tree-walker's CPS `force`) | lazy | both |
 | ✅ VM: a discarded call to `values` poisons the next `call-with-values` — *fixed 2026-08-25* (the values side buffer is gone; multiple values are only ever a `#<values>` object) | vector | VM |
