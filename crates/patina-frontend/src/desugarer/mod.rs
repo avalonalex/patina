@@ -181,15 +181,6 @@ pub struct Desugarer {
     /// These should not be treated as macro calls
     shadowed_names: std::collections::HashSet<Rc<str>>,
 
-    /// For each locally bound name, the scope set of every body that binds
-    /// it, innermost last. `shadowed_names` answers "is this spelling bound
-    /// here?", which is right for a reference written without scopes; a
-    /// macro-introduced reference carries scopes, and it is that variable
-    /// only if one of these scope sets is contained in them — a macro
-    /// defined *inside* `(let ((if …)) …)` sees the local `if`, one defined
-    /// outside keeps the special form (hygiene).
-    bound_scopes: std::collections::HashMap<Rc<str>, Vec<ScopeSet>>,
-
     /// Optional source map for looking up source positions of parsed forms
     source_map: Option<Rc<RefCell<SourceMap>>>,
 
@@ -234,7 +225,6 @@ impl Desugarer {
             env,
             current_scopes: ScopeSet::new(),
             shadowed_names: std::collections::HashSet::new(),
-            bound_scopes: std::collections::HashMap::new(),
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
@@ -253,7 +243,6 @@ impl Desugarer {
             env,
             current_scopes: ScopeSet::new(),
             shadowed_names: std::collections::HashSet::new(),
-            bound_scopes: std::collections::HashMap::new(),
             source_map: Some(source_map),
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
@@ -293,7 +282,6 @@ impl Desugarer {
             env,
             current_scopes: scopes,
             shadowed_names: std::collections::HashSet::new(),
-            bound_scopes: std::collections::HashMap::new(),
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
@@ -316,7 +304,6 @@ impl Desugarer {
             env: self.env.clone(),
             current_scopes: new_scopes,
             shadowed_names: self.shadowed_names.clone(),
-            bound_scopes: self.bound_scopes.clone(),
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
@@ -335,19 +322,11 @@ impl Desugarer {
         new_scopes: ScopeSet,
     ) -> Self {
         let mut shadowed = self.shadowed_names.clone();
-        let mut bound_scopes = self.bound_scopes.clone();
-        for name in new_shadows {
-            bound_scopes
-                .entry(name.clone())
-                .or_default()
-                .push(new_scopes.clone());
-            shadowed.insert(name);
-        }
+        shadowed.extend(new_shadows);
         Self {
             env: self.env.clone(),
             current_scopes: new_scopes,
             shadowed_names: shadowed,
-            bound_scopes,
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
@@ -357,29 +336,6 @@ impl Desugarer {
     /// Check if a name is shadowed by a local binding
     fn is_shadowed(&self, name: &str) -> bool {
         self.shadowed_names.contains(name)
-    }
-
-    /// Is a reference to `name` carrying `scopes` a local variable here? A
-    /// reference written without scopes is one if the spelling is bound
-    /// (the coarse rule `shadowed_names` has always applied); a
-    /// macro-introduced reference is one only if a binding's scope set is
-    /// contained in its own — see `bound_scopes`.
-    fn binds_variable(&self, name: &str, scopes: &ScopeSet) -> bool {
-        if scopes.is_empty() {
-            return self.is_shadowed(name);
-        }
-        self.bound_scopes
-            .get(name)
-            .is_some_and(|sets| sets.iter().any(|bs| bs.is_subset_of(scopes)))
-    }
-
-    /// Where `...` is bound as a variable here, for the macro compiler's
-    /// per-token ellipsis test (R7RS 4.3.2).
-    fn ellipsis_binding(&self) -> patina_macros::EllipsisBinding {
-        patina_macros::EllipsisBinding {
-            bare: self.is_shadowed("..."),
-            scoped: self.bound_scopes.get("...").cloned().unwrap_or_default(),
-        }
     }
 
     /// The names a body's internal definitions bind.
@@ -493,23 +449,22 @@ impl Desugarer {
     /// nothing kept them in step — a binding one of them called syntax and
     /// another did not would silently reopen the `#<macro>`-as-a-value hole.
     ///
-    /// Shadowing is checked first, since local bindings never reach the
-    /// desugarer's environment. A reference written *without* scopes is
-    /// checked by spelling (`shadowed_names`). A macro-introduced one carries
-    /// its own scopes and is checked against the *scope sets* of the local
-    /// bindings (`bound_scopes`): hygiene means
-    /// `(let ((if 'captured)) (my-cond #t 'ok))` must still see an outer
-    /// macro's `if` as the special form (`test_special_form_not_captured`),
-    /// while a macro defined *inside* that `let` refers to its `if` — the
-    /// binding's scope set is contained in the template identifier's.
+    /// Shadowing is checked first and by spelling, which is what
+    /// `shadowed_names` records: local bindings never reach the desugarer's
+    /// environment. It applies only to a reference written *without* scopes.
+    /// A macro-introduced one carries its own, and hygiene is the whole point
+    /// — `(let ((if 'captured)) (my-cond #t 'ok))` must still see the
+    /// template's `if` as the special form, which is
+    /// `test_special_form_not_captured` in `patina-tests`' hygiene suite.
     ///
-    /// The spelling test for unscoped references is *coarser* than the
-    /// resolution it guards, so an enclosing binding that merely shares a
-    /// spelling suppresses the answer — see
-    /// `test_a_shadowed_spelling_suppresses_the_check`. That direction is
-    /// safe (a missed rejection, never a wrong one) and predates this rule.
+    /// The spelling test is *coarser* than the resolution it guards, so an
+    /// enclosing binding that merely shares a spelling suppresses the answer —
+    /// see `test_a_shadowed_spelling_suppresses_the_check`. That direction is
+    /// safe (a missed rejection, never a wrong one) and predates this rule;
+    /// fixing it means making shadowing scope-aware, a hygiene change of its
+    /// own.
     fn resolve_syntax(&self, name: &str, scopes: &ScopeSet) -> Option<SyntaxRef> {
-        if self.binds_variable(name, scopes) {
+        if scopes.is_empty() && self.is_shadowed(name) {
             return None;
         }
         let tv = self.env.get_with_scopes(name, scopes)?;
@@ -551,7 +506,6 @@ impl Desugarer {
             env,
             current_scopes: scopes,
             shadowed_names: self.shadowed_names.clone(),
-            bound_scopes: self.bound_scopes.clone(),
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
@@ -1155,7 +1109,6 @@ impl Desugarer {
                     macro_name.clone(),
                     &current_env,
                     body_scopes,
-                    current_desugarer.ellipsis_binding(),
                 )?;
 
                 // Create a new child environment with the macro binding
@@ -1556,7 +1509,6 @@ impl Desugarer {
             name.clone(),
             env,
             &self.current_scopes,
-            self.ellipsis_binding(),
         )?;
 
         // Install in environment
@@ -1690,7 +1642,6 @@ impl Desugarer {
                 name.clone(),
                 &compile_env,
                 &definition_scopes,
-                self.ellipsis_binding(),
             )?;
 
             macro_bindings.push((name, compiled_macro));
@@ -2081,7 +2032,6 @@ impl Desugarer {
         name: Rc<str>,
         env: &Rc<Environment>,
         scopes: &ScopeSet,
-        ellipsis_binding: patina_macros::EllipsisBinding,
     ) -> Result<patina_macros::CompiledMacro> {
         use patina_macros::Compiler;
 
@@ -2153,8 +2103,7 @@ impl Desugarer {
             scopes.clone(),
             &self.shadowed_names,
             env.heap().clone(),
-        )
-        .with_ellipsis_binding(ellipsis_binding);
+        );
         let macro_name = name.clone();
         compiler.compile_macro(name, rules).map_err(|e| {
             DesugarError::InvalidSyntax(format!("Failed to compile macro {macro_name}: {e}"))

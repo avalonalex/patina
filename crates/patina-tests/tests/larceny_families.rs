@@ -322,27 +322,36 @@ fn input_port_open_on_an_output_only_port_is_false() {
 // ---------------------------------------------------------------------------
 
 /// Where `...` is bound as a variable, a `syntax-rules` written in that scope
-/// has no ellipsis: `(_ a b ...)` is a three-variable pattern. Larceny, Kawa
-/// and Sagittarius agree; chibi and Gauche reject the definition, as Patina
-/// did until 2026-08-25. This blocked Larceny's `base` suite at load time.
+/// has no ellipsis: `(_ a b ...)` is a three-variable pattern (R7RS 4.3.2
+/// identifies the ellipsis by binding). chibi, Larceny, Kawa and Sagittarius
+/// agree; Gauche rejects the definition, as Patina does. This blocks
+/// Larceny's `base` suite at load time.
 ///
-/// Decided per token (`EllipsisBinding`): a bare `...` in the definition's
-/// text is the variable, a scoped one is only if a binding's scope set is
-/// contained in its scopes — so an ellipsis an *outer* macro introduced via
-/// `(... ...)` stays an ellipsis inside a scope that binds `...`.
+/// Two attempts were backed out after review (#111, #114): a whole-macro
+/// sentinel ellipsis, and a per-token rule keyed on the enclosing bindings'
+/// scope sets. Both fail the same way — they cannot tell a token's *own*
+/// scopes from the ones the template compiler unions in — so a bound `...`
+/// captured an outer macro's `(... ...)` escape, a generated macro's
+/// ellipsis, or (in the second attempt) a SRFI 46 `:::`. The fix is a
+/// binding-resolution the desugarer and the macro compiler share, ordered
+/// innermost-first, which is `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`'s
+/// project; the cases in the triage doc's family 14 are its acceptance
+/// tests.
+///
+/// **When this stops erroring, replace the assertion with
+/// `assert_program_eval_to(program, "((2 1 3) (1))")` and update the triage
+/// doc.**
 #[test]
 fn a_shadowed_ellipsis_is_an_ordinary_pattern_variable() {
-    assert_program_eval_to(
-        "(define-syntax def-first
-           (syntax-rules ()
-             ((_ name) (define-syntax name (syntax-rules () ((_ a b (... ...)) (list a)))))))
-         (let ((... 'dots))
-           (define-syntax swap-first-two
-             (syntax-rules () ((_ a b ...) (list b a ...))))
-           (def-first first-of)
-           (list (swap-first-two 1 2 3) (first-of 1 2 3 4)))",
-        "((2 1 3) (1))",
-    );
+    let program = "(define-syntax def-first
+                     (syntax-rules ()
+                       ((_ name) (define-syntax name (syntax-rules () ((_ a b (... ...)) (list a)))))))
+                   (let ((... 'dots))
+                     (define-syntax swap-first-two
+                       (syntax-rules () ((_ a b ...) (list b a ...))))
+                     (def-first first-of)
+                     (list (swap-first-two 1 2 3) (first-of 1 2 3 4)))";
+    assert_program_eval_error(program);
 }
 
 // ---------------------------------------------------------------------------
@@ -352,21 +361,25 @@ fn a_shadowed_ellipsis_is_an_ordinary_pattern_variable() {
 
 /// The macro is defined *inside* the binding, so its template's free `...`
 /// (or `if`) is that local variable — the definition scopes say so. The
-/// syntax-as-a-value check used to be by spelling and exempt every scoped
-/// reference (hygiene needs an *outer* macro's `if` to stay the special
-/// form); since 2026-08-25 a scoped reference is the variable when a local
-/// binding's scope set is contained in its scopes. This was the second
-/// thing gating Larceny's `base` suite.
+/// syntax-as-a-value check is by spelling and exempts scoped references
+/// (hygiene: an *outer* macro's `if` must stay the special form), so it
+/// reports the keyword instead. A containment test on the enclosing
+/// bindings' scope sets (#114) was backed out: it also captured a parameter
+/// named `if` in a `define` shorthand, let an outer variable veto an inner
+/// `let-syntax`, and broke macro-generating macros. Same project as family
+/// 14; this is what gates Larceny's `base` suite behind it.
+///
+/// **When this stops erroring, replace the assertion with
+/// `assert_program_eval_to(program, "((1 dots) (2 nineteen) outer-if-is-syntax)")`
+/// and update the triage doc.**
 #[test]
 fn a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword() {
-    assert_program_eval_to(
-        "(define-syntax my-if (syntax-rules () ((_ c a b) (if c a b))))
-         (let ((... 'dots) (if 'nineteen))
-           (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
-           (define-syntax mention-if (syntax-rules () ((_ a) (list a if))))
-           (list (mention-dots 1) (mention-if 2) (my-if #t 'outer-if-is-syntax 'no)))",
-        "((1 dots) (2 nineteen) outer-if-is-syntax)",
-    );
+    let program = "(define-syntax my-if (syntax-rules () ((_ c a b) (if c a b))))
+                   (let ((... 'dots) (if 'nineteen))
+                     (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
+                     (define-syntax mention-if (syntax-rules () ((_ a) (list a if))))
+                     (list (mention-dots 1) (mention-if 2) (my-if #t 'outer-if-is-syntax 'no)))";
+    assert_program_eval_error(program);
 }
 
 // ---------------------------------------------------------------------------
@@ -490,15 +503,37 @@ fn a_cyclic_quoted_datum_can_be_a_macro_argument() {
     );
 }
 
-/// A datum label's scope is the outermost datum it appears in (R7RS 2.4);
-/// `read` used to keep the table across data and reject a reused label.
+/// A datum label's scope is the outermost datum it appears in (R7RS 2.4).
+/// The parser that reads a whole program datum by datum (`parse`, used by
+/// the script runner and `eval_program`; `read` builds a fresh parser per
+/// call and never had the problem) kept the table across data and rejected
+/// a reused label — and a `#n#` whose `#n=` never came was left in the
+/// datum as a placeholder object rather than reported.
 #[test]
 fn datum_labels_are_scoped_to_one_datum() {
     assert_program_eval_to(
-        "(import (scheme read))
-         (let ((p (open-input-string \"#0=(a . #0#) #0=(b . #0#)\")))
-           (list (car (read p)) (car (read p))))",
-        "(a b)",
+        "(define a '#0=(x . #0#))
+         (define b '#0=(y . #0#))
+         (list (car a) (car b) (eq? a (cdr a)))",
+        "(x y #t)",
+    );
+    assert_program_eval_error("(define a '#0=(x . #0#)) (define b '(y #0# z)) b");
+}
+
+/// The expander's scope flip copies a macro argument pair by pair; the copy
+/// must share where the original shared and close on itself where the
+/// original did — a memo from the first pair — rather than splice the
+/// original's tail in after a budget, which lost `eq?` identity across the
+/// cycle and left `write` a shape it could not print.
+#[test]
+fn a_flipped_cyclic_argument_is_a_closed_copy() {
+    assert_program_eval_to(
+        "(define-syntax both (syntax-rules () ((_ x) (list x x))))
+         (let ((v '#0=(1 . #0#)))
+           (list (eq? v (cdr v))
+                 (let ((w (car (both v)))) (eq? w (cdr w)))
+                 (let ((p (both '#1=(a b . #1#)))) (eq? (car p) (cadr p)))))",
+        "(#t #t #t)",
     );
 }
 
@@ -582,7 +617,7 @@ fn let_syntax_body_definitions_and_transformer_scope() {
                    (list (f 1) (g 1)))))
              (list (defs) (scope) (rec-scope))"
         ),
-        "((56 70) (2 2) (2 2))",
+        "((56 70) (2 1) (2 1))",
         "expected the pinned wrong answer; if this is now ((13 70) (1 2) (1 1)) the defect is fixed"
     );
 }

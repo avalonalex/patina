@@ -26,7 +26,7 @@ mod pattern_template_tests;
 pub use patina_runtime::{Identifier, Pattern, Template};
 
 // Re-export macro system types
-pub use compiler::{CompiledMacro, CompiledRule, Compiler, EllipsisBinding};
+pub use compiler::{CompiledMacro, CompiledRule, Compiler};
 pub use expander::{ExpandError, Expander};
 pub use identifier_key::IdentifierKey;
 pub use matcher::{MatchError, Matcher};
@@ -219,7 +219,6 @@ fn contains_identifier_impl(
         return false;
     }
 
-    // Check for native pairs
     if tv.is_pair() {
         if !guard.enter(tv) {
             return false;
@@ -235,59 +234,53 @@ fn contains_identifier_impl(
     }
 
     // Check for identifier (native or boxed) via unified method
-    if shared_heap.borrow().get_identifier_data_any(tv).is_some() {
-        return true;
-    }
-
-    // Check for boxed pairs
-    let is_pair = tv.is_pair();
-    if is_pair && let Some((car_tv, cdr_tv)) = shared_heap.borrow().try_pair(tv) {
-        if !guard.enter(tv) {
-            return false;
-        }
-        return contains_identifier_impl(car_tv, shared_heap, guard)
-            || contains_identifier_impl(cdr_tv, shared_heap, guard);
-    }
-
-    false
+    shared_heap.borrow().get_identifier_data_any(tv).is_some()
 }
 
 /// Implementation of flip_scope for TaggedValue
+///
+/// Copies the pair structure, flipping every identifier's scopes. The copy
+/// is memoized pair by pair, from the first one: expander output is a DAG
+/// (a pattern variable used twice shares its pairs), and a quoted datum with
+/// labels is a cycle — a memo makes the copy share where the original shared
+/// and close on itself where the original did, instead of either walking
+/// forever or splicing the original's tail into the copy. The new pair is
+/// registered *before* its fields are copied, which is what lets a back edge
+/// find it.
 fn flip_scope_on_tagged_impl(
     tv: patina_core::TaggedValue,
     scope: patina_runtime::ScopeId,
     shared_heap: &patina_core::SharedHeap,
 ) -> patina_core::TaggedValue {
-    let mut guard = CycleGuard::default();
-    flip_scope_guarded(tv, scope, shared_heap, &mut guard)
+    let mut memo: std::collections::HashMap<u64, patina_core::TaggedValue> =
+        std::collections::HashMap::new();
+    flip_scope_memo(tv, scope, shared_heap, &mut memo)
 }
 
-/// The walk behind [`flip_scope_on_tagged_impl`]. A pair seen before is a
-/// cycle in reader data (see `contains_identifier_tagged`), which holds no
-/// identifiers; the original subtree is kept, and the rebuilt copy's back
-/// edge points into it.
-fn flip_scope_guarded(
+fn flip_scope_memo(
     tv: patina_core::TaggedValue,
     scope: patina_runtime::ScopeId,
     shared_heap: &patina_core::SharedHeap,
-    guard: &mut CycleGuard,
+    memo: &mut std::collections::HashMap<u64, patina_core::TaggedValue>,
 ) -> patina_core::TaggedValue {
     // Immediate values pass through unchanged
     if tv.is_fixnum() || tv.is_char() || tv.is_special() {
         return tv;
     }
 
-    // Handle native pairs
     if tv.is_pair() {
-        if !guard.enter(tv) {
-            return tv;
+        if let Some(copy) = memo.get(&tv.raw_bits()) {
+            return *copy;
         }
         let (car, cdr) = shared_heap.borrow().get_pair(tv);
-
-        let new_car = flip_scope_guarded(car, scope, shared_heap, guard);
-        let new_cdr = flip_scope_guarded(cdr, scope, shared_heap, guard);
-
-        return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
+        let copy = shared_heap.borrow_mut().alloc_pair(car, cdr);
+        memo.insert(tv.raw_bits(), copy);
+        let new_car = flip_scope_memo(car, scope, shared_heap, memo);
+        let new_cdr = flip_scope_memo(cdr, scope, shared_heap, memo);
+        let mut heap = shared_heap.borrow_mut();
+        heap.set_car(copy, new_car);
+        heap.set_cdr(copy, new_cdr);
+        return copy;
     }
 
     // Non-object types pass through unchanged
@@ -306,17 +299,6 @@ fn flip_scope_guarded(
     if let Some((name, scopes)) = id_data {
         let new_scopes = scopes.flip_scope(scope);
         return shared_heap.borrow_mut().alloc_identifier(name, new_scopes);
-    }
-
-    // Handle boxed pairs
-    let is_pair = tv.is_pair();
-    if is_pair && let Some((car_tv, cdr_tv)) = shared_heap.borrow().try_pair(tv) {
-        if !guard.enter(tv) {
-            return tv;
-        }
-        let new_car = flip_scope_guarded(car_tv, scope, shared_heap, guard);
-        let new_cdr = flip_scope_guarded(cdr_tv, scope, shared_heap, guard);
-        return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
     }
 
     // All other values (vectors, etc.) pass through unchanged

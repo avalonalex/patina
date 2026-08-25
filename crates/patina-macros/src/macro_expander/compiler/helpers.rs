@@ -85,11 +85,9 @@ impl Compiler {
                 let is_ellipsis_match = {
                     let heap = self.heap.borrow();
                     if let Some(s) = heap.get_symbol_name(form) {
-                        // A bare token: the ellipsis unless the name is a
-                        // variable here (R7RS 4.3.2 — by binding, not spelling).
-                        s == ellipsis_sym.as_ref() && !self.ellipsis_bound.binds(None)
-                    } else if let Some((name, scopes)) = heap.get_identifier_data_any(form) {
-                        &name == ellipsis_sym && !self.ellipsis_bound.binds(Some(&scopes))
+                        s == ellipsis_sym.as_ref()
+                    } else if let Some((name, _)) = heap.get_identifier_data_any(form) {
+                        &name == ellipsis_sym
                     } else {
                         false
                     }
