@@ -47,13 +47,11 @@ fn test_read_line_max_chars_larger_than_line() {
     );
 }
 
-/// CRLF handling: a line terminated within the limit drops its \r. A cut
-/// landing between the \r and the \n keeps the \r as data and the next
-/// read sees the bare \n as an empty line — chibi goes further here (it
-/// treats \r as a terminator and swallows a terminator adjacent to a
-/// limit-hit), but only \n terminates lines everywhere else in Patina's
-/// ports, and the cut-mid-CRLF case is unreachable for the real caller
-/// (mime's limit is 4096). Deliberately ours, pinned as such.
+/// CRLF handling: \r is a line ending (R7RS 7.1.1), and return+newline is
+/// one ending, so a limit that lands on the \r still ends the line there
+/// and the \n goes with it — the next read sees "cd", as in chibi. (This
+/// used to pin the older behaviour, where only \n terminated and a cut
+/// between the two left the \r as data and an empty line after it.)
 #[test]
 fn test_read_line_max_chars_crlf() {
     assert_eq!(
@@ -68,9 +66,9 @@ fn test_read_line_max_chars_crlf() {
         eval(
             "(import (scheme base))
              (define p (open-input-string \"ab\\r\\ncd\"))
-             (list (read-line p 3) (read-line p 3) (read-line p 3))"
+             (list (read-line p 3) (read-line p 3) (eof-object? (read-line p 3)))"
         ),
-        "(\"ab\\r\" \"\" \"cd\")"
+        "(\"ab\" \"cd\" #t)"
     );
 }
 
