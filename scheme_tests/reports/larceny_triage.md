@@ -184,17 +184,27 @@ Reading for whoever takes the next one, in the order that has actually
 mattered:
 
 1. **Start from the SRFI's own reference implementation**, not chibi's copy.
-   Twice now chibi's has been wrong where the reference is right: SRFI 41's
-   `stream-filter` cannot take a bounded prefix of an infinite stream, and
-   chibi's SRFI 117 and 127 carry four defects between them (a stale `last`
-   pointer after `list-queue-remove-back!`, `list-queue-set-list!` raising on
-   the empty list, `lseq-append` truncating a generator-backed argument,
-   `lseq-member` comparing its arguments in the wrong order). The tarballs are
-   at `https://srfi.schemers.org/srfi-N/srfi-N.tgz`.
+   Twice now chibi's has been wrong where the reference is right: its
+   `stream->list` forces one element past the count it was asked for, so a
+   bounded prefix of an infinite stream does not terminate, and its SRFI 117
+   and 127 carry four defects between them (a stale `last` pointer after
+   `list-queue-remove-back!`, `list-queue-set-list!` raising on the empty
+   list, `lseq-append` truncating a generator-backed argument, `lseq-member`
+   comparing its arguments in the wrong order). All five are reported
+   upstream — chibi-scheme
+   [#1179](https://github.com/ashinn/chibi-scheme/issues/1179),
+   [#1180](https://github.com/ashinn/chibi-scheme/issues/1180),
+   [#1181](https://github.com/ashinn/chibi-scheme/issues/1181) — and confirmed
+   on chibi master before filing. The tarballs are at
+   `https://srfi.schemers.org/srfi-N/srfi-N.tgz`.
 2. **A passing suite is not evidence.** All four of those defects pass both
    Larceny's suite and chibi's, because neither exercises the shape. Diff the
    candidate against a second implementation — Gauche's is in
    `~/Project/reference` — and probe the mutators and the lazy paths by hand.
+   **Reproduce against the other implementation itself** before blaming it:
+   running its sources under Patina is not the same claim, and doing that
+   properly is what showed the SRFI 41 fault was in `stream->list` rather
+   than `stream-filter`, where this document had it for a day.
 3. **The suite can be wrong too.** chibi's SRFI 117 suite asserts that
    `list-queue-append!` leaves its first argument alone, which SRFI 117
    explicitly says it is an error to assume. Read the specification before
