@@ -121,7 +121,15 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 
 ### 22. A `guard` re-raise does not re-enter the dynamic extent — both backends
 - Ours: `a_guard_reraise_reenters_the_dynamic_extent` (pinned)
-- Upstream: [tests/scheme/base.sld#L849](tests/scheme/base.sld#L849), [#L889](tests/scheme/base.sld#L889). R7RS 4.2.7: with no matching clause the object is re-raised "in the dynamic environment of the original call to `raise`", so `dynamic-wind`'s before-thunk runs on the way back in and the after-thunk again on the way out to the outer `guard`: `(out in out in)`. Ours re-raises from the guard's own environment: `(out in)`. chibi and Gauche agree with the suite. Related to the tree-walker's own `guard` entries in PRD §6 but present on both backends.
+- **Attempted 2026-08-25 and backed out. Measured, not deduced — and the measurement refutes both diagnoses this defect previously carried.**
+  - **R7RS 7.3's reference `guard` does not fix it.** Written and run: the double `call/cc` (`guard-k` out to the guard's environment for the clauses, `handler-k` back to the raise point to re-raise) still gives `(out in)` on the VM where chibi and Gauche give `(out in out in)`. So the note on `nested_exception_handlers.rs`'s `test_a_guard_re_raise_does_not_rewind_into_the_raiser` — "fixing it means the re-raise carrying a continuation back into the raiser's wind stack, which is `guard`'s expansion, not the handler machinery" — is wrong about the *not*: the reference guard carries exactly that continuation, and it is not enough.
+  - **Why it is not enough** is family 28: `with-exception-handler` unwinds to the handler's own wind depth before calling the handler, so `handler-k` is captured *after* the extent has been left and jumping back to it re-enters nothing. Neither half fixes this alone; both are needed.
+  - **Careful with the repro.** chibi evaluates arguments right-to-left, so `(list (guard …) v)` reads `v` before the guard runs and reports `()` on every implementation that agrees with the suite. Sequence the mutation and the read into separate top-level forms.
+  - **The unwind-first behaviour is not an oversight** — it was deliberate, 2026-03-01, `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` items 3 and 4: "`raise` didn't unwind dynamic-winds before invoking handler … `apply_raise` and `maybe_route_error_through_cps` now call `run_wind_handlers` before handler invocation", closing `test_dynamic_wind_with_exception` and `test_exception_in_dynamic_wind_body_after_runs`. Reversing it is reopening a closed decision, and those two tests are what closed it.
+  - **The tree-walker has two raise paths that disagree with each other.** `(error "x")` runs the handler *before* the unwind (`(before handler after)`, PRD §6's open divergence) while `(raise 'x)` unwinds first (`(before after handler)`, agreeing with the VM and chibi). A fix aimed at one path leaves the other. Sites: VM `vm_raise_value`'s unwind loop; tree-walker `apply_raise` (`cps_eval/application.rs:560`) and `maybe_route_error_through_cps` (`cps_eval/exceptions.rs:141`).
+  - **Order matters, and it is not the one first recorded here.** The reference `guard` must land *with or before* the raise-path change, never after: with today's `guard` (clauses evaluated inside the handler) and a handler that no longer unwinds first, three green tests flip — `cps_features.rs`'s `test_dynamic_wind_with_exception` and `test_exception_in_dynamic_wind_body_after_runs`, and `backend_divergence.rs`'s `guard_handler_runs_before_the_unwind_on_the_tree_walker` (whose VM assertion would then fail as a regression).
+  - **And the tree-walker cannot take the reference `guard` yet**: under it, `6.11 Exceptions` runs 27 of 30 with `unhandled continuable exception`, because its handler stack does not survive the jump back — the gap PRD §6 records for `CpsContinuation`. Substituting `raise` for `raise-continuable` does not help, so it is the structure. (The chibi runner's pinned-total check is what caught this: three tests that stop *running* otherwise read as "1223 passed, 0 failed, 100%".)
+  - So: the tree-walker's handler stack first (§6's `MachineState` refactor), then the reference `guard` and the raise-path unwind *together*, re-deciding the 2026-03-01 item as part of it. Families 22 and 28, PRD §6's tree-walker `guard` entry and `nested_exception_handlers.rs`'s pin all close together or not at all.
 
 ### 23. `let-syntax` splices its body's definitions, and a `let-syntax` transformer sees its siblings — both backends
 - Ours: `let_syntax_body_definitions_and_transformer_scope` (pinned)
@@ -142,6 +150,20 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - Upstream: [tests/scheme/read.sld#L279](tests/scheme/read.sld#L279) — the one assertion left in `read` once `equal?` terminated on cycles.
 - Fix: the lexer's `;` comment and a `#!` shebang line both stop at `\r` as well as `\n` (R7RS 7.1.1 line endings), through one `skip_to_line_ending`.
 
+### 26. Tree-walker: the `stream` suite exceeds the runner's timeout — tree-walker only
+- Ours: none — a performance property, not a wrong answer, like `time`.
+- Upstream: [tests/scheme/stream.sld#L97](tests/scheme/stream.sld#L97), the 50th Pythagorean triple built from nested infinite streams. Measured: tree-walker 27 s at n=10, 117 s at n=20, past 200 s at n=30; the VM does n=50 in 33 s and passes the suite 81 of 81. About 20× on this workload, so the suite would need ~11 minutes there against the runner's 300 s.
+
+### 27. `error` refused a message that is not a string — both backends — ✅ fixed 2026-08-25
+- Ours: `error_accepts_a_message_that_is_not_a_string`
+- Found by review of the SRFI 41 bundle, not by a suite: the R6RS habit of `(error 'who "what")` runs through SRFI reference implementations, and all 53 of the bundled SRFI 41's diagnostics were being replaced by "error: first argument must be a string". R7RS 6.11 says the message *should* be a string — advice, not a requirement — and chibi and Gauche report the non-string as the message.
+- Fix: all three `error` implementations (the primitive and each backend's intercept) display a non-string message instead of refusing it. Nothing in either suite catches this, because `test-error` does not look at the message — which is why a bundle can ship 53 broken diagnostics and still pass 186 of 186.
+
+### 28. An exception handler runs after the unwind, not in the raise's dynamic extent — both backends
+- Ours: `an_exception_handler_runs_in_the_raises_dynamic_extent` (pinned)
+- Not from a suite: found 2026-08-25 while attempting family 22, which is this defect's visible symptom on the non-continuable path. R7RS 6.11 calls the handler "in the dynamic environment of the call to `raise`"; both backends unwind to the handler's own wind depth first, so `(with-exception-handler (lambda (e) (log 'handler) 'handled) (lambda () (dynamic-wind in (lambda () (raise-continuable 'x)) out)))` logs `(in out handler out)` — the after-thunk twice — where chibi and Gauche log `(in handler out)`.
+- Everything about the fix, its order, and what it reopens is under family 22 above; the two close together.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.
@@ -153,15 +175,6 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - **`(make-bytevector n -1)`** — [tests/scheme/base.sld#L2346](tests/scheme/base.sld#L2346), [#L2347](tests/scheme/base.sld#L2347): R7RS 6.9 requires a byte; chibi and Gauche accept a signed byte and answer 255. A leniency decision, same as the R6RS lane's family 13.
 - **Spelling-based literal matching and `apply`-head check** (review of #114, pre-existing): the literal matcher and the `apply` head test judge by spelling, so `(let ((else #f)) …)` around a macro using `my-cond`'s `else` literal, or a local `apply` around a template's `(apply f x)`, answer differently from chibi. Same project as families 14/15.
 - **`charset`, now that it loads** (2 of 93): [tests/scheme/charset.sld](tests/scheme/charset.sld) expects `char-set:full` to hold every code point — the bundled SRFI 14 is the Latin-1 reference port (PRD §6, chibi-regexp entry: blocked on a full-Unicode char-set story) — and expects `char-set-cursor` to iterate ascending, which SRFI 14 leaves unspecified.
-
-### 26. Tree-walker: the `stream` suite exceeds the runner's timeout — tree-walker only
-- Ours: none — a performance property, not a wrong answer, like `time`.
-- Upstream: [tests/scheme/stream.sld#L97](tests/scheme/stream.sld#L97), the 50th Pythagorean triple built from nested infinite streams. Measured: tree-walker 27 s at n=10, 117 s at n=20, past 200 s at n=30; the VM does n=50 in 33 s and passes the suite 81 of 81. About 20× on this workload, so the suite would need ~11 minutes there against the runner's 300 s.
-
-### 27. `error` refused a message that is not a string — both backends — ✅ fixed 2026-08-25
-- Ours: `error_accepts_a_message_that_is_not_a_string`
-- Found by review of the SRFI 41 bundle, not by a suite: the R6RS habit of `(error 'who "what")` runs through SRFI reference implementations, and all 53 of the bundled SRFI 41's diagnostics were being replaced by "error: first argument must be a string". R7RS 6.11 says the message *should* be a string — advice, not a requirement — and chibi and Gauche report the non-string as the message.
-- Fix: all three `error` implementations (the primitive and each backend's intercept) display a non-string message instead of refusing it. Nothing in either suite catches this, because `test-error` does not look at the message — which is why a bundle can ship 53 broken diagnostics and still pass 186 of 186.
 
 ## Not defects — bundling queue (L1 item 6, now with a suite each)
 

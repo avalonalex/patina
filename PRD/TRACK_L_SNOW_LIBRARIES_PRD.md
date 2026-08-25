@@ -1,7 +1,7 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-08-25 — SRFI 41 bundled as `(scheme stream)`; the suite passes 81 of 81 on the VM (17 of 33 suites, 4341 of 4351); the corpus drops the package, 125 of 161. Earlier — `let-values` binds in parallel (R7RS 7.3's reference), `read-line` ends at a bare return, and a continuation is a procedure for `with-exception-handler` on the VM. Earlier the same day — cycle-safe expansion walkers and per-datum reader labels; `base` ran briefly under a scope-aware-shadowing attempt that review showed unsound and was backed out — its five new findings are pinned (families 21–25). Earlier the same day — the VM's values side buffer removed (4260 of 4270). Earlier, 2026-08-24 — second round: `equal?` on cycles, iterative `delay-force`, `string->number` = reader syntax (15 of 33 suites, 4258 of 4270). Earlier the same day — L5.3's low-hanging fixes landed (nested `include`, port-open predicates, `rationalize`, Unicode simple case mapping, `(scheme charset)`): 13 of 33 suites, 4172 of 4193. Earlier the same day — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
+**Updated:** 2026-08-25 — `guard`'s re-raise diagnosed to its root (the handler runs after the unwind; pinned) rather than fixed, and the attempt recorded. Earlier — SRFI 41 bundled as `(scheme stream)`; the suite passes 81 of 81 on the VM (17 of 33 suites, 4341 of 4351); the corpus drops the package, 125 of 161. Earlier — `let-values` binds in parallel (R7RS 7.3's reference), `read-line` ends at a bare return, and a continuation is a procedure for `with-exception-handler` on the VM. Earlier the same day — cycle-safe expansion walkers and per-datum reader labels; `base` ran briefly under a scope-aware-shadowing attempt that review showed unsound and was backed out — its five new findings are pinned (families 21–25). Earlier the same day — the VM's values side buffer removed (4260 of 4270). Earlier, 2026-08-24 — second round: `equal?` on cycles, iterative `delay-force`, `string->number` = reader syntax (15 of 33 suites, 4258 of 4270). Earlier the same day — L5.3's low-hanging fixes landed (nested `include`, port-open predicates, `rationalize`, Unicode simple case mapping, `(scheme charset)`): 13 of 33 suites, 4172 of 4193. Earlier the same day — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
 (**125 of 161** vendored packages pass, 2026-08-25, of which **125 of 136 are in scope** — the
 other 25 are excluded by `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and
@@ -917,7 +917,7 @@ trips its test.
 | ✅ A nested `include` resolves against the wrong directory, and the base is chosen nondeterministically — *fixed 2026-08-24* | base | both |
 | A shadowed `...` is still the ellipsis, and a template's reference to a keyword-spelled definition-site local is rejected as syntax — **gate `base`** (~1000 assertions). Two attempts backed out after review (#111, #114); what they need is one innermost-first binding resolution shared by the desugarer and the macro compiler — `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` — with the reviews' cases as acceptance tests (triage families 14/15) | base | both |
 | ✅ The macro expander's walkers looped forever on a cyclic quoted datum (the scope flip is now a memoized, cycle-closing copy), and the program parser scoped datum labels to the parse rather than the datum — *fixed 2026-08-25* | base | both |
-| What `base` found while it briefly ran (triage families 21–25, each pinned): ✅ `let-values` binds sequentially and ✅ `read-line` does not end at a bare return — *both fixed 2026-08-25* (R7RS 7.3's `let-values`; one character loop for `read-line`); ✅ VM: `with-exception-handler` rejects a continuation as handler — *fixed 2026-08-25* (the VM's generic call path can invoke a continuation); still open: a `guard` re-raise does not re-enter the dynamic extent; `let-syntax` splices its body's definitions and its transformers see their siblings | base | both |
+| What `base` found while it briefly ran (triage families 21–25, each pinned): ✅ `let-values` binds sequentially and ✅ `read-line` does not end at a bare return — *both fixed 2026-08-25* (R7RS 7.3's `let-values`; one character loop for `read-line`); ✅ VM: `with-exception-handler` rejects a continuation as handler — *fixed 2026-08-25* (the VM's generic call path can invoke a continuation); still open: a `guard` re-raise does not re-enter the dynamic extent — *diagnosed 2026-08-25* to `with-exception-handler` running its handler after the unwind (§6, pinned as family 28); the reference `guard` alone does not fix it, measured, and the two must land together; `let-syntax` splices its body's definitions and its transformers see their siblings | base | both |
 | Nine Red-edition libraries are unbundled, one suite each — *`(scheme stream)` done 2026-08-25* (SRFI 41 from the snow-fort tarball of the reference implementation; `stream-match` from chibi, the reference writing it in `syntax-case`); eight left: `ephemeron`, `flonum`/SRFI 144, `ideque`, `ilist`, `list-queue`, `lseq`, `rlist`, `text` | 8 suites | both |
 | ✅ `equal?` does not terminate on circular structures — *fixed 2026-08-24* (worklist + lazily allocated visited set) | read, r6rs mutable-pairs | both |
 | ✅ `delay-force` is not iterative — 100 000 deep overflows the stack — *fixed 2026-08-24* (R7RS 7.3's iterative `force` with `promise-update!`, in the primitive and in the tree-walker's CPS `force`) | lazy | both |
@@ -1028,6 +1028,61 @@ chibi-voting now scores 6/7, identical to Gauche, and the row's residual
 failure is upstream's.
 
 ### Open
+
+**An exception handler runs after the unwind, not in the raise's dynamic
+extent** — ❌ **open**, both backends. Found 2026-08-25 while attempting
+Larceny's `guard` re-raise finding (triage family 22, which is this defect's
+visible symptom).
+
+```scheme
+(with-exception-handler (lambda (e) (log 'handler) 'handled)
+  (lambda () (dynamic-wind (lambda () (log 'in))
+                           (lambda () (raise-continuable 'x))
+                           (lambda () (log 'out)))))
+;; Patina, both backends => (in out handler out)   — the after-thunk twice
+;; chibi, Gauche         => (in handler out)
+```
+
+R7RS 6.11 calls the handler "in the dynamic environment of the call to
+`raise`, except that the current exception handler is the outer one". Both
+backends unwind to the handler's own wind depth first, so a `guard` cannot
+re-enter an extent that was left before its handler ran: nested guards log
+`(out in)` where both references log `(out in out in)`.
+
+**Measured, and the measurement refutes the two diagnoses this previously
+carried.** R7RS 7.3's reference `guard` — the double `call/cc` that jumps a
+continuation back to the raise point — was written and run: still `(out in)`
+on the VM, because that continuation is captured *after* the unwind. So
+neither `guard`'s expansion alone (what
+`nested_exception_handlers.rs::test_a_guard_re_raise_does_not_rewind_into_the_raiser`
+records) nor the handler machinery alone is the fix; both are.
+
+Four things to know before taking it, each verified:
+
+- **The unwind-first behaviour was deliberate**, 2026-03-01
+  (`PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` items 3–4),
+  closing `test_dynamic_wind_with_exception` and
+  `test_exception_in_dynamic_wind_body_after_runs`. Changing it reopens a
+  closed decision, and those two tests are what closed it.
+- **The tree-walker has two raise paths that disagree.** `(error "x")` runs
+  the handler *before* the unwind — the §6 divergence below — while
+  `(raise 'x)` unwinds first. Sites: VM `vm_raise_value`; tree-walker
+  `apply_raise` (`cps_eval/application.rs`) and `maybe_route_error_through_cps`
+  (`cps_eval/exceptions.rs`).
+- **Order.** The reference `guard` must land *with or before* the raise-path
+  change. With today's `guard` and a handler that no longer unwinds first,
+  three green tests flip: `cps_features.rs`'s two above and
+  `backend_divergence.rs`'s `guard_handler_runs_before_the_unwind_on_the_tree_walker`.
+- **The tree-walker cannot take the reference `guard` yet**: under it,
+  `6.11 Exceptions` runs 27 of 30 with `unhandled continuable exception` —
+  its handler stack does not survive the jump back, the `CpsContinuation` gap
+  recorded below. Substituting `raise` for `raise-continuable` does not help.
+
+Pinned as `an_exception_handler_runs_in_the_raises_dynamic_extent`
+(`crates/patina-tests/tests/larceny_families.rs`). This entry, that pin,
+triage families 22 and 28, the tree-walker `guard` entry below and
+`nested_exception_handlers.rs`'s pin all close together or not at all.
+
 
 *The six entries below were found 2026-08-24 by Larceny's suites (L5.3); each
 is one of that item's queue rows, with the repro that pins it.*
