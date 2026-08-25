@@ -12,6 +12,7 @@ own record. One home per tree.
 | `(srfi 125)` | chibi 0.12.0 | `125/hash.scm` | chibi-scheme's `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause) | file sha256 `d469201d00fa0b955ba23a01e02707034dad5ba2ef1a29cd7b12b880e76f1053` |
 | SRFI 162 | — | `128/162-impl.scm` | the SRFI's own sample implementation, `https://srfi.schemers.org/srfi-162/srfi/128/162-impl.scm` (John Cowan, MIT) | file sha256 `973b7a5e6557ecfaa5e218a2d51e63077572235973f27c3db484ab5bac9513f2` |
 | `(srfi 41)` | 0.1.0 | `41.sld`, `41.scm` | snow-fort, Retropikzel's R7RS port of Philip Bewig's stream reference implementation (MIT) | `c6bbc9b5d856f1ebdb3d9ce75d9542cc32050b13b82eb3e53fd9a8b96b67fdc2` |
+| `(srfi 41)`'s `stream-match` | chibi 0.12-134-gf2660362 | `41-match.scm` | chibi-scheme's **own** `lib/srfi/41.scm` — not the file of that name here (Alex Shinn, BSD 3-Clause) | file sha256 `01d33bc8f17a6b9bea94e73f6534bcaa474a6f21eff42687f726cc9f7c5d6c12` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
 Tarball URLs:
@@ -26,8 +27,10 @@ unchanged.
 **`(srfi 41)`'s `.sld` deviates in two lines, and `41-match.scm` is a second
 source.** The port comments `stream-match` out: the SRFI's reference
 implementation writes it in `syntax-case`, which Patina does not have. The
-macro is chibi-scheme's `syntax-rules` equivalent instead (Alex Shinn, BSD
-3-Clause, `lib/srfi/41.scm`), in its own file, with chibi's `assert` replaced
+macro is chibi-scheme's `syntax-rules` equivalent instead — from
+**chibi's own** `lib/srfi/41.scm`, which is a different file from the
+`lib/srfi/41.scm` in this repo (Alex Shinn, BSD 3-Clause) — in its own file,
+`41-match.scm`, pinned post-edit, with chibi's `assert` replaced
 by the error the SRFI specifies; the `.sld` exports `stream-match` and `_`
 (the wildcard its patterns match as a literal) and includes that file. Taking
 the *port's* body rather than chibi's whole library is deliberate: chibi's

@@ -5,6 +5,11 @@
 ;; R7RS-large names this library `(scheme stream)`; it is SRFI 41 under its
 ;; standard-track name. This is a pure re-export of `(srfi 41)` -- the
 ;; implementation lives there, and the two are the same bindings.
+;;
+;; One name beyond the SRFI's 30: `_`, which `stream-match` matches as a
+;; literal, so an importer's `_` has to be the same identifier as the
+;; macro's. `(srfi 41)` exports it for that reason (see its `.sld` header)
+;; and the alias carries it across rather than diverge from what it aliases.
 
 (define-library (scheme stream)
   (import (srfi 41))

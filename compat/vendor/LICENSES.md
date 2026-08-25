@@ -12,16 +12,22 @@ terms are, how each was determined, and what obligations they place on this repo
 | Licence | Packages | Class |
 |---|---|---|
 | BSD | 61 | permissive |
-| MIT | 53 | permissive |
 | SLIB (Aubrey Jaffer) | 44 | **non-standard permissive** |
+| MIT | 30 | permissive |
 | public domain | 17 | permissive |
 | ISC | 5 | permissive |
 | CC0-1.0 | 2 | permissive |
-| MIT Scheme, 1988–1995 form | 0 | **non-standard permissive** — see below |
 | Apache-2.0 | 1 | permissive |
 | Expat | 1 | permissive |
 
-**Also excluded:** thirteen packages whose library Patina bundles itself — see `README.md`.
+161 packages, counted from the committed `MANIFEST.json` (2026-08-25). This
+table is hand-kept — `build_corpus.py` regenerates `INVENTORY.md` beside it but
+leaves this file alone — so it has to be recounted whenever the corpus changes
+size, which it does every time Patina bundles a library and the corpus drops
+the package providing it.
+
+**Also excluded:** the packages whose library Patina bundles itself — see
+`README.md`.
 
 **Excluded and not vendored:** GPL-3.0 (18), GPL (8), MPL-2.0 (2), 52 packages with no discoverable
 licence, and `(srfi 5)` under a document-only licence (see below). Listed in `REVIEW-QUEUE.json`.

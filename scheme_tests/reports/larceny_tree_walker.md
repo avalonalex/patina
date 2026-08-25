@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-25 13:12:43  
+**Generated:** 2026-08-25 13:31:54  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -32,7 +32,7 @@ Bundling work, not defects — each is a Red-edition library Patina does not shi
 
 ## Crashed or hung (2)
 
-The process died or was cut off by the timeout before reporting; the defect is in Patina's runtime, not in an assertion.
+No tally was reached: the process died, or the runner's timeout cut it off. A crash is a defect in Patina's runtime; a timeout may be one, or may be a suite that needs longer than the budget on this backend — the triage doc says which for each.
 
 | Suite | What |
 |---|---|

@@ -158,6 +158,11 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - Ours: none — a performance property, not a wrong answer, like `time`.
 - Upstream: [tests/scheme/stream.sld#L97](tests/scheme/stream.sld#L97), the 50th Pythagorean triple built from nested infinite streams. Measured: tree-walker 27 s at n=10, 117 s at n=20, past 200 s at n=30; the VM does n=50 in 33 s and passes the suite 81 of 81. About 20× on this workload, so the suite would need ~11 minutes there against the runner's 300 s.
 
+### 27. `error` refused a message that is not a string — both backends — ✅ fixed 2026-08-25
+- Ours: `error_accepts_a_message_that_is_not_a_string`
+- Found by review of the SRFI 41 bundle, not by a suite: the R6RS habit of `(error 'who "what")` runs through SRFI reference implementations, and all 53 of the bundled SRFI 41's diagnostics were being replaced by "error: first argument must be a string". R7RS 6.11 says the message *should* be a string — advice, not a requirement — and chibi and Gauche report the non-string as the message.
+- Fix: all three `error` implementations (the primitive and each backend's intercept) display a non-string message instead of refusing it. Nothing in either suite catches this, because `test-error` does not look at the message — which is why a bundle can ship 53 broken diagnostics and still pass 186 of 186.
+
 ## Not defects — bundling queue (L1 item 6, now with a suite each)
 
 ~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), ~~`(scheme stream)`~~ (SRFI 41 bundled 2026-08-25; the suite passes 81 of 81 on the VM), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme ilist)`, `(scheme list-queue)`, `(scheme lseq)`, `(scheme rlist)`, `(scheme text)`. Eight of the 33 R7RS suites never load for this reason alone.

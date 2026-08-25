@@ -2542,14 +2542,19 @@ fn handle_control_primitive(
                     got: 0,
                 });
             }
-            // First arg must be a string (the message)
-            let message = state
-                .heap
-                .borrow()
-                .get_string_contents(args[0])
-                .ok_or_else(|| VmError::TypeError {
-                    message: "error: first argument must be a string".into(),
-                })?;
+            // R7RS 6.11 says the message *should* be a string — advice, not a
+            // requirement. A non-string is displayed instead of refused; see
+            // the `error` primitive in patina-primitives for why.
+            let message = {
+                let as_string = state.heap.borrow().get_string_contents(args[0]);
+                match as_string {
+                    Some(s) => s,
+                    None => patina_primitives::primitives::io::datum_writer::format_display_tagged(
+                        args[0],
+                        &state.heap,
+                    ),
+                }
+            };
             let irritants = args[1..].to_vec();
 
             // Create exception object on heap

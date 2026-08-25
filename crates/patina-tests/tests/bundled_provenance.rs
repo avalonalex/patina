@@ -48,8 +48,10 @@ const PINNED: &[(&str, u64)] = &[
     // byte-identical. Its `.sld` is pinned post-edit: two lines export and
     // include `stream-match`, which the port comments out because the
     // reference writes it in `syntax-case` — see lib/srfi/41-match.scm and
-    // PROVENANCE.md. That file is chibi's and is deliberately unpinned: it
-    // carries an edit of its own (chibi's `assert` becomes the SRFI's error).
+    // PROVENANCE.md. `41-match.scm` is chibi's, pinned post-edit for the same
+    // reason as 130.scm below: a recorded deviation must not be why a file
+    // goes unwatched.
+    ("lib/srfi/41-match.scm", 0xd3c7746a264796c7),
     ("lib/srfi/41.scm", 0xe40e5826e7cc7130),
     ("lib/srfi/41.sld", 0x8268bc8aba0fba5a),
     // Pinned post-edit: one PATINA LOCAL EDIT (ucs-range->char-set's base
