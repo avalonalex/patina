@@ -793,10 +793,10 @@ fn test_backtracking_pythagorean_triple() {
 // =============================================================================
 // Instruction-level control ops: call-with-values + call/cc
 //
-// The two *multi-value* continuation cases are a KNOWN BACKEND DIVERGENCE and
-// live in `backend_divergence.rs` with the rest of the quarantine registry, so
-// one grep finds every opted-out behaviour. See
-// PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md.
+// The two *multi-value* continuation cases lived in `backend_divergence.rs`
+// while they were a known divergence; both converged on 2026-08-25 and are
+// plain both-backend assertions there now, keeping the SRFI 1 abort shape
+// beside them. PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md is closed.
 //
 // The single-value case below is *not* affected by that bug — it was swept into
 // the old `#[cfg(feature = "vm-backend")]` gate with its two neighbours, and

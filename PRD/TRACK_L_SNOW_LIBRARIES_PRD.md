@@ -922,7 +922,7 @@ trips its test.
 | ✅ `equal?` does not terminate on circular structures — *fixed 2026-08-24* (worklist + lazily allocated visited set) | read, r6rs mutable-pairs | both |
 | ✅ `delay-force` is not iterative — 100 000 deep overflows the stack — *fixed 2026-08-24* (R7RS 7.3's iterative `force` with `promise-update!`, in the primitive and in the tree-walker's CPS `force`) | lazy | both |
 | ✅ VM: a discarded call to `values` poisons the next `call-with-values` — *fixed 2026-08-25* (the values side buffer is gone; multiple values are only ever a `#<values>` object) | vector | VM |
-| Tree-walker: a continuation invoked with other than one value is an arity error; `(values)` reaches a consumer as one unspecified value (found removing that buffer; chibi and the VM agree) | — | tree-walker |
+| ✅ Tree-walker: a continuation invoked with other than one value is an arity error; `(values)` reaches a consumer as one unspecified value — *both fixed 2026-08-25*: one `Heap::values_from` now carries the rule all four sites used to spell separately | — | tree-walker |
 | ✅ Tree-walker: SRFI 1's `zip` (n-ary `map` via `apply`) raises a wrong-arity error — *fixed 2026-08-25*; the cause was a continuation invoked with two values (`%cars+cdrs`'s `(abort '() '())`), not `apply` | list | tree-walker |
 | Tree-walker: a 1.1M-iteration `do` loop building a list overflows the stack | char | tree-walker |
 | ✅ Unicode case: `(char-upcase #\ß)` ⇒ `#\S`; `char-ci=?` on final sigma; `string-ci=?` full folding — *fixed 2026-08-24* with the simple mappings (a generated table where std's full mapping expands); `digit-value` over every Nd character still open | char (2), r6rs unicode | both |
@@ -1165,22 +1165,18 @@ suite because nothing there calls `values` for effect and then immediately
 uses `call-with-values`. Pinning as a divergence would work here: the VM
 returns a wrong value rather than failing.
 
-**Tree-walker: SRFI 1's `zip` raises a wrong-arity error** — ❌ **open**,
-tree-walker only. Nine assertions in the `list` suite, all the n-ary
-variants (`zip`, `fold`, `filter-map`, `any`, `every`, `list-index` with two
-or more lists).
+**Tree-walker: SRFI 1's `zip` raises a wrong-arity error** — ✅ **fixed
+2026-08-25**, tree-walker only. Eight assertions in the `list` suite (the
+ninth failure there, `delete-duplicates!`, is upstream's).
 
-```scheme
-(import (scheme list))
-(zip '(1 2 3) '(4 5 6))    ;; tree-walker => Wrong number of arguments: expected 1, got 2
-                           ;; VM, chibi   => ((1 4) (2 5) (3 6))
-```
-
-`zip` is `(apply map list list1 more-lists)` inside `srfi-1-reference.scm`,
-where `map` is SRFI 1's own n-ary definition. The same `apply` shape written
-at top level against `(scheme base)`'s `map` works on the tree-walker, so the
-fault is in how the library-internal `map` — or something it calls — is
-applied there, not in `apply` itself. Undiagnosed beyond that.
+The diagnosis recorded here was wrong and worth keeping as a caution: it read
+"`zip` is `(apply map list list1 more-lists)` … the same `apply` shape written
+at top level works, so the fault is in applying the library-internal `map`".
+It is not `apply` at all. SRFI 1's `%cars+cdrs` bails out of an exhausted list
+with `(abort '() '())` — a continuation invoked with two values, which the
+tree-walker refused — so every n-ary procedure that walks more than one list
+failed. `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md` had named `%cars+cdrs`
+among its impacts since 2026-03-19; the two records sat apart for months.
 
 **Tree-walker: a 1.1M-iteration `do` loop overflows the stack** — ❌
 **open**, tree-walker only (the VM runs the same suite in 4 s).

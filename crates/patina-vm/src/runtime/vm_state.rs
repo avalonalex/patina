@@ -2421,12 +2421,8 @@ fn handle_control_primitive(
             // shows it, the tree-walker does the same). There is no side
             // channel: a register-only protocol cannot go stale when a
             // `values` call is discarded.
-            if args.len() == 1 {
-                state.set_reg(dst, args[0]);
-            } else {
-                let vals_tv = state.heap.borrow_mut().alloc_values(args.to_vec());
-                state.set_reg(dst, vals_tv);
-            }
+            let packed = state.heap.borrow_mut().values_from(args.to_vec());
+            state.set_reg(dst, packed);
         }
 
         VmControlPrimitive::CallWithValues => {
@@ -3128,11 +3124,7 @@ fn try_invoke_continuation(
     // `(k v)` delivers v; `(k)` and `(k v1 v2 …)` deliver a #<values> object,
     // exactly as `(values …)` would return one — so a producer that escapes
     // through a continuation still hands call-with-values its values.
-    let deliver_val = if args.len() == 1 {
-        args[0]
-    } else {
-        state.heap.borrow_mut().alloc_values(args.to_vec())
-    };
+    let deliver_val = state.heap.borrow_mut().values_from(args.to_vec());
 
     // Full (call/cc) continuation?
     if let Some(cc) = state.get_vm_continuation(func_val) {

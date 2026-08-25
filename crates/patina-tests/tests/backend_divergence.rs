@@ -137,13 +137,33 @@ fn callcc_abort_pattern_through_call_with_values() {
         "#,
         "(cars () cdrs ())",
     );
-    assert_program_eval_to(
-        "(import (scheme list))
-         (list (zip '(1 2) '(3 4))
-               (fold + 0 '(1 2) '(3 4))
-               (any (lambda (a b) (< a b)) '(1 2) '(0 5))
-               (list-index = '(1 2 3) '(9 2 9)))",
-        "(((1 3) (2 4)) 10 #t 1)",
+    // The SRFI 1 procedures this unblocks are asserted once, in
+    // larceny_families.rs's family 5 — not duplicated here.
+}
+
+/// An error raised *after* a continuation escape is not catchable on the
+/// tree-walker.
+///
+/// Delivering two values to a single-value context is unspecified in R7RS,
+/// and the references take different options: chibi and the VM let `+` raise
+/// on the `#<values>` object, which a `guard` around it catches; Gauche
+/// delivers the first value and answers `2`. What is not an option is the
+/// tree-walker's answer — the type error aborts the program with the
+/// `guard`'s handler stack apparently already gone.
+///
+/// Reachable since 2026-08-25, when a multi-value continuation invocation
+/// stopped raising a wrong-arity error at the call site (where it *was*
+/// catchable) and started escaping. The escape path is the same one PRD §6
+/// records as not carrying the handler stack on `CpsContinuation`; this is
+/// that gap, in a shape the SRFI 1 fix made ordinary.
+#[test]
+fn an_error_after_a_multi_value_escape_is_catchable() {
+    assert_divergence(
+        "(guard (e (#t (list 'caught))) (+ 1 (call/cc (lambda (k) (k 1 2)))))",
+        On::Vm,
+        "(caught)",
+        ErrorClass::AtRuntime,
+        HANDLER_REENTRY,
     );
 }
 

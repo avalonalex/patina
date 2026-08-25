@@ -244,19 +244,15 @@ impl<'a> CpsEvaluator<'a> {
             // Invoking a captured continuation - non-local control transfer.
             //
             // `(k v)` delivers v; `(k)` and `(k v1 v2 …)` deliver a #<values>
-            // object, exactly as `(values …)` returns one, so a
-            // `call-with-values` around the capture unpacks them and a plain
-            // continuation receives the object. Refusing anything but one
+            // object, through the same `values_from` the `values` primitive
+            // itself uses, so a `call-with-values` around the capture unpacks
+            // them and a plain continuation receives the object. Refusing anything but one
             // argument — which this did until 2026-08-25 — is not an arity
             // rule R7RS has: §6.10 lets a continuation accept as many values
             // as the context it was captured in. SRFI 1 relies on it, and the
             // whole n-ary half of `(scheme list)` was unusable here because
             // `%cars+cdrs` bails out with `(abort '() '())`.
-            let val_tagged = if args.len() == 1 {
-                args.into_iter().next().unwrap()
-            } else {
-                heap.borrow_mut().alloc_values(args)
-            };
+            let val_tagged = heap.borrow_mut().values_from(args);
 
             // Run dynamic-wind handlers for continuation jump
             // This travels from current winds to the captured winds

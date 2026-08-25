@@ -930,6 +930,25 @@ impl Heap {
         self.alloc_object(HeapObjectData::Values(values))
     }
 
+    /// The single value that carries `values` — R7RS's multiple-value
+    /// protocol as this implementation represents it: one value is itself,
+    /// any other count (zero included) is a `#<values>` object.
+    ///
+    /// The rule has to be one function because it is applied in four places
+    /// — the `values` primitive, the VM's `values` intercept, and each
+    /// backend's continuation invocation — and when it was written out four
+    /// times they did not agree: the primitive mapped zero values to
+    /// `#<unspecified>`, so `(call-with-values (lambda () (values)) list)`
+    /// answered `(#<unspecified>)` on the tree-walker where every other path
+    /// and both references answer `()`.
+    pub fn values_from(&mut self, values: Vec<TaggedValue>) -> TaggedValue {
+        if values.len() == 1 {
+            values[0]
+        } else {
+            self.alloc_values(values)
+        }
+    }
+
     /// Get native Values contents as a slice, if it is one
     pub fn get_values(&self, tv: TaggedValue) -> Option<&[TaggedValue]> {
         if !tv.is_object() {
