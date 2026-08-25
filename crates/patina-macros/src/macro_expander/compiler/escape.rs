@@ -5,7 +5,7 @@
 
 use super::Compiler;
 use crate::error::MacroError;
-use crate::macro_expander::Template;
+use crate::macro_expander::{Identifier, Template};
 use patina_core::TaggedValue;
 use std::rc::Rc;
 
@@ -50,8 +50,15 @@ impl Compiler {
         if let Some(s) = self.extract_symbol_name(form) {
             // Check if it's the ellipsis symbol that was escaped
             if escaped_ellipsis.as_ref() == Some(&s) {
-                // Produce literal Symbol value so nested macros can use it
-                return Ok(self.make_literal_template(form));
+                // The nested macro's ellipsis — emitted as an identifier
+                // carrying this macro's scopes, like any template symbol,
+                // not as a bare literal: a bare `...` inside a scope that
+                // binds `...` is that variable (R7RS 4.3.2, see
+                // `EllipsisBinding`), whereas this one came from *here*.
+                return Ok(Template::Symbol(Identifier::with_scopes(
+                    s,
+                    self.definition_scopes.clone(),
+                )));
             }
 
             // Check if it's a pattern variable

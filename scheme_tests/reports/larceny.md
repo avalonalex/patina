@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-25 07:04:30  
+**Generated:** 2026-08-25 08:20:10  
 **Backend:** VM  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -10,8 +10,8 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 | | |
 |---|---|
 | Suites fully passing | 16 of 33 |
-| Assertions passed | 4260 of 4270 (99.8%) |
-| Suites not reaching a tally | 10 |
+| Assertions passed | 5306 of 5334 (99.5%) |
+| Suites not reaching a tally | 9 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
@@ -31,17 +31,30 @@ Bundling work, not defects — each is a Red-edition library Patina does not shi
 | stream | `(scheme stream)` |
 | text | `(scheme text)` |
 
-## Failed to load (1)
-
-The suite's library did not compile, so nothing in it ran. Patina's message:
-
-| Suite | Message |
-|---|---|
-| base | `Error: Parse error in tests/scheme/base.sld: desugar error: Invalid syntax: Failed to compile macro bar: Invalid syntax: Pattern variable y at level 1 used at l` |
-
-## Assertion failures (10 in 7 suites)
+## Assertion failures (28 in 8 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
+
+### base — 18 of 1064 failed
+
+- [base.sld:730](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L730) — `values` `list`
+- (not located) — `v`
+- (not located) — `v`
+- [base.sld:918](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L918) — `name` `unquote`
+- [base.sld:921](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L921) — `name` `foo`
+- [base.sld:924](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L924) — `append` `sqrt`
+- [base.sld:927](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L927) — `foo` `unquote`
+- [base.sld:1003](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L1003) — `define` `let-syntax`
+- [base.sld:1014](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L1014) — `define` `letrec-syntax`
+- [base.sld:1118](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L1118) — `let-syntax` `syntax-rules`
+- [base.sld:1126](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L1126) — `letrec-syntax` `syntax-rules`
+- (not located) — `vector-copy!`
+- (not located) — `a`
+- [base.sld:2346](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2346) — `bytevector-u8-ref` `make-bytevector`
+- [base.sld:2347](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2347) — `bytevector-u8-ref` `make-bytevector`
+- [base.sld:2741](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2741) — `read-error?` `with-exception-handler`
+- [base.sld:2748](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2748) — `file-error?` `with-exception-handler`
+- [base.sld:2805](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2805) — `map` `call-with-port`
 
 ### char — 1 of 139 failed
 
@@ -78,7 +91,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 | Suite | Status | Passed | Total |
 |---|---|---|---|
-| base | load-error | 0 | 0 |
+| base | fail | 1046 | 1064 |
 | box | pass | 10 | 10 |
 | case-lambda | pass | 5 | 5 |
 | char | fail | 138 | 139 |

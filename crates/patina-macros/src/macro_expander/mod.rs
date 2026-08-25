@@ -26,7 +26,7 @@ mod pattern_template_tests;
 pub use patina_runtime::{Identifier, Pattern, Template};
 
 // Re-export macro system types
-pub use compiler::{CompiledMacro, CompiledRule, Compiler};
+pub use compiler::{CompiledMacro, CompiledRule, Compiler, EllipsisBinding};
 pub use expander::{ExpandError, Expander};
 pub use identifier_key::IdentifierKey;
 pub use matcher::{MatchError, Matcher};
@@ -176,10 +176,43 @@ pub fn flip_scope_on_tagged(
 
 /// Check if a TaggedValue tree contains any Identifier nodes
 ///
-/// Fast traversal that returns true as soon as an Identifier is found.
+/// Fast traversal that returns true as soon as an Identifier is found. The
+/// tree may be cyclic — a quoted datum with labels (`'#0=(a b . #0#)`) is a
+/// legitimate macro argument, and Larceny's `base` suite hands `test` several
+/// — so pairs are recorded once the walk is long enough to suggest a cycle
+/// and never entered twice. Cycles only come from the reader, whose data
+/// holds symbols, not identifiers, so a revisited pair contributes nothing.
 fn contains_identifier_tagged(
     tv: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
+) -> bool {
+    let mut guard = CycleGuard::default();
+    contains_identifier_impl(tv, shared_heap, &mut guard)
+}
+
+/// A revisit guard for walks over reader data that may be cyclic. Records
+/// nothing for the first `BUDGET` pairs — the acyclic common case — and every
+/// pair after that; `enter` says whether a pair is new.
+#[derive(Default)]
+pub(crate) struct CycleGuard {
+    steps: usize,
+    seen: std::collections::HashSet<u64>,
+}
+
+impl CycleGuard {
+    const BUDGET: usize = 4096;
+
+    /// `true` if the pair should be walked, `false` if it was walked already.
+    pub(crate) fn enter(&mut self, tv: patina_core::TaggedValue) -> bool {
+        self.steps += 1;
+        self.steps <= Self::BUDGET || self.seen.insert(tv.raw_bits())
+    }
+}
+
+fn contains_identifier_impl(
+    tv: patina_core::TaggedValue,
+    shared_heap: &patina_core::SharedHeap,
+    guard: &mut CycleGuard,
 ) -> bool {
     // Immediate values (fixnum, char, bool, null) never contain identifiers
     if tv.is_fixnum() || tv.is_char() || tv.is_special() {
@@ -188,9 +221,12 @@ fn contains_identifier_tagged(
 
     // Check for native pairs
     if tv.is_pair() {
+        if !guard.enter(tv) {
+            return false;
+        }
         let (car, cdr) = shared_heap.borrow().get_pair(tv);
-        return contains_identifier_tagged(car, shared_heap)
-            || contains_identifier_tagged(cdr, shared_heap);
+        return contains_identifier_impl(car, shared_heap, guard)
+            || contains_identifier_impl(cdr, shared_heap, guard);
     }
 
     // Non-object types can't contain identifiers
@@ -206,8 +242,11 @@ fn contains_identifier_tagged(
     // Check for boxed pairs
     let is_pair = tv.is_pair();
     if is_pair && let Some((car_tv, cdr_tv)) = shared_heap.borrow().try_pair(tv) {
-        return contains_identifier_tagged(car_tv, shared_heap)
-            || contains_identifier_tagged(cdr_tv, shared_heap);
+        if !guard.enter(tv) {
+            return false;
+        }
+        return contains_identifier_impl(car_tv, shared_heap, guard)
+            || contains_identifier_impl(cdr_tv, shared_heap, guard);
     }
 
     false
@@ -219,6 +258,20 @@ fn flip_scope_on_tagged_impl(
     scope: patina_runtime::ScopeId,
     shared_heap: &patina_core::SharedHeap,
 ) -> patina_core::TaggedValue {
+    let mut guard = CycleGuard::default();
+    flip_scope_guarded(tv, scope, shared_heap, &mut guard)
+}
+
+/// The walk behind [`flip_scope_on_tagged_impl`]. A pair seen before is a
+/// cycle in reader data (see `contains_identifier_tagged`), which holds no
+/// identifiers; the original subtree is kept, and the rebuilt copy's back
+/// edge points into it.
+fn flip_scope_guarded(
+    tv: patina_core::TaggedValue,
+    scope: patina_runtime::ScopeId,
+    shared_heap: &patina_core::SharedHeap,
+    guard: &mut CycleGuard,
+) -> patina_core::TaggedValue {
     // Immediate values pass through unchanged
     if tv.is_fixnum() || tv.is_char() || tv.is_special() {
         return tv;
@@ -226,10 +279,13 @@ fn flip_scope_on_tagged_impl(
 
     // Handle native pairs
     if tv.is_pair() {
+        if !guard.enter(tv) {
+            return tv;
+        }
         let (car, cdr) = shared_heap.borrow().get_pair(tv);
 
-        let new_car = flip_scope_on_tagged_impl(car, scope, shared_heap);
-        let new_cdr = flip_scope_on_tagged_impl(cdr, scope, shared_heap);
+        let new_car = flip_scope_guarded(car, scope, shared_heap, guard);
+        let new_cdr = flip_scope_guarded(cdr, scope, shared_heap, guard);
 
         return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
     }
@@ -255,8 +311,11 @@ fn flip_scope_on_tagged_impl(
     // Handle boxed pairs
     let is_pair = tv.is_pair();
     if is_pair && let Some((car_tv, cdr_tv)) = shared_heap.borrow().try_pair(tv) {
-        let new_car = flip_scope_on_tagged_impl(car_tv, scope, shared_heap);
-        let new_cdr = flip_scope_on_tagged_impl(cdr_tv, scope, shared_heap);
+        if !guard.enter(tv) {
+            return tv;
+        }
+        let new_car = flip_scope_guarded(car_tv, scope, shared_heap, guard);
+        let new_cdr = flip_scope_guarded(cdr_tv, scope, shared_heap, guard);
         return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
     }
 

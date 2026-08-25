@@ -63,6 +63,11 @@ pub struct Compiler {
     /// None means ellipsis is disabled (inside escape)
     pub(super) ellipsis: Option<Rc<str>>,
 
+    /// Where the ellipsis's *name* is bound as a variable around this
+    /// definition — see [`EllipsisBinding`]. A token spelled like the
+    /// ellipsis that refers to such a binding is an ordinary identifier.
+    pub(super) ellipsis_bound: EllipsisBinding,
+
     /// Lexical environment where the macro is being defined (for hygiene)
     ///
     /// Free variables in templates will capture this environment.
@@ -93,7 +98,41 @@ pub struct Compiler {
     pub(super) heap: SharedHeap,
 }
 
+/// The variable bindings of the ellipsis's name (`...` unless SRFI 46 names
+/// another) visible where a `syntax-rules` is written. R7RS 4.3.2 identifies
+/// the ellipsis by binding: inside `(let ((... 19)) …)` a bare `...` is that
+/// variable, so `(_ x y ...)` is a three-variable pattern and a template's
+/// `...` refers to the 19 — while a `...` an *outer* macro introduced through
+/// `(... ...)` carries that macro's scopes, is not this binding, and stays
+/// an ellipsis. Hence a per-token test, not a per-macro switch.
+#[derive(Debug, Clone, Default)]
+pub struct EllipsisBinding {
+    /// A bare (unscoped) `...` in the definition's text is a variable.
+    pub bare: bool,
+    /// The scope sets of the enclosing bindings of that name: a scoped
+    /// token is the variable when one of these is contained in its scopes.
+    pub scoped: Vec<ScopeSet>,
+}
+
+impl EllipsisBinding {
+    /// Does a token with these scopes (`None` for a bare symbol) refer to
+    /// the variable rather than the ellipsis?
+    pub fn binds(&self, scopes: Option<&ScopeSet>) -> bool {
+        match scopes {
+            None => self.bare,
+            Some(scopes) => self.scoped.iter().any(|bs| bs.is_subset_of(scopes)),
+        }
+    }
+}
+
 impl Compiler {
+    /// Record where the ellipsis's name is bound as a variable around this
+    /// definition (see [`EllipsisBinding`]).
+    pub fn with_ellipsis_binding(mut self, bound: EllipsisBinding) -> Self {
+        self.ellipsis_bound = bound;
+        self
+    }
+
     /// Resolve literal bindings at macro definition time
     ///
     /// For each literal name, check if it's bound in the environment or in
@@ -188,6 +227,7 @@ impl Compiler {
             literals: literal_bindings,
             literal_keys: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
+            ellipsis_bound: EllipsisBinding::default(),
             env: None,
             definition_scopes: ScopeSet::new(),
             pvars: HashMap::new(),
@@ -221,6 +261,7 @@ impl Compiler {
             literals: literal_bindings,
             literal_keys: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
+            ellipsis_bound: EllipsisBinding::default(),
             env: Some(env),
             definition_scopes,
             pvars: HashMap::new(),
@@ -254,6 +295,7 @@ impl Compiler {
             literals: literal_bindings,
             literal_keys: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
+            ellipsis_bound: EllipsisBinding::default(),
             env: Some(env),
             definition_scopes: scopes,
             pvars: HashMap::new(),
@@ -292,6 +334,7 @@ impl Compiler {
             literals: literal_bindings,
             literal_keys: literals,
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
+            ellipsis_bound: EllipsisBinding::default(),
             env: Some(env),
             definition_scopes: scopes,
             pvars: HashMap::new(),

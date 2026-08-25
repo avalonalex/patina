@@ -193,8 +193,13 @@ impl Parser {
 
     pub fn parse(&mut self) -> Result<TaggedValue, ParseError> {
         let result = self.parse_expr()?;
-        // After parsing the outermost datum, resolve any label placeholders
-        Ok(self.resolve_labels(result))
+        // After parsing the outermost datum, resolve any label placeholders.
+        // A label's scope is that outermost datum (R7RS 2.4), so the table is
+        // cleared for the next one — `read` calls this once per datum and
+        // used to report "Duplicate datum label" on a file that reused `#0=`.
+        let resolved = self.resolve_labels(result);
+        self.labels.clear();
+        Ok(resolved)
     }
 
     /// Parse all expressions from the input until EOF.
