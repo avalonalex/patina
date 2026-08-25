@@ -622,20 +622,21 @@ fn let_syntax_body_definitions_and_transformer_scope() {
     );
 }
 
-/// VM: `with-exception-handler` rejects a continuation as its handler
-/// ("expected a procedure, got object"), so the R7RS idiom for capturing a
-/// raised object — `(call/cc (lambda (k) (with-exception-handler k …)))` —
-/// fails there. The tree-walker accepts it and, with the object in hand,
-/// `read-error?` and `file-error?` answer `#f` as R7RS 6.11 requires.
+/// `with-exception-handler` takes a continuation as its handler — the R7RS
+/// idiom for capturing a raised object, `(call/cc (lambda (k)
+/// (with-exception-handler k …)))`. The VM used to reject it ("expected a
+/// procedure, got object") until 2026-08-25: its type check asked for a
+/// procedure, and its generic call path could not invoke a continuation.
+/// With the object in hand, `read-error?` and `file-error?` answer `#f` as
+/// R7RS 6.11 requires.
 #[test]
 fn a_continuation_is_a_procedure_for_with_exception_handler() {
-    assert_divergence(
+    assert_program_eval_to(
         "(define e (call/cc (lambda (k) (with-exception-handler k (lambda () (error \"plain\"))))))
-         (list (read-error? e) (file-error? e) (read-error? 42) (file-error? 'x))",
-        On::TreeWalker,
-        "(#f #f #f #f)",
-        ErrorClass::AtRuntime,
-        TRIAGE,
+         (list (error-object? e) (error-object-message e)
+               (read-error? e) (file-error? e) (read-error? 42) (file-error? 'x)
+               (call/cc (lambda (k) (with-exception-handler k (lambda () (raise 'obj))))))",
+        "(#t \"plain\" #f #f #f #f obj)",
     );
 }
 

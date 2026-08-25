@@ -546,7 +546,10 @@ live in `is_continuation`, so five callers still spell the question `is_procedur
 is_continuation(x)` while four omit the disjunct. Folding that variant in would let all five drop
 it, but it widens the four that omit it today — a behaviour change wanting its own tests, not a
 rider on this one. Recorded in the `is_procedure` doc comment so the next reader does not mistake
-the enumeration for complete.
+the enumeration for complete. *(2026-08-25: two of the four widened — the VM's generic call path
+can invoke a continuation, so `with-exception-handler` takes one as its handler and `make-parameter`
+applies one as a converter on the VM; the tree-walker's converter callback still cannot, and the
+callability test pins that split.)*
 
 Guarded by `crates/patina-tests/tests/parameters.rs`, which was ported from a tree-walker-only local
 helper to the shared both-backend helpers in the same change (Track Q Q1) — a single-backend file
