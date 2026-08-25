@@ -2019,6 +2019,13 @@ fn call_any(
         return Ok(Some(result?));
     }
     // Try as VM closure
+    // A continuation is callable wherever a procedure is — as an exception
+    // handler, a call-with-values consumer, a wind thunk. Invoking it
+    // replaces the stack, so the caller's own frame is gone: signal the
+    // dispatch loop the same way the instruction-level call paths do.
+    if try_invoke_continuation(state, func_val, args)? {
+        return Err(signal_continuation_invoked(state, args));
+    }
     call_closure(state, func_val, args, return_reg)?;
     Ok(None)
 }
@@ -2485,10 +2492,12 @@ fn handle_control_primitive(
             let handler_proc = args[0];
             let thunk = args[1];
 
-            // Verify both are callable
+            // Verify both are callable. The handler may be a continuation —
+            // `(call/cc (lambda (k) (with-exception-handler k thunk)))` is
+            // R7RS's idiom for capturing a raised object.
             {
                 let heap = state.heap.borrow();
-                if !heap.is_procedure(handler_proc) {
+                if !heap.is_callable(handler_proc) {
                     return Err(VmError::TypeError {
                         message: "with-exception-handler: first argument must be a procedure"
                             .into(),

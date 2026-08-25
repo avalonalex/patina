@@ -1310,9 +1310,13 @@ impl Heap {
     /// Not the whole of "callable": tree-walker continuations
     /// (`HeapObjectData::Continuation`) are callable too but live in
     /// [`Self::is_continuation`]. Callers who mean *any* callable want
-    /// [`Self::is_callable`]; this one is the narrower question, and four
-    /// callers deliberately ask it — folding `Continuation` in here would
-    /// widen them, a behaviour change wanting its own tests.
+    /// [`Self::is_callable`]; this one is the narrower question, and two
+    /// callers still deliberately ask it (the `with-exception-handler` thunk
+    /// on the VM, and `make-parameter`'s converter — the tree-walker cannot
+    /// invoke a continuation from that callback yet) — folding
+    /// `Continuation` in here would widen them, a behaviour change wanting
+    /// its own tests. The handler argument of `with-exception-handler` moved
+    /// to `is_callable` on 2026-08-25.
     #[inline]
     pub fn is_procedure(&self, tv: TaggedValue) -> bool {
         tv.is_closure()

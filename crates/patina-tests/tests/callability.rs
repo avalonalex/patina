@@ -27,6 +27,7 @@
 mod common;
 use common::{
     ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
+    eval_program_tree_walker, eval_program_vm,
 };
 
 /// `dynamic-wind` performs no up-front validation on either backend — neither
@@ -89,17 +90,33 @@ fn test_with_exception_handler_validates_its_arguments() {
 /// into `is_procedure` would widen those four — a behaviour change wanting its
 /// own tests.
 ///
-/// **This test is meant to fail when that happens.** When it does, do not
-/// adjust the expectation: decide whether `make-parameter` should accept a
-/// continuation, then update this test, the `is_procedure` doc comment and the
-/// PRD entry together.
+/// **Decided 2026-08-25**, when the VM's generic call path learned to invoke
+/// a continuation (so `with-exception-handler` could take one, R7RS's idiom
+/// for capturing a raised object): a continuation *is* a procedure for
+/// `make-parameter` too — chibi and Gauche apply it to the initial value and
+/// escape through it, answering `1`. The VM does the same, through `call_any`.
+/// The tree-walker still rejects it, and deliberately so: its converter
+/// runs as a direct-mode primitive callback, from which a continuation
+/// cannot be invoked at all (PRD §6, "two continuation defects around
+/// primitive callbacks"), so the clean rejection is the better of its two
+/// answers until that is fixed. Not `assert_divergence` — the tree-walker
+/// returns a value, not a failure.
 #[test]
 fn test_procedure_p_is_wider_than_the_sites_that_require_a_procedure() {
     assert_program_eval_to("(call/cc (lambda (k) (procedure? k)))", "#t");
-    assert_program_eval_to(
-        r#"(call/cc (lambda (k)
-             (guard (e (#t 'rejected)) (make-parameter 1 k) 'accepted)))"#,
+    const CONVERTER: &str = r#"(call/cc (lambda (k)
+             (guard (e (#t 'rejected)) (make-parameter 1 k) 'accepted)))"#;
+    assert_eq!(
+        eval_program_vm(CONVERTER),
+        "1",
+        "the VM matches chibi and Gauche; if this changed, it regressed"
+    );
+    assert_eq!(
+        eval_program_tree_walker(CONVERTER),
         "rejected",
+        "\n[tree-walker] NO LONGER DIVERGES — a continuation converter is applied.\n\
+         Replace both assertions with assert_program_eval_to(CONVERTER, \"1\") and \
+         widen make-parameter's check to is_callable."
     );
     // The same site accepts an ordinary procedure, so the rejection above is
     // about which spelling of "callable" it uses, not about converters.

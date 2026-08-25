@@ -126,8 +126,9 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - Ours: `let_syntax_body_definitions_and_transformer_scope` (pinned)
 - Upstream: [tests/scheme/base.sld#L1003](tests/scheme/base.sld#L1003), [#L1014](tests/scheme/base.sld#L1014) (definitions), [#L1118](tests/scheme/base.sld#L1118), [#L1126](tests/scheme/base.sld#L1126) (transformer scope). R7RS 4.3.1: the body of `let-syntax` is a body, so a `define` in it is local (`x` stays 13 outside); and only `letrec-syntax` makes the bound keywords visible inside the transformers — under `let-syntax`, `g`'s `(f x)` is the *outer* `f`. Ours gives `(56 70)` and `(2 2)` for both forms; chibi and Gauche give `(13 70)`, `(1 2)` and `(1 1)`.
 
-### 24. VM: `with-exception-handler` rejects a continuation as its handler — VM only
-- Ours: `a_continuation_is_a_procedure_for_with_exception_handler` (`assert_divergence`)
+### 24. VM: `with-exception-handler` rejects a continuation as its handler — VM only — ✅ fixed 2026-08-25
+- Ours: `a_continuation_is_a_procedure_for_with_exception_handler`
+- Fix: the handler check asks `is_callable` (procedures *or* continuations), and the VM's generic call path (`call_any` — exception handlers, `call-with-values` consumers, wind thunks, parameter converters) can invoke a continuation, signalling the dispatch loop the way the instruction-level call paths already did. chibi and Gauche give `obj` for `(call/cc (lambda (k) (with-exception-handler k (lambda () (raise 'obj)))))`; so does Patina now.
 - Upstream: [tests/scheme/base.sld#L2741](tests/scheme/base.sld#L2741), [#L2748](tests/scheme/base.sld#L2748) — the R7RS idiom for capturing a raised object, `(call/cc (lambda (k) (with-exception-handler k …)))`. "expected a procedure, got object" on the VM; the tree-walker accepts it and then answers `read-error?`/`file-error?` correctly with `#f`.
 
 ### 25. `read-line` does not end a line at a bare return — both backends
