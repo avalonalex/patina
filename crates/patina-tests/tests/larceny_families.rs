@@ -25,7 +25,7 @@ mod common;
 
 use common::{
     ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
-    eval_program, eval_program_tree_walker, eval_program_vm, scratch_path,
+    eval_program_tree_walker, eval_program_vm, scratch_path,
 };
 use tempfile::TempDir;
 
@@ -72,9 +72,9 @@ fn a_nested_include_resolves_relative_to_the_including_file() {
 
 /// Two distinct cyclic lists with the same unrolling: period 2 against
 /// period 4. `(equal? a a)` is fine because `eq?` short-circuits; this one
-/// loops forever, so it cannot be pinned as a running test.
+/// looped forever until 2026-08-24 (an explicit worklist with a lazily
+/// allocated visited set now).
 #[test]
-#[ignore = "hangs: equal? recurses without a visited set — see larceny_triage.md family 2"]
 fn equal_terminates_on_two_distinct_cyclic_lists() {
     assert_program_eval_to(
         "(define a (list 1 2))       (set-cdr! (cdr a) a)
@@ -84,15 +84,16 @@ fn equal_terminates_on_two_distinct_cyclic_lists() {
     );
 }
 
-/// The vector shape of the same defect overflows the Rust stack instead of
-/// hanging, which is why Larceny's `read` suite dies rather than stalling.
+/// The vector shape of the same defect overflowed the Rust stack instead of
+/// hanging, which is why Larceny's `read` suite died rather than stalling.
+/// Also asserts the negative: a cycle of a different shape is not equal.
 #[test]
-#[ignore = "stack overflow: equal? recurses without a visited set — see larceny_triage.md family 2"]
 fn equal_terminates_on_two_distinct_cyclic_vectors() {
     assert_program_eval_to(
-        "(define (cyc) (let ((v (vector 1 #f))) (vector-set! v 1 v) v))
-         (equal? (cyc) (cyc))",
-        "#t",
+        "(define (cyc x) (let ((v (vector x #f))) (vector-set! v 1 v) v))
+         (define a (list 1 2)) (set-cdr! (cdr a) a)
+         (list (equal? (cyc 1) (cyc 1)) (equal? (cyc 1) (cyc 2)) (equal? a (cyc 1)))",
+        "(#t #f #f)",
     );
 }
 
@@ -101,9 +102,10 @@ fn equal_terminates_on_two_distinct_cyclic_vectors() {
 // ---------------------------------------------------------------------------
 
 /// The reason `delay-force` exists is that a chain of them runs in bounded
-/// space. Ours recurses per link and overflows at a hundred thousand.
+/// space. Ours recursed per link and overflowed at a hundred thousand until
+/// 2026-08-24 (R7RS 7.3's iterative `force`, inner promise aliased to the
+/// outer's box).
 #[test]
-#[ignore = "stack overflow: force recurses into a delay-force chain — see larceny_triage.md family 3"]
 fn a_long_delay_force_chain_runs_in_bounded_space() {
     assert_program_eval_to(
         "(import (scheme lazy))
@@ -195,22 +197,26 @@ fn case_mapping_of_characters_without_a_single_character_mapping() {
 // ---------------------------------------------------------------------------
 
 /// The reader accepts `+inf.0`, `-nan.0`, `1+2i` and `#e1e400` as literals;
-/// `string->number` rejects the first three and reads the last through a
-/// float, giving `+inf.0` where R7RS wants an exact integer (401 digits).
-///
-/// **When this converges, replace with `assert_program_eval_to` against
-/// `(+inf.0 +nan.0 1+2i <10^400>)` — or split the last one out — and update
-/// the triage doc.**
+/// `string->number` rejected the first three and read the last through a
+/// float. Fixed 2026-08-24: `string->number` *is* the reader's number
+/// syntax now (the whole string must lex as one number token), and `#e` on
+/// a decimal is the exact value of the text.
 #[test]
 fn string_to_number_accepts_what_the_reader_accepts() {
-    let program = "(list (string->number \"+inf.0\")
-                         (string->number \"-nan.0\")
-                         (string->number \"1+2i\")
-                         (exact? (string->number \"#e1e400\")))";
-    assert_eq!(
-        eval_program(program),
-        "(#f #f #f #f)",
-        "expected the pinned wrong answer; if this is now (+inf.0 +nan.0 1+2i #t) the defect is fixed"
+    assert_program_eval_to(
+        "(list (string->number \"+inf.0\")
+               (string->number \"-nan.0\")
+               (string->number \"1+2i\")
+               (exact? (string->number \"#e1e400\"))
+               (= (string->number \"#e1e400\") (expt 10 400))
+               (string->number \"#e1.5\")
+               (string->number \"1F\" 16)
+               (string->number \"#x1F\" 10)
+               (string->number \"abc\")
+               (string->number \"1 2\")
+               (string->number \" 12\")
+               (string->number \"\"))",
+        "(+inf.0 +nan.0 1+2i #t #t 3/2 31 31 #f #f #f #f)",
     );
 }
 
@@ -322,4 +328,106 @@ fn a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword() {
                      (define-syntax mention-if (syntax-rules () ((_ a) (list a if))))
                      (list (mention-dots 1) (mention-if 2)))";
     assert_program_eval_error(program);
+}
+
+// ---------------------------------------------------------------------------
+// Family 16 — a line comment is not ended by a bare return
+// ---------------------------------------------------------------------------
+
+/// R7RS 7.1.1: a line ending is newline, return, or return+newline, and a
+/// `;` comment runs to the line ending. Ours ran to the newline only, so a
+/// datum after a return-terminated comment was swallowed. Fixed 2026-08-24.
+#[test]
+fn a_line_comment_ends_at_a_bare_return() {
+    assert_program_eval_to(
+        "(import (scheme read))
+         (let ((p (open-input-string \"first ; comment\\rsecond ; another\\r\\nthird\")))
+           (list (read p) (read p) (read p) (eof-object? (read p))))",
+        "(first second third #t)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Review of #112 — the cases its review found, kept as they were verified
+// ---------------------------------------------------------------------------
+
+/// A promise's box can be re-pointed by a force nested inside its own thunk
+/// (`promise_update` aliases the inner promise to the outer's box). The
+/// outer force must then look its box up again rather than store into the
+/// one it captured before the thunk: R7RS 7.3's reference gives (2 2 2).
+#[test]
+fn a_force_reentered_through_promise_update_memoizes_once() {
+    assert_program_eval_to(
+        "(import (scheme lazy))
+         (define n 0)
+         (define q #f)
+         (define p (delay-force q))
+         (set! q (delay (let ((me (begin (set! n (+ n 1)) n)))
+                          (if (= me 1) (force p))
+                          me)))
+         (list (force q) (force q) (force p))",
+        "(2 2 2)",
+    );
+}
+
+/// `(delay e)` wraps its value in a *done* promise (R7RS 7.3), so forcing a
+/// delay whose value is a promise yields that promise, not its value —
+/// forcing through is what `delay-force` is for.
+#[test]
+fn forcing_a_delay_of_a_promise_yields_the_promise() {
+    assert_program_eval_to(
+        "(import (scheme lazy))
+         (define a (delay 7))
+         (list (promise? (force (delay (delay 5))))
+               (eq? (force (delay a)) a)
+               (force (delay-force (delay 5))))",
+        "(#t #t 5)",
+    );
+}
+
+/// `equal?` walks record fields on the same worklist as pairs and vectors,
+/// so a cycle through a record terminates too.
+#[test]
+fn equal_terminates_through_a_record_field_cycle() {
+    assert_program_eval_to(
+        "(define-record-type <box> (mk v) box? (v box-v box-set-v!))
+         (define a (mk #f)) (box-set-v! a a)
+         (define b (mk #f)) (box-set-v! b b)
+         (define c (mk 1))  (box-set-v! c (list c))
+         (list (equal? a b) (equal? a c) (equal? (mk 1) (mk 1)) (equal? (mk 1) (mk 2)))",
+        "(#t #f #t #f)",
+    );
+}
+
+/// `string->number` is the reader's number syntax and nothing more: a
+/// comment, a block comment or a `#!` line before the digits is not part
+/// of a number; an exactness prefix applies to both parts of a complex; a
+/// pure imaginary needs its sign; an exponent no bignum should hold is
+/// refused rather than computed.
+#[test]
+fn string_to_number_is_exactly_one_number_token() {
+    assert_program_eval_to(
+        "(list (string->number \"1;2\")
+               (string->number \"#|c|#1\")
+               (string->number \"#!fold-case 1\")
+               (string->number \"#e1.5+2i\")
+               (string->number \"#i1+2i\")
+               (string->number \"1i\")
+               (string->number \"+1i\")
+               (string->number \"#e1e1000000\")
+               (string->number \"#e1.00e-9223372036854775807\")
+               (string->number \"+123\")
+               (string->number \"-99999999999999999999\"))",
+        "(#f #f #f 3/2+2i 1.0+2.0i #f +i #f #f 123 -99999999999999999999)",
+    );
+}
+
+/// A shebang line, like a `;` comment, ends at a bare return.
+#[test]
+fn a_shebang_line_ends_at_a_bare_return() {
+    assert_program_eval_to(
+        "(import (scheme read))
+         (read (open-input-string \"#!/usr/bin/env patina\\r42\"))",
+        "42",
+    );
 }

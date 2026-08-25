@@ -691,6 +691,47 @@ impl Parser {
             )));
         }
 
+        // `#e` on a decimal literal: the exact value of the *text*, not of the
+        // double it would round to — `#e1.5` is 3/2 and `#e1e400` is 10^400,
+        // which no f64 holds.
+        if exactness == Some(true) && radix == 10 {
+            let exact = Self::exact_decimal(rest);
+            if let Some(ratio) = exact {
+                return Ok(self.tagged_rational(ratio?));
+            }
+        }
+
+        // An exactness prefix applies to the whole number (R7RS 6.2.5), so a
+        // rectangular complex gets it on each part: `#e1.5+2i` is 3/2+2i.
+        let rectangular =
+            if exactness.is_some() && radix == 10 && (rest.ends_with('i') || rest.ends_with('I')) {
+                Self::rectangular_parts(&rest[..rest.len() - 1])
+            } else {
+                None
+            };
+        if let Some((re, im)) = rectangular {
+            let part = |text: &str| -> Result<TaggedValue, ParseError> {
+                let exact = if exactness == Some(true) {
+                    Self::exact_decimal(text)
+                } else {
+                    None
+                };
+                match exact {
+                    Some(ratio) => Ok(self.tagged_rational(ratio?)),
+                    None => {
+                        let tv = self.parse_real_component_as_tagged(text)?;
+                        self.apply_exactness(tv, exactness, s)
+                    }
+                }
+            };
+            let re_tv = match re {
+                Some(text) => part(text)?,
+                None => self.apply_exactness(TaggedValue::fixnum(0), exactness, s)?,
+            };
+            let im_tv = part(&im)?;
+            return Ok(self.alloc_complex(re_tv, im_tv));
+        }
+
         // Parse the number based on radix
         let tv = if radix == 10 {
             // For decimal, use the main parse_number logic (handles floats, rationals, complex, etc.)
@@ -706,6 +747,140 @@ impl Parser {
 
         // Apply exactness conversion if specified
         self.apply_exactness(tv, exactness, s)
+    }
+
+    /// The exact rational a plain decimal literal denotes —
+    /// `[sign] digits [. digits] [e [sign] digits]` with any R7RS exponent
+    /// marker. `None` if `s` is not that shape (a rational, a complex, an
+    /// infinity: those take the ordinary path); `Some(Err(_))` if it is,
+    /// but its exponent is beyond what an exact number should be asked to
+    /// hold — refused rather than rounded, since `#e` promised exactness.
+    fn exact_decimal(s: &str) -> Option<Result<BigRational, ParseError>> {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        let negative = match bytes.first() {
+            Some(b'-') => {
+                i += 1;
+                true
+            }
+            Some(b'+') => {
+                i += 1;
+                false
+            }
+            _ => false,
+        };
+        let mut mantissa = String::new();
+        let mut frac_digits: i64 = 0;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            mantissa.push(bytes[i] as char);
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                mantissa.push(bytes[i] as char);
+                frac_digits += 1;
+                i += 1;
+            }
+        }
+        if mantissa.is_empty() {
+            return None;
+        }
+        let mut exponent: i64 = 0;
+        if i < bytes.len() {
+            if !matches!(
+                bytes[i],
+                b'e' | b'E' | b's' | b'S' | b'f' | b'F' | b'd' | b'D' | b'l' | b'L'
+            ) {
+                return None;
+            }
+            i += 1;
+            let exp_negative = match bytes.get(i) {
+                Some(b'-') => {
+                    i += 1;
+                    true
+                }
+                Some(b'+') => {
+                    i += 1;
+                    false
+                }
+                _ => false,
+            };
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == start || i != bytes.len() {
+                return None;
+            }
+            exponent = s[start..i].parse::<i64>().ok()?;
+            if exp_negative {
+                exponent = -exponent;
+            }
+        }
+        // The exact value is mantissa × 10^scale. Bound the scale: a literal
+        // can spell an exponent no bignum should be asked to hold
+        // (`#e1e1000000000`), and the subtraction itself can overflow. Past
+        // the bound the literal takes the ordinary (inexact) path, where it
+        // is an infinity and `#e` is refused.
+        const MAX_SCALE: i64 = 20_000;
+        let too_large = || {
+            Some(Err(ParseError::InvalidSyntax(format!(
+                "#e: exponent of {s} is too large for an exact number"
+            ))))
+        };
+        let scale = match exponent.checked_sub(frac_digits) {
+            Some(scale) if scale.abs() <= MAX_SCALE => scale,
+            _ => return too_large(),
+        };
+        let mantissa = BigInt::from_str(&mantissa).ok()?;
+        let pow = num_traits::pow(BigInt::from(10u32), scale.unsigned_abs() as usize);
+        let value = if scale >= 0 {
+            BigRational::from(mantissa * pow)
+        } else {
+            BigRational::new(mantissa, pow)
+        };
+        Some(Ok(if negative { -value } else { value }))
+    }
+
+    /// The whole of `s` as one numeric literal, or `None` — R7RS 6.2.7's
+    /// `string->number`. Reuses the reader: `s` must lex as exactly one
+    /// number token, so everything the reader accepts (`1+2i`, `+inf.0`,
+    /// `#e1e400`, `#x1/10`) `string->number` accepts too, and nothing else.
+    /// `radix` applies unless `s` carries its own radix prefix.
+    pub fn number_from_str(s: &str, radix: u32, heap: SharedHeap) -> Option<TaggedValue> {
+        // The reader skips whitespace; a numeric string does not have any.
+        if s.is_empty() || s != s.trim() {
+            return None;
+        }
+        let lower = s.to_ascii_lowercase();
+        let has_radix_prefix = ["#b", "#o", "#d", "#x"].iter().any(|p| lower.contains(p));
+        let prefixed;
+        let input = if radix == 10 || has_radix_prefix {
+            s
+        } else {
+            let marker = match radix {
+                2 => 'b',
+                8 => 'o',
+                16 => 'x',
+                _ => return None,
+            };
+            prefixed = format!("#{marker}{s}");
+            &prefixed
+        };
+        let mut parser = Parser::new_with_heap(input, heap).ok()?;
+        let text = match &parser.current_token {
+            // The token must *be* the input: the lexer skips comments,
+            // block comments and `#!` lines before a token, and "1;2" is
+            // not a number.
+            Token::Number(text) if text.len() == input.len() => text.clone(),
+            _ => return None,
+        };
+        parser.advance().ok()?;
+        if parser.current_token != Token::Eof {
+            return None;
+        }
+        parser.parse_number(&text).ok()
     }
 
     /// Parse a rational number string: "numerator/denominator"
@@ -867,56 +1042,47 @@ impl Parser {
         self.heap.borrow_mut().alloc_complex(real, imag)
     }
 
+    /// Split the text of a rectangular complex (without its trailing `i`)
+    /// into its real part, if any, and its signed imaginary part: `"1.5+2"`
+    /// → `(Some("1.5"), "+2")`, `"+"` → `(None, "+1")`, `"-3"` → `(None,
+    /// "-3")`. `None` if the imaginary part has no sign — R7RS 7.1.1 derives
+    /// every pure-imaginary form with one, so `1i` is not a number.
+    fn rectangular_parts(s_no_i: &str) -> Option<(Option<&str>, String)> {
+        let with_unit = |sign: &str| -> String {
+            if sign == "+" || sign == "-" {
+                format!("{sign}1")
+            } else {
+                sign.to_string()
+            }
+        };
+        let start_pos = usize::from(s_no_i.starts_with('+') || s_no_i.starts_with('-'));
+        if let Some(sep) = s_no_i[start_pos..].find(['+', '-']) {
+            let at = start_pos + sep;
+            let real = &s_no_i[..at];
+            let imag = &s_no_i[at..];
+            // An infnan real part carries its own sign; its "separator" is
+            // the imaginary part's sign, which is what we want.
+            let real = if real.is_empty() { None } else { Some(real) };
+            return Some((real, with_unit(imag)));
+        }
+        if start_pos == 1 || s_no_i.is_empty() {
+            let imag = if s_no_i.is_empty() { "+" } else { s_no_i };
+            return Some((None, with_unit(imag)));
+        }
+        None
+    }
+
     fn parse_rectangular(&self, s: &str) -> Result<TaggedValue, ParseError> {
         // Remove the trailing 'i' or 'I'
         let s_no_i = &s[..s.len() - 1];
-
-        // Handle special cases: +i, -i
-        let zero = TaggedValue::fixnum(0);
-        if s_no_i == "+" || s_no_i.is_empty() {
-            // +i means 0+1i (both exact integers)
-            return Ok(self.alloc_complex(zero, TaggedValue::fixnum(1)));
-        }
-        if s_no_i == "-" {
-            // -i means 0-1i (both exact integers)
-            return Ok(self.alloc_complex(zero, TaggedValue::fixnum(-1)));
-        }
-
-        // Find the position of + or - that separates real and imaginary parts
-        // We need to skip the leading sign (if any)
-        let start_pos = if s_no_i.starts_with('+') || s_no_i.starts_with('-') {
-            1
-        } else {
-            0
+        let (real, imag) = Self::rectangular_parts(s_no_i)
+            .ok_or_else(|| ParseError::InvalidSyntax(format!("Invalid number: {}", s)))?;
+        let real_tv = match real {
+            None => TaggedValue::fixnum(0),
+            Some(text) => self.parse_real_component_as_tagged(text)?,
         };
-
-        // Find the separator (+ or -) after the start position
-        if let Some(sep_pos) = s_no_i[start_pos..].find(['+', '-']) {
-            let real_sep_pos = start_pos + sep_pos;
-            let real_part_str = &s_no_i[..real_sep_pos];
-            let imag_part_str = &s_no_i[real_sep_pos..];
-
-            // Handle empty imaginary part (like "3+i" or "3-i")
-            let imag_str = if imag_part_str == "+" || imag_part_str == "-" {
-                format!("{}1", imag_part_str)
-            } else {
-                imag_part_str.to_string()
-            };
-
-            // Parse both parts as TaggedValues (preserving exactness)
-            let real_tv = if real_part_str.is_empty() {
-                zero
-            } else {
-                self.parse_real_component_as_tagged(real_part_str)?
-            };
-            let imag_tv = self.parse_real_component_as_tagged(&imag_str)?;
-
-            Ok(self.alloc_complex(real_tv, imag_tv))
-        } else {
-            // No separator found - this is pure imaginary like "+5i" or "-3i"
-            let imag_tv = self.parse_real_component_as_tagged(s_no_i)?;
-            Ok(self.alloc_complex(zero, imag_tv))
-        }
+        let imag_tv = self.parse_real_component_as_tagged(&imag)?;
+        Ok(self.alloc_complex(real_tv, imag_tv))
     }
 
     fn parse_polar(&self, s: &str) -> Result<TaggedValue, ParseError> {

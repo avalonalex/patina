@@ -20,6 +20,7 @@ pub fn build_internal_lazy(_name: Vec<String>, env: Rc<Environment>) -> Vec<Stri
         ("make-promise", Arity::Exact(1)),
         // Internal helper for delay/delay-force macros
         ("%make-delayed-promise", Arity::Exact(1)),
+        ("%make-forced-promise", Arity::Exact(1)),
     ];
 
     for (name, arity) in &primitives {

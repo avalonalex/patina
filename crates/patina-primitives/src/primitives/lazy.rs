@@ -48,6 +48,30 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         "Internal: Create a delayed promise from a thunk. Used by delay macro.",
         make_delayed_promise,
     ));
+
+    registry.register(PrimitiveFn::new_heap(
+        "scheme.lazy",
+        "%make-forced-promise",
+        Arity::Exact(1),
+        "Internal: a promise already holding obj — even when obj is itself a promise, \
+         unlike make-promise. What (delay e) wraps its value in (R7RS 7.3).",
+        make_forced_promise,
+    ));
+}
+
+/// `(%make-forced-promise obj)` — R7RS 7.3's `(make-promise #t obj)`: a done
+/// promise holding `obj`, wrapping a promise rather than returning it. That
+/// is what makes `(force (delay p))` yield the promise `p` itself instead of
+/// forcing through it, which `delay-force` is for.
+fn make_forced_promise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let state = Rc::new(RefCell::new(PromiseState::Forced(args[0])));
+    Ok(heap.borrow_mut().alloc_promise(state))
 }
 
 /// Force evaluation of a promise
@@ -68,49 +92,47 @@ fn force(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<TaggedValue, 
     force_tagged(ctx, args[0])
 }
 
-/// Internal recursive forcing that works entirely with TaggedValue
+/// Force a promise — R7RS 7.3's reference algorithm, iteratively.
+///
+/// A `delay-force` thunk yields another promise. Rather than force that one
+/// recursively (a Rust frame per link, so a chain of a hundred thousand —
+/// the whole reason `delay-force` exists — overflowed the stack), the outer
+/// promise takes over the inner's state and the inner is re-pointed at the
+/// outer's box (`Heap::promise_update`), and the loop goes round again.
+/// Either promise forced later sees the one memoized value; SRFI 45's leak
+/// tests hold because nothing accumulates per link.
+///
+/// The promise's box is looked up afresh on every turn, by object. A thunk
+/// may force its own promise re-entrantly, and a nested force can re-point
+/// this promise at a different box while the thunk runs; a box captured
+/// before the thunk would then be an orphan, and the value stored into it
+/// never memoized. If the promise is already done when the thunk returns,
+/// that value wins and the thunk's result is dropped (R7RS: "unless
+/// (promise-done? promise)").
 fn force_tagged(ctx: &dyn ApplyContext, obj: TaggedValue) -> Result<TaggedValue, EvalError> {
     let heap = ctx.heap();
+    loop {
+        let cell = match heap.borrow().get_promise(obj) {
+            Some(p) => p,
+            None => return Ok(obj), // Not a promise, return unchanged
+        };
+        let thunk = match *cell.borrow() {
+            PromiseState::Forced(value) => return Ok(value),
+            PromiseState::Delayed(thunk) => thunk,
+        };
+        drop(cell);
 
-    // Check if it's a promise
-    let promise_ref = match heap.borrow().get_promise(obj) {
-        Some(p) => p,
-        None => return Ok(obj), // Not a promise, return unchanged
-    };
+        let result = ctx.apply_proc(thunk, vec![])?;
 
-    let promise = promise_ref.borrow_mut();
-
-    match *promise {
-        PromiseState::Forced(value_tagged) => {
-            // Already evaluated, return cached TaggedValue directly
-            Ok(value_tagged)
+        let cell = heap.borrow().get_promise(obj).expect("still a promise");
+        if let PromiseState::Forced(value) = *cell.borrow() {
+            return Ok(value);
         }
-        PromiseState::Delayed(thunk_tagged) => {
-            // Drop borrow before evaluating
-            drop(promise);
-
-            // Check if thunk is a procedure using heap
-            let is_proc = heap.borrow().is_procedure(thunk_tagged);
-
-            let result_tagged = if is_proc {
-                // Call the thunk with no arguments — thunk is already TaggedValue
-                ctx.apply_proc(thunk_tagged, vec![])?
-            } else {
-                // If it's not a procedure, just return it
-                thunk_tagged
-            };
-
-            // If the result is a promise, force it recursively (delay-force pattern)
-            let final_tagged = if heap.borrow().is_promise(result_tagged) {
-                force_tagged(ctx, result_tagged)?
-            } else {
-                result_tagged
-            };
-
-            // Cache the result as TaggedValue
-            *promise_ref.borrow_mut() = PromiseState::Forced(final_tagged);
-
-            Ok(final_tagged)
+        if heap.borrow().is_promise(result) {
+            heap.borrow_mut().promise_update(obj, result);
+        } else {
+            *cell.borrow_mut() = PromiseState::Forced(result);
+            return Ok(result);
         }
     }
 }

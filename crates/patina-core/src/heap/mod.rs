@@ -882,6 +882,24 @@ impl Heap {
         self.alloc_object(HeapObjectData::Promise(state))
     }
 
+    /// R7RS 7.3's `promise-update!`: forcing the `delay-force` promise
+    /// `outer` yielded the promise `inner`. `outer` takes over `inner`'s
+    /// current state, and `inner` is re-pointed at `outer`'s box, so forcing
+    /// either later sees the one memoized value and a chain of them is
+    /// forced in constant space. Both boxes are looked up *now*, by object:
+    /// a force nested inside the thunk may already have re-pointed either
+    /// promise, and a box captured before the thunk ran can be stale.
+    pub fn promise_update(&mut self, outer: TaggedValue, inner: TaggedValue) {
+        let (outer_cell, inner_state) = match (self.get_promise(outer), self.get_promise(inner)) {
+            (Some(o), Some(i)) => (o, *i.borrow()),
+            _ => return,
+        };
+        if !Rc::ptr_eq(&outer_cell, &self.get_promise(inner).expect("checked")) {
+            *outer_cell.borrow_mut() = inner_state;
+            self.objects[inner.heap_index() as usize] = HeapObjectData::Promise(outer_cell);
+        }
+    }
+
     /// Allocate a native Library object
     pub fn alloc_library(&mut self, lib: Rc<crate::library::Library>) -> TaggedValue {
         self.alloc_object(HeapObjectData::Library(lib))
@@ -2013,36 +2031,143 @@ impl Heap {
 
     /// Deep structural comparison for native pairs
     pub fn pairs_equal(&self, a: TaggedValue, b: TaggedValue) -> bool {
-        if !a.is_pair() || !b.is_pair() {
-            return false;
-        }
-        let a_car = self.car(a);
-        let a_cdr = self.cdr(a);
-        let b_car = self.car(b);
-        let b_cdr = self.cdr(b);
-        self.tagged_values_equal(a_car, b_car) && self.tagged_values_equal(a_cdr, b_cdr)
+        a.is_pair() && b.is_pair() && self.tagged_values_equal(a, b)
     }
 
     /// Deep structural comparison for native vectors
     pub fn vectors_equal(&self, a: TaggedValue, b: TaggedValue) -> bool {
-        if !a.is_vector() || !b.is_vector() {
-            return false;
-        }
-        let a_slice = self.vector_slice(a);
-        let b_slice = self.vector_slice(b);
-        if a_slice.len() != b_slice.len() {
-            return false;
-        }
-        for (av, bv) in a_slice.iter().zip(b_slice.iter()) {
-            if !self.tagged_values_equal(*av, *bv) {
-                return false;
-            }
-        }
-        true
+        a.is_vector() && b.is_vector() && self.tagged_values_equal(a, b)
     }
 
-    /// Full equal? implementation that handles all value types
+    /// Full equal? implementation that handles all value types.
+    ///
+    /// R7RS 6.1: "`equal?` must always terminate even if its arguments are
+    /// circular data structures". Pairs, vectors and records are walked
+    /// without Rust recursion: the cdr spine of a list is followed in place,
+    /// a vector or record is stepped through by index, and only a *nested*
+    /// container is pushed on a worklist — so comparing two flat lists
+    /// allocates nothing, and a long one cannot overflow the stack. Once the
+    /// walk has entered more containers than any sane acyclic structure has
+    /// (`RECORD_VISITS_AFTER`), every (a, b) container pair it enters is
+    /// recorded and not entered twice; treating a revisit as equal is the
+    /// coinductive reading every implementation uses. Below that bound the
+    /// acyclic case pays nothing beyond the walk itself.
     pub fn tagged_values_equal(&self, a: TaggedValue, b: TaggedValue) -> bool {
+        const RECORD_VISITS_AFTER: usize = 1 << 20;
+        enum Item {
+            Pair(TaggedValue, TaggedValue),
+            /// Elements `i..` of two vectors or records, fetched by index so
+            /// the worklist never holds a copy of the contents.
+            Indexed(TaggedValue, TaggedValue, usize),
+        }
+        let mut work: Vec<Item> = Vec::new();
+        let mut visited: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+        let mut entered = 0usize;
+
+        // Enter the container pair (a, b); `false` means "already entered,
+        // assume equal", `true` means "walk it".
+        let mut enter = |a: TaggedValue, b: TaggedValue| -> bool {
+            entered += 1;
+            entered <= RECORD_VISITS_AFTER || visited.insert((a.raw(), b.raw()))
+        };
+
+        let mut item = Item::Pair(a, b);
+        loop {
+            match item {
+                Item::Pair(mut a, mut b) => {
+                    // Walk the cdr spine in place; descend into a nested
+                    // container only through the worklist.
+                    loop {
+                        if a.raw() == b.raw() {
+                            break;
+                        }
+                        if a.is_pair() && b.is_pair() {
+                            if !enter(a, b) {
+                                break;
+                            }
+                            let (ca, cb) = (self.car(a), self.car(b));
+                            if ca.raw() != cb.raw() {
+                                if self.both_containers(ca, cb) {
+                                    work.push(Item::Pair(ca, cb));
+                                } else if !self.equal_leaf(ca, cb) {
+                                    return false;
+                                }
+                            }
+                            a = self.cdr(a);
+                            b = self.cdr(b);
+                        } else if self.both_indexed(a, b) {
+                            if enter(a, b) {
+                                work.push(Item::Indexed(a, b, 0));
+                            }
+                            break;
+                        } else if !self.equal_leaf(a, b) {
+                            return false;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                Item::Indexed(a, b, i) => {
+                    let (len_a, len_b) = (self.indexed_len(a), self.indexed_len(b));
+                    if len_a != len_b {
+                        return false;
+                    }
+                    if i < len_a {
+                        let (ea, eb) = (self.indexed_ref(a, i), self.indexed_ref(b, i));
+                        work.push(Item::Indexed(a, b, i + 1));
+                        if ea.raw() != eb.raw() {
+                            if self.both_containers(ea, eb) {
+                                work.push(Item::Pair(ea, eb));
+                            } else if !self.equal_leaf(ea, eb) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            match work.pop() {
+                Some(next) => item = next,
+                None => return true,
+            }
+        }
+    }
+
+    /// Both a pair, both a vector, or both a record — the shapes
+    /// [`Self::tagged_values_equal`] walks rather than compares as leaves.
+    fn both_containers(&self, a: TaggedValue, b: TaggedValue) -> bool {
+        (a.is_pair() && b.is_pair()) || self.both_indexed(a, b)
+    }
+
+    /// Both a vector, or both a record of the same type.
+    fn both_indexed(&self, a: TaggedValue, b: TaggedValue) -> bool {
+        (a.is_vector() && b.is_vector())
+            || matches!(
+                (self.get_record(a), self.get_record(b)),
+                (Some((ra, _)), Some((rb, _))) if Rc::ptr_eq(ra, rb)
+            )
+    }
+
+    fn indexed_len(&self, tv: TaggedValue) -> usize {
+        if tv.is_vector() {
+            self.vector_slice(tv).len()
+        } else {
+            self.get_record(tv).map_or(0, |(_, f)| f.borrow().len())
+        }
+    }
+
+    fn indexed_ref(&self, tv: TaggedValue, i: usize) -> TaggedValue {
+        if tv.is_vector() {
+            self.vector_slice(tv)[i]
+        } else {
+            self.get_record(tv).expect("record").1.borrow()[i]
+        }
+    }
+
+    /// `equal?` on two values that are not both containers of the same kind —
+    /// the leaves of [`Self::tagged_values_equal`]'s walk. (Two records of
+    /// the same type are walked; two of different types fall through to
+    /// `values_equal`, which says no.)
+    fn equal_leaf(&self, a: TaggedValue, b: TaggedValue) -> bool {
         // Fast path: identical raw values
         if a.raw() == b.raw() {
             return true;
@@ -2054,16 +2179,6 @@ impl Heap {
         }
         if a.is_null() || b.is_null() {
             return false;
-        }
-
-        // Check for pairs (native heap pairs)
-        if a.is_pair() && b.is_pair() {
-            return self.pairs_equal(a, b);
-        }
-
-        // Check for vectors (native heap vectors)
-        if a.is_vector() && b.is_vector() {
-            return self.vectors_equal(a, b);
         }
 
         // Check for native bytevectors

@@ -20,7 +20,8 @@
     promise?
     make-promise
     ;; Internal: needed for delay/delay-force macro expansion
-    %make-delayed-promise)
+    %make-delayed-promise
+    %make-forced-promise)
 
   ;; delay and delay-force are macros
   (include "lazy/promises.scm"))

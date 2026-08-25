@@ -7,7 +7,7 @@
 use crate::registry::{PrimitiveFn, PrimitiveRegistry};
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{Num, ToPrimitive};
+
 use patina_core::TaggedValue;
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
@@ -124,14 +124,29 @@ fn string_to_number(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
         )));
     }
 
-    let trimmed = string.trim();
-    if trimmed.is_empty() {
-        return Ok(TaggedValue::FALSE);
+    drop(heap_ref);
+
+    // Fast path: a plain decimal integer, the common case for anything that
+    // tokenizes text, parsed without standing up a lexer. `[+-]?digits` is
+    // exactly what fits — a leading '+' is allowed by i64::from_str.
+    let plain_integer = default_radix == 10
+        && string
+            .strip_prefix(['+', '-'])
+            .unwrap_or(&string)
+            .bytes()
+            .all(|b| b.is_ascii_digit());
+    if let Some(n) = plain_integer.then(|| string.parse::<i64>().ok()).flatten() {
+        return Ok(if TaggedValue::fits_fixnum(n) {
+            TaggedValue::fixnum(n)
+        } else {
+            heap.borrow_mut().alloc_bigint(num_bigint::BigInt::from(n))
+        });
     }
 
-    // Drop the immutable borrow before getting mutable borrow for allocation
-    drop(heap_ref);
-    match parse_number_string(trimmed, default_radix, &mut heap.borrow_mut()) {
+    // The reader's number syntax is the definition of what string->number
+    // accepts (R7RS 6.2.7); a second parser here had drifted — no infinities,
+    // no complex numbers, `#e` through a double.
+    match patina_frontend::Parser::number_from_str(&string, default_radix, heap.clone()) {
         Some(tagged) => Ok(tagged),
         None => Ok(TaggedValue::FALSE),
     }
@@ -355,105 +370,6 @@ fn complex_to_string_tagged(r: TaggedValue, i: TaggedValue, heap: &patina_core::
             tagged_number_str(i, heap)
         )
     }
-}
-
-/// Parse a number string with the given radix, returning a TaggedValue
-fn parse_number_string(s: &str, radix: u32, heap: &mut patina_core::Heap) -> Option<TaggedValue> {
-    // Handle prefixes (#b, #o, #d, #x, #e, #i)
-    let (s, actual_radix, exactness) = parse_number_prefix(s, radix);
-
-    // Try to parse as different number types
-    // First, try as integer
-    if let Some(val) = try_parse_integer(s, actual_radix, heap) {
-        if let Some(false) = exactness {
-            // Convert to inexact
-            let f = if val.is_fixnum() {
-                val.as_fixnum_unchecked() as f64
-            } else {
-                heap.get_bigint(val)
-                    .map(|n| n.to_f64().unwrap_or(f64::INFINITY))
-                    .unwrap_or(0.0)
-            };
-            return Some(heap.alloc_real(f));
-        }
-        return Some(val);
-    }
-
-    // If radix is 10, try as floating point
-    if actual_radix == 10 {
-        if let Ok(f) = s.parse::<f64>() {
-            return Some(heap.alloc_real(f));
-        }
-
-        // Try parsing rational (e.g., "3/4")
-        if s.contains('/') {
-            let parts: Vec<&str> = s.split('/').collect();
-            if parts.len() == 2
-                && let (Ok(numer), Ok(denom)) = (parts[0].parse::<i64>(), parts[1].parse::<i64>())
-                && denom != 0
-            {
-                return Some(
-                    heap.alloc_rational(BigRational::new(BigInt::from(numer), BigInt::from(denom))),
-                );
-            }
-        }
-    }
-
-    None
-}
-
-/// Parse number prefix and return (remaining_string, radix, exactness)
-/// exactness: None = unspecified, Some(true) = exact, Some(false) = inexact
-fn parse_number_prefix(s: &str, default_radix: u32) -> (&str, u32, Option<bool>) {
-    let mut s = s;
-    let mut radix = default_radix;
-    let mut exactness = None;
-
-    // Parse up to 2 prefixes
-    for _ in 0..2 {
-        if s.starts_with("#b") || s.starts_with("#B") {
-            radix = 2;
-            s = &s[2..];
-        } else if s.starts_with("#o") || s.starts_with("#O") {
-            radix = 8;
-            s = &s[2..];
-        } else if s.starts_with("#d") || s.starts_with("#D") {
-            radix = 10;
-            s = &s[2..];
-        } else if s.starts_with("#x") || s.starts_with("#X") {
-            radix = 16;
-            s = &s[2..];
-        } else if s.starts_with("#e") || s.starts_with("#E") {
-            exactness = Some(true);
-            s = &s[2..];
-        } else if s.starts_with("#i") || s.starts_with("#I") {
-            exactness = Some(false);
-            s = &s[2..];
-        } else {
-            break;
-        }
-    }
-
-    (s, radix, exactness)
-}
-
-/// Try to parse as integer in the given radix, returning a TaggedValue
-fn try_parse_integer(s: &str, radix: u32, heap: &mut patina_core::Heap) -> Option<TaggedValue> {
-    // Try i64 first
-    if let Ok(n) = i64::from_str_radix(s, radix) {
-        if TaggedValue::fits_fixnum(n) {
-            return Some(TaggedValue::fixnum(n));
-        } else {
-            return Some(heap.alloc_bigint(BigInt::from(n)));
-        }
-    }
-
-    // Try BigInt
-    if let Ok(n) = BigInt::from_str_radix(s, radix) {
-        return Some(heap.alloc_bigint(n));
-    }
-
-    None
 }
 
 /// Register conversion primitives in the registry

@@ -211,9 +211,7 @@ fn test_string_to_number_radix_prefix_overrides() {
 fn test_string_to_number_exactness_prefix() {
     assert_eval_to("(string->number \"#e100\")", "100");
     assert_eval_to("(string->number \"#i100\")", "100.0");
-    // TODO: #e with floats should convert to exact (rational)
-    // This requires implementing inexact->exact conversion
-    // assert_eval_to("(string->number \"#e1.5\")", "3/2");
+    assert_eval_to("(string->number \"#e1.5\")", "3/2");
 }
 
 #[test]
@@ -232,10 +230,14 @@ fn test_string_to_number_invalid() {
     assert_eval_to("(string->number \"1 2\")", "#f");
 }
 
+/// Whitespace is not number syntax (R7RS 6.2.7), so a padded string is
+/// not a number. Gauche and Chez answer #f; chibi tolerates *leading*
+/// whitespace only. This used to assert the trimmed answer.
 #[test]
 fn test_string_to_number_whitespace() {
-    assert_eval_to("(string->number \"  100  \")", "100");
-    assert_eval_to("(string->number \"\\t42\\n\")", "42");
+    assert_eval_to("(string->number \"  100  \")", "#f");
+    assert_eval_to("(string->number \"\\t42\\n\")", "#f");
+    assert_eval_to("(string->number \"100\")", "100");
 }
 
 #[test]

@@ -200,9 +200,12 @@ pub enum ContValue {
         original_cont: Box<ContValue>,
     },
     /// Special continuation for force
-    /// When the thunk returns, cache the value and continue
+    /// When the thunk returns, cache the value and continue. Holds the
+    /// promise *object*, not its box: a force nested inside the thunk can
+    /// re-point the promise at another box (`Heap::promise_update`), so the
+    /// box is looked up again when the thunk returns.
     ForceCache {
-        promise: Rc<std::cell::RefCell<crate::PromiseState>>,
+        promise: TaggedValue,
         original_cont: Box<ContValue>,
     },
     // Note: ParameterizeCleanup has been removed.

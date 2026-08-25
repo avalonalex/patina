@@ -1004,7 +1004,7 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 promise,
                 original_cont,
             } => {
-                visitor.visit_promise(promise);
+                visitor.visit(*promise);
                 original_cont
             }
 

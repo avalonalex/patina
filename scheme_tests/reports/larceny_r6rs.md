@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-24 20:23:38  
+**Generated:** 2026-08-24 22:11:08  
 **Backend:** VM  
 **Lane:** tests/r6rs ((r6rs …) emulation libraries)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,19 +9,11 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 11 of 16 |
-| Assertions passed | 4014 of 4022 (99.8%) |
-| Suites not reaching a tally | 2 |
+| Suites fully passing | 12 of 16 |
+| Assertions passed | 4017 of 4025 (99.8%) |
+| Suites not reaching a tally | 1 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
-
-## Crashed or hung (1)
-
-The process died or was cut off by the timeout before reporting; the defect is in Patina's runtime, not in an assertion.
-
-| Suite | What |
-|---|---|
-| mutable-pairs | no result before the timeout |
 
 ## Failed to load (1)
 
@@ -66,7 +58,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | hashtables | pass | 249 | 249 |
 | io/simple | pass | 56 | 56 |
 | lists | pass | 72 | 72 |
-| mutable-pairs | timeout | 0 | 0 |
+| mutable-pairs | pass | 3 | 3 |
 | mutable-strings | pass | 3 | 3 |
 | programs | pass | 2 | 2 |
 | r5rs | pass | 71 | 71 |

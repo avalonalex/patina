@@ -211,21 +211,37 @@ impl<'a> CpsEvaluator<'a> {
                 promise,
                 original_cont,
             } => {
-                // Thunk has returned a value
+                // Thunk has returned a value. The promise's box is looked up
+                // now, by object — see the variant's doc comment.
                 let heap = self.evaluator.global_env.heap();
+                let cell = heap.borrow().get_promise(promise).expect("still a promise");
 
-                // Check if result is a promise (delay-force pattern) - need to force recursively
-                // Use heap method to check without full conversion
+                // The thunk may have forced this very promise re-entrantly;
+                // R7RS 7.3 keeps the value it left ("unless (promise-done?
+                // promise)") and discards the thunk's result.
+                if let patina_core::PromiseState::Forced(cached) = *cell.borrow() {
+                    return Ok(StepResult::InvokeContinuation {
+                        cont: *original_cont,
+                        value: cached,
+                        env: self.evaluator.global_env.clone(),
+                        cont_env,
+                        prompt_stack,
+                        dynamic_winds,
+                        exception_handlers,
+                    });
+                }
+
+                // A `delay-force` thunk yields another promise: this promise
+                // takes over the inner's state, the inner is re-pointed at
+                // this box (`promise_update`), and forcing goes round again
+                // *with the same continuation* — not a new ForceCache wrapped
+                // around the old one per link, which made a chain of a
+                // hundred thousand a hundred-thousand-deep continuation.
                 if heap.borrow().is_promise(value) {
-                    // Result is a promise - force it recursively before caching
-                    // Create a new ForceCache that will cache the final result
-                    let recursive_cont = ContValue::ForceCache {
-                        promise,
-                        original_cont,
-                    };
+                    heap.borrow_mut().promise_update(promise, value);
                     return self.force_promise_cps(
-                        value, // Pass TaggedValue directly
-                        recursive_cont,
+                        promise,
+                        *original_cont,
                         cont_env,
                         prompt_stack,
                         dynamic_winds,
@@ -234,11 +250,7 @@ impl<'a> CpsEvaluator<'a> {
                 }
 
                 // Cache the result (non-promise value)
-                // PromiseState now stores TaggedValue directly - no conversion needed
-                {
-                    let mut state = promise.borrow_mut();
-                    *state = patina_core::PromiseState::Forced(value);
-                }
+                *cell.borrow_mut() = patina_core::PromiseState::Forced(value);
 
                 // Continue with the forced value
                 Ok(StepResult::InvokeContinuation {
