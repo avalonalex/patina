@@ -374,9 +374,17 @@ is the proof that they were needed.
 - Track-level metric: **the number of behaviours that differ between the two
   backends.** This is now a literal count —
   `rg -c assert_divergence crates/patina-tests/tests/backend_divergence.rs` —
-  and it is expected to reach, and stay at, zero. It stands at **7**: the four
-  §1.2 control-operator rows, two multi-value continuation cases from
-  `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`, and handler loss on
+  and it is expected to reach, and stay at, zero. It stands at **6**: the four
+  §1.2 control-operator rows, an error raised after a multi-value escape
+  (2026-08-25 — see below), and handler loss on
   continuation re-entry (`PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3, quarantined
   2026-08-10 — previously a comment-only divergence, which is exactly the
   discovery mode this metric exists to end).
+
+  It was 7 until 2026-08-25, when the two multi-value continuation cases from
+  `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md` converged and that document
+  closed — and 6 rather than 5 because the same change made a new shape
+  reachable: an error raised *after* a multi-value escape is not catchable on
+  the tree-walker, which is the handler-loss row above in a second guise. The
+  metric moving by −2+1 rather than −2 is the honest number; a fix that
+  uncovers a neighbouring gap has not removed it.

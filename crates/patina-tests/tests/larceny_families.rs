@@ -23,10 +23,7 @@
 
 mod common;
 
-use common::{
-    assert_program_eval_error, assert_program_eval_to, eval_program, eval_program_tree_walker,
-    eval_program_vm, scratch_path,
-};
+use common::{assert_program_eval_error, assert_program_eval_to, eval_program, scratch_path};
 use tempfile::TempDir;
 
 const TRIAGE: &str = "scheme_tests/reports/larceny_triage.md";
@@ -156,31 +153,25 @@ fn call_with_values_sees_only_what_its_producer_returned() {
 /// since 2026-08-25. The tree-walker used to raise a wrong-arity error, which
 /// is what made SRFI 1's n-ary procedures unusable there (family 5).
 #[test]
-fn a_continuation_invoked_with_two_values_on_the_tree_walker() {
+fn a_continuation_invoked_with_two_values_delivers_them() {
     assert_program_eval_to(
-        "(list (call-with-values (lambda () (call/cc (lambda (k) (k 4 5)))) list)
-               (call-with-values (lambda () (call/cc (lambda (k) (k)))) (lambda xs xs)))",
-        "((4 5) ())",
+        "(call-with-values (lambda () (call/cc (lambda (k) (k 4 5)))) list)",
+        "(4 5)",
     );
 }
 
-/// Tree-walker: `(values)` reaches the consumer as one unspecified value
-/// instead of none. Not `assert_divergence` — the tree-walker returns a
-/// plausible wrong answer rather than failing.
+/// `(values)` reaches a consumer as no arguments, and `(k)` likewise —
+/// R7RS 6.10, and what chibi and Gauche both answer. The tree-walker gave
+/// `(#<unspecified>)` for the first until 2026-08-25, because the rule "one
+/// value is itself, any other count is a #<values> object" was written out
+/// in four places and the `values` primitive's copy special-cased zero. One
+/// `Heap::values_from` now serves all four.
 #[test]
 fn zero_values_reach_the_consumer_as_no_arguments() {
-    const PROGRAM: &str = "(call-with-values (lambda () (values)) (lambda xs xs))";
-    assert_eq!(
-        eval_program_vm(PROGRAM),
-        "()",
-        "the VM matches chibi; if this changed, it regressed"
-    );
-    assert_eq!(
-        eval_program_tree_walker(PROGRAM),
-        "(#<unspecified>)",
-        "\n[tree-walker] NO LONGER DIVERGES — zero values now arrive as none.\n\
-         Replace both assertions with assert_program_eval_to(PROGRAM, \"()\") \
-         and update {TRIAGE} family 18."
+    assert_program_eval_to(
+        "(list (call-with-values (lambda () (values)) (lambda xs xs))
+               (call-with-values (lambda () (call/cc (lambda (k) (k)))) (lambda xs xs)))",
+        "(() ())",
     );
 }
 
@@ -196,14 +187,16 @@ fn zero_values_reach_the_consumer_as_no_arguments() {
 /// tree-walker refused. Fixed 2026-08-25 with that one; every n-ary
 /// procedure that walks more than one list reaches the same abort.
 #[test]
-fn srfi_1_zip_with_two_lists_on_the_tree_walker() {
+fn srfi_1_n_ary_procedures_walk_more_than_one_list() {
     assert_program_eval_to(
         "(import (scheme list))
          (list (zip '(1 2 3) '(4 5 6))
                (fold + 0 '(1 2) '(3 4))
                (every < '(1 2) '(3 4))
-               (any (lambda (a b) (if (< a b) 'yes #f)) '(1 2 3) '(0 1 4)))",
-        "(((1 4) (2 5) (3 6)) 10 #t yes)",
+               (any (lambda (a b) (if (< a b) 'yes #f)) '(1 2 3) '(0 1 4))
+               (filter-map (lambda (x y) (and (number? x) (* x y))) '(a 1 b 3) '(9 9 9 9))
+               (list-index = '(1 2 3) '(9 2 9)))",
+        "(((1 4) (2 5) (3 6)) 10 #t yes (9 27) 1)",
     );
 }
 

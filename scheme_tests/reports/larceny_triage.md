@@ -150,6 +150,17 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - Upstream: [tests/scheme/read.sld#L279](tests/scheme/read.sld#L279) — the one assertion left in `read` once `equal?` terminated on cycles.
 - Fix: the lexer's `;` comment and a `#!` shebang line both stop at `\r` as well as `\n` (R7RS 7.1.1 line endings), through one `skip_to_line_ending`.
 
+### 17. Tree-walker: a continuation invoked with other than one value is an arity error — tree-walker only — ✅ fixed 2026-08-25
+- Ours: `a_continuation_invoked_with_two_values_delivers_them`
+- Found 2026-08-25 while removing the VM's values buffer; chibi gives `(4 5)`, the VM did too.
+- Fix: the tree-walker delivers a `#<values>` object for any count but one. This was also family 5's cause — SRFI 1's `%cars+cdrs` bails out with `(abort '() '())` — and it closed `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`, open since 2026-03-19.
+- *This section and family 18's were lost between 2026-08-25 and the next day*: a scripted edit that sliced between two headings wrote families 19 and 20 over them, so the two rows the fix was recorded against did not exist while it was being made. Restored with the fix. The hazard is in the repo's own notes; verify `grep '^### '` counts after any scripted edit here.
+
+### 18. Tree-walker: `(values)` reaches a consumer as one unspecified value — tree-walker only — ✅ fixed 2026-08-25
+- Ours: `zero_values_reach_the_consumer_as_no_arguments`
+- Same discovery; chibi, Gauche and the VM give `()`.
+- Fix: the rule "one value is itself, any other count is a `#<values>` object" now lives in one place, `Heap::values_from`. It had been written out four times — the `values` primitive, the VM's `values` intercept, and each backend's continuation invocation — and the primitive's copy special-cased zero to `#<unspecified>`, which is what this row was. Fixing family 17 without it left `(k)` and `(values)` disagreeing on the same backend.
+
 ### 26. Tree-walker: the `stream` suite exceeds the runner's timeout — tree-walker only
 - Ours: none — a performance property, not a wrong answer, like `time`.
 - Upstream: [tests/scheme/stream.sld#L97](tests/scheme/stream.sld#L97), the 50th Pythagorean triple built from nested infinite streams. Measured: tree-walker 27 s at n=10, 117 s at n=20, past 200 s at n=30; the VM does n=50 in 33 s and passes the suite 81 of 81. About 20× on this workload, so the suite would need ~11 minutes there against the runner's 300 s.

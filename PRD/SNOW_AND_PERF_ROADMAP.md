@@ -49,7 +49,7 @@ GC (P6) is the cross-cutting unblocker: real Snow workloads run long enough that
 ---
 
 ## Housekeeping (fold in opportunistically)
-- **Open bug:** `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md` — tree-walker wrong-arity error when a `call/cc` continuation is invoked with multiple values via `call-with-values` (VM already fixed). Blocks some SRFI-1 abort patterns.
+- ~~**Open bug:** `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`~~ — **closed 2026-08-25.** The tree-walker delivers multiple values to a continuation now, which fixed the SRFI-1 abort pattern (`%cars+cdrs`) that entry named and with it the n-ary half of `(scheme list)` on that backend.
 - **Stale docs:** `PRD/phase2/R7RS_LARGE_STATUS.md` ("not started") contradicts `PRD/PARALLEL_TRACKS.md` (9 SRFIs done) — reconcile.
 - **CLAUDE.md link drift:** points to `PRD/phase1/GC_DESIGN.md` / `CLONE_OPTIMIZATION_ANALYSIS.md` / `PRD/phase2/SYNTAX_CASE_DESIGN.md`, now under `PRD/ARCHIVE/phase1_optimization_2026_02/` and `PRD/macro/`; `docs/VM_STEPPER.md` exists but isn't listed.
 
