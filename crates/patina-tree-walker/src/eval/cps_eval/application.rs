@@ -241,23 +241,22 @@ impl<'a> CpsEvaluator<'a> {
                 }
             }
         } else if let Some(k) = cont_opt {
-            // Invoking a captured continuation - non-local control transfer
-            if args.len() != 1 {
-                return self.maybe_route_error_through_cps(
-                    EvalError::WrongArity {
-                        expected: "1".to_string(),
-                        actual: args.len(),
-                    },
-                    cont,
-                    cont_env,
-                    prompt_stack,
-                    dynamic_winds,
-                    exception_handlers,
-                );
-            }
-
-            // Get the single argument as TaggedValue directly
-            let val_tagged = args.into_iter().next().unwrap();
+            // Invoking a captured continuation - non-local control transfer.
+            //
+            // `(k v)` delivers v; `(k)` and `(k v1 v2 …)` deliver a #<values>
+            // object, exactly as `(values …)` returns one, so a
+            // `call-with-values` around the capture unpacks them and a plain
+            // continuation receives the object. Refusing anything but one
+            // argument — which this did until 2026-08-25 — is not an arity
+            // rule R7RS has: §6.10 lets a continuation accept as many values
+            // as the context it was captured in. SRFI 1 relies on it, and the
+            // whole n-ary half of `(scheme list)` was unusable here because
+            // `%cars+cdrs` bails out with `(abort '() '())`.
+            let val_tagged = if args.len() == 1 {
+                args.into_iter().next().unwrap()
+            } else {
+                heap.borrow_mut().alloc_values(args)
+            };
 
             // Run dynamic-wind handlers for continuation jump
             // This travels from current winds to the captured winds

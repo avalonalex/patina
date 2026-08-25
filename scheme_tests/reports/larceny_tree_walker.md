@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-25 15:04:46  
+**Generated:** 2026-08-25 15:39:23  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -10,7 +10,7 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 | | |
 |---|---|
 | Suites fully passing | 17 of 33 |
-| Assertions passed | 4262 of 4280 (99.6%) |
+| Assertions passed | 4270 of 4280 (99.8%) |
 | Suites not reaching a tally | 9 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
@@ -45,7 +45,7 @@ The suite's library did not compile, so nothing in it ran. Patina's message:
 |---|---|
 | base | `Error: Invalid syntax: Failed to load library: Parse error in tests/scheme/base.sld: Failed to desugar expression: Invalid syntax: Failed to compile macro bar: ` |
 
-## Assertion failures (18 in 7 suites)
+## Assertion failures (10 in 7 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -66,16 +66,8 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 - [inexact.sld:361](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/inexact.sld#L361) — `sqrt`
 
-### list — 9 of 172 failed
+### list — 1 of 172 failed
 
-- [list.sld:360](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L360) — `zip`
-- [list.sld:361](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L361) — `zip`
-- [list.sld:362](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L362) — `zip` `circular-list`
-- [list.sld:397](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L397) — `fold`
-- [list.sld:470](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L470) — `filter-map` `number?`
-- [list.sld:559](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L559) — `any`
-- [list.sld:565](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L565) — `every` `circular-list`
-- [list.sld:569](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L569) — `list-index`
 - [list.sld:589](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L589) — `list` `cells`
 
 ### time — 1 of 2 failed
@@ -111,7 +103,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | inexact | fail | 591 | 592 |
 | lazy | pass | 33 | 33 |
 | list-queue | pass | 40 | 40 |
-| list | fail | 163 | 172 |
+| list | fail | 171 | 172 |
 | load | pass | 1 | 1 |
 | lseq | pass | 109 | 109 |
 | process-context | pass | 2 | 2 |

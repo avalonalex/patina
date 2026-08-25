@@ -48,10 +48,10 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - Fix: the VM's `value_buffer` side channel is gone. `values` already returned a `#<values>` heap object for anything but a single value, so every consumer (`call-with-values` in both its instruction-level and primitive forms) now unpacks that object from the result register and nothing else — a protocol that cannot go stale. A continuation invoked with other than one value delivers a `#<values>` object the same way.
 - Upstream: [tests/scheme/vector.sld#L117](tests/scheme/vector.sld#L117) is the cause (`vector-unfold` with `values` as the generator); [#L118](tests/scheme/vector.sld#L118) is where it shows — the next assertion's thunk evaluates to the stale `6`.
 
-### 5. Tree-walker: SRFI 1's n-ary procedures raise a wrong-arity error — tree-walker only
-- Ours: `srfi_1_zip_with_two_lists_on_the_tree_walker` (`assert_divergence`)
+### 5. Tree-walker: SRFI 1's n-ary procedures raise a wrong-arity error — tree-walker only — ✅ fixed 2026-08-25
+- Ours: `srfi_1_zip_with_two_lists_on_the_tree_walker`
 - Upstream, all in `tests/scheme/list.sld`: [#L360](tests/scheme/list.sld#L360), [#L361](tests/scheme/list.sld#L361), [#L362](tests/scheme/list.sld#L362) (`zip`), [#L397](tests/scheme/list.sld#L397) (`fold`), [#L470](tests/scheme/list.sld#L470) (`filter-map`), [#L559](tests/scheme/list.sld#L559) (`any`), [#L565](tests/scheme/list.sld#L565) (`every`), [#L569](tests/scheme/list.sld#L569) (`list-index`) — 8 assertions, every one the two-or-more-lists form
-- Undiagnosed beyond: the same `apply` shape against `(scheme base)`'s `map` works on the tree-walker, so it is the library-internal n-ary `map` being applied.
+- **It was family 17, not `apply`.** SRFI 1's `%cars+cdrs` bails out of an exhausted list with `(abort '() '())` — a continuation invoked with two values, which the tree-walker refused. Every n-ary procedure that walks more than one list goes through it. Fixed with family 17; the two were tracked separately, and `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md` had named `%cars+cdrs` among its impacts since 2026-03-19 without anyone connecting it to this row.
 
 ### 6. Tree-walker: the full-Unicode character sweep overflows the stack — tree-walker only
 - Ours: **none yet** — a 1.1M-iteration `do` loop building a 550k-element list, and `map`/`reverse` over 600k elements, all run fine on the tree-walker standalone, so the trigger is something else in the suite's sweep. Reproduce with `./scripts/run_larceny_tests.sh --tree-walker char` (~74 s to the crash).

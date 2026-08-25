@@ -24,8 +24,8 @@
 mod common;
 
 use common::{
-    ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
-    eval_program, eval_program_tree_walker, eval_program_vm, scratch_path,
+    assert_program_eval_error, assert_program_eval_to, eval_program, eval_program_tree_walker,
+    eval_program_vm, scratch_path,
 };
 use tempfile::TempDir;
 
@@ -151,17 +151,16 @@ fn call_with_values_sees_only_what_its_producer_returned() {
     );
 }
 
-/// Tree-walker: a continuation invoked with other than one value. The VM
-/// delivers a #<values> object, as `(values …)` would return one, and
-/// chibi gives `(4 5)`; the tree-walker raises an arity error.
+/// A continuation invoked with other than one value delivers a `#<values>`
+/// object, as `(values …)` returns one — the VM since #113, the tree-walker
+/// since 2026-08-25. The tree-walker used to raise a wrong-arity error, which
+/// is what made SRFI 1's n-ary procedures unusable there (family 5).
 #[test]
 fn a_continuation_invoked_with_two_values_on_the_tree_walker() {
-    assert_divergence(
-        "(call-with-values (lambda () (call/cc (lambda (k) (k 4 5)))) list)",
-        On::Vm,
-        "(4 5)",
-        ErrorClass::AtRuntime,
-        TRIAGE,
+    assert_program_eval_to(
+        "(list (call-with-values (lambda () (call/cc (lambda (k) (k 4 5)))) list)
+               (call-with-values (lambda () (call/cc (lambda (k) (k)))) (lambda xs xs)))",
+        "((4 5) ())",
     );
 }
 
@@ -190,18 +189,21 @@ fn zero_values_reach_the_consumer_as_no_arguments() {
 // ---------------------------------------------------------------------------
 
 /// `zip` is `(apply map list list1 more-lists)` inside `srfi-1-reference.scm`,
-/// against SRFI 1's own n-ary `map`. The same `apply` shape written at top
-/// level against `(scheme base)`'s `map` works on the tree-walker, so the
-/// fault is in applying the library-internal definition.
+/// against SRFI 1's own n-ary `map`. It failed on the tree-walker with a
+/// wrong-arity error, and the cause turned out to be family 17, not `apply`:
+/// SRFI 1's `%cars+cdrs` bails out of an exhausted list with
+/// `(abort '() '())`, invoking a continuation with two values, which the
+/// tree-walker refused. Fixed 2026-08-25 with that one; every n-ary
+/// procedure that walks more than one list reaches the same abort.
 #[test]
 fn srfi_1_zip_with_two_lists_on_the_tree_walker() {
-    assert_divergence(
+    assert_program_eval_to(
         "(import (scheme list))
-         (zip '(1 2 3) '(4 5 6))",
-        On::Vm,
-        "((1 4) (2 5) (3 6))",
-        ErrorClass::AtRuntime,
-        TRIAGE,
+         (list (zip '(1 2 3) '(4 5 6))
+               (fold + 0 '(1 2) '(3 4))
+               (every < '(1 2) '(3 4))
+               (any (lambda (a b) (if (< a b) 'yes #f)) '(1 2 3) '(0 1 4)))",
+        "(((1 4) (2 5) (3 6)) 10 #t yes)",
     );
 }
 

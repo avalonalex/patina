@@ -16,7 +16,7 @@
 //! divergence list will look for them.
 //!
 //! Sources: `PRD/TRACK_Q_QUALITY_PRD.md` §1.2, re-measured at `2d4ce29`
-//! (2026-08-10), `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`, and
+//! (2026-08-10), and
 //! `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3 (measured 2026-08-10).
 //!
 //! Shared root cause of the §1.2 cluster: R7RS §6.10 makes `call/cc`,
@@ -47,7 +47,6 @@ mod common;
 use common::*;
 
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
-const CALLCC_MULTI_VALUES: &str = "PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md";
 const HANDLER_REENTRY: &str = "PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md B3";
 const GUARD_UNWIND_ORDER: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
 
@@ -104,10 +103,12 @@ fn apply_callcc() {
 
 // ─── Multi-value continuations (TREE_WALKER_CALLCC_MULTI_VALUES.md) ──────────
 
-/// A `call/cc` continuation invoked with multiple values.
+/// A `call/cc` continuation invoked with multiple values. Converged
+/// 2026-08-25: the tree-walker delivers a `#<values>` object for any count
+/// but one, as the VM has since #113 and as `(values …)` itself does.
 #[test]
 fn callcc_multi_value_through_call_with_values() {
-    assert_divergence(
+    assert_program_eval_to(
         r#"
         (call-with-values
           (lambda ()
@@ -115,17 +116,17 @@ fn callcc_multi_value_through_call_with_values() {
               (lambda (k) (k 1 2))))
           (lambda (a b) (list a b)))
         "#,
-        On::Vm,
         "(1 2)",
-        ErrorClass::AtRuntime,
-        CALLCC_MULTI_VALUES,
     );
 }
 
-/// The abort pattern used by SRFI 1's `%cars+cdrs`.
+/// The abort pattern used by SRFI 1's `%cars+cdrs`, and the reason the whole
+/// n-ary half of `(scheme list)` was unusable on the tree-walker: `zip`,
+/// `fold`, `any`, `every` and `list-index` over two or more lists all reach
+/// it. Converged with the test above.
 #[test]
 fn callcc_abort_pattern_through_call_with_values() {
-    assert_divergence(
+    assert_program_eval_to(
         r#"
         (call-with-values
           (lambda ()
@@ -134,10 +135,15 @@ fn callcc_abort_pattern_through_call_with_values() {
                 (abort '() '()))))
           (lambda (cars cdrs) (list 'cars cars 'cdrs cdrs)))
         "#,
-        On::Vm,
         "(cars () cdrs ())",
-        ErrorClass::AtRuntime,
-        CALLCC_MULTI_VALUES,
+    );
+    assert_program_eval_to(
+        "(import (scheme list))
+         (list (zip '(1 2) '(3 4))
+               (fold + 0 '(1 2) '(3 4))
+               (any (lambda (a b) (< a b)) '(1 2) '(0 5))
+               (list-index = '(1 2 3) '(9 2 9)))",
+        "(((1 3) (2 4)) 10 #t 1)",
     );
 }
 
