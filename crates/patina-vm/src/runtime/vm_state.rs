@@ -440,7 +440,12 @@ fn vm_evaluate_parsed_library(
     let saved_globals = state.globals.clone();
     state.globals = lib_env.clone();
 
-    let desugarer = Desugarer::with_env(lib_env.clone()).with_fs(state.fs.clone());
+    // A relative `include` in the body resolves beside the `.sld` — the same
+    // rule as the backend's loader; a library must not load or fail
+    // depending on which door it came through.
+    let desugarer = Desugarer::with_env(lib_env.clone())
+        .with_fs(state.fs.clone())
+        .with_include_base_of(parsed.source.as_deref());
     let shared_heap = lib_env.heap().clone();
 
     let body_result = (|| -> Result<(), LibraryError> {

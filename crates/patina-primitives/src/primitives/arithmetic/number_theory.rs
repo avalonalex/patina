@@ -176,7 +176,7 @@ pub(super) fn exact_integer_sqrt(
 /// (rationalize x tolerance) - Find simplest rational within tolerance of x
 /// Returns the rational with smallest denominator within x±tolerance
 ///
-/// R7RS: If x is inexact, the result is inexact. If x is exact, the result is exact.
+/// R7RS: the result is inexact if either argument is inexact, exact otherwise.
 pub(super) fn rationalize(
     heap: &SharedHeap,
     args: &[TaggedValue],
@@ -203,8 +203,13 @@ pub(super) fn rationalize(
         }
     }
 
-    // Check if x is inexact - this determines the exactness of the result
-    let x_is_inexact = heap.borrow().is_inexact_number(args[0]);
+    // R7RS 6.2.6: the result is inexact if either argument is, so
+    // (rationalize 3 +inf.0) is 0.0, not 0.
+    let (x_is_inexact_arg, tol_is_inexact_arg) = {
+        let h = heap.borrow();
+        (h.is_inexact_number(args[0]), h.is_inexact_number(args[1]))
+    };
+    let x_is_inexact = x_is_inexact_arg || tol_is_inexact_arg;
 
     // Helper to extract f64 from a real-valued TaggedValue
     let tv_to_f64 = |tv: TaggedValue| -> f64 {
@@ -226,6 +231,29 @@ pub(super) fn rationalize(
 
     let x_f64 = tv_to_f64(args[0]);
     let tol_f64 = tv_to_f64(args[1]).abs();
+
+    // The inexact infinities, per R6RS 11.7.4's examples (R7RS keeps the
+    // procedure, not the examples): (rationalize +inf.0 3) is +inf.0 — the
+    // simplest number within 3 of infinity is infinity; (rationalize 3
+    // +inf.0) is 0.0 — everything is within an infinite tolerance and 0 is
+    // the simplest; (rationalize +inf.0 +inf.0) is +nan.0. The interval
+    // arithmetic below turned all of these into 0. Keyed on the *arguments*
+    // being inexact, not on the f64 view — an exact bignum beyond f64's
+    // range reads as infinite there and must stay on the exact path.
+    let x_inexact_special = x_is_inexact_arg && !x_f64.is_finite();
+    let tol_inexact_special = tol_is_inexact_arg && !tol_f64.is_finite();
+    if (x_inexact_special && x_f64.is_nan())
+        || (tol_inexact_special && tol_f64.is_nan())
+        || (x_inexact_special && tol_inexact_special)
+    {
+        return Ok(heap.borrow_mut().alloc_real(f64::NAN));
+    }
+    if x_inexact_special {
+        return Ok(heap.borrow_mut().alloc_real(x_f64));
+    }
+    if tol_inexact_special {
+        return Ok(heap.borrow_mut().alloc_real(0.0));
+    }
 
     // Range: [x - tolerance, x + tolerance]
     let lower = x_f64 - tol_f64;

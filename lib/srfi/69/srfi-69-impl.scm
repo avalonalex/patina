@@ -37,9 +37,15 @@
   (let ((bound (if (null? maybe-bound) *default-bound* (car maybe-bound))))
     (%string-hash s (lambda (x) x) bound)))
 
+;; PATINA DEVIATION: hash the string's case *folding*, which is what
+;; string-ci=? compares (R7RS 6.7), so two strings that are string-ci=? hash
+;; alike — "Straße" and "STRASSE" both fold to "strasse". Per-character
+;; char-downcase does not, and SRFI 69 pairs this hash with string-ci=?
+;; automatically, so keys were being stored under one hash and looked up
+;; under another.
 (define (string-ci-hash s . maybe-bound)
   (let ((bound (if (null? maybe-bound) *default-bound* (car maybe-bound))))
-    (%string-hash s char-downcase bound)))
+    (%string-hash (string-foldcase s) (lambda (x) x) bound)))
 
 (define (symbol-hash s . maybe-bound)
   (let ((bound (if (null? maybe-bound) *default-bound* (car maybe-bound))))

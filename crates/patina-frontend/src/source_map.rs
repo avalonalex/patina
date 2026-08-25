@@ -19,6 +19,11 @@ pub struct SourceMap {
     /// The full source text, used for pretty error formatting (caret display).
     /// Populated by `Parser::new_with_source_map`.
     source_text: Option<String>,
+    /// The name the parser was given for that text — a file path when the
+    /// program came from one, `<eval>`/`<repl>` otherwise. Populated with
+    /// `source_text`; the desugarer resolves a top-level relative `include`
+    /// beside it.
+    primary_source: Option<String>,
     /// Macro expansion chain records, keyed by (line, column) of the call site.
     /// Each entry is an ordered list of macro names expanded at that location
     /// (outermost first, matching expansion sequence).
@@ -31,6 +36,7 @@ impl SourceMap {
         Self {
             locations: HashMap::new(),
             source_text: None,
+            primary_source: None,
             expansion_records: HashMap::new(),
         }
     }
@@ -38,6 +44,16 @@ impl SourceMap {
     /// Store the source text for caret-style error display.
     pub fn set_source_text(&mut self, text: String) {
         self.source_text = Some(text);
+    }
+
+    /// Record where the source text came from (see `primary_source`).
+    pub fn set_primary_source(&mut self, name: &str) {
+        self.primary_source = Some(name.to_string());
+    }
+
+    /// The name the parser was given for the current source text, if any.
+    pub fn primary_source(&self) -> Option<&str> {
+        self.primary_source.as_deref()
     }
 
     /// Return the (1-indexed) line from the stored source text, if available.

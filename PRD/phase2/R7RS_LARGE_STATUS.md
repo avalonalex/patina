@@ -27,7 +27,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI | Library Name | Description | `(srfi n)` | `(scheme …)` alias |
 |------|-------------|-------------|------------|--------------------|
 | SRFI 1 | `(scheme list)` | List library | ✅ shipped | ✅ shipped |
-| SRFI 14 | `(scheme charset)` | Character sets | ❌ | ❌ |
+| SRFI 14 | `(scheme charset)` | Character sets | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 14)`, 2026-08-24) |
 | SRFI 41 | `(scheme stream)` | Streams (lazy lists) | ❌ | ❌ |
 | SRFI 101 | `(scheme rlist)` | Random-access lists | ❌ | ❌ |
 | SRFI 111 | `(scheme box)` | Boxes (single-value containers) | ✅ shipped | ✅ shipped |
