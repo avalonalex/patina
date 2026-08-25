@@ -38,11 +38,10 @@ const TRIAGE: &str = "scheme_tests/reports/larceny_triage.md";
 /// `outer.scm` (included by absolute path) includes `sub/middle.scm` by
 /// absolute path, and `middle.scm` includes `"leaf.scm"` relatively. Every
 /// implementation that runs Larceny's `base` suite resolves that last one
-/// beside `middle.scm`; Patina looks in the first file the source map happens
-/// to yield, then the cwd, and finds nothing.
+/// beside `middle.scm`; Patina used to look in the first file the source map
+/// happened to yield, then the cwd, and find nothing.
 ///
-/// **When this stops erroring, replace the assertion with
-/// `assert_program_eval_to(&program, "found")` and update the triage doc.**
+/// Fixed 2026-08-24: the desugarer keeps a stack of include directories.
 #[test]
 fn a_nested_include_resolves_relative_to_the_including_file() {
     let dir = TempDir::new().expect("temp dir");
@@ -64,8 +63,7 @@ fn a_nested_include_resolves_relative_to_the_including_file() {
         "(include \"{}\") leaf-value",
         scratch_path(&dir, "outer.scm")
     );
-    // Pinned as the error it is today; see the doc comment for the flip.
-    assert_program_eval_error(&program);
+    assert_program_eval_to(&program, "found");
 }
 
 // ---------------------------------------------------------------------------
@@ -177,19 +175,17 @@ fn srfi_1_zip_with_two_lists_on_the_tree_walker() {
 /// foldings (`string-foldcase` already does — it is the comparison that does
 /// not use it).
 ///
-/// **When this converges on `(#\ß #\ß #t #t)`, replace the assertion with
-/// `assert_program_eval_to` and update the triage doc.**
+/// Fixed 2026-08-24: a mapping that is not a single character returns the
+/// character itself; the `-ci` comparisons fold instead of lower-casing.
 #[test]
 fn case_mapping_of_characters_without_a_single_character_mapping() {
-    let program = "(import (scheme char))
-                   (list (char-upcase #\\ß)
-                         (char-foldcase #\\ß)
-                         (char-ci=? #\\ς #\\σ)
-                         (string-ci=? \"Straße\" \"STRASSE\"))";
-    assert_eq!(
-        eval_program(program),
-        "(#\\S #\\s #f #f)",
-        "expected the pinned wrong answer; if this is now (#\\ß #\\ß #t #t) the defect is fixed"
+    assert_program_eval_to(
+        "(import (scheme char))
+         (list (char-upcase #\\ß)
+               (char-foldcase #\\ß)
+               (char-ci=? #\\ς #\\σ)
+               (string-ci=? \"Straße\" \"STRASSE\"))",
+        "(#\\ß #\\ß #t #t)",
     );
 }
 
@@ -224,16 +220,13 @@ fn string_to_number_accepts_what_the_reader_accepts() {
 /// `(rationalize +inf.0 3)` is `+inf.0` and `(rationalize 3 +inf.0)` is
 /// `0.0` — the second is exact `0` today, the first `0.0`.
 ///
-/// **When this converges on `(+inf.0 0.0)`, replace with
-/// `assert_program_eval_to` and update the triage doc.**
+/// Fixed 2026-08-24.
 #[test]
 fn rationalize_with_an_infinite_argument() {
-    let program = "(import (scheme inexact))
-                   (list (rationalize +inf.0 3) (rationalize 3 +inf.0))";
-    assert_eq!(
-        eval_program(program),
-        "(0.0 0)",
-        "expected the pinned wrong answer; if this is now (+inf.0 0.0) the defect is fixed"
+    assert_program_eval_to(
+        "(import (scheme inexact))
+         (list (rationalize +inf.0 3) (rationalize 3 +inf.0) (rationalize -inf.0 1))",
+        "(+inf.0 0.0 -inf.0)",
     );
 }
 
@@ -263,8 +256,7 @@ fn environment_accepts_a_nested_import_set() {
 /// a type error. Larceny's `file` suite maps every port predicate over a
 /// freshly opened binary port and dies here.
 ///
-/// **When this stops erroring, replace the assertion with
-/// `assert_program_eval_to(&program, "(#t #f)")` and update the triage doc.**
+/// Fixed 2026-08-24: `#f` for the other direction, on both predicates.
 #[test]
 fn input_port_open_on_an_output_only_port_is_false() {
     let dir = TempDir::new().expect("temp dir");
@@ -272,7 +264,53 @@ fn input_port_open_on_an_output_only_port_is_false() {
     let program = format!(
         "(import (scheme file))
          (define p (open-binary-output-file \"{path}\"))
-         (list (output-port-open? p) (input-port-open? p))"
+         (define q (open-input-string \"\"))
+         (list (output-port-open? p) (input-port-open? p)
+               (input-port-open? q) (output-port-open? q))"
     );
-    assert_program_eval_error(&program);
+    assert_program_eval_to(&program, "(#t #f #t #f)");
+}
+
+// ---------------------------------------------------------------------------
+// Family 14 — a shadowed `...` is no longer the ellipsis (R7RS 4.3.2)
+// ---------------------------------------------------------------------------
+
+/// Where `...` is bound as a variable, a `syntax-rules` written in that scope
+/// has no ellipsis: `(_ a b ...)` is a three-variable pattern. Larceny, Kawa
+/// and Sagittarius agree; chibi and Gauche reject the definition, as Patina
+/// did until 2026-08-24. This blocked Larceny's `base` suite at load time.
+#[test]
+fn a_shadowed_ellipsis_is_an_ordinary_pattern_variable() {
+    assert_program_eval_to(
+        "(let ((... 'dots))
+           (define-syntax swap-first-two
+             (syntax-rules () ((_ a b ...) (list b a ...))))
+           (swap-first-two 1 2 3))",
+        "(2 1 3)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Family 15 — a template's reference to a definition-site local that spells
+//             a keyword is rejected as syntax
+// ---------------------------------------------------------------------------
+
+/// The macro is defined *inside* the binding, so its template's free `...`
+/// (or `if`) is that local variable — the definition scopes say so. The
+/// syntax-as-a-value check is by spelling and exempts scoped references
+/// (hygiene: an *outer* macro's `if` must stay the special form), so it
+/// reports the keyword instead. Making it scope-aware is the hygiene change
+/// `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves; this is what now
+/// gates Larceny's `base` suite.
+///
+/// **When this stops erroring, replace the assertion with
+/// `assert_program_eval_to(program, "((1 dots) (2 nineteen))")` and update
+/// the triage doc.**
+#[test]
+fn a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword() {
+    let program = "(let ((... 'dots) (if 'nineteen))
+                     (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
+                     (define-syntax mention-if (syntax-rules () ((_ a) (list a if))))
+                     (list (mention-dots 1) (mention-if 2)))";
+    assert_program_eval_error(program);
 }

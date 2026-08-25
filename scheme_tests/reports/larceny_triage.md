@@ -21,10 +21,10 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 
 ## Ours
 
-### 1. A nested `include` resolves against the wrong directory — both backends
-- Ours: `a_nested_include_resolves_relative_to_the_including_file` (pinned as the error it is today)
+### 1. A nested `include` resolves against the wrong directory — both backends — ✅ fixed 2026-08-24
+- Ours: `a_nested_include_resolves_relative_to_the_including_file`
+- Fix: the desugarer keeps a stack of include directories (seeded from the `.sld` for a library body, pushed by each `include`), tried before the cwd; the `HashMap` walk is gone. `base` now loads past its includes and stops at family 15 instead.
 - Upstream: [tests/scheme/base.sld#L359](tests/scheme/base.sld#L359) starts the chain; [tests/scheme/base-test3.scm#L1](tests/scheme/base-test3.scm#L1) is the include that fails. Blocks the whole `base` suite (~900 assertions) on both backends.
-- Cause: `resolve_include_base_dir` picks "the first file in the source map" (a `HashMap` walk), and included files are parsed without a source name. Fix sketch in PRD §6.
 - Note: chibi 0.12 fails this file the same way; Gauche resolves relative to the including file.
 
 ### 2. `equal?` does not terminate on circular structures — both backends
@@ -49,8 +49,9 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 - Ours: **none yet** — a 1.1M-iteration `do` loop building a 550k-element list, and `map`/`reverse` over 600k elements, all run fine on the tree-walker standalone, so the trigger is something else in the suite's sweep. Reproduce with `./scripts/run_larceny_tests.sh --tree-walker char` (~74 s to the crash).
 - Upstream: [tests/scheme/char.body.scm#L7](tests/scheme/char.body.scm#L7) (`filter-all-chars`, the sweep), called from [tests/scheme/char.sld#L182](tests/scheme/char.sld#L182)
 
-### 7. Unicode case mapping beyond the one-to-one table — both backends
+### 7. Unicode case mapping beyond the one-to-one table — both backends — ✅ fixed 2026-08-24 (the `digit-value` sweep remains)
 - Ours: `case_mapping_of_characters_without_a_single_character_mapping`
+- Fix: a mapping that is not a single character returns the character itself (`char-upcase`, `char-downcase`, `char-foldcase`); `char-ci=?` and friends compare case *foldings*, and `string-ci=?` and friends compare full foldings (`string-foldcase` already did).
 - Upstream: [tests/scheme/char.sld#L57](tests/scheme/char.sld#L57) (`char-upcase`), [#L59](tests/scheme/char.sld#L59) (`char-foldcase`), [#L69](tests/scheme/char.sld#L69) (`char-ci=?`), [#L113](tests/scheme/char.sld#L113), [#L114](tests/scheme/char.sld#L114) (`string-ci=?`); the R6RS lane repeats them at [tests/r6rs/unicode.sld#L11](tests/r6rs/unicode.sld#L11), [#L14](tests/r6rs/unicode.sld#L14), [#L39](tests/r6rs/unicode.sld#L39), [#L116](tests/r6rs/unicode.sld#L116)–[#L118](tests/r6rs/unicode.sld#L118)
 - Also in this family, **no original case yet**: `digit-value` disagrees with `char-numeric?` somewhere in the full Nd sweep — [tests/scheme/char.body.scm#L109](tests/scheme/char.body.scm#L109), [#L123](tests/scheme/char.body.scm#L123). Spot checks (`#\3`, Arabic-Indic three) are right; the sweep is over every code point.
 
@@ -58,17 +59,19 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 - Ours: `string_to_number_accepts_what_the_reader_accepts`
 - Upstream: infinities and NaN — [tests/scheme/inexact.sld#L405](tests/scheme/inexact.sld#L405)–[#L407](tests/scheme/inexact.sld#L407); `#e` with a large exponent — [#L91](tests/scheme/inexact.sld#L91), [#L95](tests/scheme/inexact.sld#L95), [#L388](tests/scheme/inexact.sld#L388), [#L389](tests/scheme/inexact.sld#L389); complex — [tests/scheme/complex.sld#L55](tests/scheme/complex.sld#L55), [#L56](tests/scheme/complex.sld#L56)
 
-### 9. `rationalize` at the infinities; `log`/`sqrt` edges — both backends
+### 9. `rationalize` at the infinities — both backends — ✅ fixed 2026-08-24
 - Ours: `rationalize_with_an_infinite_argument`
-- Upstream: [tests/scheme/inexact.sld#L311](tests/scheme/inexact.sld#L311)–[#L313](tests/scheme/inexact.sld#L313) (`rationalize`); **no original case yet** for [#L361](tests/scheme/inexact.sld#L361) (`sqrt` of `-inf.0`, an approximate-compare miss) and [tests/scheme/complex.body.scm#L89](tests/scheme/complex.body.scm#L89) (`log` of `-0.0` should carry an imaginary part of π)
+- Upstream: [tests/scheme/inexact.sld#L311](tests/scheme/inexact.sld#L311)–[#L313](tests/scheme/inexact.sld#L313)
+- The two neighbours first filed here are **not ours**: `(log -0.0)` ⇒ `-inf.0` and `(sqrt -inf.0)` ⇒ `0.0+inf.0i` in chibi, Gauche *and* Chez, exactly as in Patina — [#L361](tests/scheme/inexact.sld#L361) is an approximate comparison that cannot pass with an infinity in it, and [tests/scheme/complex.body.scm#L89](tests/scheme/complex.body.scm#L89) expects `-inf.0+πi`, which no reference produces.
 
 ### 10. `environment` rejects a nested import set — both backends
 - Ours: `environment_accepts_a_nested_import_set` (pinned as the error it is today)
 - Upstream: [tests/scheme/eval.sld#L33](tests/scheme/eval.sld#L33); R6RS lane [tests/r6rs/eval.sld#L16](tests/r6rs/eval.sld#L16)
 - Probably the `prefix`-binds-nowhere symptom recorded in `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`, reached through `environment`.
 
-### 11. `input-port-open?` on an output-only port is an error, not `#f` — both backends
-- Ours: `input_port_open_on_an_output_only_port_is_false` (pinned as the error it is today)
+### 11. `input-port-open?` on an output-only port is an error, not `#f` — both backends — ✅ fixed 2026-08-24
+- Ours: `input_port_open_on_an_output_only_port_is_false`
+- Fix: both predicates answer `#f` for the other direction. The `file` suite is clean.
 - Upstream: [tests/scheme/file.sld#L139](tests/scheme/file.sld#L139), [#L154](tests/scheme/file.sld#L154) — each maps every port predicate over a fresh binary port
 
 ### 12. `write` spells the symbol `@` as `|@|` — both backends, a decision
@@ -79,13 +82,24 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 - Ours: none — these exercise the bundled `(r6rs …)` emulation libraries, not R7RS behaviour. R6RS lets `make-bytevector`'s fill be a signed byte; `(r6rs enums)`'s `define-enumeration` constructor fails on a member name.
 - Upstream: [tests/r6rs/bytevectors.sld#L47](tests/r6rs/bytevectors.sld#L47), [#L48](tests/r6rs/bytevectors.sld#L48), [#L65](tests/r6rs/bytevectors.sld#L65), [#L74](tests/r6rs/bytevectors.sld#L74); [tests/r6rs/enums.sld#L97](tests/r6rs/enums.sld#L97), [#L99](tests/r6rs/enums.sld#L99), [#L100](tests/r6rs/enums.sld#L100)
 
+### 14. A shadowed `...` is no longer the ellipsis (R7RS 4.3.2) — both backends — ✅ fixed 2026-08-24
+- Ours: `a_shadowed_ellipsis_is_an_ordinary_pattern_variable`
+- Upstream: [tests/scheme/base.sld#L1155](tests/scheme/base.sld#L1155) — the first of a pair that blocked `base` at load time once its includes resolved. chibi and Gauche reject it too; Larceny, Kawa and Sagittarius accept.
+- Fix: a `syntax-rules` compiled where `...` is a shadowed name gets an ellipsis nothing can spell (the SRFI 46 hook); and an internal `define-syntax` is now compiled by the *body's* desugarer, which knows the enclosing lambda's names, rather than the outer one.
+
+### 15. A template's reference to a definition-site local spelled like a keyword is rejected as syntax — both backends
+- Ours: `a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword` (pinned as the error it is today)
+- Upstream: [tests/scheme/base.sld#L1163](tests/scheme/base.sld#L1163) — the second of the pair; **this is what gates `base` now** (~900 assertions), at desugar time of the library.
+- Cause: `resolve_syntax`'s shadow test is by spelling and exempts scoped (macro-introduced) references, which hygiene needs for an *outer* macro's `if`. A macro defined *inside* `(let ((if …)) …)` has that binding in its definition scopes, so its template's `if` is the variable. Making the shadow test scope-aware is the hygiene change `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves — not a one-liner.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.
 - **`delete-duplicates!` cell reuse** — [tests/scheme/list.sld#L589](tests/scheme/list.sld#L589) requires the result to reuse the input's cells; SRFI 1 permits that, it does not require it.
 - **`(let-syntax ())` with an empty body** — [tests/r6rs/base.sld#L1571](tests/r6rs/base.sld#L1571) blocks the R6RS `base` suite. R6RS's splicing `let-syntax` allows it, R7RS's does not; Gauche and Chez accept, chibi rejects as we do. A leniency decision, not a defect.
 - **Tree-walker `time`** — [tests/scheme/time.sld#L49](tests/scheme/time.sld#L49): a one-second busy loop measured at two seconds. Speed, not correctness.
+- **`charset`, now that it loads** (2 of 93): [tests/scheme/charset.sld](tests/scheme/charset.sld) expects `char-set:full` to hold every code point — the bundled SRFI 14 is the Latin-1 reference port (PRD §6, chibi-regexp entry: blocked on a full-Unicode char-set story) — and expects `char-set-cursor` to iterate ascending, which SRFI 14 leaves unspecified.
 
 ## Not defects — bundling queue (L1 item 6, now with a suite each)
 
-`(scheme charset)` (a one-line alias over the bundled `(srfi 14)`), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme ilist)`, `(scheme list-queue)`, `(scheme lseq)`, `(scheme rlist)`, `(scheme stream)`, `(scheme text)`. Ten of the 33 R7RS suites never load for this reason alone.
+~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme ilist)`, `(scheme list-queue)`, `(scheme lseq)`, `(scheme rlist)`, `(scheme stream)`, `(scheme text)`. Ten of the 33 R7RS suites never load for this reason alone.

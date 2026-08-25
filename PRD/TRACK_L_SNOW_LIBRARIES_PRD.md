@@ -1,7 +1,7 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-08-24 — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
+**Updated:** 2026-08-24 — L5.3's Tier 1 fixes landed (nested `include`, port-open predicates, `rationalize`, Unicode case mapping, `(scheme charset)`, shadowed `...`): 13 of 33 suites, 4172 of 4193. Earlier the same day — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
 (**126 of 162** vendored packages pass, 2026-08-22, of which **126 of 137 are in scope** — the
 other 25 are excluded by `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and
@@ -868,6 +868,13 @@ are their own statuses.
 | R7RS, tree-walker | 12 of 33 | 3931 of 3961 (99.2%) | the same, plus `char` (stack overflow) |
 | R6RS, VM | 10 of 16 | 4008 of 4022 (99.7%) | `base` (`(let-syntax ())`) · `mutable-pairs` (hang) |
 
+**Tier 1 fixes, 2026-08-24 (same day):** nested `include`, the port-open predicates, `rationalize` at
+the infinities, Unicode case mapping, `(scheme charset)`, and a shadowed `...` — R7RS lane
+**13 of 33 suites, 4172 of 4193 (VM)**, tree-walker 13 of 33 / 4027 of 4054, R6RS lane 11 of 16 /
+4014 of 4022. `file` and R6RS `unicode` are clean; `base` now loads past its includes and stops at a
+template reference to a keyword-spelled local (queue row below), which is the scope-aware
+shadowing the syntax-keyword-bindings design reserves.
+
 The ratio flatters; the suite column does not. Of the 21 R7RS suites that are
 not clean, 10 never load because the library under test is not bundled —
 `(scheme charset)`, `ephemeron`, `flonum`/SRFI 144, `ideque`, `ilist`,
@@ -889,17 +896,18 @@ trips its test.
 
 | Defect | Suites | Backends |
 |---|---|---|
-| A nested `include` resolves against the wrong directory, and the base is chosen nondeterministically | base (blocks ~900 assertions) | both |
+| ✅ A nested `include` resolves against the wrong directory, and the base is chosen nondeterministically — *fixed 2026-08-24* | base | both |
+| A template's reference to a definition-site local spelled like a keyword (`(let ((if …)) …)` around a `define-syntax`) is rejected as syntax — the scope-aware shadowing `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves; **now what blocks `base`** (~900 assertions) | base | both |
 | `equal?` does not terminate on circular structures | read (crash), r6rs mutable-pairs (hang) | both |
 | `delay-force` is not iterative — 100 000 deep overflows the stack | lazy | both |
 | VM: a discarded call to `values` poisons the next `call-with-values` | vector | VM |
 | Tree-walker: SRFI 1's `zip` (n-ary `map` via `apply`) raises a wrong-arity error | list (9) | tree-walker |
 | Tree-walker: a 1.1M-iteration `do` loop building a list overflows the stack | char | tree-walker |
-| Unicode case: `(char-upcase #\ß)` ⇒ `#\S`; `char-ci=?` on final sigma; `string-ci=?` full folding; `digit-value` over every Nd character | char (8), r6rs unicode (6) | both |
+| ✅ Unicode case: `(char-upcase #\ß)` ⇒ `#\S`; `char-ci=?` on final sigma; `string-ci=?` full folding — *fixed 2026-08-24*; `digit-value` over every Nd character still open | char (2), r6rs unicode | both |
 | `string->number`: `"+inf.0"`, `"+nan.0"` ⇒ `#f`; `"1+2i"` ⇒ `#f`; `#e1e1000` ⇒ `+inf.0` instead of an exact integer | inexact (7), complex (2) | both |
-| `rationalize` with infinities; `(log -0.0)` loses its imaginary part; `(sqrt -inf.0)` | inexact (4), complex (1) | both |
+| ✅ `rationalize` with infinities — *fixed 2026-08-24*. `(log -0.0)` and `(sqrt -inf.0)` turned out not to be ours: chibi, Gauche and Chez all answer as Patina does | inexact (1), complex (1) | both |
 | `environment` rejects a nested import set, `(prefix (only …) …)` | eval, r6rs eval | both |
-| Binary file ports: `open-binary-output-file` then the port predicates / `write-u8` error | file (2) | both |
+| ✅ `input-port-open?` on an output-only port was a type error, not `#f` — *fixed 2026-08-24*; `file` is clean | file | both |
 | `write` spells the symbol `@` as `\|@\|` — consistent with reading it bare, but the suite expects `@` | write (3) | both |
 | R6RS lane: `(make-bytevector 10 -1)` (a signed fill byte); enum `(color black)` | r6rs bytevectors (4), enums (3) | both |
 

@@ -155,6 +155,29 @@ pub(super) fn char_ge(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
 // ========== Case-Insensitive Character Comparisons ==========
 
 /// (char-ci=? char1 char2 ...) - Case-insensitive character equality
+/// The case-insensitive identity of a character: Unicode case folding, which
+/// is how R7RS 6.6 defines `char-ci=?` and friends ("as if by
+/// `char-foldcase`"). Lower-casing is not the same thing — final sigma
+/// lower-cases to itself but folds to sigma, so `(char-ci=? #\ς #\σ)` came
+/// out false. Folding can expand (ß → "ss"), hence a `String`.
+fn fold_char(c: char) -> String {
+    use unicode_casefold::UnicodeCaseFold;
+    c.case_fold().collect()
+}
+
+/// A single-character case mapping, or the character itself when the
+/// mapping is not a single character. R7RS 6.6: `char-upcase` etc. return
+/// *the* character — ß upper-cases to "SS", so it has no upper-case
+/// character and is returned unchanged; taking the first character of the
+/// expansion (`#\S`) is a different letter.
+fn single_char_mapping(c: char, mapping: impl Iterator<Item = char>) -> char {
+    let mut it = mapping;
+    match (it.next(), it.next()) {
+        (Some(m), None) => m,
+        _ => c,
+    }
+}
+
 pub(super) fn char_ci_equal(
     heap: &SharedHeap,
     args: &[TaggedValue],
@@ -169,12 +192,8 @@ pub(super) fn char_ci_equal(
     let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char-ci=?")?
-            .to_lowercase()
-            .to_string();
-        let c2 = get_char(args[i + 1], &heap_ref, "char-ci=?")?
-            .to_lowercase()
-            .to_string();
+        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci=?")?);
+        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci=?")?);
         if c1 != c2 {
             return Ok(TaggedValue::FALSE);
         }
@@ -197,12 +216,8 @@ pub(super) fn char_ci_lt(
     let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char-ci<?")?
-            .to_lowercase()
-            .to_string();
-        let c2 = get_char(args[i + 1], &heap_ref, "char-ci<?")?
-            .to_lowercase()
-            .to_string();
+        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci<?")?);
+        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci<?")?);
         if c1 >= c2 {
             return Ok(TaggedValue::FALSE);
         }
@@ -225,12 +240,8 @@ pub(super) fn char_ci_gt(
     let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char-ci>?")?
-            .to_lowercase()
-            .to_string();
-        let c2 = get_char(args[i + 1], &heap_ref, "char-ci>?")?
-            .to_lowercase()
-            .to_string();
+        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci>?")?);
+        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci>?")?);
         if c1 <= c2 {
             return Ok(TaggedValue::FALSE);
         }
@@ -253,12 +264,8 @@ pub(super) fn char_ci_le(
     let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char-ci<=?")?
-            .to_lowercase()
-            .to_string();
-        let c2 = get_char(args[i + 1], &heap_ref, "char-ci<=?")?
-            .to_lowercase()
-            .to_string();
+        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci<=?")?);
+        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci<=?")?);
         if c1 > c2 {
             return Ok(TaggedValue::FALSE);
         }
@@ -281,12 +288,8 @@ pub(super) fn char_ci_ge(
     let heap_ref = heap.borrow();
 
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char-ci>=?")?
-            .to_lowercase()
-            .to_string();
-        let c2 = get_char(args[i + 1], &heap_ref, "char-ci>=?")?
-            .to_lowercase()
-            .to_string();
+        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci>=?")?);
+        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci>=?")?);
         if c1 < c2 {
             return Ok(TaggedValue::FALSE);
         }
@@ -394,10 +397,10 @@ pub(super) fn char_upcase(
     let heap_ref = heap.borrow();
     let c = get_char(args[0], &heap_ref, "char-upcase")?;
 
-    // R7RS: Returns the uppercase version, using full Unicode case mapping
-    // If multiple chars result, we use the first (per R7RS simple case mapping)
-    let upper: Vec<char> = c.to_uppercase().collect();
-    Ok(TaggedValue::character(upper[0]))
+    Ok(TaggedValue::character(single_char_mapping(
+        c,
+        c.to_uppercase(),
+    )))
 }
 
 /// (char-downcase char) - Convert character to lowercase
@@ -414,16 +417,16 @@ pub(super) fn char_downcase(
     let heap_ref = heap.borrow();
     let c = get_char(args[0], &heap_ref, "char-downcase")?;
 
-    // R7RS: Returns the lowercase version, using full Unicode case mapping
-    let lower: Vec<char> = c.to_lowercase().collect();
-    Ok(TaggedValue::character(lower[0]))
+    Ok(TaggedValue::character(single_char_mapping(
+        c,
+        c.to_lowercase(),
+    )))
 }
 
 /// (char-foldcase char) - Case-folding (for case-insensitive comparison)
 ///
-/// R7RS: Returns the case-folded character. Note that full case folding
-/// can map one character to multiple (e.g., ß → ss), but char-foldcase
-/// must return a single character. We use simple case folding here.
+/// R7RS: Returns the case-folded character. Full case folding can map one
+/// character to several (ß → ss); such a character folds to itself.
 pub(super) fn char_foldcase(
     heap: &SharedHeap,
     args: &[TaggedValue],
@@ -439,12 +442,13 @@ pub(super) fn char_foldcase(
 
     use unicode_casefold::UnicodeCaseFold;
 
-    // For char-foldcase, we need to return a single character.
-    // Full case folding can expand (ß → ss), so we take the first character.
-    // This matches R7RS which says char-foldcase returns "a" character.
-    let folded: String = c.case_fold().collect();
-    let first_char = folded.chars().next().unwrap_or(c);
-    Ok(TaggedValue::character(first_char))
+    // A character whose folding expands (ß → "ss") has no folded
+    // *character* and is returned unchanged, as with char-upcase above;
+    // taking the first character of the expansion gave `#\s`.
+    Ok(TaggedValue::character(single_char_mapping(
+        c,
+        c.case_fold(),
+    )))
 }
 
 // ========== Character/Integer Conversion ==========

@@ -103,8 +103,13 @@ impl Parser {
         source_name: Rc<str>,
         source_map: Rc<RefCell<SourceMap>>,
     ) -> Result<Self, ParseError> {
-        // Store source text for caret-style error display
-        source_map.borrow_mut().set_source_text(input.to_string());
+        // Store source text for caret-style error display, and where it came
+        // from, for resolving a relative `include` beside the program.
+        {
+            let mut sm = source_map.borrow_mut();
+            sm.set_source_text(input.to_string());
+            sm.set_primary_source(&source_name);
+        }
         // The map is keyed by raw bits, so slots the GC reclaims must be
         // pruned from it (§9.1). Recording is enabled here — only
         // source-mapped sessions pay for it — and the run loops drain via

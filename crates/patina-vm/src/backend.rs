@@ -548,8 +548,12 @@ impl VmBackend {
         // Closures created during execution capture lib_env as their globals
         // (per-closure environment pointer), so no seeding or merge is needed.
 
-        let desugarer =
+        let mut desugarer =
             Desugarer::with_env(lib_env.clone()).with_fs(self.state.borrow().fs.clone());
+        // A relative `include` in the body resolves beside the `.sld`.
+        if let Some(dir) = parsed.source.as_ref().and_then(|p| p.parent()) {
+            desugarer = desugarer.with_include_base(dir.to_path_buf());
+        }
         let shared_heap = lib_env.heap().clone();
 
         {

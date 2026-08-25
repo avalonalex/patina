@@ -187,6 +187,14 @@ pub struct Desugarer {
     /// Virtual filesystem for `include` / `include-ci` forms.
     /// Defaults to `NativeFs` when not explicitly set.
     fs: std::sync::Arc<dyn patina_core::FileSystem>,
+
+    /// Directories a relative `include` path is resolved against, innermost
+    /// last: the directory of the file being desugared, then of each file an
+    /// `include` has opened on the way here. Shared (not cloned) with the
+    /// child desugarers made for nested scopes, so an `include` inside a
+    /// `let-syntax` body pushes and pops the same stack. Empty for a program
+    /// that has no file (the REPL, `eval`), where the cwd is what is left.
+    include_dirs: Rc<RefCell<Vec<std::path::PathBuf>>>,
 }
 
 impl Desugarer {
@@ -219,6 +227,7 @@ impl Desugarer {
             shadowed_names: std::collections::HashSet::new(),
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
+            include_dirs: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -236,12 +245,22 @@ impl Desugarer {
             shadowed_names: std::collections::HashSet::new(),
             source_map: Some(source_map),
             fs: std::sync::Arc::new(patina_core::NativeFs),
+            include_dirs: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
     /// Set the virtual filesystem for `include` handling.
     pub fn with_fs(mut self, fs: std::sync::Arc<dyn patina_core::FileSystem>) -> Self {
         self.fs = fs;
+        self
+    }
+
+    /// Name the directory of the file whose forms this desugarer will see,
+    /// so a relative `include` inside them resolves beside that file. The
+    /// library loaders call this with the `.sld`'s directory; without it the
+    /// only candidate is the current working directory.
+    pub fn with_include_base(self, dir: std::path::PathBuf) -> Self {
+        self.include_dirs.borrow_mut().push(dir);
         self
     }
 
@@ -255,6 +274,7 @@ impl Desugarer {
             shadowed_names: std::collections::HashSet::new(),
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
+            include_dirs: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -276,6 +296,7 @@ impl Desugarer {
             shadowed_names: self.shadowed_names.clone(),
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
+            include_dirs: self.include_dirs.clone(),
         };
         (desugarer, scope)
     }
@@ -298,6 +319,7 @@ impl Desugarer {
             shadowed_names: shadowed,
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
+            include_dirs: self.include_dirs.clone(),
         }
     }
 
@@ -476,6 +498,7 @@ impl Desugarer {
             shadowed_names: self.shadowed_names.clone(),
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
+            include_dirs: self.include_dirs.clone(),
         }
     }
 
@@ -1069,8 +1092,11 @@ impl Desugarer {
                 current_desugarer.try_parse_define_syntax_tagged(*tv, shared_heap);
 
             if let Some((macro_name, transformer_tv)) = define_syntax_info {
-                // Compile the macro immediately
-                let compiled_macro = self.compile_syntax_rules_tagged(
+                // Compile the macro immediately — with the *body's* desugarer,
+                // not `self`: it knows which names the enclosing lambda binds,
+                // and a bound `...` means this syntax-rules has no ellipsis
+                // (see compile_syntax_rules_tagged).
+                let compiled_macro = current_desugarer.compile_syntax_rules_tagged(
                     transformer_tv,
                     shared_heap,
                     macro_name.clone(),
@@ -1879,17 +1905,18 @@ impl Desugarer {
                 })?
             };
 
-            // Resolve the path
-            let path = if let Some(ref base) = base_dir {
-                let p = base.join(&filename);
-                if self.fs.file_exists(&p) {
-                    p
-                } else {
-                    // Fall back to current directory
-                    std::path::PathBuf::from(&filename)
+            // Resolve the path: beside the including file if it is there,
+            // otherwise relative to the cwd. The second is chibi's convention
+            // and what a program run from its own directory relies on; the
+            // first is what every implementation that runs Larceny's suite
+            // does for a file that includes a sibling, and it wins only when
+            // the file actually exists there, so nothing that resolved before
+            // resolves differently now.
+            let path = match base_dir {
+                Some(ref base) if self.fs.file_exists(&base.join(&filename)) => {
+                    base.join(&filename)
                 }
-            } else {
-                std::path::PathBuf::from(&filename)
+                _ => std::path::PathBuf::from(&filename),
             };
 
             // Read the file
@@ -1923,10 +1950,23 @@ impl Desugarer {
                 ))
             })?;
 
-            // Desugar each expression from the included file
-            for expr_tv in parsed_exprs {
-                all_exprs.push(self.desugar_tagged(expr_tv, shared_heap)?);
+            // Desugar each expression from the included file, with that
+            // file's directory on the stack so its own relative includes
+            // resolve beside it. Popped on the error path too: a desugarer
+            // outlives one failed `include` (the REPL's does), and a stale
+            // entry would misdirect the next one.
+            let pushed = path.parent().map(|d| d.to_path_buf());
+            if let Some(dir) = pushed.clone() {
+                self.include_dirs.borrow_mut().push(dir);
             }
+            let desugared: Result<Vec<CoreExpr>> = parsed_exprs
+                .into_iter()
+                .map(|expr_tv| self.desugar_tagged(expr_tv, shared_heap))
+                .collect();
+            if pushed.is_some() {
+                self.include_dirs.borrow_mut().pop();
+            }
+            all_exprs.extend(desugared?);
         }
 
         if all_exprs.is_empty() {
@@ -1940,27 +1980,30 @@ impl Desugarer {
         }
     }
 
-    /// Determine the base directory for resolving include paths.
+    /// The directory a relative `include` path is tried against first: the
+    /// innermost entry of `include_dirs` — the directory of the file
+    /// currently being desugared — or, for a program that has no file, the
+    /// directory of the source the parser was given, when that is a real
+    /// path. `None` means only the cwd is available.
     ///
-    /// Looks at source locations in the source map to find a file path,
-    /// then uses its parent directory. Falls back to the current working
-    /// directory if no file path is available (e.g., REPL or eval).
+    /// This used to walk every location in the source map and take the first
+    /// with a file path. The map is a `HashMap`, so which file won was not
+    /// deterministic, and a library's forms (parsed without a source map)
+    /// could only ever be resolved against whatever *program* was in it.
     fn resolve_include_base_dir(&self) -> Option<std::path::PathBuf> {
-        if let Some(ref sm) = self.source_map {
-            let sm_ref = sm.borrow();
-            // Look for any source location that has a real file path
-            for loc in sm_ref.iter_locations() {
-                let s = loc.source.as_ref();
-                if !s.starts_with('<') && !s.is_empty() {
-                    let p = std::path::Path::new(s);
-                    if let Some(parent) = p.parent() {
-                        return Some(parent.to_path_buf());
-                    }
-                }
-            }
+        if let Some(dir) = self.include_dirs.borrow().last() {
+            return Some(dir.clone());
         }
-        // Fall back to current working directory
-        std::env::current_dir().ok()
+        self.source_map.as_ref().and_then(|sm| {
+            let sm = sm.borrow();
+            let source = sm.primary_source()?;
+            if source.starts_with('<') || source.is_empty() {
+                return None;
+            }
+            std::path::Path::new(source)
+                .parent()
+                .map(|p| p.to_path_buf())
+        })
     }
 
     // =========================================================================
@@ -2032,6 +2075,18 @@ impl Desugarer {
                 "syntax-rules with custom ellipsis requires literals and rules".to_string(),
             ));
         }
+
+        // R7RS 4.3.2 identifies the ellipsis by binding, not spelling: inside
+        // `(let ((... 19)) …)` the identifier `...` is a variable, and a
+        // `syntax-rules` written there has no ellipsis at all — `(_ x y ...)`
+        // is a three-variable pattern and a template's `...` refers to the
+        // 19. The compiler already takes the ellipsis by name (SRFI 46), so a
+        // shadowed `...` is expressed as an ellipsis nothing can spell.
+        // Larceny, Kawa and Sagittarius do this; chibi and Gauche do not.
+        let custom_ellipsis = custom_ellipsis.or_else(|| {
+            self.is_shadowed("...")
+                .then(|| Rc::from("... (shadowed: no ellipsis in this scope)"))
+        });
 
         let literals = self.parse_literals_list_tagged(list[literals_index], shared_heap)?;
 

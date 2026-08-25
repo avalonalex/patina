@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-24 14:03:46  
+**Generated:** 2026-08-24 18:18:25  
 **Backend:** VM  
 **Lane:** tests/r6rs ((r6rs …) emulation libraries)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,8 +9,8 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 10 of 16 |
-| Assertions passed | 4008 of 4022 (99.7%) |
+| Suites fully passing | 11 of 16 |
+| Assertions passed | 4014 of 4022 (99.8%) |
 | Suites not reaching a tally | 2 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
@@ -31,7 +31,7 @@ The suite's library did not compile, so nothing in it ran. Patina's message:
 |---|---|
 | base | `Error: Parse error in tests/r6rs/base.sld: desugar error: Invalid syntax: let-syntax requires bindings and at least one body expression` |
 
-## Assertion failures (14 in 4 suites)
+## Assertion failures (8 in 3 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -52,15 +52,6 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 - [eval.sld:16](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/eval.sld#L16) — `eval` `eval:car`
 
-### unicode — 6 of 118 failed
-
-- [unicode.sld:11](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/unicode.sld#L11) — `char-upcase`
-- [unicode.sld:14](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/unicode.sld#L14) — `char-foldcase`
-- [unicode.sld:39](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/unicode.sld#L39) — `char-ci=?`
-- [unicode.sld:116](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/unicode.sld#L116) — `string-ci=?`
-- [unicode.sld:117](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/unicode.sld#L117) — `string-ci=?`
-- [unicode.sld:118](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/unicode.sld#L118) — `string-ci=?`
-
 ## All suites
 
 | Suite | Status | Passed | Total |
@@ -80,4 +71,4 @@ Each entry links to the test case; the name after it is the procedure the assert
 | programs | pass | 2 | 2 |
 | r5rs | pass | 71 | 71 |
 | sorting | pass | 4 | 4 |
-| unicode | fail | 112 | 118 |
+| unicode | pass | 118 | 118 |

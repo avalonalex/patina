@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-24 14:03:46  
+**Generated:** 2026-08-24 18:21:50  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,19 +9,18 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 12 of 33 |
-| Assertions passed | 3931 of 3961 (99.2%) |
-| Suites not reaching a tally | 14 |
+| Suites fully passing | 13 of 33 |
+| Assertions passed | 4027 of 4054 (99.3%) |
+| Suites not reaching a tally | 13 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Library under test not bundled (10)
+## Library under test not bundled (9)
 
 Bundling work, not defects — each is a Red-edition library Patina does not ship yet.
 
 | Suite | Missing |
 |---|---|
-| charset | `(scheme charset)` |
 | ephemeron | `(scheme ephemeron)` |
 | flonum | `(srfi 144)` |
 | ideque | `(scheme ideque)` |
@@ -48,11 +47,16 @@ The suite's library did not compile, so nothing in it ran. Patina's message:
 
 | Suite | Message |
 |---|---|
-| base | `Error: Invalid syntax: Failed to load library: Parse error in tests/scheme/base.sld: Failed to desugar expression: Invalid syntax: include: cannot read 'base-te` |
+| base | `Error: Invalid syntax: Failed to load library: Parse error in tests/scheme/base.sld: Failed to desugar expression: Invalid syntax: invalid use of syntax as a va` |
 
-## Assertion failures (30 in 7 suites)
+## Assertion failures (27 in 7 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
+
+### charset — 2 of 93 failed
+
+- [charset.sld:108](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/charset.sld#L108) — `>=` `char-set-size`
+- [charset.sld:136](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/charset.sld#L136) — `cs` `char-set`
 
 ### complex — 3 of 61 failed
 
@@ -64,16 +68,8 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 - [eval.sld:33](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/eval.sld#L33) — `eval` `eval:car`
 
-### file — 2 of 75 failed
+### inexact — 8 of 592 failed
 
-- [file.sld:139](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/file.sld#L139) — `open-binary-output-file` `flags`
-- [file.sld:154](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/file.sld#L154) — `open-binary-input-file` `flags`
-
-### inexact — 11 of 592 failed
-
-- [inexact.sld:311](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/inexact.sld#L311) — `rationalize`
-- [inexact.sld:312](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/inexact.sld#L312) — `rationalize`
-- [inexact.sld:313](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/inexact.sld#L313) — `rationalize`
 - [inexact.sld:361](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/inexact.sld#L361) — `sqrt`
 - [inexact.sld:405](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/inexact.sld#L405) — `string->number`
 - [inexact.sld:406](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/inexact.sld#L406) — `string->number`
@@ -113,19 +109,19 @@ Each entry links to the test case; the name after it is the procedure the assert
 | box | pass | 10 | 10 |
 | case-lambda | pass | 5 | 5 |
 | char | crash | 0 | 0 |
-| charset | not-bundled | 0 | 0 |
+| charset | fail | 91 | 93 |
 | comparator | pass | 158 | 158 |
 | complex | fail | 58 | 61 |
 | cxr | pass | 28 | 28 |
 | ephemeron | not-bundled | 0 | 0 |
 | eval | fail | 2 | 3 |
-| file | fail | 73 | 75 |
+| file | pass | 75 | 75 |
 | flonum | not-bundled | 0 | 0 |
 | generator | pass | 49 | 49 |
 | hash-table | pass | 82 | 82 |
 | ideque | not-bundled | 0 | 0 |
 | ilist | not-bundled | 0 | 0 |
-| inexact | fail | 581 | 592 |
+| inexact | fail | 584 | 592 |
 | lazy | crash | 0 | 0 |
 | list-queue | not-bundled | 0 | 0 |
 | list | fail | 163 | 172 |

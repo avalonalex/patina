@@ -203,8 +203,12 @@ pub(super) fn rationalize(
         }
     }
 
-    // Check if x is inexact - this determines the exactness of the result
-    let x_is_inexact = heap.borrow().is_inexact_number(args[0]);
+    // R7RS 6.2.6: the result is inexact if either argument is, so
+    // (rationalize 3 +inf.0) is 0.0, not 0.
+    let x_is_inexact = {
+        let h = heap.borrow();
+        h.is_inexact_number(args[0]) || h.is_inexact_number(args[1])
+    };
 
     // Helper to extract f64 from a real-valued TaggedValue
     let tv_to_f64 = |tv: TaggedValue| -> f64 {
@@ -226,6 +230,21 @@ pub(super) fn rationalize(
 
     let x_f64 = tv_to_f64(args[0]);
     let tol_f64 = tv_to_f64(args[1]).abs();
+
+    // The infinities, per R7RS 6.2.6's examples: (rationalize +inf.0 3) is
+    // +inf.0 — the simplest number within 3 of infinity is infinity;
+    // (rationalize 3 +inf.0) is 0.0 — every number is within an infinite
+    // tolerance and 0 is the simplest; (rationalize +inf.0 +inf.0) is +nan.0.
+    // The interval arithmetic below turns all of these into 0.
+    if x_f64.is_nan() || tol_f64.is_nan() || (x_f64.is_infinite() && tol_f64.is_infinite()) {
+        return Ok(heap.borrow_mut().alloc_real(f64::NAN));
+    }
+    if x_f64.is_infinite() {
+        return Ok(heap.borrow_mut().alloc_real(x_f64));
+    }
+    if tol_f64.is_infinite() {
+        return Ok(heap.borrow_mut().alloc_real(0.0));
+    }
 
     // Range: [x - tolerance, x + tolerance]
     let lower = x_f64 - tol_f64;

@@ -224,10 +224,12 @@ pub(super) fn input_port_open_p(
     let heap_ref = heap.borrow();
     match get_port_tv(args[0], &heap_ref) {
         Some(p) => {
+            // R7RS 6.13.1: "#t if port is still open and capable of
+            // performing input" — an output-only port is simply not, rather
+            // than a type error. Larceny's file suite maps every port
+            // predicate over a fresh binary port and expects (#f ...) here.
             if p.direction != PortDirection::Input {
-                return Err(EvalError::TypeError(
-                    "input-port-open? expects an input port".to_string(),
-                ));
+                return Ok(TaggedValue::FALSE);
             }
             Ok(TaggedValue::boolean(p.is_open()))
         }
@@ -251,10 +253,10 @@ pub(super) fn output_port_open_p(
     let heap_ref = heap.borrow();
     match get_port_tv(args[0], &heap_ref) {
         Some(p) => {
+            // Mirror of input-port-open?: an input-only port is not capable
+            // of output, so #f, not an error.
             if p.direction != PortDirection::Output {
-                return Err(EvalError::TypeError(
-                    "output-port-open? expects an output port".to_string(),
-                ));
+                return Ok(TaggedValue::FALSE);
             }
             Ok(TaggedValue::boolean(p.is_open()))
         }

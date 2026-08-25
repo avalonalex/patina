@@ -371,9 +371,12 @@ where
         let a_chars = get_string_as_chars(args[i], &heap_ref, fn_name)?;
         let b_chars = get_string_as_chars(args[i + 1], &heap_ref, fn_name)?;
 
-        // Convert Vec<char> to String for case-insensitive comparison
-        let a_str = chars_to_string(a_chars).to_lowercase();
-        let b_str = chars_to_string(b_chars).to_lowercase();
+        // R7RS 6.7: string-ci=? and friends compare "as if by
+        // string-foldcase" — full case folding, so "Straße" and "STRASSE"
+        // are equal. Lower-casing left ß as ß and said they were not.
+        use unicode_casefold::UnicodeCaseFold;
+        let a_str: String = chars_to_string(a_chars).case_fold().collect();
+        let b_str: String = chars_to_string(b_chars).case_fold().collect();
 
         if !cmp(&a_str, &b_str) {
             return Ok(TaggedValue::FALSE);
