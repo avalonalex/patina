@@ -1,5 +1,5 @@
 {
-  "generated": "2026-08-18",
+  "generated": "2026-08-25",
   "source": "snow-fort.org /s/repo.scm",
   "built_by": "compat/tools/build_corpus.py",
   "purpose": "compatibility test corpus only: not a dependency of Patina, not shipped with it, and not an endorsement of any package",
@@ -2454,32 +2454,6 @@
       "files": [
         "package.scm",
         "srfi/28.sld"
-      ],
-      "modified": false,
-      "needs_ffi": false
-    },
-    {
-      "library": "srfi 41",
-      "slug": "srfi-41",
-      "version": "0.1.0",
-      "license": "MIT",
-      "license_class": "PERMISSIVE",
-      "license_evidence": "text-match",
-      "upstream_url": "http://snow-fort.org/s/iki.fi/retropikzel/srfi/41/0.1.0/srfi-41-0.1.0.tgz",
-      "tarball_sha256": "c6bbc9b5d856f1ebdb3d9ce75d9542cc32050b13b82eb3e53fd9a8b96b67fdc2",
-      "popularity_indegree": 1,
-      "provides": [
-        "srfi 41"
-      ],
-      "depends": [
-        "scheme base"
-      ],
-      "description": "SRFI-41",
-      "files": [
-        "README.html",
-        "package.scm",
-        "srfi/41.scm",
-        "srfi/41.sld"
       ],
       "modified": false,
       "needs_ffi": false

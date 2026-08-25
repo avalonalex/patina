@@ -154,6 +154,12 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - **Spelling-based literal matching and `apply`-head check** (review of #114, pre-existing): the literal matcher and the `apply` head test judge by spelling, so `(let ((else #f)) …)` around a macro using `my-cond`'s `else` literal, or a local `apply` around a template's `(apply f x)`, answer differently from chibi. Same project as families 14/15.
 - **`charset`, now that it loads** (2 of 93): [tests/scheme/charset.sld](tests/scheme/charset.sld) expects `char-set:full` to hold every code point — the bundled SRFI 14 is the Latin-1 reference port (PRD §6, chibi-regexp entry: blocked on a full-Unicode char-set story) — and expects `char-set-cursor` to iterate ascending, which SRFI 14 leaves unspecified.
 
+### 26. Tree-walker: the `stream` suite exceeds the runner's timeout — tree-walker only
+- Ours: none — a performance property, not a wrong answer, like `time`.
+- Upstream: [tests/scheme/stream.sld#L97](tests/scheme/stream.sld#L97), the 50th Pythagorean triple built from nested infinite streams. Measured: tree-walker 27 s at n=10, 117 s at n=20, past 200 s at n=30; the VM does n=50 in 33 s and passes the suite 81 of 81. About 20× on this workload, so the suite would need ~11 minutes there against the runner's 300 s.
+
 ## Not defects — bundling queue (L1 item 6, now with a suite each)
 
-~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme ilist)`, `(scheme list-queue)`, `(scheme lseq)`, `(scheme rlist)`, `(scheme stream)`, `(scheme text)`. Nine of the 33 R7RS suites never load for this reason alone.
+~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), ~~`(scheme stream)`~~ (SRFI 41 bundled 2026-08-25; the suite passes 81 of 81 on the VM), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme ilist)`, `(scheme list-queue)`, `(scheme lseq)`, `(scheme rlist)`, `(scheme text)`. Eight of the 33 R7RS suites never load for this reason alone.
+
+Reading for whoever takes the next one: chibi's tree has all eight, but its copy is not automatically the right source — SRFI 41 showed chibi's `stream-filter` failing to take a bounded prefix of an infinite stream where the SRFI's own reference implementation is fine. Prefer the snow-fort tarball of the reference implementation and check what its R7RS port had to drop (SRFI 41's was `stream-match`, written in `syntax-case`).

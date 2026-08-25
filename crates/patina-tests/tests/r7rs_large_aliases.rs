@@ -20,6 +20,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("generator", 158),  // Tangerine
     ("hash-table", 125), // Red
     ("charset", 14),     // Red
+    ("stream", 41),      // Red
 ];
 
 #[test]

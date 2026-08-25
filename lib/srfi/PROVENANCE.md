@@ -11,15 +11,30 @@ own record. One home per tree.
 | `(srfi 14)` | 0.1.0 | `14.sld`, `14.scm` | snow-fort, Retropikzel's R7RS port of Olin Shivers' char-set reference implementation (MIT-Scheme-old) | `de94f90d7b032ea554ed51b4cbce942b22df6fefe68497d661b9c26e3c7e690e` |
 | `(srfi 125)` | chibi 0.12.0 | `125/hash.scm` | chibi-scheme's `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause) | file sha256 `d469201d00fa0b955ba23a01e02707034dad5ba2ef1a29cd7b12b880e76f1053` |
 | SRFI 162 | — | `128/162-impl.scm` | the SRFI's own sample implementation, `https://srfi.schemers.org/srfi-162/srfi/128/162-impl.scm` (John Cowan, MIT) | file sha256 `973b7a5e6557ecfaa5e218a2d51e63077572235973f27c3db484ab5bac9513f2` |
+| `(srfi 41)` | 0.1.0 | `41.sld`, `41.scm` | snow-fort, Retropikzel's R7RS port of Philip Bewig's stream reference implementation (MIT) | `c6bbc9b5d856f1ebdb3d9ce75d9542cc32050b13b82eb3e53fd9a8b96b67fdc2` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
 Tarball URLs:
-`http://snow-fort.org/s/iki.fi/retropikzel/srfi/14/0.1.0/srfi-14-0.1.0.tgz` and
-`http://snow-fort.org/s/iki.fi/retropikzel/srfi/27/2025.12.14/srfi-27-2025.12.14.tgz`
+`http://snow-fort.org/s/iki.fi/retropikzel/srfi/14/0.1.0/srfi-14-0.1.0.tgz`,
+`http://snow-fort.org/s/iki.fi/retropikzel/srfi/27/2025.12.14/srfi-27-2025.12.14.tgz` and
+`http://snow-fort.org/s/iki.fi/retropikzel/srfi/41/0.1.0/srfi-41-0.1.0.tgz`
 (the compat corpus vendored the same tarballs until Patina bundled them; the
 corpus drops packages Patina provides). Each `.scm` sits beside its `.sld`
 rather than in a numbered subdirectory so the `(include "…")` resolves
 unchanged.
+
+**`(srfi 41)`'s `.sld` deviates in two lines, and `41-match.scm` is a second
+source.** The port comments `stream-match` out: the SRFI's reference
+implementation writes it in `syntax-case`, which Patina does not have. The
+macro is chibi-scheme's `syntax-rules` equivalent instead (Alex Shinn, BSD
+3-Clause, `lib/srfi/41.scm`), in its own file, with chibi's `assert` replaced
+by the error the SRFI specifies; the `.sld` exports `stream-match` and `_`
+(the wildcard its patterns match as a literal) and includes that file. Taking
+the *port's* body rather than chibi's whole library is deliberate: chibi's
+`stream-filter` is not lazy enough to take a bounded prefix of an infinite
+stream — `(stream->list 2 (stream-filter (lambda (n) (= n (* n n))) (stream-from 0)))`
+does not terminate there — while the reference implementation, which is the
+specification's own code, answers `(0 1)`.
 
 **SRFI 162 has no library of its own, deliberately.** Its bindings are exported
 from `(srfi 128)` because SRFI 162 says to: *"Implementers are urged to add them

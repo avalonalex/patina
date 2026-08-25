@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-25 09:49:25  
+**Generated:** 2026-08-25 13:04:10  
 **Backend:** VM  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,13 +9,13 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 16 of 33 |
-| Assertions passed | 4260 of 4270 (99.8%) |
-| Suites not reaching a tally | 10 |
+| Suites fully passing | 17 of 33 |
+| Assertions passed | 4341 of 4351 (99.8%) |
+| Suites not reaching a tally | 9 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Library under test not bundled (9)
+## Library under test not bundled (8)
 
 Bundling work, not defects — each is a Red-edition library Patina does not ship yet.
 
@@ -28,7 +28,6 @@ Bundling work, not defects — each is a Red-edition library Patina does not shi
 | list-queue | `(scheme list-queue)` |
 | lseq | `(scheme lseq)` |
 | rlist | `(scheme rlist)` |
-| stream | `(scheme stream)` |
 | text | `(scheme text)` |
 
 ## Failed to load (1)
@@ -106,7 +105,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | rlist | not-bundled | 0 | 0 |
 | set | pass | 16 | 16 |
 | sort | pass | 2562 | 2562 |
-| stream | not-bundled | 0 | 0 |
+| stream | pass | 81 | 81 |
 | text | not-bundled | 0 | 0 |
 | time | pass | 2 | 2 |
 | vector | pass | 103 | 103 |
