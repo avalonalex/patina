@@ -12,6 +12,8 @@ own record. One home per tree.
 | `(srfi 125)` | chibi 0.12.0 | `125/hash.scm` | chibi-scheme's `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause) | file sha256 `d469201d00fa0b955ba23a01e02707034dad5ba2ef1a29cd7b12b880e76f1053` |
 | SRFI 162 | — | `128/162-impl.scm` | the SRFI's own sample implementation, `https://srfi.schemers.org/srfi-162/srfi/128/162-impl.scm` (John Cowan, MIT) | file sha256 `973b7a5e6557ecfaa5e218a2d51e63077572235973f27c3db484ab5bac9513f2` |
 | `(srfi 41)` | 0.1.0 | `41.sld`, `41.scm` | snow-fort, Retropikzel's R7RS port of Philip Bewig's stream reference implementation (MIT) | `c6bbc9b5d856f1ebdb3d9ce75d9542cc32050b13b82eb3e53fd9a8b96b67fdc2` |
+| `(srfi 117)` | 1.5 | `117/list-queues-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-117/srfi-117.tgz` (John Cowan, MIT) | tarball sha256 `ffc8349567a8169eb53e818dd15f73b0485c3db9aca79e432d7e6781db2b8e46` |
+| `(srfi 127)` | — | `127/lseqs-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-127/srfi-127.tgz` (John Cowan, MIT) | tarball sha256 `edff4ba12bcc5d4e11d48189a2db4bdbb86b8f424f3bdadbb0350eee095e3828` |
 | `(srfi 41)`'s `stream-match` | chibi 0.12-134-gf2660362 | `41-match.scm` | chibi-scheme's **own** `lib/srfi/41.scm` — not the file of that name here (Alex Shinn, BSD 3-Clause) | file sha256 `01d33bc8f17a6b9bea94e73f6534bcaa474a6f21eff42687f726cc9f7c5d6c12` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
@@ -38,6 +40,41 @@ the *port's* body rather than chibi's whole library is deliberate: chibi's
 stream — `(stream->list 2 (stream-filter (lambda (n) (= n (* n n))) (stream-from 0)))`
 does not terminate there — while the reference implementation, which is the
 specification's own code, answers `(0 1)`.
+
+**`(srfi 117)` and `(srfi 127)` are the SRFIs' own reference
+implementations, and chibi's copies were tried first and rejected.** Both of
+chibi's pass Larceny's suites and chibi's own, and both are wrong in ways
+neither suite reaches — found by review, each reproduced before acting:
+`list-queue-remove-back!` never re-points the queue's last pair, so
+`list-queue-back` answers the removed element and the next
+`list-queue-add-back!` is silently dropped; `list-queue-set-list!` raises on
+the empty list; `lseq-append` uses `cdr` where it needs `lseq-cdr`, so a
+generator-backed argument is truncated after one element; and `lseq-member`
+passes its comparison arguments in the order opposite to SRFI 1's. The
+reference implementations have none of these. This is the second time chibi's
+copy has been the wrong source (SRFI 41's `stream-filter` was the first) and
+the first time a *suite* was wrong too — see the note on the SRFI 117 row in
+`upstream_srfi_suites.rs`.
+
+**One `PATINA LOCAL EDIT` in `117/list-queues-impl.scm`**, marked in place:
+`list-queue-join!` did an unguarded `(set-cdr! (get-last queue1) …)`, which
+raises when queue1 is empty — Larceny's suite hits it — and never re-pointed
+queue1's last pair, so `(list-queue-append! a b)` followed by
+`list-queue-add-back!` lost every element of `b`. Both are repaired without
+changing the joined result.
+
+**Two upstream properties, left as found** because they are the
+specification's own reference implementation and neither suite nor Patina has
+a stake in changing them: `lseq?` walks the whole chain, so it does not
+terminate on a circular list (Gauche's is O(1)); and `lseq-map` uses the eof
+object as its end-of-sequence sentinel, so a mapping procedure that
+legitimately returns one truncates the sequence.
+
+**The `.sld` files are Patina's.** Upstream names these libraries
+`(srfi-117)` and `(lseqs)`, which is not what R7RS code imports; ours declare
+`(srfi 117)` and `(srfi 127)` and include the byte-identical implementation
+beside them. `(srfi 127)`'s takes its generator procedures from the bundled
+`(srfi 158)` rather than the `(srfi 121)` of the SRFI's day.
 
 **SRFI 162 has no library of its own, deliberately.** Its bindings are exported
 from `(srfi 128)` because SRFI 162 says to: *"Implementers are urged to add them

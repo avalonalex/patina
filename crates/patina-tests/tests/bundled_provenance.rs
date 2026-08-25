@@ -44,6 +44,15 @@ const PINNED: &[(&str, u64)] = &[
     // lib/srfi/128/ is the adapted SRFI 128 port and is deliberately unpinned
     // (see the module docs); this file is not adapted, so it is watched.
     ("lib/srfi/128/162-impl.scm", 0xf93547f60a36817a),
+    // SRFI 117's and 127's own reference implementations (John Cowan, MIT).
+    // 117's is pinned post-edit — one PATINA LOCAL EDIT to list-queue-join!,
+    // marked in place and recorded in PROVENANCE.md. The two `.sld` files are
+    // ours, not upstream's (upstream names the libraries `(srfi-117)` and
+    // `(lseqs)`), and are pinned so an edit to them is deliberate too.
+    ("lib/srfi/117.sld", 0xcbbd0e9aaac6aef6),
+    ("lib/srfi/117/list-queues-impl.scm", 0x30690c9b26f3e72b),
+    ("lib/srfi/127.sld", 0x6171c0c4565c6a0f),
+    ("lib/srfi/127/lseqs-impl.scm", 0x13a69d50373b02fe),
     // SRFI 41's reference implementation as Retropikzel ported it,
     // byte-identical. Its `.sld` is pinned post-edit: two lines export and
     // include `stream-match`, which the port comments out because the
