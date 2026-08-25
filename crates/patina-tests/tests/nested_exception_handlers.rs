@@ -125,10 +125,17 @@ fn test_three_levels_of_nesting() {
 /// Patina  => (in out)          chibi => (in out in out)
 /// ```
 ///
-/// Fixing it means the re-raise carrying a continuation back into the raiser's
-/// wind stack, which is `guard`'s expansion, not the handler machinery. The
-/// value the whole expression produces is the same either way, which is why
-/// nothing else notices.
+/// **That "not the handler machinery" was wrong, measured 2026-08-25.** R7RS
+/// 7.3's reference `guard` carries exactly the continuation this describes,
+/// back into the raiser's wind stack — and still gives `(in out)` here,
+/// because `with-exception-handler` unwinds *before* calling the handler, so
+/// the continuation is captured after the extent has been left. Both halves
+/// are needed. See Track L PRD §6, "An exception handler runs after the
+/// unwind", and the triage doc's families 22 and 28 for the order and for
+/// what changing the unwind reopens; this pin closes with them.
+///
+/// The value the whole expression produces is the same either way, which is
+/// why nothing else notices.
 #[test]
 fn test_a_guard_re_raise_does_not_rewind_into_the_raiser() {
     assert_eq!(
