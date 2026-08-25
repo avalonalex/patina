@@ -23,7 +23,8 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 
 ### 1. A nested `include` resolves against the wrong directory — both backends — ✅ fixed 2026-08-24
 - Ours: `a_nested_include_resolves_relative_to_the_including_file`
-- Fix: the desugarer keeps a stack of include directories (seeded from the `.sld` for a library body, pushed by each `include`), tried before the cwd; the `HashMap` walk is gone. `base` now loads past its includes and stops at family 15 instead.
+- Fix: the desugarer keeps a stack of include directories (seeded from the `.sld` by all three library loaders, pushed by each `include` that resolved to a real directory), tried before the cwd; the `HashMap` walk is gone. `base` now loads past its includes and stops at family 14 instead.
+- Left for later, same family (review of #111, all pre-existing): a declaration-level `(include "sub/impl.scm")` in a `.sld` is inlined without recording `sub/`, so an expression-level include inside it resolves against the `.sld` directory; an inline `(define-library …)` has no source path, so its body includes are cwd-only; `load` evaluates through a desugarer with an empty stack, so a loaded file's relative includes are cwd-only.
 - Upstream: [tests/scheme/base.sld#L359](tests/scheme/base.sld#L359) starts the chain; [tests/scheme/base-test3.scm#L1](tests/scheme/base-test3.scm#L1) is the include that fails. Blocks the whole `base` suite (~900 assertions) on both backends.
 - Note: chibi 0.12 fails this file the same way; Gauche resolves relative to the including file.
 
@@ -51,7 +52,7 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 
 ### 7. Unicode case mapping beyond the one-to-one table — both backends — ✅ fixed 2026-08-24 (the `digit-value` sweep remains)
 - Ours: `case_mapping_of_characters_without_a_single_character_mapping`
-- Fix: a mapping that is not a single character returns the character itself (`char-upcase`, `char-downcase`, `char-foldcase`); `char-ci=?` and friends compare case *foldings*, and `string-ci=?` and friends compare full foldings (`string-foldcase` already did).
+- Fix: the Unicode *simple* mappings (R7RS 6.6) — std's full mapping where it is one character, a generated table (from UnicodeData/SpecialCasing) where it expands (İ → i, ᾀ → ᾈ), the character itself where there is none (ß); `char-foldcase` and the `char-ci` comparisons use simple folding (ẞ → ß), `string-ci=?` and friends full folding. SRFI 69's `string-ci-hash` hashes the folding so it agrees with `string-ci=?`.
 - Upstream: [tests/scheme/char.sld#L57](tests/scheme/char.sld#L57) (`char-upcase`), [#L59](tests/scheme/char.sld#L59) (`char-foldcase`), [#L69](tests/scheme/char.sld#L69) (`char-ci=?`), [#L113](tests/scheme/char.sld#L113), [#L114](tests/scheme/char.sld#L114) (`string-ci=?`); the R6RS lane repeats them at [tests/r6rs/unicode.sld#L11](tests/r6rs/unicode.sld#L11), [#L14](tests/r6rs/unicode.sld#L14), [#L39](tests/r6rs/unicode.sld#L39), [#L116](tests/r6rs/unicode.sld#L116)–[#L118](tests/r6rs/unicode.sld#L118)
 - Also in this family, **no original case yet**: `digit-value` disagrees with `char-numeric?` somewhere in the full Nd sweep — [tests/scheme/char.body.scm#L109](tests/scheme/char.body.scm#L109), [#L123](tests/scheme/char.body.scm#L123). Spot checks (`#\3`, Arabic-Indic three) are right; the sweep is over every code point.
 
@@ -62,6 +63,7 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 ### 9. `rationalize` at the infinities — both backends — ✅ fixed 2026-08-24
 - Ours: `rationalize_with_an_infinite_argument`
 - Upstream: [tests/scheme/inexact.sld#L311](tests/scheme/inexact.sld#L311)–[#L313](tests/scheme/inexact.sld#L313)
+- Left for later (pre-existing, adjacent): `simplest_rational_in_range` truncates its bounds with `as i64`, so any result with |x| ≥ 2^63 is wrong (`(rationalize 1e19 1)` ⇒ `9223372036854775808.0`).
 - The two neighbours first filed here are **not ours**: `(log -0.0)` ⇒ `-inf.0` and `(sqrt -inf.0)` ⇒ `0.0+inf.0i` in chibi, Gauche *and* Chez, exactly as in Patina — [#L361](tests/scheme/inexact.sld#L361) is an approximate comparison that cannot pass with an infinity in it, and [tests/scheme/complex.body.scm#L89](tests/scheme/complex.body.scm#L89) expects `-inf.0+πi`, which no reference produces.
 
 ### 10. `environment` rejects a nested import set — both backends
@@ -82,14 +84,14 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 - Ours: none — these exercise the bundled `(r6rs …)` emulation libraries, not R7RS behaviour. R6RS lets `make-bytevector`'s fill be a signed byte; `(r6rs enums)`'s `define-enumeration` constructor fails on a member name.
 - Upstream: [tests/r6rs/bytevectors.sld#L47](tests/r6rs/bytevectors.sld#L47), [#L48](tests/r6rs/bytevectors.sld#L48), [#L65](tests/r6rs/bytevectors.sld#L65), [#L74](tests/r6rs/bytevectors.sld#L74); [tests/r6rs/enums.sld#L97](tests/r6rs/enums.sld#L97), [#L99](tests/r6rs/enums.sld#L99), [#L100](tests/r6rs/enums.sld#L100)
 
-### 14. A shadowed `...` is no longer the ellipsis (R7RS 4.3.2) — both backends — ✅ fixed 2026-08-24
-- Ours: `a_shadowed_ellipsis_is_an_ordinary_pattern_variable`
-- Upstream: [tests/scheme/base.sld#L1155](tests/scheme/base.sld#L1155) — the first of a pair that blocked `base` at load time once its includes resolved. chibi and Gauche reject it too; Larceny, Kawa and Sagittarius accept.
-- Fix: a `syntax-rules` compiled where `...` is a shadowed name gets an ellipsis nothing can spell (the SRFI 46 hook); and an internal `define-syntax` is now compiled by the *body's* desugarer, which knows the enclosing lambda's names, rather than the outer one.
+### 14. A shadowed `...` is no longer the ellipsis (R7RS 4.3.2) — both backends
+- Ours: `a_shadowed_ellipsis_is_an_ordinary_pattern_variable` (pinned as the error it is today)
+- Upstream: [tests/scheme/base.sld#L1155](tests/scheme/base.sld#L1155) — the first of a pair; **this is what gates `base` now** (~900 assertions), at load time, once its includes resolve. chibi and Gauche reject it too; Larceny, Kawa and Sagittarius accept.
+- Tried and backed out (review of #111): a whole-macro sentinel ellipsis when `...` is a shadowed *spelling*, plus compiling internal `define-syntax` with the body's desugarer. The second fed lambda parameter names into literal resolution, so a literal spelled like a parameter matched a *nested* rebinding (`(lit lit)` where chibi says `(lit var)`); the first lost an ellipsis an *outer* macro introduced via `(... ...)` whenever the expansion landed in a scope binding `...`. The decision is per token and scope-aware — it belongs in `Compiler::is_ellipsis`, which already has the scopes and a native no-ellipsis mode — and a global `(define ... …)` should disable it too (Larceny resolves the ellipsis by `syntactic-lookup`).
 
 ### 15. A template's reference to a definition-site local spelled like a keyword is rejected as syntax — both backends
 - Ours: `a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword` (pinned as the error it is today)
-- Upstream: [tests/scheme/base.sld#L1163](tests/scheme/base.sld#L1163) — the second of the pair; **this is what gates `base` now** (~900 assertions), at desugar time of the library.
+- Upstream: [tests/scheme/base.sld#L1163](tests/scheme/base.sld#L1163) — the second of the pair; blocks `base` next, at desugar time of the library.
 - Cause: `resolve_syntax`'s shadow test is by spelling and exempts scoped (macro-introduced) references, which hygiene needs for an *outer* macro's `if`. A macro defined *inside* `(let ((if …)) …)` has that binding in its definition scopes, so its template's `if` is the variable. Making the shadow test scope-aware is the hygiene change `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves — not a one-liner.
 
 ## Not ours — recorded so nobody re-diagnoses them
@@ -102,4 +104,4 @@ Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 
 ## Not defects — bundling queue (L1 item 6, now with a suite each)
 
-~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme ilist)`, `(scheme list-queue)`, `(scheme lseq)`, `(scheme rlist)`, `(scheme stream)`, `(scheme text)`. Ten of the 33 R7RS suites never load for this reason alone.
+~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme ilist)`, `(scheme list-queue)`, `(scheme lseq)`, `(scheme rlist)`, `(scheme stream)`, `(scheme text)`. Nine of the 33 R7RS suites never load for this reason alone.

@@ -199,7 +199,8 @@ impl VmBackend {
 
         // Desugar: TaggedValue → CoreExpr.
         let desugarer = match source_map {
-            Some(sm) => Desugarer::with_env_and_source_map(Rc::clone(&self.global_env), sm.clone()),
+            Some(sm) => Desugarer::with_env_and_source_map(Rc::clone(&self.global_env), sm.clone())
+                .with_fs(self.state.borrow().fs.clone()),
             None => Desugarer::with_env(Rc::clone(&self.global_env))
                 .with_fs(self.state.borrow().fs.clone()),
         };
@@ -548,12 +549,10 @@ impl VmBackend {
         // Closures created during execution capture lib_env as their globals
         // (per-closure environment pointer), so no seeding or merge is needed.
 
-        let mut desugarer =
-            Desugarer::with_env(lib_env.clone()).with_fs(self.state.borrow().fs.clone());
         // A relative `include` in the body resolves beside the `.sld`.
-        if let Some(dir) = parsed.source.as_ref().and_then(|p| p.parent()) {
-            desugarer = desugarer.with_include_base(dir.to_path_buf());
-        }
+        let desugarer = Desugarer::with_env(lib_env.clone())
+            .with_fs(self.state.borrow().fs.clone())
+            .with_include_base_of(parsed.source.as_deref());
         let shared_heap = lib_env.heap().clone();
 
         {

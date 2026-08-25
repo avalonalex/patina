@@ -128,7 +128,8 @@ impl TreeWalker {
         }
 
         let desugarer = match source_map {
-            Some(sm) => Desugarer::with_env_and_source_map(env.clone(), sm.clone()),
+            Some(sm) => Desugarer::with_env_and_source_map(env.clone(), sm.clone())
+                .with_fs(self.evaluator.fs.clone()),
             None => Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone()),
         };
 

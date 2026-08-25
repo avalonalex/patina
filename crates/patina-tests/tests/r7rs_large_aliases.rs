@@ -19,6 +19,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("vector", 133),     // Red
     ("generator", 158),  // Tangerine
     ("hash-table", 125), // Red
+    ("charset", 14),     // Red
 ];
 
 #[test]

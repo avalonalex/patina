@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-24 18:13:24  
+**Generated:** 2026-08-24 20:18:38  
 **Backend:** VM  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -46,7 +46,7 @@ The suite's library did not compile, so nothing in it ran. Patina's message:
 
 | Suite | Message |
 |---|---|
-| base | `Error: Parse error in tests/scheme/base.sld: desugar error: Invalid syntax: invalid use of syntax as a value: `...` is a syntactic keyword` |
+| base | `Error: Parse error in tests/scheme/base.sld: desugar error: Invalid syntax: Failed to compile macro bar: Invalid syntax: Pattern variable y at level 1 used at l` |
 
 ## Assertion failures (21 in 8 suites)
 

@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-24 18:21:50  
+**Generated:** 2026-08-24 20:28:09  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -47,7 +47,7 @@ The suite's library did not compile, so nothing in it ran. Patina's message:
 
 | Suite | Message |
 |---|---|
-| base | `Error: Invalid syntax: Failed to load library: Parse error in tests/scheme/base.sld: Failed to desugar expression: Invalid syntax: invalid use of syntax as a va` |
+| base | `Error: Invalid syntax: Failed to load library: Parse error in tests/scheme/base.sld: Failed to desugar expression: Invalid syntax: Failed to compile macro bar: ` |
 
 ## Assertion failures (27 in 7 suites)
 

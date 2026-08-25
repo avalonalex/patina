@@ -725,12 +725,10 @@ impl Evaluator {
         // Step 2: Evaluate library body (definitions only)
         // Use CPS evaluation so that all lambdas become CpsLambdas, enabling
         // proper continuation support throughout the codebase.
-        let mut desugarer =
-            patina_frontend::Desugarer::with_env(lib_env.clone()).with_fs(self.fs.clone());
         // A relative `include` in the body resolves beside the `.sld`.
-        if let Some(dir) = parsed.source.as_ref().and_then(|p| p.parent()) {
-            desugarer = desugarer.with_include_base(dir.to_path_buf());
-        }
+        let desugarer = patina_frontend::Desugarer::with_env(lib_env.clone())
+            .with_fs(self.fs.clone())
+            .with_include_base_of(parsed.source.as_deref());
         let shared_heap = lib_env.heap().clone();
         // Collection is already deferred here: `parsed` carries a
         // `GcDeferGuard` while it holds unevaluated body forms — see

@@ -154,30 +154,84 @@ pub(super) fn char_ge(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
 
 // ========== Case-Insensitive Character Comparisons ==========
 
-/// (char-ci=? char1 char2 ...) - Case-insensitive character equality
-/// The case-insensitive identity of a character: Unicode case folding, which
-/// is how R7RS 6.6 defines `char-ci=?` and friends ("as if by
-/// `char-foldcase`"). Lower-casing is not the same thing — final sigma
-/// lower-cases to itself but folds to sigma, so `(char-ci=? #\ς #\σ)` came
-/// out false. Folding can expand (ß → "ss"), hence a `String`.
-fn fold_char(c: char) -> String {
-    use unicode_casefold::UnicodeCaseFold;
-    c.case_fold().collect()
-}
+// ========== Simple case mapping ==========
+//
+// R7RS 6.6 defines char-upcase / char-downcase / char-foldcase as the Unicode
+// *simple* case mappings (UnicodeData's one-to-one fields), and char-ci=? and
+// friends as comparison "as if by char-foldcase". Rust's std gives the *full*
+// mappings (SpecialCasing: ß → "SS", ﬁ → "FI"); the two agree wherever the
+// full mapping is a single character, and differ on about a hundred
+// characters. Taking the first character of an expansion (`#\S` for ß) is a
+// different letter, and returning the character itself misses the cases
+// that *do* have a simple mapping (İ → i, ᾀ → ᾈ) — so the table below
+// supplies the simple mapping exactly where the full one expands.
 
-/// A single-character case mapping, or the character itself when the
-/// mapping is not a single character. R7RS 6.6: `char-upcase` etc. return
-/// *the* character — ß upper-cases to "SS", so it has no upper-case
-/// character and is returned unchanged; taking the first character of the
-/// expansion (`#\S`) is a different letter.
-fn single_char_mapping(c: char, mapping: impl Iterator<Item = char>) -> char {
-    let mut it = mapping;
+// Generated from UnicodeData.txt / SpecialCasing.txt (Unicode 17.0, SpecialCasing dated 2025-07-31):
+// characters whose full case mapping is not a single character, with the
+// simple (UnicodeData field 12/13) mapping to use instead. Identity means
+// there is no simple mapping either (ß has no upper-case character).
+const SIMPLE_UPPER_WHEN_FULL_EXPANDS: &[(char, char)] = &[
+    ('\u{1F80}', '\u{1F88}'),
+    ('\u{1F81}', '\u{1F89}'),
+    ('\u{1F82}', '\u{1F8A}'),
+    ('\u{1F83}', '\u{1F8B}'),
+    ('\u{1F84}', '\u{1F8C}'),
+    ('\u{1F85}', '\u{1F8D}'),
+    ('\u{1F86}', '\u{1F8E}'),
+    ('\u{1F87}', '\u{1F8F}'),
+    ('\u{1F90}', '\u{1F98}'),
+    ('\u{1F91}', '\u{1F99}'),
+    ('\u{1F92}', '\u{1F9A}'),
+    ('\u{1F93}', '\u{1F9B}'),
+    ('\u{1F94}', '\u{1F9C}'),
+    ('\u{1F95}', '\u{1F9D}'),
+    ('\u{1F96}', '\u{1F9E}'),
+    ('\u{1F97}', '\u{1F9F}'),
+    ('\u{1FA0}', '\u{1FA8}'),
+    ('\u{1FA1}', '\u{1FA9}'),
+    ('\u{1FA2}', '\u{1FAA}'),
+    ('\u{1FA3}', '\u{1FAB}'),
+    ('\u{1FA4}', '\u{1FAC}'),
+    ('\u{1FA5}', '\u{1FAD}'),
+    ('\u{1FA6}', '\u{1FAE}'),
+    ('\u{1FA7}', '\u{1FAF}'),
+    ('\u{1FB3}', '\u{1FBC}'),
+    ('\u{1FC3}', '\u{1FCC}'),
+    ('\u{1FF3}', '\u{1FFC}'),
+];
+
+const SIMPLE_LOWER_WHEN_FULL_EXPANDS: &[(char, char)] = &[('\u{0130}', '\u{0069}')];
+
+/// `c`'s simple case mapping, given std's full one: the full mapping when it
+/// is a single character, the tabled simple mapping when it expands, else the
+/// character itself (ß has no upper-case character at all).
+fn simple_mapping(
+    c: char,
+    full: impl Iterator<Item = char>,
+    when_full_expands: &[(char, char)],
+) -> char {
+    let mut it = full;
     match (it.next(), it.next()) {
         (Some(m), None) => m,
-        _ => c,
+        _ => when_full_expands
+            .iter()
+            .find(|(from, _)| *from == c)
+            .map_or(c, |(_, to)| *to),
     }
 }
 
+/// Unicode simple case folding — one character to one character, which is
+/// what `char-foldcase` returns and what `char-ci=?` compares. Lower-casing
+/// is not the same thing: final sigma lower-cases to itself but folds to
+/// sigma, so `(char-ci=? #\ς #\σ)` came out false.
+fn fold_char(c: char) -> char {
+    use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
+    c.case_fold_with(Variant::Simple, Locale::NonTurkic)
+        .next()
+        .unwrap_or(c)
+}
+
+/// (char-ci=? char1 char2 ...) - Case-insensitive character equality
 pub(super) fn char_ci_equal(
     heap: &SharedHeap,
     args: &[TaggedValue],
@@ -397,9 +451,10 @@ pub(super) fn char_upcase(
     let heap_ref = heap.borrow();
     let c = get_char(args[0], &heap_ref, "char-upcase")?;
 
-    Ok(TaggedValue::character(single_char_mapping(
+    Ok(TaggedValue::character(simple_mapping(
         c,
         c.to_uppercase(),
+        SIMPLE_UPPER_WHEN_FULL_EXPANDS,
     )))
 }
 
@@ -417,16 +472,17 @@ pub(super) fn char_downcase(
     let heap_ref = heap.borrow();
     let c = get_char(args[0], &heap_ref, "char-downcase")?;
 
-    Ok(TaggedValue::character(single_char_mapping(
+    Ok(TaggedValue::character(simple_mapping(
         c,
         c.to_lowercase(),
+        SIMPLE_LOWER_WHEN_FULL_EXPANDS,
     )))
 }
 
 /// (char-foldcase char) - Case-folding (for case-insensitive comparison)
 ///
-/// R7RS: Returns the case-folded character. Full case folding can map one
-/// character to several (ß → ss); such a character folds to itself.
+/// R7RS: Returns the case-folded character — Unicode *simple* folding, so
+/// ß stays ß (its full folding "ss" is not a character) while ẞ folds to ß.
 pub(super) fn char_foldcase(
     heap: &SharedHeap,
     args: &[TaggedValue],
@@ -440,15 +496,7 @@ pub(super) fn char_foldcase(
     let heap_ref = heap.borrow();
     let c = get_char(args[0], &heap_ref, "char-foldcase")?;
 
-    use unicode_casefold::UnicodeCaseFold;
-
-    // A character whose folding expands (ß → "ss") has no folded
-    // *character* and is returned unchanged, as with char-upcase above;
-    // taking the first character of the expansion gave `#\s`.
-    Ok(TaggedValue::character(single_char_mapping(
-        c,
-        c.case_fold(),
-    )))
+    Ok(TaggedValue::character(fold_char(c)))
 }
 
 // ========== Character/Integer Conversion ==========

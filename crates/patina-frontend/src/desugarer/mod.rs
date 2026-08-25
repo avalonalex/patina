@@ -264,6 +264,16 @@ impl Desugarer {
         self
     }
 
+    /// [`Self::with_include_base`] for a library's source path, when there is
+    /// one — the shape every library loader has in hand. One helper so the
+    /// three loaders (VM backend, VM runtime, tree-walker) cannot drift.
+    pub fn with_include_base_of(self, source: Option<&std::path::Path>) -> Self {
+        match source.and_then(|p| p.parent()) {
+            Some(dir) if !dir.as_os_str().is_empty() => self.with_include_base(dir.to_path_buf()),
+            _ => self,
+        }
+    }
+
     /// Create a new desugarer with environment and specific scope set
     ///
     /// Used when creating child desugarers that inherit scope context.
@@ -1092,11 +1102,8 @@ impl Desugarer {
                 current_desugarer.try_parse_define_syntax_tagged(*tv, shared_heap);
 
             if let Some((macro_name, transformer_tv)) = define_syntax_info {
-                // Compile the macro immediately — with the *body's* desugarer,
-                // not `self`: it knows which names the enclosing lambda binds,
-                // and a bound `...` means this syntax-rules has no ellipsis
-                // (see compile_syntax_rules_tagged).
-                let compiled_macro = current_desugarer.compile_syntax_rules_tagged(
+                // Compile the macro immediately
+                let compiled_macro = self.compile_syntax_rules_tagged(
                     transformer_tv,
                     shared_heap,
                     macro_name.clone(),
@@ -1955,7 +1962,14 @@ impl Desugarer {
             // resolve beside it. Popped on the error path too: a desugarer
             // outlives one failed `include` (the REPL's does), and a stale
             // entry would misdirect the next one.
-            let pushed = path.parent().map(|d| d.to_path_buf());
+            // A path resolved from the cwd is bare ("x.scm") and its parent
+            // is "", which must not become the innermost directory — that
+            // would hide the program's own directory from the nested
+            // includes; leave the stack alone and they see what this one saw.
+            let pushed = path
+                .parent()
+                .filter(|d| !d.as_os_str().is_empty())
+                .map(|d| d.to_path_buf());
             if let Some(dir) = pushed.clone() {
                 self.include_dirs.borrow_mut().push(dir);
             }
@@ -2075,18 +2089,6 @@ impl Desugarer {
                 "syntax-rules with custom ellipsis requires literals and rules".to_string(),
             ));
         }
-
-        // R7RS 4.3.2 identifies the ellipsis by binding, not spelling: inside
-        // `(let ((... 19)) …)` the identifier `...` is a variable, and a
-        // `syntax-rules` written there has no ellipsis at all — `(_ x y ...)`
-        // is a three-variable pattern and a template's `...` refers to the
-        // 19. The compiler already takes the ellipsis by name (SRFI 46), so a
-        // shadowed `...` is expressed as an ellipsis nothing can spell.
-        // Larceny, Kawa and Sagittarius do this; chibi and Gauche do not.
-        let custom_ellipsis = custom_ellipsis.or_else(|| {
-            self.is_shadowed("...")
-                .then(|| Rc::from("... (shadowed: no ellipsis in this scope)"))
-        });
 
         let literals = self.parse_literals_list_tagged(list[literals_index], shared_heap)?;
 
